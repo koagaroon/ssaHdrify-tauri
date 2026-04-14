@@ -44,7 +44,7 @@ export function detectFormat(content: string): SubtitleFormat {
 
 // ── Timestamp Parsing ─────────────────────────────────────
 
-/** Parse "HH:MM:SS,mmm" (SRT) or "HH:MM:SS.mmm" (VTT) to ms */
+/** Parse "HH:MM:SS,mmm" (SRT) or "HH:MM:SS.mmm" to ms */
 function parseSrtTime(ts: string): number {
   const m = ts.match(/(\d+):(\d{2}):(\d{2})[,.](\d{3})/);
   if (!m) return 0;
@@ -54,6 +54,30 @@ function parseSrtTime(ts: string): number {
     parseInt(m[3]) * 1000 +
     parseInt(m[4])
   );
+}
+
+/** Parse VTT timestamps — supports both "HH:MM:SS.mmm" and "MM:SS.mmm" (no hours) */
+function parseVttTime(ts: string): number {
+  // HH:MM:SS.mmm (or H:MM:SS.mmm with variable-length hours)
+  const full = ts.match(/^(\d{2,}):(\d{2}):(\d{2})\.(\d{3})$/);
+  if (full) {
+    return (
+      parseInt(full[1]) * 3600000 +
+      parseInt(full[2]) * 60000 +
+      parseInt(full[3]) * 1000 +
+      parseInt(full[4])
+    );
+  }
+  // MM:SS.mmm (no hours — valid per WebVTT spec)
+  const short = ts.match(/^(\d{2}):(\d{2})\.(\d{3})$/);
+  if (short) {
+    return (
+      parseInt(short[1]) * 60000 +
+      parseInt(short[2]) * 1000 +
+      parseInt(short[3])
+    );
+  }
+  return 0;
 }
 
 /** Parse "H:MM:SS.cc" (ASS centiseconds) to ms */
@@ -70,6 +94,7 @@ function parseAssTime(ts: string): number {
 
 /** Format ms → "HH:MM:SS,mmm" (SRT) */
 function formatSrtTime(ms: number): string {
+  if (!Number.isFinite(ms)) ms = 0;
   if (ms < 0) ms = 0;
   const h = Math.floor(ms / 3600000);
   const m = Math.floor((ms % 3600000) / 60000);
@@ -85,6 +110,7 @@ function formatVttTime(ms: number): string {
 
 /** Format ms → "H:MM:SS.cc" (ASS centiseconds) */
 function formatAssTime(ms: number): string {
+  if (!Number.isFinite(ms)) ms = 0;
   if (ms < 0) ms = 0;
   const h = Math.floor(ms / 3600000);
   const m = Math.floor((ms % 3600000) / 60000);
@@ -112,19 +138,38 @@ export function parseDisplayTime(ts: string): number | null {
 
 // ── SRT Parser ────────────────────────────────────────────
 
-const SRT_BLOCK_RE =
-  /(\d+)\s*\r?\n(\d{2}:\d{2}:\d{2},\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2},\d{3})\s*\r?\n([\s\S]*?)(?=\r?\n\r?\n|\r?\n*$)/g;
-
 function parseSrt(content: string): Caption[] {
   const captions: Caption[] = [];
-  let match;
-  SRT_BLOCK_RE.lastIndex = 0;
-  while ((match = SRT_BLOCK_RE.exec(content)) !== null) {
+  // Split on double-newline (handles both \n\n and \r\n\r\n)
+  const blocks = content.split(/\n\n|\r\n\r\n/).filter((b) => b.trim());
+  if (blocks.length > 100000) {
+    throw new Error(`Too many subtitle blocks: ${blocks.length} (max 100,000)`);
+  }
+  // Regex defined inside function — no shared lastIndex state
+  const timingRe =
+    /^(\d{2}:\d{2}:\d{2},\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2},\d{3})/;
+
+  for (const block of blocks) {
+    const lines = block.replace(/^\r?\n/, "").split(/\r?\n/);
+    // Find the timing line (skip the numeric index line)
+    let timingIdx = -1;
+    for (let i = 0; i < lines.length; i++) {
+      if (timingRe.test(lines[i])) {
+        timingIdx = i;
+        break;
+      }
+    }
+    if (timingIdx === -1) continue;
+
+    const timingMatch = lines[timingIdx].match(timingRe);
+    if (!timingMatch) continue;
+
+    const text = lines.slice(timingIdx + 1).join("\n").trim();
     captions.push({
-      raw: match[0],
-      start: parseSrtTime(match[2]),
-      end: parseSrtTime(match[3]),
-      text: match[4].trim(),
+      raw: block.trim(),
+      start: parseSrtTime(timingMatch[1]),
+      end: parseSrtTime(timingMatch[2]),
+      text,
     });
   }
   return captions;
@@ -141,21 +186,40 @@ function buildSrt(captions: Caption[]): string {
 
 // ── VTT Parser ────────────────────────────────────────────
 
-const VTT_BLOCK_RE =
-  /(?:^|\n)(?:\d+\s*\n)?(\d{2}:\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}\.\d{3})[^\n]*\n([\s\S]*?)(?=\n\n|\n*$)/g;
-
 function parseVtt(content: string): Caption[] {
   const captions: Caption[] = [];
   // Skip WEBVTT header
   const body = content.replace(/^WEBVTT[^\n]*\n/, "");
-  let match;
-  VTT_BLOCK_RE.lastIndex = 0;
-  while ((match = VTT_BLOCK_RE.exec(body)) !== null) {
+  // Split on double-newline (handles both \n\n and \r\n\r\n)
+  const blocks = body.split(/\n\n|\r\n\r\n/).filter((b) => b.trim());
+  if (blocks.length > 100000) {
+    throw new Error(`Too many subtitle blocks: ${blocks.length} (max 100,000)`);
+  }
+  // VTT timing: supports both HH:MM:SS.mmm and MM:SS.mmm
+  const timingRe =
+    /^(\d{2,}:\d{2}:\d{2}\.\d{3}|\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{2,}:\d{2}:\d{2}\.\d{3}|\d{2}:\d{2}\.\d{3})/;
+
+  for (const block of blocks) {
+    const lines = block.replace(/^\r?\n/, "").split(/\r?\n/);
+    // Find the timing line — a cue ID is any line that does NOT contain "-->"
+    let timingIdx = -1;
+    for (let i = 0; i < lines.length; i++) {
+      if (timingRe.test(lines[i])) {
+        timingIdx = i;
+        break;
+      }
+    }
+    if (timingIdx === -1) continue;
+
+    const timingMatch = lines[timingIdx].match(timingRe);
+    if (!timingMatch) continue;
+
+    const text = lines.slice(timingIdx + 1).join("\n").trim();
     captions.push({
-      raw: match[0],
-      start: parseSrtTime(match[1]), // VTT uses . instead of , but same format
-      end: parseSrtTime(match[2]),
-      text: match[3].trim(),
+      raw: block.trim(),
+      start: parseVttTime(timingMatch[1]),
+      end: parseVttTime(timingMatch[2]),
+      text,
     });
   }
   return captions;
@@ -173,14 +237,13 @@ function buildVtt(captions: Caption[]): string {
 
 // ── ASS/SSA Parser (timing only) ─────────────────────────
 
-const ASS_DIALOGUE_RE =
-  /^(Dialogue:\s*\d+,)(\d+:\d{2}:\d{2}\.\d{2}),(\ *\d+:\d{2}:\d{2}\.\d{2}),(.*)$/gm;
-
 function parseAss(content: string): Caption[] {
   const captions: Caption[] = [];
+  // Regex defined inside function — no shared lastIndex state
+  const dialogueRe =
+    /^(Dialogue:\s*\d+,)(\d+:\d{2}:\d{2}\.\d{2}),(\ *\d+:\d{2}:\d{2}\.\d{2}),(.*)$/gm;
   let match;
-  ASS_DIALOGUE_RE.lastIndex = 0;
-  while ((match = ASS_DIALOGUE_RE.exec(content)) !== null) {
+  while ((match = dialogueRe.exec(content)) !== null) {
     captions.push({
       raw: match[0],
       start: parseAssTime(match[2]),
@@ -193,9 +256,11 @@ function parseAss(content: string): Caption[] {
 
 function buildAss(content: string, captions: Caption[]): string {
   // For ASS, we replace timestamps in-place rather than rebuilding
+  // Regex defined inside function — no shared lastIndex state
+  const dialogueRe =
+    /^(Dialogue:\s*\d+,)(\d+:\d{2}:\d{2}\.\d{2}),(\ *\d+:\d{2}:\d{2}\.\d{2}),(.*)$/gm;
   let idx = 0;
-  ASS_DIALOGUE_RE.lastIndex = 0;
-  return content.replace(ASS_DIALOGUE_RE, (original, prefix, _start, _end, rest) => {
+  return content.replace(dialogueRe, (original, prefix, _start, _end, rest) => {
     if (idx < captions.length) {
       const c = captions[idx++];
       return `${prefix}${formatAssTime(c.start)},${formatAssTime(c.end)},${rest}`;
@@ -206,14 +271,20 @@ function buildAss(content: string, captions: Caption[]): string {
 
 // ── SUB (MicroDVD) Parser ─────────────────────────────────
 
-const SUB_LINE_RE = /^\{(\d+)\}\{(\d+)\}(.*)$/gm;
 const DEFAULT_FPS = 23.976;
 
 function parseSub(content: string, fps: number = DEFAULT_FPS): Caption[] {
+  if (!Number.isFinite(fps) || fps <= 0) fps = DEFAULT_FPS;
   const captions: Caption[] = [];
+  // Regex defined inside function — no shared lastIndex state
+  const subLineRe = /^\{(\d+)\}\{(\d+)\}(.*)$/gm;
   let match;
-  SUB_LINE_RE.lastIndex = 0;
-  while ((match = SUB_LINE_RE.exec(content)) !== null) {
+  let count = 0;
+  while ((match = subLineRe.exec(content)) !== null) {
+    count = count + 1;
+    if (count > 100000) {
+      throw new Error(`Too many subtitle entries: ${count} (max 100,000)`);
+    }
     captions.push({
       raw: match[0],
       start: Math.round((parseInt(match[1]) / fps) * 1000),
@@ -225,6 +296,7 @@ function parseSub(content: string, fps: number = DEFAULT_FPS): Caption[] {
 }
 
 function buildSub(captions: Caption[], fps: number = DEFAULT_FPS): string {
+  if (!Number.isFinite(fps) || fps <= 0) fps = DEFAULT_FPS;
   return captions
     .map((c) => {
       const startFrame = Math.round((c.start / 1000) * fps);

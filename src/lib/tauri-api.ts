@@ -6,7 +6,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import {
   readFile,
   readTextFile,
-  writeFile,
+  stat,
   writeTextFile,
 } from "@tauri-apps/plugin-fs";
 import { invoke } from "@tauri-apps/api/core";
@@ -81,9 +81,38 @@ export async function pickSavePath(
 
 // ── File I/O ──────────────────────────────────────────────
 
+const MAX_TEXT_SIZE = 50 * 1024 * 1024; // 50 MB
+const MAX_BINARY_SIZE = 100 * 1024 * 1024; // 100 MB (font files)
+
+/** Check file size before reading. Throws if file exceeds the limit. */
+async function assertFileSize(path: string, maxBytes: number): Promise<void> {
+  const info = await stat(path);
+  if (info.size > maxBytes) {
+    const sizeMB = (info.size / (1024 * 1024)).toFixed(1);
+    const limitMB = (maxBytes / (1024 * 1024)).toFixed(0);
+    throw new Error(
+      `File too large: ${sizeMB} MB exceeds the ${limitMB} MB limit (${path})`
+    );
+  }
+}
+
 /** Read a text file with explicit UTF-8 encoding. */
-export async function readText(path: string): Promise<string> {
-  return readTextFile(path);
+export async function readText(
+  path: string,
+  maxSizeBytes: number = MAX_TEXT_SIZE
+): Promise<string> {
+  await assertFileSize(path, maxSizeBytes);
+  const content = await readTextFile(path);
+  // Post-read size check to close TOCTOU window (file could grow between stat and read)
+  const byteLength = new TextEncoder().encode(content).length;
+  if (byteLength > maxSizeBytes) {
+    const sizeMB = (byteLength / (1024 * 1024)).toFixed(1);
+    const limitMB = (maxSizeBytes / (1024 * 1024)).toFixed(0);
+    throw new Error(
+      `File too large after read: ${sizeMB} MB exceeds the ${limitMB} MB limit (${path})`
+    );
+  }
+  return content;
 }
 
 /** Write a text file with explicit UTF-8. */
@@ -92,16 +121,21 @@ export async function writeText(path: string, content: string): Promise<void> {
 }
 
 /** Read a binary file (for font files). Returns Uint8Array. */
-export async function readBinary(path: string): Promise<Uint8Array> {
-  return readFile(path);
-}
-
-/** Write a binary file. */
-export async function writeBinary(
+export async function readBinary(
   path: string,
-  data: Uint8Array
-): Promise<void> {
-  await writeFile(path, data);
+  maxSizeBytes: number = MAX_BINARY_SIZE
+): Promise<Uint8Array> {
+  await assertFileSize(path, maxSizeBytes);
+  const data = await readFile(path);
+  // Post-read size check to close TOCTOU window
+  if (data.length > maxSizeBytes) {
+    const sizeMB = (data.length / (1024 * 1024)).toFixed(1);
+    const limitMB = (maxSizeBytes / (1024 * 1024)).toFixed(0);
+    throw new Error(
+      `File too large after read: ${sizeMB} MB exceeds the ${limitMB} MB limit (${path})`
+    );
+  }
+  return data;
 }
 
 // ── Rust Commands ─────────────────────────────────────────
@@ -113,4 +147,13 @@ export async function findSystemFont(
   italic: boolean
 ): Promise<string> {
   return invoke<string>("find_system_font", { family, bold, italic });
+}
+
+/** Subset a font file to only include the specified codepoints. */
+export async function subsetFont(
+  fontPath: string,
+  codepoints: number[]
+): Promise<Uint8Array> {
+  const bytes: number[] = await invoke("subset_font", { fontPath, codepoints });
+  return new Uint8Array(bytes);
 }

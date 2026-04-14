@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "enables the default permissions",
+  "description": "Default permissions. Font directories are intentionally excluded from fs:scope — font files are read by Rust commands via std::fs::read with provenance validation (see fonts.rs), not through the Tauri FS plugin. The FS scope applies only to frontend-initiated file operations.",
   "windows": [
     "main"
   ],
@@ -11,16 +11,13 @@
     "dialog:allow-open",
     "dialog:allow-save",
     "fs:default",
-    "fs:allow-read",
-    "fs:allow-write",
-    "fs:allow-exists",
-    "fs:allow-mkdir",
+    "fs:allow-read-text-file",
+    "fs:allow-read-file",
+    "fs:allow-write-text-file",
     "fs:allow-stat",
     {
       "identifier": "fs:scope",
-      "allow": [
-        { "path": "**" }
-      ]
+      "allow": [{ "path": "$HOME/**" }]
     }
   ]
 }

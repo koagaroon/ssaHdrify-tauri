@@ -9,18 +9,37 @@
  */
 import { sRgbToHdr, type Eotf, DEFAULT_BRIGHTNESS } from "./color-engine";
 
-// ── ASS Color Regex ───────────────────────────────────────
-// Matches: \c&HBBGGRR, \1c&HBBGGRR, \2c&HAABBGGRR, etc.
-// Groups: (1) prefix like "\c&H" or "\1c&H", (2) 6 or 8 hex digits
-// Lookahead ensures the color ends at a valid ASS delimiter
-const COLOR_TAG_RE =
-  /(\\[0-9]?c&H)([0-9a-fA-F]{6}|[0-9a-fA-F]{8})(?=[&}),\\])/g;
-
 // ── Style color fields in ASS [V4+ Styles] section ────────
 // Format line: "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, ..."
 // Style line: "Style: Default,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,..."
 // Color fields are at fixed indices: Primary=3, Secondary=4, Outline=5, Back=6
-const STYLE_COLOR_INDICES = [3, 4, 5, 6];
+const STYLE_COLOR_INDICES_FALLBACK = [3, 4, 5, 6];
+
+/** Names of the color fields in the ASS style format line */
+const STYLE_COLOR_FIELDS = new Set([
+  "primarycolour",
+  "secondarycolour",
+  "outlinecolour",
+  "backcolour",
+]);
+
+/**
+ * Parse a Format line in [V4+ Styles] section and return indices of color fields.
+ * Returns null if parsing fails (caller should use fallback).
+ */
+function parseStyleFormatLine(formatLine: string): number[] | null {
+  const colonIdx = formatLine.indexOf(":");
+  if (colonIdx < 0) return null;
+  const fields = formatLine.slice(colonIdx + 1).split(",").map((f) => f.trim().toLowerCase());
+  const indices: number[] = [];
+  for (let i = 0; i < fields.length; i++) {
+    if (STYLE_COLOR_FIELDS.has(fields[i])) {
+      indices.push(i);
+    }
+  }
+  return indices.length > 0 ? indices : null;
+}
+
 
 /**
  * Parse an ASS color string (&H[AA]BBGGRR) into {r, g, b, alpha}.
@@ -80,6 +99,12 @@ function transformEventText(
   targetBrightness: number,
   eotf: Eotf
 ): string {
+  // Matches: \c&HBBGGRR, \1c&HBBGGRR, \2c&HAABBGGRR, etc.
+  // Groups: (1) prefix like "\c&H" or "\1c&H", (2) 6 or 8 hex digits
+  // Lookahead ensures the color ends at a valid ASS delimiter
+  const COLOR_TAG_RE =
+    /(\\[0-9]?c&H)([0-9a-fA-F]{6}|[0-9a-fA-F]{8})(?=[&}),\\]|$)/g;
+
   return text.replace(COLOR_TAG_RE, (_, prefix: string, hexColor: string) => {
     let alpha = "";
     let bgr = hexColor;
@@ -99,7 +124,7 @@ function transformEventText(
 
     const [hr, hg, hb] = sRgbToHdr(red, green, blue, targetBrightness, eotf);
 
-    const hex = (n: number) => n.toString(16).padStart(2, "0");
+    const hex = (n: number) => n.toString(16).padStart(2, "0").toUpperCase();
     return `${prefix}${alpha}${hex(hb)}${hex(hg)}${hex(hr)}`;
   });
 }
@@ -111,7 +136,8 @@ function transformEventText(
 function transformStyleLine(
   line: string,
   targetBrightness: number,
-  eotf: Eotf
+  eotf: Eotf,
+  styleColorIndices: number[]
 ): string {
   if (!line.startsWith("Style:")) return line;
 
@@ -120,8 +146,8 @@ function transformStyleLine(
   const prefix = line.slice(0, colonIdx + 1);
   const fields = line.slice(colonIdx + 1).split(",").map((f) => f.trim());
 
-  // Transform color fields at known indices
-  for (const idx of STYLE_COLOR_INDICES) {
+  // Transform color fields at dynamically-parsed indices
+  for (const idx of styleColorIndices) {
     if (idx < fields.length && fields[idx]) {
       fields[idx] = transformColorString(fields[idx], targetBrightness, eotf);
     }
@@ -159,9 +185,19 @@ export function processAssContent(
   eotf: Eotf = "PQ",
   onProgress?: (current: number, total: number) => void
 ): string {
+  // Preserve the original line ending style
+  const lineEnding = content.includes("\r\n") ? "\r\n" : "\n";
   const lines = content.split(/\r?\n/);
+
+  if (lines.length > 500000) {
+    throw new Error(`File too large: ${lines.length} lines (max 500,000)`);
+  }
+
   let currentSection: AssSection = "info";
   const result: string[] = [];
+
+  // Local copy — prevents cross-file contamination if one file has a Format line and the next doesn't
+  let styleColorIndices = STYLE_COLOR_INDICES_FALLBACK.slice();
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -176,7 +212,14 @@ export function processAssContent(
 
     // Transform based on current section
     if (currentSection === "styles") {
-      result.push(transformStyleLine(line, targetBrightness, eotf));
+      // Parse Format line to discover color field positions
+      if (line.trimStart().startsWith("Format:")) {
+        const parsed = parseStyleFormatLine(line);
+        if (parsed) {
+          styleColorIndices = parsed;
+        }
+      }
+      result.push(transformStyleLine(line, targetBrightness, eotf, styleColorIndices));
     } else if (currentSection === "events") {
       // Dialogue lines: "Dialogue: ..." — transform inline color tags
       if (line.startsWith("Dialogue:") || line.startsWith("Comment:")) {
@@ -193,5 +236,5 @@ export function processAssContent(
     }
   }
 
-  return result.join("\n");
+  return result.join(lineEnding);
 }

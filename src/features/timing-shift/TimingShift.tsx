@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import {
   pickSubtitleFile,
   pickSavePath,
@@ -35,6 +35,9 @@ export default function TimingShift() {
   const [preview, setPreview] = useState<PreviewEntry[]>([]);
   const [captionCount, setCaptionCount] = useState(0);
   const [status, setStatus] = useState<string>("");
+  const [isError, setIsError] = useState(false);
+
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
 
 
   // Compute effective offset in ms
@@ -46,21 +49,32 @@ export default function TimingShift() {
   // Compute threshold in ms
   const thresholdMs = useThreshold ? parseTimestamp(thresholdText) : undefined;
 
-  // Update preview whenever parameters change
+  // Update preview whenever parameters change (debounced to avoid reprocessing on every keystroke)
   useEffect(() => {
     if (!fileContent) return;
-    try {
-      const result = shiftSubtitles(fileContent, {
-        offsetMs: effectiveOffsetMs,
-        thresholdMs: thresholdMs ?? undefined,
-      });
-      setPreview(result.preview);
-      setCaptionCount(result.captionCount);
-      setDetectedFormat(result.format.toUpperCase());
-    } catch {
-      // Preview update failed — don't crash, just skip
+    if (useThreshold && thresholdMs == null) {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      setPreview([]);
+      return;
     }
-  }, [fileContent, effectiveOffsetMs, thresholdMs]);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      try {
+        const result = shiftSubtitles(fileContent, {
+          offsetMs: effectiveOffsetMs,
+          thresholdMs: thresholdMs ?? undefined,
+        });
+        setPreview(result.preview);
+        setCaptionCount(result.captionCount);
+        setDetectedFormat(result.format.toUpperCase());
+      } catch {
+        // Preview update failed — don't crash, just skip
+      }
+    }, 200);
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [fileContent, effectiveOffsetMs, thresholdMs, useThreshold]);
 
   const handlePickFile = useCallback(async () => {
     const path = await pickSubtitleFile();
@@ -70,6 +84,7 @@ export default function TimingShift() {
     setFileName(name);
     setFilePath(path);
     setStatus("");
+    setIsError(false);
 
     try {
       const content = await readText(path);
@@ -83,12 +98,14 @@ export default function TimingShift() {
       setCaptionCount(result.captionCount);
       setDetectedFormat(result.format.toUpperCase());
     } catch (e) {
+      setIsError(true);
       setStatus(t("error_prefix", e instanceof Error ? e.message : String(e)));
     }
-  }, [effectiveOffsetMs, thresholdMs, t]);
+  }, [effectiveOffsetMs, thresholdMs, useThreshold, t]);
 
   const handleSave = useCallback(async () => {
     if (!fileContent || !filePath) return;
+    if (useThreshold && thresholdMs == null) return;
 
     try {
       const result: ShiftResult = shiftSubtitles(fileContent, {
@@ -106,11 +123,13 @@ export default function TimingShift() {
 
       await writeText(savePath, result.content);
       const outName = savePath.replace(/\\/g, "/").split("/").pop() ?? savePath;
+      setIsError(false);
       setStatus(t("msg_saved", outName, result.captionCount));
     } catch (e) {
+      setIsError(true);
       setStatus(t("error_prefix", e instanceof Error ? e.message : String(e)));
     }
-  }, [fileContent, filePath, fileName, effectiveOffsetMs, thresholdMs, t]);
+  }, [fileContent, filePath, fileName, effectiveOffsetMs, thresholdMs, useThreshold, t]);
 
   return (
     <div className="max-w-2xl space-y-5">
@@ -340,8 +359,9 @@ export default function TimingShift() {
       {fileContent && (
         <button
           onClick={handleSave}
+          disabled={useThreshold && thresholdMs === null}
           className="px-6 py-2.5 rounded-lg text-white font-medium text-sm transition-colors"
-          style={{ background: "var(--accent)" }}
+          style={{ background: useThreshold && thresholdMs === null ? "var(--bg-input)" : "var(--accent)" }}
         >
           {t("btn_save_as")}
         </button>
@@ -352,7 +372,7 @@ export default function TimingShift() {
         <p
           className="text-sm"
           style={{
-            color: status.startsWith("Error")
+            color: isError
               ? "var(--error)"
               : "var(--success)",
           }}

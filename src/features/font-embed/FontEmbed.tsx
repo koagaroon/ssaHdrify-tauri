@@ -32,6 +32,7 @@ export default function FontEmbed() {
   const [embedding, setEmbedding] = useState(false);
   const [progress, setProgress] = useState<EmbedProgress | null>(null);
   const [status, setStatus] = useState("");
+  const [isError, setIsError] = useState(false);
   const cancelRef = useRef(false);
 
   const handlePickFile = useCallback(async () => {
@@ -45,6 +46,7 @@ export default function FontEmbed() {
     setFonts([]);
     setSelected(new Set());
     setStatus("");
+    setIsError(false);
 
     setAnalyzing(true);
     try {
@@ -66,6 +68,7 @@ export default function FontEmbed() {
       });
       setSelected(autoSelected);
     } catch (e) {
+      setIsError(true);
       setStatus(t("error_prefix", e instanceof Error ? e.message : String(e)));
     } finally {
       setAnalyzing(false);
@@ -96,6 +99,7 @@ export default function FontEmbed() {
     }
 
     setEmbedding(true);
+    setIsError(false);
     cancelRef.current = false;
 
     try {
@@ -103,8 +107,17 @@ export default function FontEmbed() {
         fileContent,
         selectedFonts,
         fontUsages,
-        (p) => setProgress(p)
+        (p) => setProgress(p),
+        () => cancelRef.current,
+        t
       );
+
+      // If cancelled, clean up and exit without showing save dialog
+      if (result === null) {
+        setStatus("");
+        setIsError(false);
+        return;
+      }
 
       // Suggest output filename
       const baseName = fileName.slice(0, fileName.lastIndexOf("."));
@@ -114,15 +127,15 @@ export default function FontEmbed() {
         { name: "ASS Subtitles", extensions: ["ass"] },
       ]);
       if (!savePath) {
-        setEmbedding(false);
-        setProgress(null);
         return;
       }
 
-      await writeText(savePath, result);
+      await writeText(savePath, result.content);
       const outName = savePath.replace(/\\/g, "/").split("/").pop() ?? savePath;
-      setStatus(t("msg_embed_saved", outName, selectedFonts.length));
+      setIsError(false);
+      setStatus(t("msg_embed_saved", outName, result.embeddedCount));
     } catch (e) {
+      setIsError(true);
       setStatus(t("error_prefix", e instanceof Error ? e.message : String(e)));
     } finally {
       setEmbedding(false);
@@ -242,23 +255,38 @@ export default function FontEmbed() {
         )}
       </div>
 
-      {/* Embed Button */}
-      <button
-        onClick={handleEmbed}
-        disabled={isEmbedDisabled}
-        className="px-6 py-2.5 rounded-lg font-medium text-sm transition-colors"
-        style={
-          isEmbedDisabled
-            ? { background: "var(--accent-disabled-bg)", color: "var(--accent-disabled-text)" }
-            : { background: "var(--accent)", color: "#fff" }
-        }
-      >
-        {embedding
-          ? t("btn_embedding")
-          : selected.size > 0
-            ? t("btn_embed", selected.size)
-            : t("btn_embed_default")}
-      </button>
+      {/* Embed / Cancel Buttons */}
+      <div className="flex gap-3">
+        <button
+          onClick={handleEmbed}
+          disabled={isEmbedDisabled}
+          className="px-6 py-2.5 rounded-lg font-medium text-sm transition-colors"
+          style={
+            isEmbedDisabled
+              ? { background: "var(--accent-disabled-bg)", color: "var(--accent-disabled-text)" }
+              : { background: "var(--accent)", color: "#fff" }
+          }
+        >
+          {embedding
+            ? t("btn_embedding")
+            : selected.size > 0
+              ? t("btn_embed", selected.size)
+              : t("btn_embed_default")}
+        </button>
+        {embedding && (
+          <button
+            onClick={() => { cancelRef.current = true; }}
+            className="px-5 py-2.5 rounded-lg font-medium text-sm transition-colors"
+            style={{
+              background: "var(--bg-input)",
+              border: "1px solid var(--border)",
+              color: "var(--text-primary)",
+            }}
+          >
+            {t("btn_cancel")}
+          </button>
+        )}
+      </div>
 
       {/* Progress */}
       {progress && (
@@ -286,7 +314,7 @@ export default function FontEmbed() {
         <p
           className="text-sm"
           style={{
-            color: status.startsWith("Error")
+            color: isError
               ? "var(--error)"
               : "var(--success)",
           }}

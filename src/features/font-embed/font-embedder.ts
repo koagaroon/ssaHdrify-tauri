@@ -13,8 +13,7 @@ import {
   type FontKey,
 } from "./font-collector";
 import { buildFontEntry } from "./ass-uuencode";
-import { findSystemFont, readBinary } from "../../lib/tauri-api";
-import { invoke } from "@tauri-apps/api/core";
+import { findSystemFont, subsetFont } from "../../lib/tauri-api";
 
 // ── Types ─────────────────────────────────────────────────
 
@@ -76,7 +75,12 @@ export async function analyzeFonts(assContent: string): Promise<FontInfo[]> {
  * Convention: family_bold_italic.ttf (all lowercase)
  */
 function buildFontFileName(key: FontKey): string {
-  let name = key.family.toLowerCase().replace(/\s+/g, "_");
+  let name = key.family
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, "_")  // strip everything except safe chars
+    .replace(/_+/g, "_")           // collapse consecutive underscores
+    .replace(/^_|_$/g, "");        // trim leading/trailing underscores
+  if (!name) name = "font";       // fallback if name becomes empty
   if (key.bold) name += "_bold";
   if (key.italic) name += "_italic";
   return `${name}.ttf`;
@@ -95,24 +99,26 @@ export async function embedFonts(
   assContent: string,
   selectedFonts: FontInfo[],
   fontUsages: FontUsage[],
-  onProgress?: (progress: EmbedProgress) => void
-): Promise<string> {
+  onProgress?: (progress: EmbedProgress) => void,
+  isCancelled?: () => boolean,
+  t?: (key: string, ...args: (string | number)[]) => string
+): Promise<{ content: string; embeddedCount: number } | null> {
   const total = selectedFonts.length;
   const fontEntries: string[] = [];
 
   for (let i = 0; i < selectedFonts.length; i++) {
+    if (isCancelled?.()) break;
+
     const info = selectedFonts[i];
     if (!info.filePath) continue;
 
     const fontName = buildFontFileName(info.key);
+    const fontLabel = `${info.key.family}${info.key.bold ? " Bold" : ""}${info.key.italic ? " Italic" : ""}`;
     onProgress?.({
-      stage: `Subsetting ${info.key.family}${info.key.bold ? " Bold" : ""}${info.key.italic ? " Italic" : ""}`,
+      stage: t?.("msg_subsetting", fontLabel) ?? `Subsetting ${fontLabel}...`,
       current: i + 1,
       total,
     });
-
-    // Read the full font file
-    const fontData = await readBinary(info.filePath);
 
     // Find the matching usage to get codepoints
     const usage = fontUsages.find(
@@ -126,30 +132,35 @@ export async function embedFonts(
     // Subset the font to only used glyphs (via Rust backend)
     let subsetData: Uint8Array;
     try {
-      const codepoints = Array.from(usage.codepoints);
-      const subsetBytes: number[] = await invoke("subset_font", {
-        fontPath: info.filePath,
-        codepoints,
+      subsetData = await subsetFont(info.filePath, Array.from(usage.codepoints));
+      if (isCancelled?.()) return null;
+    } catch (subsetErr) {
+      console.warn(`Font subsetting failed for ${usage.key.family}, skipping: ${subsetErr}`);
+      onProgress?.({
+        stage: t?.("msg_font_skipped", info.key.family, String(subsetErr)) ?? `Skipped ${info.key.family}: ${subsetErr}`,
+        current: i + 1,
+        total,
       });
-      subsetData = new Uint8Array(subsetBytes);
-    } catch {
-      // If subsetting fails (e.g., not implemented yet), use full font
-      subsetData = fontData;
+      continue;  // Skip this font, don't fall back to unguarded read
     }
 
     // Build the [Fonts] entry
     fontEntries.push(buildFontEntry(fontName, subsetData));
   }
 
+  if (isCancelled?.()) {
+    return null;
+  }
+
   if (fontEntries.length === 0) {
-    return assContent;
+    return { content: assContent, embeddedCount: 0 };
   }
 
   // Build [Fonts] section
   const fontsSection = `\n[Fonts]\n${fontEntries.join("\n\n")}\n`;
 
   // Insert [Fonts] section into ASS file
-  return insertFontsSection(assContent, fontsSection);
+  return { content: insertFontsSection(assContent, fontsSection), embeddedCount: fontEntries.length };
 }
 
 /**
@@ -158,7 +169,11 @@ export async function embedFonts(
  * If [Fonts] already exists, replace it.
  */
 function insertFontsSection(content: string, fontsSection: string): string {
+  const lineEnding = content.includes("\r\n") ? "\r\n" : "\n";
   const lines = content.split(/\r?\n/);
+
+  // Adapt fontsSection to match the file's line ending
+  const adaptedFontsSection = fontsSection.replace(/\n/g, lineEnding);
 
   // Check if [Fonts] section already exists
   const existingFontsIdx = lines.findIndex(
@@ -173,9 +188,9 @@ function insertFontsSection(content: string, fontsSection: string): string {
       endIdx++;
     }
     // Replace existing [Fonts] section
-    const before = lines.slice(0, existingFontsIdx).join("\n");
-    const after = lines.slice(endIdx).join("\n");
-    return `${before}${fontsSection}\n${after}`;
+    const before = lines.slice(0, existingFontsIdx).join(lineEnding);
+    const after = lines.slice(endIdx).join(lineEnding);
+    return `${before}${adaptedFontsSection}${lineEnding}${after}`;
   }
 
   // No existing [Fonts] — insert before [Events]
@@ -184,11 +199,11 @@ function insertFontsSection(content: string, fontsSection: string): string {
   );
 
   if (eventsIdx >= 0) {
-    const before = lines.slice(0, eventsIdx).join("\n");
-    const after = lines.slice(eventsIdx).join("\n");
-    return `${before}${fontsSection}\n${after}`;
+    const before = lines.slice(0, eventsIdx).join(lineEnding);
+    const after = lines.slice(eventsIdx).join(lineEnding);
+    return `${before}${adaptedFontsSection}${lineEnding}${after}`;
   }
 
   // No [Events] section found — append at end
-  return content + fontsSection;
+  return content + adaptedFontsSection;
 }

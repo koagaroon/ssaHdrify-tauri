@@ -31,6 +31,12 @@ import { parseSubtitle } from "../../lib/subtitle-parser";
 import NumberInput from "../../lib/NumberInput";
 import { useI18n } from "../../i18n/useI18n";
 
+/** Convert ASS color "&H00BBGGRR" to HTML "#RRGGBB" */
+function assColorToHex(assColor: string): string {
+  const s = assColor.replace(/^&H/i, "").padStart(8, "0");
+  return `#${s.slice(6, 8)}${s.slice(4, 6)}${s.slice(2, 4)}`;
+}
+
 // Common fonts available on most systems (cross-platform)
 const COMMON_FONTS = [
   "Arial", "Arial Black", "Calibri", "Cambria", "Comic Sans MS",
@@ -98,87 +104,107 @@ export default function HdrConvert() {
 
     setProcessing(true);
     cancelRef.current = false;
-    addLog(t("msg_start_conversion", paths.length, eotf, brightness));
 
-    const outputPaths = new Set<string>();
-    let successCount = 0;
+    try {
+      addLog(t("msg_start_conversion", paths.length, eotf, brightness));
 
-    for (const filePath of paths) {
-      if (cancelRef.current) {
-        addLog(t("msg_cancelled"), "info");
-        break;
+      const outputPaths = new Set<string>();
+      let successCount = 0;
+
+      for (const filePath of paths) {
+        if (cancelRef.current) {
+          addLog(t("msg_cancelled"), "info");
+          break;
+        }
+
+        const fileName = filePath.replace(/\\/g, "/").split("/").pop() ?? filePath;
+        addLog(t("msg_processing", fileName));
+
+        try {
+          // Resolve output path
+          let outputPath: string;
+          try {
+            outputPath = resolveOutputPath(filePath, activeTemplate, eotf);
+          } catch (e) {
+            addLog(t("msg_skipped", fileName, e instanceof Error ? e.message : String(e)), "error");
+            continue;
+          }
+
+          // Check file extension before reading — skip unsupported formats early
+          if (!isNativeAss(fileName) && !isConvertible(fileName)) {
+            addLog(t("msg_unsupported", fileName), "error");
+            continue;
+          }
+
+          // Check for duplicate output targets
+          const normalizedOut = outputPath.replace(/\\/g, "/").toLowerCase();
+          if (outputPaths.has(normalizedOut)) {
+            addLog(t("msg_skipped_duplicate", fileName), "error");
+            continue;
+          }
+          outputPaths.add(normalizedOut);
+
+          // Read input file
+          let content: string;
+          try {
+            content = await readText(filePath);
+          } catch (e) {
+            addLog(t("msg_read_error", fileName, e instanceof Error ? e.message : String(e)), "error");
+            continue;
+          }
+
+          // Check cancel after I/O
+          if (cancelRef.current) break;
+
+          let assContent: string;
+
+          if (isNativeAss(fileName)) {
+            // Direct ASS processing
+            assContent = processAssContent(content, brightness, eotf);
+          } else if (isConvertible(fileName)) {
+            // SRT/SUB → ASS conversion path
+            // Strip any ASS-style override blocks from raw SRT before color preprocessing
+            const sanitized = content.replace(/\{[^}]*\}/g, "");
+            // Preprocess SRT colors
+            const preprocessed = preprocessSrtColors(sanitized);
+
+            // Parse with our browser-compatible parser
+            const { captions } = parseSubtitle(preprocessed, style.fps);
+
+            // Build ASS document from parsed captions
+            const entries = captions.map((c) => ({
+              start: c.start,
+              end: c.end,
+              text: c.text,
+            }));
+            const rawAss = buildAssDocument(entries, style);
+
+            // Now transform the ASS colors to HDR
+            assContent = processAssContent(rawAss, brightness, eotf);
+          } else {
+            // Unreachable — extension was validated above, but satisfies TypeScript
+            continue;
+          }
+
+          // Check cancel before writing
+          if (cancelRef.current) break;
+
+          // Write output
+          await writeText(outputPath, assContent);
+          const outName = outputPath.replace(/\\/g, "/").split("/").pop() ?? outputPath;
+          addLog(t("msg_done", outName), "success");
+          successCount++;
+        } catch (e) {
+          addLog(t("msg_convert_error", fileName, e instanceof Error ? e.message : String(e)), "error");
+        }
       }
 
-      const fileName = filePath.replace(/\\/g, "/").split("/").pop() ?? filePath;
-      addLog(t("msg_processing", fileName));
-
-      try {
-        // Resolve output path
-        let outputPath: string;
-        try {
-          outputPath = resolveOutputPath(filePath, activeTemplate, eotf);
-        } catch (e) {
-          addLog(t("msg_skipped", fileName, e instanceof Error ? e.message : String(e)), "error");
-          continue;
-        }
-
-        // Check for duplicate output targets
-        const normalizedOut = outputPath.replace(/\\/g, "/").toLowerCase();
-        if (outputPaths.has(normalizedOut)) {
-          addLog(t("msg_skipped_duplicate", fileName), "error");
-          continue;
-        }
-        outputPaths.add(normalizedOut);
-
-        // Read input file
-        let content: string;
-        try {
-          content = await readText(filePath);
-        } catch (e) {
-          addLog(t("msg_read_error", fileName, e instanceof Error ? e.message : String(e)), "error");
-          continue;
-        }
-
-        let assContent: string;
-
-        if (isNativeAss(fileName)) {
-          // Direct ASS processing
-          assContent = processAssContent(content, brightness, eotf);
-        } else if (isConvertible(fileName)) {
-          // SRT/SUB → ASS conversion path
-          // Preprocess SRT colors
-          const preprocessed = preprocessSrtColors(content);
-
-          // Parse with our browser-compatible parser
-          const { captions } = parseSubtitle(preprocessed);
-
-          // Build ASS document from parsed captions
-          const entries = captions.map((c) => ({
-            start: c.start,
-            end: c.end,
-            text: c.text,
-          }));
-          const rawAss = buildAssDocument(entries, style);
-
-          // Now transform the ASS colors to HDR
-          assContent = processAssContent(rawAss, brightness, eotf);
-        } else {
-          addLog(t("msg_unsupported", fileName), "error");
-          continue;
-        }
-
-        // Write output
-        await writeText(outputPath, assContent);
-        const outName = outputPath.replace(/\\/g, "/").split("/").pop() ?? outputPath;
-        addLog(t("msg_done", outName), "success");
-        successCount++;
-      } catch (e) {
-        addLog(t("msg_convert_error", fileName, e instanceof Error ? e.message : String(e)), "error");
+      if (!cancelRef.current) {
+        addLog(t("msg_complete", successCount, paths.length), "success");
       }
+    } finally {
+      setProcessing(false);
     }
-
-    addLog(t("msg_complete", successCount, paths.length), "success");
-    setProcessing(false);
   }, [brightness, eotf, activeTemplate, style, addLog, t]);
 
   return (
@@ -264,6 +290,7 @@ export default function HdrConvert() {
               value={customTemplate}
               onChange={(e) => setCustomTemplate(e.target.value)}
               placeholder="{name}.hdr.{eotf}.ass"
+              maxLength={200}
               disabled={processing}
               className="w-64 px-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               style={{
@@ -349,7 +376,7 @@ export default function HdrConvert() {
               </label>
               <input
                 type="color"
-                value="#ffffff"
+                value={assColorToHex(style.primaryColor)}
                 onChange={(e) => {
                   const hex = e.target.value.slice(1);
                   const r = hex.slice(0, 2);
@@ -371,7 +398,7 @@ export default function HdrConvert() {
               </label>
               <input
                 type="color"
-                value="#000000"
+                value={assColorToHex(style.outlineColor)}
                 onChange={(e) => {
                   const hex = e.target.value.slice(1);
                   const r = hex.slice(0, 2);
@@ -393,7 +420,7 @@ export default function HdrConvert() {
               </label>
               <NumberInput
                 value={style.outlineWidth}
-                onChange={(v) => setStyle({ ...style, outlineWidth: parseFloat(v) || 2 })}
+                onChange={(v) => { const n = parseFloat(v); setStyle({ ...style, outlineWidth: Number.isNaN(n) ? 2 : n }); }}
                 min={0}
                 max={20}
                 step="0.5"
@@ -406,7 +433,7 @@ export default function HdrConvert() {
               </label>
               <NumberInput
                 value={style.shadowDepth}
-                onChange={(v) => setStyle({ ...style, shadowDepth: parseFloat(v) || 1 })}
+                onChange={(v) => { const n = parseFloat(v); setStyle({ ...style, shadowDepth: Number.isNaN(n) ? 1 : n }); }}
                 min={0}
                 max={20}
                 step="0.5"

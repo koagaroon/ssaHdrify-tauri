@@ -60,6 +60,7 @@ export function assUuencode(data: Uint8Array): string[] {
  * @returns Complete entry text including "fontname:" header
  */
 export function buildFontEntry(fontName: string, data: Uint8Array): string {
+  const safeName = fontName.replace(/[\r\n]/g, "_");
   const encodedLines = assUuencode(data);
-  return `fontname: ${fontName}\n${encodedLines.join("\n")}`;
+  return `fontname: ${safeName}\n${encodedLines.join("\n")}`;
 }

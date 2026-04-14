@@ -121,6 +121,8 @@ export const strings: Record<string, StringEntry> = {
   btn_embed: { en: "Embed Selected Fonts ({0})", zh: "嵌入已选字体（{0}）" },
   btn_embed_default: { en: "Embed Fonts", zh: "嵌入字体" },
   btn_embedding: { en: "Embedding...", zh: "嵌入中…" },
+  msg_subsetting: { en: "Subsetting {0}...", zh: "子集化 {0}..." },
+  msg_font_skipped: { en: "Skipped {0}: {1}", zh: "跳过 {0}：{1}" },
   msg_no_fonts_selected: { en: "No fonts selected for embedding", zh: "未选择需嵌入的字体" },
   msg_embed_saved: {
     en: "Saved: {0} ({1} font(s) embedded)",

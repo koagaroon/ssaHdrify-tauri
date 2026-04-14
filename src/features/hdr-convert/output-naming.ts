@@ -44,6 +44,9 @@ export function resolveOutputPath(
   const normalized = inputPath.replace(/\\/g, "/");
   const lastSlash = normalized.lastIndexOf("/");
   const dir = lastSlash >= 0 ? normalized.slice(0, lastSlash) : ".";
+  if (dir === "." || dir === "") {
+    throw new Error("Input path must be absolute");
+  }
   const fullName = normalized.slice(lastSlash + 1);
   const dotIdx = fullName.lastIndexOf(".");
   let baseName = dotIdx > 0 ? fullName.slice(0, dotIdx) : fullName;
@@ -60,11 +63,21 @@ export function resolveOutputPath(
     }
   }
 
+  // Guard: reject filenames with no valid stem (e.g., ".ass")
+  if (!baseName || !baseName.replace(/^\.+/, "").trim()) {
+    throw new Error("Input filename has no valid stem");
+  }
+
   // Resolve template variables
   const resolved = template
     .replace(/\{name\}/g, baseName)
-    .replace(/\{eotf\}/g, eotf.toLowerCase())
-    .replace(/\{dir\}/g, dir);
+    .replace(/\{eotf\}/g, eotf.toLowerCase());
+
+  // Safety: reject characters that are illegal in filenames on Windows
+  const ILLEGAL_CHARS = /[<>:"|?*\\/]/;
+  if (ILLEGAL_CHARS.test(resolved)) {
+    throw new Error(`Output filename contains illegal characters: ${resolved}`);
+  }
 
   // Safety: reject empty filename
   if (!resolved.trim()) {
@@ -72,7 +85,8 @@ export function resolveOutputPath(
   }
 
   // Safety: check for Windows reserved names
-  const stem = resolved.slice(0, resolved.lastIndexOf(".")).replace(/[\s.]+$/, "");
+  const stemDotIdx = resolved.lastIndexOf(".");
+  const stem = (stemDotIdx > 0 ? resolved.slice(0, stemDotIdx) : resolved).replace(/[\s.]+$/, "");
   if (WINDOWS_RESERVED.has(stem.toUpperCase())) {
     throw new Error(`Output filename is a Windows reserved name: ${stem}`);
   }
@@ -80,18 +94,28 @@ export function resolveOutputPath(
   // Build full output path
   const outputPath = `${dir}/${resolved}`;
 
-  // Safety: reject path traversal
-  const normalizedOutput = outputPath.replace(/\\/g, "/");
-  const normalizedDir = dir.replace(/\\/g, "/");
-  if (!normalizedOutput.startsWith(normalizedDir + "/")) {
-    // Could be a same-directory relative path, check again
-    if (normalizedOutput.includes("..")) {
-      throw new Error(`Output path escapes input directory: ${outputPath}`);
-    }
+  // Safety: reject paths that exceed Windows MAX_PATH limit
+  if (outputPath.length > 260) {
+    throw new Error(`Output path too long (${outputPath.length} chars, max 260 for Windows compatibility)`);
   }
 
-  // Safety: reject self-overwrite
-  if (normalizedOutput === normalized) {
+  // Safety: reject path traversal — check unconditionally
+  const normalizedOutput = outputPath.replace(/\\/g, "/");
+  const normalizedDir = dir.replace(/\\/g, "/");
+  if (normalizedOutput.includes("..")) {
+    throw new Error(`Output path contains directory traversal: ${outputPath}`);
+  }
+  if (!normalizedOutput.startsWith(normalizedDir + "/")) {
+    throw new Error(`Output path escapes input directory: ${outputPath}`);
+  }
+
+  // Safety: output must have .ass extension
+  if (!resolved.toLowerCase().endsWith(".ass")) {
+    throw new Error("Output filename must end with .ass");
+  }
+
+  // Safety: reject self-overwrite (case-insensitive for Windows)
+  if (normalizedOutput.toLowerCase() === normalized.toLowerCase()) {
     throw new Error(
       "Output path is the same as input (would overwrite source file)"
     );

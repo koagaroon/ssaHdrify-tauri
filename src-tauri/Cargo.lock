@@ -3495,6 +3495,7 @@ version = "0.1.0"
 dependencies = [
  "font-kit",
  "log",
+ "once_cell",
  "serde",
  "serde_json",
  "tauri",

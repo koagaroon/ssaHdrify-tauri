@@ -5,7 +5,7 @@
  *   const { t, lang, setLang } = useI18n();
  *   t("msg_done", fileName)  →  "Done: subtitle.ass"
  */
-import { createContext, useContext } from "react";
+import { createContext, useCallback, useContext } from "react";
 import { strings, type Lang } from "./strings";
 
 export interface I18nContextValue {
@@ -20,6 +20,9 @@ export const I18nContext = createContext<I18nContextValue>({
 
 /**
  * Translate a key, substituting {0}, {1}, ... with additional arguments.
+ *
+ * NOTE: Translation args may contain user-controlled content (file paths, errors).
+ * Safe because React JSX renders as text nodes, not HTML. Do NOT use with dangerouslySetInnerHTML.
  */
 function translate(lang: Lang, key: string, ...args: (string | number)[]): string {
   const entry = strings[key];
@@ -27,7 +30,7 @@ function translate(lang: Lang, key: string, ...args: (string | number)[]): strin
 
   let text = entry[lang] ?? entry.en ?? key;
   for (let i = 0; i < args.length; i++) {
-    text = text.replace(`{${i}}`, String(args[i]));
+    text = text.replace(new RegExp(`\\{${i}\\}`, 'g'), String(args[i]));
   }
   return text;
 }
@@ -35,8 +38,10 @@ function translate(lang: Lang, key: string, ...args: (string | number)[]): strin
 export function useI18n() {
   const { lang, setLang } = useContext(I18nContext);
 
-  const t = (key: string, ...args: (string | number)[]) =>
-    translate(lang, key, ...args);
+  const t = useCallback(
+    (key: string, ...args: (string | number)[]) => translate(lang, key, ...args),
+    [lang]
+  );
 
   return { t, lang, setLang };
 }

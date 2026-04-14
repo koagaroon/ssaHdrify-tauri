@@ -68,8 +68,13 @@ export function collectFonts(assContent: string): FontUsage[] {
 
   if (parsed.styles?.style) {
     for (const style of parsed.styles.style) {
+      // Sanitize font family name: strip control characters and limit length
+      const rawFamily = (style.Fontname || "Arial").trim();
+      const family = rawFamily
+        .replace(/[\x00-\x1f\x7f]/g, "")
+        .slice(0, 128);
       styleMap.set(style.Name, {
-        family: style.Fontname || "Arial",
+        family: family || "Arial",
         bold: parseInt(style.Bold || "0") !== 0,
         italic: parseInt(style.Italic || "0") !== 0,
       });
@@ -85,11 +90,18 @@ export function collectFonts(assContent: string): FontUsage[] {
     if (!usage) {
       usage = { key: { ...key }, codepoints: new Set() };
       usageMap.set(keyStr, usage);
+      if (usageMap.size > 500) {
+        throw new Error(`Too many font variants: ${usageMap.size} (max 500)`);
+      }
     }
     for (const char of text) {
+      if (usage.codepoints.size > 65536) {
+        // BMP limit reached — no point collecting more codepoints for subsetting
+        break;
+      }
       const cp = char.codePointAt(0);
-      if (cp !== undefined && cp > 32) {
-        // Skip control chars and space
+      if (cp !== undefined && cp > 32 && cp <= 0x10FFFF) {
+        // Skip control chars, space, and invalid codepoints
         usage.codepoints.add(cp);
       }
     }
@@ -171,6 +183,10 @@ function applyOverrideTags(block: string, current: FontKey): FontKey {
   const fnMatch = block.match(/\\fn([^\\}]+)/);
   if (fnMatch) {
     result.family = fnMatch[1].trim();
+    // Sanitize font family name: strip control characters and limit length
+    result.family = result.family
+      .replace(/[\x00-\x1f\x7f]/g, "")  // strip control chars including newlines
+      .slice(0, 128);  // limit length
   }
 
   // \b<0|1|weight> — bold

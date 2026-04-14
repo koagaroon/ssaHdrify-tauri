@@ -32,7 +32,7 @@ export function preprocessSrtColors(text: string): string {
   });
 
   // Convert closing tags
-  result = result.replace(SRT_COLOR_CLOSE_RE, "{\\1c}");
+  result = result.replace(SRT_COLOR_CLOSE_RE, "{\\r}");
 
   return result;
 }
@@ -84,8 +84,10 @@ export function buildAssDocument(
   lines.push(
     "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding"
   );
+  // Sanitize fontName: strip control characters and commas to prevent CSV corruption
+  const safeFontName = style.fontName.replace(/[\x00-\x1f\x7f,]/g, "");
   lines.push(
-    `Style: Default,${style.fontName},${style.fontSize},${style.primaryColor},&H000000FF,${style.outlineColor},&H00000000,0,0,0,0,100,100,0,0,1,${style.outlineWidth},${style.shadowDepth},2,10,10,10,1`
+    `Style: Default,${safeFontName},${style.fontSize},${style.primaryColor},&H000000FF,${style.outlineColor},&H00000000,0,0,0,0,100,100,0,0,1,${style.outlineWidth},${style.shadowDepth},2,10,10,10,1`
   );
   lines.push("");
 
@@ -99,7 +101,7 @@ export function buildAssDocument(
     const startTime = msToAssTime(entry.start);
     const endTime = msToAssTime(entry.end);
     // Clean SRT formatting: convert line breaks, strip remaining HTML
-    const cleanText = entry.text
+    let cleanText = entry.text
       .replace(/\r?\n/g, "\\N")
       .replace(/<[^>]*>/g, ""); // strip any remaining HTML tags
     lines.push(
