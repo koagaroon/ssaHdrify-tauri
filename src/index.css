@@ -1,1 +1,46 @@
 @import "tailwindcss";
+
+/* Base dark theme for the app */
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  background: #0a0a0a;
+  color: #e5e5e5;
+  font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Custom scrollbar for dark theme */
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #171717;
+}
+::-webkit-scrollbar-thumb {
+  background: #404040;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #525252;
+}
+
+/* Dark-themed select dropdowns — fix text alignment */
+select {
+  text-indent: 0;
+  padding-left: 0.5rem;
+}
+
+/* Dark-themed number input spinners */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
+}
+
+/* Custom spinner replacement via wrapper — hide native, show styled controls */
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}

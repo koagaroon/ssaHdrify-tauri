@@ -1,121 +1,63 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import heroImg from './assets/hero.png'
-import './App.css'
+import { useState } from "react";
+import HdrConvert from "./features/hdr-convert/HdrConvert";
+import TimingShift from "./features/timing-shift/TimingShift";
+import FontEmbed from "./features/font-embed/FontEmbed";
+
+type Tab = "hdr" | "timing" | "fonts";
+
+const TABS: { id: Tab; label: string; desc: string }[] = [
+  { id: "hdr", label: "HDR Convert", desc: "SDR → HDR color space conversion" },
+  { id: "timing", label: "Timing Shift", desc: "Batch subtitle timing adjustment" },
+  { id: "fonts", label: "Font Embed", desc: "Subset & embed fonts into ASS" },
+];
 
 function App() {
-  const [count, setCount] = useState(0)
+  const [activeTab, setActiveTab] = useState<Tab>("hdr");
 
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
+    <div className="flex flex-col h-screen bg-neutral-950 text-neutral-100">
+      {/* ── Header ─────────────────────────────────── */}
+      <header className="flex-none border-b border-neutral-800 bg-neutral-900/80 backdrop-blur-sm">
+        <div className="px-5 pt-4 pb-0">
+          <h1 className="text-lg font-semibold tracking-tight">
+            SSA HDRify
+          </h1>
+          <nav className="flex gap-1 mt-3" role="tablist">
+            {TABS.map((tab) => (
+              <button
+                key={tab.id}
+                role="tab"
+                aria-selected={activeTab === tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`
+                  px-4 py-2 text-sm font-medium rounded-t-lg transition-colors
+                  ${
+                    activeTab === tab.id
+                      ? "bg-neutral-950 text-white border-t border-x border-neutral-700"
+                      : "text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800/50"
+                  }
+                `}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </nav>
         </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
+      </header>
 
-      <div className="ticks"></div>
+      {/* ── Tab content ────────────────────────────── */}
+      <main className="flex-1 overflow-y-auto p-5">
+        {activeTab === "hdr" && <HdrConvert />}
+        {activeTab === "timing" && <TimingShift />}
+        {activeTab === "fonts" && <FontEmbed />}
+      </main>
 
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
-  )
+      {/* ── Footer ─────────────────────────────────── */}
+      <footer className="flex-none px-5 py-2 text-xs text-neutral-500 border-t border-neutral-800">
+        SSA HDRify v0.1.0
+      </footer>
+    </div>
+  );
 }
 
-export default App
+export default App;

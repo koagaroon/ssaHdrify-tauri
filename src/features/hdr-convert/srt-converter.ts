@@ -1,0 +1,147 @@
+/**
+ * SRT/SUB → ASS conversion with color preprocessing.
+ *
+ * Converts SRT <font color="#RRGGBB"> tags to ASS inline color overrides
+ * before building a full ASS document. This allows the HDR processor
+ * to handle all color tags uniformly.
+ *
+ * Uses subsrt for multi-format parsing and ass-compiler for ASS generation.
+ */
+
+// ── SRT Color Preprocessing ──────────────────────────────
+// Matches: <font color="#RRGGBB"> or <font color=#RRGGBB>
+// with up to 512 chars of other attributes before/after color (ReDoS guard)
+const SRT_COLOR_OPEN_RE =
+  /<font\b[^>]{0,512}\bcolor="?#([0-9a-fA-F]{6})"?[^>]{0,512}>/gi;
+const SRT_COLOR_CLOSE_RE = /<\/font>/gi;
+
+/**
+ * Convert HTML-style font color tags to ASS inline color overrides.
+ * <font color="#RRGGBB">text</font>  →  {\1c&HBBGGRR&}text{\1c}
+ */
+export function preprocessSrtColors(text: string): string {
+  let result = text;
+
+  // Convert opening tags with color
+  result = result.replace(SRT_COLOR_OPEN_RE, (_match, hexRgb: string) => {
+    const r = hexRgb.slice(0, 2);
+    const g = hexRgb.slice(2, 4);
+    const b = hexRgb.slice(4, 6);
+    // Reverse to BGR for ASS format
+    return `{\\1c&H${b}${g}${r}&}`;
+  });
+
+  // Convert closing tags
+  result = result.replace(SRT_COLOR_CLOSE_RE, "{\\1c}");
+
+  return result;
+}
+
+// ── Style Configuration ──────────────────────────────────
+
+export interface StyleConfig {
+  fontName: string;
+  fontSize: number;
+  primaryColor: string; // ASS format: &H00FFFFFF
+  outlineColor: string; // ASS format: &H00000000
+  outlineWidth: number;
+  shadowDepth: number;
+  fps: number; // only used for SUB (MicroDVD) format
+}
+
+export const DEFAULT_STYLE: StyleConfig = {
+  fontName: "Arial",
+  fontSize: 48,
+  primaryColor: "&H00FFFFFF",
+  outlineColor: "&H00000000",
+  outlineWidth: 2.0,
+  shadowDepth: 1.0,
+  fps: 23.976,
+};
+
+// ── ASS Document Builder ─────────────────────────────────
+
+/**
+ * Build a minimal ASS document from parsed subtitle entries.
+ * This creates a properly formatted ASS file with styles and events.
+ */
+export function buildAssDocument(
+  entries: { start: number; end: number; text: string }[],
+  style: StyleConfig = DEFAULT_STYLE
+): string {
+  const lines: string[] = [];
+
+  // [Script Info]
+  lines.push("[Script Info]");
+  lines.push("ScriptType: v4.00+");
+  lines.push("PlayResX: 1920");
+  lines.push("PlayResY: 1080");
+  lines.push("WrapStyle: 0");
+  lines.push("");
+
+  // [V4+ Styles]
+  lines.push("[V4+ Styles]");
+  lines.push(
+    "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding"
+  );
+  lines.push(
+    `Style: Default,${style.fontName},${style.fontSize},${style.primaryColor},&H000000FF,${style.outlineColor},&H00000000,0,0,0,0,100,100,0,0,1,${style.outlineWidth},${style.shadowDepth},2,10,10,10,1`
+  );
+  lines.push("");
+
+  // [Events]
+  lines.push("[Events]");
+  lines.push(
+    "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
+  );
+
+  for (const entry of entries) {
+    const startTime = msToAssTime(entry.start);
+    const endTime = msToAssTime(entry.end);
+    // Clean SRT formatting: convert line breaks, strip remaining HTML
+    const cleanText = entry.text
+      .replace(/\r?\n/g, "\\N")
+      .replace(/<[^>]*>/g, ""); // strip any remaining HTML tags
+    lines.push(
+      `Dialogue: 0,${startTime},${endTime},Default,,0,0,0,,${cleanText}`
+    );
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Convert milliseconds to ASS timestamp format: H:MM:SS.cc (centiseconds)
+ */
+function msToAssTime(ms: number): string {
+  if (ms < 0) ms = 0;
+  const totalCs = Math.round(ms / 10);
+  const cs = totalCs % 100;
+  const totalSec = Math.floor(totalCs / 100);
+  const sec = totalSec % 60;
+  const totalMin = Math.floor(totalSec / 60);
+  const min = totalMin % 60;
+  const hr = Math.floor(totalMin / 60);
+
+  return `${hr}:${String(min).padStart(2, "0")}:${String(sec).padStart(2, "0")}.${String(cs).padStart(2, "0")}`;
+}
+
+// ── Format Support ────────────────────────────────────────
+
+/** File extensions that need SRT/SUB → ASS conversion */
+export const CONVERTIBLE_EXTENSIONS = new Set([".srt", ".sub"]);
+
+/** File extensions that are native ASS/SSA */
+export const NATIVE_ASS_EXTENSIONS = new Set([".ass", ".ssa"]);
+
+/** Check if a filename is a native ASS format */
+export function isNativeAss(filename: string): boolean {
+  const ext = filename.slice(filename.lastIndexOf(".")).toLowerCase();
+  return NATIVE_ASS_EXTENSIONS.has(ext);
+}
+
+/** Check if a filename can be converted to ASS */
+export function isConvertible(filename: string): boolean {
+  const ext = filename.slice(filename.lastIndexOf(".")).toLowerCase();
+  return CONVERTIBLE_EXTENSIONS.has(ext);
+}
