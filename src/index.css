@@ -1,45 +1,128 @@
 @import "tailwindcss";
 
-/* Base dark theme for the app */
+/* ── Theme CSS Variables ───────────────────────────────────
+   Light mode is default (:root).
+   Dark mode is activated via data-theme="dark" on <html>.
+   Components use var(--xxx) for all theme-sensitive colors.
+*/
+
+:root {
+  --bg-app: #ffffff;
+  --bg-header: rgba(249, 250, 251, 0.8);
+  --bg-secondary: #f3f4f6;
+  --bg-input: #f9fafb;
+  --bg-hover: rgba(0, 0, 0, 0.04);
+  --bg-panel: rgba(249, 250, 251, 0.5);
+  --text-primary: #111827;
+  --text-secondary: #4b5563;
+  --text-muted: #9ca3af;
+  --text-faint: #d1d5db;
+  --border: #e5e7eb;
+  --border-light: rgba(229, 231, 235, 0.5);
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-disabled-bg: #e5e7eb;
+  --accent-disabled-text: #9ca3af;
+  --success: #16a34a;
+  --error: #dc2626;
+  --info: #6b7280;
+  --scrollbar-track: #f3f4f6;
+  --scrollbar-thumb: #d1d5db;
+  --scrollbar-thumb-hover: #9ca3af;
+  --spinner-bg: #f3f4f6;
+  --spinner-hover: #e5e7eb;
+  --spinner-active: #d1d5db;
+  --spinner-icon: #6b7280;
+  --badge-green-bg: rgba(22, 163, 74, 0.1);
+  --badge-green-text: #16a34a;
+  --badge-red-bg: rgba(220, 38, 38, 0.1);
+  --badge-red-text: #dc2626;
+  --preview-shifted: #2563eb;
+  --cancel-bg: rgba(220, 38, 38, 0.08);
+  --cancel-bg-hover: rgba(220, 38, 38, 0.15);
+  --cancel-text: #dc2626;
+  --progress-bg: #e5e7eb;
+  --progress-fill: #2563eb;
+}
+
+/*
+ * Dark mode — M3 tonal elevation + Apple HIG layering.
+ *
+ * Surface hierarchy (darker → lighter as elevation rises):
+ *   Level 0  --bg-app          #0a0a0c   App background (lowest)
+ *   Level 1  --bg-header       #141418   Navigation bar, header
+ *   Level 2  --bg-panel        #1a1a20   Cards, panels, log area
+ *   Level 3  --bg-input        #24242c   Input fields, dropdowns, interactive
+ *   Level 4  --bg-hover        #2e2e38   Hover states, highest elevation
+ *
+ * The slight blue shift (+4 on B channel) is the M3 "primary tint"
+ * that prevents flat gray surfaces from looking dead/muddy.
+ */
+[data-theme="dark"] {
+  --bg-app: #0a0a0c;
+  --bg-header: rgba(20, 20, 24, 0.92);
+  --bg-secondary: #141418;
+  --bg-input: #24242c;
+  --bg-hover: #2e2e38;
+  --bg-panel: #1a1a20;
+  --text-primary: #e8e8ed;
+  --text-secondary: #a0a0aa;
+  --text-muted: #65656f;
+  --text-faint: #3a3a42;
+  --border: #2e2e36;
+  --border-light: rgba(46, 46, 54, 0.5);
+  --accent: #5b8def;
+  --accent-hover: #7aa3f5;
+  --accent-disabled-bg: #1e1e24;
+  --accent-disabled-text: #4a4a54;
+  --success: #4ade80;
+  --error: #f87171;
+  --info: #a0a0aa;
+  --scrollbar-track: #141418;
+  --scrollbar-thumb: #2e2e36;
+  --scrollbar-thumb-hover: #3e3e48;
+  --spinner-bg: #24242c;
+  --spinner-hover: #2e2e38;
+  --spinner-active: #38384a;
+  --spinner-icon: #a0a0aa;
+  --badge-green-bg: rgba(74, 222, 128, 0.12);
+  --badge-green-text: #4ade80;
+  --badge-red-bg: rgba(248, 113, 113, 0.12);
+  --badge-red-text: #f87171;
+  --preview-shifted: #7aa3f5;
+  --cancel-bg: rgba(248, 113, 113, 0.08);
+  --cancel-bg-hover: rgba(248, 113, 113, 0.16);
+  --cancel-text: #f87171;
+  --progress-bg: #1a1a20;
+  --progress-fill: #5b8def;
+}
+
+/* ── Base ──────────────────────────────────────────────────*/
 html, body, #root {
   height: 100%;
   margin: 0;
-  background: #0a0a0a;
-  color: #e5e5e5;
+  background: var(--bg-app);
+  color: var(--text-primary);
   font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
+  transition: background-color 0.2s, color 0.2s;
 }
 
-/* Custom scrollbar for dark theme */
-::-webkit-scrollbar {
-  width: 8px;
-}
-::-webkit-scrollbar-track {
-  background: #171717;
-}
-::-webkit-scrollbar-thumb {
-  background: #404040;
-  border-radius: 4px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: #525252;
-}
+/* ── Scrollbar ─────────────────────────────────────────────*/
+::-webkit-scrollbar { width: 8px; }
+::-webkit-scrollbar-track { background: var(--scrollbar-track); }
+::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
 
-/* Dark-themed select dropdowns — fix text alignment */
-select {
-  text-indent: 0;
-  padding-left: 0.5rem;
-}
+/* ── Form controls ─────────────────────────────────────────*/
+select { text-indent: 0; padding-left: 0.5rem; }
 
-/* Dark-themed number input spinners */
 input[type="number"]::-webkit-inner-spin-button,
 input[type="number"]::-webkit-outer-spin-button {
   -webkit-appearance: none;
   appearance: none;
   margin: 0;
 }
-
-/* Custom spinner replacement via wrapper — hide native, show styled controls */
 input[type="number"] {
   -moz-appearance: textfield;
   appearance: textfield;

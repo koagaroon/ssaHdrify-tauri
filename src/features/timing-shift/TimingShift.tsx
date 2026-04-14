@@ -12,11 +12,14 @@ import {
   type ShiftResult,
   type PreviewEntry,
 } from "./timing-engine";
+import { useI18n } from "../../i18n/useI18n";
 
 type Unit = "ms" | "s";
 type Direction = "slower" | "faster";
 
 export default function TimingShift() {
+  const { t } = useI18n();
+
   const [filePath, setFilePath] = useState<string | null>(null);
   const [fileName, setFileName] = useState<string>("");
   const [fileContent, setFileContent] = useState<string>("");
@@ -80,9 +83,9 @@ export default function TimingShift() {
       setCaptionCount(result.captionCount);
       setDetectedFormat(result.format.toUpperCase());
     } catch (e) {
-      setStatus(`Error: ${e instanceof Error ? e.message : e}`);
+      setStatus(t("error_prefix", e instanceof Error ? e.message : String(e)));
     }
-  }, [effectiveOffsetMs, thresholdMs]);
+  }, [effectiveOffsetMs, thresholdMs, t]);
 
   const handleSave = useCallback(async () => {
     if (!fileContent || !filePath) return;
@@ -103,11 +106,11 @@ export default function TimingShift() {
 
       await writeText(savePath, result.content);
       const outName = savePath.replace(/\\/g, "/").split("/").pop() ?? savePath;
-      setStatus(`Saved: ${outName} (${result.captionCount} captions)`);
+      setStatus(t("msg_saved", outName, result.captionCount));
     } catch (e) {
-      setStatus(`Error: ${e instanceof Error ? e.message : e}`);
+      setStatus(t("error_prefix", e instanceof Error ? e.message : String(e)));
     }
-  }, [fileContent, filePath, fileName, effectiveOffsetMs, thresholdMs]);
+  }, [fileContent, filePath, fileName, effectiveOffsetMs, thresholdMs, t]);
 
   return (
     <div className="max-w-2xl space-y-5">
@@ -115,21 +118,32 @@ export default function TimingShift() {
       <div className="space-y-2">
         <button
           onClick={handlePickFile}
-          className="px-5 py-2.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-sm font-medium text-neutral-200 transition-colors"
+          className="px-5 py-2.5 rounded-lg text-sm font-medium transition-colors"
+          style={{
+            background: "var(--bg-input)",
+            border: "1px solid var(--border)",
+            color: "var(--text-primary)",
+          }}
         >
-          Select Subtitle File
+          {t("btn_select_subtitle")}
         </button>
         {fileName && (
           <div className="flex items-center gap-3 text-sm">
-            <span className="text-neutral-300">{fileName}</span>
+            <span style={{ color: "var(--text-primary)" }}>{fileName}</span>
             {detectedFormat && (
-              <span className="px-2 py-0.5 rounded bg-neutral-800 text-xs text-neutral-400">
+              <span
+                className="px-2 py-0.5 rounded text-xs"
+                style={{
+                  background: "var(--bg-input)",
+                  color: "var(--text-muted)",
+                }}
+              >
                 {detectedFormat}
               </span>
             )}
             {captionCount > 0 && (
-              <span className="text-xs text-neutral-500">
-                {captionCount} captions
+              <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+                {t("captions_count", captionCount)}
               </span>
             )}
           </div>
@@ -139,44 +153,72 @@ export default function TimingShift() {
       {/* Offset Controls */}
       <div className="flex items-end gap-3">
         <div>
-          <label className="block text-sm font-medium text-neutral-300 mb-1">
-            Offset
+          <label
+            className="block text-sm font-medium mb-1"
+            style={{ color: "var(--text-primary)" }}
+          >
+            {t("offset_label")}
           </label>
           <input
             type="number"
             value={offsetValue}
             onChange={(e) => setOffsetValue(parseInt(e.target.value) || 0)}
-            className="w-28 px-3 py-2 rounded-lg bg-neutral-800 border border-neutral-700 text-neutral-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-28 px-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            style={{
+              background: "var(--bg-input)",
+              border: "1px solid var(--border)",
+              color: "var(--text-primary)",
+            }}
           />
         </div>
         <select
           value={unit}
           onChange={(e) => setUnit(e.target.value as Unit)}
-          className="px-3 py-2 rounded-lg bg-neutral-800 border border-neutral-700 text-neutral-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="px-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          style={{
+            background: "var(--bg-input)",
+            border: "1px solid var(--border)",
+            color: "var(--text-primary)",
+          }}
         >
-          <option value="ms">ms</option>
-          <option value="s">seconds</option>
+          <option value="ms">{t("unit_ms")}</option>
+          <option value="s">{t("unit_seconds")}</option>
         </select>
         <select
           value={direction}
           onChange={(e) => setDirection(e.target.value as Direction)}
-          className="px-3 py-2 rounded-lg bg-neutral-800 border border-neutral-700 text-neutral-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="px-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          style={{
+            background: "var(--bg-input)",
+            border: "1px solid var(--border)",
+            color: "var(--text-primary)",
+          }}
         >
-          <option value="slower">Slower (+)</option>
-          <option value="faster">Faster (−)</option>
+          <option value="slower">{t("direction_slower")}</option>
+          <option value="faster">{t("direction_faster")}</option>
         </select>
       </div>
+      <p className="text-xs" style={{ color: "var(--text-muted)", marginTop: "-0.5rem" }}>
+        {t("offset_hint")}
+      </p>
 
       {/* Threshold */}
       <div className="flex items-center gap-3">
-        <label className="flex items-center gap-2 text-sm text-neutral-300 cursor-pointer">
+        <label
+          className="flex items-center gap-2 text-sm cursor-pointer"
+          style={{ color: "var(--text-primary)" }}
+        >
           <input
             type="checkbox"
             checked={useThreshold}
             onChange={(e) => setUseThreshold(e.target.checked)}
-            className="rounded bg-neutral-800 border-neutral-600"
+            className="rounded"
+            style={{
+              background: "var(--bg-input)",
+              borderColor: "var(--border)",
+            }}
           />
-          Apply only after:
+          {t("threshold_label")}
         </label>
         {useThreshold && (
           <input
@@ -184,55 +226,105 @@ export default function TimingShift() {
             value={thresholdText}
             onChange={(e) => setThresholdText(e.target.value)}
             placeholder="00:05:00.000"
-            className="w-40 px-3 py-1.5 rounded-lg bg-neutral-800 border border-neutral-700 text-neutral-100 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-40 px-3 py-1.5 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+            style={{
+              background: "var(--bg-input)",
+              border: "1px solid var(--border)",
+              color: "var(--text-primary)",
+            }}
           />
         )}
         {useThreshold && thresholdMs === null && (
-          <span className="text-xs text-red-400">Invalid format (HH:MM:SS.mmm)</span>
+          <span className="text-xs" style={{ color: "var(--error)" }}>
+            {t("threshold_invalid")}
+          </span>
         )}
       </div>
 
       {/* Preview */}
       {preview.length > 0 && (
-        <div className="border border-neutral-800 rounded-lg bg-neutral-900/50">
-          <div className="px-3 py-2 border-b border-neutral-800">
-            <span className="text-xs font-medium text-neutral-400">
-              Preview (first {preview.length} of {captionCount})
+        <div
+          className="rounded-lg"
+          style={{
+            border: "1px solid var(--border)",
+            background: "var(--bg-panel)",
+          }}
+        >
+          <div
+            className="px-3 py-2"
+            style={{ borderBottom: "1px solid var(--border)" }}
+          >
+            <span
+              className="text-xs font-medium"
+              style={{ color: "var(--text-muted)" }}
+            >
+              {t("preview_title", preview.length, captionCount)}
             </span>
           </div>
           <div className="max-h-64 overflow-y-auto">
             <table className="w-full text-xs font-mono">
               <thead>
-                <tr className="text-neutral-500 border-b border-neutral-800">
-                  <th className="px-3 py-1.5 text-left">#</th>
-                  <th className="px-3 py-1.5 text-left">Original</th>
-                  <th className="px-3 py-1.5 text-center">→</th>
-                  <th className="px-3 py-1.5 text-left">Shifted</th>
+                <tr style={{ borderBottom: "1px solid var(--border)" }}>
+                  <th
+                    className="px-3 py-1.5 text-left"
+                    style={{ color: "var(--text-muted)" }}
+                  >
+                    {t("col_index")}
+                  </th>
+                  <th
+                    className="px-3 py-1.5 text-left"
+                    style={{ color: "var(--text-muted)" }}
+                  >
+                    {t("col_original")}
+                  </th>
+                  <th
+                    className="px-3 py-1.5 text-center"
+                    style={{ color: "var(--text-muted)" }}
+                  >
+                    →
+                  </th>
+                  <th
+                    className="px-3 py-1.5 text-left"
+                    style={{ color: "var(--text-muted)" }}
+                  >
+                    {t("col_shifted")}
+                  </th>
                 </tr>
               </thead>
               <tbody>
                 {preview.map((entry) => (
                   <tr
                     key={entry.index}
-                    className={`border-b border-neutral-800/50 ${
-                      entry.wasShifted ? "" : "opacity-50"
-                    }`}
+                    className={entry.wasShifted ? "" : "opacity-50"}
+                    style={{
+                      borderBottom: "1px solid color-mix(in srgb, var(--border) 50%, transparent)",
+                    }}
                   >
-                    <td className="px-3 py-1 text-neutral-500">
+                    <td
+                      className="px-3 py-1"
+                      style={{ color: "var(--text-muted)" }}
+                    >
                       {entry.index}
                     </td>
-                    <td className="px-3 py-1 text-neutral-400">
+                    <td
+                      className="px-3 py-1"
+                      style={{ color: "var(--text-muted)" }}
+                    >
                       {formatTimestamp(entry.originalStart)}
                     </td>
-                    <td className="px-3 py-1 text-center text-neutral-600">
+                    <td
+                      className="px-3 py-1 text-center"
+                      style={{ color: "var(--text-muted)" }}
+                    >
                       {entry.wasShifted ? "→" : "·"}
                     </td>
                     <td
-                      className={`px-3 py-1 ${
-                        entry.wasShifted
-                          ? "text-blue-400"
-                          : "text-neutral-400"
-                      }`}
+                      className="px-3 py-1"
+                      style={{
+                        color: entry.wasShifted
+                          ? "var(--preview-shifted)"
+                          : "var(--text-muted)",
+                      }}
                     >
                       {formatTimestamp(entry.shiftedStart)}
                     </td>
@@ -248,18 +340,22 @@ export default function TimingShift() {
       {fileContent && (
         <button
           onClick={handleSave}
-          className="px-6 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-medium text-sm transition-colors"
+          className="px-6 py-2.5 rounded-lg text-white font-medium text-sm transition-colors"
+          style={{ background: "var(--accent)" }}
         >
-          Save As...
+          {t("btn_save_as")}
         </button>
       )}
 
       {/* Status */}
       {status && (
         <p
-          className={`text-sm ${
-            status.startsWith("Error") ? "text-red-400" : "text-green-400"
-          }`}
+          className="text-sm"
+          style={{
+            color: status.startsWith("Error")
+              ? "var(--error)"
+              : "var(--success)",
+          }}
         >
           {status}
         </p>

@@ -29,6 +29,7 @@ import {
 
 import { parseSubtitle } from "../../lib/subtitle-parser";
 import NumberInput from "../../lib/NumberInput";
+import { useI18n } from "../../i18n/useI18n";
 
 // Common fonts available on most systems (cross-platform)
 const COMMON_FONTS = [
@@ -40,18 +41,6 @@ const COMMON_FONTS = [
   "Source Han Sans", "Source Han Serif",
 ];
 
-// ── EOTF descriptions ──────────────────────────────────────
-const EOTF_INFO: Record<Eotf, { desc: string; brightnessHint: string }> = {
-  PQ: {
-    desc: "Absolute brightness, up to 10,000 nits. For HDR10 / Dolby Vision streaming and disc content.",
-    brightnessHint: "Recommended: 100–300 nits (BT.2408 standard: 203)",
-  },
-  HLG: {
-    desc: "Relative brightness, adapts to display. For broadcast HDR and SDR-compatible content.",
-    brightnessHint: "Recommended: 100–400 nits (display-adaptive)",
-  },
-};
-
 interface LogEntry {
   id: number;
   text: string;
@@ -59,6 +48,7 @@ interface LogEntry {
 }
 
 export default function HdrConvert() {
+  const { t } = useI18n();
   const [eotf, setEotf] = useState<Eotf>("PQ");
   const [brightness, setBrightness] = useState(DEFAULT_BRIGHTNESS);
   const [brightnessText, setBrightnessText] = useState(String(DEFAULT_BRIGHTNESS));
@@ -99,7 +89,7 @@ export default function HdrConvert() {
   const handleConvert = useCallback(async () => {
     // Validate brightness
     if (brightness < MIN_BRIGHTNESS || brightness > MAX_BRIGHTNESS) {
-      addLog(`Invalid brightness: must be ${MIN_BRIGHTNESS}–${MAX_BRIGHTNESS} nits`, "error");
+      addLog(t("msg_invalid_brightness", MIN_BRIGHTNESS, MAX_BRIGHTNESS), "error");
       return;
     }
 
@@ -108,19 +98,19 @@ export default function HdrConvert() {
 
     setProcessing(true);
     cancelRef.current = false;
-    addLog(`Starting conversion: ${paths.length} file(s), ${eotf} @ ${brightness} nits`);
+    addLog(t("msg_start_conversion", paths.length, eotf, brightness));
 
     const outputPaths = new Set<string>();
     let successCount = 0;
 
     for (const filePath of paths) {
       if (cancelRef.current) {
-        addLog("Conversion cancelled.", "info");
+        addLog(t("msg_cancelled"), "info");
         break;
       }
 
       const fileName = filePath.replace(/\\/g, "/").split("/").pop() ?? filePath;
-      addLog(`Processing: ${fileName}`);
+      addLog(t("msg_processing", fileName));
 
       try {
         // Resolve output path
@@ -128,14 +118,14 @@ export default function HdrConvert() {
         try {
           outputPath = resolveOutputPath(filePath, activeTemplate, eotf);
         } catch (e) {
-          addLog(`Skipped ${fileName}: ${e instanceof Error ? e.message : e}`, "error");
+          addLog(t("msg_skipped", fileName, e instanceof Error ? e.message : String(e)), "error");
           continue;
         }
 
         // Check for duplicate output targets
         const normalizedOut = outputPath.replace(/\\/g, "/").toLowerCase();
         if (outputPaths.has(normalizedOut)) {
-          addLog(`Skipped ${fileName}: duplicate output path`, "error");
+          addLog(t("msg_skipped_duplicate", fileName), "error");
           continue;
         }
         outputPaths.add(normalizedOut);
@@ -145,7 +135,7 @@ export default function HdrConvert() {
         try {
           content = await readText(filePath);
         } catch (e) {
-          addLog(`Error reading ${fileName}: ${e instanceof Error ? e.message : e}`, "error");
+          addLog(t("msg_read_error", fileName, e instanceof Error ? e.message : String(e)), "error");
           continue;
         }
 
@@ -173,47 +163,60 @@ export default function HdrConvert() {
           // Now transform the ASS colors to HDR
           assContent = processAssContent(rawAss, brightness, eotf);
         } else {
-          addLog(`Skipped ${fileName}: unsupported format`, "error");
+          addLog(t("msg_unsupported", fileName), "error");
           continue;
         }
 
         // Write output
         await writeText(outputPath, assContent);
         const outName = outputPath.replace(/\\/g, "/").split("/").pop() ?? outputPath;
-        addLog(`Done: ${outName}`, "success");
+        addLog(t("msg_done", outName), "success");
         successCount++;
       } catch (e) {
-        addLog(`Error converting ${fileName}: ${e instanceof Error ? e.message : e}`, "error");
+        addLog(t("msg_convert_error", fileName, e instanceof Error ? e.message : String(e)), "error");
       }
     }
 
-    addLog(`Conversion complete: ${successCount}/${paths.length} file(s) processed`, "success");
+    addLog(t("msg_complete", successCount, paths.length), "success");
     setProcessing(false);
-  }, [brightness, eotf, activeTemplate, style, addLog]);
+  }, [brightness, eotf, activeTemplate, style, addLog, t]);
 
   return (
     <div className="max-w-2xl space-y-5">
       {/* EOTF Selection */}
       <div className="space-y-2">
-        <label className="block text-sm font-medium text-neutral-300">
-          Content EOTF Curve
+        <label
+          className="block text-sm font-medium"
+          style={{ color: "var(--text-secondary)" }}
+        >
+          {t("eotf_label")}
         </label>
         <select
           value={eotf}
           onChange={(e) => setEotf(e.target.value as Eotf)}
           disabled={processing}
-          className="w-48 px-3 py-2 rounded-lg bg-neutral-800 border border-neutral-700 text-neutral-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="w-48 px-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          style={{
+            background: "var(--bg-input)",
+            border: "1px solid var(--border)",
+            color: "var(--text-primary)",
+          }}
         >
           <option value="PQ">PQ (Perceptual Quantizer)</option>
           <option value="HLG">HLG (Hybrid Log-Gamma)</option>
         </select>
-        <p className="text-xs text-neutral-500">{EOTF_INFO[eotf].desc}</p>
+        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+          {eotf === "PQ" ? t("eotf_pq_desc") : t("eotf_hlg_desc")}
+        </p>
       </div>
 
       {/* Brightness */}
       <div className="space-y-2">
-        <label className="block text-sm font-medium text-neutral-300">
-          Target Subtitle Brightness (nits)
+        <label
+          className="block text-sm font-medium"
+          style={{ color: "var(--text-secondary)" }}
+        >
+          {t("brightness_label")}
         </label>
         <NumberInput
           value={brightnessText}
@@ -223,27 +226,37 @@ export default function HdrConvert() {
           disabled={processing}
           className="w-36"
         />
-        <p className="text-xs text-neutral-500">{EOTF_INFO[eotf].brightnessHint}</p>
+        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+          {eotf === "PQ" ? t("brightness_hint_pq") : t("brightness_hint_hlg")}
+        </p>
       </div>
 
       {/* Output Template */}
       <div className="space-y-2">
-        <label className="block text-sm font-medium text-neutral-300">
-          Output Template
+        <label
+          className="block text-sm font-medium"
+          style={{ color: "var(--text-secondary)" }}
+        >
+          {t("template_label")}
         </label>
         <div className="flex flex-col gap-2">
           <select
             value={template}
             onChange={(e) => setTemplate(e.target.value)}
             disabled={processing}
-            className="w-64 px-3 py-2 rounded-lg bg-neutral-800 border border-neutral-700 text-neutral-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-64 px-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            style={{
+              background: "var(--bg-input)",
+              border: "1px solid var(--border)",
+              color: "var(--text-primary)",
+            }}
           >
             {OUTPUT_PRESETS.map((p) => (
               <option key={p} value={p}>
                 {p}
               </option>
             ))}
-            <option value="custom">Custom...</option>
+            <option value="custom">{t("template_custom")}</option>
           </select>
           {template === "custom" && (
             <input
@@ -252,28 +265,36 @@ export default function HdrConvert() {
               onChange={(e) => setCustomTemplate(e.target.value)}
               placeholder="{name}.hdr.{eotf}.ass"
               disabled={processing}
-              className="w-64 px-3 py-2 rounded-lg bg-neutral-800 border border-neutral-700 text-neutral-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-64 px-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              style={{
+                background: "var(--bg-input)",
+                border: "1px solid var(--border)",
+                color: "var(--text-primary)",
+              }}
             />
           )}
         </div>
       </div>
 
       {/* Collapsible Style Settings */}
-      <div className="border border-neutral-800 rounded-lg">
+      <div className="rounded-lg" style={{ border: "1px solid var(--border)" }}>
         <button
           onClick={() => setShowStylePanel(!showStylePanel)}
-          className="w-full flex items-center gap-2 px-4 py-3 text-sm font-medium text-neutral-300 hover:bg-neutral-800/50 rounded-lg transition-colors"
+          className="w-full flex items-center gap-2 px-4 py-3 text-sm font-medium rounded-lg transition-colors"
+          style={{ color: "var(--text-secondary)" }}
         >
           <span className="text-xs">{showStylePanel ? "▼" : "▶"}</span>
-          Style Settings
-          <span className="text-xs text-neutral-500 ml-2">
-            (SRT/SUB input only)
+          {t("style_settings")}
+          <span className="text-xs ml-2" style={{ color: "var(--text-muted)" }}>
+            {t("style_hint")}
           </span>
         </button>
         {showStylePanel && (
           <div className="px-4 pb-4 grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs text-neutral-500 mb-1">Font</label>
+              <label className="block text-xs mb-1" style={{ color: "var(--text-muted)" }}>
+                {t("style_font")}
+              </label>
               <select
                 value={COMMON_FONTS.includes(style.fontName) ? style.fontName : "__custom"}
                 onChange={(e) => {
@@ -282,12 +303,17 @@ export default function HdrConvert() {
                   }
                 }}
                 disabled={processing}
-                className="w-full px-2 py-1.5 rounded bg-neutral-800 border border-neutral-700 text-sm text-neutral-100"
+                className="w-full px-2 py-1.5 rounded text-sm"
+                style={{
+                  background: "var(--bg-input)",
+                  border: "1px solid var(--border)",
+                  color: "var(--text-primary)",
+                }}
               >
                 {COMMON_FONTS.map((f) => (
                   <option key={f} value={f}>{f}</option>
                 ))}
-                <option value="__custom">Custom...</option>
+                <option value="__custom">{t("style_font_custom")}</option>
               </select>
               {!COMMON_FONTS.includes(style.fontName) && (
                 <input
@@ -296,12 +322,19 @@ export default function HdrConvert() {
                   onChange={(e) => setStyle({ ...style, fontName: e.target.value })}
                   placeholder="Font family name"
                   disabled={processing}
-                  className="w-full mt-1.5 px-2 py-1.5 rounded bg-neutral-800 border border-neutral-700 text-sm text-neutral-100"
+                  className="w-full mt-1.5 px-2 py-1.5 rounded text-sm"
+                  style={{
+                    background: "var(--bg-input)",
+                    border: "1px solid var(--border)",
+                    color: "var(--text-primary)",
+                  }}
                 />
               )}
             </div>
             <div>
-              <label className="block text-xs text-neutral-500 mb-1">Size</label>
+              <label className="block text-xs mb-1" style={{ color: "var(--text-muted)" }}>
+                {t("style_size")}
+              </label>
               <NumberInput
                 value={style.fontSize}
                 onChange={(v) => setStyle({ ...style, fontSize: parseInt(v) || 48 })}
@@ -311,8 +344,8 @@ export default function HdrConvert() {
               />
             </div>
             <div>
-              <label className="block text-xs text-neutral-500 mb-1">
-                Primary Color
+              <label className="block text-xs mb-1" style={{ color: "var(--text-muted)" }}>
+                {t("style_primary_color")}
               </label>
               <input
                 type="color"
@@ -325,12 +358,16 @@ export default function HdrConvert() {
                   setStyle({ ...style, primaryColor: `&H00${b}${g}${r}` });
                 }}
                 disabled={processing}
-                className="w-full h-8 rounded bg-neutral-800 border border-neutral-700 cursor-pointer"
+                className="w-full h-8 rounded cursor-pointer"
+                style={{
+                  background: "var(--bg-input)",
+                  border: "1px solid var(--border)",
+                }}
               />
             </div>
             <div>
-              <label className="block text-xs text-neutral-500 mb-1">
-                Outline Color
+              <label className="block text-xs mb-1" style={{ color: "var(--text-muted)" }}>
+                {t("style_outline_color")}
               </label>
               <input
                 type="color"
@@ -343,12 +380,16 @@ export default function HdrConvert() {
                   setStyle({ ...style, outlineColor: `&H00${b}${g}${r}` });
                 }}
                 disabled={processing}
-                className="w-full h-8 rounded bg-neutral-800 border border-neutral-700 cursor-pointer"
+                className="w-full h-8 rounded cursor-pointer"
+                style={{
+                  background: "var(--bg-input)",
+                  border: "1px solid var(--border)",
+                }}
               />
             </div>
             <div>
-              <label className="block text-xs text-neutral-500 mb-1">
-                Outline Width
+              <label className="block text-xs mb-1" style={{ color: "var(--text-muted)" }}>
+                {t("style_outline_width")}
               </label>
               <NumberInput
                 value={style.outlineWidth}
@@ -360,8 +401,8 @@ export default function HdrConvert() {
               />
             </div>
             <div>
-              <label className="block text-xs text-neutral-500 mb-1">
-                Shadow Depth
+              <label className="block text-xs mb-1" style={{ color: "var(--text-muted)" }}>
+                {t("style_shadow_depth")}
               </label>
               <NumberInput
                 value={style.shadowDepth}
@@ -373,8 +414,8 @@ export default function HdrConvert() {
               />
             </div>
             <div>
-              <label className="block text-xs text-neutral-500 mb-1">
-                FPS (SUB only)
+              <label className="block text-xs mb-1" style={{ color: "var(--text-muted)" }}>
+                {t("style_fps")}
               </label>
               <NumberInput
                 value={style.fps}
@@ -394,43 +435,58 @@ export default function HdrConvert() {
         <button
           onClick={handleConvert}
           disabled={processing}
-          className="px-6 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:bg-neutral-700 disabled:text-neutral-500 text-white font-medium text-sm transition-colors"
+          className="px-6 py-2.5 rounded-lg font-medium text-sm transition-colors"
+          style={{
+            background: processing ? "var(--bg-input)" : "var(--accent)",
+            color: processing ? "var(--text-muted)" : "white",
+          }}
         >
-          {processing ? "Converting..." : "Select Files & Convert"}
+          {processing ? t("btn_converting") : t("btn_select_convert")}
         </button>
         {processing && (
           <button
             onClick={() => { cancelRef.current = true; }}
-            className="px-4 py-2.5 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-400 text-sm transition-colors"
+            className="px-4 py-2.5 rounded-lg text-sm transition-colors"
+            style={{
+              background: "var(--cancel-bg)",
+              color: "var(--cancel-text)",
+            }}
           >
-            Cancel
+            {t("btn_cancel")}
           </button>
         )}
       </div>
 
       {/* Log Output */}
       {logs.length > 0 && (
-        <div className="border border-neutral-800 rounded-lg bg-neutral-900/50">
-          <div className="flex items-center justify-between px-3 py-2 border-b border-neutral-800">
-            <span className="text-xs font-medium text-neutral-400">Log</span>
+        <div className="rounded-lg" style={{ border: "1px solid var(--border)", background: "var(--bg-panel)" }}>
+          <div
+            className="flex items-center justify-between px-3 py-2"
+            style={{ borderBottom: "1px solid var(--border)" }}
+          >
+            <span className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>
+              {t("log_title")}
+            </span>
             <button
               onClick={() => setLogs([])}
-              className="text-xs text-neutral-500 hover:text-neutral-300"
+              className="text-xs"
+              style={{ color: "var(--text-muted)" }}
             >
-              Clear
+              {t("log_clear")}
             </button>
           </div>
           <div className="max-h-48 overflow-y-auto p-3 font-mono text-xs space-y-0.5">
             {logs.map((log) => (
               <div
                 key={log.id}
-                className={
-                  log.type === "error"
-                    ? "text-red-400"
-                    : log.type === "success"
-                      ? "text-green-400"
-                      : "text-neutral-400"
-                }
+                style={{
+                  color:
+                    log.type === "error"
+                      ? "var(--error)"
+                      : log.type === "success"
+                        ? "var(--success)"
+                        : "var(--text-muted)",
+                }}
               >
                 {log.text}
               </div>

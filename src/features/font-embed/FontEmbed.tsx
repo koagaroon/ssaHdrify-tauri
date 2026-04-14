@@ -16,8 +16,11 @@ import {
   ensureLoaded,
   type FontUsage,
 } from "./font-collector";
+import { useI18n } from "../../i18n/useI18n";
 
 export default function FontEmbed() {
+  const { t } = useI18n();
+
   const [filePath, setFilePath] = useState<string | null>(null);
   const [fileName, setFileName] = useState("");
   const [fileContent, setFileContent] = useState("");
@@ -63,11 +66,11 @@ export default function FontEmbed() {
       });
       setSelected(autoSelected);
     } catch (e) {
-      setStatus(`Error: ${e instanceof Error ? e.message : e}`);
+      setStatus(t("error_prefix", e instanceof Error ? e.message : String(e)));
     } finally {
       setAnalyzing(false);
     }
-  }, []);
+  }, [t]);
 
   const toggleSelect = (idx: number) => {
     setSelected((prev) => {
@@ -88,7 +91,7 @@ export default function FontEmbed() {
       (_, idx) => selected.has(idx) && fonts[idx].filePath
     );
     if (selectedFonts.length === 0) {
-      setStatus("No fonts selected for embedding");
+      setStatus(t("msg_no_fonts_selected"));
       return;
     }
 
@@ -118,14 +121,14 @@ export default function FontEmbed() {
 
       await writeText(savePath, result);
       const outName = savePath.replace(/\\/g, "/").split("/").pop() ?? savePath;
-      setStatus(`Saved: ${outName} (${selectedFonts.length} font(s) embedded)`);
+      setStatus(t("msg_embed_saved", outName, selectedFonts.length));
     } catch (e) {
-      setStatus(`Error: ${e instanceof Error ? e.message : e}`);
+      setStatus(t("error_prefix", e instanceof Error ? e.message : String(e)));
     } finally {
       setEmbedding(false);
       setProgress(null);
     }
-  }, [fileContent, filePath, fileName, fonts, selected, fontUsages]);
+  }, [fileContent, filePath, fileName, fonts, selected, fontUsages, t]);
 
   const formatFontLabel = (info: FontInfo) => {
     let label = info.key.family;
@@ -134,6 +137,8 @@ export default function FontEmbed() {
     return label;
   };
 
+  const isEmbedDisabled = embedding || selected.size === 0 || !filePath;
+
   return (
     <div className="max-w-2xl space-y-5">
       {/* File Selection */}
@@ -141,54 +146,78 @@ export default function FontEmbed() {
         <button
           onClick={handlePickFile}
           disabled={analyzing || embedding}
-          className="px-5 py-2.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 disabled:opacity-50 border border-neutral-700 text-sm font-medium text-neutral-200 transition-colors"
+          className="px-5 py-2.5 rounded-lg disabled:opacity-50 text-sm font-medium transition-colors"
+          style={{
+            background: "var(--bg-input)",
+            border: "1px solid var(--border)",
+            color: "var(--text-primary)",
+          }}
         >
-          {analyzing ? "Analyzing..." : "Select .ass File"}
+          {analyzing ? t("btn_analyzing") : t("btn_select_ass")}
         </button>
         {fileName && (
-          <p className="text-sm text-neutral-300">{fileName}</p>
+          <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
+            {fileName}
+          </p>
         )}
       </div>
 
       {/* Font List — always visible, shows empty state before file selection */}
-      <div className="border border-neutral-800 rounded-lg bg-neutral-900/50">
-        <div className="px-3 py-2 border-b border-neutral-800">
-          <span className="text-xs font-medium text-neutral-400">
-            Detected Fonts{fonts.length > 0 ? ` (${fonts.length})` : ""}
+      <div
+        className="rounded-lg"
+        style={{
+          border: "1px solid var(--border)",
+          background: "var(--bg-panel)",
+        }}
+      >
+        <div
+          className="px-3 py-2"
+          style={{ borderBottom: "1px solid var(--border)" }}
+        >
+          <span className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>
+            {fonts.length > 0
+              ? t("fonts_title_count", fonts.length)
+              : t("fonts_title")}
           </span>
         </div>
         {fonts.length > 0 ? (
-          <div className="divide-y divide-neutral-800/50 max-h-64 overflow-y-auto">
+          <div className="max-h-64 overflow-y-auto">
             {fonts.map((info, idx) => (
               <label
                 key={idx}
-                className={`flex items-center gap-3 px-4 py-2.5 cursor-pointer hover:bg-neutral-800/30 transition-colors ${
+                className={`flex items-center gap-3 px-4 py-2.5 cursor-pointer transition-colors ${
                   !info.filePath ? "opacity-50" : ""
                 }`}
+                style={{ borderBottom: "1px solid color-mix(in srgb, var(--border) 50%, transparent)" }}
               >
                 <input
                   type="checkbox"
                   checked={selected.has(idx)}
                   onChange={() => toggleSelect(idx)}
                   disabled={!info.filePath || embedding}
-                  className="rounded bg-neutral-800 border-neutral-600"
+                  className="rounded"
+                  style={{
+                    background: "var(--bg-input)",
+                    borderColor: "var(--border)",
+                  }}
                 />
                 <div className="flex-1 min-w-0">
-                  <span className="text-sm text-neutral-200">
+                  <span className="text-sm" style={{ color: "var(--text-primary)" }}>
                     {formatFontLabel(info)}
                   </span>
-                  <span className="text-xs text-neutral-500 ml-2">
-                    — {info.glyphCount} glyphs
+                  <span className="text-xs ml-2" style={{ color: "var(--text-muted)" }}>
+                    {t("fonts_glyphs", info.glyphCount)}
                   </span>
                 </div>
                 <span
-                  className={`text-xs px-2 py-0.5 rounded ${
+                  className="text-xs px-2 py-0.5 rounded"
+                  style={
                     info.filePath
-                      ? "bg-green-900/30 text-green-400"
-                      : "bg-red-900/30 text-red-400"
-                  }`}
+                      ? { background: "var(--badge-green-bg)", color: "var(--badge-green-text)" }
+                      : { background: "var(--badge-red-bg)", color: "var(--badge-red-text)" }
+                  }
                 >
-                  {info.filePath ? "Found" : "Missing"}
+                  {info.filePath ? t("fonts_found") : t("fonts_missing")}
                 </span>
               </label>
             ))}
@@ -196,12 +225,16 @@ export default function FontEmbed() {
         ) : (
           <div className="px-4 py-8 text-center">
             {analyzing ? (
-              <p className="text-sm text-neutral-400">Scanning fonts...</p>
+              <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+                {t("fonts_scanning")}
+              </p>
             ) : (
               <div className="space-y-1">
-                <p className="text-sm text-neutral-500">No file loaded</p>
-                <p className="text-xs text-neutral-600">
-                  Select an .ass file to detect fonts used in the subtitle
+                <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+                  {t("fonts_empty")}
+                </p>
+                <p className="text-xs" style={{ color: "var(--text-muted)", opacity: 0.7 }}>
+                  {t("fonts_empty_hint")}
                 </p>
               </div>
             )}
@@ -212,26 +245,37 @@ export default function FontEmbed() {
       {/* Embed Button */}
       <button
         onClick={handleEmbed}
-        disabled={embedding || selected.size === 0 || !filePath}
-        className="px-6 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:bg-neutral-700 disabled:text-neutral-500 text-white font-medium text-sm transition-colors"
+        disabled={isEmbedDisabled}
+        className="px-6 py-2.5 rounded-lg font-medium text-sm transition-colors"
+        style={
+          isEmbedDisabled
+            ? { background: "var(--accent-disabled-bg)", color: "var(--accent-disabled-text)" }
+            : { background: "var(--accent)", color: "#fff" }
+        }
       >
         {embedding
-          ? "Embedding..."
+          ? t("btn_embedding")
           : selected.size > 0
-            ? `Embed Selected Fonts (${selected.size})`
-            : "Embed Fonts"}
+            ? t("btn_embed", selected.size)
+            : t("btn_embed_default")}
       </button>
 
       {/* Progress */}
       {progress && (
-        <div className="text-sm text-neutral-400">
+        <div className="text-sm" style={{ color: "var(--text-muted)" }}>
           <p>
             {progress.stage} ({progress.current}/{progress.total})
           </p>
-          <div className="mt-1 h-1.5 bg-neutral-800 rounded-full overflow-hidden">
+          <div
+            className="mt-1 h-1.5 rounded-full overflow-hidden"
+            style={{ background: "var(--progress-bg)" }}
+          >
             <div
-              className="h-full bg-blue-500 transition-all"
-              style={{ width: `${(progress.current / progress.total) * 100}%` }}
+              className="h-full transition-all"
+              style={{
+                background: "var(--progress-fill)",
+                width: `${(progress.current / progress.total) * 100}%`,
+              }}
             />
           </div>
         </div>
@@ -240,9 +284,12 @@ export default function FontEmbed() {
       {/* Status */}
       {status && (
         <p
-          className={`text-sm ${
-            status.startsWith("Error") ? "text-red-400" : "text-green-400"
-          }`}
+          className="text-sm"
+          style={{
+            color: status.startsWith("Error")
+              ? "var(--error)"
+              : "var(--success)",
+          }}
         >
           {status}
         </p>
