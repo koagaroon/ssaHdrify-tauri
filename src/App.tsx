@@ -59,7 +59,7 @@ function App() {
     <div className="flex flex-col h-screen" style={{ background: "var(--bg-app)", color: "var(--text-primary)" }}>
       {/* ── Header ─────────────────────────────────── */}
       <header
-        className="flex-none backdrop-blur-sm"
+        className="flex-none"
         style={{ borderBottom: "1px solid var(--border)", background: "var(--bg-header)" }}
       >
         <div className="px-5 pt-4 pb-0 flex items-start justify-between">
@@ -71,8 +71,10 @@ function App() {
               {TAB_IDS.map((tab) => (
                 <button
                   key={tab.id}
+                  id={`tab-${tab.id}`}
                   role="tab"
                   aria-selected={activeTab === tab.id}
+                  aria-controls={`panel-${tab.id}`}
                   onClick={() => setActiveTab(tab.id)}
                   className="px-4 py-2 text-sm font-medium rounded-t-lg transition-colors"
                   style={
@@ -147,7 +149,7 @@ function App() {
                 <div
                   className="absolute right-0 mt-1 py-1 rounded-lg shadow-lg z-50"
                   style={{
-                    background: "var(--bg-panel)",
+                    background: "var(--bg-app)",
                     border: "1px solid var(--border)",
                     minWidth: "140px",
                   }}
@@ -183,11 +185,14 @@ function App() {
         </div>
       </header>
 
-      {/* ── Tab content ────────────────────────────── */}
+      {/* ── Tab content ──────────────────────────────
+           All tabs stay mounted (CSS visibility) so local state
+           (offset values, style panel, threshold, etc.) survives
+           tab switches. File state lives in FileContext above. */}
       <main className="flex-1 overflow-y-auto p-5">
-        {activeTab === "hdr" && <HdrConvert />}
-        {activeTab === "timing" && <TimingShift />}
-        {activeTab === "fonts" && <FontEmbed />}
+        <div id="panel-hdr" role="tabpanel" aria-labelledby="tab-hdr" style={{ display: activeTab === "hdr" ? "block" : "none" }}><HdrConvert /></div>
+        <div id="panel-timing" role="tabpanel" aria-labelledby="tab-timing" style={{ display: activeTab === "timing" ? "block" : "none" }}><TimingShift /></div>
+        <div id="panel-fonts" role="tabpanel" aria-labelledby="tab-fonts" style={{ display: activeTab === "fonts" ? "block" : "none" }}><FontEmbed /></div>
       </main>
 
       {/* ── Footer ─────────────────────────────────── */}

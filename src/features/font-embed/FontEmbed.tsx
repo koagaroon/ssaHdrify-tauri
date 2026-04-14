@@ -17,13 +17,11 @@ import {
   type FontUsage,
 } from "./font-collector";
 import { useI18n } from "../../i18n/useI18n";
+import { useFileContext } from "../../lib/FileContext";
 
 export default function FontEmbed() {
   const { t } = useI18n();
-
-  const [filePath, setFilePath] = useState<string | null>(null);
-  const [fileName, setFileName] = useState("");
-  const [fileContent, setFileContent] = useState("");
+  const { fontsFile, setFontsFile, clearFile, isFileInUse } = useFileContext();
 
   const [fonts, setFonts] = useState<FontInfo[]>([]);
   const [fontUsages, setFontUsages] = useState<FontUsage[]>([]);
@@ -34,15 +32,36 @@ export default function FontEmbed() {
   const [status, setStatus] = useState("");
   const [isError, setIsError] = useState(false);
   const cancelRef = useRef(false);
+  // Generation counter: incremented on each pick or clear to invalidate stale async results
+  const pickGenRef = useRef(0);
+
+  // Derive file state from context
+  const filePath = fontsFile?.filePath ?? null;
+  const fileName = fontsFile?.fileName ?? "";
+  const fileContent = fontsFile?.fileContent ?? "";
 
   const handlePickFile = useCallback(async () => {
+    // Claim generation BEFORE any await so clear-during-dialog is guarded.
+    // If the user clicks × (clear) while ensureLoaded or the file dialog is
+    // open, handleClearFile increments pickGenRef, and the stale pick will
+    // be rejected at every subsequent guard check.
+    const gen = pickGenRef.current = pickGenRef.current + 1;
+
     await ensureLoaded();
+    if (gen !== pickGenRef.current) return; // cleared while loading module
+
     const path = await pickAssFile();
     if (!path) return;
+    if (gen !== pickGenRef.current) return; // cleared during dialog
 
-    const name = path.replace(/\\/g, "/").split("/").pop() ?? path;
-    setFileName(name);
-    setFilePath(path);
+    // Cross-tab duplicate guard
+    const usedIn = isFileInUse(path, "fonts");
+    if (usedIn) {
+      setIsError(true);
+      setStatus(t("msg_file_in_use", t("tab_" + usedIn)));
+      return;
+    }
+
     setFonts([]);
     setSelected(new Set());
     setStatus("");
@@ -51,14 +70,18 @@ export default function FontEmbed() {
     setAnalyzing(true);
     try {
       const content = await readText(path);
-      setFileContent(content);
+      if (gen !== pickGenRef.current) return; // stale — user cleared or re-picked
+
+      const name = path.replace(/\\/g, "/").split("/").pop() ?? path;
 
       // Collect font usages
       const usages = collectFonts(content);
       setFontUsages(usages);
 
-      // Resolve system font paths
+      // Resolve system font paths (slow Rust IPC for each font)
       const infos = await analyzeFonts(content);
+      if (gen !== pickGenRef.current) return; // stale — user cleared or re-picked
+
       setFonts(infos);
 
       // Auto-select all found fonts
@@ -67,13 +90,21 @@ export default function FontEmbed() {
         if (info.filePath) autoSelected.add(idx);
       });
       setSelected(autoSelected);
+
+      // Silent replace: see FileContext.tsx for design rationale
+      setFontsFile({
+        filePath: path,
+        fileName: name,
+        fileContent: content,
+      });
     } catch (e) {
+      if (gen !== pickGenRef.current) return; // stale — don't show error for cancelled pick
       setIsError(true);
       setStatus(t("error_prefix", e instanceof Error ? e.message : String(e)));
     } finally {
-      setAnalyzing(false);
+      if (gen === pickGenRef.current) setAnalyzing(false);
     }
-  }, [t]);
+  }, [isFileInUse, setFontsFile, t]);
 
   const toggleSelect = (idx: number) => {
     setSelected((prev) => {
@@ -150,29 +181,94 @@ export default function FontEmbed() {
     return label;
   };
 
+  const handleClearFile = useCallback(() => {
+    // Increment generation to invalidate any in-flight handlePickFile async work
+    pickGenRef.current = pickGenRef.current + 1;
+    clearFile("fonts");
+    setFonts([]);
+    setFontUsages([]);
+    setSelected(new Set());
+    setAnalyzing(false);
+    setStatus("");
+    setIsError(false);
+    setProgress(null);
+  }, [clearFile]);
+
   const isEmbedDisabled = embedding || selected.size === 0 || !filePath;
 
   return (
-    <div className="max-w-2xl space-y-5">
-      {/* File Selection */}
-      <div className="space-y-2">
-        <button
-          onClick={handlePickFile}
-          disabled={analyzing || embedding}
-          className="px-5 py-2.5 rounded-lg disabled:opacity-50 text-sm font-medium transition-colors"
-          style={{
-            background: "var(--bg-input)",
-            border: "1px solid var(--border)",
-            color: "var(--text-primary)",
-          }}
-        >
-          {analyzing ? t("btn_analyzing") : t("btn_select_ass")}
-        </button>
-        {fileName && (
-          <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
-            {fileName}
-          </p>
-        )}
+    <div className="space-y-5">
+      {/* ── Top area: file info left + buttons right ── */}
+      <div className="flex items-start justify-between gap-6">
+        {/* Left: file name */}
+        <div className="flex items-center gap-3 flex-1 min-w-0">
+          {fileName && (
+            <>
+              <span
+                className="text-sm truncate"
+                style={{ color: "var(--text-primary)" }}
+              >
+                {fileName}
+              </span>
+              <button
+                onClick={handleClearFile}
+                disabled={embedding}
+                className="flex-none px-3 py-2 rounded-lg text-lg font-bold transition-colors"
+                style={{
+                  background: "var(--cancel-bg)",
+                  color: "var(--cancel-text)",
+                  opacity: embedding ? 0.4 : 1,
+                }}
+                title={t("btn_clear_file")}
+              >
+                ✕
+              </button>
+            </>
+          )}
+        </div>
+
+        {/* Right: stacked action buttons */}
+        <div className="flex flex-col gap-2 flex-none" style={{ minWidth: "130px" }}>
+          <button
+            onClick={handlePickFile}
+            disabled={analyzing || embedding}
+            className="w-full px-5 py-2.5 rounded-lg font-medium text-sm transition-colors"
+            style={{
+              background: analyzing || embedding ? "var(--bg-input)" : "var(--accent)",
+              color: analyzing || embedding ? "var(--text-muted)" : "white",
+            }}
+          >
+            {analyzing ? t("btn_analyzing") : t("btn_select_file")}
+          </button>
+          <button
+            onClick={handleEmbed}
+            disabled={isEmbedDisabled}
+            className="w-full px-5 py-2.5 rounded-lg font-medium text-sm transition-colors"
+            style={
+              isEmbedDisabled
+                ? { background: "var(--accent-disabled-bg)", color: "var(--accent-disabled-text)", opacity: !filePath ? 0.5 : 1 }
+                : { background: "var(--accent)", color: "#fff" }
+            }
+          >
+            {embedding
+              ? t("btn_embedding")
+              : selected.size > 0
+                ? t("btn_embed", selected.size)
+                : t("btn_embed_default")}
+          </button>
+          {embedding && (
+            <button
+              onClick={() => { cancelRef.current = true; }}
+              className="w-full px-5 py-2.5 rounded-lg font-medium text-sm transition-colors"
+              style={{
+                background: "var(--cancel-bg)",
+                color: "var(--cancel-text)",
+              }}
+            >
+              {t("btn_cancel")}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Font List — always visible, shows empty state before file selection */}
@@ -252,39 +348,6 @@ export default function FontEmbed() {
               </div>
             )}
           </div>
-        )}
-      </div>
-
-      {/* Embed / Cancel Buttons */}
-      <div className="flex gap-3">
-        <button
-          onClick={handleEmbed}
-          disabled={isEmbedDisabled}
-          className="px-6 py-2.5 rounded-lg font-medium text-sm transition-colors"
-          style={
-            isEmbedDisabled
-              ? { background: "var(--accent-disabled-bg)", color: "var(--accent-disabled-text)" }
-              : { background: "var(--accent)", color: "#fff" }
-          }
-        >
-          {embedding
-            ? t("btn_embedding")
-            : selected.size > 0
-              ? t("btn_embed", selected.size)
-              : t("btn_embed_default")}
-        </button>
-        {embedding && (
-          <button
-            onClick={() => { cancelRef.current = true; }}
-            className="px-5 py-2.5 rounded-lg font-medium text-sm transition-colors"
-            style={{
-              background: "var(--bg-input)",
-              border: "1px solid var(--border)",
-              color: "var(--text-primary)",
-            }}
-          >
-            {t("btn_cancel")}
-          </button>
         )}
       </div>
 

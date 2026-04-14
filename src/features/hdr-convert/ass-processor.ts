@@ -166,7 +166,12 @@ function detectSection(line: string): AssSection | null {
   if (trimmed === "[v4+ styles]" || trimmed === "[v4 styles]") return "styles";
   if (trimmed === "[fonts]") return "fonts";
   if (trimmed === "[events]") return "events";
-  if (trimmed.startsWith("[")) return "other";
+  // Catch-all for unknown section headers. Note: trimmed is already lowercased,
+  // so the [a-z ] lookahead is always satisfied by any letter — this means
+  // UUEncode lines could theoretically match here. This is acceptable because
+  // the "other" branch in processAssContent passes lines through unchanged,
+  // identical to the "fonts" branch. No correctness impact from a false positive.
+  if (/^\[(?=[A-Za-z0-9+ ]*[a-z ])[A-Za-z0-9+ ]{1,50}\]$/.test(trimmed)) return "other";
   return null; // not a section header
 }
 
@@ -221,8 +226,8 @@ export function processAssContent(
       }
       result.push(transformStyleLine(line, targetBrightness, eotf, styleColorIndices));
     } else if (currentSection === "events") {
-      // Dialogue lines: "Dialogue: ..." — transform inline color tags
-      if (line.startsWith("Dialogue:") || line.startsWith("Comment:")) {
+      // Dialogue lines only — Comment: lines are non-rendering and must not be mutated
+      if (line.startsWith("Dialogue:")) {
         result.push(transformEventText(line, targetBrightness, eotf));
       } else {
         result.push(line);

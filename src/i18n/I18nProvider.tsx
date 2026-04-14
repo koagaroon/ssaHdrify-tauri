@@ -8,17 +8,12 @@ import type { Lang } from "./strings";
 
 const STORAGE_KEY = "ssahdrify-lang";
 
-function detectSystemLang(): Lang {
-  const nav = navigator.language || "";
-  // Chinese variants: zh, zh-CN, zh-TW, zh-Hans, zh-Hant
-  if (nav.startsWith("zh")) return "zh";
-  return "en";
-}
-
 function loadLang(): Lang {
   const stored = localStorage.getItem(STORAGE_KEY);
   if (stored === "en" || stored === "zh") return stored;
-  return detectSystemLang();
+  // First launch (no localStorage): always Chinese regardless of system language.
+  // User can switch to English manually; that choice persists via localStorage.
+  return "zh";
 }
 
 export default function I18nProvider({ children }: { children: ReactNode }) {

@@ -30,6 +30,7 @@ import {
 import { parseSubtitle } from "../../lib/subtitle-parser";
 import NumberInput from "../../lib/NumberInput";
 import { useI18n } from "../../i18n/useI18n";
+import { useFileContext } from "../../lib/FileContext";
 
 /** Convert ASS color "&H00BBGGRR" to HTML "#RRGGBB" */
 function assColorToHex(assColor: string): string {
@@ -55,6 +56,7 @@ interface LogEntry {
 
 export default function HdrConvert() {
   const { t } = useI18n();
+  const { hdrFiles, setHdrFiles, clearFile, filterAvailablePaths } = useFileContext();
   const [eotf, setEotf] = useState<Eotf>("PQ");
   const [brightness, setBrightness] = useState(DEFAULT_BRIGHTNESS);
   const [brightnessText, setBrightnessText] = useState(String(DEFAULT_BRIGHTNESS));
@@ -92,16 +94,36 @@ export default function HdrConvert() {
 
   const activeTemplate = template === "custom" ? customTemplate : template;
 
+  // ── File selection (separate from conversion) ──────────
+  const handleSelectFiles = useCallback(async () => {
+    const paths = await pickSubtitleFiles();
+    if (!paths || paths.length === 0) return;
+
+    // Cross-tab duplicate guard: skip files already loaded in other tabs
+    const { allowed, skippedCount } = filterAvailablePaths(paths, "hdr");
+    if (skippedCount > 0) {
+      addLog(t("msg_files_skipped_in_use", skippedCount), "error");
+    }
+    if (allowed.length === 0) return;
+
+    // Silent replace: see FileContext.tsx for design rationale
+    const names = allowed.map(
+      (p) => p.replace(/\\/g, "/").split("/").pop() ?? p
+    );
+    setHdrFiles({ filePaths: allowed, fileNames: names });
+  }, [filterAvailablePaths, setHdrFiles, addLog, t]);
+
+  // ── Conversion (uses already-selected files) ───────────
   const handleConvert = useCallback(async () => {
+    if (!hdrFiles) return;
+
     // Validate brightness
     if (brightness < MIN_BRIGHTNESS || brightness > MAX_BRIGHTNESS) {
       addLog(t("msg_invalid_brightness", MIN_BRIGHTNESS, MAX_BRIGHTNESS), "error");
       return;
     }
 
-    const paths = await pickSubtitleFiles();
-    if (!paths || paths.length === 0) return;
-
+    const paths = hdrFiles.filePaths;
     setProcessing(true);
     cancelRef.current = false;
 
@@ -205,57 +227,138 @@ export default function HdrConvert() {
     } finally {
       setProcessing(false);
     }
-  }, [brightness, eotf, activeTemplate, style, addLog, t]);
+  }, [hdrFiles, brightness, eotf, activeTemplate, style, addLog, t]);
+
+  const handleClearFiles = useCallback(() => {
+    clearFile("hdr");
+  }, [clearFile]);
 
   return (
-    <div className="max-w-2xl space-y-5">
-      {/* EOTF Selection */}
-      <div className="space-y-2">
-        <label
-          className="block text-sm font-medium"
-          style={{ color: "var(--text-secondary)" }}
-        >
-          {t("eotf_label")}
-        </label>
-        <select
-          value={eotf}
-          onChange={(e) => setEotf(e.target.value as Eotf)}
-          disabled={processing}
-          className="w-48 px-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-          style={{
-            background: "var(--bg-input)",
-            border: "1px solid var(--border)",
-            color: "var(--text-primary)",
-          }}
-        >
-          <option value="PQ">PQ (Perceptual Quantizer)</option>
-          <option value="HLG">HLG (Hybrid Log-Gamma)</option>
-        </select>
-        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-          {eotf === "PQ" ? t("eotf_pq_desc") : t("eotf_hlg_desc")}
-        </p>
+    <div className="space-y-5">
+      {/* ── Top area: controls left + buttons right ─── */}
+      <div className="flex items-start justify-between gap-6">
+        {/* Left: EOTF + Brightness */}
+        <div className="flex items-start gap-6 flex-1 min-w-0">
+          {/* EOTF Selection */}
+          <div className="space-y-1">
+            <label
+              className="block text-sm font-medium"
+              style={{ color: "var(--text-secondary)" }}
+            >
+              {t("eotf_label")}
+            </label>
+            <select
+              value={eotf}
+              onChange={(e) => setEotf(e.target.value as Eotf)}
+              disabled={processing}
+              className="w-48 px-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              style={{
+                background: "var(--bg-input)",
+                border: "1px solid var(--border)",
+                color: "var(--text-primary)",
+              }}
+            >
+              <option value="PQ">{t("eotf_pq")}</option>
+              <option value="HLG">{t("eotf_hlg")}</option>
+            </select>
+            <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+              {eotf === "PQ" ? t("eotf_pq_desc") : t("eotf_hlg_desc")}
+            </p>
+          </div>
+
+          {/* Brightness */}
+          <div className="space-y-1">
+            <label
+              className="block text-sm font-medium"
+              style={{ color: "var(--text-secondary)" }}
+            >
+              {t("brightness_label")}
+            </label>
+            <NumberInput
+              value={brightnessText}
+              onChange={handleBrightnessChange}
+              min={MIN_BRIGHTNESS}
+              max={MAX_BRIGHTNESS}
+              disabled={processing}
+              className="w-36"
+            />
+            <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+              {eotf === "PQ" ? t("brightness_hint_pq") : t("brightness_hint_hlg")}
+            </p>
+          </div>
+        </div>
+
+        {/* Right: stacked action buttons */}
+        <div className="flex flex-col gap-2 flex-none" style={{ minWidth: "130px" }}>
+          <button
+            onClick={handleSelectFiles}
+            disabled={processing}
+            className="w-full px-5 py-2.5 rounded-lg font-medium text-sm transition-colors"
+            style={{
+              background: processing ? "var(--bg-input)" : "var(--accent)",
+              color: processing ? "var(--text-muted)" : "white",
+            }}
+          >
+            {t("btn_select_files")}
+          </button>
+          <button
+            onClick={handleConvert}
+            disabled={!hdrFiles || processing}
+            className="w-full px-5 py-2.5 rounded-lg font-medium text-sm transition-colors"
+            style={{
+              background: !hdrFiles || processing ? "var(--bg-input)" : "var(--accent)",
+              color: !hdrFiles || processing ? "var(--text-muted)" : "white",
+              opacity: !hdrFiles ? 0.5 : 1,
+            }}
+          >
+            {processing ? t("btn_converting") : t("btn_convert")}
+          </button>
+          {processing && (
+            <button
+              onClick={() => { cancelRef.current = true; }}
+              className="w-full px-4 py-2.5 rounded-lg text-sm transition-colors"
+              style={{
+                background: "var(--cancel-bg)",
+                color: "var(--cancel-text)",
+              }}
+            >
+              {t("btn_cancel")}
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* Brightness */}
-      <div className="space-y-2">
-        <label
-          className="block text-sm font-medium"
-          style={{ color: "var(--text-secondary)" }}
-        >
-          {t("brightness_label")}
-        </label>
-        <NumberInput
-          value={brightnessText}
-          onChange={handleBrightnessChange}
-          min={MIN_BRIGHTNESS}
-          max={MAX_BRIGHTNESS}
-          disabled={processing}
-          className="w-36"
-        />
-        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-          {eotf === "PQ" ? t("brightness_hint_pq") : t("brightness_hint_hlg")}
-        </p>
-      </div>
+      {/* ── Selected files display ──────────────────── */}
+      {hdrFiles && (
+        <div className="flex items-center gap-3">
+          <div
+            className="flex-1 min-w-0 px-3 py-2 rounded-lg text-sm truncate"
+            style={{
+              background: "var(--bg-panel)",
+              border: "1px solid var(--border)",
+              color: "var(--text-secondary)",
+            }}
+          >
+            {hdrFiles.fileNames.join(", ")}
+            <span className="ml-2 text-xs" style={{ color: "var(--text-muted)" }}>
+              ({hdrFiles.filePaths.length})
+            </span>
+          </div>
+          <button
+            onClick={handleClearFiles}
+            disabled={processing}
+            className="flex-none px-3 py-2 rounded-lg text-lg font-bold transition-colors"
+            style={{
+              background: "var(--cancel-bg)",
+              color: "var(--cancel-text)",
+              opacity: processing ? 0.4 : 1,
+            }}
+            title={t("btn_clear_file")}
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* Output Template */}
       <div className="space-y-2">
@@ -454,33 +557,6 @@ export default function HdrConvert() {
               />
             </div>
           </div>
-        )}
-      </div>
-
-      {/* Action Button */}
-      <div className="flex gap-3">
-        <button
-          onClick={handleConvert}
-          disabled={processing}
-          className="px-6 py-2.5 rounded-lg font-medium text-sm transition-colors"
-          style={{
-            background: processing ? "var(--bg-input)" : "var(--accent)",
-            color: processing ? "var(--text-muted)" : "white",
-          }}
-        >
-          {processing ? t("btn_converting") : t("btn_select_convert")}
-        </button>
-        {processing && (
-          <button
-            onClick={() => { cancelRef.current = true; }}
-            className="px-4 py-2.5 rounded-lg text-sm transition-colors"
-            style={{
-              background: "var(--cancel-bg)",
-              color: "var(--cancel-text)",
-            }}
-          >
-            {t("btn_cancel")}
-          </button>
         )}
       </div>
 

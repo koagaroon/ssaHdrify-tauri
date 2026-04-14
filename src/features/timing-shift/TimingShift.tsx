@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import {
   pickSubtitleFile,
   pickSavePath,
@@ -13,16 +13,15 @@ import {
   type PreviewEntry,
 } from "./timing-engine";
 import { useI18n } from "../../i18n/useI18n";
+import { useFileContext } from "../../lib/FileContext";
 
 type Unit = "ms" | "s";
 type Direction = "slower" | "faster";
 
 export default function TimingShift() {
   const { t } = useI18n();
+  const { timingFile, setTimingFile, clearFile, isFileInUse } = useFileContext();
 
-  const [filePath, setFilePath] = useState<string | null>(null);
-  const [fileName, setFileName] = useState<string>("");
-  const [fileContent, setFileContent] = useState<string>("");
   const [detectedFormat, setDetectedFormat] = useState<string>("");
 
   const [offsetValue, setOffsetValue] = useState(2000);
@@ -39,20 +38,28 @@ export default function TimingShift() {
 
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
 
-
-  // Compute effective offset in ms
-  const effectiveOffsetMs = (() => {
+  // Memoized derived values — prevents debounce effect from resetting on unrelated state updates
+  const effectiveOffsetMs = useMemo(() => {
     const base = unit === "s" ? offsetValue * 1000 : offsetValue;
     return direction === "faster" ? -base : base;
-  })();
+  }, [unit, offsetValue, direction]);
 
-  // Compute threshold in ms
-  const thresholdMs = useThreshold ? parseTimestamp(thresholdText) : undefined;
+  // Returns number when valid, null when invalid or disabled.
+  // Consistently null (not undefined) so all guards can use strict === null.
+  const thresholdMs = useMemo(
+    () => (useThreshold ? parseTimestamp(thresholdText) : null),
+    [useThreshold, thresholdText]
+  );
+
+  // Derive file state from context
+  const filePath = timingFile?.filePath ?? null;
+  const fileName = timingFile?.fileName ?? "";
+  const fileContent = timingFile?.fileContent ?? "";
 
   // Update preview whenever parameters change (debounced to avoid reprocessing on every keystroke)
   useEffect(() => {
     if (!fileContent) return;
-    if (useThreshold && thresholdMs == null) {
+    if (useThreshold && thresholdMs === null) {
       if (debounceRef.current) clearTimeout(debounceRef.current);
       setPreview([]);
       return;
@@ -80,15 +87,20 @@ export default function TimingShift() {
     const path = await pickSubtitleFile();
     if (!path) return;
 
-    const name = path.replace(/\\/g, "/").split("/").pop() ?? path;
-    setFileName(name);
-    setFilePath(path);
+    // Cross-tab duplicate guard
+    const usedIn = isFileInUse(path, "timing");
+    if (usedIn) {
+      setIsError(true);
+      setStatus(t("msg_file_in_use", t("tab_" + usedIn)));
+      return;
+    }
+
     setStatus("");
     setIsError(false);
 
     try {
       const content = await readText(path);
-      setFileContent(content);
+      const name = path.replace(/\\/g, "/").split("/").pop() ?? path;
 
       const result = shiftSubtitles(content, {
         offsetMs: effectiveOffsetMs,
@@ -97,17 +109,36 @@ export default function TimingShift() {
       setPreview(result.preview);
       setCaptionCount(result.captionCount);
       setDetectedFormat(result.format.toUpperCase());
+
+      // Silent replace: see FileContext.tsx for design rationale
+      setTimingFile({
+        filePath: path,
+        fileName: name,
+        fileContent: content,
+      });
     } catch (e) {
       setIsError(true);
       setStatus(t("error_prefix", e instanceof Error ? e.message : String(e)));
     }
-  }, [effectiveOffsetMs, thresholdMs, useThreshold, t]);
+  }, [effectiveOffsetMs, thresholdMs, isFileInUse, setTimingFile, t]);
+
+  const handleClearFile = useCallback(() => {
+    clearFile("timing");
+    setPreview([]);
+    setCaptionCount(0);
+    setDetectedFormat("");
+    setStatus("");
+    setIsError(false);
+  }, [clearFile]);
 
   const handleSave = useCallback(async () => {
     if (!fileContent || !filePath) return;
-    if (useThreshold && thresholdMs == null) return;
+    if (useThreshold && thresholdMs === null) return;
 
     try {
+      // Always recompute from current parameters — do not cache. A cached result
+      // can go stale if the user changes params and clicks Save within the 200ms
+      // debounce window, producing output that doesn't match the UI settings.
       const result: ShiftResult = shiftSubtitles(fileContent, {
         offsetMs: effectiveOffsetMs,
         thresholdMs: thresholdMs ?? undefined,
@@ -132,41 +163,79 @@ export default function TimingShift() {
   }, [fileContent, filePath, fileName, effectiveOffsetMs, thresholdMs, useThreshold, t]);
 
   return (
-    <div className="max-w-2xl space-y-5">
-      {/* File Selection */}
-      <div className="space-y-2">
-        <button
-          onClick={handlePickFile}
-          className="px-5 py-2.5 rounded-lg text-sm font-medium transition-colors"
-          style={{
-            background: "var(--bg-input)",
-            border: "1px solid var(--border)",
-            color: "var(--text-primary)",
-          }}
-        >
-          {t("btn_select_subtitle")}
-        </button>
-        {fileName && (
-          <div className="flex items-center gap-3 text-sm">
-            <span style={{ color: "var(--text-primary)" }}>{fileName}</span>
-            {detectedFormat && (
+    <div className="space-y-5">
+      {/* ── Top area: file info left + buttons right ── */}
+      <div className="flex items-start justify-between gap-6">
+        {/* Left: file name + format badge */}
+        <div className="flex items-center gap-3 flex-1 min-w-0">
+          {fileName && (
+            <>
               <span
-                className="px-2 py-0.5 rounded text-xs"
-                style={{
-                  background: "var(--bg-input)",
-                  color: "var(--text-muted)",
-                }}
+                className="text-sm truncate"
+                style={{ color: "var(--text-primary)" }}
               >
-                {detectedFormat}
+                {fileName}
               </span>
-            )}
-            {captionCount > 0 && (
-              <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-                {t("captions_count", captionCount)}
-              </span>
-            )}
-          </div>
-        )}
+              {detectedFormat && (
+                <span
+                  className="flex-none px-2 py-0.5 rounded text-xs"
+                  style={{
+                    background: "var(--bg-input)",
+                    color: "var(--text-muted)",
+                  }}
+                >
+                  {detectedFormat}
+                </span>
+              )}
+              {captionCount > 0 && (
+                <span className="flex-none text-xs" style={{ color: "var(--text-muted)" }}>
+                  {t("captions_count", captionCount)}
+                </span>
+              )}
+              <button
+                onClick={handleClearFile}
+                className="flex-none px-3 py-2 rounded-lg text-lg font-bold transition-colors"
+                style={{
+                  background: "var(--cancel-bg)",
+                  color: "var(--cancel-text)",
+                }}
+                title={t("btn_clear_file")}
+              >
+                ✕
+              </button>
+            </>
+          )}
+        </div>
+
+        {/* Right: stacked action buttons */}
+        <div className="flex flex-col gap-2 flex-none" style={{ minWidth: "130px" }}>
+          <button
+            onClick={handlePickFile}
+            className="w-full px-5 py-2.5 rounded-lg font-medium text-sm transition-colors"
+            style={{
+              background: "var(--accent)",
+              color: "white",
+            }}
+          >
+            {t("btn_select_file")}
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={!filePath || (useThreshold && thresholdMs === null)}
+            className="w-full px-5 py-2.5 rounded-lg font-medium text-sm transition-colors"
+            style={{
+              background: !filePath || (useThreshold && thresholdMs === null)
+                ? "var(--bg-input)"
+                : "var(--accent)",
+              color: !filePath || (useThreshold && thresholdMs === null)
+                ? "var(--text-muted)"
+                : "white",
+              opacity: !filePath ? 0.5 : 1,
+            }}
+          >
+            {t("btn_save_as")}
+          </button>
+        </div>
       </div>
 
       {/* Offset Controls */}
@@ -353,18 +422,6 @@ export default function TimingShift() {
             </table>
           </div>
         </div>
-      )}
-
-      {/* Save Button */}
-      {fileContent && (
-        <button
-          onClick={handleSave}
-          disabled={useThreshold && thresholdMs === null}
-          className="px-6 py-2.5 rounded-lg text-white font-medium text-sm transition-colors"
-          style={{ background: useThreshold && thresholdMs === null ? "var(--bg-input)" : "var(--accent)" }}
-        >
-          {t("btn_save_as")}
-        </button>
       )}
 
       {/* Status */}

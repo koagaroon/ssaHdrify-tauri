@@ -156,8 +156,8 @@ export async function embedFonts(
     return { content: assContent, embeddedCount: 0 };
   }
 
-  // Build [Fonts] section
-  const fontsSection = `\n[Fonts]\n${fontEntries.join("\n\n")}\n`;
+  // Build [Fonts] section (no leading \n — insertFontsSection handles the separator)
+  const fontsSection = `[Fonts]\n${fontEntries.join("\n\n")}\n`;
 
   // Insert [Fonts] section into ASS file
   return { content: insertFontsSection(assContent, fontsSection), embeddedCount: fontEntries.length };
@@ -180,17 +180,66 @@ function insertFontsSection(content: string, fontsSection: string): string {
     (l) => l.trim().toLowerCase() === "[fonts]"
   );
 
+  // Build "before" from a line slice: strip trailing blank lines so we control
+  // the separator ourselves. Array.join() absorbs trailing "" elements into a
+  // single lineEnding, making blank separator lines invisible — so we strip them
+  // and add an explicit blank-line separator instead.
+  const buildBefore = (endIdx: number): { text: string; sep: string } => {
+    const slice = lines.slice(0, endIdx);
+    while (slice.length > 0 && slice[slice.length - 1].trim() === "") {
+      slice.pop();
+    }
+    const text = slice.join(lineEnding);
+    // One blank line separator when there is content before; nothing when [Fonts] is at start
+    const sep = slice.length > 0 ? lineEnding + lineEnding : "";
+    return { text, sep };
+  };
+
+  // Build "after" from a line slice: strip leading blank lines so section
+  // separators are normalized to exactly one blank line. This is intentional —
+  // ASS convention is one blank line between sections. Files with 2+ blank
+  // lines between sections (from manual editing or other tools) are normalized
+  // on output. Without this stripping, blank lines between an old [Fonts]
+  // block and the next section header would leak through as extra blank lines.
+  const buildAfter = (startIdx: number): string => {
+    const slice = lines.slice(startIdx);
+    while (slice.length > 0 && slice[0].trim() === "") {
+      slice.shift();
+    }
+    return slice.join(lineEnding);
+  };
+
+  // Check if a line is a section header like [Events], [Fonts], etc.
+  // Real ASS section names contain only letters, digits, spaces, and +
+  // (e.g., [Script Info], [V4+ Styles], [Events], [Fonts], [Graphics]).
+  // A simple startsWith("[") or even startsWith("[") + endsWith("]") is NOT
+  // sufficient — UUEncode font data uses ASCII 33–96, which includes both
+  // [ (93) and ] (91), so encoded lines can start with [ and end with ].
+  // Matches real ASS section headers while excluding UUEncode font data.
+  // UUEncode output uses ASCII 33–96 which includes [ ] A-Z 0-9 + but
+  // NEVER lowercase letters (97-122) or space (32). Every real ASS section
+  // name contains at least one lowercase letter or space (e.g., [Script Info],
+  // [V4+ Styles], [Events], [Fonts]). The lookahead (?=...[a-z ]) ensures
+  // at least one such character exists, making UUEncode collisions impossible.
+  // Length capped at 50 as defense-in-depth (longest known: 24 inner chars).
+  const SECTION_HEADER_RE = /^\[(?=[A-Za-z0-9+ ]*[a-z ])[A-Za-z0-9+ ]{1,50}\]$/;
+  const isSectionHeader = (line: string) => SECTION_HEADER_RE.test(line.trim());
+
   if (existingFontsIdx >= 0) {
     // Find the end of the existing [Fonts] section (next section header)
     let endIdx = existingFontsIdx + 1;
     while (endIdx < lines.length) {
-      if (lines[endIdx].trim().startsWith("[")) break;
+      if (isSectionHeader(lines[endIdx])) break;
       endIdx++;
     }
     // Replace existing [Fonts] section
-    const before = lines.slice(0, existingFontsIdx).join(lineEnding);
-    const after = lines.slice(endIdx).join(lineEnding);
-    return `${before}${adaptedFontsSection}${lineEnding}${after}`;
+    const { text: before, sep } = buildBefore(existingFontsIdx);
+    const after = buildAfter(endIdx);
+    // Only add separator before after when there IS content after [Fonts].
+    // When [Fonts] is the last section, after is "" and adaptedFontsSection
+    // already ends with lineEnding — adding another would create a trailing blank.
+    const afterSep = after.length > 0 ? lineEnding : "";
+    return `${before}${sep}${adaptedFontsSection}${afterSep}${after}`;
   }
 
   // No existing [Fonts] — insert before [Events]
@@ -199,11 +248,13 @@ function insertFontsSection(content: string, fontsSection: string): string {
   );
 
   if (eventsIdx >= 0) {
-    const before = lines.slice(0, eventsIdx).join(lineEnding);
+    const { text: before, sep } = buildBefore(eventsIdx);
     const after = lines.slice(eventsIdx).join(lineEnding);
-    return `${before}${adaptedFontsSection}${lineEnding}${after}`;
+    return `${before}${sep}${adaptedFontsSection}${lineEnding}${after}`;
   }
 
-  // No [Events] section found — append at end
-  return content + adaptedFontsSection;
+  // No [Events] section found — append at end with a blank line separator.
+  // Strip trailing newlines from content to avoid double blank line.
+  const trimmedContent = content.replace(/(\r\n|\n)+$/, "");
+  return `${trimmedContent}${lineEnding}${lineEnding}${adaptedFontsSection}`;
 }

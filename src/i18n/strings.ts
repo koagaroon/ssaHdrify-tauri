@@ -14,8 +14,8 @@ export const strings: Record<string, StringEntry> = {
   app_title: { en: "SSA HDRify", zh: "SSA HDRify" },
   tab_hdr: { en: "HDR Convert", zh: "HDR 转换" },
   tab_hdr_desc: { en: "SDR → HDR color space conversion", zh: "SDR → HDR 色彩空间转换" },
-  tab_timing: { en: "Timing Shift", zh: "时间轴偏移" },
-  tab_timing_desc: { en: "Batch subtitle timing adjustment", zh: "批量字幕时间轴调整" },
+  tab_timing: { en: "Time Shift", zh: "时间轴偏移" },
+  tab_timing_desc: { en: "Batch subtitle time adjustment", zh: "批量字幕时间轴调整" },
   tab_fonts: { en: "Font Embed", zh: "字体嵌入" },
   tab_fonts_desc: { en: "Subset & embed fonts into ASS", zh: "字体子集化并嵌入 ASS" },
   footer_version: { en: "SSA HDRify v0.1.0", zh: "SSA HDRify v0.1.0" },
@@ -26,7 +26,7 @@ export const strings: Record<string, StringEntry> = {
   theme_dark: { en: "Dark", zh: "深色" },
 
   // ── HDR Convert ─────────────────────────────────────────
-  eotf_label: { en: "Content EOTF Curve", zh: "内容 EOTF 曲线" },
+  eotf_label: { en: "EOTF Curve", zh: "EOTF 曲线" },
   eotf_pq: { en: "PQ (Perceptual Quantizer)", zh: "PQ（感知量化器）" },
   eotf_hlg: { en: "HLG (Hybrid Log-Gamma)", zh: "HLG（混合对数伽马）" },
   eotf_pq_desc: {
@@ -37,7 +37,7 @@ export const strings: Record<string, StringEntry> = {
     en: "Relative brightness, adapts to display. For broadcast HDR and SDR-compatible content.",
     zh: "相对亮度映射，适应显示器。适用于广播 HDR 及需兼容 SDR 的内容。",
   },
-  brightness_label: { en: "Target Subtitle Brightness (nits)", zh: "目标字幕亮度（尼特）" },
+  brightness_label: { en: "Subtitle Brightness (nits)", zh: "字幕亮度（尼特）" },
   brightness_hint_pq: {
     en: "Recommended: 100–300 nits (BT.2408 standard: 203)",
     zh: "推荐：100–300 尼特（BT.2408 标准值 203）",
@@ -58,7 +58,8 @@ export const strings: Record<string, StringEntry> = {
   style_shadow_depth: { en: "Shadow Depth", zh: "阴影深度" },
   style_fps: { en: "FPS (SUB only)", zh: "帧率（仅 SUB）" },
   style_font_custom: { en: "Custom...", zh: "自定义…" },
-  btn_select_convert: { en: "Select Files & Convert", zh: "选择文件并转换" },
+  btn_select_files: { en: "Select File(s)", zh: "选择文件" },
+  btn_convert: { en: "Convert", zh: "转换" },
   btn_converting: { en: "Converting...", zh: "转换中…" },
   btn_cancel: { en: "Cancel", zh: "取消" },
   log_title: { en: "Log", zh: "日志" },
@@ -86,8 +87,7 @@ export const strings: Record<string, StringEntry> = {
   },
   msg_cancelled: { en: "Conversion cancelled.", zh: "转换已取消。" },
 
-  // ── Timing Shift ────────────────────────────────────────
-  btn_select_subtitle: { en: "Select Subtitle File", zh: "选择字幕文件" },
+  // ── Time Shift ──────────────────────────────────────────
   captions_count: { en: "{0} captions", zh: "{0} 条字幕" },
   offset_label: { en: "Offset", zh: "偏移量" },
   unit_ms: { en: "ms", zh: "毫秒" },
@@ -100,12 +100,11 @@ export const strings: Record<string, StringEntry> = {
   preview_title: { en: "Preview (first {0} of {1})", zh: "预览（前 {0} 条，共 {1} 条）" },
   col_index: { en: "#", zh: "#" },
   col_original: { en: "Original", zh: "原始" },
-  col_shifted: { en: "Shifted", zh: "偏移后" },
+  col_shifted: { en: "After Shift", zh: "偏移后" },
   btn_save_as: { en: "Save As...", zh: "另存为…" },
   msg_saved: { en: "Saved: {0} ({1} captions)", zh: "已保存：{0}（{1} 条字幕）" },
 
   // ── Font Embed ──────────────────────────────────────────
-  btn_select_ass: { en: "Select .ass File", zh: "选择 .ass 文件" },
   btn_analyzing: { en: "Analyzing...", zh: "分析中…" },
   fonts_title: { en: "Detected Fonts", zh: "检测到的字体" },
   fonts_title_count: { en: "Detected Fonts ({0})", zh: "检测到的字体（{0}）" },
@@ -115,7 +114,7 @@ export const strings: Record<string, StringEntry> = {
     en: "Select an .ass file to detect fonts used in the subtitle",
     zh: "选择 .ass 文件以检测字幕中使用的字体",
   },
-  fonts_glyphs: { en: "— {0} glyphs", zh: "— {0} 个字形" },
+  fonts_glyphs: { en: "— {0} glyphs used", zh: "— 使用 {0} 个字形" },
   fonts_found: { en: "Found", zh: "已找到" },
   fonts_missing: { en: "Missing", zh: "缺失" },
   btn_embed: { en: "Embed Selected Fonts ({0})", zh: "嵌入已选字体（{0}）" },
@@ -130,5 +129,15 @@ export const strings: Record<string, StringEntry> = {
   },
 
   // ── Shared ──────────────────────────────────────────────
+  btn_select_file: { en: "Select File", zh: "选择文件" },
+  btn_clear_file: { en: "Clear", zh: "清除" },
+  msg_file_in_use: {
+    en: "This file is already loaded in the {0} tab. Clear it there first.",
+    zh: "此文件已在「{0}」标签页中加载，请先在该标签页清除。",
+  },
+  msg_files_skipped_in_use: {
+    en: "Skipped {0} file(s) already loaded in other tabs",
+    zh: "已跳过 {0} 个在其他标签页中已加载的文件",
+  },
   error_prefix: { en: "Error: {0}", zh: "错误：{0}" },
 };

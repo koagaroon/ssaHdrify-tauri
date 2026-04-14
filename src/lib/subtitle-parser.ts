@@ -188,8 +188,7 @@ function buildSrt(captions: Caption[]): string {
 
 function parseVtt(content: string): Caption[] {
   const captions: Caption[] = [];
-  // Skip WEBVTT header
-  const body = content.replace(/^WEBVTT[^\n]*\n/, "");
+  const body = content.replace(/^WEBVTT[^\r\n]*\r?\n/, "");
   // Split on double-newline (handles both \n\n and \r\n\r\n)
   const blocks = body.split(/\n\n|\r\n\r\n/).filter((b) => b.trim());
   if (blocks.length > 100000) {
@@ -225,8 +224,8 @@ function parseVtt(content: string): Caption[] {
   return captions;
 }
 
-function buildVtt(captions: Caption[]): string {
-  const lines = ["WEBVTT", ""];
+function buildVtt(captions: Caption[], header: string = "WEBVTT"): string {
+  const lines = [header, ""];
   for (const c of captions) {
     lines.push(`${formatVttTime(c.start)} --> ${formatVttTime(c.end)}`);
     lines.push(c.text);
@@ -368,9 +367,14 @@ export function shiftSubtitle(
     case "srt":
       output = buildSrt(shifted);
       break;
-    case "vtt":
-      output = buildVtt(shifted);
+    case "vtt": {
+      // Preserve the original VTT header (may contain X-TIMESTAMP-MAP for HLS).
+      // Extracted here and passed to buildVtt as a local — no module-level state.
+      const headerMatch = content.match(/^(WEBVTT[^\r\n]*)\r?\n/);
+      const vttHeader = headerMatch?.[1] ?? "WEBVTT";
+      output = buildVtt(shifted, vttHeader);
       break;
+    }
     case "ass":
       output = buildAss(content, shifted);
       break;

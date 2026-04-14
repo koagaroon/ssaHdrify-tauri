@@ -8,7 +8,7 @@
 
 :root {
   --bg-app: #ffffff;
-  --bg-header: rgba(249, 250, 251, 0.8);
+  --bg-header: #f9fafb;
   --bg-secondary: #f3f4f6;
   --bg-input: #f9fafb;
   --bg-hover: rgba(0, 0, 0, 0.04);
@@ -60,7 +60,7 @@
  */
 [data-theme="dark"] {
   --bg-app: #0a0a0c;
-  --bg-header: rgba(20, 20, 24, 0.92);
+  --bg-header: #141418;
   --bg-secondary: #141418;
   --bg-input: #24242c;
   --bg-hover: #2e2e38;

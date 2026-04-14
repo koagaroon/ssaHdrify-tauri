@@ -12,11 +12,11 @@
 
 import type { ParsedASS } from "ass-compiler";
 
-// Dynamic import for code-splitting; ass-compiler uses named exports
+// Lazy dynamic import — only triggers when ensureLoaded() is first called.
+// Previously this ran at module load time, which blocked startup after the
+// CSS visibility refactor made all tabs mount immediately.
 let parseFn: ((text: string) => ParsedASS) | null = null;
-const assCompilerReady = import("ass-compiler").then((m) => {
-  parseFn = m.parse;
-});
+let assCompilerReady: Promise<void> | null = null;
 
 export interface FontKey {
   family: string;
@@ -40,6 +40,11 @@ function fontKeyToString(key: FontKey): string {
  * Ensure ass-compiler is loaded. Call before using collector functions.
  */
 export async function ensureLoaded(): Promise<void> {
+  if (!assCompilerReady) {
+    assCompilerReady = import("ass-compiler").then((m) => {
+      parseFn = m.parse;
+    });
+  }
   await assCompilerReady;
 }
 
@@ -148,7 +153,15 @@ function processDialogueText(
     if (text[i] === "{") {
       // Override block — parse tags until closing }
       const closeIdx = text.indexOf("}", i);
-      if (closeIdx === -1) break; // malformed, bail
+      if (closeIdx === -1) {
+        // Malformed override block — treat unmatched '{' as literal text
+        // (matches behavior of most ASS renderers like libass/Aegisub).
+        // Do NOT break here: breaking would silently drop all remaining
+        // text from codepoint collection, causing missing glyphs in
+        // the embedded font subset.
+        i++;
+        continue;
+      }
 
       const block = text.slice(i + 1, closeIdx);
       current = applyOverrideTags(block, current);
