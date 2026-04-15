@@ -23,6 +23,15 @@ A Tauri desktop rewrite of [gky99/ssaHdrify](https://github.com/gky99/ssaHdrify)
 | **多语言 / i18n** | 中英双语界面，自动记住语言偏好 / Chinese/English UI, persists preference |
 | **深浅色主题 / Themes** | 深色 / 浅色 / 跟随系统，自动记住主题偏好 / Dark / Light / Auto, persists preference |
 
+> [!TIP]
+> **中文路径完全支持** — 文件路径中包含中文或其他非 ASCII 字符不会导致任何问题。Tauri 和 Rust 底层使用 Unicode API，不受传统 ANSI 编码限制。
+>
+> **Non-ASCII paths fully supported** — File paths containing Chinese, Japanese, or other non-ASCII characters work correctly. Tauri and Rust use native Unicode APIs under the hood.
+
+> [!WARNING]
+> - **字体嵌入为完整文件 / Full font embedding**：CJK 字体可能达 15-20 MB。字体子集化（仅嵌入实际使用的字符）尚未实现。/ CJK fonts can be 15-20 MB. Font subsetting (embedding only used glyphs) is not yet implemented.
+> - **编码检测 / Encoding detection**：仅支持 UTF-8 字幕文件。非 UTF-8 编码（如 GBK、Big5）需手动转换。/ Only UTF-8 subtitle files are supported. Non-UTF-8 encodings (e.g. GBK, Big5) must be converted manually.
+
 ---
 
 ## 使用场景 | Background
@@ -36,36 +45,6 @@ When playing HDR video, the display enters HDR mode. However, SSA/ASS subtitles 
 > If your player already handles subtitle brightness correctly (e.g. mpv with `blend-subtitles=video`, or madVR with xy-SubFilter color management), you don't need this tool.
 
 相关讨论 / Related discussion: [libass/libass#297](https://github.com/libass/libass/issues/297)
-
----
-
-## 转换原理 | How It Works
-
-```
-SSA/ASS 字幕颜色 (sRGB)
-  │
-  ├─ 1. sRGB → rec2100-linear（Color.js 色彩空间转换）
-  │     sRGB → rec2100-linear (Color.js color space conversion)
-  │
-  ├─ 2. 亮度缩放：Y × (targetBrightness / 203)
-  │     Luminance scaling per BT.2408 reference white
-  │
-  ├─ 3. rec2100-linear → rec2100pq 或 rec2100hlg
-  │     Apply PQ (ST 2084) or HLG (ARIB STD-B67) transfer function
-  │
-  └─ 4. 输出 RGB
-        Output RGB
-```
-
-### 精度说明 | Accuracy Note
-
-PQ 模式经过验证，与 Python 原版（colour-science）逐像素一致。HLG 模式使用手动实现的 BT.2100 逆 OOTF + OETF（绕过 Color.js 的 rec2100hlg 空间），同样与 Python 原版完全匹配。
-
-PQ mode is verified pixel-exact against the Python version (colour-science). HLG mode uses a manually implemented BT.2100 inverse OOTF + OETF (bypassing Color.js's rec2100hlg space), also exact-matching the Python version.
-
-由于字幕混合管线和 HDR 显示的不确定性（HDMI 元数据匹配、显示器 tone mapping 等），**实际效果只能保证"红是红、蓝是蓝"，不适用于对颜色精度有严格要求的场景**。
-
-Due to the complex subtitle blending pipeline and HDR display behavior, **the result is only to the effect of "red is red and blue is blue" — not suitable for scenarios requiring strict color accuracy**.
 
 ---
 
@@ -100,6 +79,36 @@ Due to the complex subtitle blending pipeline and HDR display behavior, **the re
 > |---|---|---|
 > | EOTF curve | PQ | PQ (ST 2084) 用于 HDR10/杜比视界；HLG 用于广播 HDR / PQ for HDR10/Dolby Vision; HLG for broadcast HDR |
 > | Target brightness | 203 nits | SDR 字幕亮度峰值（BT.2408 标准值）。字幕太亮就调低，太暗就调高 / Peak brightness per BT.2408. Decrease if too bright, increase if too dim |
+
+---
+
+## 转换原理 | How It Works
+
+```
+SSA/ASS 字幕颜色 (sRGB)
+  │
+  ├─ 1. sRGB → rec2100-linear（Color.js 色彩空间转换）
+  │     sRGB → rec2100-linear (Color.js color space conversion)
+  │
+  ├─ 2. 亮度缩放：Y × (targetBrightness / 203)
+  │     Luminance scaling per BT.2408 reference white
+  │
+  ├─ 3. rec2100-linear → rec2100pq 或 rec2100hlg
+  │     Apply PQ (ST 2084) or HLG (ARIB STD-B67) transfer function
+  │
+  └─ 4. 输出 RGB
+        Output RGB
+```
+
+### 精度说明 | Accuracy Note
+
+PQ 模式经过验证，与 Python 原版（colour-science）逐像素一致。HLG 模式使用手动实现的 BT.2100 逆 OOTF + OETF（绕过 Color.js 的 rec2100hlg 空间），同样与 Python 原版完全匹配。
+
+PQ mode is verified pixel-exact against the Python version (colour-science). HLG mode uses a manually implemented BT.2100 inverse OOTF + OETF (bypassing Color.js's rec2100hlg space), also exact-matching the Python version.
+
+由于字幕混合管线和 HDR 显示的不确定性（HDMI 元数据匹配、显示器 tone mapping 等），**实际效果只能保证"红是红、蓝是蓝"，不适用于对颜色精度有严格要求的场景**。
+
+Due to the complex subtitle blending pipeline and HDR display behavior, **the result is only to the effect of "red is red and blue is blue" — not suitable for scenarios requiring strict color accuracy**.
 
 ---
 
@@ -166,18 +175,6 @@ Output is in the `src-tauri/target/release/bundle/` directory.
 | 多语言 / i18n | 中英切换 / zh/en | 中英切换 / zh/en |
 | 跨平台 / Cross-platform | Windows | Windows + macOS + Linux |
 | 启动速度 / Startup | ~2s | <0.5s |
-
----
-
-## 已知限制 | Known Limitations
-
-- **字体嵌入为完整文件 / Full font embedding**：CJK 字体可能达 15-20 MB。字体子集化（仅嵌入实际使用的字符）尚未实现。/ CJK fonts can be 15-20 MB. Font subsetting (embedding only used glyphs) is not yet implemented.
-- **编码检测 / Encoding detection**：仅支持 UTF-8 字幕文件。非 UTF-8 编码（如 GBK、Big5）需手动转换。/ Only UTF-8 subtitle files are supported. Non-UTF-8 encodings (e.g. GBK, Big5) must be converted manually.
-
-> [!TIP]
-> **中文路径完全支持** — 文件路径中包含中文或其他非 ASCII 字符不会导致任何问题。Tauri 和 Rust 底层使用 Unicode API，不受传统 ANSI 编码限制。
->
-> **Non-ASCII paths fully supported** — File paths containing Chinese, Japanese, or other non-ASCII characters work correctly. Tauri and Rust use native Unicode APIs under the hood.
 
 ---
 
