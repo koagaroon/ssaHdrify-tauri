@@ -114,7 +114,7 @@ export const strings: Record<string, StringEntry> = {
     en: "Select an .ass file to detect fonts used in the subtitle",
     zh: "选择 .ass 文件以检测字幕中使用的字体",
   },
-  fonts_glyphs: { en: "— {0} glyphs used", zh: "— 使用 {0} 个字形" },
+  fonts_glyphs: { en: "— {0} glyphs referenced", zh: "— 引用 {0} 个字形" },
   fonts_found: { en: "Found", zh: "已找到" },
   fonts_missing: { en: "Missing", zh: "缺失" },
   btn_embed: { en: "Embed Selected Fonts ({0})", zh: "嵌入已选字体（{0}）" },
@@ -126,6 +126,10 @@ export const strings: Record<string, StringEntry> = {
   msg_embed_saved: {
     en: "Saved: {0} ({1} font(s) embedded)",
     zh: "已保存：{0}（已嵌入 {1} 个字体）",
+  },
+  fonts_full_embed_warning: {
+    en: "Note: Full font files are currently embedded (byte-level subsetting coming in a future update). Output may be large.",
+    zh: "注意：当前嵌入完整字体文件（字节级子集化将在后续版本实现），输出文件可能较大",
   },
 
   // ── Shared ──────────────────────────────────────────────

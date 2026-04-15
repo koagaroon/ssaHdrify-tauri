@@ -40,11 +40,11 @@ export interface EmbedProgress {
  * @param assContent - Full ASS file content
  * @returns Array of FontInfo with resolved paths or errors
  */
-export async function analyzeFonts(assContent: string): Promise<FontInfo[]> {
+export async function analyzeFonts(assContent: string): Promise<{ infos: FontInfo[]; usages: FontUsage[] }> {
   await ensureCollectorLoaded();
 
   const usages = collectFonts(assContent);
-  const results: FontInfo[] = [];
+  const infos: FontInfo[] = [];
 
   for (const usage of usages) {
     try {
@@ -53,14 +53,14 @@ export async function analyzeFonts(assContent: string): Promise<FontInfo[]> {
         usage.key.bold,
         usage.key.italic
       );
-      results.push({
+      infos.push({
         key: usage.key,
         glyphCount: usage.codepoints.size,
         filePath,
         error: null,
       });
     } catch (e) {
-      results.push({
+      infos.push({
         key: usage.key,
         glyphCount: usage.codepoints.size,
         filePath: null,
@@ -69,7 +69,7 @@ export async function analyzeFonts(assContent: string): Promise<FontInfo[]> {
     }
   }
 
-  return results;
+  return { infos, usages };
 }
 
 /**

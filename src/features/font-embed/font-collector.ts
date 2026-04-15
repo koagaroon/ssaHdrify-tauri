@@ -156,6 +156,7 @@ function processDialogueText(
   recordChars: (key: FontKey, text: string) => void
 ) {
   let current = { ...initialFont };
+  let isDrawing = false;
   let i = 0;
 
   while (i < text.length) {
@@ -173,7 +174,12 @@ function processDialogueText(
       }
 
       const block = text.slice(i + 1, closeIdx);
-      current = applyOverrideTags(block, current);
+      current = applyOverrideTags(block, current, initialFont);
+      if (/\\p0/.test(block) || /\\r/.test(block)) {
+        isDrawing = false;
+      } else if (/\\p[1-9]/.test(block)) {
+        isDrawing = true;
+      }
       i = closeIdx + 1;
     } else {
       // Plain text — find the next override block or end
@@ -187,7 +193,7 @@ function processDialogueText(
         .replace(/\\n/g, "")
         .replace(/\\h/g, "");
 
-      if (cleanText.length > 0) {
+      if (cleanText.length > 0 && !isDrawing) {
         recordChars(current, cleanText);
       }
       i = plainEnd;
@@ -198,18 +204,28 @@ function processDialogueText(
 /**
  * Apply override tags from a single { ... } block to the current font state.
  */
-function applyOverrideTags(block: string, current: FontKey): FontKey {
-  const result = { ...current };
+function applyOverrideTags(block: string, current: FontKey, initialFont: FontKey): FontKey {
+  let result = { ...current };
 
-  // \fn<FontName> — change font family
-  const fnMatch = block.match(/\\fn([^\\}]+)/);
+  // \r[StyleName] — reset to base style (but don't return early;
+  // subsequent tags like \fn in the same block must still be applied)
+  if (/\\r/.test(block)) {
+    result = { ...initialFont };
+  }
+
+  // \fn<FontName> — change font family (empty \fn resets to style default)
+  const fnMatch = block.match(/\\fn([^\\}]*)/);
   if (fnMatch) {
-    result.family = fnMatch[1].trim();
-    // Sanitize font family name: strip control characters and limit length
-    result.family = result.family
-      // eslint-disable-next-line no-control-regex -- intentional: sanitize control chars from subtitle font names
-      .replace(/[\x00-\x1f\x7f]/g, "")  // strip control chars including newlines
-      .slice(0, 128);  // limit length
+    const rawFamily = fnMatch[1].trim();
+    if (!rawFamily) {
+      result.family = initialFont.family;
+    } else {
+      result.family = rawFamily
+        // eslint-disable-next-line no-control-regex -- intentional: sanitize control chars from subtitle font names
+        .replace(/[\x00-\x1f\x7f]/g, "")
+        .slice(0, 128);
+      if (!result.family) result.family = current.family;
+    }
   }
 
   // \b<0|1|weight> — bold

@@ -197,7 +197,7 @@ export default function HdrConvert() {
           } else if (isConvertible(fileName)) {
             // SRT/SUB → ASS conversion path
             // Strip any ASS-style override blocks from raw SRT before color preprocessing
-            const sanitized = content.replace(/\{[^}]*\}/g, "");
+            const sanitized = content.replace(/\{[^}]*\\[^}]*\}/g, "");
             // Preprocess SRT colors
             const preprocessed = preprocessSrtColors(sanitized);
 
@@ -478,7 +478,7 @@ export default function HdrConvert() {
               </label>
               <NumberInput
                 value={style.fontSize}
-                onChange={(v) => setStyle({ ...style, fontSize: parseInt(v) || 48 })}
+                onChange={(v) => { const n = parseInt(v); setStyle({ ...style, fontSize: Number.isNaN(n) ? 48 : n }); }}
                 min={1}
                 max={200}
                 disabled={processing}

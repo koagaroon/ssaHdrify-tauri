@@ -12,7 +12,7 @@
 // Matches: <font color="#RRGGBB"> or <font color=#RRGGBB>
 // with up to 512 chars of other attributes before/after color (ReDoS guard)
 const SRT_COLOR_OPEN_RE =
-  /<font\b[^>]{0,512}\bcolor="?#([0-9a-fA-F]{6})"?[^>]{0,512}>/gi;
+  /<font\b[^>]{0,512}\bcolor="?#([0-9a-fA-F]{6}|[0-9a-fA-F]{3})"?[^>]{0,512}>/gi;
 const SRT_COLOR_CLOSE_RE = /<\/font>/gi;
 
 /**
@@ -20,10 +20,15 @@ const SRT_COLOR_CLOSE_RE = /<\/font>/gi;
  * <font color="#RRGGBB">text</font>  →  {\1c&HBBGGRR&}text{\1c}
  */
 export function preprocessSrtColors(text: string): string {
-  let result = text;
+  // Track how many color <font> tags were converted to ASS overrides
+  let colorCount = 0;
 
   // Convert opening tags with color
-  result = result.replace(SRT_COLOR_OPEN_RE, (_match, hexRgb: string) => {
+  let result = text.replace(SRT_COLOR_OPEN_RE, (_match, raw: string) => {
+    colorCount++;
+    const hexRgb = raw.length === 3
+      ? raw[0].repeat(2) + raw[1].repeat(2) + raw[2].repeat(2)
+      : raw;
     const r = hexRgb.slice(0, 2);
     const g = hexRgb.slice(2, 4);
     const b = hexRgb.slice(4, 6);
@@ -31,8 +36,16 @@ export function preprocessSrtColors(text: string): string {
     return `{\\1c&H${b}${g}${r}&}`;
   });
 
-  // Convert closing tags
-  result = result.replace(SRT_COLOR_CLOSE_RE, "{\\r}");
+  // Only convert as many </font> as we converted color opens;
+  // extra </font> from non-color <font> tags are stripped instead
+  let closeCount = 0;
+  result = result.replace(SRT_COLOR_CLOSE_RE, () => {
+    if (closeCount < colorCount) {
+      closeCount++;
+      return "{\\r}";
+    }
+    return "";
+  });
 
   return result;
 }
@@ -104,7 +117,10 @@ export function buildAssDocument(
     // Clean SRT formatting: convert line breaks, strip remaining HTML
     const cleanText = entry.text
       .replace(/\r?\n/g, "\\N")
-      .replace(/<[^>]*>/g, ""); // strip any remaining HTML tags
+      .replace(/<b>/gi, "{\\b1}").replace(/<\/b>/gi, "{\\b0}")
+      .replace(/<i>/gi, "{\\i1}").replace(/<\/i>/gi, "{\\i0}")
+      .replace(/<u>/gi, "{\\u1}").replace(/<\/u>/gi, "{\\u0}")
+      .replace(/<[^>]*>/g, ""); // strip remaining unknown HTML tags
     lines.push(
       `Dialogue: 0,${startTime},${endTime},Default,,0,0,0,,${cleanText}`
     );
@@ -139,12 +155,16 @@ export const NATIVE_ASS_EXTENSIONS = new Set([".ass", ".ssa"]);
 
 /** Check if a filename is a native ASS format */
 export function isNativeAss(filename: string): boolean {
-  const ext = filename.slice(filename.lastIndexOf(".")).toLowerCase();
+  const dotIdx = filename.lastIndexOf(".");
+  if (dotIdx <= 0) return false;
+  const ext = filename.slice(dotIdx).toLowerCase();
   return NATIVE_ASS_EXTENSIONS.has(ext);
 }
 
 /** Check if a filename can be converted to ASS */
 export function isConvertible(filename: string): boolean {
-  const ext = filename.slice(filename.lastIndexOf(".")).toLowerCase();
+  const dotIdx = filename.lastIndexOf(".");
+  if (dotIdx <= 0) return false;
+  const ext = filename.slice(dotIdx).toLowerCase();
   return CONVERTIBLE_EXTENSIONS.has(ext);
 }

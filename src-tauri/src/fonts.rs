@@ -9,7 +9,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 /// Allowed font file extensions (lowercase).
-const ALLOWED_FONT_EXTENSIONS: &[&str] = &["ttf", "otf", "ttc", "woff", "woff2"];
+const ALLOWED_FONT_EXTENSIONS: &[&str] = &["ttf", "otf", "ttc"];
 
 /// Strip the Win32 extended-length UNC prefix (`\\?\`) that `canonicalize()`
 /// adds on Windows, so paths compare consistently across insert and lookup.
@@ -110,6 +110,14 @@ fn is_in_system_fonts_dir(canonical: &Path) -> bool {
             || canonical_str == "/Library/Fonts"
             || canonical_str.starts_with("/System/Library/Fonts/")
             || canonical_str == "/System/Library/Fonts"
+            || canonical_str.starts_with("/System/Library/AssetsV2/")
+            || canonical_str == "/System/Library/AssetsV2"
+            || canonical_str.starts_with("/Library/Application Support/")
+            || canonical_str == "/Library/Application Support"
+            || canonical_str.starts_with("/opt/homebrew/share/fonts/")
+            || canonical_str == "/opt/homebrew/share/fonts"
+            || canonical_str.starts_with("/usr/local/share/fonts/")
+            || canonical_str == "/usr/local/share/fonts"
             || {
                 // Per-user fonts: ~/Library/Fonts/
                 if let Some(home) = std::env::var_os("HOME") {

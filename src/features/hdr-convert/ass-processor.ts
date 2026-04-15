@@ -129,19 +129,19 @@ function transformStyleLine(
 ): string {
   if (!line.startsWith("Style:")) return line;
 
-  // Split "Style: " prefix from the rest
   const colonIdx = line.indexOf(":");
   const prefix = line.slice(0, colonIdx + 1);
-  const fields = line.slice(colonIdx + 1).split(",").map((f) => f.trim());
+  const afterColon = line.slice(colonIdx + 1);
+  const fields = afterColon.split(",");
 
-  // Transform color fields at dynamically-parsed indices
+  // Only trim the specific color fields being transformed, leave everything else untouched
   for (const idx of styleColorIndices) {
     if (idx < fields.length && fields[idx]) {
-      fields[idx] = transformColorString(fields[idx], targetBrightness, eotf);
+      fields[idx] = transformColorString(fields[idx].trim(), targetBrightness, eotf);
     }
   }
 
-  return `${prefix} ${fields.join(",")}`;
+  return `${prefix}${fields.join(",")}`;
 }
 
 // ── Section Detection ─────────────────────────────────────

@@ -13,7 +13,6 @@ import {
   type EmbedProgress,
 } from "./font-embedder";
 import {
-  collectFonts,
   ensureLoaded,
   fontKeyLabel,
   type FontUsage,
@@ -76,14 +75,11 @@ export default function FontEmbed() {
 
       const name = fileNameFromPath(path);
 
-      // Collect font usages
-      const usages = collectFonts(content);
-      setFontUsages(usages);
-
       // Resolve system font paths (slow Rust IPC for each font)
-      const infos = await analyzeFonts(content);
+      const { infos, usages } = await analyzeFonts(content);
       if (gen !== pickGenRef.current) return; // stale — user cleared or re-picked
 
+      setFontUsages(usages);
       setFonts(infos);
 
       // Auto-select all found fonts
@@ -255,6 +251,11 @@ export default function FontEmbed() {
           >
             {embedButtonLabel()}
           </button>
+          {fonts.length > 0 && (
+            <p className="text-xs" style={{ color: "var(--text-muted)", opacity: 0.8 }}>
+              {t("fonts_full_embed_warning")}
+            </p>
+          )}
           {embedding && (
             <button
               onClick={() => { cancelRef.current = true; }}

@@ -17,6 +17,8 @@ export interface Caption {
   start: number; // ms
   end: number; // ms
   text: string;
+  /** VTT cue identifier (lines before the timing line), if present */
+  cueId?: string;
 }
 
 export interface ParseResult {
@@ -112,10 +114,12 @@ function formatVttTime(ms: number): string {
 function formatAssTime(ms: number): string {
   if (!Number.isFinite(ms)) ms = 0;
   if (ms < 0) ms = 0;
-  const h = Math.floor(ms / 3600000);
-  const m = Math.floor((ms % 3600000) / 60000);
-  const s = Math.floor((ms % 60000) / 1000);
-  const cs = Math.floor((ms % 1000) / 10);
+  const totalCs = Math.round(ms / 10);
+  const cs = totalCs % 100;
+  const totalSec = Math.floor(totalCs / 100);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
   return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${String(cs).padStart(2, "0")}`;
 }
 
@@ -213,12 +217,14 @@ function parseVtt(content: string): Caption[] {
     const timingMatch = lines[timingIdx].match(timingRe);
     if (!timingMatch) continue;
 
+    const cueId = timingIdx > 0 ? lines.slice(0, timingIdx).join("\n").trim() : undefined;
     const text = lines.slice(timingIdx + 1).join("\n").trim();
     captions.push({
       raw: block.trim(),
       start: parseVttTime(timingMatch[1]),
       end: parseVttTime(timingMatch[2]),
       text,
+      cueId,
     });
   }
   return captions;
@@ -227,6 +233,9 @@ function parseVtt(content: string): Caption[] {
 function buildVtt(captions: Caption[], header: string = "WEBVTT"): string {
   const lines = [header, ""];
   for (const c of captions) {
+    if (c.cueId) {
+      lines.push(c.cueId);
+    }
     lines.push(`${formatVttTime(c.start)} --> ${formatVttTime(c.end)}`);
     lines.push(c.text);
     lines.push("");
@@ -240,14 +249,14 @@ function parseAss(content: string): Caption[] {
   const captions: Caption[] = [];
   // Regex defined inside function — no shared lastIndex state
   const dialogueRe =
-    /^(Dialogue:\s*\d+,)(\d+:\d{2}:\d{2}\.\d{2}),( *\d+:\d{2}:\d{2}\.\d{2}),(.*)$/gm;
+    /^(Dialogue:\s*\d+,)(\d+:\d{2}:\d{2}\.\d{2}),( *)(\d+:\d{2}:\d{2}\.\d{2}),(.*)$/gm;
   let match;
   while ((match = dialogueRe.exec(content)) !== null) {
     captions.push({
       raw: match[0],
       start: parseAssTime(match[2]),
-      end: parseAssTime(match[3].trim()),
-      text: match[4],
+      end: parseAssTime(match[4]),
+      text: match[5],
     });
   }
   return captions;
@@ -257,12 +266,12 @@ function buildAss(content: string, captions: Caption[]): string {
   // For ASS, we replace timestamps in-place rather than rebuilding
   // Regex defined inside function — no shared lastIndex state
   const dialogueRe =
-    /^(Dialogue:\s*\d+,)(\d+:\d{2}:\d{2}\.\d{2}),( *\d+:\d{2}:\d{2}\.\d{2}),(.*)$/gm;
+    /^(Dialogue:\s*\d+,)(\d+:\d{2}:\d{2}\.\d{2}),( *)(\d+:\d{2}:\d{2}\.\d{2}),(.*)$/gm;
   let idx = 0;
-  return content.replace(dialogueRe, (original, prefix, _start, _end, rest) => {
+  return content.replace(dialogueRe, (original, prefix, _start, space, _end, rest) => {
     if (idx < captions.length) {
       const c = captions[idx++];
-      return `${prefix}${formatAssTime(c.start)},${formatAssTime(c.end)},${rest}`;
+      return `${prefix}${formatAssTime(c.start)},${space}${formatAssTime(c.end)},${rest}`;
     }
     return original;
   });

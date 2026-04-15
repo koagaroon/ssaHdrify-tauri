@@ -101,7 +101,7 @@ export function resolveOutputPath(
 
   // Safety: reject path traversal — check unconditionally
   // dir and outputPath are already forward-slash normalized (derived from `normalized`)
-  if (outputPath.includes("..")) {
+  if (/(^|\/)\.\.($|\/)/.test(outputPath)) {
     throw new Error(`Output path contains directory traversal: ${outputPath}`);
   }
   if (!outputPath.startsWith(dir + "/")) {

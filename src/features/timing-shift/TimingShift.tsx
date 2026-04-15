@@ -38,6 +38,7 @@ export default function TimingShift() {
   const [isError, setIsError] = useState(false);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const pickGenRef = useRef(0);
 
   // Memoized derived values — prevents debounce effect from resetting on unrelated state updates
   const effectiveOffsetMs = useMemo(() => {
@@ -86,7 +87,10 @@ export default function TimingShift() {
   }, [fileContent, effectiveOffsetMs, thresholdMs, useThreshold]);
 
   const handlePickFile = useCallback(async () => {
+    const gen = pickGenRef.current = pickGenRef.current + 1;
+
     const path = await pickSubtitleFile();
+    if (gen !== pickGenRef.current) return;
     if (!path) return;
 
     // Cross-tab duplicate guard
@@ -101,7 +105,9 @@ export default function TimingShift() {
     setIsError(false);
 
     try {
+      clearFile("timing");
       const content = await readText(path);
+      if (gen !== pickGenRef.current) return;
       const name = fileNameFromPath(path);
 
       const result = shiftSubtitles(content, {
@@ -119,12 +125,14 @@ export default function TimingShift() {
         fileContent: content,
       });
     } catch (e) {
+      if (gen !== pickGenRef.current) return;
       setIsError(true);
       setStatus(t("error_prefix", e instanceof Error ? e.message : String(e)));
     }
-  }, [effectiveOffsetMs, thresholdMs, isFileInUse, setTimingFile, t]);
+  }, [effectiveOffsetMs, thresholdMs, isFileInUse, setTimingFile, clearFile, t]);
 
   const handleClearFile = useCallback(() => {
+    pickGenRef.current = pickGenRef.current + 1;
     clearFile("timing");
     setPreview([]);
     setCaptionCount(0);
