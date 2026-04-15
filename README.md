@@ -167,7 +167,7 @@ Output is in the `src-tauri/target/release/bundle/` directory.
 
 ## 与 Python 版的区别 | vs. Python Version
 
-| | Python 版 / Python version ([CC_ssaHdrify](https://github.com/LtxPoi/CC_ssaHdrify)) | Tauri 版 / Tauri version（本项目 / this project） |
+| | Python 版 / Python version ([CC_ssaHdrify](https://github.com/koagaroon/CC_ssaHdrify)) | Tauri 版 / Tauri version（本项目 / this project） |
 |---|---|---|
 | 功能 / Features | HDR 转换 / HDR conversion | HDR 转换 + 时间轴偏移 + 字体嵌入 / HDR conversion + timing shift + font embedding |
 | UI | tkinter | Web UI (React + Tailwind) |
@@ -189,7 +189,7 @@ Output is in the `src-tauri/target/release/bundle/` directory.
 
 Copyright (C) 2021 ying  
 Copyright (C) 2024-2025 gky99  
-Copyright (C) 2026 LtxPoi
+Copyright (C) 2026 koagaroon
 
 本项目采用 [GNU 通用公共许可证 v3.0 或更高版本](LICENSE) 授权。
 

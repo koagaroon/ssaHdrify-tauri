@@ -2,9 +2,9 @@
 name = "ssahdrify"
 version = "0.1.0"
 description = "SDR subtitle to HDR color space converter with font embedding and timing tools"
-authors = ["LtxPoi"]
+authors = ["koagaroon"]
 license = "GPL-3.0-or-later"
-repository = "https://github.com/LtxPoi/ssaHdrify-tauri"
+repository = "https://github.com/koagaroon/ssaHdrify-tauri"
 edition = "2021"
 rust-version = "1.77.2"
 
