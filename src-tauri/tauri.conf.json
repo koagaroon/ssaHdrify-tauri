@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "SSA HDRify",
-  "version": "0.1.0",
-  "identifier": "com.ssahdrify.app",
+  "version": "1.0.0",
+  "identifier": "com.koagaroon.ssahdrify",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
