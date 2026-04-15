@@ -61,6 +61,7 @@ export default function TimingShift() {
     if (!fileContent) return;
     if (useThreshold && thresholdMs === null) {
       if (debounceRef.current) clearTimeout(debounceRef.current);
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- guard clause: clears stale preview, cannot cascade
       setPreview([]);
       return;
     }

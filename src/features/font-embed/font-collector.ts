@@ -76,6 +76,7 @@ export function collectFonts(assContent: string): FontUsage[] {
       // Sanitize font family name: strip control characters and limit length
       const rawFamily = (style.Fontname || "Arial").trim();
       const family = rawFamily
+        // eslint-disable-next-line no-control-regex -- intentional: sanitize control chars from subtitle font names
         .replace(/[\x00-\x1f\x7f]/g, "")
         .slice(0, 128);
       styleMap.set(style.Name, {
@@ -198,6 +199,7 @@ function applyOverrideTags(block: string, current: FontKey): FontKey {
     result.family = fnMatch[1].trim();
     // Sanitize font family name: strip control characters and limit length
     result.family = result.family
+      // eslint-disable-next-line no-control-regex -- intentional: sanitize control chars from subtitle font names
       .replace(/[\x00-\x1f\x7f]/g, "")  // strip control chars including newlines
       .slice(0, 128);  // limit length
   }

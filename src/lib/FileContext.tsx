@@ -156,6 +156,7 @@ export function FileProvider({ children }: { children: ReactNode }) {
 
 // ── Hook ─────────────────────────────────────────────────
 
+// eslint-disable-next-line react-refresh/only-export-components -- co-located Provider + hook is standard React pattern
 export function useFileContext(): FileContextValue {
   const ctx = useContext(FileContext);
   if (!ctx) {

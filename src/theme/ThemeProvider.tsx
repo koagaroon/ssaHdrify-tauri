@@ -20,11 +20,6 @@ function getSystemPreference(): ThemeAppearance {
   return "light";
 }
 
-function resolveAppearance(mode: ThemeMode): ThemeAppearance {
-  if (mode === "auto") return getSystemPreference();
-  return mode;
-}
-
 export default function ThemeProvider({ children }: { children: ReactNode }) {
   const [mode, setModeState] = useState<ThemeMode>(loadMode);
   const [systemPref, setSystemPref] = useState<ThemeAppearance>(getSystemPreference);

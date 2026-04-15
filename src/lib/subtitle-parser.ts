@@ -240,7 +240,7 @@ function parseAss(content: string): Caption[] {
   const captions: Caption[] = [];
   // Regex defined inside function — no shared lastIndex state
   const dialogueRe =
-    /^(Dialogue:\s*\d+,)(\d+:\d{2}:\d{2}\.\d{2}),(\ *\d+:\d{2}:\d{2}\.\d{2}),(.*)$/gm;
+    /^(Dialogue:\s*\d+,)(\d+:\d{2}:\d{2}\.\d{2}),( *\d+:\d{2}:\d{2}\.\d{2}),(.*)$/gm;
   let match;
   while ((match = dialogueRe.exec(content)) !== null) {
     captions.push({
@@ -257,7 +257,7 @@ function buildAss(content: string, captions: Caption[]): string {
   // For ASS, we replace timestamps in-place rather than rebuilding
   // Regex defined inside function — no shared lastIndex state
   const dialogueRe =
-    /^(Dialogue:\s*\d+,)(\d+:\d{2}:\d{2}\.\d{2}),(\ *\d+:\d{2}:\d{2}\.\d{2}),(.*)$/gm;
+    /^(Dialogue:\s*\d+,)(\d+:\d{2}:\d{2}\.\d{2}),( *\d+:\d{2}:\d{2}\.\d{2}),(.*)$/gm;
   let idx = 0;
   return content.replace(dialogueRe, (original, prefix, _start, _end, rest) => {
     if (idx < captions.length) {

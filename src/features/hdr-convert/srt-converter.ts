@@ -85,6 +85,7 @@ export function buildAssDocument(
     "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding"
   );
   // Sanitize fontName: strip control characters and commas to prevent CSV corruption
+  // eslint-disable-next-line no-control-regex -- intentional: sanitize control chars from subtitle font names
   const safeFontName = style.fontName.replace(/[\x00-\x1f\x7f,]/g, "");
   lines.push(
     `Style: Default,${safeFontName},${style.fontSize},${style.primaryColor},&H000000FF,${style.outlineColor},&H00000000,0,0,0,0,100,100,0,0,1,${style.outlineWidth},${style.shadowDepth},2,10,10,10,1`
@@ -101,7 +102,7 @@ export function buildAssDocument(
     const startTime = msToAssTime(entry.start);
     const endTime = msToAssTime(entry.end);
     // Clean SRT formatting: convert line breaks, strip remaining HTML
-    let cleanText = entry.text
+    const cleanText = entry.text
       .replace(/\r?\n/g, "\\N")
       .replace(/<[^>]*>/g, ""); // strip any remaining HTML tags
     lines.push(

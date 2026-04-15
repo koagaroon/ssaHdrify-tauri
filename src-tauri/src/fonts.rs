@@ -14,8 +14,8 @@ const ALLOWED_FONT_EXTENSIONS: &[&str] = &["ttf", "otf", "ttc", "woff", "woff2"]
 /// Strip the Win32 extended-length UNC prefix (`\\?\`) that `canonicalize()`
 /// adds on Windows, so paths compare consistently across insert and lookup.
 fn normalize_canonical_path(canonical_str: &str) -> String {
-    if canonical_str.starts_with("\\\\?\\") {
-        canonical_str[4..].to_string()
+    if let Some(stripped) = canonical_str.strip_prefix("\\\\?\\") {
+        stripped.to_string()
     } else {
         canonical_str.to_string()
     }
@@ -84,8 +84,8 @@ pub fn find_system_font(family: String, bold: bool, italic: bool) -> Result<Stri
 fn is_in_system_fonts_dir(canonical: &Path) -> bool {
     let raw = canonical.to_string_lossy();
     // Strip Win32 extended-length UNC prefix (produced by canonicalize() on Windows)
-    let canonical_str = if raw.starts_with("\\\\?\\") {
-        std::borrow::Cow::Owned(raw[4..].to_string())
+    let canonical_str = if let Some(stripped) = raw.strip_prefix("\\\\?\\") {
+        std::borrow::Cow::Owned(stripped.to_string())
     } else {
         raw
     };
