@@ -82,13 +82,7 @@ pub fn find_system_font(family: String, bold: bool, italic: bool) -> Result<Stri
 /// Uses `starts_with` only — no `contains` patterns — to prevent matching
 /// arbitrary directories that happen to include "fonts" in the path.
 fn is_in_system_fonts_dir(canonical: &Path) -> bool {
-    let raw = canonical.to_string_lossy();
-    // Strip Win32 extended-length UNC prefix (produced by canonicalize() on Windows)
-    let canonical_str = if let Some(stripped) = raw.strip_prefix("\\\\?\\") {
-        std::borrow::Cow::Owned(stripped.to_string())
-    } else {
-        raw
-    };
+    let canonical_str = normalize_canonical_path(&canonical.to_string_lossy());
 
     if cfg!(windows) {
         let lower = canonical_str.to_lowercase().replace("/", "\\");

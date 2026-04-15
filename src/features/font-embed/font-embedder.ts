@@ -9,11 +9,13 @@
 import {
   collectFonts,
   ensureLoaded as ensureCollectorLoaded,
+  fontKeyLabel,
   type FontUsage,
   type FontKey,
 } from "./font-collector";
 import { buildFontEntry } from "./ass-uuencode";
 import { findSystemFont, subsetFont } from "../../lib/tauri-api";
+import { SECTION_HEADER_RE } from "../hdr-convert/ass-processor";
 
 // ── Types ─────────────────────────────────────────────────
 
@@ -113,9 +115,9 @@ export async function embedFonts(
     if (!info.filePath) continue;
 
     const fontName = buildFontFileName(info.key);
-    const fontLabel = `${info.key.family}${info.key.bold ? " Bold" : ""}${info.key.italic ? " Italic" : ""}`;
+    const label = fontKeyLabel(info.key);
     onProgress?.({
-      stage: t?.("msg_subsetting", fontLabel) ?? `Subsetting ${fontLabel}...`,
+      stage: t?.("msg_subsetting", label) ?? `Subsetting ${label}...`,
       current: i + 1,
       total,
     });
@@ -209,20 +211,6 @@ function insertFontsSection(content: string, fontsSection: string): string {
     return slice.join(lineEnding);
   };
 
-  // Check if a line is a section header like [Events], [Fonts], etc.
-  // Real ASS section names contain only letters, digits, spaces, and +
-  // (e.g., [Script Info], [V4+ Styles], [Events], [Fonts], [Graphics]).
-  // A simple startsWith("[") or even startsWith("[") + endsWith("]") is NOT
-  // sufficient — UUEncode font data uses ASCII 33–96, which includes both
-  // [ (93) and ] (91), so encoded lines can start with [ and end with ].
-  // Matches real ASS section headers while excluding UUEncode font data.
-  // UUEncode output uses ASCII 33–96 which includes [ ] A-Z 0-9 + but
-  // NEVER lowercase letters (97-122) or space (32). Every real ASS section
-  // name contains at least one lowercase letter or space (e.g., [Script Info],
-  // [V4+ Styles], [Events], [Fonts]). The lookahead (?=...[a-z ]) ensures
-  // at least one such character exists, making UUEncode collisions impossible.
-  // Length capped at 50 as defense-in-depth (longest known: 24 inner chars).
-  const SECTION_HEADER_RE = /^\[(?=[A-Za-z0-9+ ]*[a-z ])[A-Za-z0-9+ ]{1,50}\]$/;
   const isSectionHeader = (line: string) => SECTION_HEADER_RE.test(line.trim());
 
   if (existingFontsIdx >= 0) {

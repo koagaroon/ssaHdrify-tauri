@@ -40,7 +40,6 @@ function parseStyleFormatLine(formatLine: string): number[] | null {
   return indices.length > 0 ? indices : null;
 }
 
-
 /**
  * Parse an ASS color string (&H[AA]BBGGRR) into {r, g, b, alpha}.
  * Alpha: "00" = opaque, "FF" = fully transparent (ASS convention).
@@ -64,6 +63,11 @@ export function parseAssColor(assColor: string): {
   return { r: red, g: green, b: blue, alpha };
 }
 
+/** Format a single byte as two uppercase hex digits. */
+function hexByte(n: number): string {
+  return n.toString(16).padStart(2, "0").toUpperCase();
+}
+
 /**
  * Format RGB back to ASS color string with preserved alpha.
  */
@@ -73,8 +77,7 @@ export function formatAssColor(
   b: number,
   alpha: string
 ): string {
-  const hex = (n: number) => n.toString(16).padStart(2, "0").toUpperCase();
-  return `&H${alpha}${hex(b)}${hex(g)}${hex(r)}`;
+  return `&H${alpha}${hexByte(b)}${hexByte(g)}${hexByte(r)}`;
 }
 
 /**
@@ -106,26 +109,11 @@ function transformEventText(
     /(\\[0-9]?c&H)([0-9a-fA-F]{6}|[0-9a-fA-F]{8})(?=[&}),\\]|$)/g;
 
   return text.replace(COLOR_TAG_RE, (_, prefix: string, hexColor: string) => {
-    let alpha = "";
-    let bgr = hexColor;
-
-    // 8-digit: first 2 chars are alpha
-    if (hexColor.length === 8) {
-      alpha = hexColor.slice(0, 2);
-      bgr = hexColor.slice(2);
-    }
-
-    // Pad to 6 digits for safety
-    bgr = bgr.padStart(6, "0");
-
-    const blue = parseInt(bgr.slice(0, 2), 16);
-    const green = parseInt(bgr.slice(2, 4), 16);
-    const red = parseInt(bgr.slice(4, 6), 16);
-
-    const [hr, hg, hb] = sRgbToHdr(red, green, blue, targetBrightness, eotf);
-
-    const hex = (n: number) => n.toString(16).padStart(2, "0").toUpperCase();
-    return `${prefix}${alpha}${hex(hb)}${hex(hg)}${hex(hr)}`;
+    const { r, g, b, alpha } = parseAssColor(`&H${hexColor}`);
+    const [hr, hg, hb] = sRgbToHdr(r, g, b, targetBrightness, eotf);
+    // Inline color tags use the same alpha prefix as the input
+    const alphaPrefix = hexColor.length === 8 ? alpha : "";
+    return `${prefix}${alphaPrefix}${hexByte(hb)}${hexByte(hg)}${hexByte(hr)}`;
   });
 }
 
@@ -158,9 +146,20 @@ function transformStyleLine(
 
 // ── Section Detection ─────────────────────────────────────
 
-type AssSection = "info" | "styles" | "fonts" | "events" | "other";
+export type AssSection = "info" | "styles" | "fonts" | "events" | "other";
 
-function detectSection(line: string): AssSection | null {
+/**
+ * Matches real ASS section headers while excluding UUEncode font data.
+ * UUEncode output uses ASCII 33–96 which includes [ ] A-Z 0-9 + but
+ * NEVER lowercase letters (97-122) or space (32). Every real ASS section
+ * name contains at least one lowercase letter or space (e.g., [Script Info],
+ * [V4+ Styles], [Events], [Fonts]). The lookahead ensures at least one such
+ * character exists, making UUEncode collisions impossible.
+ * Length capped at 50 as defense-in-depth (longest known: 24 inner chars).
+ */
+export const SECTION_HEADER_RE = /^\[(?=[A-Za-z0-9+ ]*[a-z ])[A-Za-z0-9+ ]{1,50}\]$/;
+
+export function detectSection(line: string): AssSection | null {
   const trimmed = line.trim().toLowerCase();
   if (trimmed === "[script info]") return "info";
   if (trimmed === "[v4+ styles]" || trimmed === "[v4 styles]") return "styles";
@@ -171,7 +170,7 @@ function detectSection(line: string): AssSection | null {
   // UUEncode lines could theoretically match here. This is acceptable because
   // the "other" branch in processAssContent passes lines through unchanged,
   // identical to the "fonts" branch. No correctness impact from a false positive.
-  if (/^\[(?=[A-Za-z0-9+ ]*[a-z ])[A-Za-z0-9+ ]{1,50}\]$/.test(trimmed)) return "other";
+  if (SECTION_HEADER_RE.test(trimmed)) return "other";
   return null; // not a section header
 }
 

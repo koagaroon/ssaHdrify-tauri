@@ -10,7 +10,6 @@
  * Formats: ASS, SRT, VTT, SUB (MicroDVD)
  */
 import {
-  parseSubtitle,
   shiftSubtitle,
   formatDisplayTime,
   parseDisplayTime,
@@ -46,14 +45,6 @@ export interface ShiftResult {
   preview: PreviewEntry[];
   /** Total number of captions */
   captionCount: number;
-}
-
-/**
- * Detect the format of a subtitle file.
- */
-export function detectFormat(content: string): SubtitleFormat {
-  const { format } = parseSubtitle(content);
-  return format;
 }
 
 /**

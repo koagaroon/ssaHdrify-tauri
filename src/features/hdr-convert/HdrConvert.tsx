@@ -3,9 +3,12 @@ import {
   pickSubtitleFiles,
   readText,
   writeText,
+  fileNameFromPath,
 } from "../../lib/tauri-api";
 import {
   processAssContent,
+  parseAssColor,
+  formatAssColor,
 } from "./ass-processor";
 import {
   preprocessSrtColors,
@@ -34,8 +37,18 @@ import { useFileContext } from "../../lib/FileContext";
 
 /** Convert ASS color "&H00BBGGRR" to HTML "#RRGGBB" */
 function assColorToHex(assColor: string): string {
-  const s = assColor.replace(/^&H/i, "").padStart(8, "0");
-  return `#${s.slice(6, 8)}${s.slice(4, 6)}${s.slice(2, 4)}`;
+  const { r, g, b } = parseAssColor(assColor);
+  const hex = (n: number) => n.toString(16).padStart(2, "0");
+  return `#${hex(r)}${hex(g)}${hex(b)}`;
+}
+
+/** Convert HTML "#RRGGBB" to ASS color "&H00BBGGRR" */
+function hexToAssColor(htmlHex: string): string {
+  const hex = htmlHex.slice(1);
+  const r = parseInt(hex.slice(0, 2), 16);
+  const g = parseInt(hex.slice(2, 4), 16);
+  const b = parseInt(hex.slice(4, 6), 16);
+  return formatAssColor(r, g, b, "00");
 }
 
 // Common fonts available on most systems (cross-platform)
@@ -107,9 +120,7 @@ export default function HdrConvert() {
     if (allowed.length === 0) return;
 
     // Silent replace: see FileContext.tsx for design rationale
-    const names = allowed.map(
-      (p) => p.replace(/\\/g, "/").split("/").pop() ?? p
-    );
+    const names = allowed.map(fileNameFromPath);
     setHdrFiles({ filePaths: allowed, fileNames: names });
   }, [filterAvailablePaths, setHdrFiles, addLog, t]);
 
@@ -139,7 +150,7 @@ export default function HdrConvert() {
           break;
         }
 
-        const fileName = filePath.replace(/\\/g, "/").split("/").pop() ?? filePath;
+        const fileName = fileNameFromPath(filePath);
         addLog(t("msg_processing", fileName));
 
         try {
@@ -213,7 +224,7 @@ export default function HdrConvert() {
 
           // Write output
           await writeText(outputPath, assContent);
-          const outName = outputPath.replace(/\\/g, "/").split("/").pop() ?? outputPath;
+          const outName = fileNameFromPath(outputPath);
           addLog(t("msg_done", outName), "success");
           successCount++;
         } catch (e) {
@@ -480,13 +491,7 @@ export default function HdrConvert() {
               <input
                 type="color"
                 value={assColorToHex(style.primaryColor)}
-                onChange={(e) => {
-                  const hex = e.target.value.slice(1);
-                  const r = hex.slice(0, 2);
-                  const g = hex.slice(2, 4);
-                  const b = hex.slice(4, 6);
-                  setStyle({ ...style, primaryColor: `&H00${b}${g}${r}` });
-                }}
+                onChange={(e) => setStyle({ ...style, primaryColor: hexToAssColor(e.target.value) })}
                 disabled={processing}
                 className="w-full h-8 rounded cursor-pointer"
                 style={{
@@ -502,13 +507,7 @@ export default function HdrConvert() {
               <input
                 type="color"
                 value={assColorToHex(style.outlineColor)}
-                onChange={(e) => {
-                  const hex = e.target.value.slice(1);
-                  const r = hex.slice(0, 2);
-                  const g = hex.slice(2, 4);
-                  const b = hex.slice(4, 6);
-                  setStyle({ ...style, outlineColor: `&H00${b}${g}${r}` });
-                }}
+                onChange={(e) => setStyle({ ...style, outlineColor: hexToAssColor(e.target.value) })}
                 disabled={processing}
                 className="w-full h-8 rounded cursor-pointer"
                 style={{
@@ -583,12 +582,11 @@ export default function HdrConvert() {
               <div
                 key={log.id}
                 style={{
-                  color:
-                    log.type === "error"
-                      ? "var(--error)"
-                      : log.type === "success"
-                        ? "var(--success)"
-                        : "var(--text-muted)",
+                  color: {
+                    error: "var(--error)",
+                    success: "var(--success)",
+                    info: "var(--text-muted)",
+                  }[log.type],
                 }}
               >
                 {log.text}

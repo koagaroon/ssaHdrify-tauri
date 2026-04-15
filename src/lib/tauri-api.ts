@@ -138,6 +138,13 @@ export async function readBinary(
   return data;
 }
 
+// ── Path Utilities ───────────────────────────────────────
+
+/** Extract the filename from a full file path (handles both / and \ separators). */
+export function fileNameFromPath(path: string): string {
+  return path.replace(/\\/g, "/").split("/").pop() ?? path;
+}
+
 // ── Rust Commands ─────────────────────────────────────────
 
 /** Find a system font file path by family name and style. */

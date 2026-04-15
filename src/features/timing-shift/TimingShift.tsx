@@ -4,6 +4,7 @@ import {
   pickSavePath,
   readText,
   writeText,
+  fileNameFromPath,
 } from "../../lib/tauri-api";
 import {
   shiftSubtitles,
@@ -101,7 +102,7 @@ export default function TimingShift() {
 
     try {
       const content = await readText(path);
-      const name = path.replace(/\\/g, "/").split("/").pop() ?? path;
+      const name = fileNameFromPath(path);
 
       const result = shiftSubtitles(content, {
         offsetMs: effectiveOffsetMs,
@@ -154,7 +155,7 @@ export default function TimingShift() {
       if (!savePath) return;
 
       await writeText(savePath, result.content);
-      const outName = savePath.replace(/\\/g, "/").split("/").pop() ?? savePath;
+      const outName = fileNameFromPath(savePath);
       setIsError(false);
       setStatus(t("msg_saved", outName, result.captionCount));
     } catch (e) {

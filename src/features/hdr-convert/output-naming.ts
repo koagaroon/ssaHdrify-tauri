@@ -100,12 +100,11 @@ export function resolveOutputPath(
   }
 
   // Safety: reject path traversal — check unconditionally
-  const normalizedOutput = outputPath.replace(/\\/g, "/");
-  const normalizedDir = dir.replace(/\\/g, "/");
-  if (normalizedOutput.includes("..")) {
+  // dir and outputPath are already forward-slash normalized (derived from `normalized`)
+  if (outputPath.includes("..")) {
     throw new Error(`Output path contains directory traversal: ${outputPath}`);
   }
-  if (!normalizedOutput.startsWith(normalizedDir + "/")) {
+  if (!outputPath.startsWith(dir + "/")) {
     throw new Error(`Output path escapes input directory: ${outputPath}`);
   }
 
@@ -115,7 +114,7 @@ export function resolveOutputPath(
   }
 
   // Safety: reject self-overwrite (case-insensitive for Windows)
-  if (normalizedOutput.toLowerCase() === normalized.toLowerCase()) {
+  if (outputPath.toLowerCase() === normalized.toLowerCase()) {
     throw new Error(
       "Output path is the same as input (would overwrite source file)"
     );

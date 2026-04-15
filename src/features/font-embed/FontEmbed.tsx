@@ -4,6 +4,7 @@ import {
   pickSavePath,
   readText,
   writeText,
+  fileNameFromPath,
 } from "../../lib/tauri-api";
 import {
   analyzeFonts,
@@ -14,6 +15,7 @@ import {
 import {
   collectFonts,
   ensureLoaded,
+  fontKeyLabel,
   type FontUsage,
 } from "./font-collector";
 import { useI18n } from "../../i18n/useI18n";
@@ -72,7 +74,7 @@ export default function FontEmbed() {
       const content = await readText(path);
       if (gen !== pickGenRef.current) return; // stale — user cleared or re-picked
 
-      const name = path.replace(/\\/g, "/").split("/").pop() ?? path;
+      const name = fileNameFromPath(path);
 
       // Collect font usages
       const usages = collectFonts(content);
@@ -162,7 +164,7 @@ export default function FontEmbed() {
       }
 
       await writeText(savePath, result.content);
-      const outName = savePath.replace(/\\/g, "/").split("/").pop() ?? savePath;
+      const outName = fileNameFromPath(savePath);
       setIsError(false);
       setStatus(t("msg_embed_saved", outName, result.embeddedCount));
     } catch (e) {
@@ -174,12 +176,7 @@ export default function FontEmbed() {
     }
   }, [fileContent, filePath, fileName, fonts, selected, fontUsages, t]);
 
-  const formatFontLabel = (info: FontInfo) => {
-    let label = info.key.family;
-    if (info.key.bold) label += " Bold";
-    if (info.key.italic) label += " Italic";
-    return label;
-  };
+  const formatFontLabel = (info: FontInfo) => fontKeyLabel(info.key);
 
   const handleClearFile = useCallback(() => {
     // Increment generation to invalidate any in-flight handlePickFile async work
@@ -195,6 +192,12 @@ export default function FontEmbed() {
   }, [clearFile]);
 
   const isEmbedDisabled = embedding || selected.size === 0 || !filePath;
+
+  function embedButtonLabel(): string {
+    if (embedding) return t("btn_embedding");
+    if (selected.size > 0) return t("btn_embed", selected.size);
+    return t("btn_embed_default");
+  }
 
   return (
     <div className="space-y-5">
@@ -250,11 +253,7 @@ export default function FontEmbed() {
                 : { background: "var(--accent)", color: "#fff" }
             }
           >
-            {embedding
-              ? t("btn_embedding")
-              : selected.size > 0
-                ? t("btn_embed", selected.size)
-                : t("btn_embed_default")}
+            {embedButtonLabel()}
           </button>
           {embedding && (
             <button

@@ -36,6 +36,14 @@ function fontKeyToString(key: FontKey): string {
   return `${key.family}|${key.bold ? "B" : ""}${key.italic ? "I" : ""}`;
 }
 
+/** Format a FontKey as a human-readable label (e.g., "Arial Bold Italic"). */
+export function fontKeyLabel(key: FontKey): string {
+  let label = key.family;
+  if (key.bold) label += " Bold";
+  if (key.italic) label += " Italic";
+  return label;
+}
+
 /**
  * Ensure ass-compiler is loaded. Call before using collector functions.
  */
