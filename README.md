@@ -145,7 +145,7 @@ Output is in the `src-tauri/target/release/bundle/` directory.
 │  │  - Custom subtitle parser (timing tab)         │  │
 │  │  - i18n (zh/en), dark/light/auto theme         │  │
 │  └──────────────┬─────────────────────────────────┘  │
-│                 │ Tauri IPC                           │
+│                 │ Tauri IPC                          │
 │  ┌──────────────▼─────────────────────────────────┐  │
 │  │  Rust Backend                                  │  │
 │  │  - font-kit: system font discovery + matching  │  │
