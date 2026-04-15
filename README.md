@@ -174,6 +174,11 @@ Output is in the `src-tauri/target/release/bundle/` directory.
 - **字体嵌入为完整文件 / Full font embedding**：CJK 字体可能达 15-20 MB。字体子集化（仅嵌入实际使用的字符）尚未实现。/ CJK fonts can be 15-20 MB. Font subsetting (embedding only used glyphs) is not yet implemented.
 - **编码检测 / Encoding detection**：仅支持 UTF-8 字幕文件。非 UTF-8 编码（如 GBK、Big5）需手动转换。/ Only UTF-8 subtitle files are supported. Non-UTF-8 encodings (e.g. GBK, Big5) must be converted manually.
 
+> [!TIP]
+> **中文路径完全支持** — 文件路径中包含中文或其他非 ASCII 字符不会导致任何问题。Tauri 和 Rust 底层使用 Unicode API，不受传统 ANSI 编码限制。
+>
+> **Non-ASCII paths fully supported** — File paths containing Chinese, Japanese, or other non-ASCII characters work correctly. Tauri and Rust use native Unicode APIs under the hood.
+
 ---
 
 ## 致谢 | Credits
