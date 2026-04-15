@@ -37,7 +37,7 @@ export default function TimingShift() {
   const [status, setStatus] = useState<string>("");
   const [isError, setIsError] = useState(false);
 
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const pickGenRef = useRef(0);
 
   // Memoized derived values — prevents debounce effect from resetting on unrelated state updates

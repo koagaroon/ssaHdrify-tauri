@@ -13,8 +13,8 @@
     "windows": [
       {
         "title": "SSA HDRify",
-        "width": 1050,
-        "height": 550,
+        "width": 960,
+        "height": 680,
         "resizable": true,
         "fullscreen": false
       }
@@ -25,7 +25,13 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis"],
+    "windows": {
+      "nsis": {
+        "languages": ["SimpChinese", "English"],
+        "displayLanguageSelector": false
+      }
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
