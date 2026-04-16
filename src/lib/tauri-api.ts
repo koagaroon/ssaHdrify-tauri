@@ -5,7 +5,6 @@
 import { open, save } from "@tauri-apps/plugin-dialog";
 import {
   readFile,
-  readTextFile,
   stat,
   writeTextFile,
 } from "@tauri-apps/plugin-fs";
@@ -81,7 +80,6 @@ export async function pickSavePath(
 
 // ── File I/O ──────────────────────────────────────────────
 
-const MAX_TEXT_SIZE = 50 * 1024 * 1024; // 50 MB
 const MAX_BINARY_SIZE = 100 * 1024 * 1024; // 100 MB (font files)
 
 /** Check file size before reading. Throws if file exceeds the limit. */
@@ -96,23 +94,34 @@ async function assertFileSize(path: string, maxBytes: number): Promise<void> {
   }
 }
 
-/** Read a text file with explicit UTF-8 encoding. */
-export async function readText(
-  path: string,
-  maxSizeBytes: number = MAX_TEXT_SIZE
-): Promise<string> {
-  await assertFileSize(path, maxSizeBytes);
-  const content = await readTextFile(path);
-  // Post-read size check to close TOCTOU window (file could grow between stat and read)
-  const byteLength = new TextEncoder().encode(content).length;
-  if (byteLength > maxSizeBytes) {
-    const sizeMB = (byteLength / (1024 * 1024)).toFixed(1);
-    const limitMB = (maxSizeBytes / (1024 * 1024)).toFixed(0);
-    throw new Error(
-      `File too large after read: ${sizeMB} MB exceeds the ${limitMB} MB limit (${path})`
-    );
-  }
-  return content;
+/** Result from encoding-aware file reading. */
+export interface ReadTextResult {
+  /** File content decoded to UTF-8 */
+  text: string;
+  /** Detected encoding (e.g. "UTF-8", "GBK", "Big5", "Shift_JIS", "UTF-16LE") */
+  encoding: string;
+}
+
+/**
+ * Read a text file with automatic encoding detection.
+ *
+ * Handles UTF-8, UTF-8 BOM, UTF-16 LE/BE, GBK, Big5, Shift_JIS, EUC-KR,
+ * and other encodings via the Rust backend (chardetng + encoding_rs).
+ * Returns clean UTF-8 text regardless of original encoding.
+ */
+export async function readText(path: string): Promise<string> {
+  const result = await readTextDetectEncoding(path);
+  return result.text;
+}
+
+/**
+ * Read a text file with encoding detection, returning both text and encoding name.
+ * Useful when the UI needs to display the detected encoding.
+ */
+export async function readTextDetectEncoding(
+  path: string
+): Promise<ReadTextResult> {
+  return invoke<ReadTextResult>("read_text_detect_encoding", { path });
 }
 
 /** Write a text file with explicit UTF-8. */

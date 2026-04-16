@@ -1,3 +1,4 @@
+mod encoding;
 mod fonts;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -15,7 +16,11 @@ pub fn run() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![fonts::find_system_font, fonts::subset_font])
+        .invoke_handler(tauri::generate_handler![
+            encoding::read_text_detect_encoding,
+            fonts::find_system_font,
+            fonts::subset_font,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
