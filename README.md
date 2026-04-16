@@ -38,9 +38,15 @@ A Tauri desktop rewrite of [gky99/ssaHdrify](https://github.com/gky99/ssaHdrify)
 >
 > **Non-ASCII paths fully supported** — File paths containing Chinese, Japanese, or other non-ASCII characters work correctly. Tauri and Rust use native Unicode APIs under the hood.
 
-> [!WARNING]
-> - **字体嵌入为完整文件 / Full font embedding**：CJK 字体可能达 15-20 MB。字体子集化（仅嵌入实际使用的字符）尚未实现。/ CJK fonts can be 15-20 MB. Font subsetting (embedding only used glyphs) is not yet implemented.
-> - **编码检测 / Encoding detection**：仅支持 UTF-8 字幕文件。非 UTF-8 编码（如 GBK、Big5）需手动转换。/ Only UTF-8 subtitle files are supported. Non-UTF-8 encodings (e.g. GBK, Big5) must be converted manually.
+> [!TIP]
+> **字体子集化已支持 / Font subsetting supported** — 嵌入字体时仅保留字幕中实际使用的字符，大幅减小文件体积（如 15 MB CJK 字体 → 几百 KB）。基于 [fontcull](https://github.com/bearcove/fontcull)（Google klippa 引擎）实现。
+>
+> *When embedding fonts, only glyphs actually used in the subtitle are kept, significantly reducing file size (e.g. 15 MB CJK font → a few hundred KB). Powered by [fontcull](https://github.com/bearcove/fontcull) (Google's klippa engine).*
+
+> [!TIP]
+> **多编码支持 / Multi-encoding support** — 自动检测并支持 UTF-8、UTF-8 BOM、UTF-16 LE/BE、GBK、Big5、Shift-JIS 等编码的字幕文件。基于 [chardetng](https://github.com/nicedoc/chardetng)（Firefox 编码检测引擎）实现。
+>
+> *Automatically detects and supports subtitle files in UTF-8, UTF-8 BOM, UTF-16 LE/BE, GBK, Big5, Shift-JIS, and more. Powered by [chardetng](https://github.com/nicedoc/chardetng) (Firefox's encoding detector).*
 
 ---
 
@@ -168,6 +174,8 @@ Output is in the `src-tauri/target/release/bundle/` directory.
 │  ┌──────────────▼─────────────────────────────────┐  │
 │  │  Rust Backend                                  │  │
 │  │  - font-kit: system font discovery + matching  │  │
+│  │  - fontcull: font subsetting (Google klippa)   │  │
+│  │  - chardetng + encoding_rs: encoding detection │  │
 │  │  - File I/O via Tauri fs/dialog plugins        │  │
 │  └────────────────────────────────────────────────┘  │
 └──────────────────────────────────────────────────────┘
@@ -179,7 +187,7 @@ Output is in the `src-tauri/target/release/bundle/` directory.
 
 | | Python 版 / Python version ([CC_ssaHdrify](https://github.com/koagaroon/CC_ssaHdrify)) | Tauri 版 / Tauri version（本项目 / this project） |
 |---|---|---|
-| 功能 / Features | HDR 转换 / HDR conversion | HDR 转换 + 时间轴偏移 + 字体嵌入 / HDR conversion + timing shift + font embedding |
+| 功能 / Features | HDR 转换 / HDR conversion | HDR 转换 + 时间轴偏移 + 字体嵌入（含子集化）/ HDR conversion + timing shift + font embedding (with subsetting) |
 | UI | tkinter | Web UI (React + Tailwind) |
 | 主题 / Themes | 无 / None | 深色 / 浅色 / 自动 / Dark / Light / Auto |
 | 多语言 / i18n | 中英切换 / zh/en | 中英切换 / zh/en |
@@ -245,6 +253,9 @@ All dependencies use licenses compatible with GPL-3.0.
 | [Color.js](https://colorjs.io/) | MIT | HDR 色彩空间转换 (PQ/HLG) / HDR color space conversion |
 | [ass-compiler](https://github.com/nicedoc/ass-compiler) | MIT | ASS 字幕解析（字体收集）/ ASS subtitle parsing for font collection |
 | [font-kit](https://github.com/nicedoc/font-kit) | MIT OR Apache-2.0 | 跨平台系统字体发现 (Rust) / Cross-platform system font discovery |
+| [fontcull](https://github.com/bearcove/fontcull) | MIT | 字体子集化 (Google klippa 引擎) / Font subsetting (Google's klippa engine) |
+| [chardetng](https://github.com/nicedoc/chardetng) | MIT OR Apache-2.0 | 编码检测 (Firefox 引擎) / Encoding detection (Firefox's engine) |
+| [encoding_rs](https://github.com/nicedoc/encoding_rs) | MIT OR Apache-2.0 | 编码转换 / Encoding conversion |
 | [serde](https://serde.rs/) | MIT OR Apache-2.0 | Rust 序列化 / Rust serialization |
 
 #### 构建时依赖（不随应用分发）| Build-time only (not shipped)

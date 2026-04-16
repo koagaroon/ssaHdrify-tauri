@@ -151,15 +151,12 @@ fn is_in_system_fonts_dir(canonical: &Path) -> bool {
 }
 
 /// Subset a font file to only include the specified codepoints.
-/// Currently returns the full font file — true subsetting will be added
-/// with a dedicated Rust crate in a future update.
 ///
-/// NOTE: The frontend (FontEmbed.tsx) displays a glyph count derived from
-/// the `_codepoints` parameter, which may imply the font has been subsetted.
-/// Until true subsetting is implemented, the full font is always embedded
-/// regardless of the displayed count. TODO: update UI to clarify this.
+/// Uses fontcull (Google's klippa engine) for pure-Rust subsetting.
+/// Always includes ASCII printable (0x0020–0x007E) and CJK fullwidth forms
+/// (0xFF01–0xFF5E) as safety padding. Falls back to full font on error.
 #[tauri::command]
-pub fn subset_font(font_path: String, _codepoints: Vec<u32>) -> Result<Vec<u8>, String> {
+pub fn subset_font(font_path: String, codepoints: Vec<u32>) -> Result<Vec<u8>, String> {
     let path = Path::new(&font_path);
     let filename = path.file_name()
         .and_then(|n| n.to_str())
@@ -205,9 +202,37 @@ pub fn subset_font(font_path: String, _codepoints: Vec<u32>) -> Result<Vec<u8>, 
         ));
     }
 
-    // TODO: implement actual subsetting with a Rust font crate
-    // For now, return the full font file — embedding still works,
-    // just with larger file sizes
-    fs::read(&canonical)
-        .map_err(|e| format!("Failed to read font file '{}': {}", filename, e))
+    let font_data = fs::read(&canonical)
+        .map_err(|e| format!("Failed to read font file '{}': {}", filename, e))?;
+
+    // Build codepoint set: caller's codepoints + safety padding
+    let mut all_codepoints = codepoints;
+    // ASCII printable — always needed for punctuation, numbers, basic latin
+    all_codepoints.extend(0x0020u32..=0x007Eu32);
+    // CJK fullwidth forms — common in CJK subtitle typesetting (，。！？etc.)
+    all_codepoints.extend(0xFF01u32..=0xFF5Eu32);
+    all_codepoints.sort();
+    all_codepoints.dedup();
+
+    // Attempt subsetting; fall back to full font if it fails
+    // Empty feature tags — subtitle fonts don't need OpenType layout features
+    match fontcull::subset_font_data_unicode(&font_data, &all_codepoints, &[]) {
+        Ok(subsetted) => {
+            log::info!(
+                "Subsetted '{}': {} → {} bytes ({} codepoints)",
+                filename,
+                font_data.len(),
+                subsetted.len(),
+                all_codepoints.len()
+            );
+            Ok(subsetted)
+        }
+        Err(e) => {
+            log::warn!(
+                "Subsetting failed for '{}': {:?}, returning full font",
+                filename, e
+            );
+            Ok(font_data)
+        }
+    }
 }
