@@ -23,6 +23,8 @@ export interface FontInfo {
   key: FontKey;
   glyphCount: number;
   filePath: string | null;
+  /** Face index within the font file (0 for TTF, may be >0 for TTC) */
+  fontIndex: number;
   error: string | null;
 }
 
@@ -48,7 +50,7 @@ export async function analyzeFonts(assContent: string): Promise<{ infos: FontInf
 
   for (const usage of usages) {
     try {
-      const filePath = await findSystemFont(
+      const result = await findSystemFont(
         usage.key.family,
         usage.key.bold,
         usage.key.italic
@@ -56,7 +58,8 @@ export async function analyzeFonts(assContent: string): Promise<{ infos: FontInf
       infos.push({
         key: usage.key,
         glyphCount: usage.codepoints.size,
-        filePath,
+        filePath: result.path,
+        fontIndex: result.index,
         error: null,
       });
     } catch (e) {
@@ -64,6 +67,7 @@ export async function analyzeFonts(assContent: string): Promise<{ infos: FontInf
         key: usage.key,
         glyphCount: usage.codepoints.size,
         filePath: null,
+        fontIndex: 0,
         error: e instanceof Error ? e.message : String(e),
       });
     }
@@ -134,7 +138,7 @@ export async function embedFonts(
     // Subset the font to only used glyphs (via Rust backend)
     let subsetData: Uint8Array;
     try {
-      subsetData = await subsetFont(info.filePath, Array.from(usage.codepoints));
+      subsetData = await subsetFont(info.filePath, info.fontIndex, Array.from(usage.codepoints));
       if (isCancelled?.()) return null;
     } catch (subsetErr) {
       console.warn(`Font subsetting failed for ${usage.key.family}, skipping: ${subsetErr}`);

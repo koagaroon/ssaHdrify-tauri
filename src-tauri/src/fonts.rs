@@ -30,10 +30,20 @@ fn normalize_canonical_path(canonical_str: &str) -> String {
 static ALLOWED_FONT_PATHS: Lazy<Mutex<HashSet<String>>> =
     Lazy::new(|| Mutex::new(HashSet::new()));
 
+/// Result of font lookup — includes path and face index for TTC files.
+#[derive(serde::Serialize)]
+pub struct FontLookupResult {
+    /// Absolute path to the font file
+    pub path: String,
+    /// Face index within the file (0 for single-font files, >0 for TTC faces)
+    pub index: u32,
+}
+
 /// Find a system font file path by family name, bold, and italic flags.
-/// Returns the absolute path to the font file on disk.
+/// Returns the path + face index. Prefers TTF/TTC over OTF/OTC for subtitle
+/// renderer compatibility (libass/VSFilter don't support OTF bold).
 #[tauri::command]
-pub fn find_system_font(family: String, bold: bool, italic: bool) -> Result<String, String> {
+pub fn find_system_font(family: String, bold: bool, italic: bool) -> Result<FontLookupResult, String> {
     // Input validation: reject empty, oversized, or control-char-containing names
     if family.is_empty() || family.len() > 256 {
         return Err("Font family name must be 1-256 characters".to_string());
@@ -57,25 +67,61 @@ pub fn find_system_font(family: String, bold: bool, italic: bool) -> Result<Stri
         .map_err(|e| format!("Font not found: {} (bold={}, italic={}): {}", family, bold, italic, e))?;
 
     match handle {
-        Handle::Path { path, .. } => {
-            // Register the canonicalized path as allowed for subset_font.
-            // subset_font checks the canonical form, so we must store the
-            // same form here to ensure the provenance check passes.
-            let canonical = path.canonicalize()
-                .map_err(|e| format!("Cannot resolve font path: {}", e))?;
-            let canonical_string = normalize_canonical_path(&canonical.to_string_lossy());
-            ALLOWED_FONT_PATHS.lock()
-                .map_err(|e| format!("Internal error: font path cache corrupted: {}", e))?
-                .insert(canonical_string.clone());
+        Handle::Path { path, font_index } => {
+            let ext = path.extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.to_lowercase())
+                .unwrap_or_default();
 
-            // Return the normalized canonical path so the frontend uses the
-            // same value stored in the provenance cache.
-            Ok(canonical_string)
+            // TTF preference: if the match is OTF/OTC, try to find a TTF/TTC
+            // alternative. libass/VSFilter don't support OTF bold rendering.
+            if ext == "otf" || ext == "otc" {
+                if let Ok(alt) = source.select_best_match(
+                    &[FamilyName::Title(family.clone())],
+                    &props,
+                ) {
+                    if let Handle::Path { path: alt_path, font_index: alt_index } = &alt {
+                        let alt_ext = alt_path.extension()
+                            .and_then(|e| e.to_str())
+                            .map(|e| e.to_lowercase())
+                            .unwrap_or_default();
+                        if alt_ext == "ttf" || alt_ext == "ttc" {
+                            log::info!(
+                                "Preferring TTF over OTF for '{}': {}",
+                                family, alt_path.display()
+                            );
+                            return register_font_path(alt_path, *alt_index);
+                        }
+                    }
+                }
+                // No TTF alternative found — use OTF with a warning
+                log::warn!(
+                    "Using OTF font for '{}' — bold may not render in libass/VSFilter",
+                    family
+                );
+            }
+
+            register_font_path(&path, font_index)
         }
         Handle::Memory { .. } => {
             Err("Font is memory-only (no file path available)".to_string())
         }
     }
+}
+
+/// Register a font path in the provenance cache and return the lookup result.
+fn register_font_path(path: &Path, font_index: u32) -> Result<FontLookupResult, String> {
+    let canonical = path.canonicalize()
+        .map_err(|e| format!("Cannot resolve font path: {}", e))?;
+    let canonical_string = normalize_canonical_path(&canonical.to_string_lossy());
+    ALLOWED_FONT_PATHS.lock()
+        .map_err(|e| format!("Internal error: font path cache corrupted: {}", e))?
+        .insert(canonical_string.clone());
+
+    Ok(FontLookupResult {
+        path: canonical_string,
+        index: font_index,
+    })
 }
 
 /// Check whether a canonicalized path is under a known system fonts directory.
@@ -153,10 +199,12 @@ fn is_in_system_fonts_dir(canonical: &Path) -> bool {
 /// Subset a font file to only include the specified codepoints.
 ///
 /// Uses fontcull (Google's klippa engine) for pure-Rust subsetting.
-/// Always includes ASCII printable (0x0020–0x007E) and CJK fullwidth forms
-/// (0xFF01–0xFF5E) as safety padding. Falls back to full font on error.
+/// For TTC files with face index > 0, uses fontcull's internal crates directly
+/// to select the correct face. Always includes ASCII printable (0x0020–0x007E)
+/// and CJK fullwidth forms (0xFF01–0xFF5E) as safety padding.
+/// Falls back to full font on error.
 #[tauri::command]
-pub fn subset_font(font_path: String, codepoints: Vec<u32>) -> Result<Vec<u8>, String> {
+pub fn subset_font(font_path: String, font_index: u32, codepoints: Vec<u32>) -> Result<Vec<u8>, String> {
     let path = Path::new(&font_path);
     let filename = path.file_name()
         .and_then(|n| n.to_str())
@@ -215,12 +263,20 @@ pub fn subset_font(font_path: String, codepoints: Vec<u32>) -> Result<Vec<u8>, S
     all_codepoints.dedup();
 
     // Attempt subsetting; fall back to full font if it fails
-    // Empty feature tags — subtitle fonts don't need OpenType layout features
-    match fontcull::subset_font_data_unicode(&font_data, &all_codepoints, &[]) {
+    let subset_result = if font_index == 0 {
+        // Common path: single font or first face in TTC
+        fontcull::subset_font_data_unicode(&font_data, &all_codepoints, &[])
+            .map_err(|e| format!("{e:?}"))
+    } else {
+        // TTC with face index > 0: use internal crates with from_index
+        subset_with_index(&font_data, font_index, &all_codepoints)
+    };
+
+    match subset_result {
         Ok(subsetted) => {
             log::info!(
-                "Subsetted '{}': {} → {} bytes ({} codepoints)",
-                filename,
+                "Subsetted '{}' (face {}): {} → {} bytes ({} codepoints)",
+                filename, font_index,
                 font_data.len(),
                 subsetted.len(),
                 all_codepoints.len()
@@ -229,10 +285,52 @@ pub fn subset_font(font_path: String, codepoints: Vec<u32>) -> Result<Vec<u8>, S
         }
         Err(e) => {
             log::warn!(
-                "Subsetting failed for '{}': {:?}, returning full font",
-                filename, e
+                "Subsetting failed for '{}' (face {}): {}, returning full font",
+                filename, font_index, e
             );
             Ok(font_data)
         }
     }
+}
+
+/// Subset a specific face from a TTC/OTC collection file.
+/// Uses fontcull's internal crates directly for `FontRef::from_index`.
+fn subset_with_index(
+    font_data: &[u8],
+    index: u32,
+    codepoints: &[u32],
+) -> Result<Vec<u8>, String> {
+    use fontcull_klippa::{Plan, SubsetFlags, subset_font};
+    use fontcull_read_fonts::collections::IntSet;
+    use fontcull_skrifa::{FontRef, GlyphId, Tag};
+    use fontcull_write_fonts::types::NameId;
+
+    let font = FontRef::from_index(font_data, index)
+        .map_err(|e| format!("Cannot parse font face {index}: {e:?}"))?;
+
+    let mut unicode_set: IntSet<u32> = IntSet::empty();
+    for &cp in codepoints {
+        unicode_set.insert(cp);
+    }
+
+    let empty_gids: IntSet<GlyphId> = IntSet::empty();
+    let empty_tags: IntSet<Tag> = IntSet::empty();
+    let empty_name_ids: IntSet<NameId> = IntSet::empty();
+    let empty_langs: IntSet<u16> = IntSet::empty();
+    let layout_scripts: IntSet<Tag> = IntSet::all();
+    let layout_features: IntSet<Tag> = IntSet::empty();
+
+    let plan = Plan::new(
+        &empty_gids,
+        &unicode_set,
+        &font,
+        SubsetFlags::default(),
+        &empty_tags,
+        &layout_scripts,
+        &layout_features,
+        &empty_name_ids,
+        &empty_langs,
+    );
+
+    subset_font(&font, &plan).map_err(|e| format!("Subset failed for face {index}: {e:?}"))
 }

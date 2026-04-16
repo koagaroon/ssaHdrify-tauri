@@ -156,20 +156,29 @@ export function fileNameFromPath(path: string): string {
 
 // ── Rust Commands ─────────────────────────────────────────
 
-/** Find a system font file path by family name and style. */
+/** Result of font lookup — path + face index for TTC files. */
+export interface FontLookupResult {
+  /** Absolute path to the font file */
+  path: string;
+  /** Face index within the file (0 for single fonts, >0 for TTC faces) */
+  index: number;
+}
+
+/** Find a system font file by family name and style. Returns path + face index. */
 export async function findSystemFont(
   family: string,
   bold: boolean,
   italic: boolean
-): Promise<string> {
-  return invoke<string>("find_system_font", { family, bold, italic });
+): Promise<FontLookupResult> {
+  return invoke<FontLookupResult>("find_system_font", { family, bold, italic });
 }
 
 /** Subset a font file to only include the specified codepoints. */
 export async function subsetFont(
   fontPath: string,
+  fontIndex: number,
   codepoints: number[]
 ): Promise<Uint8Array> {
-  const bytes: number[] = await invoke("subset_font", { fontPath, codepoints });
+  const bytes: number[] = await invoke("subset_font", { fontPath, fontIndex, codepoints });
   return new Uint8Array(bytes);
 }

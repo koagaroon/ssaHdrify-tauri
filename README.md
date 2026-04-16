@@ -44,9 +44,9 @@ A Tauri desktop rewrite of [gky99/ssaHdrify](https://github.com/gky99/ssaHdrify)
 > *When embedding fonts, only glyphs actually used in the subtitle are kept, significantly reducing file size (e.g. 15 MB CJK font → a few hundred KB). Powered by [fontcull](https://github.com/bearcove/fontcull) (Google's klippa engine).*
 
 > [!TIP]
-> **多编码支持 / Multi-encoding support** — 自动检测并支持 UTF-8、UTF-8 BOM、UTF-16 LE/BE、GBK、Big5、Shift-JIS 等编码的字幕文件。基于 [chardetng](https://github.com/nicedoc/chardetng)（Firefox 编码检测引擎）实现。
+> **多编码支持 / Multi-encoding support** — 自动检测并支持 UTF-8、UTF-8 BOM、UTF-16 LE/BE、GBK、Big5、Shift-JIS 等编码的字幕文件。基于 [chardetng](https://github.com/hsivonen/chardetng)（Firefox 编码检测引擎）实现。
 >
-> *Automatically detects and supports subtitle files in UTF-8, UTF-8 BOM, UTF-16 LE/BE, GBK, Big5, Shift-JIS, and more. Powered by [chardetng](https://github.com/nicedoc/chardetng) (Firefox's encoding detector).*
+> *Automatically detects and supports subtitle files in UTF-8, UTF-8 BOM, UTF-16 LE/BE, GBK, Big5, Shift-JIS, and more. Powered by [chardetng](https://github.com/hsivonen/chardetng) (Firefox's encoding detector).*
 
 ---
 
@@ -155,6 +155,13 @@ npm run tauri build
 
 Output is in the `src-tauri/target/release/bundle/` directory.
 
+### 测试 | Testing
+
+```bash
+npm test              # 前端单元测试 (Vitest) / Frontend unit tests (Vitest)
+cargo test -p ssahdrify  # Rust 后端测试 / Rust backend tests
+```
+
 ---
 
 ## 架构 | Architecture
@@ -180,19 +187,6 @@ Output is in the `src-tauri/target/release/bundle/` directory.
 │  └────────────────────────────────────────────────┘  │
 └──────────────────────────────────────────────────────┘
 ```
-
----
-
-## 与 Python 版的区别 | vs. Python Version
-
-| | Python 版 / Python version ([CC_ssaHdrify](https://github.com/koagaroon/CC_ssaHdrify)) | Tauri 版 / Tauri version（本项目 / this project） |
-|---|---|---|
-| 功能 / Features | HDR 转换 / HDR conversion | HDR 转换 + 时间轴偏移 + 字体嵌入（含子集化）/ HDR conversion + timing shift + font embedding (with subsetting) |
-| UI | tkinter | Web UI (React + Tailwind) |
-| 主题 / Themes | 无 / None | 深色 / 浅色 / 自动 / Dark / Light / Auto |
-| 多语言 / i18n | 中英切换 / zh/en | 中英切换 / zh/en |
-| 跨平台 / Cross-platform | Windows | Windows + macOS + Linux |
-| 启动速度 / Startup | ~2s | <0.5s |
 
 ---
 
@@ -251,11 +245,11 @@ All dependencies use licenses compatible with GPL-3.0.
 | [Tauri](https://tauri.app/) | MIT OR Apache-2.0 | 桌面应用框架 / Desktop app framework |
 | [React](https://react.dev/) | MIT | UI 框架 / UI framework |
 | [Color.js](https://colorjs.io/) | MIT | HDR 色彩空间转换 (PQ/HLG) / HDR color space conversion |
-| [ass-compiler](https://github.com/nicedoc/ass-compiler) | MIT | ASS 字幕解析（字体收集）/ ASS subtitle parsing for font collection |
-| [font-kit](https://github.com/nicedoc/font-kit) | MIT OR Apache-2.0 | 跨平台系统字体发现 (Rust) / Cross-platform system font discovery |
+| [ass-compiler](https://github.com/weizhenye/ass-compiler) | MIT | ASS 字幕解析（字体收集）/ ASS subtitle parsing for font collection |
+| [font-kit](https://github.com/servo/font-kit) | MIT OR Apache-2.0 | 跨平台系统字体发现 (Rust) / Cross-platform system font discovery |
 | [fontcull](https://github.com/bearcove/fontcull) | MIT | 字体子集化 (Google klippa 引擎) / Font subsetting (Google's klippa engine) |
-| [chardetng](https://github.com/nicedoc/chardetng) | MIT OR Apache-2.0 | 编码检测 (Firefox 引擎) / Encoding detection (Firefox's engine) |
-| [encoding_rs](https://github.com/nicedoc/encoding_rs) | MIT OR Apache-2.0 | 编码转换 / Encoding conversion |
+| [chardetng](https://github.com/hsivonen/chardetng) | MIT OR Apache-2.0 | 编码检测 (Firefox 引擎) / Encoding detection (Firefox's engine) |
+| [encoding_rs](https://github.com/hsivonen/encoding_rs) | MIT OR Apache-2.0 | 编码转换 / Encoding conversion |
 | [serde](https://serde.rs/) | MIT OR Apache-2.0 | Rust 序列化 / Rust serialization |
 
 #### 构建时依赖（不随应用分发）| Build-time only (not shipped)
