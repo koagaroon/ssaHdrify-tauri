@@ -157,7 +157,8 @@ export type AssSection = "info" | "styles" | "fonts" | "events" | "other";
  * character exists, making UUEncode collisions impossible.
  * Length capped at 50 as defense-in-depth (longest known: 24 inner chars).
  */
-export const SECTION_HEADER_RE = /^\[(?=[A-Za-z0-9+ ]*[a-z ])[A-Za-z0-9+ ]{1,50}\]$/;
+/** Callers must pass a trimmed, lowercased string for correct matching. */
+export const SECTION_HEADER_RE = /^\[(?=[a-z0-9+ ]*[a-z ])[a-z0-9+ ]{1,50}\]$/;
 
 export function detectSection(line: string): AssSection | null {
   const trimmed = line.trim().toLowerCase();
@@ -216,14 +217,16 @@ export function processAssContent(
 
     // Transform based on current section
     if (currentSection === "styles") {
-      // Parse Format line to discover color field positions
+      // Parse Format line to discover color field positions — pass through unchanged
       if (line.trimStart().startsWith("Format:")) {
         const parsed = parseStyleFormatLine(line);
         if (parsed) {
           styleColorIndices = parsed;
         }
+        result.push(line);
+      } else {
+        result.push(transformStyleLine(line, targetBrightness, eotf, styleColorIndices));
       }
-      result.push(transformStyleLine(line, targetBrightness, eotf, styleColorIndices));
     } else if (currentSection === "events") {
       // Dialogue lines only — Comment: lines are non-rendering and must not be mutated
       if (line.startsWith("Dialogue:")) {
@@ -239,6 +242,9 @@ export function processAssContent(
       onProgress(i, lines.length);
     }
   }
+
+  // Signal completion — callers displaying progress need the final 100% tick
+  onProgress?.(lines.length, lines.length);
 
   return result.join(lineEnding);
 }

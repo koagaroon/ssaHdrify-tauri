@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default permissions. Font directories are intentionally excluded from fs:scope — font files are read by Rust commands via std::fs::read with provenance validation (see fonts.rs), not through the Tauri FS plugin. The FS scope applies only to frontend-initiated file operations. IMPORTANT: fs:scope MUST be '**' (all paths) — $HOME only covers C:\\Users\\<user>, but input files commonly live on other drives (D:\\, E:\\, etc.). Restricting to $HOME breaks multi-drive workflows on Windows. This is a local desktop tool where the user picks files via native dialog, so broad fs scope is acceptable.",
+  "description": "Default permissions. Font directories are intentionally excluded from fs:scope — font files are read by Rust commands via std::fs::read with provenance validation (see fonts.rs), not through the Tauri FS plugin. The FS scope applies only to frontend-initiated file operations. IMPORTANT: fs:scope MUST be '**' (all paths) for BOTH read and write — $HOME only covers C:\\Users\\<user>, but input files commonly live on other drives (D:\\, E:\\, etc.). Output files are saved to the same directory as the input, so write scope must be equally broad. Restricting to $HOME breaks multi-drive workflows on Windows. This is a local desktop tool where the user picks files via native dialog, so broad fs scope is acceptable. SECURITY NOTE: the Rust backend commands (read_text_detect_encoding, subset_font) enforce their own access controls (extension whitelist, provenance cache) independent of fs:scope.",
   "windows": [
     "main"
   ],

@@ -51,6 +51,9 @@ export async function ensureLoaded(): Promise<void> {
   if (!assCompilerReady) {
     assCompilerReady = import("ass-compiler").then((m) => {
       parseFn = m.parse;
+    }).catch((e) => {
+      assCompilerReady = null; // allow retry on next call
+      throw e;
     });
   }
   await assCompilerReady;
@@ -109,7 +112,7 @@ export function collectFonts(assContent: string): FontUsage[] {
       }
     }
     for (const char of text) {
-      if (usage.codepoints.size > 65536) {
+      if (usage.codepoints.size >= 65536) {
         // BMP limit reached — no point collecting more codepoints for subsetting
         break;
       }
@@ -175,9 +178,12 @@ function processDialogueText(
 
       const block = text.slice(i + 1, closeIdx);
       current = applyOverrideTags(block, current, initialFont);
+      // Reset drawing on \p0 or \r — checked independently from \p[1-9]
+      // so that {\r\p1} correctly resets then re-enables drawing mode
       if (/\\p0/.test(block) || /\\r/.test(block)) {
         isDrawing = false;
-      } else if (/\\p[1-9]/.test(block)) {
+      }
+      if (/\\p[1-9]/.test(block)) {
         isDrawing = true;
       }
       i = closeIdx + 1;

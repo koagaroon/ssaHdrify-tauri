@@ -29,7 +29,8 @@ A Tauri desktop rewrite of [gky99/ssaHdrify](https://github.com/gky99/ssaHdrify)
 | **HDR 色彩转换 / HDR Color Conversion** | sRGB → BT.2100 PQ 或 HLG，基于 Color.js 实现 / sRGB → BT.2100 PQ or HLG, powered by Color.js |
 | **多格式支持 / Multi-format Support** | 输入：ASS / SSA / SRT / SUB / VTT / SBV / LRC → 输出：ASS / Input: ASS/SSA/SRT/SUB/VTT/SBV/LRC → Output: ASS |
 | **时间轴偏移 / Timing Shift** | 批量偏移字幕时间戳，支持阈值过滤和实时预览 / Batch offset timestamps with threshold filter and live preview |
-| **字体嵌入 / Font Embedding** | 自动检测字幕所用字体，从系统字体库匹配并嵌入 ASS 文件 / Auto-detect fonts, match from system fonts, embed into ASS |
+| **字体嵌入 / Font Embedding** | 自动检测字幕所用字体，从系统字体库匹配并嵌入 ASS 文件，含字体子集化 / Auto-detect fonts, match from system fonts, embed into ASS with font subsetting |
+| **多编码支持 / Multi-encoding** | 自动检测 UTF-8、UTF-16、GBK、Big5、Shift-JIS 等编码 / Auto-detects UTF-8, UTF-16, GBK, Big5, Shift-JIS, and more |
 | **多语言 / i18n** | 中英双语界面，自动记住语言偏好 / Chinese/English UI, persists preference |
 | **深浅色主题 / Themes** | 深色 / 浅色 / 跟随系统，自动记住主题偏好 / Dark / Light / Auto, persists preference |
 
@@ -37,16 +38,6 @@ A Tauri desktop rewrite of [gky99/ssaHdrify](https://github.com/gky99/ssaHdrify)
 > **中文路径完全支持** — 文件路径中包含中文或其他非 ASCII 字符不会导致任何问题。Tauri 和 Rust 底层使用 Unicode API，不受传统 ANSI 编码限制。
 >
 > **Non-ASCII paths fully supported** — File paths containing Chinese, Japanese, or other non-ASCII characters work correctly. Tauri and Rust use native Unicode APIs under the hood.
-
-> [!TIP]
-> **字体子集化已支持 / Font subsetting supported** — 嵌入字体时仅保留字幕中实际使用的字符，大幅减小文件体积（如 15 MB CJK 字体 → 几百 KB）。基于 [fontcull](https://github.com/bearcove/fontcull)（Google klippa 引擎）实现。
->
-> *When embedding fonts, only glyphs actually used in the subtitle are kept, significantly reducing file size (e.g. 15 MB CJK font → a few hundred KB). Powered by [fontcull](https://github.com/bearcove/fontcull) (Google's klippa engine).*
-
-> [!TIP]
-> **多编码支持 / Multi-encoding support** — 自动检测并支持 UTF-8、UTF-8 BOM、UTF-16 LE/BE、GBK、Big5、Shift-JIS 等编码的字幕文件。基于 [chardetng](https://github.com/hsivonen/chardetng)（Firefox 编码检测引擎）实现。
->
-> *Automatically detects and supports subtitle files in UTF-8, UTF-8 BOM, UTF-16 LE/BE, GBK, Big5, Shift-JIS, and more. Powered by [chardetng](https://github.com/hsivonen/chardetng) (Firefox's encoding detector).*
 
 ---
 
@@ -247,7 +238,7 @@ All dependencies use licenses compatible with GPL-3.0.
 | [Color.js](https://colorjs.io/) | MIT | HDR 色彩空间转换 (PQ/HLG) / HDR color space conversion |
 | [ass-compiler](https://github.com/weizhenye/ass-compiler) | MIT | ASS 字幕解析（字体收集）/ ASS subtitle parsing for font collection |
 | [font-kit](https://github.com/servo/font-kit) | MIT OR Apache-2.0 | 跨平台系统字体发现 (Rust) / Cross-platform system font discovery |
-| [fontcull](https://github.com/bearcove/fontcull) | MIT | 字体子集化 (Google klippa 引擎) / Font subsetting (Google's klippa engine) |
+| [fontcull](https://github.com/bearcove/fontcull) | MIT | 字体子集化（含 fontcull-klippa、fontcull-skrifa）/ Font subsetting (includes fontcull-klippa, fontcull-skrifa) |
 | [chardetng](https://github.com/hsivonen/chardetng) | MIT OR Apache-2.0 | 编码检测 (Firefox 引擎) / Encoding detection (Firefox's engine) |
 | [encoding_rs](https://github.com/hsivonen/encoding_rs) | MIT OR Apache-2.0 | 编码转换 / Encoding conversion |
 | [serde](https://serde.rs/) | MIT OR Apache-2.0 | Rust 序列化 / Rust serialization |
@@ -260,3 +251,4 @@ All dependencies use licenses compatible with GPL-3.0.
 | [TypeScript](https://www.typescriptlang.org/) | Apache-2.0 | 类型检查 / Type checking |
 | [Vite](https://vite.dev/) | MIT | 构建工具 / Build tool |
 | [ESLint](https://eslint.org/) | MIT | 代码检查 / Linting |
+| [Vitest](https://vitest.dev/) | MIT | 单元测试 / Unit testing |

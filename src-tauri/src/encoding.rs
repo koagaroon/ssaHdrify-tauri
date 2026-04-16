@@ -5,8 +5,16 @@
 //! clean Unicode regardless of the original file encoding.
 
 use chardetng::EncodingDetector;
+use std::path::Path;
 
 const MAX_TEXT_SIZE: u64 = 50 * 1024 * 1024; // 50 MB
+
+/// Allowed subtitle/text file extensions for `read_text_detect_encoding`.
+/// Defense-in-depth: the frontend only sends paths from file dialogs, but
+/// this prevents the IPC command from being repurposed as a generic file reader.
+const ALLOWED_TEXT_EXTENSIONS: &[&str] = &[
+    "ass", "ssa", "srt", "vtt", "sub", "sbv", "lrc", "txt",
+];
 
 // ── Internal helpers (exported for tests) ────────────────
 
@@ -55,6 +63,16 @@ pub struct ReadTextResult {
 /// 3. Lossy UTF-8 fallback — if all else fails
 #[tauri::command]
 pub fn read_text_detect_encoding(path: String) -> Result<ReadTextResult, String> {
+    // Extension validation: only allow subtitle/text file types
+    let path_ref = Path::new(&path);
+    let ext = path_ref.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+    if !ALLOWED_TEXT_EXTENSIONS.contains(&ext.as_str()) {
+        return Err(format!("Unsupported file type: .{ext}"));
+    }
+
     // Size check
     let metadata =
         std::fs::metadata(&path).map_err(|e| format!("Cannot access file: {e}"))?;

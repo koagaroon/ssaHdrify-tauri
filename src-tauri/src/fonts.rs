@@ -73,28 +73,12 @@ pub fn find_system_font(family: String, bold: bool, italic: bool) -> Result<Font
                 .map(|e| e.to_lowercase())
                 .unwrap_or_default();
 
-            // TTF preference: if the match is OTF/OTC, try to find a TTF/TTC
-            // alternative. libass/VSFilter don't support OTF bold rendering.
+            // OTF/OTC warning: libass/VSFilter don't support OTF bold rendering.
+            // font-kit's select_best_match returns the system's preferred match
+            // and has no API to filter by format. Enumerating the family and
+            // loading each face to check style properties is too expensive for
+            // a font lookup hot path. Accept the OTF and warn.
             if ext == "otf" || ext == "otc" {
-                if let Ok(alt) = source.select_best_match(
-                    &[FamilyName::Title(family.clone())],
-                    &props,
-                ) {
-                    if let Handle::Path { path: alt_path, font_index: alt_index } = &alt {
-                        let alt_ext = alt_path.extension()
-                            .and_then(|e| e.to_str())
-                            .map(|e| e.to_lowercase())
-                            .unwrap_or_default();
-                        if alt_ext == "ttf" || alt_ext == "ttc" {
-                            log::info!(
-                                "Preferring TTF over OTF for '{}': {}",
-                                family, alt_path.display()
-                            );
-                            return register_font_path(alt_path, *alt_index);
-                        }
-                    }
-                }
-                // No TTF alternative found — use OTF with a warning
                 log::warn!(
                     "Using OTF font for '{}' — bold may not render in libass/VSFilter",
                     family
@@ -205,6 +189,17 @@ fn is_in_system_fonts_dir(canonical: &Path) -> bool {
 /// Falls back to full font on error.
 #[tauri::command]
 pub fn subset_font(font_path: String, font_index: u32, codepoints: Vec<u32>) -> Result<Vec<u8>, String> {
+    // IPC boundary validation: font_index and codepoints come from untrusted JS
+    if font_index > 255 {
+        return Err(format!("Invalid font face index: {font_index} (max 255)"));
+    }
+    if codepoints.len() > 200_000 {
+        return Err(format!(
+            "Too many codepoints: {} (max 200,000)",
+            codepoints.len()
+        ));
+    }
+
     let path = Path::new(&font_path);
     let filename = path.file_name()
         .and_then(|n| n.to_str())
@@ -253,6 +248,14 @@ pub fn subset_font(font_path: String, font_index: u32, codepoints: Vec<u32>) -> 
     let font_data = fs::read(&canonical)
         .map_err(|e| format!("Failed to read font file '{}': {}", filename, e))?;
 
+    // Post-read size check (TOCTOU mitigation — file could grow between stat and read)
+    if font_data.len() > 50 * 1024 * 1024 {
+        return Err(format!(
+            "Font file too large after read ({} MB, max 50 MB)",
+            font_data.len() / 1024 / 1024
+        ));
+    }
+
     // Build codepoint set: caller's codepoints + safety padding
     let mut all_codepoints = codepoints;
     // ASCII printable — always needed for punctuation, numbers, basic latin
@@ -285,9 +288,17 @@ pub fn subset_font(font_path: String, font_index: u32, codepoints: Vec<u32>) -> 
         }
         Err(e) => {
             log::warn!(
-                "Subsetting failed for '{}' (face {}): {}, returning full font",
+                "Subsetting failed for '{}' (face {}): {}, falling back to full font",
                 filename, font_index, e
             );
+            // Cap fallback size — the full font goes through IPC → JS heap → ASS string,
+            // so a 50 MB font would cause excessive memory use in the frontend.
+            if font_data.len() > 10 * 1024 * 1024 {
+                return Err(format!(
+                    "Subsetting failed and full font too large ({} MB, max 10 MB for fallback)",
+                    font_data.len() / 1024 / 1024
+                ));
+            }
             Ok(font_data)
         }
     }

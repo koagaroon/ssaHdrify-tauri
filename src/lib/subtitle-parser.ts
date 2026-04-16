@@ -268,13 +268,19 @@ function buildAss(content: string, captions: Caption[]): string {
   const dialogueRe =
     /^(Dialogue:\s*\d+,)(\d+:\d{2}:\d{2}\.\d{2}),( *)(\d+:\d{2}:\d{2}\.\d{2}),(.*)$/gm;
   let idx = 0;
-  return content.replace(dialogueRe, (original, prefix, _start, space, _end, rest) => {
+  const result = content.replace(dialogueRe, (original, prefix, _start, space, _end, rest) => {
     if (idx < captions.length) {
       const c = captions[idx++];
       return `${prefix}${formatAssTime(c.start)},${space}${formatAssTime(c.end)},${rest}`;
     }
     return original;
   });
+  // Verify all shifted entries were consumed — a mismatch means
+  // parseAss and buildAss diverged on which lines are Dialogue entries
+  if (idx !== captions.length) {
+    console.warn(`buildAss: consumed ${idx}/${captions.length} shifted entries`);
+  }
+  return result;
 }
 
 // ── SUB (MicroDVD) Parser ─────────────────────────────────

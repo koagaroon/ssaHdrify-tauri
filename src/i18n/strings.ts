@@ -128,8 +128,8 @@ export const strings: Record<string, StringEntry> = {
     zh: "已保存：{0}（已嵌入 {1} 个字体）",
   },
   fonts_full_embed_warning: {
-    en: "Note: Full font files are currently embedded (byte-level subsetting coming in a future update). Output may be large.",
-    zh: "注意：当前嵌入完整字体文件（字节级子集化将在后续版本实现），输出文件可能较大",
+    en: "Fonts are subset to only the glyphs used in this subtitle. Safety padding (ASCII + CJK fullwidth) is included automatically.",
+    zh: "字体已子集化为仅包含本字幕使用的字形，并自动包含安全填充（ASCII + CJK 全角字符）",
   },
 
   // ── Shared ──────────────────────────────────────────────

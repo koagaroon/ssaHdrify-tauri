@@ -43,7 +43,10 @@ export default function TimingShift() {
   // Memoized derived values — prevents debounce effect from resetting on unrelated state updates
   const effectiveOffsetMs = useMemo(() => {
     const base = unit === "s" ? offsetValue * 1000 : offsetValue;
-    return direction === "faster" ? -base : base;
+    // Cap to ±1 year to prevent integer precision loss for extreme inputs
+    const MAX_OFFSET_MS = 365 * 24 * 3600 * 1000;
+    const clamped = Math.max(-MAX_OFFSET_MS, Math.min(MAX_OFFSET_MS, base));
+    return direction === "faster" ? -clamped : clamped;
   }, [unit, offsetValue, direction]);
 
   // Returns number when valid, null when invalid or disabled.
@@ -155,8 +158,9 @@ export default function TimingShift() {
       });
 
       // Suggest output filename
-      const ext = fileName.slice(fileName.lastIndexOf("."));
-      const baseName = fileName.slice(0, fileName.lastIndexOf("."));
+      const lastDot = fileName.lastIndexOf(".");
+      const ext = lastDot > 0 ? fileName.slice(lastDot) : "";
+      const baseName = lastDot > 0 ? fileName.slice(0, lastDot) : fileName;
       const defaultName = `${baseName}.shifted${ext}`;
 
       const savePath = await pickSavePath(defaultName);
@@ -260,7 +264,10 @@ export default function TimingShift() {
           <input
             type="number"
             value={offsetValue}
-            onChange={(e) => setOffsetValue(parseInt(e.target.value) || 0)}
+            onChange={(e) => {
+              const n = parseInt(e.target.value, 10);
+              if (!Number.isNaN(n)) setOffsetValue(n);
+            }}
             className="w-28 px-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             style={{
               background: "var(--bg-input)",

@@ -68,10 +68,11 @@ export function resolveOutputPath(
     throw new Error("Input filename has no valid stem");
   }
 
-  // Resolve template variables
-  const resolved = template
-    .replace(/\{name\}/g, baseName)
-    .replace(/\{eotf\}/g, eotf.toLowerCase());
+  // Resolve template variables in a single pass to prevent double-substitution
+  // (e.g., a filename containing literal "{eotf}" being expanded by the second replace)
+  const resolved = template.replace(/\{(name|eotf)\}/g, (_, key: string) =>
+    key === "name" ? baseName : eotf.toLowerCase()
+  );
 
   // Safety: reject characters that are illegal in filenames on Windows
   const ILLEGAL_CHARS = /[<>:"|?*\\/]/;

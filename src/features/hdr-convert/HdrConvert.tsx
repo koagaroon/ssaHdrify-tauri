@@ -196,8 +196,10 @@ export default function HdrConvert() {
             assContent = processAssContent(content, brightness, eotf);
           } else if (isConvertible(fileName)) {
             // SRT/SUB → ASS conversion path
-            // Strip any ASS-style override blocks from raw SRT before color preprocessing
-            const sanitized = content.replace(/\{[^}]*\\[^}]*\}/g, "");
+            // Strip all curly-brace blocks from raw SRT before color preprocessing.
+            // SRT has no curly-brace syntax, so any {...} is either a leaked ASS
+            // override tag or content that would be misinterpreted by ASS renderers.
+            const sanitized = content.replace(/\{[^}]*\}/g, "");
             // Preprocess SRT colors
             const preprocessed = preprocessSrtColors(sanitized);
 
@@ -548,7 +550,7 @@ export default function HdrConvert() {
               </label>
               <NumberInput
                 value={style.fps}
-                onChange={(v) => setStyle({ ...style, fps: parseFloat(v) || 23.976 })}
+                onChange={(v) => { const n = parseFloat(v); setStyle({ ...style, fps: Number.isNaN(n) ? 23.976 : n }); }}
                 min={1}
                 max={120}
                 step="0.001"

@@ -9,23 +9,21 @@
  */
 
 // ── SRT Color Preprocessing ──────────────────────────────
-// Matches: <font color="#RRGGBB"> or <font color=#RRGGBB>
-// with up to 512 chars of other attributes before/after color (ReDoS guard)
-const SRT_COLOR_OPEN_RE =
-  /<font\b[^>]{0,512}\bcolor="?#([0-9a-fA-F]{6}|[0-9a-fA-F]{3})"?[^>]{0,512}>/gi;
-const SRT_COLOR_CLOSE_RE = /<\/font>/gi;
 
 /**
  * Convert HTML-style font color tags to ASS inline color overrides.
  * <font color="#RRGGBB">text</font>  →  {\1c&HBBGGRR&}text{\1c}
  */
 export function preprocessSrtColors(text: string): string {
-  // Track how many color <font> tags were converted to ASS overrides
-  let colorCount = 0;
+  // Regex defined inside function — no shared lastIndex state.
+  // Matches: <font color="#RRGGBB"> or <font color=#RRGGBB>
+  // with up to 512 chars of other attributes before/after color (ReDoS guard)
+  const SRT_COLOR_OPEN_RE =
+    /<font\b[^>]{0,512}\bcolor="?#([0-9a-fA-F]{6}|[0-9a-fA-F]{3})"?[^>]{0,512}>/gi;
+  const SRT_COLOR_CLOSE_RE = /<\/font>/gi;
 
   // Convert opening tags with color
   let result = text.replace(SRT_COLOR_OPEN_RE, (_match, raw: string) => {
-    colorCount++;
     const hexRgb = raw.length === 3
       ? raw[0].repeat(2) + raw[1].repeat(2) + raw[2].repeat(2)
       : raw;
@@ -36,16 +34,11 @@ export function preprocessSrtColors(text: string): string {
     return `{\\1c&H${b}${g}${r}&}`;
   });
 
-  // Only convert as many </font> as we converted color opens;
-  // extra </font> from non-color <font> tags are stripped instead
-  let closeCount = 0;
-  result = result.replace(SRT_COLOR_CLOSE_RE, () => {
-    if (closeCount < colorCount) {
-      closeCount++;
-      return "{\\r}";
-    }
-    return "";
-  });
+  // Convert ALL </font> to style resets — both color and non-color.
+  // Non-color <font> tags are stripped later by HTML tag removal in buildAssDocument,
+  // so their {\r} is harmless (resets to default which is the current state).
+  // This avoids positional mismatch when non-color </font> precedes color </font>.
+  result = result.replace(SRT_COLOR_CLOSE_RE, () => "{\\r}");
 
   return result;
 }

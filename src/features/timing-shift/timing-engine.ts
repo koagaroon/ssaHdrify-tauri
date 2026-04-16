@@ -24,6 +24,8 @@ export interface ShiftOptions {
   offsetMs: number;
   /** If set, only shift captions starting at or after this timestamp (ms) */
   thresholdMs?: number;
+  /** Frame rate for frame-based formats (SUB/MicroDVD). Defaults to 23.976. */
+  fps?: number;
 }
 
 export interface PreviewEntry {
@@ -54,12 +56,13 @@ export function shiftSubtitles(
   content: string,
   options: ShiftOptions
 ): ShiftResult {
-  const { offsetMs, thresholdMs } = options;
+  const { offsetMs, thresholdMs, fps } = options;
 
   const { output, format, captions, shifted } = shiftSubtitle(
     content,
     offsetMs,
-    thresholdMs
+    thresholdMs,
+    fps
   );
 
   // Build preview (first 15 entries)

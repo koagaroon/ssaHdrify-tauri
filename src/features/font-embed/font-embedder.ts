@@ -215,7 +215,10 @@ function insertFontsSection(content: string, fontsSection: string): string {
     return slice.join(lineEnding);
   };
 
-  const isSectionHeader = (line: string) => SECTION_HEADER_RE.test(line.trim());
+  // Lowercase before testing: SECTION_HEADER_RE's lookahead requires [a-z ],
+  // which fails on all-uppercase headers like [EVENTS] if not lowercased.
+  const isSectionHeader = (line: string) =>
+    SECTION_HEADER_RE.test(line.trim().toLowerCase());
 
   if (existingFontsIdx >= 0) {
     // Find the end of the existing [Fonts] section (next section header)
