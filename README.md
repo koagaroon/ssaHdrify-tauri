@@ -1,5 +1,7 @@
 # SSA HDRify
 
+[![License: GPL v3](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](LICENSE) [![GitHub release](https://img.shields.io/github/v/release/koagaroon/ssaHdrify-tauri?include_prereleases)](https://github.com/koagaroon/ssaHdrify-tauri/releases) ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)
+
 > **将 SSA/ASS 字幕颜色从 SDR 色彩空间转换到 HDR 色彩空间的桌面工具，附带时间轴偏移和字体嵌入功能。**
 >
 > _A desktop tool to convert SSA/ASS subtitle colors from SDR to HDR color space, with timing shift and font embedding._
@@ -177,7 +179,7 @@ cargo test -p ssahdrify  # Rust 后端测试 / Rust backend tests
 │  │  - FontSourceModal: folder/file picker + coverage UI │  │
 │  │  - i18n (zh/en), dark/light/auto theme               │  │
 │  └──────────────┬───────────────────────────────────────┘  │
-│                 │ Tauri IPC                                 │
+│                 │ Tauri IPC                                │
 │  ┌──────────────▼───────────────────────────────────────┐  │
 │  │  Rust Backend                                        │  │
 │  │  - font-kit: system font discovery + matching        │  │
