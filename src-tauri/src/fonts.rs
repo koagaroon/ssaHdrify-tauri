@@ -37,8 +37,7 @@ fn normalize_canonical_path(canonical_str: &str) -> String {
 // Font paths discovered by find_system_font are cached for the session.
 // The cache grows unbounded but is bounded by the number of unique system fonts
 // (typically < 1000). Paths are never evicted to avoid TOCTOU issues.
-static ALLOWED_FONT_PATHS: Lazy<Mutex<HashSet<String>>> =
-    Lazy::new(|| Mutex::new(HashSet::new()));
+static ALLOWED_FONT_PATHS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
 /// Sibling provenance cache for paths that came from a user-picked directory
 /// or file list (via `scan_font_directory` / `scan_font_files`). Paths here
@@ -89,7 +88,11 @@ pub struct LocalFontEntry {
 /// Returns the path + face index. Prefers TTF/TTC over OTF/OTC for subtitle
 /// renderer compatibility (libass/VSFilter don't support OTF bold).
 #[tauri::command]
-pub fn find_system_font(family: String, bold: bool, italic: bool) -> Result<FontLookupResult, String> {
+pub fn find_system_font(
+    family: String,
+    bold: bool,
+    italic: bool,
+) -> Result<FontLookupResult, String> {
     // Input validation: reject empty, oversized, or control-char-containing names
     if family.is_empty() || family.len() > 256 {
         return Err("Font family name must be 1-256 characters".to_string());
@@ -110,11 +113,17 @@ pub fn find_system_font(family: String, bold: bool, italic: bool) -> Result<Font
 
     let handle = source
         .select_best_match(&[FamilyName::Title(family.clone())], &props)
-        .map_err(|e| format!("Font not found: {} (bold={}, italic={}): {}", family, bold, italic, e))?;
+        .map_err(|e| {
+            format!(
+                "Font not found: {} (bold={}, italic={}): {}",
+                family, bold, italic, e
+            )
+        })?;
 
     match handle {
         Handle::Path { path, font_index } => {
-            let ext = path.extension()
+            let ext = path
+                .extension()
                 .and_then(|e| e.to_str())
                 .map(|e| e.to_lowercase())
                 .unwrap_or_default();
@@ -133,9 +142,7 @@ pub fn find_system_font(family: String, bold: bool, italic: bool) -> Result<Font
 
             register_font_path(&path, font_index)
         }
-        Handle::Memory { .. } => {
-            Err("Font is memory-only (no file path available)".to_string())
-        }
+        Handle::Memory { .. } => Err("Font is memory-only (no file path available)".to_string()),
     }
 }
 
@@ -292,8 +299,7 @@ pub fn scan_font_directory(dir: String) -> Result<Vec<LocalFontEntry>, String> {
         return Err(format!("Not a directory: {dir}"));
     }
 
-    let read = fs::read_dir(&canonical_dir)
-        .map_err(|e| format!("Cannot read directory: {e}"))?;
+    let read = fs::read_dir(&canonical_dir).map_err(|e| format!("Cannot read directory: {e}"))?;
 
     let mut result = Vec::new();
     for entry in read {
@@ -382,17 +388,23 @@ pub fn scan_font_files(paths: Vec<String>) -> Result<Vec<LocalFontEntry>, String
         }
     }
 
-    log::info!("Scanned {} local font file(s) → {} faces", result.len(), result.len());
+    log::info!(
+        "Scanned {} local font file(s) → {} faces",
+        result.len(),
+        result.len()
+    );
 
     Ok(result)
 }
 
 /// Register a font path in the provenance cache and return the lookup result.
 fn register_font_path(path: &Path, font_index: u32) -> Result<FontLookupResult, String> {
-    let canonical = path.canonicalize()
+    let canonical = path
+        .canonicalize()
         .map_err(|e| format!("Cannot resolve font path: {}", e))?;
     let canonical_string = normalize_canonical_path(&canonical.to_string_lossy());
-    ALLOWED_FONT_PATHS.lock()
+    ALLOWED_FONT_PATHS
+        .lock()
         .map_err(|e| format!("Internal error: font path cache corrupted: {}", e))?
         .insert(canonical_string.clone());
 
@@ -417,14 +429,14 @@ fn is_in_system_fonts_dir(canonical: &Path) -> bool {
             .replace("/", "\\");
         let sys_fonts_prefix = format!("{}\\fonts\\", sys_root);
         let sys_fonts_exact = format!("{}\\fonts", sys_root);
-        let sys_fonts = lower.starts_with(&sys_fonts_prefix)
-            || lower == sys_fonts_exact;
+        let sys_fonts = lower.starts_with(&sys_fonts_prefix) || lower == sys_fonts_exact;
         // Per-user fonts directory (Windows 10 1809+)
         let user_fonts = if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
-            let user_font_dir = format!("{}\\microsoft\\windows\\fonts",
-                local_app_data.to_lowercase().replace("/", "\\"));
-            lower.starts_with(&format!("{}\\", user_font_dir))
-                || lower == user_font_dir
+            let user_font_dir = format!(
+                "{}\\microsoft\\windows\\fonts",
+                local_app_data.to_lowercase().replace("/", "\\")
+            );
+            lower.starts_with(&format!("{}\\", user_font_dir)) || lower == user_font_dir
         } else {
             false
         };
@@ -482,7 +494,11 @@ fn is_in_system_fonts_dir(canonical: &Path) -> bool {
 /// and CJK fullwidth forms (0xFF01–0xFF5E) as safety padding.
 /// Falls back to full font on error.
 #[tauri::command]
-pub fn subset_font(font_path: String, font_index: u32, codepoints: Vec<u32>) -> Result<Vec<u8>, String> {
+pub fn subset_font(
+    font_path: String,
+    font_index: u32,
+    codepoints: Vec<u32>,
+) -> Result<Vec<u8>, String> {
     // IPC boundary validation: font_index and codepoints come from untrusted JS
     if font_index > 255 {
         return Err(format!("Invalid font face index: {font_index} (max 255)"));
@@ -495,24 +511,29 @@ pub fn subset_font(font_path: String, font_index: u32, codepoints: Vec<u32>) -> 
     }
 
     let path = Path::new(&font_path);
-    let filename = path.file_name()
+    let filename = path
+        .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("<unknown>");
 
     // Validate file extension against allowed font types
-    let ext = path.extension()
+    let ext = path
+        .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase())
         .unwrap_or_default();
     if !ALLOWED_FONT_EXTENSIONS.contains(&ext.as_str()) {
         return Err(format!(
             "Invalid font file type '{}' for '{}'. Allowed extensions: {}",
-            ext, filename, ALLOWED_FONT_EXTENSIONS.join(", ")
+            ext,
+            filename,
+            ALLOWED_FONT_EXTENSIONS.join(", ")
         ));
     }
 
     // Canonicalize to resolve symlinks, "..", and normalize the path
-    let canonical = path.canonicalize()
+    let canonical = path
+        .canonicalize()
         .map_err(|e| format!("Cannot resolve font path: {}", e))?;
 
     // Primary guard: the path must have been discovered by one of the scan
@@ -541,8 +562,7 @@ pub fn subset_font(font_path: String, font_index: u32, codepoints: Vec<u32>) -> 
     }
 
     // Reject font files larger than 50 MB to prevent OOM with large CJK fonts
-    let metadata = fs::metadata(&canonical)
-        .map_err(|e| format!("Cannot stat font file: {}", e))?;
+    let metadata = fs::metadata(&canonical).map_err(|e| format!("Cannot stat font file: {}", e))?;
     if metadata.len() > 50 * 1024 * 1024 {
         return Err(format!(
             "Font file too large ({} MB, max 50 MB)",
@@ -584,7 +604,8 @@ pub fn subset_font(font_path: String, font_index: u32, codepoints: Vec<u32>) -> 
         Ok(subsetted) => {
             log::info!(
                 "Subsetted '{}' (face {}): {} → {} bytes ({} codepoints)",
-                filename, font_index,
+                filename,
+                font_index,
                 font_data.len(),
                 subsetted.len(),
                 all_codepoints.len()
@@ -594,7 +615,9 @@ pub fn subset_font(font_path: String, font_index: u32, codepoints: Vec<u32>) -> 
         Err(e) => {
             log::warn!(
                 "Subsetting failed for '{}' (face {}): {}, falling back to full font",
-                filename, font_index, e
+                filename,
+                font_index,
+                e
             );
             // Cap fallback size — the full font goes through IPC → JS heap → ASS string,
             // so a 50 MB font would cause excessive memory use in the frontend.
@@ -611,12 +634,8 @@ pub fn subset_font(font_path: String, font_index: u32, codepoints: Vec<u32>) -> 
 
 /// Subset a specific face from a TTC/OTC collection file.
 /// Uses fontcull's internal crates directly for `FontRef::from_index`.
-fn subset_with_index(
-    font_data: &[u8],
-    index: u32,
-    codepoints: &[u32],
-) -> Result<Vec<u8>, String> {
-    use fontcull_klippa::{Plan, SubsetFlags, subset_font};
+fn subset_with_index(font_data: &[u8], index: u32, codepoints: &[u32]) -> Result<Vec<u8>, String> {
+    use fontcull_klippa::{subset_font, Plan, SubsetFlags};
     use fontcull_read_fonts::collections::IntSet;
     use fontcull_skrifa::{FontRef, GlyphId, Tag};
     use fontcull_write_fonts::types::NameId;

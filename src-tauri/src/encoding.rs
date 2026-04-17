@@ -12,9 +12,7 @@ const MAX_TEXT_SIZE: u64 = 50 * 1024 * 1024; // 50 MB
 /// Allowed subtitle/text file extensions for `read_text_detect_encoding`.
 /// Defense-in-depth: the frontend only sends paths from file dialogs, but
 /// this prevents the IPC command from being repurposed as a generic file reader.
-const ALLOWED_TEXT_EXTENSIONS: &[&str] = &[
-    "ass", "ssa", "srt", "vtt", "sub", "sbv", "lrc", "txt",
-];
+const ALLOWED_TEXT_EXTENSIONS: &[&str] = &["ass", "ssa", "srt", "vtt", "sub", "sbv", "lrc", "txt"];
 
 // ── Internal helpers (exported for tests) ────────────────
 
@@ -65,7 +63,8 @@ pub struct ReadTextResult {
 pub fn read_text_detect_encoding(path: String) -> Result<ReadTextResult, String> {
     // Extension validation: only allow subtitle/text file types
     let path_ref = Path::new(&path);
-    let ext = path_ref.extension()
+    let ext = path_ref
+        .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase())
         .unwrap_or_default();
@@ -74,8 +73,7 @@ pub fn read_text_detect_encoding(path: String) -> Result<ReadTextResult, String>
     }
 
     // Size check
-    let metadata =
-        std::fs::metadata(&path).map_err(|e| format!("Cannot access file: {e}"))?;
+    let metadata = std::fs::metadata(&path).map_err(|e| format!("Cannot access file: {e}"))?;
     if metadata.len() > MAX_TEXT_SIZE {
         let size_mb = metadata.len() as f64 / (1024.0 * 1024.0);
         return Err(format!(
