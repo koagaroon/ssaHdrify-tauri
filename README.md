@@ -24,15 +24,15 @@ A Tauri desktop rewrite of [gky99/ssaHdrify](https://github.com/gky99/ssaHdrify)
 
 ## 功能 | Features
 
-| 功能                                    | 说明                                                                                                                                                  |
-| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **HDR 色彩转换 / HDR Color Conversion** | sRGB → BT.2100 PQ 或 HLG，基于 Color.js 实现 / sRGB → BT.2100 PQ or HLG, powered by Color.js                                                          |
-| **多格式支持 / Multi-format Support**   | 输入：ASS / SSA / SRT / SUB / VTT / SBV / LRC → 输出：ASS / Input: ASS/SSA/SRT/SUB/VTT/SBV/LRC → Output: ASS                                          |
-| **时间轴偏移 / Timing Shift**           | 批量偏移字幕时间戳，支持阈值过滤和实时预览 / Batch offset timestamps with threshold filter and live preview                                           |
-| **字体嵌入 / Font Embedding**           | 自动检测字幕所用字体，从系统字体库匹配并嵌入 ASS 文件，含字体子集化 / Auto-detect fonts, match from system fonts, embed into ASS with font subsetting |
-| **多编码支持 / Multi-encoding**         | 自动检测 UTF-8、UTF-16、GBK、Big5、Shift-JIS 等编码 / Auto-detects UTF-8, UTF-16, GBK, Big5, Shift-JIS, and more                                      |
-| **多语言 / i18n**                       | 中英双语界面，自动记住语言偏好 / Chinese/English UI, persists preference                                                                              |
-| **深浅色主题 / Themes**                 | 深色 / 浅色 / 跟随系统，自动记住主题偏好 / Dark / Light / Auto, persists preference                                                                   |
+| 功能                                    | 说明                                                                                                                                                                                                                                                                                                                                                                 |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **HDR 色彩转换 / HDR Color Conversion** | sRGB → BT.2100 PQ 或 HLG，基于 Color.js 实现 / sRGB → BT.2100 PQ or HLG, powered by Color.js                                                                                                                                                                                                                                                                         |
+| **多格式支持 / Multi-format Support**   | 输入：ASS / SSA / SRT / SUB / VTT / SBV / LRC → 输出：ASS / Input: ASS/SSA/SRT/SUB/VTT/SBV/LRC → Output: ASS                                                                                                                                                                                                                                                         |
+| **时间轴偏移 / Timing Shift**           | 批量偏移字幕时间戳，支持阈值过滤和实时预览 / Batch offset timestamps with threshold filter and live preview                                                                                                                                                                                                                                                          |
+| **字体嵌入 / Font Embedding**           | 自动检测字幕所用字体，从系统字体或本地文件夹匹配并嵌入 ASS 文件；支持多语言家族名（中/英/Typographic）与 ASS `@` 竖排前缀；含字体子集化 / Auto-detect fonts, match from system OR a user-picked local folder, embed into ASS. Handles multi-locale family names (Chinese / English / Typographic) and the ASS `@` vertical-writing prefix. Font subsetting included. |
+| **多编码支持 / Multi-encoding**         | 自动检测 UTF-8、UTF-16、GBK、Big5、Shift-JIS 等编码 / Auto-detects UTF-8, UTF-16, GBK, Big5, Shift-JIS, and more                                                                                                                                                                                                                                                     |
+| **多语言 / i18n**                       | 中英双语界面，自动记住语言偏好 / Chinese/English UI, persists preference                                                                                                                                                                                                                                                                                             |
+| **深浅色主题 / Themes**                 | 深色 / 浅色 / 跟随系统，自动记住主题偏好 / Dark / Light / Auto, persists preference                                                                                                                                                                                                                                                                                  |
 
 > [!TIP]
 > **中文路径完全支持** — 文件路径中包含中文或其他非 ASCII 字符不会导致任何问题。Tauri 和 Rust 底层使用 Unicode API，不受传统 ANSI 编码限制。
@@ -75,10 +75,18 @@ When playing HDR video, the display enters HDR mode. However, SSA/ASS subtitles 
 
 ### 字体嵌入 / Font Embedding
 
-1. 选择 ASS 字幕文件 / Select an ASS subtitle file
-2. 工具自动检测字幕中使用的字体 / Tool auto-detects fonts used in the subtitle
-3. 从系统字体库匹配字体（显示匹配/缺失状态）/ Matches against system fonts (shows found/missing status)
-4. 点击嵌入，字体数据写入 ASS 文件 / Click embed to write font data into the ASS file
+1. 点击「选择字幕文件 / Select Subtitle File」选择 ASS 字幕文件 / Click **Select Subtitle File** to pick an ASS file
+2. 工具自动检测字幕中使用的字体，从系统字体库匹配 / Tool auto-detects fonts used in the subtitle and matches against the system font list
+3. （可选）点击「选择字体文件 / Select Font Files」指定本地字体文件夹或多个字体文件，无需系统安装即可匹配 / (Optional) Click **Select Font Files** to point at a local font folder or hand-pick individual files — no system-wide installation needed
+4. 模态框内实时显示覆盖进度（覆盖 N / M）和尚未匹配的字体 / The modal shows live coverage (Coverage: N / M) and lists any still-missing families
+5. 每条字体标注来源（本地 / 系统）和匹配状态（已找到 / 缺失）/ Each detected font is tagged with its source (Local / System) and match status (Found / Missing)
+6. 点击「嵌入已选字体」，字体数据（子集化后）写入 ASS 文件 / Click **Embed Selected Fonts** to write the subset font data into the ASS file
+
+> **字体名称匹配 / Font Name Matching**
+>
+> 工具会读取字体文件的 OpenType `name` 表并索引**所有**语言变体（英文、中文、Typographic 名等）——ASS 脚本引用任何一个名字都能命中同一个字体文件。ASS 的 `@家族名` 竖排前缀也会被正确识别为同一字体。
+>
+> The tool reads each font's OpenType `name` table and indexes **every** localized family-name variant (English, Chinese, Typographic, etc.) — an ASS script referencing any of them resolves to the same file. The ASS `@FamilyName` vertical-writing prefix is correctly treated as the same font.
 
 > **参数说明 | Parameter Guide**
 >
@@ -158,25 +166,30 @@ cargo test -p ssahdrify  # Rust 后端测试 / Rust backend tests
 ## 架构 | Architecture
 
 ```
-┌──────────────────────────────────────────────────────┐
-│              Tauri 2 Application                     │
-│  ┌────────────────────────────────────────────────┐  │
-│  │  Web Frontend (React + Tailwind CSS)           │  │
-│  │  - 3 tabs: HDR Convert, Time Shift, Font Embed │  │
-│  │  - Color.js for sRGB → HDR color math          │  │
-│  │  - ass-compiler for ASS parsing (font tab)     │  │
-│  │  - Custom subtitle parser (timing tab)         │  │
-│  │  - i18n (zh/en), dark/light/auto theme         │  │
-│  └──────────────┬─────────────────────────────────┘  │
-│                 │ Tauri IPC                          │
-│  ┌──────────────▼─────────────────────────────────┐  │
-│  │  Rust Backend                                  │  │
-│  │  - font-kit: system font discovery + matching  │  │
-│  │  - fontcull: font subsetting (Google klippa)   │  │
-│  │  - chardetng + encoding_rs: encoding detection │  │
-│  │  - File I/O via Tauri fs/dialog plugins        │  │
-│  └────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────┐
+│                   Tauri 2 Application                      │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  Web Frontend (React + Tailwind CSS)                 │  │
+│  │  - 3 tabs: HDR Convert, Time Shift, Font Embed       │  │
+│  │  - Color.js for sRGB → HDR color math                │  │
+│  │  - ass-compiler for ASS parsing (font tab)           │  │
+│  │  - Custom subtitle parser (timing tab)               │  │
+│  │  - FontSourceModal: folder/file picker + coverage UI │  │
+│  │  - i18n (zh/en), dark/light/auto theme               │  │
+│  └──────────────┬───────────────────────────────────────┘  │
+│                 │ Tauri IPC                                 │
+│  ┌──────────────▼───────────────────────────────────────┐  │
+│  │  Rust Backend                                        │  │
+│  │  - font-kit: system font discovery + matching        │  │
+│  │  - fontcull: font subsetting (Google klippa)         │  │
+│  │  - fontcull-skrifa: name-table reader → every        │  │
+│  │    localized family-name variant per face            │  │
+│  │  - scan_font_directory / scan_font_files: enumerate  │  │
+│  │    user-picked folders / files                       │  │
+│  │  - chardetng + encoding_rs: encoding detection       │  │
+│  │  - File I/O via Tauri fs/dialog plugins              │  │
+│  └──────────────────────────────────────────────────────┘  │
+└────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -251,4 +264,5 @@ All dependencies use licenses compatible with GPL-3.0.
 | [TypeScript](https://www.typescriptlang.org/) | Apache-2.0       | 类型检查 / Type checking             |
 | [Vite](https://vite.dev/)                     | MIT              | 构建工具 / Build tool                |
 | [ESLint](https://eslint.org/)                 | MIT              | 代码检查 / Linting                   |
+| [Prettier](https://prettier.io/)              | MIT              | 代码格式化 / Code formatter          |
 | [Vitest](https://vitest.dev/)                 | MIT              | 单元测试 / Unit testing              |
