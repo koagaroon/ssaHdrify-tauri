@@ -5,7 +5,6 @@ import {
   readText,
   writeText,
   fileNameFromPath,
-  type LocalFontEntry,
 } from "../../lib/tauri-api";
 import {
   analyzeFonts,
@@ -18,6 +17,15 @@ import { ensureLoaded, fontKeyLabel, type FontUsage } from "./font-collector";
 import { useI18n } from "../../i18n/useI18n";
 import { useFileContext } from "../../lib/FileContext";
 import FontSourceModal, { type FontSource } from "./FontSourceModal";
+
+/** Indices of fonts that resolved to a file — used to pre-check them in the UI. */
+function indicesOfResolvedFonts(infos: FontInfo[]): Set<number> {
+  const out = new Set<number>();
+  infos.forEach((info, idx) => {
+    if (info.filePath) out.add(idx);
+  });
+  return out;
+}
 
 export default function FontEmbed() {
   const { t } = useI18n();
@@ -43,13 +51,10 @@ export default function FontEmbed() {
   // canonical helper so every match site (initial analyze, reanalyze, etc.)
   // uses identical indexing logic. Each face contributes multiple keys —
   // one per localized family name variant — all pointing at the same entry.
-  const userFontMap = useMemo(() => {
-    const all: LocalFontEntry[] = [];
-    for (const src of fontSources) {
-      all.push(...src.entries);
-    }
-    return buildUserFontMap(all);
-  }, [fontSources]);
+  const userFontMap = useMemo(
+    () => buildUserFontMap(fontSources.flatMap((src) => src.entries)),
+    [fontSources]
+  );
 
   // Derive file state from context
   const filePath = fontsFile?.filePath ?? null;
@@ -97,13 +102,7 @@ export default function FontEmbed() {
 
       setFontUsages(usages);
       setFonts(infos);
-
-      // Auto-select all found fonts
-      const autoSelected = new Set<number>();
-      infos.forEach((info, idx) => {
-        if (info.filePath) autoSelected.add(idx);
-      });
-      setSelected(autoSelected);
+      setSelected(indicesOfResolvedFonts(infos));
 
       // Silent replace: see FileContext.tsx for design rationale
       setFontsFile({
@@ -128,20 +127,12 @@ export default function FontEmbed() {
   const reanalyzeWithSources = useCallback(
     async (nextSources: FontSource[]) => {
       if (!fileContent) return;
-      const all: LocalFontEntry[] = [];
-      for (const src of nextSources) {
-        all.push(...src.entries);
-      }
-      const map = buildUserFontMap(all);
+      const map = buildUserFontMap(nextSources.flatMap((src) => src.entries));
       try {
         const { infos, usages } = await analyzeFonts(fileContent, map);
         setFontUsages(usages);
         setFonts(infos);
-        const autoSelected = new Set<number>();
-        infos.forEach((info, idx) => {
-          if (info.filePath) autoSelected.add(idx);
-        });
-        setSelected(autoSelected);
+        setSelected(indicesOfResolvedFonts(infos));
       } catch (e) {
         setIsError(true);
         setStatus(t("error_prefix", e instanceof Error ? e.message : String(e)));
@@ -204,7 +195,7 @@ export default function FontEmbed() {
   const handleEmbed = useCallback(async () => {
     if (!fileContent || !filePath) return;
 
-    const selectedFonts = fonts.filter((_, idx) => selected.has(idx) && fonts[idx].filePath);
+    const selectedFonts = fonts.filter((info, idx) => selected.has(idx) && info.filePath);
     if (selectedFonts.length === 0) {
       setStatus(t("msg_no_fonts_selected"));
       return;

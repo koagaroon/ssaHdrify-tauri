@@ -55,6 +55,7 @@ export default function TimingShift() {
     () => (useThreshold ? parseDisplayTime(thresholdText) : null),
     [useThreshold, thresholdText]
   );
+  const thresholdInvalid = useThreshold && thresholdMs === null;
 
   // Derive file state from context
   const filePath = timingFile?.filePath ?? null;
@@ -64,7 +65,7 @@ export default function TimingShift() {
   // Update preview whenever parameters change (debounced to avoid reprocessing on every keystroke)
   useEffect(() => {
     if (!fileContent) return;
-    if (useThreshold && thresholdMs === null) {
+    if (thresholdInvalid) {
       if (debounceRef.current) clearTimeout(debounceRef.current);
       // eslint-disable-next-line react-hooks/set-state-in-effect -- guard clause: clears stale preview, cannot cascade
       setPreview([]);
@@ -87,7 +88,7 @@ export default function TimingShift() {
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [fileContent, effectiveOffsetMs, thresholdMs, useThreshold]);
+  }, [fileContent, effectiveOffsetMs, thresholdMs, thresholdInvalid]);
 
   const handlePickFile = useCallback(async () => {
     const gen = (pickGenRef.current = pickGenRef.current + 1);
@@ -146,7 +147,7 @@ export default function TimingShift() {
 
   const handleSave = useCallback(async () => {
     if (!fileContent || !filePath) return;
-    if (useThreshold && thresholdMs === null) return;
+    if (thresholdInvalid) return;
 
     try {
       // Always recompute from current parameters — do not cache. A cached result
@@ -174,7 +175,7 @@ export default function TimingShift() {
       setIsError(true);
       setStatus(t("error_prefix", e instanceof Error ? e.message : String(e)));
     }
-  }, [fileContent, filePath, fileName, effectiveOffsetMs, thresholdMs, useThreshold, t]);
+  }, [fileContent, filePath, fileName, effectiveOffsetMs, thresholdMs, thresholdInvalid, t]);
 
   return (
     <div className="space-y-5">
@@ -232,15 +233,11 @@ export default function TimingShift() {
           </button>
           <button
             onClick={handleSave}
-            disabled={!filePath || (useThreshold && thresholdMs === null)}
+            disabled={!filePath || thresholdInvalid}
             className="w-full px-5 py-2.5 rounded-lg font-medium text-sm transition-colors"
             style={{
-              background:
-                !filePath || (useThreshold && thresholdMs === null)
-                  ? "var(--bg-input)"
-                  : "var(--accent)",
-              color:
-                !filePath || (useThreshold && thresholdMs === null) ? "var(--text-muted)" : "white",
+              background: !filePath || thresholdInvalid ? "var(--bg-input)" : "var(--accent)",
+              color: !filePath || thresholdInvalid ? "var(--text-muted)" : "white",
               opacity: !filePath ? 0.5 : 1,
             }}
           >
@@ -345,7 +342,7 @@ export default function TimingShift() {
             }}
           />
         )}
-        {useThreshold && thresholdMs === null && (
+        {thresholdInvalid && (
           <span className="text-xs" style={{ color: "var(--error)" }}>
             {t("threshold_invalid")}
           </span>

@@ -101,6 +101,7 @@ export default function HdrConvert() {
   };
 
   const activeTemplate = template === "custom" ? customTemplate : template;
+  const convertDisabled = !hdrFiles || processing;
 
   // ── File selection (separate from conversion) ──────────
   const handleSelectFiles = useCallback(async () => {
@@ -322,11 +323,11 @@ export default function HdrConvert() {
           </button>
           <button
             onClick={handleConvert}
-            disabled={!hdrFiles || processing}
+            disabled={convertDisabled}
             className="w-full px-5 py-2.5 rounded-lg font-medium text-sm transition-colors"
             style={{
-              background: !hdrFiles || processing ? "var(--bg-input)" : "var(--accent)",
-              color: !hdrFiles || processing ? "var(--text-muted)" : "white",
+              background: convertDisabled ? "var(--bg-input)" : "var(--accent)",
+              color: convertDisabled ? "var(--text-muted)" : "white",
               opacity: !hdrFiles ? 0.5 : 1,
             }}
           >

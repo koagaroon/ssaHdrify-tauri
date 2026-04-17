@@ -58,6 +58,17 @@ function normalizeFamily(raw: string): string {
   return trimmed.startsWith("@") ? trimmed.slice(1) : trimmed;
 }
 
+/** Strip control characters and cap length — applied to every family name
+ *  captured from a subtitle file before it flows into matching or output. */
+function sanitizeFamily(raw: string): string {
+  return (
+    raw
+      // eslint-disable-next-line no-control-regex -- intentional: sanitize control chars from subtitle font names
+      .replace(/[\x00-\x1f\x7f]/g, "")
+      .slice(0, 128)
+  );
+}
+
 /**
  * Ensure ass-compiler is loaded. Call before using collector functions.
  */
@@ -97,15 +108,9 @@ export function collectFonts(assContent: string): FontUsage[] {
 
   if (parsed.styles?.style) {
     for (const style of parsed.styles.style) {
-      // Sanitize font family name: strip control characters and limit length,
-      // then drop the ASS `@` vertical-writing prefix so styles that only
-      // differ by vertical/horizontal typesetting hint collapse into a single
-      // usage entry.
-      const rawFamily = normalizeFamily(style.Fontname || "Arial");
-      const family = rawFamily
-        // eslint-disable-next-line no-control-regex -- intentional: sanitize control chars from subtitle font names
-        .replace(/[\x00-\x1f\x7f]/g, "")
-        .slice(0, 128);
+      // Drop the ASS `@` vertical-writing prefix (collapses vertical and
+      // horizontal uses into one entry), then strip control chars and cap length.
+      const family = sanitizeFamily(normalizeFamily(style.Fontname || "Arial"));
       styleMap.set(style.Name, {
         family: family || "Arial",
         bold: parseInt(style.Bold || "0") !== 0,
@@ -154,23 +159,16 @@ export function collectFonts(assContent: string): FontUsage[] {
     }
   }
 
-  // Walk dialogue events
   if (parsed.events?.dialogue) {
     for (const dialogue of parsed.events.dialogue) {
-      // Get base font from style
       const styleName = dialogue.Style || "Default";
-      const baseStyle = styleMap.get(styleName) ?? {
+      const baseStyle: FontKey = styleMap.get(styleName) ?? {
         family: "Arial",
         bold: false,
         italic: false,
       };
-
-      // Current active font state (starts with the line's style)
-      const currentFont: FontKey = { ...baseStyle };
-
-      // Parse the dialogue text for override tags and plain text
       const rawText: string = dialogue.Text?.raw ?? "";
-      processDialogueText(rawText, currentFont, recordChars);
+      processDialogueText(rawText, baseStyle, recordChars);
     }
   }
 
@@ -256,11 +254,7 @@ function applyOverrideTags(block: string, current: FontKey, initialFont: FontKey
     if (!rawFamily) {
       result.family = initialFont.family;
     } else {
-      result.family = rawFamily
-        // eslint-disable-next-line no-control-regex -- intentional: sanitize control chars from subtitle font names
-        .replace(/[\x00-\x1f\x7f]/g, "")
-        .slice(0, 128);
-      if (!result.family) result.family = current.family;
+      result.family = sanitizeFamily(rawFamily) || current.family;
     }
   }
 

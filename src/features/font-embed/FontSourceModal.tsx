@@ -49,6 +49,28 @@ function newId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/** Compute how many required font families are matched by the user-supplied map. */
+function computeCoverage(
+  usages: FontUsage[],
+  userFontMap: Map<string, LocalFontEntry>,
+  hasSubtitle: boolean
+): { covered: number; total: number; missing: string[] } {
+  if (!hasSubtitle || usages.length === 0) {
+    return { covered: 0, total: 0, missing: [] };
+  }
+  let covered = 0;
+  const missing: string[] = [];
+  for (const u of usages) {
+    const k = userFontKey(u.key.family, u.key.bold, u.key.italic);
+    if (userFontMap.has(k)) {
+      covered += 1;
+    } else {
+      missing.push(fontKeyLabel(u.key));
+    }
+  }
+  return { covered, total: usages.length, missing };
+}
+
 export default function FontSourceModal(props: Props) {
   const { open, onClose, sources, usages, userFontMap, hasSubtitle, onAddSource, onRemoveSource } =
     props;
@@ -152,22 +174,7 @@ export default function FontSourceModal(props: Props) {
   // only consider the local map, so the count reflects the user's question:
   // "does the folder I picked cover every font the ASS needs?" System-
   // installed matches are shown as secondary info in the main font list.
-  const { covered, total, missing } = (() => {
-    if (!hasSubtitle || usages.length === 0) {
-      return { covered: 0, total: 0, missing: [] as string[] };
-    }
-    let covered = 0;
-    const missing: string[] = [];
-    for (const u of usages) {
-      const k = userFontKey(u.key.family, u.key.bold, u.key.italic);
-      if (userFontMap.has(k)) {
-        covered += 1;
-      } else {
-        missing.push(fontKeyLabel(u.key));
-      }
-    }
-    return { covered, total: usages.length, missing };
-  })();
+  const { covered, total, missing } = computeCoverage(usages, userFontMap, hasSubtitle);
 
   if (!open) return null;
 

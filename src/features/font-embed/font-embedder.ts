@@ -101,13 +101,13 @@ export async function analyzeFonts(
 
   for (const usage of usages) {
     const key = userFontKey(usage.key.family, usage.key.bold, usage.key.italic);
-    const local = userFontMap?.get(key);
+    const base = { key: usage.key, glyphCount: usage.codepoints.size };
 
+    const local = userFontMap?.get(key);
     if (local) {
       console.debug(`[ssaHdrify] '${usage.key.family}' → LOCAL ${local.path}`);
       infos.push({
-        key: usage.key,
-        glyphCount: usage.codepoints.size,
+        ...base,
         filePath: local.path,
         fontIndex: local.index,
         error: null,
@@ -120,23 +120,20 @@ export async function analyzeFonts(
       const result = await findSystemFont(usage.key.family, usage.key.bold, usage.key.italic);
       console.debug(`[ssaHdrify] '${usage.key.family}' → SYSTEM ${result.path}`);
       infos.push({
-        key: usage.key,
-        glyphCount: usage.codepoints.size,
+        ...base,
         filePath: result.path,
         fontIndex: result.index,
         error: null,
         source: "system",
       });
     } catch (e) {
-      console.debug(
-        `[ssaHdrify] '${usage.key.family}' → MISS (key='${key}', reason=${e instanceof Error ? e.message : String(e)})`
-      );
+      const reason = e instanceof Error ? e.message : String(e);
+      console.debug(`[ssaHdrify] '${usage.key.family}' → MISS (key='${key}', reason=${reason})`);
       infos.push({
-        key: usage.key,
-        glyphCount: usage.codepoints.size,
+        ...base,
         filePath: null,
         fontIndex: 0,
-        error: e instanceof Error ? e.message : String(e),
+        error: reason,
         source: null,
       });
     }
@@ -299,13 +296,12 @@ function insertFontsSection(content: string, fontsSection: string): string {
   const isSectionHeader = (line: string) => SECTION_HEADER_RE.test(line.trim().toLowerCase());
 
   if (existingFontsIdx >= 0) {
-    // Find the end of the existing [Fonts] section (next section header)
+    // Find the end of the existing [Fonts] section (next section header or EOF).
     let endIdx = existingFontsIdx + 1;
-    while (endIdx < lines.length) {
-      if (isSectionHeader(lines[endIdx])) break;
+    while (endIdx < lines.length && !isSectionHeader(lines[endIdx])) {
       endIdx++;
     }
-    // Replace existing [Fonts] section
+
     const { text: before, sep } = buildBefore(existingFontsIdx);
     const after = buildAfter(endIdx);
     // Only add separator before after when there IS content after [Fonts].

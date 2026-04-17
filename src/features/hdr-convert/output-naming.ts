@@ -67,16 +67,9 @@ export function resolveOutputPath(inputPath: string, template: string, eotf: Eot
   const dotIdx = fullName.lastIndexOf(".");
   let baseName = dotIdx > 0 ? fullName.slice(0, dotIdx) : fullName;
 
-  // Strip existing .hdr / .sdr tags to prevent doubling
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const tag of [".hdr", ".sdr"]) {
-      if (baseName.toLowerCase().endsWith(tag)) {
-        baseName = baseName.slice(0, -tag.length);
-        changed = true;
-      }
-    }
+  // Strip existing .hdr / .sdr tags (any stacking order) to prevent doubling
+  while (/\.(hdr|sdr)$/i.test(baseName)) {
+    baseName = baseName.slice(0, -4);
   }
 
   // Guard: reject filenames with no valid stem (e.g., ".ass")

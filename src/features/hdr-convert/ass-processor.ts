@@ -197,7 +197,6 @@ export function processAssContent(
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
-    // Check for section change
     const newSection = detectSection(line);
     if (newSection !== null) {
       currentSection = newSection;
@@ -205,9 +204,9 @@ export function processAssContent(
       continue;
     }
 
-    // Transform based on current section
     if (currentSection === "styles") {
-      // Parse Format line to discover color field positions — pass through unchanged
+      // Format lines declare the color-field positions for later Style lines;
+      // pass them through unchanged.
       if (line.trimStart().startsWith("Format:")) {
         const parsed = parseStyleFormatLine(line);
         if (parsed) {
@@ -217,13 +216,9 @@ export function processAssContent(
       } else {
         result.push(transformStyleLine(line, targetBrightness, eotf, styleColorIndices));
       }
-    } else if (currentSection === "events") {
-      // Dialogue lines only — Comment: lines are non-rendering and must not be mutated
-      if (line.startsWith("Dialogue:")) {
-        result.push(transformEventText(line, targetBrightness, eotf));
-      } else {
-        result.push(line);
-      }
+    } else if (currentSection === "events" && line.startsWith("Dialogue:")) {
+      // Comment: lines are non-rendering and must not be mutated
+      result.push(transformEventText(line, targetBrightness, eotf));
     } else {
       result.push(line);
     }

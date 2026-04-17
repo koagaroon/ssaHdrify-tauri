@@ -32,60 +32,50 @@ const FONT_FILTERS: FileFilter[] = [
   { name: "All Files", extensions: ["*"] },
 ];
 
+// open() returns string | string[] | null. These helpers normalize each shape.
+function toSinglePath(result: string | string[] | null): string | null {
+  if (!result) return null;
+  return typeof result === "string" ? result : (result[0] ?? null);
+}
+
+function toMultiplePaths(result: string | string[] | null): string[] | null {
+  if (!result) return null;
+  return Array.isArray(result) ? result : [result];
+}
+
 /** Open a multi-file picker for subtitle files. Returns file paths or null if cancelled. */
 export async function pickSubtitleFiles(): Promise<string[] | null> {
-  const result = await open({
-    multiple: true,
-    filters: SUBTITLE_FILTERS,
-    title: "Select subtitle files",
-  });
-  if (!result) return null;
-  // open() returns string | string[] | null depending on multiple flag
-  return Array.isArray(result) ? result : [result];
+  return toMultiplePaths(
+    await open({ multiple: true, filters: SUBTITLE_FILTERS, title: "Select subtitle files" })
+  );
 }
 
 /** Open a single-file picker for ASS files. */
 export async function pickAssFile(): Promise<string | null> {
-  const result = await open({
-    multiple: false,
-    filters: ASS_FILTERS,
-    title: "Select .ass file",
-  });
-  if (!result) return null;
-  return typeof result === "string" ? result : (result[0] ?? null);
+  return toSinglePath(
+    await open({ multiple: false, filters: ASS_FILTERS, title: "Select .ass file" })
+  );
 }
 
 /** Open a directory picker for a local font folder. Returns path or null. */
 export async function pickFontDirectory(): Promise<string | null> {
-  const result = await open({
-    directory: true,
-    multiple: false,
-    title: "Select font folder",
-  });
-  if (!result) return null;
-  return typeof result === "string" ? result : (result[0] ?? null);
+  return toSinglePath(
+    await open({ directory: true, multiple: false, title: "Select font folder" })
+  );
 }
 
 /** Open a multi-file picker for individual font files. Returns paths or null. */
 export async function pickFontFiles(): Promise<string[] | null> {
-  const result = await open({
-    multiple: true,
-    filters: FONT_FILTERS,
-    title: "Select font files",
-  });
-  if (!result) return null;
-  return Array.isArray(result) ? result : [result];
+  return toMultiplePaths(
+    await open({ multiple: true, filters: FONT_FILTERS, title: "Select font files" })
+  );
 }
 
 /** Open a single-file picker for any subtitle format. */
 export async function pickSubtitleFile(): Promise<string | null> {
-  const result = await open({
-    multiple: false,
-    filters: SUBTITLE_FILTERS,
-    title: "Select subtitle file",
-  });
-  if (!result) return null;
-  return typeof result === "string" ? result : (result[0] ?? null);
+  return toSinglePath(
+    await open({ multiple: false, filters: SUBTITLE_FILTERS, title: "Select subtitle file" })
+  );
 }
 
 /** Save dialog — returns chosen path or null if cancelled. */

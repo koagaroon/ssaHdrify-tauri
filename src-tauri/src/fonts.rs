@@ -21,6 +21,15 @@ const MAX_FONTS_PER_SCAN: usize = 500;
 /// headers that might claim an absurd number of faces.
 const MAX_TTC_FACES: u32 = 64;
 
+/// Cap on raw font data read for subsetting — prevents OOM with large CJK
+/// fonts and mirrors the front-end guard in `ass-uuencode.ts`.
+const MAX_FONT_DATA_SIZE: u64 = 50 * 1024 * 1024;
+
+/// Cap on the unmodified font emitted by the subset fallback path. Lower
+/// than `MAX_FONT_DATA_SIZE` because the fallback sends the full font through
+/// IPC → JS heap → ASS string.
+const MAX_FONT_FALLBACK_SIZE: usize = 10 * 1024 * 1024;
+
 /// Strip the Win32 extended-length UNC prefix (`\\?\`) that `canonicalize()`
 /// adds on Windows, so paths compare consistently across insert and lookup.
 fn normalize_canonical_path(canonical_str: &str) -> String {
@@ -34,9 +43,8 @@ fn normalize_canonical_path(canonical_str: &str) -> String {
 /// Provenance cache: tracks font paths returned by `find_system_font`.
 /// Only paths that were discovered through the font lookup API are allowed
 /// to be read by `subset_font`, preventing arbitrary file reads via IPC.
-// Font paths discovered by find_system_font are cached for the session.
-// The cache grows unbounded but is bounded by the number of unique system fonts
-// (typically < 1000). Paths are never evicted to avoid TOCTOU issues.
+/// Never evicted — the set is bounded by the number of unique system fonts
+/// (typically < 1000), and eviction would introduce TOCTOU windows.
 static ALLOWED_FONT_PATHS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
 /// Sibling provenance cache for paths that came from a user-picked directory
@@ -251,25 +259,17 @@ fn parse_local_font_file(canonical: &Path) -> Vec<LocalFontEntry> {
         // Stabilize the primary-name pick: prefer font-kit's family_name if
         // it's among the variants, else fall back to a sorted order so UI
         // listings stay deterministic across runs (HashSet iteration order
-        // is not guaranteed).
+        // is not guaranteed). family_variants is a HashSet, so no duplicates
+        // can leak into the sorted list.
         let primary = fk_font.family_name();
-        let mut families: Vec<String> = if family_variants.contains(&primary) {
-            let mut rest: Vec<String> = family_variants
-                .iter()
-                .filter(|v| **v != primary)
-                .cloned()
-                .collect();
-            rest.sort();
-            let mut v = Vec::with_capacity(1 + rest.len());
-            v.push(primary);
-            v.extend(rest);
-            v
-        } else {
-            let mut v: Vec<String> = family_variants.into_iter().collect();
-            v.sort();
-            v
-        };
-        families.dedup();
+        let mut families: Vec<String> = family_variants.into_iter().collect();
+        families.sort();
+        if let Some(pos) = families.iter().position(|v| v == &primary) {
+            // rotate_right(1) moves families[pos] to index 0 while keeping
+            // the elements before it in alphabetical order — swap(0, pos)
+            // would displace the element at 0 to pos, breaking sort order.
+            families[..=pos].rotate_right(1);
+        }
 
         entries.push(LocalFontEntry {
             path: canonical_string.clone(),
@@ -339,19 +339,27 @@ pub fn scan_font_directory(dir: String) -> Result<Vec<LocalFontEntry>, String> {
         }
     }
 
-    // Entries now map 1:1 to faces. Files ≤ faces (TTC collections can hold
-    // multiple faces per file); variants per face are folded inside.
+    log_scan_summary(
+        &format!("font directory '{}'", canonical_dir.display()),
+        &result,
+    );
+    Ok(result)
+}
+
+/// Log a scan-result summary with face/file/variant counts.
+///
+/// Entries map 1:1 to faces. Files ≤ faces (TTC collections hold multiple
+/// faces per file); variants per face are folded inside each entry.
+fn log_scan_summary(source: &str, result: &[LocalFontEntry]) {
     let file_count = result.iter().map(|e| &e.path).collect::<HashSet<_>>().len();
     let variant_count: usize = result.iter().map(|e| e.families.len()).sum();
     log::info!(
-        "Scanned font directory '{}': {} faces / {} files / {} name variants",
-        canonical_dir.display(),
+        "Scanned {}: {} faces / {} files / {} name variants",
+        source,
         result.len(),
         file_count,
         variant_count,
     );
-
-    Ok(result)
 }
 
 /// Scan a user-picked list of individual font files. Same per-file logic as
@@ -392,15 +400,7 @@ pub fn scan_font_files(paths: Vec<String>) -> Result<Vec<LocalFontEntry>, String
         }
     }
 
-    let file_count = result.iter().map(|e| &e.path).collect::<HashSet<_>>().len();
-    let variant_count: usize = result.iter().map(|e| e.families.len()).sum();
-    log::info!(
-        "Scanned local font files: {} faces / {} files / {} name variants",
-        result.len(),
-        file_count,
-        variant_count,
-    );
-
+    log_scan_summary("local font files", &result);
     Ok(result)
 }
 
@@ -421,75 +421,76 @@ fn register_font_path(path: &Path, font_index: u32) -> Result<FontLookupResult, 
     })
 }
 
+/// True when `path` equals `dir` or lives under it (using `sep` as the
+/// separator). Matched via `starts_with` only — no `contains` — so that
+/// directories whose names merely include "fonts" never leak through.
+fn path_under_dir(path: &str, dir: &str, sep: &str) -> bool {
+    path == dir || path.starts_with(&format!("{dir}{sep}"))
+}
+
 /// Check whether a canonicalized path is under a known system fonts directory.
-/// Uses `starts_with` only — no `contains` patterns — to prevent matching
-/// arbitrary directories that happen to include "fonts" in the path.
 fn is_in_system_fonts_dir(canonical: &Path) -> bool {
     let canonical_str = normalize_canonical_path(&canonical.to_string_lossy());
 
     if cfg!(windows) {
         let lower = canonical_str.to_lowercase().replace("/", "\\");
+        let under = |dir: &str| path_under_dir(&lower, dir, "\\");
+
         // System fonts directory — use SYSTEMROOT to support non-C: installs
         let sys_root = std::env::var("SYSTEMROOT")
             .unwrap_or_else(|_| "C:\\Windows".to_string())
             .to_lowercase()
             .replace("/", "\\");
-        let sys_fonts_prefix = format!("{}\\fonts\\", sys_root);
-        let sys_fonts_exact = format!("{}\\fonts", sys_root);
-        let sys_fonts = lower.starts_with(&sys_fonts_prefix) || lower == sys_fonts_exact;
+        if under(&format!("{sys_root}\\fonts")) {
+            return true;
+        }
         // Per-user fonts directory (Windows 10 1809+)
-        let user_fonts = if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+        if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
             let user_font_dir = format!(
                 "{}\\microsoft\\windows\\fonts",
                 local_app_data.to_lowercase().replace("/", "\\")
             );
-            lower.starts_with(&format!("{}\\", user_font_dir)) || lower == user_font_dir
-        } else {
-            false
-        };
-        sys_fonts || user_fonts
-    } else if cfg!(target_os = "macos") {
-        canonical_str.starts_with("/Library/Fonts/")
-            || canonical_str == "/Library/Fonts"
-            || canonical_str.starts_with("/System/Library/Fonts/")
-            || canonical_str == "/System/Library/Fonts"
-            || canonical_str.starts_with("/System/Library/AssetsV2/")
-            || canonical_str == "/System/Library/AssetsV2"
-            || canonical_str.starts_with("/Library/Application Support/")
-            || canonical_str == "/Library/Application Support"
-            || canonical_str.starts_with("/opt/homebrew/share/fonts/")
-            || canonical_str == "/opt/homebrew/share/fonts"
-            || canonical_str.starts_with("/usr/local/share/fonts/")
-            || canonical_str == "/usr/local/share/fonts"
-            || {
-                // Per-user fonts: ~/Library/Fonts/
-                if let Some(home) = std::env::var_os("HOME") {
-                    let home_str = home.to_string_lossy();
-                    let user_font_dir = format!("{}/Library/Fonts", home_str);
-                    canonical_str.starts_with(&format!("{}/", user_font_dir))
-                        || canonical_str == user_font_dir.as_str()
-                } else {
-                    false
-                }
+            if under(&user_font_dir) {
+                return true;
             }
+        }
+        false
+    } else if cfg!(target_os = "macos") {
+        let under = |dir: &str| path_under_dir(&canonical_str, dir, "/");
+        const MAC_DIRS: &[&str] = &[
+            "/Library/Fonts",
+            "/System/Library/Fonts",
+            "/System/Library/AssetsV2",
+            "/Library/Application Support",
+            "/opt/homebrew/share/fonts",
+            "/usr/local/share/fonts",
+        ];
+        if MAC_DIRS.iter().any(|d| under(d)) {
+            return true;
+        }
+        // Per-user fonts: ~/Library/Fonts/
+        if let Some(home) = std::env::var_os("HOME") {
+            let user_font_dir = format!("{}/Library/Fonts", home.to_string_lossy());
+            if under(&user_font_dir) {
+                return true;
+            }
+        }
+        false
     } else {
         // Linux
-        let user_fonts = if let Some(home) = std::env::var_os("HOME") {
+        let under = |dir: &str| path_under_dir(&canonical_str, dir, "/");
+        if under("/usr/share/fonts") || under("/usr/local/share/fonts") {
+            return true;
+        }
+        if let Some(home) = std::env::var_os("HOME") {
             let home_str = home.to_string_lossy();
-            let dot_fonts = format!("{}/.fonts", home_str);
-            let local_fonts = format!("{}/.local/share/fonts", home_str);
-            canonical_str.starts_with(&format!("{}/", dot_fonts))
-                || canonical_str == dot_fonts.as_str()
-                || canonical_str.starts_with(&format!("{}/", local_fonts))
-                || canonical_str == local_fonts.as_str()
-        } else {
-            false
-        };
-        canonical_str.starts_with("/usr/share/fonts/")
-            || canonical_str == "/usr/share/fonts"
-            || canonical_str.starts_with("/usr/local/share/fonts/")
-            || canonical_str == "/usr/local/share/fonts"
-            || user_fonts
+            if under(&format!("{home_str}/.fonts"))
+                || under(&format!("{home_str}/.local/share/fonts"))
+            {
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -574,12 +575,13 @@ pub fn subset_font(
         return Err("System font path is not in a system fonts directory".to_string());
     }
 
-    // Reject font files larger than 50 MB to prevent OOM with large CJK fonts
+    // Pre-read size check — rejects obvious oversize before allocating the Vec.
     let metadata = fs::metadata(&canonical).map_err(|e| format!("Cannot stat font file: {}", e))?;
-    if metadata.len() > 50 * 1024 * 1024 {
+    if metadata.len() > MAX_FONT_DATA_SIZE {
         return Err(format!(
-            "Font file too large ({} MB, max 50 MB)",
-            metadata.len() / 1024 / 1024
+            "Font file too large ({} MB, max {} MB)",
+            metadata.len() / 1024 / 1024,
+            MAX_FONT_DATA_SIZE / 1024 / 1024
         ));
     }
 
@@ -587,10 +589,11 @@ pub fn subset_font(
         .map_err(|e| format!("Failed to read font file '{}': {}", filename, e))?;
 
     // Post-read size check (TOCTOU mitigation — file could grow between stat and read)
-    if font_data.len() > 50 * 1024 * 1024 {
+    if font_data.len() as u64 > MAX_FONT_DATA_SIZE {
         return Err(format!(
-            "Font file too large after read ({} MB, max 50 MB)",
-            font_data.len() / 1024 / 1024
+            "Font file too large after read ({} MB, max {} MB)",
+            font_data.len() / 1024 / 1024,
+            MAX_FONT_DATA_SIZE / 1024 / 1024
         ));
     }
 
@@ -633,11 +636,12 @@ pub fn subset_font(
                 e
             );
             // Cap fallback size — the full font goes through IPC → JS heap → ASS string,
-            // so a 50 MB font would cause excessive memory use in the frontend.
-            if font_data.len() > 10 * 1024 * 1024 {
+            // so a large font would cause excessive memory use in the frontend.
+            if font_data.len() > MAX_FONT_FALLBACK_SIZE {
                 return Err(format!(
-                    "Subsetting failed and full font too large ({} MB, max 10 MB for fallback)",
-                    font_data.len() / 1024 / 1024
+                    "Subsetting failed and full font too large ({} MB, max {} MB for fallback)",
+                    font_data.len() / 1024 / 1024,
+                    MAX_FONT_FALLBACK_SIZE / 1024 / 1024
                 ));
             }
             Ok(font_data)
