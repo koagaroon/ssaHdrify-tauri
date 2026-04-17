@@ -190,7 +190,8 @@ export function processAssContent(
   let currentSection: AssSection = "info";
   const result: string[] = [];
 
-  // Local copy — prevents cross-file contamination if one file has a Format line and the next doesn't
+  // Fresh per-call copy so a Format line parsed in one file doesn't leak its
+  // color-field indices into the next file when callers reuse this module.
   let styleColorIndices = STYLE_COLOR_INDICES_FALLBACK.slice();
 
   for (let i = 0; i < lines.length; i++) {

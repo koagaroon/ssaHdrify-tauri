@@ -18,6 +18,7 @@ import {
 } from "../../lib/subtitle-parser";
 
 export type { Caption, SubtitleFormat };
+export { formatDisplayTime, parseDisplayTime };
 
 export interface ShiftOptions {
   /** Offset in milliseconds (positive = later/slower, negative = earlier/faster) */
@@ -80,4 +81,3 @@ export function shiftSubtitles(content: string, options: ShiftOptions): ShiftRes
   };
 }
 
-export { formatDisplayTime as formatTimestamp, parseDisplayTime as parseTimestamp };

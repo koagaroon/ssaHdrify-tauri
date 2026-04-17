@@ -3,7 +3,7 @@
  * Centralizes all native interactions so feature code stays pure JS.
  */
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { readFile, stat, writeTextFile } from "@tauri-apps/plugin-fs";
+import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { invoke } from "@tauri-apps/api/core";
 
 // ── File Dialogs ──────────────────────────────────────────
@@ -103,18 +103,6 @@ export async function pickSavePath(
 
 // ── File I/O ──────────────────────────────────────────────
 
-const MAX_BINARY_SIZE = 100 * 1024 * 1024; // 100 MB (font files)
-
-/** Check file size before reading. Throws if file exceeds the limit. */
-async function assertFileSize(path: string, maxBytes: number): Promise<void> {
-  const info = await stat(path);
-  if (info.size > maxBytes) {
-    const sizeMB = (info.size / (1024 * 1024)).toFixed(1);
-    const limitMB = (maxBytes / (1024 * 1024)).toFixed(0);
-    throw new Error(`File too large: ${sizeMB} MB exceeds the ${limitMB} MB limit (${path})`);
-  }
-}
-
 /** Result from encoding-aware file reading. */
 export interface ReadTextResult {
   /** File content decoded to UTF-8 */
@@ -146,24 +134,6 @@ export async function readTextDetectEncoding(path: string): Promise<ReadTextResu
 /** Write a text file with explicit UTF-8. */
 export async function writeText(path: string, content: string): Promise<void> {
   await writeTextFile(path, content);
-}
-
-/** Read a binary file (for font files). Returns Uint8Array. */
-export async function readBinary(
-  path: string,
-  maxSizeBytes: number = MAX_BINARY_SIZE
-): Promise<Uint8Array> {
-  await assertFileSize(path, maxSizeBytes);
-  const data = await readFile(path);
-  // Post-read size check to close TOCTOU window
-  if (data.length > maxSizeBytes) {
-    const sizeMB = (data.length / (1024 * 1024)).toFixed(1);
-    const limitMB = (maxSizeBytes / (1024 * 1024)).toFixed(0);
-    throw new Error(
-      `File too large after read: ${sizeMB} MB exceeds the ${limitMB} MB limit (${path})`
-    );
-  }
-  return data;
 }
 
 // ── Path Utilities ───────────────────────────────────────

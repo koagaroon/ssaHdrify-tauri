@@ -116,6 +116,11 @@ export function collectFonts(assContent: string): FontUsage[] {
 
   // Accumulate: fontKeyString → { key, codepoints }
   const usageMap = new Map<string, FontUsage>();
+  // Per-font caps are not enough on their own: 500 variants × 65,536 codepoints
+  // each would reach ~130 MB of Set overhead before any single cap triggers.
+  // Bound the combined codepoint count across all variants as defense-in-depth.
+  const MAX_TOTAL_CODEPOINTS = 1_000_000;
+  let totalCodepoints = 0;
 
   function recordChars(key: FontKey, text: string) {
     const keyStr = fontKeyToString(key);
@@ -135,7 +140,16 @@ export function collectFonts(assContent: string): FontUsage[] {
       const cp = char.codePointAt(0);
       if (cp !== undefined && cp > 32 && cp <= 0x10ffff) {
         // Skip control chars, space, and invalid codepoints
+        const before = usage.codepoints.size;
         usage.codepoints.add(cp);
+        if (usage.codepoints.size !== before) {
+          totalCodepoints++;
+          if (totalCodepoints > MAX_TOTAL_CODEPOINTS) {
+            throw new Error(
+              `Too many codepoints across fonts: ${totalCodepoints} (max ${MAX_TOTAL_CODEPOINTS})`
+            );
+          }
+        }
       }
     }
   }

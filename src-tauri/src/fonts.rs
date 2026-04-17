@@ -249,21 +249,25 @@ fn parse_local_font_file(canonical: &Path) -> Vec<LocalFontEntry> {
         }
 
         // Stabilize the primary-name pick: prefer font-kit's family_name if
-        // it's among the variants, else take an arbitrary HashSet element.
-        // A stable primary keeps UI listings predictable.
+        // it's among the variants, else fall back to a sorted order so UI
+        // listings stay deterministic across runs (HashSet iteration order
+        // is not guaranteed).
         let primary = fk_font.family_name();
         let mut families: Vec<String> = if family_variants.contains(&primary) {
-            let rest: Vec<String> = family_variants
+            let mut rest: Vec<String> = family_variants
                 .iter()
                 .filter(|v| **v != primary)
                 .cloned()
                 .collect();
+            rest.sort();
             let mut v = Vec::with_capacity(1 + rest.len());
             v.push(primary);
             v.extend(rest);
             v
         } else {
-            family_variants.into_iter().collect()
+            let mut v: Vec<String> = family_variants.into_iter().collect();
+            v.sort();
+            v
         };
         families.dedup();
 
@@ -388,10 +392,13 @@ pub fn scan_font_files(paths: Vec<String>) -> Result<Vec<LocalFontEntry>, String
         }
     }
 
+    let file_count = result.iter().map(|e| &e.path).collect::<HashSet<_>>().len();
+    let variant_count: usize = result.iter().map(|e| e.families.len()).sum();
     log::info!(
-        "Scanned {} local font file(s) → {} faces",
+        "Scanned local font files: {} faces / {} files / {} name variants",
         result.len(),
-        result.len()
+        file_count,
+        variant_count,
     );
 
     Ok(result)
@@ -508,6 +515,12 @@ pub fn subset_font(
             "Too many codepoints: {} (max 200,000)",
             codepoints.len()
         ));
+    }
+    // Reject out-of-range codepoints. Unicode tops out at U+10FFFF; anything
+    // larger is a JS-side bug or a crafted IPC payload and must not reach
+    // fontcull's IntSet, which would happily allocate for absurd values.
+    if let Some(&bad) = codepoints.iter().find(|&&cp| cp > 0x10FFFF) {
+        return Err(format!("Invalid codepoint: U+{bad:X} (max U+10FFFF)"));
     }
 
     let path = Path::new(&font_path);

@@ -202,7 +202,14 @@ export async function embedFonts(
         u.key.bold === info.key.bold &&
         u.key.italic === info.key.italic
     );
-    if (!usage) continue;
+    if (!usage) {
+      // Selected FontInfo has no matching FontUsage — means analyzeFonts and
+      // the current fontUsages array disagree, which should be impossible if
+      // both came from the same ASS parse. Log so the drift is debuggable
+      // instead of silently producing an embed file missing this font.
+      console.warn(`[ssaHdrify] embedFonts: no usage entry for ${fontKeyLabel(info.key)}`);
+      continue;
+    }
 
     // Subset the font to only used glyphs (via Rust backend)
     let subsetData: Uint8Array;

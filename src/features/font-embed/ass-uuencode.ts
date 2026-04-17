@@ -14,12 +14,25 @@
  */
 
 /**
+ * Hard cap on input size. The Rust backend already refuses font files over
+ * 50 MB; this guard defends the encoder itself from being handed oversized
+ * data through a bypass or refactor. 50 MB of input yields ~67 MB of encoded
+ * text plus the `fontname:` header overhead — well past any realistic subset.
+ */
+const MAX_FONT_DATA_SIZE = 50 * 1024 * 1024;
+
+/**
  * Encode a binary buffer into ASS [Fonts] section format.
  *
  * @param data - Binary font data (Uint8Array)
  * @returns Array of encoded lines (without the fontname: header)
  */
 export function assUuencode(data: Uint8Array): string[] {
+  if (data.length > MAX_FONT_DATA_SIZE) {
+    throw new Error(
+      `Font data too large: ${data.length} bytes (max ${MAX_FONT_DATA_SIZE})`
+    );
+  }
   const lines: string[] = [];
   let currentLine = "";
 

@@ -164,8 +164,11 @@ export function sRgbToHdr(
     });
 
     return [result[0], result[1], result[2]];
-  } catch {
-    // Any conversion error → black
+  } catch (e) {
+    // Any conversion error → black. Log so a malformed color from the ASS
+    // parser or a numerically degenerate intermediate surfaces in DevTools
+    // instead of being swallowed.
+    console.warn(`[ssaHdrify] sRgbToHdr failed for (${r},${g},${b}):`, e);
     return [0, 0, 0];
   }
 }

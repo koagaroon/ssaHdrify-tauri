@@ -8,8 +8,8 @@ import {
 } from "../../lib/tauri-api";
 import {
   shiftSubtitles,
-  formatTimestamp,
-  parseTimestamp,
+  formatDisplayTime,
+  parseDisplayTime,
   type ShiftResult,
   type PreviewEntry,
 } from "./timing-engine";
@@ -52,7 +52,7 @@ export default function TimingShift() {
   // Returns number when valid, null when invalid or disabled.
   // Consistently null (not undefined) so all guards can use strict === null.
   const thresholdMs = useMemo(
-    () => (useThreshold ? parseTimestamp(thresholdText) : null),
+    () => (useThreshold ? parseDisplayTime(thresholdText) : null),
     [useThreshold, thresholdText]
   );
 
@@ -397,7 +397,7 @@ export default function TimingShift() {
                       {entry.index}
                     </td>
                     <td className="px-3 py-1" style={{ color: "var(--text-muted)" }}>
-                      {formatTimestamp(entry.originalStart)}
+                      {formatDisplayTime(entry.originalStart)}
                     </td>
                     <td className="px-3 py-1 text-center" style={{ color: "var(--text-muted)" }}>
                       {entry.wasShifted ? "→" : "·"}
@@ -408,7 +408,7 @@ export default function TimingShift() {
                         color: entry.wasShifted ? "var(--preview-shifted)" : "var(--text-muted)",
                       }}
                     >
-                      {formatTimestamp(entry.shiftedStart)}
+                      {formatDisplayTime(entry.shiftedStart)}
                     </td>
                   </tr>
                 ))}

@@ -11,8 +11,9 @@ const STORAGE_KEY = "ssahdrify-lang";
 function loadLang(): Lang {
   const stored = localStorage.getItem(STORAGE_KEY);
   if (stored === "en" || stored === "zh") return stored;
-  // First launch (no localStorage): always Chinese regardless of system language.
-  // User can switch to English manually; that choice persists via localStorage.
+  // First launch defaults to Chinese by project choice — not a fallback for
+  // undetected system language. Users can switch to English via the header
+  // toggle; the choice persists in localStorage.
   return "zh";
 }
 
