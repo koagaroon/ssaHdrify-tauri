@@ -117,11 +117,7 @@ export async function analyzeFonts(
     }
 
     try {
-      const result = await findSystemFont(
-        usage.key.family,
-        usage.key.bold,
-        usage.key.italic
-      );
+      const result = await findSystemFont(usage.key.family, usage.key.bold, usage.key.italic);
       console.debug(`[ssaHdrify] '${usage.key.family}' → SYSTEM ${result.path}`);
       infos.push({
         key: usage.key,
@@ -156,10 +152,10 @@ export async function analyzeFonts(
 function buildFontFileName(key: FontKey): string {
   let name = key.family
     .toLowerCase()
-    .replace(/[^a-z0-9_-]/g, "_")  // strip everything except safe chars
-    .replace(/_+/g, "_")           // collapse consecutive underscores
-    .replace(/^_|_$/g, "");        // trim leading/trailing underscores
-  if (!name) name = "font";       // fallback if name becomes empty
+    .replace(/[^a-z0-9_-]/g, "_") // strip everything except safe chars
+    .replace(/_+/g, "_") // collapse consecutive underscores
+    .replace(/^_|_$/g, ""); // trim leading/trailing underscores
+  if (!name) name = "font"; // fallback if name becomes empty
   if (key.bold) name += "_bold";
   if (key.italic) name += "_italic";
   return `${name}.ttf`;
@@ -216,11 +212,13 @@ export async function embedFonts(
     } catch (subsetErr) {
       console.warn(`Font subsetting failed for ${usage.key.family}, skipping: ${subsetErr}`);
       onProgress?.({
-        stage: t?.("msg_font_skipped", info.key.family, String(subsetErr)) ?? `Skipped ${info.key.family}: ${subsetErr}`,
+        stage:
+          t?.("msg_font_skipped", info.key.family, String(subsetErr)) ??
+          `Skipped ${info.key.family}: ${subsetErr}`,
         current: i + 1,
         total,
       });
-      continue;  // Skip this font, don't fall back to unguarded read
+      continue; // Skip this font, don't fall back to unguarded read
     }
 
     // Build the [Fonts] entry
@@ -239,7 +237,10 @@ export async function embedFonts(
   const fontsSection = `[Fonts]\n${fontEntries.join("\n\n")}\n`;
 
   // Insert [Fonts] section into ASS file
-  return { content: insertFontsSection(assContent, fontsSection), embeddedCount: fontEntries.length };
+  return {
+    content: insertFontsSection(assContent, fontsSection),
+    embeddedCount: fontEntries.length,
+  };
 }
 
 /**
@@ -255,9 +256,7 @@ function insertFontsSection(content: string, fontsSection: string): string {
   const adaptedFontsSection = fontsSection.replace(/\n/g, lineEnding);
 
   // Check if [Fonts] section already exists
-  const existingFontsIdx = lines.findIndex(
-    (l) => l.trim().toLowerCase() === "[fonts]"
-  );
+  const existingFontsIdx = lines.findIndex((l) => l.trim().toLowerCase() === "[fonts]");
 
   // Build "before" from a line slice: strip trailing blank lines so we control
   // the separator ourselves. Array.join() absorbs trailing "" elements into a
@@ -290,8 +289,7 @@ function insertFontsSection(content: string, fontsSection: string): string {
 
   // Lowercase before testing: SECTION_HEADER_RE's lookahead requires [a-z ],
   // which fails on all-uppercase headers like [EVENTS] if not lowercased.
-  const isSectionHeader = (line: string) =>
-    SECTION_HEADER_RE.test(line.trim().toLowerCase());
+  const isSectionHeader = (line: string) => SECTION_HEADER_RE.test(line.trim().toLowerCase());
 
   if (existingFontsIdx >= 0) {
     // Find the end of the existing [Fonts] section (next section header)
@@ -311,9 +309,7 @@ function insertFontsSection(content: string, fontsSection: string): string {
   }
 
   // No existing [Fonts] — insert before [Events]
-  const eventsIdx = lines.findIndex(
-    (l) => l.trim().toLowerCase() === "[events]"
-  );
+  const eventsIdx = lines.findIndex((l) => l.trim().toLowerCase() === "[events]");
 
   if (eventsIdx >= 0) {
     const { text: before, sep } = buildBefore(eventsIdx);

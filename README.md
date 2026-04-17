@@ -2,7 +2,7 @@
 
 > **将 SSA/ASS 字幕颜色从 SDR 色彩空间转换到 HDR 色彩空间的桌面工具，附带时间轴偏移和字体嵌入功能。**
 >
-> *A desktop tool to convert SSA/ASS subtitle colors from SDR to HDR color space, with timing shift and font embedding.*
+> _A desktop tool to convert SSA/ASS subtitle colors from SDR to HDR color space, with timing shift and font embedding._
 
 Tauri 桌面重写版，基于 [gky99/ssaHdrify](https://github.com/gky99/ssaHdrify)（Python 原版）。
 
@@ -10,29 +10,29 @@ A Tauri desktop rewrite of [gky99/ssaHdrify](https://github.com/gky99/ssaHdrify)
 
 ### 浅色主题（中文）/ Light Theme (Chinese)
 
-| HDR 转换 | 时间轴偏移 | 字体嵌入 |
-|:---:|:---:|:---:|
+|                         HDR 转换                          |                         时间轴偏移                          |                        字体嵌入                         |
+| :-------------------------------------------------------: | :---------------------------------------------------------: | :-----------------------------------------------------: |
 | ![HDR Convert](docs/screenshots/hdr-convert-light-zh.jpg) | ![Timing Shift](docs/screenshots/timing-shift-light-zh.jpg) | ![Font Embed](docs/screenshots/font-embed-light-zh.jpg) |
 
 ### 深色主题（英文）/ Dark Theme (English)
 
-| HDR Convert | Time Shift | Font Embed |
-|:---:|:---:|:---:|
+|                       HDR Convert                        |                         Time Shift                         |                       Font Embed                       |
+| :------------------------------------------------------: | :--------------------------------------------------------: | :----------------------------------------------------: |
 | ![HDR Convert](docs/screenshots/hdr-convert-dark-en.jpg) | ![Timing Shift](docs/screenshots/timing-shift-dark-en.jpg) | ![Font Embed](docs/screenshots/font-embed-dark-en.jpg) |
 
 ---
 
 ## 功能 | Features
 
-| 功能 | 说明 |
-|------|------|
-| **HDR 色彩转换 / HDR Color Conversion** | sRGB → BT.2100 PQ 或 HLG，基于 Color.js 实现 / sRGB → BT.2100 PQ or HLG, powered by Color.js |
-| **多格式支持 / Multi-format Support** | 输入：ASS / SSA / SRT / SUB / VTT / SBV / LRC → 输出：ASS / Input: ASS/SSA/SRT/SUB/VTT/SBV/LRC → Output: ASS |
-| **时间轴偏移 / Timing Shift** | 批量偏移字幕时间戳，支持阈值过滤和实时预览 / Batch offset timestamps with threshold filter and live preview |
-| **字体嵌入 / Font Embedding** | 自动检测字幕所用字体，从系统字体库匹配并嵌入 ASS 文件，含字体子集化 / Auto-detect fonts, match from system fonts, embed into ASS with font subsetting |
-| **多编码支持 / Multi-encoding** | 自动检测 UTF-8、UTF-16、GBK、Big5、Shift-JIS 等编码 / Auto-detects UTF-8, UTF-16, GBK, Big5, Shift-JIS, and more |
-| **多语言 / i18n** | 中英双语界面，自动记住语言偏好 / Chinese/English UI, persists preference |
-| **深浅色主题 / Themes** | 深色 / 浅色 / 跟随系统，自动记住主题偏好 / Dark / Light / Auto, persists preference |
+| 功能                                    | 说明                                                                                                                                                  |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **HDR 色彩转换 / HDR Color Conversion** | sRGB → BT.2100 PQ 或 HLG，基于 Color.js 实现 / sRGB → BT.2100 PQ or HLG, powered by Color.js                                                          |
+| **多格式支持 / Multi-format Support**   | 输入：ASS / SSA / SRT / SUB / VTT / SBV / LRC → 输出：ASS / Input: ASS/SSA/SRT/SUB/VTT/SBV/LRC → Output: ASS                                          |
+| **时间轴偏移 / Timing Shift**           | 批量偏移字幕时间戳，支持阈值过滤和实时预览 / Batch offset timestamps with threshold filter and live preview                                           |
+| **字体嵌入 / Font Embedding**           | 自动检测字幕所用字体，从系统字体库匹配并嵌入 ASS 文件，含字体子集化 / Auto-detect fonts, match from system fonts, embed into ASS with font subsetting |
+| **多编码支持 / Multi-encoding**         | 自动检测 UTF-8、UTF-16、GBK、Big5、Shift-JIS 等编码 / Auto-detects UTF-8, UTF-16, GBK, Big5, Shift-JIS, and more                                      |
+| **多语言 / i18n**                       | 中英双语界面，自动记住语言偏好 / Chinese/English UI, persists preference                                                                              |
+| **深浅色主题 / Themes**                 | 深色 / 浅色 / 跟随系统，自动记住主题偏好 / Dark / Light / Auto, persists preference                                                                   |
 
 > [!TIP]
 > **中文路径完全支持** — 文件路径中包含中文或其他非 ASCII 字符不会导致任何问题。Tauri 和 Rust 底层使用 Unicode API，不受传统 ANSI 编码限制。
@@ -82,10 +82,10 @@ When playing HDR video, the display enters HDR mode. However, SSA/ASS subtitles 
 
 > **参数说明 | Parameter Guide**
 >
-> | 参数 / Parameter | 默认值 / Default | 说明 / Description |
-> |---|---|---|
-> | EOTF curve | PQ | PQ (ST 2084) 用于 HDR10/杜比视界；HLG 用于广播 HDR / PQ for HDR10/Dolby Vision; HLG for broadcast HDR |
-> | Target brightness | 203 nits | SDR 字幕亮度峰值（BT.2408 标准值）。字幕太亮就调低，太暗就调高 / Peak brightness per BT.2408. Decrease if too bright, increase if too dim |
+> | 参数 / Parameter  | 默认值 / Default | 说明 / Description                                                                                                                        |
+> | ----------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+> | EOTF curve        | PQ               | PQ (ST 2084) 用于 HDR10/杜比视界；HLG 用于广播 HDR / PQ for HDR10/Dolby Vision; HLG for broadcast HDR                                     |
+> | Target brightness | 203 nits         | SDR 字幕亮度峰值（BT.2408 标准值）。字幕太亮就调低，太暗就调高 / Peak brightness per BT.2408. Decrease if too bright, increase if too dim |
 
 ---
 
@@ -231,24 +231,24 @@ All dependencies use licenses compatible with GPL-3.0.
 
 #### 运行时依赖（随应用分发）| Runtime (shipped with the application)
 
-| 组件 / Component | 许可证 / License | 用途 / Usage |
-|-----------|---------|-------|
-| [Tauri](https://tauri.app/) | MIT OR Apache-2.0 | 桌面应用框架 / Desktop app framework |
-| [React](https://react.dev/) | MIT | UI 框架 / UI framework |
-| [Color.js](https://colorjs.io/) | MIT | HDR 色彩空间转换 (PQ/HLG) / HDR color space conversion |
-| [ass-compiler](https://github.com/weizhenye/ass-compiler) | MIT | ASS 字幕解析（字体收集）/ ASS subtitle parsing for font collection |
-| [font-kit](https://github.com/servo/font-kit) | MIT OR Apache-2.0 | 跨平台系统字体发现 (Rust) / Cross-platform system font discovery |
-| [fontcull](https://github.com/bearcove/fontcull) | MIT | 字体子集化（含 fontcull-klippa、fontcull-skrifa）/ Font subsetting (includes fontcull-klippa, fontcull-skrifa) |
-| [chardetng](https://github.com/hsivonen/chardetng) | MIT OR Apache-2.0 | 编码检测 (Firefox 引擎) / Encoding detection (Firefox's engine) |
-| [encoding_rs](https://github.com/hsivonen/encoding_rs) | MIT OR Apache-2.0 | 编码转换 / Encoding conversion |
-| [serde](https://serde.rs/) | MIT OR Apache-2.0 | Rust 序列化 / Rust serialization |
+| 组件 / Component                                          | 许可证 / License  | 用途 / Usage                                                                                                   |
+| --------------------------------------------------------- | ----------------- | -------------------------------------------------------------------------------------------------------------- |
+| [Tauri](https://tauri.app/)                               | MIT OR Apache-2.0 | 桌面应用框架 / Desktop app framework                                                                           |
+| [React](https://react.dev/)                               | MIT               | UI 框架 / UI framework                                                                                         |
+| [Color.js](https://colorjs.io/)                           | MIT               | HDR 色彩空间转换 (PQ/HLG) / HDR color space conversion                                                         |
+| [ass-compiler](https://github.com/weizhenye/ass-compiler) | MIT               | ASS 字幕解析（字体收集）/ ASS subtitle parsing for font collection                                             |
+| [font-kit](https://github.com/servo/font-kit)             | MIT OR Apache-2.0 | 跨平台系统字体发现 (Rust) / Cross-platform system font discovery                                               |
+| [fontcull](https://github.com/bearcove/fontcull)          | MIT               | 字体子集化（含 fontcull-klippa、fontcull-skrifa）/ Font subsetting (includes fontcull-klippa, fontcull-skrifa) |
+| [chardetng](https://github.com/hsivonen/chardetng)        | MIT OR Apache-2.0 | 编码检测 (Firefox 引擎) / Encoding detection (Firefox's engine)                                                |
+| [encoding_rs](https://github.com/hsivonen/encoding_rs)    | MIT OR Apache-2.0 | 编码转换 / Encoding conversion                                                                                 |
+| [serde](https://serde.rs/)                                | MIT OR Apache-2.0 | Rust 序列化 / Rust serialization                                                                               |
 
 #### 构建时依赖（不随应用分发）| Build-time only (not shipped)
 
-| 组件 / Component | 许可证 / License | 用途 / Usage |
-|-----------|---------|-------|
-| [Tailwind CSS](https://tailwindcss.com/) | MIT | CSS 工具框架 / CSS utility framework |
-| [TypeScript](https://www.typescriptlang.org/) | Apache-2.0 | 类型检查 / Type checking |
-| [Vite](https://vite.dev/) | MIT | 构建工具 / Build tool |
-| [ESLint](https://eslint.org/) | MIT | 代码检查 / Linting |
-| [Vitest](https://vitest.dev/) | MIT | 单元测试 / Unit testing |
+| 组件 / Component                              | 许可证 / License | 用途 / Usage                         |
+| --------------------------------------------- | ---------------- | ------------------------------------ |
+| [Tailwind CSS](https://tailwindcss.com/)      | MIT              | CSS 工具框架 / CSS utility framework |
+| [TypeScript](https://www.typescriptlang.org/) | Apache-2.0       | 类型检查 / Type checking             |
+| [Vite](https://vite.dev/)                     | MIT              | 构建工具 / Build tool                |
+| [ESLint](https://eslint.org/)                 | MIT              | 代码检查 / Linting                   |
+| [Vitest](https://vitest.dev/)                 | MIT              | 单元测试 / Unit testing              |

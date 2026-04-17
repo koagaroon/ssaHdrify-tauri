@@ -82,9 +82,7 @@ describe("analyzeFonts — match priority", () => {
     expect(fz?.filePath).toBe("C:/user/Fonts/FZ.ttf");
     // Critically: findSystemFont should not have been called for FZ — the
     // local match short-circuits the lookup.
-    const fzCalls = findSystemFontMock.mock.calls.filter(
-      (c) => c[0] === "FZLanTingHei"
-    );
+    const fzCalls = findSystemFontMock.mock.calls.filter((c) => c[0] === "FZLanTingHei");
     expect(fzCalls.length).toBe(0);
   });
 
@@ -139,18 +137,14 @@ describe("analyzeFonts — real-world anime-release scenario", () => {
   // entry per face, with every localized family-name variant packed inside
   // the `families` array.
   const SCAN_OUTPUT: LocalFontEntry[] = [
-    makeMultiFamilyEntry(
-      ["方正粗黑宋简体", "FZCuHeiSongS-B-GB"],
-      false, false, "C:/R/FZCHSJW.TTF"
-    ),
+    makeMultiFamilyEntry(["方正粗黑宋简体", "FZCuHeiSongS-B-GB"], false, false, "C:/R/FZCHSJW.TTF"),
     makeMultiFamilyEntry(
       ["HYXuanSong 75S", "HYXuanSong", "汉仪玄宋 75S", "汉仪玄宋"],
-      false, false, "C:/R/HYXuanSong75S.ttf"
+      false,
+      false,
+      "C:/R/HYXuanSong75S.ttf"
     ),
-    makeMultiFamilyEntry(
-      ["青鸟华光简粗黑", "JCUH"],
-      false, false, "C:/R/青鸟华光简粗黑.TTF"
-    ),
+    makeMultiFamilyEntry(["青鸟华光简粗黑", "JCUH"], false, false, "C:/R/青鸟华光简粗黑.TTF"),
   ];
 
   const ANIME_ASS = `[Script Info]
@@ -230,7 +224,9 @@ Dialogue: 0,0:00:05.00,0:00:10.00,Default,{\\fn青鸟华光简粗黑}horizontal
     // Every family variant should resolve to the correct face.
     expect(map.get(userFontKey("HYXuanSong 75S", false, false))?.path).toContain("HYXuanSong75S");
     expect(map.get(userFontKey("汉仪玄宋", false, false))?.path).toContain("HYXuanSong75S");
-    expect(map.get(userFontKey("青鸟华光简粗黑", false, false))?.path).toContain("青鸟华光简粗黑.TTF");
+    expect(map.get(userFontKey("青鸟华光简粗黑", false, false))?.path).toContain(
+      "青鸟华光简粗黑.TTF"
+    );
     expect(map.get(userFontKey("JCUH", false, false))?.path).toContain("青鸟华光简粗黑.TTF");
   });
 });

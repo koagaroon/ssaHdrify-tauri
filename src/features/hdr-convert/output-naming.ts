@@ -19,10 +19,30 @@ export const DEFAULT_TEMPLATE = OUTPUT_PRESETS[0];
 // ── Windows Reserved Names ────────────────────────────────
 // These filenames are forbidden on Windows regardless of extension
 const WINDOWS_RESERVED = new Set([
-  "CON", "PRN", "AUX", "NUL",
-  "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-  "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
-  "CONIN$", "CONOUT$",
+  "CON",
+  "PRN",
+  "AUX",
+  "NUL",
+  "COM1",
+  "COM2",
+  "COM3",
+  "COM4",
+  "COM5",
+  "COM6",
+  "COM7",
+  "COM8",
+  "COM9",
+  "LPT1",
+  "LPT2",
+  "LPT3",
+  "LPT4",
+  "LPT5",
+  "LPT6",
+  "LPT7",
+  "LPT8",
+  "LPT9",
+  "CONIN$",
+  "CONOUT$",
 ]);
 
 /**
@@ -34,11 +54,7 @@ const WINDOWS_RESERVED = new Set([
  * @returns Resolved output file path
  * @throws Error if template resolves to unsafe path
  */
-export function resolveOutputPath(
-  inputPath: string,
-  template: string,
-  eotf: Eotf
-): string {
+export function resolveOutputPath(inputPath: string, template: string, eotf: Eotf): string {
   // Extract directory and base name from input path
   // Handle both forward and backslash separators
   const normalized = inputPath.replace(/\\/g, "/");
@@ -97,7 +113,9 @@ export function resolveOutputPath(
 
   // Safety: reject paths that exceed Windows MAX_PATH limit
   if (outputPath.length > 260) {
-    throw new Error(`Output path too long (${outputPath.length} chars, max 260 for Windows compatibility)`);
+    throw new Error(
+      `Output path too long (${outputPath.length} chars, max 260 for Windows compatibility)`
+    );
   }
 
   // Safety: reject path traversal — check unconditionally
@@ -116,9 +134,7 @@ export function resolveOutputPath(
 
   // Safety: reject self-overwrite (case-insensitive for Windows)
   if (outputPath.toLowerCase() === normalized.toLowerCase()) {
-    throw new Error(
-      "Output path is the same as input (would overwrite source file)"
-    );
+    throw new Error("Output path is the same as input (would overwrite source file)");
   }
 
   return outputPath;

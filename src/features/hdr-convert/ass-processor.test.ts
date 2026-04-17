@@ -5,12 +5,7 @@
  * inline color tag regex matching, and full content processing.
  */
 import { describe, it, expect } from "vitest";
-import {
-  parseAssColor,
-  formatAssColor,
-  detectSection,
-  processAssContent,
-} from "./ass-processor";
+import { parseAssColor, formatAssColor, detectSection, processAssContent } from "./ass-processor";
 
 // ── Helpers ──────────────────────────────────────────────
 
@@ -185,10 +180,7 @@ describe("processAssContent — style lines", () => {
   });
 
   it("preserves black style colors (passthrough)", () => {
-    const input = makeAss(
-      "Hello",
-      "&H00000000,&H00000000,&H00000000,&H00000000"
-    );
+    const input = makeAss("Hello", "&H00000000,&H00000000,&H00000000,&H00000000");
     const output = processAssContent(input, 203, "PQ");
     // All black — should remain &H00000000
     expect(output).toContain("&H00000000");

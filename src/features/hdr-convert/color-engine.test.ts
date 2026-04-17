@@ -82,7 +82,11 @@ describe("sRgbToHdr — edge cases", () => {
 
   it("handles saturated primary colors", () => {
     // Pure red, green, blue should all produce valid output
-    for (const [ri, gi, bi] of [[255, 0, 0], [0, 255, 0], [0, 0, 255]] as const) {
+    for (const [ri, gi, bi] of [
+      [255, 0, 0],
+      [0, 255, 0],
+      [0, 0, 255],
+    ] as const) {
       const [r, g, b] = sRgbToHdr(ri, gi, bi, 203, "PQ");
       expect(r).toBeGreaterThanOrEqual(0);
       expect(r).toBeLessThanOrEqual(255);

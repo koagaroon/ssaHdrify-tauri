@@ -14,11 +14,7 @@ import {
   type FontInfo,
   type EmbedProgress,
 } from "./font-embedder";
-import {
-  ensureLoaded,
-  fontKeyLabel,
-  type FontUsage,
-} from "./font-collector";
+import { ensureLoaded, fontKeyLabel, type FontUsage } from "./font-collector";
 import { useI18n } from "../../i18n/useI18n";
 import { useFileContext } from "../../lib/FileContext";
 import FontSourceModal, { type FontSource } from "./FontSourceModal";
@@ -65,7 +61,7 @@ export default function FontEmbed() {
     // If the user clicks × (clear) while ensureLoaded or the file dialog is
     // open, handleClearFile increments pickGenRef, and the stale pick will
     // be rejected at every subsequent guard check.
-    const gen = pickGenRef.current = pickGenRef.current + 1;
+    const gen = (pickGenRef.current = pickGenRef.current + 1);
 
     await ensureLoaded();
     if (gen !== pickGenRef.current) return; // cleared while loading module
@@ -165,9 +161,7 @@ export default function FontEmbed() {
           registered.add(`${e.path}|${e.index}`);
         }
       }
-      const newEntries = source.entries.filter(
-        (e) => !registered.has(`${e.path}|${e.index}`)
-      );
+      const newEntries = source.entries.filter((e) => !registered.has(`${e.path}|${e.index}`));
       const duplicated = source.entries.length - newEntries.length;
       if (newEntries.length === 0) {
         return { added: 0, duplicated };
@@ -210,9 +204,7 @@ export default function FontEmbed() {
   const handleEmbed = useCallback(async () => {
     if (!fileContent || !filePath) return;
 
-    const selectedFonts = fonts.filter(
-      (_, idx) => selected.has(idx) && fonts[idx].filePath
-    );
+    const selectedFonts = fonts.filter((_, idx) => selected.has(idx) && fonts[idx].filePath);
     if (selectedFonts.length === 0) {
       setStatus(t("msg_no_fonts_selected"));
       return;
@@ -294,10 +286,7 @@ export default function FontEmbed() {
         <div className="flex items-center gap-3 flex-1 min-w-0">
           {fileName && (
             <>
-              <span
-                className="text-sm truncate"
-                style={{ color: "var(--text-primary)" }}
-              >
+              <span className="text-sm truncate" style={{ color: "var(--text-primary)" }}>
                 {fileName}
               </span>
               <button
@@ -355,7 +344,11 @@ export default function FontEmbed() {
             className="w-full px-5 py-2.5 rounded-lg font-medium text-sm transition-colors"
             style={
               isEmbedDisabled
-                ? { background: "var(--accent-disabled-bg)", color: "var(--accent-disabled-text)", opacity: !filePath ? 0.5 : 1 }
+                ? {
+                    background: "var(--accent-disabled-bg)",
+                    color: "var(--accent-disabled-text)",
+                    opacity: !filePath ? 0.5 : 1,
+                  }
                 : { background: "var(--accent)", color: "#fff" }
             }
           >
@@ -368,7 +361,9 @@ export default function FontEmbed() {
           )}
           {embedding && (
             <button
-              onClick={() => { cancelRef.current = true; }}
+              onClick={() => {
+                cancelRef.current = true;
+              }}
               className="w-full px-5 py-2.5 rounded-lg font-medium text-sm transition-colors"
               style={{
                 background: "var(--cancel-bg)",
@@ -389,14 +384,9 @@ export default function FontEmbed() {
           background: "var(--bg-panel)",
         }}
       >
-        <div
-          className="px-3 py-2"
-          style={{ borderBottom: "1px solid var(--border)" }}
-        >
+        <div className="px-3 py-2" style={{ borderBottom: "1px solid var(--border)" }}>
           <span className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>
-            {fonts.length > 0
-              ? t("fonts_title_count", fonts.length)
-              : t("fonts_title")}
+            {fonts.length > 0 ? t("fonts_title_count", fonts.length) : t("fonts_title")}
           </span>
         </div>
         {fonts.length > 0 ? (
@@ -407,7 +397,9 @@ export default function FontEmbed() {
                 className={`flex items-center gap-3 px-4 py-2.5 cursor-pointer transition-colors ${
                   !info.filePath ? "opacity-50" : ""
                 }`}
-                style={{ borderBottom: "1px solid color-mix(in srgb, var(--border) 50%, transparent)" }}
+                style={{
+                  borderBottom: "1px solid color-mix(in srgb, var(--border) 50%, transparent)",
+                }}
               >
                 <input
                   type="checkbox"
@@ -499,9 +491,7 @@ export default function FontEmbed() {
         <p
           className="text-sm"
           style={{
-            color: isError
-              ? "var(--error)"
-              : "var(--success)",
+            color: isError ? "var(--error)" : "var(--success)",
           }}
         >
           {status}

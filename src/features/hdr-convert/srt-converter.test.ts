@@ -26,17 +26,13 @@ describe("preprocessSrtColors", () => {
   });
 
   it("inserts color reset after </font>", () => {
-    const result = preprocessSrtColors(
-      '<font color="#FF0000">Red</font> normal'
-    );
+    const result = preprocessSrtColors('<font color="#FF0000">Red</font> normal');
     // After the colored section, a reset tag should appear
     expect(result).toContain("normal");
   });
 
   it("handles multiple attributes on <font> tag", () => {
-    const result = preprocessSrtColors(
-      '<font face="Arial" color="#00FF00">Green</font>'
-    );
+    const result = preprocessSrtColors('<font face="Arial" color="#00FF00">Green</font>');
     expect(result).toMatch(/\\1?c&H/);
     expect(result).toContain("Green");
   });
@@ -58,9 +54,7 @@ describe("preprocessSrtColors", () => {
 
 describe("buildAssDocument", () => {
   it("produces valid ASS with Script Info and V4+ Styles", () => {
-    const entries = [
-      { start: 1000, end: 5000, text: "Hello World" },
-    ];
+    const entries = [{ start: 1000, end: 5000, text: "Hello World" }];
     const result = buildAssDocument(entries);
     expect(result).toContain("[Script Info]");
     expect(result).toContain("[V4+ Styles]");

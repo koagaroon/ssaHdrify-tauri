@@ -52,18 +52,10 @@ export interface ShiftResult {
 /**
  * Parse, shift, and rebuild a subtitle file.
  */
-export function shiftSubtitles(
-  content: string,
-  options: ShiftOptions
-): ShiftResult {
+export function shiftSubtitles(content: string, options: ShiftOptions): ShiftResult {
   const { offsetMs, thresholdMs, fps } = options;
 
-  const { output, format, captions, shifted } = shiftSubtitle(
-    content,
-    offsetMs,
-    thresholdMs,
-    fps
-  );
+  const { output, format, captions, shifted } = shiftSubtitle(content, offsetMs, thresholdMs, fps);
 
   // Build preview (first 15 entries)
   const preview: PreviewEntry[] = captions.slice(0, 15).map((c, i) => {

@@ -24,9 +24,5 @@ export default function I18nProvider({ children }: { children: ReactNode }) {
     localStorage.setItem(STORAGE_KEY, next);
   };
 
-  return (
-    <I18nContext.Provider value={{ lang, setLang }}>
-      {children}
-    </I18nContext.Provider>
-  );
+  return <I18nContext.Provider value={{ lang, setLang }}>{children}</I18nContext.Provider>;
 }

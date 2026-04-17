@@ -24,9 +24,7 @@ export function preprocessSrtColors(text: string): string {
 
   // Convert opening tags with color
   let result = text.replace(SRT_COLOR_OPEN_RE, (_match, raw: string) => {
-    const hexRgb = raw.length === 3
-      ? raw[0].repeat(2) + raw[1].repeat(2) + raw[2].repeat(2)
-      : raw;
+    const hexRgb = raw.length === 3 ? raw[0].repeat(2) + raw[1].repeat(2) + raw[2].repeat(2) : raw;
     const r = hexRgb.slice(0, 2);
     const g = hexRgb.slice(2, 4);
     const b = hexRgb.slice(4, 6);
@@ -100,9 +98,7 @@ export function buildAssDocument(
 
   // [Events]
   lines.push("[Events]");
-  lines.push(
-    "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
-  );
+  lines.push("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text");
 
   for (const entry of entries) {
     const startTime = msToAssTime(entry.start);
@@ -110,13 +106,14 @@ export function buildAssDocument(
     // Clean SRT formatting: convert line breaks, strip remaining HTML
     const cleanText = entry.text
       .replace(/\r?\n/g, "\\N")
-      .replace(/<b>/gi, "{\\b1}").replace(/<\/b>/gi, "{\\b0}")
-      .replace(/<i>/gi, "{\\i1}").replace(/<\/i>/gi, "{\\i0}")
-      .replace(/<u>/gi, "{\\u1}").replace(/<\/u>/gi, "{\\u0}")
+      .replace(/<b>/gi, "{\\b1}")
+      .replace(/<\/b>/gi, "{\\b0}")
+      .replace(/<i>/gi, "{\\i1}")
+      .replace(/<\/i>/gi, "{\\i0}")
+      .replace(/<u>/gi, "{\\u1}")
+      .replace(/<\/u>/gi, "{\\u0}")
       .replace(/<[^>]*>/g, ""); // strip remaining unknown HTML tags
-    lines.push(
-      `Dialogue: 0,${startTime},${endTime},Default,,0,0,0,,${cleanText}`
-    );
+    lines.push(`Dialogue: 0,${startTime},${endTime},Default,,0,0,0,,${cleanText}`);
   }
 
   return lines.join("\n");

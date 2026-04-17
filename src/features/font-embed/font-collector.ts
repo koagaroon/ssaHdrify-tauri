@@ -63,12 +63,14 @@ function normalizeFamily(raw: string): string {
  */
 export async function ensureLoaded(): Promise<void> {
   if (!assCompilerReady) {
-    assCompilerReady = import("ass-compiler").then((m) => {
-      parseFn = m.parse;
-    }).catch((e) => {
-      assCompilerReady = null; // allow retry on next call
-      throw e;
-    });
+    assCompilerReady = import("ass-compiler")
+      .then((m) => {
+        parseFn = m.parse;
+      })
+      .catch((e) => {
+        assCompilerReady = null; // allow retry on next call
+        throw e;
+      });
   }
   await assCompilerReady;
 }
@@ -91,10 +93,7 @@ export function collectFonts(assContent: string): FontUsage[] {
   }
 
   // Build style → font map from [V4+ Styles]
-  const styleMap = new Map<
-    string,
-    { family: string; bold: boolean; italic: boolean }
-  >();
+  const styleMap = new Map<string, { family: string; bold: boolean; italic: boolean }>();
 
   if (parsed.styles?.style) {
     for (const style of parsed.styles.style) {
@@ -134,7 +133,7 @@ export function collectFonts(assContent: string): FontUsage[] {
         break;
       }
       const cp = char.codePointAt(0);
-      if (cp !== undefined && cp > 32 && cp <= 0x10FFFF) {
+      if (cp !== undefined && cp > 32 && cp <= 0x10ffff) {
         // Skip control chars, space, and invalid codepoints
         usage.codepoints.add(cp);
       }
@@ -211,10 +210,7 @@ function processDialogueText(
       const plain = text.slice(i, plainEnd);
 
       // Skip ASS drawing commands (\N, \n, \h) and line breaks
-      const cleanText = plain
-        .replace(/\\N/g, "")
-        .replace(/\\n/g, "")
-        .replace(/\\h/g, "");
+      const cleanText = plain.replace(/\\N/g, "").replace(/\\n/g, "").replace(/\\h/g, "");
 
       if (cleanText.length > 0 && !isDrawing) {
         recordChars(current, cleanText);

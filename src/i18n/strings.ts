@@ -76,7 +76,10 @@ export const strings: Record<string, StringEntry> = {
   },
   msg_processing: { en: "Processing: {0}", zh: "处理中：{0}" },
   msg_skipped: { en: "Skipped {0}: {1}", zh: "已跳过 {0}：{1}" },
-  msg_skipped_duplicate: { en: "Skipped {0}: duplicate output path", zh: "已跳过 {0}：输出路径重复" },
+  msg_skipped_duplicate: {
+    en: "Skipped {0}: duplicate output path",
+    zh: "已跳过 {0}：输出路径重复",
+  },
   msg_read_error: { en: "Error reading {0}: {1}", zh: "读取 {0} 出错：{1}" },
   msg_unsupported: { en: "Skipped {0}: unsupported format", zh: "已跳过 {0}：不支持的格式" },
   msg_done: { en: "Done: {0}", zh: "完成：{0}" },

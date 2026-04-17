@@ -50,7 +50,8 @@ function newId(): string {
 }
 
 export default function FontSourceModal(props: Props) {
-  const { open, onClose, sources, usages, userFontMap, hasSubtitle, onAddSource, onRemoveSource } = props;
+  const { open, onClose, sources, usages, userFontMap, hasSubtitle, onAddSource, onRemoveSource } =
+    props;
   const { t } = useI18n();
 
   const [scanning, setScanning] = useState(false);
@@ -193,10 +194,7 @@ export default function FontSourceModal(props: Props) {
           className="px-5 py-3 flex items-center justify-between"
           style={{ borderBottom: "1px solid var(--border)" }}
         >
-          <h2
-            className="text-sm font-semibold"
-            style={{ color: "var(--text-primary)" }}
-          >
+          <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
             {t("font_sources_title")}
           </h2>
           <button
@@ -263,7 +261,11 @@ export default function FontSourceModal(props: Props) {
               className="flex-1 px-4 py-2 rounded-lg font-medium text-sm transition-colors"
               style={
                 scanning
-                  ? { background: "var(--accent-disabled-bg)", color: "var(--accent-disabled-text)", opacity: 0.6 }
+                  ? {
+                      background: "var(--accent-disabled-bg)",
+                      color: "var(--accent-disabled-text)",
+                      opacity: 0.6,
+                    }
                   : { background: "var(--accent)", color: "white" }
               }
             >
@@ -275,7 +277,11 @@ export default function FontSourceModal(props: Props) {
               className="flex-1 px-4 py-2 rounded-lg font-medium text-sm transition-colors"
               style={
                 scanning
-                  ? { background: "var(--accent-disabled-bg)", color: "var(--accent-disabled-text)", opacity: 0.6 }
+                  ? {
+                      background: "var(--accent-disabled-bg)",
+                      color: "var(--accent-disabled-text)",
+                      opacity: 0.6,
+                    }
                   : { background: "var(--accent)", color: "white" }
               }
             >
@@ -312,9 +318,7 @@ export default function FontSourceModal(props: Props) {
                 <p
                   className="text-sm font-medium"
                   style={{
-                    color: coverageComplete
-                      ? "var(--badge-green-text)"
-                      : "var(--text-primary)",
+                    color: coverageComplete ? "var(--badge-green-text)" : "var(--text-primary)",
                   }}
                 >
                   {t("font_coverage", covered, total)}

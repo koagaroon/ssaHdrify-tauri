@@ -19,13 +19,7 @@
  * clear it from the current tab first (via the × button).
  */
 
-import {
-  createContext,
-  useContext,
-  useState,
-  useCallback,
-  type ReactNode,
-} from "react";
+import { createContext, useContext, useState, useCallback, type ReactNode } from "react";
 
 // ── Types ────────────────────────────────────────────────
 

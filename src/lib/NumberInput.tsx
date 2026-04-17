@@ -48,9 +48,16 @@ export default function NumberInput({
         step={step}
         disabled={disabled}
         className="w-full pl-3 pr-7 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-50"
-        style={{ background: "var(--bg-input)", border: "1px solid var(--border)", color: "var(--text-primary)" }}
+        style={{
+          background: "var(--bg-input)",
+          border: "1px solid var(--border)",
+          color: "var(--text-primary)",
+        }}
       />
-      <div className="absolute right-0 top-0 bottom-0 flex flex-col w-6 rounded-r-lg overflow-hidden" style={{ borderLeft: "1px solid var(--border)" }}>
+      <div
+        className="absolute right-0 top-0 bottom-0 flex flex-col w-6 rounded-r-lg overflow-hidden"
+        style={{ borderLeft: "1px solid var(--border)" }}
+      >
         <button
           type="button"
           tabIndex={-1}
@@ -58,10 +65,16 @@ export default function NumberInput({
           disabled={disabled}
           className="flex-1 flex items-center justify-center disabled:opacity-30 transition-colors"
           style={{ background: "var(--spinner-bg)", color: "var(--spinner-icon)" }}
-          onMouseEnter={(e) => { e.currentTarget.style.background = "var(--spinner-hover)"; }}
-          onMouseLeave={(e) => { e.currentTarget.style.background = "var(--spinner-bg)"; }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = "var(--spinner-hover)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = "var(--spinner-bg)";
+          }}
         >
-          <svg width="8" height="5" viewBox="0 0 8 5"><path d="M4 0L8 5H0L4 0Z" fill="currentColor" /></svg>
+          <svg width="8" height="5" viewBox="0 0 8 5">
+            <path d="M4 0L8 5H0L4 0Z" fill="currentColor" />
+          </svg>
         </button>
         <div style={{ height: "1px", background: "var(--border)" }} />
         <button
@@ -71,10 +84,16 @@ export default function NumberInput({
           disabled={disabled}
           className="flex-1 flex items-center justify-center disabled:opacity-30 transition-colors"
           style={{ background: "var(--spinner-bg)", color: "var(--spinner-icon)" }}
-          onMouseEnter={(e) => { e.currentTarget.style.background = "var(--spinner-hover)"; }}
-          onMouseLeave={(e) => { e.currentTarget.style.background = "var(--spinner-bg)"; }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = "var(--spinner-hover)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = "var(--spinner-bg)";
+          }}
         >
-          <svg width="8" height="5" viewBox="0 0 8 5"><path d="M4 5L0 0H8L4 5Z" fill="currentColor" /></svg>
+          <svg width="8" height="5" viewBox="0 0 8 5">
+            <path d="M4 5L0 0H8L4 5Z" fill="currentColor" />
+          </svg>
         </button>
       </div>
     </div>

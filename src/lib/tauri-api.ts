@@ -3,11 +3,7 @@
  * Centralizes all native interactions so feature code stays pure JS.
  */
 import { open, save } from "@tauri-apps/plugin-dialog";
-import {
-  readFile,
-  stat,
-  writeTextFile,
-} from "@tauri-apps/plugin-fs";
+import { readFile, stat, writeTextFile } from "@tauri-apps/plugin-fs";
 import { invoke } from "@tauri-apps/api/core";
 
 // ── File Dialogs ──────────────────────────────────────────
@@ -56,7 +52,7 @@ export async function pickAssFile(): Promise<string | null> {
     title: "Select .ass file",
   });
   if (!result) return null;
-  return typeof result === "string" ? result : result[0] ?? null;
+  return typeof result === "string" ? result : (result[0] ?? null);
 }
 
 /** Open a directory picker for a local font folder. Returns path or null. */
@@ -67,7 +63,7 @@ export async function pickFontDirectory(): Promise<string | null> {
     title: "Select font folder",
   });
   if (!result) return null;
-  return typeof result === "string" ? result : result[0] ?? null;
+  return typeof result === "string" ? result : (result[0] ?? null);
 }
 
 /** Open a multi-file picker for individual font files. Returns paths or null. */
@@ -89,7 +85,7 @@ export async function pickSubtitleFile(): Promise<string | null> {
     title: "Select subtitle file",
   });
   if (!result) return null;
-  return typeof result === "string" ? result : result[0] ?? null;
+  return typeof result === "string" ? result : (result[0] ?? null);
 }
 
 /** Save dialog — returns chosen path or null if cancelled. */
@@ -115,9 +111,7 @@ async function assertFileSize(path: string, maxBytes: number): Promise<void> {
   if (info.size > maxBytes) {
     const sizeMB = (info.size / (1024 * 1024)).toFixed(1);
     const limitMB = (maxBytes / (1024 * 1024)).toFixed(0);
-    throw new Error(
-      `File too large: ${sizeMB} MB exceeds the ${limitMB} MB limit (${path})`
-    );
+    throw new Error(`File too large: ${sizeMB} MB exceeds the ${limitMB} MB limit (${path})`);
   }
 }
 
@@ -145,9 +139,7 @@ export async function readText(path: string): Promise<string> {
  * Read a text file with encoding detection, returning both text and encoding name.
  * Useful when the UI needs to display the detected encoding.
  */
-export async function readTextDetectEncoding(
-  path: string
-): Promise<ReadTextResult> {
+export async function readTextDetectEncoding(path: string): Promise<ReadTextResult> {
   return invoke<ReadTextResult>("read_text_detect_encoding", { path });
 }
 

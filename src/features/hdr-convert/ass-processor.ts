@@ -30,7 +30,10 @@ const STYLE_COLOR_FIELDS = new Set([
 function parseStyleFormatLine(formatLine: string): number[] | null {
   const colonIdx = formatLine.indexOf(":");
   if (colonIdx < 0) return null;
-  const fields = formatLine.slice(colonIdx + 1).split(",").map((f) => f.trim().toLowerCase());
+  const fields = formatLine
+    .slice(colonIdx + 1)
+    .split(",")
+    .map((f) => f.trim().toLowerCase());
   const indices: number[] = [];
   for (let i = 0; i < fields.length; i++) {
     if (STYLE_COLOR_FIELDS.has(fields[i])) {
@@ -71,23 +74,14 @@ function hexByte(n: number): string {
 /**
  * Format RGB back to ASS color string with preserved alpha.
  */
-export function formatAssColor(
-  r: number,
-  g: number,
-  b: number,
-  alpha: string
-): string {
+export function formatAssColor(r: number, g: number, b: number, alpha: string): string {
   return `&H${alpha}${hexByte(b)}${hexByte(g)}${hexByte(r)}`;
 }
 
 /**
  * Transform a single ASS color string from SDR to HDR.
  */
-function transformColorString(
-  assColor: string,
-  targetBrightness: number,
-  eotf: Eotf
-): string {
+function transformColorString(assColor: string, targetBrightness: number, eotf: Eotf): string {
   const { r, g, b, alpha } = parseAssColor(assColor);
   const [hr, hg, hb] = sRgbToHdr(r, g, b, targetBrightness, eotf);
   return formatAssColor(hr, hg, hb, alpha);
@@ -97,16 +91,11 @@ function transformColorString(
  * Transform inline color tags in a dialogue event text.
  * e.g., {\1c&H0000FF} → {\1c&H002D45}
  */
-function transformEventText(
-  text: string,
-  targetBrightness: number,
-  eotf: Eotf
-): string {
+function transformEventText(text: string, targetBrightness: number, eotf: Eotf): string {
   // Matches: \c&HBBGGRR, \1c&HBBGGRR, \2c&HAABBGGRR, etc.
   // Groups: (1) prefix like "\c&H" or "\1c&H", (2) 6 or 8 hex digits
   // Lookahead ensures the color ends at a valid ASS delimiter
-  const COLOR_TAG_RE =
-    /(\\[0-9]?c&H)([0-9a-fA-F]{6}|[0-9a-fA-F]{8})(?=[&}),\\]|$)/g;
+  const COLOR_TAG_RE = /(\\[0-9]?c&H)([0-9a-fA-F]{6}|[0-9a-fA-F]{8})(?=[&}),\\]|$)/g;
 
   return text.replace(COLOR_TAG_RE, (_, prefix: string, hexColor: string) => {
     const { r, g, b, alpha } = parseAssColor(`&H${hexColor}`);

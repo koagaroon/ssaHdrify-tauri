@@ -50,8 +50,6 @@ export default function ThemeProvider({ children }: { children: ReactNode }) {
   }, [appearance]);
 
   return (
-    <ThemeContext.Provider value={{ mode, appearance, setMode }}>
-      {children}
-    </ThemeContext.Provider>
+    <ThemeContext.Provider value={{ mode, appearance, setMode }}>{children}</ThemeContext.Provider>
   );
 }

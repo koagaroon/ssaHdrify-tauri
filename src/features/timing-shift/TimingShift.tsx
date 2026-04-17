@@ -90,7 +90,7 @@ export default function TimingShift() {
   }, [fileContent, effectiveOffsetMs, thresholdMs, useThreshold]);
 
   const handlePickFile = useCallback(async () => {
-    const gen = pickGenRef.current = pickGenRef.current + 1;
+    const gen = (pickGenRef.current = pickGenRef.current + 1);
 
     const path = await pickSubtitleFile();
     if (gen !== pickGenRef.current) return;
@@ -184,10 +184,7 @@ export default function TimingShift() {
         <div className="flex items-center gap-3 flex-1 min-w-0">
           {fileName && (
             <>
-              <span
-                className="text-sm truncate"
-                style={{ color: "var(--text-primary)" }}
-              >
+              <span className="text-sm truncate" style={{ color: "var(--text-primary)" }}>
                 {fileName}
               </span>
               {detectedFormat && (
@@ -238,12 +235,12 @@ export default function TimingShift() {
             disabled={!filePath || (useThreshold && thresholdMs === null)}
             className="w-full px-5 py-2.5 rounded-lg font-medium text-sm transition-colors"
             style={{
-              background: !filePath || (useThreshold && thresholdMs === null)
-                ? "var(--bg-input)"
-                : "var(--accent)",
-              color: !filePath || (useThreshold && thresholdMs === null)
-                ? "var(--text-muted)"
-                : "white",
+              background:
+                !filePath || (useThreshold && thresholdMs === null)
+                  ? "var(--bg-input)"
+                  : "var(--accent)",
+              color:
+                !filePath || (useThreshold && thresholdMs === null) ? "var(--text-muted)" : "white",
               opacity: !filePath ? 0.5 : 1,
             }}
           >
@@ -364,14 +361,8 @@ export default function TimingShift() {
             background: "var(--bg-panel)",
           }}
         >
-          <div
-            className="px-3 py-2"
-            style={{ borderBottom: "1px solid var(--border)" }}
-          >
-            <span
-              className="text-xs font-medium"
-              style={{ color: "var(--text-muted)" }}
-            >
+          <div className="px-3 py-2" style={{ borderBottom: "1px solid var(--border)" }}>
+            <span className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>
               {t("preview_title", preview.length, captionCount)}
             </span>
           </div>
@@ -379,28 +370,16 @@ export default function TimingShift() {
             <table className="w-full text-xs font-mono">
               <thead>
                 <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                  <th
-                    className="px-3 py-1.5 text-left"
-                    style={{ color: "var(--text-muted)" }}
-                  >
+                  <th className="px-3 py-1.5 text-left" style={{ color: "var(--text-muted)" }}>
                     {t("col_index")}
                   </th>
-                  <th
-                    className="px-3 py-1.5 text-left"
-                    style={{ color: "var(--text-muted)" }}
-                  >
+                  <th className="px-3 py-1.5 text-left" style={{ color: "var(--text-muted)" }}>
                     {t("col_original")}
                   </th>
-                  <th
-                    className="px-3 py-1.5 text-center"
-                    style={{ color: "var(--text-muted)" }}
-                  >
+                  <th className="px-3 py-1.5 text-center" style={{ color: "var(--text-muted)" }}>
                     →
                   </th>
-                  <th
-                    className="px-3 py-1.5 text-left"
-                    style={{ color: "var(--text-muted)" }}
-                  >
+                  <th className="px-3 py-1.5 text-left" style={{ color: "var(--text-muted)" }}>
                     {t("col_shifted")}
                   </th>
                 </tr>
@@ -414,30 +393,19 @@ export default function TimingShift() {
                       borderBottom: "1px solid color-mix(in srgb, var(--border) 50%, transparent)",
                     }}
                   >
-                    <td
-                      className="px-3 py-1"
-                      style={{ color: "var(--text-muted)" }}
-                    >
+                    <td className="px-3 py-1" style={{ color: "var(--text-muted)" }}>
                       {entry.index}
                     </td>
-                    <td
-                      className="px-3 py-1"
-                      style={{ color: "var(--text-muted)" }}
-                    >
+                    <td className="px-3 py-1" style={{ color: "var(--text-muted)" }}>
                       {formatTimestamp(entry.originalStart)}
                     </td>
-                    <td
-                      className="px-3 py-1 text-center"
-                      style={{ color: "var(--text-muted)" }}
-                    >
+                    <td className="px-3 py-1 text-center" style={{ color: "var(--text-muted)" }}>
                       {entry.wasShifted ? "→" : "·"}
                     </td>
                     <td
                       className="px-3 py-1"
                       style={{
-                        color: entry.wasShifted
-                          ? "var(--preview-shifted)"
-                          : "var(--text-muted)",
+                        color: entry.wasShifted ? "var(--preview-shifted)" : "var(--text-muted)",
                       }}
                     >
                       {formatTimestamp(entry.shiftedStart)}
@@ -455,9 +423,7 @@ export default function TimingShift() {
         <p
           className="text-sm"
           style={{
-            color: isError
-              ? "var(--error)"
-              : "var(--success)",
+            color: isError ? "var(--error)" : "var(--success)",
           }}
         >
           {status}

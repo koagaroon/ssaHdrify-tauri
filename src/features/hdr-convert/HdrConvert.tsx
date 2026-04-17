@@ -1,15 +1,6 @@
 import { useState, useCallback, useRef } from "react";
-import {
-  pickSubtitleFiles,
-  readText,
-  writeText,
-  fileNameFromPath,
-} from "../../lib/tauri-api";
-import {
-  processAssContent,
-  parseAssColor,
-  formatAssColor,
-} from "./ass-processor";
+import { pickSubtitleFiles, readText, writeText, fileNameFromPath } from "../../lib/tauri-api";
+import { processAssContent, parseAssColor, formatAssColor } from "./ass-processor";
 import {
   preprocessSrtColors,
   buildAssDocument,
@@ -18,17 +9,8 @@ import {
   DEFAULT_STYLE,
   type StyleConfig,
 } from "./srt-converter";
-import {
-  resolveOutputPath,
-  OUTPUT_PRESETS,
-  DEFAULT_TEMPLATE,
-} from "./output-naming";
-import {
-  DEFAULT_BRIGHTNESS,
-  MIN_BRIGHTNESS,
-  MAX_BRIGHTNESS,
-  type Eotf,
-} from "./color-engine";
+import { resolveOutputPath, OUTPUT_PRESETS, DEFAULT_TEMPLATE } from "./output-naming";
+import { DEFAULT_BRIGHTNESS, MIN_BRIGHTNESS, MAX_BRIGHTNESS, type Eotf } from "./color-engine";
 
 import { parseSubtitle } from "../../lib/subtitle-parser";
 import NumberInput from "../../lib/NumberInput";
@@ -53,12 +35,28 @@ function hexToAssColor(htmlHex: string): string {
 
 // Common fonts available on most systems (cross-platform)
 const COMMON_FONTS = [
-  "Arial", "Arial Black", "Calibri", "Cambria", "Comic Sans MS",
-  "Consolas", "Courier New", "Georgia", "Impact", "Lucida Console",
-  "Microsoft YaHei", "PingFang SC", "Segoe UI", "Tahoma",
-  "Times New Roman", "Trebuchet MS", "Verdana",
-  "Noto Sans", "Noto Sans CJK SC", "Noto Serif",
-  "Source Han Sans", "Source Han Serif",
+  "Arial",
+  "Arial Black",
+  "Calibri",
+  "Cambria",
+  "Comic Sans MS",
+  "Consolas",
+  "Courier New",
+  "Georgia",
+  "Impact",
+  "Lucida Console",
+  "Microsoft YaHei",
+  "PingFang SC",
+  "Segoe UI",
+  "Tahoma",
+  "Times New Roman",
+  "Trebuchet MS",
+  "Verdana",
+  "Noto Sans",
+  "Noto Sans CJK SC",
+  "Noto Serif",
+  "Source Han Sans",
+  "Source Han Serif",
 ];
 
 interface LogEntry {
@@ -83,19 +81,16 @@ export default function HdrConvert() {
   const cancelRef = useRef(false);
   const logEndRef = useRef<HTMLDivElement>(null);
 
-  const addLog = useCallback(
-    (text: string, type: LogEntry["type"] = "info") => {
-      const id = logIdRef.current++;
-      setLogs((prev) => {
-        const next = [...prev, { id, text, type }];
-        // Trim to 200 entries max
-        return next.length > 200 ? next.slice(-200) : next;
-      });
-      // Auto-scroll
-      setTimeout(() => logEndRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
-    },
-    []
-  );
+  const addLog = useCallback((text: string, type: LogEntry["type"] = "info") => {
+    const id = logIdRef.current++;
+    setLogs((prev) => {
+      const next = [...prev, { id, text, type }];
+      // Trim to 200 entries max
+      return next.length > 200 ? next.slice(-200) : next;
+    });
+    // Auto-scroll
+    setTimeout(() => logEndRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
+  }, []);
 
   const handleBrightnessChange = (value: string) => {
     setBrightnessText(value);
@@ -182,7 +177,10 @@ export default function HdrConvert() {
           try {
             content = await readText(filePath);
           } catch (e) {
-            addLog(t("msg_read_error", fileName, e instanceof Error ? e.message : String(e)), "error");
+            addLog(
+              t("msg_read_error", fileName, e instanceof Error ? e.message : String(e)),
+              "error"
+            );
             continue;
           }
 
@@ -230,7 +228,10 @@ export default function HdrConvert() {
           addLog(t("msg_done", outName), "success");
           successCount++;
         } catch (e) {
-          addLog(t("msg_convert_error", fileName, e instanceof Error ? e.message : String(e)), "error");
+          addLog(
+            t("msg_convert_error", fileName, e instanceof Error ? e.message : String(e)),
+            "error"
+          );
         }
       }
 
@@ -333,7 +334,9 @@ export default function HdrConvert() {
           </button>
           {processing && (
             <button
-              onClick={() => { cancelRef.current = true; }}
+              onClick={() => {
+                cancelRef.current = true;
+              }}
               className="w-full px-4 py-2.5 rounded-lg text-sm transition-colors"
               style={{
                 background: "var(--cancel-bg)",
@@ -462,7 +465,9 @@ export default function HdrConvert() {
                 }}
               >
                 {COMMON_FONTS.map((f) => (
-                  <option key={f} value={f}>{f}</option>
+                  <option key={f} value={f}>
+                    {f}
+                  </option>
                 ))}
                 <option value="__custom">{t("style_font_custom")}</option>
               </select>
@@ -488,7 +493,10 @@ export default function HdrConvert() {
               </label>
               <NumberInput
                 value={style.fontSize}
-                onChange={(v) => { const n = parseInt(v); setStyle({ ...style, fontSize: Number.isNaN(n) ? 48 : n }); }}
+                onChange={(v) => {
+                  const n = parseInt(v);
+                  setStyle({ ...style, fontSize: Number.isNaN(n) ? 48 : n });
+                }}
                 min={1}
                 max={200}
                 disabled={processing}
@@ -501,7 +509,9 @@ export default function HdrConvert() {
               <input
                 type="color"
                 value={assColorToHex(style.primaryColor)}
-                onChange={(e) => setStyle({ ...style, primaryColor: hexToAssColor(e.target.value) })}
+                onChange={(e) =>
+                  setStyle({ ...style, primaryColor: hexToAssColor(e.target.value) })
+                }
                 disabled={processing}
                 className="w-full h-8 rounded cursor-pointer"
                 style={{
@@ -517,7 +527,9 @@ export default function HdrConvert() {
               <input
                 type="color"
                 value={assColorToHex(style.outlineColor)}
-                onChange={(e) => setStyle({ ...style, outlineColor: hexToAssColor(e.target.value) })}
+                onChange={(e) =>
+                  setStyle({ ...style, outlineColor: hexToAssColor(e.target.value) })
+                }
                 disabled={processing}
                 className="w-full h-8 rounded cursor-pointer"
                 style={{
@@ -532,7 +544,10 @@ export default function HdrConvert() {
               </label>
               <NumberInput
                 value={style.outlineWidth}
-                onChange={(v) => { const n = parseFloat(v); setStyle({ ...style, outlineWidth: Number.isNaN(n) ? 2 : n }); }}
+                onChange={(v) => {
+                  const n = parseFloat(v);
+                  setStyle({ ...style, outlineWidth: Number.isNaN(n) ? 2 : n });
+                }}
                 min={0}
                 max={20}
                 step="0.5"
@@ -545,7 +560,10 @@ export default function HdrConvert() {
               </label>
               <NumberInput
                 value={style.shadowDepth}
-                onChange={(v) => { const n = parseFloat(v); setStyle({ ...style, shadowDepth: Number.isNaN(n) ? 1 : n }); }}
+                onChange={(v) => {
+                  const n = parseFloat(v);
+                  setStyle({ ...style, shadowDepth: Number.isNaN(n) ? 1 : n });
+                }}
                 min={0}
                 max={20}
                 step="0.5"
@@ -558,7 +576,10 @@ export default function HdrConvert() {
               </label>
               <NumberInput
                 value={style.fps}
-                onChange={(v) => { const n = parseFloat(v); setStyle({ ...style, fps: Number.isNaN(n) ? 23.976 : n }); }}
+                onChange={(v) => {
+                  const n = parseFloat(v);
+                  setStyle({ ...style, fps: Number.isNaN(n) ? 23.976 : n });
+                }}
                 min={1}
                 max={120}
                 step="0.001"
@@ -571,7 +592,10 @@ export default function HdrConvert() {
 
       {/* Log Output */}
       {logs.length > 0 && (
-        <div className="rounded-lg" style={{ border: "1px solid var(--border)", background: "var(--bg-panel)" }}>
+        <div
+          className="rounded-lg"
+          style={{ border: "1px solid var(--border)", background: "var(--bg-panel)" }}
+        >
           <div
             className="flex items-center justify-between px-3 py-2"
             style={{ borderBottom: "1px solid var(--border)" }}

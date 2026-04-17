@@ -56,7 +56,10 @@ function App() {
   }, [themeOpen]);
 
   return (
-    <div className="flex flex-col h-screen" style={{ background: "var(--bg-app)", color: "var(--text-primary)" }}>
+    <div
+      className="flex flex-col h-screen"
+      style={{ background: "var(--bg-app)", color: "var(--text-primary)" }}
+    >
       {/* ── Header ─────────────────────────────────── */}
       <header
         className="flex-none"
@@ -64,9 +67,7 @@ function App() {
       >
         <div className="px-5 pt-4 pb-0 flex items-start justify-between">
           <div>
-            <h1 className="text-lg font-semibold tracking-tight">
-              {t("app_title")}
-            </h1>
+            <h1 className="text-lg font-semibold tracking-tight">{t("app_title")}</h1>
             <nav className="flex gap-1 mt-3" role="tablist">
               {TAB_IDS.map((tab) => (
                 <button
@@ -130,15 +131,37 @@ function App() {
                 title={t("theme_" + mode)}
               >
                 {appearance === "light" ? (
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
                     <circle cx="12" cy="12" r="5" />
-                    <line x1="12" y1="1" x2="12" y2="3" /><line x1="12" y1="21" x2="12" y2="23" />
-                    <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" /><line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
-                    <line x1="1" y1="12" x2="3" y2="12" /><line x1="21" y1="12" x2="23" y2="12" />
-                    <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" /><line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+                    <line x1="12" y1="1" x2="12" y2="3" />
+                    <line x1="12" y1="21" x2="12" y2="23" />
+                    <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+                    <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+                    <line x1="1" y1="12" x2="3" y2="12" />
+                    <line x1="21" y1="12" x2="23" y2="12" />
+                    <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+                    <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
                   </svg>
                 ) : (
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
                     <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
                   </svg>
                 )}
@@ -158,7 +181,10 @@ function App() {
                     <div key={opt.mode}>
                       {/* Separator after "Follow System" */}
                       {idx === 1 && (
-                        <div className="my-1" style={{ height: "1px", background: "var(--border)" }} />
+                        <div
+                          className="my-1"
+                          style={{ height: "1px", background: "var(--border)" }}
+                        />
                       )}
                       <button
                         onClick={() => {
@@ -167,13 +193,21 @@ function App() {
                         }}
                         className="w-full text-left px-3 py-1.5 text-sm transition-colors flex items-center justify-between"
                         style={{ color: "var(--text-primary)" }}
-                        onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
-                        onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.background = "var(--bg-hover)";
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = "transparent";
+                        }}
                       >
                         <span>{t(opt.labelKey)}</span>
                         {/* Bullet indicator for active mode */}
                         {mode === opt.mode && (
-                          <span style={{ color: "var(--accent)", fontSize: "1.25rem", lineHeight: 1 }}>{"\u2022"}</span>
+                          <span
+                            style={{ color: "var(--accent)", fontSize: "1.25rem", lineHeight: 1 }}
+                          >
+                            {"\u2022"}
+                          </span>
                         )}
                       </button>
                     </div>
@@ -190,9 +224,30 @@ function App() {
            (offset values, style panel, threshold, etc.) survives
            tab switches. File state lives in FileContext above. */}
       <main className="flex-1 overflow-y-auto p-5">
-        <div id="panel-hdr" role="tabpanel" aria-labelledby="tab-hdr" style={{ display: activeTab === "hdr" ? "block" : "none" }}><HdrConvert /></div>
-        <div id="panel-timing" role="tabpanel" aria-labelledby="tab-timing" style={{ display: activeTab === "timing" ? "block" : "none" }}><TimingShift /></div>
-        <div id="panel-fonts" role="tabpanel" aria-labelledby="tab-fonts" style={{ display: activeTab === "fonts" ? "block" : "none" }}><FontEmbed /></div>
+        <div
+          id="panel-hdr"
+          role="tabpanel"
+          aria-labelledby="tab-hdr"
+          style={{ display: activeTab === "hdr" ? "block" : "none" }}
+        >
+          <HdrConvert />
+        </div>
+        <div
+          id="panel-timing"
+          role="tabpanel"
+          aria-labelledby="tab-timing"
+          style={{ display: activeTab === "timing" ? "block" : "none" }}
+        >
+          <TimingShift />
+        </div>
+        <div
+          id="panel-fonts"
+          role="tabpanel"
+          aria-labelledby="tab-fonts"
+          style={{ display: activeTab === "fonts" ? "block" : "none" }}
+        >
+          <FontEmbed />
+        </div>
       </main>
 
       {/* ── Footer ─────────────────────────────────── */}

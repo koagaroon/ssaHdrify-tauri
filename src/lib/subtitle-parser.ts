@@ -32,7 +32,7 @@ export type SubtitleFormat = "srt" | "vtt" | "ass" | "sub" | "unknown";
 
 const VTT_HEADER = /^WEBVTT/m;
 const SRT_TIMING = /\d{2}:\d{2}:\d{2},\d{3}\s*-->\s*\d{2}:\d{2}:\d{2},\d{3}/;
-const ASS_HEADER = /^\[Script Info\]/mi;
+const ASS_HEADER = /^\[Script Info\]/im;
 const SUB_LINE = /^\{\d+\}\{\d+\}/m;
 
 export function detectFormat(content: string): SubtitleFormat {
@@ -50,12 +50,7 @@ export function detectFormat(content: string): SubtitleFormat {
 function parseSrtTime(ts: string): number {
   const m = ts.match(/(\d+):(\d{2}):(\d{2})[,.](\d{3})/);
   if (!m) return 0;
-  return (
-    parseInt(m[1]) * 3600000 +
-    parseInt(m[2]) * 60000 +
-    parseInt(m[3]) * 1000 +
-    parseInt(m[4])
-  );
+  return parseInt(m[1]) * 3600000 + parseInt(m[2]) * 60000 + parseInt(m[3]) * 1000 + parseInt(m[4]);
 }
 
 /** Parse VTT timestamps — supports both "HH:MM:SS.mmm" and "MM:SS.mmm" (no hours) */
@@ -73,11 +68,7 @@ function parseVttTime(ts: string): number {
   // MM:SS.mmm (no hours — valid per WebVTT spec)
   const short = ts.match(/^(\d{2}):(\d{2})\.(\d{3})$/);
   if (short) {
-    return (
-      parseInt(short[1]) * 60000 +
-      parseInt(short[2]) * 1000 +
-      parseInt(short[3])
-    );
+    return parseInt(short[1]) * 60000 + parseInt(short[2]) * 1000 + parseInt(short[3]);
   }
   return 0;
 }
@@ -87,10 +78,7 @@ function parseAssTime(ts: string): number {
   const m = ts.match(/(\d+):(\d{2}):(\d{2})\.(\d{2})/);
   if (!m) return 0;
   return (
-    parseInt(m[1]) * 3600000 +
-    parseInt(m[2]) * 60000 +
-    parseInt(m[3]) * 1000 +
-    parseInt(m[4]) * 10
+    parseInt(m[1]) * 3600000 + parseInt(m[2]) * 60000 + parseInt(m[3]) * 1000 + parseInt(m[4]) * 10
   );
 }
 
@@ -150,8 +138,7 @@ function parseSrt(content: string): Caption[] {
     throw new Error(`Too many subtitle blocks: ${blocks.length} (max 100,000)`);
   }
   // Regex defined inside function — no shared lastIndex state
-  const timingRe =
-    /^(\d{2}:\d{2}:\d{2},\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2},\d{3})/;
+  const timingRe = /^(\d{2}:\d{2}:\d{2},\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2},\d{3})/;
 
   for (const block of blocks) {
     const lines = block.replace(/^\r?\n/, "").split(/\r?\n/);
@@ -168,7 +155,10 @@ function parseSrt(content: string): Caption[] {
     const timingMatch = lines[timingIdx].match(timingRe);
     if (!timingMatch) continue;
 
-    const text = lines.slice(timingIdx + 1).join("\n").trim();
+    const text = lines
+      .slice(timingIdx + 1)
+      .join("\n")
+      .trim();
     captions.push({
       raw: block.trim(),
       start: parseSrtTime(timingMatch[1]),
@@ -180,12 +170,11 @@ function parseSrt(content: string): Caption[] {
 }
 
 function buildSrt(captions: Caption[]): string {
-  return captions
-    .map(
-      (c, i) =>
-        `${i + 1}\n${formatSrtTime(c.start)} --> ${formatSrtTime(c.end)}\n${c.text}`
-    )
-    .join("\n\n") + "\n";
+  return (
+    captions
+      .map((c, i) => `${i + 1}\n${formatSrtTime(c.start)} --> ${formatSrtTime(c.end)}\n${c.text}`)
+      .join("\n\n") + "\n"
+  );
 }
 
 // ── VTT Parser ────────────────────────────────────────────
@@ -218,7 +207,10 @@ function parseVtt(content: string): Caption[] {
     if (!timingMatch) continue;
 
     const cueId = timingIdx > 0 ? lines.slice(0, timingIdx).join("\n").trim() : undefined;
-    const text = lines.slice(timingIdx + 1).join("\n").trim();
+    const text = lines
+      .slice(timingIdx + 1)
+      .join("\n")
+      .trim();
     captions.push({
       raw: block.trim(),
       start: parseVttTime(timingMatch[1]),
@@ -311,13 +303,15 @@ function parseSub(content: string, fps: number = DEFAULT_FPS): Caption[] {
 
 function buildSub(captions: Caption[], fps: number = DEFAULT_FPS): string {
   if (!Number.isFinite(fps) || fps <= 0) fps = DEFAULT_FPS;
-  return captions
-    .map((c) => {
-      const startFrame = Math.round((c.start / 1000) * fps);
-      const endFrame = Math.round((c.end / 1000) * fps);
-      return `{${startFrame}}{${endFrame}}${c.text.replace(/\n/g, "|")}`;
-    })
-    .join("\n") + "\n";
+  return (
+    captions
+      .map((c) => {
+        const startFrame = Math.round((c.start / 1000) * fps);
+        const endFrame = Math.round((c.end / 1000) * fps);
+        return `{${startFrame}}{${endFrame}}${c.text.replace(/\n/g, "|")}`;
+      })
+      .join("\n") + "\n"
+  );
 }
 
 // ── Public API ────────────────────────────────────────────
@@ -367,8 +361,7 @@ export function shiftSubtitle(
   const { format, captions } = parseSubtitle(content, fps);
 
   const shifted = captions.map((c) => {
-    const shouldShift =
-      thresholdMs === undefined || c.start >= thresholdMs;
+    const shouldShift = thresholdMs === undefined || c.start >= thresholdMs;
     if (!shouldShift) return { ...c };
     return {
       ...c,

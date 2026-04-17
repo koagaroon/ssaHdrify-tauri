@@ -30,7 +30,7 @@ function translate(lang: Lang, key: string, ...args: (string | number)[]): strin
 
   let text = entry[lang] ?? entry.en ?? key;
   for (let i = 0; i < args.length; i++) {
-    text = text.replace(new RegExp(`\\{${i}\\}`, 'g'), String(args[i]));
+    text = text.replace(new RegExp(`\\{${i}\\}`, "g"), String(args[i]));
   }
   return text;
 }

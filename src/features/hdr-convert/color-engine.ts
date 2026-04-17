@@ -29,7 +29,7 @@ const HLG_GAMMA = 1.2;
 
 /** Rec.2020 luminance coefficients */
 const REC2020_LUM_R = 0.2627;
-const REC2020_LUM_G = 0.6780;
+const REC2020_LUM_G = 0.678;
 const REC2020_LUM_B = 0.0593;
 
 /** ARIB STD-B67 OETF constants */
@@ -90,9 +90,7 @@ function sRgbToHlg(
   const Y_D = REC2020_LUM_R * R_D + REC2020_LUM_G * G_D + REC2020_LUM_B * B_D;
   if (Y_D <= 0) return [0, 0, 0];
 
-  const factor =
-    Math.pow(Y_D, (1 - HLG_GAMMA) / HLG_GAMMA) /
-    Math.pow(HLG_L_W, 1 / HLG_GAMMA);
+  const factor = Math.pow(Y_D, (1 - HLG_GAMMA) / HLG_GAMMA) / Math.pow(HLG_L_W, 1 / HLG_GAMMA);
   const R_S = R_D * factor;
   const G_S = G_D * factor;
   const B_S = B_D * factor;
