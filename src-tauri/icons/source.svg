@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ssaHdrify icon — "H with HDR transition"
+
+  The left vertical of the H is a muted grey (SDR — low dynamic range),
+  the right vertical and the crossbar blend into a gradient that climbs
+  through violet → magenta → amber (HDR — extended gamut, vivid highlights).
+  Background is a plum-to-obsidian gradient with a soft purple glow,
+  matching the Cinematic Violet theme.
+
+  Designed for Tauri's icon generator: one 512×512 source that rasterizes
+  cleanly down to 16×16 (browser favicon) and up to Windows Store 310×310.
+  Generate all raster sizes with: npx @tauri-apps/cli icon src-tauri/icons/source.svg
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- Background: subtle plum gradient from top-left to bottom-right -->
+    <linearGradient id="bg" x1="0.2" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1e1628"/>
+      <stop offset="1" stop-color="#0a0710"/>
+    </linearGradient>
+
+    <!-- Soft purple glow behind the right half of the H, off-center right -->
+    <radialGradient id="glow" cx="0.72" cy="0.38" r="0.75">
+      <stop offset="0" stop-color="#a78bfa" stop-opacity="0.24"/>
+      <stop offset="0.5" stop-color="#a78bfa" stop-opacity="0.08"/>
+      <stop offset="1" stop-color="#a78bfa" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- HDR vertical gradient: amber (top, brightest highlight) → magenta → deep violet (bottom, darkest HDR channel) -->
+    <linearGradient id="hdrV" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fbbf24"/>
+      <stop offset="0.5" stop-color="#ec4899"/>
+      <stop offset="1" stop-color="#6d28d9"/>
+    </linearGradient>
+
+    <!-- HDR horizontal gradient for the crossbar: muted grey (left, SDR side) → HDR spectrum (right) -->
+    <linearGradient id="hdrH" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#6b7280"/>
+      <stop offset="0.38" stop-color="#7c3aed"/>
+      <stop offset="0.72" stop-color="#ec4899"/>
+      <stop offset="1" stop-color="#fbbf24"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Rounded-square background with glow overlay -->
+  <rect width="512" height="512" rx="108" ry="108" fill="url(#bg)"/>
+  <rect width="512" height="512" rx="108" ry="108" fill="url(#glow)"/>
+
+  <!-- H letterform -->
+  <!-- Left vertical: muted grey (SDR side) -->
+  <rect x="120" y="96" width="72" height="320" rx="12" ry="12" fill="#64748b"/>
+  <!-- Right vertical: full HDR vertical gradient -->
+  <rect x="320" y="96" width="72" height="320" rx="12" ry="12" fill="url(#hdrV)"/>
+  <!-- Crossbar: horizontal gradient bridging SDR grey to HDR spectrum -->
+  <rect x="120" y="220" width="272" height="72" fill="url(#hdrH)"/>
+</svg>
