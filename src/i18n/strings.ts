@@ -18,7 +18,14 @@ export const strings: Record<string, StringEntry> = {
   tab_timing_desc: { en: "Batch subtitle time adjustment", zh: "批量字幕时间轴调整" },
   tab_fonts: { en: "Font Embed", zh: "字体嵌入" },
   tab_fonts_desc: { en: "Subset & embed fonts into ASS", zh: "字体子集化并嵌入 ASS" },
-  footer_version: { en: "SSA HDRify v0.1.0", zh: "SSA HDRify v0.1.0" },
+  // Version label is injected from vite.config.ts at build time — see
+  // `resolveAppVersion()`. Do not hardcode a version string here; it will
+  // silently drift behind git tags. The template below is the ONLY place
+  // this string is assembled.
+  footer_version: {
+    en: `SSA HDRify ${__APP_VERSION__}`,
+    zh: `SSA HDRify ${__APP_VERSION__}`,
+  },
 
   // ── Theme ───────────────────────────────────────────────
   theme_auto: { en: "Follow System", zh: "跟随系统" },
