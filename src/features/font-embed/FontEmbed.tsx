@@ -1,13 +1,15 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useMemo } from "react";
 import {
   pickAssFile,
   pickSavePath,
   readText,
   writeText,
   fileNameFromPath,
+  type LocalFontEntry,
 } from "../../lib/tauri-api";
 import {
   analyzeFonts,
+  buildUserFontMap,
   embedFonts,
   type FontInfo,
   type EmbedProgress,
@@ -19,6 +21,7 @@ import {
 } from "./font-collector";
 import { useI18n } from "../../i18n/useI18n";
 import { useFileContext } from "../../lib/FileContext";
+import FontSourceModal, { type FontSource } from "./FontSourceModal";
 
 export default function FontEmbed() {
   const { t } = useI18n();
@@ -35,6 +38,22 @@ export default function FontEmbed() {
   const cancelRef = useRef(false);
   // Generation counter: incremented on each pick or clear to invalidate stale async results
   const pickGenRef = useRef(0);
+
+  // ── Local font sources (persist for the tab session) ─────
+  const [fontSources, setFontSources] = useState<FontSource[]>([]);
+  const [sourceModalOpen, setSourceModalOpen] = useState(false);
+
+  // Derived: flattened user font map. Built once per sources change via the
+  // canonical helper so every match site (initial analyze, reanalyze, etc.)
+  // uses identical indexing logic. Each face contributes multiple keys —
+  // one per localized family name variant — all pointing at the same entry.
+  const userFontMap = useMemo(() => {
+    const all: LocalFontEntry[] = [];
+    for (const src of fontSources) {
+      all.push(...src.entries);
+    }
+    return buildUserFontMap(all);
+  }, [fontSources]);
 
   // Derive file state from context
   const filePath = fontsFile?.filePath ?? null;
@@ -75,8 +94,9 @@ export default function FontEmbed() {
 
       const name = fileNameFromPath(path);
 
-      // Resolve system font paths (slow Rust IPC for each font)
-      const { infos, usages } = await analyzeFonts(content);
+      // Resolve fonts — local user sources take priority, system fonts fall
+      // back after. See font-embedder.ts for the match order.
+      const { infos, usages } = await analyzeFonts(content, userFontMap);
       if (gen !== pickGenRef.current) return; // stale — user cleared or re-picked
 
       setFontUsages(usages);
@@ -102,7 +122,78 @@ export default function FontEmbed() {
     } finally {
       if (gen === pickGenRef.current) setAnalyzing(false);
     }
-  }, [isFileInUse, setFontsFile, t]);
+  }, [isFileInUse, setFontsFile, t, userFontMap]);
+
+  // ── Font source management ────────────────────────────
+  // Adding a source: append to the list, then — if an ASS is already loaded
+  // — rerun analyzeFonts with the fresh user font map so the main list
+  // updates its found/missing badges without requiring the user to re-pick
+  // the subtitle file.
+  const reanalyzeWithSources = useCallback(
+    async (nextSources: FontSource[]) => {
+      if (!fileContent) return;
+      const all: LocalFontEntry[] = [];
+      for (const src of nextSources) {
+        all.push(...src.entries);
+      }
+      const map = buildUserFontMap(all);
+      try {
+        const { infos, usages } = await analyzeFonts(fileContent, map);
+        setFontUsages(usages);
+        setFonts(infos);
+        const autoSelected = new Set<number>();
+        infos.forEach((info, idx) => {
+          if (info.filePath) autoSelected.add(idx);
+        });
+        setSelected(autoSelected);
+      } catch (e) {
+        setIsError(true);
+        setStatus(t("error_prefix", e instanceof Error ? e.message : String(e)));
+      }
+    },
+    [fileContent, t]
+  );
+
+  const handleAddFontSource = useCallback(
+    (source: FontSource): { added: number; duplicated: number } => {
+      // Dedup against faces already registered in any existing source.
+      // A face is uniquely identified by (path, index) — multiple family-name
+      // variants live INSIDE one face, so we must not dedup on family.
+      const registered = new Set<string>();
+      for (const src of fontSources) {
+        for (const e of src.entries) {
+          registered.add(`${e.path}|${e.index}`);
+        }
+      }
+      const newEntries = source.entries.filter(
+        (e) => !registered.has(`${e.path}|${e.index}`)
+      );
+      const duplicated = source.entries.length - newEntries.length;
+      if (newEntries.length === 0) {
+        return { added: 0, duplicated };
+      }
+
+      // Build nextSources from the closure value — side-effect-free state
+      // update, then fire the async reanalyze outside the setter. StrictMode
+      // double-invokes setState updaters, so putting the reanalyze inside
+      // would run it twice on every add.
+      const filtered: FontSource = { ...source, entries: newEntries };
+      const nextSources = [...fontSources, filtered];
+      setFontSources(nextSources);
+      void reanalyzeWithSources(nextSources);
+      return { added: newEntries.length, duplicated };
+    },
+    [fontSources, reanalyzeWithSources]
+  );
+
+  const handleRemoveFontSource = useCallback(
+    (id: string) => {
+      const nextSources = fontSources.filter((s) => s.id !== id);
+      setFontSources(nextSources);
+      void reanalyzeWithSources(nextSources);
+    },
+    [fontSources, reanalyzeWithSources]
+  );
 
   const toggleSelect = (idx: number) => {
     setSelected((prev) => {
@@ -227,7 +318,7 @@ export default function FontEmbed() {
         </div>
 
         {/* Right: stacked action buttons */}
-        <div className="flex flex-col gap-2 flex-none" style={{ minWidth: "130px" }}>
+        <div className="flex flex-col gap-2 flex-none" style={{ minWidth: "150px" }}>
           <button
             onClick={handlePickFile}
             disabled={analyzing || embedding}
@@ -237,7 +328,26 @@ export default function FontEmbed() {
               color: analyzing || embedding ? "var(--text-muted)" : "white",
             }}
           >
-            {analyzing ? t("btn_analyzing") : t("btn_select_file")}
+            {analyzing ? t("btn_analyzing") : t("btn_select_subtitle_file")}
+          </button>
+          <button
+            onClick={() => setSourceModalOpen(true)}
+            disabled={embedding || !filePath}
+            className="w-full px-5 py-2.5 rounded-lg font-medium text-sm transition-colors"
+            style={
+              embedding || !filePath
+                ? {
+                    background: "var(--accent-disabled-bg)",
+                    color: "var(--accent-disabled-text)",
+                    opacity: 0.5,
+                  }
+                : { background: "var(--accent)", color: "#fff" }
+            }
+            title={!filePath ? t("font_coverage_no_subtitle") : undefined}
+          >
+            {fontSources.length > 0
+              ? t("btn_select_font_files_with_count", fontSources.length)
+              : t("btn_select_font_files")}
           </button>
           <button
             onClick={handleEmbed}
@@ -318,6 +428,18 @@ export default function FontEmbed() {
                     {t("fonts_glyphs", info.glyphCount)}
                   </span>
                 </div>
+                {info.source && (
+                  <span
+                    className="text-xs px-2 py-0.5 rounded"
+                    style={{
+                      background: "var(--bg-input)",
+                      color: "var(--text-secondary)",
+                      border: "1px solid var(--border)",
+                    }}
+                  >
+                    {t(info.source === "local" ? "badge_local" : "badge_system")}
+                  </span>
+                )}
                 <span
                   className="text-xs px-2 py-0.5 rounded"
                   style={
@@ -385,6 +507,18 @@ export default function FontEmbed() {
           {status}
         </p>
       )}
+
+      {/* Font source modal */}
+      <FontSourceModal
+        open={sourceModalOpen}
+        onClose={() => setSourceModalOpen(false)}
+        sources={fontSources}
+        usages={fontUsages}
+        userFontMap={userFontMap}
+        hasSubtitle={!!filePath}
+        onAddSource={handleAddFontSource}
+        onRemoveSource={handleRemoveFontSource}
+      />
     </div>
   );
 }

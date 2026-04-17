@@ -10,6 +10,8 @@ interface NumberInputProps {
   step?: number | string;
   disabled?: boolean;
   className?: string;
+  /** id forwarded to the inner <input> so a sibling <label htmlFor> works */
+  id?: string;
 }
 
 export default function NumberInput({
@@ -20,6 +22,7 @@ export default function NumberInput({
   step = 1,
   disabled = false,
   className = "",
+  id,
 }: NumberInputProps) {
   const numStep = typeof step === "string" ? parseFloat(step) : step;
 
@@ -37,6 +40,7 @@ export default function NumberInput({
     <div className={`relative flex items-stretch ${className}`}>
       <input
         type="number"
+        id={id}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         min={min}

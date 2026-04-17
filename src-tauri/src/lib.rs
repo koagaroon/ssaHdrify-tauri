@@ -1,5 +1,5 @@
-mod encoding;
-mod fonts;
+pub mod encoding;
+pub mod fonts;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -20,6 +20,8 @@ pub fn run() {
             encoding::read_text_detect_encoding,
             fonts::find_system_font,
             fonts::subset_font,
+            fonts::scan_font_directory,
+            fonts::scan_font_files,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

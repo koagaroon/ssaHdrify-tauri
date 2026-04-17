@@ -45,6 +45,20 @@ export function fontKeyLabel(key: FontKey): string {
 }
 
 /**
+ * Strip the ASS `@` vertical-writing prefix from a family name.
+ *
+ * `@FamilyName` in a Style or `\fn` override tag tells the renderer to
+ * rotate glyphs 90° for vertical typesetting — the underlying font file is
+ * identical to the non-prefixed form. For font *identification* (matching,
+ * subsetting, embedding) we must treat both as the same font, so this strip
+ * is applied consistently wherever the collector captures a family name.
+ */
+function normalizeFamily(raw: string): string {
+  const trimmed = raw.trim();
+  return trimmed.startsWith("@") ? trimmed.slice(1) : trimmed;
+}
+
+/**
  * Ensure ass-compiler is loaded. Call before using collector functions.
  */
 export async function ensureLoaded(): Promise<void> {
@@ -84,8 +98,11 @@ export function collectFonts(assContent: string): FontUsage[] {
 
   if (parsed.styles?.style) {
     for (const style of parsed.styles.style) {
-      // Sanitize font family name: strip control characters and limit length
-      const rawFamily = (style.Fontname || "Arial").trim();
+      // Sanitize font family name: strip control characters and limit length,
+      // then drop the ASS `@` vertical-writing prefix so styles that only
+      // differ by vertical/horizontal typesetting hint collapse into a single
+      // usage entry.
+      const rawFamily = normalizeFamily(style.Fontname || "Arial");
       const family = rawFamily
         // eslint-disable-next-line no-control-regex -- intentional: sanitize control chars from subtitle font names
         .replace(/[\x00-\x1f\x7f]/g, "")
@@ -219,10 +236,13 @@ function applyOverrideTags(block: string, current: FontKey, initialFont: FontKey
     result = { ...initialFont };
   }
 
-  // \fn<FontName> — change font family (empty \fn resets to style default)
+  // \fn<FontName> — change font family (empty \fn resets to style default).
+  // The `@` vertical-writing prefix is a rendering hint, not part of the
+  // font identity; strip it so `\fn@Foo` and `\fnFoo` resolve to the same
+  // font file and share a FontUsage entry (codepoints merge for subsetting).
   const fnMatch = block.match(/\\fn([^\\}]*)/);
   if (fnMatch) {
-    const rawFamily = fnMatch[1].trim();
+    const rawFamily = normalizeFamily(fnMatch[1]);
     if (!rawFamily) {
       result.family = initialFont.family;
     } else {

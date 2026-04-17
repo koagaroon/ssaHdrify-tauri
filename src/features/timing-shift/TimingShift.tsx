@@ -256,12 +256,15 @@ export default function TimingShift() {
       <div className="flex items-end gap-3">
         <div>
           <label
+            htmlFor="timing-offset-input"
             className="block text-sm font-medium mb-1"
             style={{ color: "var(--text-primary)" }}
           >
             {t("offset_label")}
           </label>
           <input
+            id="timing-offset-input"
+            name="offset"
             type="number"
             value={offsetValue}
             onChange={(e) => {
@@ -277,6 +280,9 @@ export default function TimingShift() {
           />
         </div>
         <select
+          id="timing-unit-select"
+          name="offset-unit"
+          aria-label={t("offset_label")}
           value={unit}
           onChange={(e) => setUnit(e.target.value as Unit)}
           className="px-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -290,6 +296,9 @@ export default function TimingShift() {
           <option value="s">{t("unit_seconds")}</option>
         </select>
         <select
+          id="timing-direction-select"
+          name="offset-direction"
+          aria-label={t("offset_label")}
           value={direction}
           onChange={(e) => setDirection(e.target.value as Direction)}
           className="px-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"

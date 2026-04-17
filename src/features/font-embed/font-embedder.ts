@@ -14,10 +14,13 @@ import {
   type FontKey,
 } from "./font-collector";
 import { buildFontEntry } from "./ass-uuencode";
-import { findSystemFont, subsetFont } from "../../lib/tauri-api";
+import { findSystemFont, subsetFont, type LocalFontEntry } from "../../lib/tauri-api";
 import { SECTION_HEADER_RE } from "../hdr-convert/ass-processor";
 
 // ── Types ─────────────────────────────────────────────────
+
+/** Where a resolved font came from. Shown as a badge in the main font list. */
+export type FontSource = "local" | "system";
 
 export interface FontInfo {
   key: FontKey;
@@ -26,6 +29,17 @@ export interface FontInfo {
   /** Face index within the font file (0 for TTF, may be >0 for TTC) */
   fontIndex: number;
   error: string | null;
+  /** null when the font could not be resolved */
+  source: FontSource | null;
+}
+
+/**
+ * Map key for the user font map: "family|bold|italic" with family lowercased.
+ * Kept as a plain string so React state can memo-compare equality cheaply and
+ * so the same key derivation is trivially reproducible in the UI layer.
+ */
+export function userFontKey(family: string, bold: boolean, italic: boolean): string {
+  return `${family.toLowerCase()}|${bold ? "1" : "0"}|${italic ? "1" : "0"}`;
 }
 
 export interface EmbedProgress {
@@ -37,38 +51,97 @@ export interface EmbedProgress {
 // ── Font Discovery ────────────────────────────────────────
 
 /**
- * Analyze an ASS file: collect fonts and resolve their system paths.
+ * Build a lookup map from a list of local font faces. One face contributes
+ * one map entry **per family-name variant** it carries — so a CJK font with
+ * both English and Chinese names in its name table becomes two keys that
+ * both resolve to the same (path, index) tuple. This is what lets an ASS
+ * script's Fontname match the font no matter which language the typesetter
+ * chose to reference.
+ */
+export function buildUserFontMap(faces: LocalFontEntry[]): Map<string, LocalFontEntry> {
+  const map = new Map<string, LocalFontEntry>();
+  for (const face of faces) {
+    for (const family of face.families) {
+      map.set(userFontKey(family, face.bold, face.italic), face);
+    }
+  }
+  return map;
+}
+
+/**
+ * Analyze an ASS file: collect fonts and resolve each font to either a
+ * user-provided local font (preferred) or a system-installed font.
  *
  * @param assContent - Full ASS file content
- * @returns Array of FontInfo with resolved paths or errors
+ * @param userFontMap - Optional map keyed by `userFontKey(family, bold, italic)`.
+ *                     Build with `buildUserFontMap()`. When present, entries
+ *                     override system matches so that user-supplied fonts
+ *                     always win.
  */
-export async function analyzeFonts(assContent: string): Promise<{ infos: FontInfo[]; usages: FontUsage[] }> {
+export async function analyzeFonts(
+  assContent: string,
+  userFontMap?: Map<string, LocalFontEntry>
+): Promise<{ infos: FontInfo[]; usages: FontUsage[] }> {
   await ensureCollectorLoaded();
 
   const usages = collectFonts(assContent);
   const infos: FontInfo[] = [];
 
+  // Development diagnostic: when a user reports "font X doesn't match", the
+  // only way to confirm from logs is to see both the lookup key and every
+  // key actually present in the map. Format is tight so the console stays
+  // readable. Remove once this feature stabilizes in the wild.
+  if (userFontMap && userFontMap.size > 0) {
+    const sample = Array.from(userFontMap.keys()).slice(0, 20);
+    console.debug(
+      `[ssaHdrify] userFontMap has ${userFontMap.size} keys; first ${sample.length}:`,
+      sample
+    );
+  }
+
   for (const usage of usages) {
+    const key = userFontKey(usage.key.family, usage.key.bold, usage.key.italic);
+    const local = userFontMap?.get(key);
+
+    if (local) {
+      console.debug(`[ssaHdrify] '${usage.key.family}' → LOCAL ${local.path}`);
+      infos.push({
+        key: usage.key,
+        glyphCount: usage.codepoints.size,
+        filePath: local.path,
+        fontIndex: local.index,
+        error: null,
+        source: "local",
+      });
+      continue;
+    }
+
     try {
       const result = await findSystemFont(
         usage.key.family,
         usage.key.bold,
         usage.key.italic
       );
+      console.debug(`[ssaHdrify] '${usage.key.family}' → SYSTEM ${result.path}`);
       infos.push({
         key: usage.key,
         glyphCount: usage.codepoints.size,
         filePath: result.path,
         fontIndex: result.index,
         error: null,
+        source: "system",
       });
     } catch (e) {
+      console.debug(
+        `[ssaHdrify] '${usage.key.family}' → MISS (key='${key}', reason=${e instanceof Error ? e.message : String(e)})`
+      );
       infos.push({
         key: usage.key,
         glyphCount: usage.codepoints.size,
         filePath: null,
         fontIndex: 0,
         error: e instanceof Error ? e.message : String(e),
+        source: null,
       });
     }
   }

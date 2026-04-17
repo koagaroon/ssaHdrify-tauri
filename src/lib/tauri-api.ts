@@ -31,6 +31,11 @@ const ASS_FILTERS: FileFilter[] = [
   { name: "All Files", extensions: ["*"] },
 ];
 
+const FONT_FILTERS: FileFilter[] = [
+  { name: "Font Files", extensions: ["ttf", "otf", "ttc", "otc"] },
+  { name: "All Files", extensions: ["*"] },
+];
+
 /** Open a multi-file picker for subtitle files. Returns file paths or null if cancelled. */
 export async function pickSubtitleFiles(): Promise<string[] | null> {
   const result = await open({
@@ -52,6 +57,28 @@ export async function pickAssFile(): Promise<string | null> {
   });
   if (!result) return null;
   return typeof result === "string" ? result : result[0] ?? null;
+}
+
+/** Open a directory picker for a local font folder. Returns path or null. */
+export async function pickFontDirectory(): Promise<string | null> {
+  const result = await open({
+    directory: true,
+    multiple: false,
+    title: "Select font folder",
+  });
+  if (!result) return null;
+  return typeof result === "string" ? result : result[0] ?? null;
+}
+
+/** Open a multi-file picker for individual font files. Returns paths or null. */
+export async function pickFontFiles(): Promise<string[] | null> {
+  const result = await open({
+    multiple: true,
+    filters: FONT_FILTERS,
+    title: "Select font files",
+  });
+  if (!result) return null;
+  return Array.isArray(result) ? result : [result];
 }
 
 /** Open a single-file picker for any subtitle format. */
@@ -181,4 +208,66 @@ export async function subsetFont(
 ): Promise<Uint8Array> {
   const bytes: number[] = await invoke("subset_font", { fontPath, fontIndex, codepoints });
   return new Uint8Array(bytes);
+}
+
+/** One font face discovered in a user-picked directory or file list.
+ *
+ *  A single face can expose multiple localized family-name variants (common
+ *  for CJK fonts that carry both an English and a Chinese name in their
+ *  OpenType name table). `families[0]` is the preferred display name; the
+ *  rest are kept for matching so an ASS script referring to any variant will
+ *  still resolve to the same file.
+ */
+export interface LocalFontEntry {
+  /** Canonical path to the font file */
+  path: string;
+  /** Face index within the file (0 for TTF/OTF, 0..n for TTC/OTC) */
+  index: number;
+  /** All localized family names for this face (display name first). */
+  families: string[];
+  /** True when OS/2 weight >= 600 */
+  bold: boolean;
+  /** True for Italic/Oblique styles */
+  italic: boolean;
+  /** File size in bytes (same value repeated across faces of one TTC) */
+  sizeBytes: number;
+}
+
+/**
+ * Scan a user-picked directory (one level deep) for font files. Returns one
+ * entry per face — TTC files produce multiple entries sharing the same path.
+ * Each returned path is registered on the Rust side so subset_font will
+ * accept it.
+ */
+export async function scanFontDirectory(dir: string): Promise<LocalFontEntry[]> {
+  const raw = await invoke<RawLocalFontEntry[]>("scan_font_directory", { dir });
+  return raw.map(fromRawLocalFontEntry);
+}
+
+/** Scan a user-supplied list of individual font file paths. */
+export async function scanFontFiles(paths: string[]): Promise<LocalFontEntry[]> {
+  const raw = await invoke<RawLocalFontEntry[]>("scan_font_files", { paths });
+  return raw.map(fromRawLocalFontEntry);
+}
+
+// Rust serializes `size_bytes` (snake_case); translate to camelCase here so
+// the rest of the frontend stays in JS conventions.
+interface RawLocalFontEntry {
+  path: string;
+  index: number;
+  families: string[];
+  bold: boolean;
+  italic: boolean;
+  size_bytes: number;
+}
+
+function fromRawLocalFontEntry(raw: RawLocalFontEntry): LocalFontEntry {
+  return {
+    path: raw.path,
+    index: raw.index,
+    families: raw.families,
+    bold: raw.bold,
+    italic: raw.italic,
+    sizeBytes: raw.size_bytes,
+  };
 }

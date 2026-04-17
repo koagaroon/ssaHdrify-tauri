@@ -131,6 +131,56 @@ export const strings: Record<string, StringEntry> = {
     en: "Fonts are subset to only the glyphs used in this subtitle. Safety padding (ASCII + CJK fullwidth) is included automatically.",
     zh: "字体已子集化为仅包含本字幕使用的字形，并自动包含安全填充（ASCII + CJK 全角字符）",
   },
+  btn_select_subtitle_file: { en: "Select Subtitle File", zh: "选择字幕文件" },
+  btn_select_font_files: { en: "Select Font Files", zh: "选择字体文件" },
+  btn_select_font_files_with_count: {
+    en: "Select Font Files ({0})",
+    zh: "选择字体文件（{0}）",
+  },
+  badge_local: { en: "Local", zh: "本地" },
+  badge_system: { en: "System", zh: "系统" },
+
+  // Font source modal
+  font_sources_title: { en: "Font Sources", zh: "字体来源" },
+  font_sources_empty_hint: {
+    en: "No local sources yet. Add a folder or individual files to match fonts without installing them system-wide.",
+    zh: "尚未添加本地字体来源。添加文件夹或独立文件即可在不安装字体的情况下完成匹配。",
+  },
+  font_sources_add_folder: { en: "Add Folder", zh: "添加文件夹" },
+  font_sources_add_files: { en: "Add Files", zh: "添加文件" },
+  font_sources_folder_entry: {
+    en: "{0} ({1} fonts)",
+    zh: "{0}（{1} 个字体）",
+  },
+  font_sources_files_entry: {
+    en: "{0} file(s) ({1} fonts)",
+    zh: "{0} 个文件（{1} 个字体）",
+  },
+  font_sources_scanning: { en: "Scanning...", zh: "扫描中…" },
+  font_coverage: { en: "Coverage: {0} / {1}", zh: "覆盖进度：{0} / {1}" },
+  font_coverage_complete: {
+    en: "All required fonts matched",
+    zh: "所有所需字体均已匹配",
+  },
+  font_coverage_missing: { en: "Missing: {0}", zh: "未匹配：{0}" },
+  font_coverage_no_subtitle: {
+    en: "Load a subtitle file to see match progress.",
+    zh: "加载字幕文件后可查看匹配进度。",
+  },
+  font_sources_close: { en: "Close", zh: "关闭" },
+  font_sources_remove: { en: "Remove source", zh: "移除此来源" },
+  font_sources_all_duplicate: {
+    en: "All fonts from this selection are already loaded.",
+    zh: "此选择的字体已全部加载过。",
+  },
+  font_sources_partial_duplicate: {
+    en: "Added {0} new font(s); {1} were already loaded.",
+    zh: "新增 {0} 个字体；{1} 个已存在。",
+  },
+  font_sources_added: {
+    en: "Added {0} font(s).",
+    zh: "新增 {0} 个字体。",
+  },
 
   // ── Shared ──────────────────────────────────────────────
   btn_select_file: { en: "Select File", zh: "选择文件" },

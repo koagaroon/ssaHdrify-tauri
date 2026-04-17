@@ -255,12 +255,15 @@ export default function HdrConvert() {
           {/* EOTF Selection */}
           <div className="space-y-1">
             <label
+              htmlFor="hdr-eotf-select"
               className="block text-sm font-medium"
               style={{ color: "var(--text-secondary)" }}
             >
               {t("eotf_label")}
             </label>
             <select
+              id="hdr-eotf-select"
+              name="eotf"
               value={eotf}
               onChange={(e) => setEotf(e.target.value as Eotf)}
               disabled={processing}
@@ -282,12 +285,14 @@ export default function HdrConvert() {
           {/* Brightness */}
           <div className="space-y-1">
             <label
+              htmlFor="hdr-brightness-input"
               className="block text-sm font-medium"
               style={{ color: "var(--text-secondary)" }}
             >
               {t("brightness_label")}
             </label>
             <NumberInput
+              id="hdr-brightness-input"
               value={brightnessText}
               onChange={handleBrightnessChange}
               min={MIN_BRIGHTNESS}
@@ -376,6 +381,7 @@ export default function HdrConvert() {
       {/* Output Template */}
       <div className="space-y-2">
         <label
+          htmlFor="hdr-template-select"
           className="block text-sm font-medium"
           style={{ color: "var(--text-secondary)" }}
         >
@@ -383,6 +389,8 @@ export default function HdrConvert() {
         </label>
         <div className="flex flex-col gap-2">
           <select
+            id="hdr-template-select"
+            name="output-template"
             value={template}
             onChange={(e) => setTemplate(e.target.value)}
             disabled={processing}
