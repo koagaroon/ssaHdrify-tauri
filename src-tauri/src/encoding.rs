@@ -31,10 +31,14 @@ pub fn decode_bytes(bytes: &[u8]) -> ReadTextResult {
 
     let (cow, _, had_errors) = encoding.decode(bytes);
     if had_errors {
+        // chardetng picked an encoding but decoding hit invalid sequences.
+        // Record the attempted encoding in the label so callers can see what
+        // was tried — plain "UTF-8 (lossy)" masked whether the file was
+        // actually UTF-8 or some other guess that failed.
         let text = String::from_utf8_lossy(bytes).into_owned();
         return ReadTextResult {
             text,
-            encoding: "UTF-8 (lossy)".to_string(),
+            encoding: format!("{} (lossy)", encoding.name()),
         };
     }
 

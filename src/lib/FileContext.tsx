@@ -105,7 +105,7 @@ export function FileProvider({ children }: { children: ReactNode }) {
       let skippedCount = 0;
       for (const p of paths) {
         if (isFileInUse(p, currentTab) !== null) {
-          skippedCount = skippedCount + 1;
+          skippedCount += 1;
         } else {
           allowed.push(p);
         }

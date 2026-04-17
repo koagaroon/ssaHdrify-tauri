@@ -104,7 +104,7 @@ export default function FontSourceModal(props: Props) {
     try {
       const entries = await scanFontDirectory(dir);
       if (entries.length === 0) {
-        setError(t("font_sources_folder_entry", basename(dir), 0));
+        setError(t("font_sources_no_fonts_in_folder", basename(dir)));
         return;
       }
       const result = onAddSource({
@@ -130,7 +130,7 @@ export default function FontSourceModal(props: Props) {
     try {
       const entries = await scanFontFiles(paths);
       if (entries.length === 0) {
-        setError(t("font_sources_files_entry", paths.length, 0));
+        setError(t("font_sources_no_fonts_in_files", paths.length));
         return;
       }
       const result = onAddSource({

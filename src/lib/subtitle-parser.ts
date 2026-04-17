@@ -287,7 +287,7 @@ function parseSub(content: string, fps: number = DEFAULT_FPS): Caption[] {
   let match;
   let count = 0;
   while ((match = subLineRe.exec(content)) !== null) {
-    count = count + 1;
+    count += 1;
     if (count > 100000) {
       throw new Error(`Too many subtitle entries: ${count} (max 100,000)`);
     }

@@ -166,6 +166,14 @@ export const strings: Record<string, StringEntry> = {
     en: "{0} file(s) ({1} fonts)",
     zh: "{0} 个文件（{1} 个字体）",
   },
+  font_sources_no_fonts_in_folder: {
+    en: "No fonts found in {0}.",
+    zh: "{0} 中未找到字体。",
+  },
+  font_sources_no_fonts_in_files: {
+    en: "No fonts found in the {0} selected file(s).",
+    zh: "所选 {0} 个文件中未找到字体。",
+  },
   font_sources_scanning: { en: "Scanning...", zh: "扫描中…" },
   font_coverage: { en: "Coverage: {0} / {1}", zh: "覆盖进度：{0} / {1}" },
   font_coverage_complete: {
