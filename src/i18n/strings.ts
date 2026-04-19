@@ -226,12 +226,19 @@ export const strings: Record<string, StringEntry> = {
     zh: "所选 {0} 个文件中未找到字体。",
   },
   font_sources_scanning: { en: "Scanning...", zh: "扫描中…" },
-  font_coverage: { en: "Coverage: {0} / {1}", zh: "覆盖进度：{0} / {1}" },
+  font_coverage: { en: "Local coverage: {0} / {1}", zh: "本地覆盖：{0} / {1}" },
   font_coverage_complete: {
-    en: "All required fonts matched",
-    zh: "所有所需字体均已匹配",
+    en: "All required fonts covered locally",
+    zh: "所需字体均已本地覆盖",
   },
-  font_coverage_missing: { en: "Missing: {0}", zh: "未匹配：{0}" },
+  font_coverage_missing: {
+    en: "Not in local sources: {0}",
+    zh: "本地来源未收录：{0}",
+  },
+  font_coverage_hint: {
+    en: "Missing fonts may still match via installed system fonts — check the Detected Fonts list.",
+    zh: "未被本地来源收录的字体仍可能通过已安装的系统字体匹配 — 请查看主面板「检测到的字体」。",
+  },
   font_coverage_no_subtitle: {
     en: "Load a subtitle file to see match progress.",
     zh: "加载字幕文件后可查看匹配进度。",

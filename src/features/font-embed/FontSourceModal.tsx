@@ -355,9 +355,14 @@ export default function FontSourceModal(props: Props) {
                   )}
                 </p>
                 {missing.length > 0 && (
-                  <p className="text-xs" style={{ color: "var(--text-secondary)" }}>
-                    {t("font_coverage_missing", missing.join(", "))}
-                  </p>
+                  <>
+                    <p className="text-xs" style={{ color: "var(--text-secondary)" }}>
+                      {t("font_coverage_missing", missing.join(", "))}
+                    </p>
+                    <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                      {t("font_coverage_hint")}
+                    </p>
+                  </>
                 )}
               </div>
             )}
