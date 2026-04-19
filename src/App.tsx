@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import HdrConvert from "./features/hdr-convert/HdrConvert";
 import TimingShift from "./features/timing-shift/TimingShift";
@@ -6,10 +6,11 @@ import FontEmbed from "./features/font-embed/FontEmbed";
 import { useI18n } from "./i18n/useI18n";
 import { useTheme } from "./theme/useTheme";
 import type { ThemeMode } from "./theme/useTheme";
-import { useStatus, type StatusTab } from "./lib/StatusContext";
+import { useStatus, type StatusTab, DEFAULT_STATUS } from "./lib/StatusContext";
 import "./shell.css";
 
-type Tab = "hdr" | "timing" | "fonts";
+// Tab ids also serve as StatusTab keys — single source of truth.
+type Tab = StatusTab;
 
 const TAB_IDS: { id: Tab; labelKey: string }[] = [
   { id: "hdr", labelKey: "tab_hdr" },
@@ -23,14 +24,25 @@ const THEME_OPTIONS: { mode: ThemeMode; labelKey: string }[] = [
   { mode: "dark", labelKey: "theme_dark" },
 ];
 
-const appWindow = getCurrentWindow();
+// Theme label keys — explicit map instead of `t("theme_" + mode)` string
+// concat. If a ThemeMode value is ever renamed the compiler will flag the
+// gap here, where silent string concat would just return the bare key.
+const THEME_LABEL_KEYS: Record<ThemeMode, string> = {
+  auto: "theme_auto",
+  light: "theme_light",
+  dark: "theme_dark",
+};
 
 function App() {
   const [activeTab, setActiveTab] = useState<Tab>("hdr");
   const { t, lang, setLang } = useI18n();
   const { mode, appearance, setMode } = useTheme();
   const { statuses } = useStatus();
-  const currentStatus = statuses[activeTab as StatusTab];
+  const currentStatus = statuses[activeTab] ?? DEFAULT_STATUS;
+  // Resolve the Tauri window handle once — doing this at module scope would
+  // crash a non-Tauri host (e.g. a vitest env that accidentally imports
+  // App.tsx), even though only main.tsx imports it today.
+  const appWindow = useMemo(() => getCurrentWindow(), []);
 
   const [themeOpen, setThemeOpen] = useState(false);
   const themeRef = useRef<HTMLDivElement>(null);
@@ -92,8 +104,8 @@ function App() {
           <button
             className="titlebar-btn"
             onClick={() => appWindow.minimize()}
-            aria-label="Minimize"
-            title="Minimize"
+            aria-label={t("titlebar_minimize")}
+            title={t("titlebar_minimize")}
           >
             <svg width="10" height="10" viewBox="0 0 12 12" aria-hidden="true">
               <path stroke="currentColor" d="M2 6h8" />
@@ -102,8 +114,8 @@ function App() {
           <button
             className="titlebar-btn"
             onClick={() => appWindow.toggleMaximize()}
-            aria-label="Maximize"
-            title="Maximize"
+            aria-label={t("titlebar_maximize")}
+            title={t("titlebar_maximize")}
           >
             <svg width="10" height="10" viewBox="0 0 12 12" aria-hidden="true">
               <rect x="2" y="2" width="8" height="8" fill="none" stroke="currentColor" />
@@ -112,8 +124,8 @@ function App() {
           <button
             className="titlebar-btn close"
             onClick={() => appWindow.close()}
-            aria-label="Close"
-            title="Close"
+            aria-label={t("titlebar_close")}
+            title={t("titlebar_close")}
           >
             <svg width="10" height="10" viewBox="0 0 12 12" aria-hidden="true">
               <path stroke="currentColor" d="M3 3l6 6M9 3l-6 6" />
@@ -183,7 +195,7 @@ function App() {
                 <button
                   className="icon-btn"
                   onClick={() => setThemeOpen(!themeOpen)}
-                  title={t("theme_" + mode)}
+                  title={t(THEME_LABEL_KEYS[mode])}
                 >
                   {appearance === "light" ? (
                     <svg

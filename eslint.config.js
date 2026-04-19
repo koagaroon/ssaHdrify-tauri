@@ -16,7 +16,10 @@ export default defineConfig([
       reactRefresh.configs.vite,
     ],
     languageOptions: {
-      ecmaVersion: 2020,
+      // Aligned with tsconfig.app.json `target: es2023` — the TS parser
+      // already accepts 2023 syntax, so keeping ESLint at 2020 produced a
+      // mismatched signal about what the codebase is actually compiled as.
+      ecmaVersion: 2023,
       globals: globals.browser,
     },
   },

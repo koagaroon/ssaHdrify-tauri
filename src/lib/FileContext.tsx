@@ -19,7 +19,14 @@
  * clear it from the current tab first (via the × button).
  */
 
-import { createContext, useContext, useState, useCallback, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 
 // ── Types ────────────────────────────────────────────────
 
@@ -129,23 +136,25 @@ export function FileProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  return (
-    <FileContext.Provider
-      value={{
-        hdrFiles,
-        timingFile,
-        fontsFile,
-        setHdrFiles,
-        setTimingFile,
-        setFontsFile,
-        clearFile,
-        isFileInUse,
-        filterAvailablePaths,
-      }}
-    >
-      {children}
-    </FileContext.Provider>
+  // Memoize so consumers reading `useFileContext()` don't re-render on every
+  // parent re-render. The value identity changes only when a state slot or
+  // stable callback reference actually changes.
+  const value = useMemo(
+    () => ({
+      hdrFiles,
+      timingFile,
+      fontsFile,
+      setHdrFiles,
+      setTimingFile,
+      setFontsFile,
+      clearFile,
+      isFileInUse,
+      filterAvailablePaths,
+    }),
+    [hdrFiles, timingFile, fontsFile, clearFile, isFileInUse, filterAvailablePaths]
   );
+
+  return <FileContext.Provider value={value}>{children}</FileContext.Provider>;
 }
 
 // ── Hook ─────────────────────────────────────────────────

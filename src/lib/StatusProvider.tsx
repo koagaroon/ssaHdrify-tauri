@@ -3,9 +3,9 @@
  * setter. The setter skips no-op updates so feature components can call
  * it unconditionally inside useEffect without triggering render loops.
  *
- * See StatusContext.ts for the context / hook / type definitions.
+ * See StatusContext.tsx for the context / hook / type definitions.
  */
-import { useCallback, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import {
   StatusContext,
   DEFAULT_STATUSES,
@@ -26,7 +26,11 @@ export default function StatusProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  return (
-    <StatusContext.Provider value={{ statuses, setStatus }}>{children}</StatusContext.Provider>
-  );
+  // useMemo keeps the context value referentially stable when neither
+  // `statuses` nor `setStatus` changed. Without the memo, every render
+  // creates a fresh `{statuses, setStatus}` object → every useStatus()
+  // consumer re-renders.
+  const value = useMemo(() => ({ statuses, setStatus }), [statuses, setStatus]);
+
+  return <StatusContext.Provider value={value}>{children}</StatusContext.Provider>;
 }

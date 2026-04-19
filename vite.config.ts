@@ -3,7 +3,13 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+// ESM-safe equivalent of CommonJS __dirname — Vite injects a shim today, but
+// relying on import.meta.url keeps this config portable across strict-ESM
+// tooling (and future Vite versions that might drop the shim).
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 /**
  * Version label shown in the app footer.
@@ -47,5 +53,13 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   define: {
     __APP_VERSION__: JSON.stringify(APP_VERSION),
+  },
+  // Bind the dev server to loopback only. Vite's default is already
+  // `localhost`, but being explicit guarantees `npm run dev` never exposes
+  // the unauth'd hot-reload server on the LAN even if a developer passes
+  // --host accidentally.
+  server: {
+    host: "127.0.0.1",
+    strictPort: true,
   },
 });

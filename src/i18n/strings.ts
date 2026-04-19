@@ -60,11 +60,13 @@ export const strings: Record<string, StringEntry> = {
     zh: "占位符 — {name}：输入文件名（不含扩展名）· {eotf}：pq 或 hlg（小写）",
   },
   tab_hdr: { en: "HDR Convert", zh: "HDR 转换" },
-  tab_hdr_desc: { en: "SDR → HDR color space conversion", zh: "SDR → HDR 色彩空间转换" },
   tab_timing: { en: "Time Shift", zh: "时间轴偏移" },
-  tab_timing_desc: { en: "Batch subtitle time adjustment", zh: "批量字幕时间轴调整" },
   tab_fonts: { en: "Font Embed", zh: "字体嵌入" },
-  tab_fonts_desc: { en: "Subset & embed fonts into ASS", zh: "字体子集化并嵌入 ASS" },
+  // Titlebar window controls — localized so screen readers and tooltip
+  // hovers stay consistent with the app's current language.
+  titlebar_minimize: { en: "Minimize", zh: "最小化" },
+  titlebar_maximize: { en: "Maximize", zh: "最大化" },
+  titlebar_close: { en: "Close", zh: "关闭" },
   // Version label is injected from vite.config.ts at build time — see
   // `resolveAppVersion()`. Do not hardcode a version string here; it will
   // silently drift behind git tags. The template below is the ONLY place
