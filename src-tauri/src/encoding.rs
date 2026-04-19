@@ -5,14 +5,30 @@
 //! clean Unicode regardless of the original file encoding.
 
 use chardetng::EncodingDetector;
+use std::io::ErrorKind;
 use std::path::Path;
 
 const MAX_TEXT_SIZE: u64 = 50 * 1024 * 1024; // 50 MB
 
-/// Allowed subtitle/text file extensions for `read_text_detect_encoding`.
+/// Allowed subtitle file extensions for `read_text_detect_encoding`.
 /// Defense-in-depth: the frontend only sends paths from file dialogs, but
 /// this prevents the IPC command from being repurposed as a generic file reader.
-const ALLOWED_TEXT_EXTENSIONS: &[&str] = &["ass", "ssa", "srt", "vtt", "sub", "sbv", "lrc", "txt"];
+/// `.txt` is intentionally excluded — the frontend dialogs never offer it,
+/// and keeping it in the allow-list would widen arbitrary-read via any JS bug.
+const ALLOWED_TEXT_EXTENSIONS: &[&str] = &["ass", "ssa", "srt", "vtt", "sub", "sbv", "lrc"];
+
+/// Map a std::io::Error to a generic, path-free message for IPC. The detailed
+/// error is logged server-side so it's still reachable during debug, but never
+/// crosses the IPC boundary where a user-facing error toast could leak paths.
+fn sanitize_io_error(e: &std::io::Error, action: &str) -> String {
+    log::warn!("io error during {action}: {e}");
+    match e.kind() {
+        ErrorKind::NotFound => format!("{action} failed: file not found"),
+        ErrorKind::PermissionDenied => format!("{action} failed: permission denied"),
+        ErrorKind::InvalidData => format!("{action} failed: invalid data"),
+        _ => format!("{action} failed"),
+    }
+}
 
 // ── Internal helpers (exported for tests) ────────────────
 
@@ -77,7 +93,7 @@ pub fn read_text_detect_encoding(path: String) -> Result<ReadTextResult, String>
     }
 
     // Size check
-    let metadata = std::fs::metadata(&path).map_err(|e| format!("Cannot access file: {e}"))?;
+    let metadata = std::fs::metadata(&path).map_err(|e| sanitize_io_error(&e, "stat"))?;
     if metadata.len() > MAX_TEXT_SIZE {
         let size_mb = metadata.len() as f64 / (1024.0 * 1024.0);
         return Err(format!(
@@ -85,7 +101,7 @@ pub fn read_text_detect_encoding(path: String) -> Result<ReadTextResult, String>
         ));
     }
 
-    let bytes = std::fs::read(&path).map_err(|e| format!("Cannot read file: {e}"))?;
+    let bytes = std::fs::read(&path).map_err(|e| sanitize_io_error(&e, "read"))?;
 
     // Post-read size check (TOCTOU mitigation — file could grow between stat and read)
     if bytes.len() as u64 > MAX_TEXT_SIZE {
@@ -98,32 +114,49 @@ pub fn read_text_detect_encoding(path: String) -> Result<ReadTextResult, String>
     Ok(decode_bytes(&bytes))
 }
 
-/// Check for Byte Order Mark and decode accordingly.
+/// Check for Byte Order Mark and decode accordingly. When the decoded text
+/// contained invalid sequences, the encoding label is suffixed with "(lossy)"
+/// so the frontend can distinguish clean decodes from ones with U+FFFD
+/// replacements.
 fn detect_bom(bytes: &[u8]) -> Option<ReadTextResult> {
     // UTF-8 BOM (EF BB BF) — strip BOM, decode as UTF-8
     if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
-        let text = String::from_utf8_lossy(&bytes[3..]).into_owned();
+        let payload = &bytes[3..];
+        let lossy = std::str::from_utf8(payload).is_err();
+        let text = String::from_utf8_lossy(payload).into_owned();
         return Some(ReadTextResult {
             text,
-            encoding: "UTF-8 (BOM)".to_string(),
+            encoding: if lossy {
+                "UTF-8 (BOM, lossy)".to_string()
+            } else {
+                "UTF-8 (BOM)".to_string()
+            },
         });
     }
 
     // UTF-16 LE BOM (FF FE)
     if bytes.starts_with(&[0xFF, 0xFE]) {
-        let (cow, _, _) = encoding_rs::UTF_16LE.decode(&bytes[2..]);
+        let (cow, _, had_errors) = encoding_rs::UTF_16LE.decode(&bytes[2..]);
         return Some(ReadTextResult {
             text: cow.into_owned(),
-            encoding: "UTF-16LE".to_string(),
+            encoding: if had_errors {
+                "UTF-16LE (lossy)".to_string()
+            } else {
+                "UTF-16LE".to_string()
+            },
         });
     }
 
     // UTF-16 BE BOM (FE FF)
     if bytes.starts_with(&[0xFE, 0xFF]) {
-        let (cow, _, _) = encoding_rs::UTF_16BE.decode(&bytes[2..]);
+        let (cow, _, had_errors) = encoding_rs::UTF_16BE.decode(&bytes[2..]);
         return Some(ReadTextResult {
             text: cow.into_owned(),
-            encoding: "UTF-16BE".to_string(),
+            encoding: if had_errors {
+                "UTF-16BE (lossy)".to_string()
+            } else {
+                "UTF-16BE".to_string()
+            },
         });
     }
 

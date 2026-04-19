@@ -30,6 +30,12 @@ const MAX_FONT_DATA_SIZE: u64 = 50 * 1024 * 1024;
 /// IPC → JS heap → ASS string.
 const MAX_FONT_FALLBACK_SIZE: usize = 10 * 1024 * 1024;
 
+/// Overall cap on the size of each provenance cache, as a defense against a
+/// pathological long-running session that accumulates thousands of scanned
+/// directories. A typical desktop has < 1000 installed fonts; 10k leaves
+/// plenty of headroom before the cap fires.
+const MAX_PROVENANCE_CACHE_SIZE: usize = 10_000;
+
 /// Strip the Win32 extended-length UNC prefix (`\\?\`) that `canonicalize()`
 /// adds on Windows, so paths compare consistently across insert and lookup.
 fn normalize_canonical_path(canonical_str: &str) -> String {
@@ -122,10 +128,12 @@ pub fn find_system_font(
     let handle = source
         .select_best_match(&[FamilyName::Title(family.clone())], &props)
         .map_err(|e| {
-            format!(
-                "Font not found: {} (bold={}, italic={}): {}",
-                family, bold, italic, e
-            )
+            // Log the detailed error server-side; return a generic message
+            // to the frontend so OS-level paths never surface in user toasts.
+            log::warn!(
+                "font lookup failed for '{family}' (bold={bold}, italic={italic}): {e}"
+            );
+            format!("Font not found: {family} (bold={bold}, italic={italic})")
         })?;
 
     match handle {
@@ -203,12 +211,28 @@ fn parse_local_font_file(canonical: &Path) -> Vec<LocalFontEntry> {
     let arc_data = std::sync::Arc::new(data);
 
     let mut entries = Vec::new();
+    // Permit a small run of consecutive parse failures before giving up on
+    // the collection. In practice font_kit returns an error once `i` exceeds
+    // the real face count, so this also serves as our loop-termination
+    // condition. 3 consecutive gives resilience against an isolated corrupt
+    // face without scanning all 64 possible indices on every single-face TTF.
+    const MAX_CONSECUTIVE_FAILURES: u32 = 3;
+    let mut consecutive_failures: u32 = 0;
     for i in 0..max_faces {
         // font-kit for weight/style — its enum API is simpler than reading
         // OS/2 directly through skrifa.
         let fk_font = match font_kit::font::Font::from_bytes(arc_data.clone(), i) {
-            Ok(f) => f,
-            Err(_) => break,
+            Ok(f) => {
+                consecutive_failures = 0;
+                f
+            }
+            Err(_) => {
+                consecutive_failures += 1;
+                if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
+                    break;
+                }
+                continue;
+            }
         };
         let props = fk_font.properties();
         let bold = props.weight.0 >= 600.0;
@@ -217,7 +241,13 @@ fn parse_local_font_file(canonical: &Path) -> Vec<LocalFontEntry> {
         // skrifa for ALL localized family names — this is the key fix.
         let font_ref = match FontRef::from_index(&arc_data, i) {
             Ok(f) => f,
-            Err(_) => break,
+            Err(_) => {
+                consecutive_failures += 1;
+                if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
+                    break;
+                }
+                continue;
+            }
         };
 
         let mut family_variants: HashSet<String> = HashSet::new();
@@ -251,9 +281,12 @@ fn parse_local_font_file(canonical: &Path) -> Vec<LocalFontEntry> {
         }
 
         // Register the path once per face — the allow-set is a HashSet so
-        // repeated inserts are cheap no-ops.
+        // repeated inserts are cheap no-ops. Respect the overall cache cap
+        // to bound unbounded growth across a long session.
         if let Ok(mut cache) = ALLOWED_USER_FONT_PATHS.lock() {
-            cache.insert(canonical_string.clone());
+            if cache.len() < MAX_PROVENANCE_CACHE_SIZE || cache.contains(&canonical_string) {
+                cache.insert(canonical_string.clone());
+            }
         }
 
         // Stabilize the primary-name pick: prefer font-kit's family_name if
@@ -296,14 +329,18 @@ pub fn scan_font_directory(dir: String) -> Result<Vec<LocalFontEntry>, String> {
         return Err("Directory path contains invalid characters".to_string());
     }
 
-    let canonical_dir = Path::new(&dir)
-        .canonicalize()
-        .map_err(|e| format!("Cannot resolve directory path: {e}"))?;
+    let canonical_dir = Path::new(&dir).canonicalize().map_err(|e| {
+        log::warn!("canonicalize directory failed: {e}");
+        "Cannot resolve directory path".to_string()
+    })?;
     if !canonical_dir.is_dir() {
-        return Err(format!("Not a directory: {dir}"));
+        return Err("Not a directory".to_string());
     }
 
-    let read = fs::read_dir(&canonical_dir).map_err(|e| format!("Cannot read directory: {e}"))?;
+    let read = fs::read_dir(&canonical_dir).map_err(|e| {
+        log::warn!("read_dir failed for '{}': {e}", canonical_dir.display());
+        "Cannot read directory".to_string()
+    })?;
 
     let mut result = Vec::new();
     for entry in read {
@@ -332,8 +369,9 @@ pub fn scan_font_directory(dir: String) -> Result<Vec<LocalFontEntry>, String> {
             result.push(font_entry);
             if result.len() > MAX_FONTS_PER_SCAN {
                 return Err(format!(
-                    "Too many fonts in directory (> {MAX_FONTS_PER_SCAN}). \
-                     Pick a more specific folder or split into multiple."
+                    "Too many fonts in directory ({} found, max {MAX_FONTS_PER_SCAN}). \
+                     Pick a more specific folder or split into multiple.",
+                    result.len()
                 ));
             }
         }
@@ -406,14 +444,17 @@ pub fn scan_font_files(paths: Vec<String>) -> Result<Vec<LocalFontEntry>, String
 
 /// Register a font path in the provenance cache and return the lookup result.
 fn register_font_path(path: &Path, font_index: u32) -> Result<FontLookupResult, String> {
-    let canonical = path
-        .canonicalize()
-        .map_err(|e| format!("Cannot resolve font path: {}", e))?;
+    let canonical = path.canonicalize().map_err(|e| {
+        log::warn!("canonicalize font path failed: {e}");
+        "Cannot resolve font path".to_string()
+    })?;
     let canonical_string = normalize_canonical_path(&canonical.to_string_lossy());
-    ALLOWED_FONT_PATHS
+    let mut cache = ALLOWED_FONT_PATHS
         .lock()
-        .map_err(|e| format!("Internal error: font path cache corrupted: {}", e))?
-        .insert(canonical_string.clone());
+        .map_err(|_| "Internal error: font path cache corrupted".to_string())?;
+    if cache.len() < MAX_PROVENANCE_CACHE_SIZE || cache.contains(&canonical_string) {
+        cache.insert(canonical_string.clone());
+    }
 
     Ok(FontLookupResult {
         path: canonical_string,
@@ -456,7 +497,10 @@ fn is_in_system_fonts_dir(canonical: &Path) -> bool {
         }
         false
     } else if cfg!(target_os = "macos") {
-        let under = |dir: &str| path_under_dir(&canonical_str, dir, "/");
+        // APFS is case-insensitive by default; compare in lowercase so symlink
+        // chains that surface mixed-case paths still match canonical targets.
+        let lower = canonical_str.to_lowercase();
+        let under = |dir: &str| path_under_dir(&lower, &dir.to_lowercase(), "/");
         const MAC_DIRS: &[&str] = &[
             "/Library/Fonts",
             "/System/Library/Fonts",
@@ -546,9 +590,10 @@ pub fn subset_font(
     }
 
     // Canonicalize to resolve symlinks, "..", and normalize the path
-    let canonical = path
-        .canonicalize()
-        .map_err(|e| format!("Cannot resolve font path: {}", e))?;
+    let canonical = path.canonicalize().map_err(|e| {
+        log::warn!("canonicalize font path failed for '{filename}': {e}");
+        "Cannot resolve font path".to_string()
+    })?;
 
     // Primary guard: the path must have been discovered by one of the scan
     // commands (find_system_font OR scan_font_directory / scan_font_files).
@@ -556,11 +601,11 @@ pub fn subset_font(
     let canonical_string = normalize_canonical_path(&canonical.to_string_lossy());
     let is_system = ALLOWED_FONT_PATHS
         .lock()
-        .map_err(|e| format!("Internal error: font path cache corrupted: {e}"))?
+        .map_err(|_| "Internal error: font path cache corrupted".to_string())?
         .contains(&canonical_string);
     let is_user = ALLOWED_USER_FONT_PATHS
         .lock()
-        .map_err(|e| format!("Internal error: user font path cache corrupted: {e}"))?
+        .map_err(|_| "Internal error: user font path cache corrupted".to_string())?
         .contains(&canonical_string);
     if !is_system && !is_user {
         return Err("Font path was not discovered by a scan command".to_string());
@@ -576,23 +621,28 @@ pub fn subset_font(
     }
 
     // Pre-read size check — rejects obvious oversize before allocating the Vec.
-    let metadata = fs::metadata(&canonical).map_err(|e| format!("Cannot stat font file: {}", e))?;
+    let metadata = fs::metadata(&canonical).map_err(|e| {
+        log::warn!("stat font file failed for '{filename}': {e}");
+        "Cannot stat font file".to_string()
+    })?;
     if metadata.len() > MAX_FONT_DATA_SIZE {
         return Err(format!(
-            "Font file too large ({} MB, max {} MB)",
-            metadata.len() / 1024 / 1024,
+            "Font file too large ({:.1} MB, max {} MB)",
+            metadata.len() as f64 / (1024.0 * 1024.0),
             MAX_FONT_DATA_SIZE / 1024 / 1024
         ));
     }
 
-    let font_data = fs::read(&canonical)
-        .map_err(|e| format!("Failed to read font file '{}': {}", filename, e))?;
+    let font_data = fs::read(&canonical).map_err(|e| {
+        log::warn!("read font file failed for '{filename}': {e}");
+        format!("Failed to read font file '{filename}'")
+    })?;
 
     // Post-read size check (TOCTOU mitigation — file could grow between stat and read)
     if font_data.len() as u64 > MAX_FONT_DATA_SIZE {
         return Err(format!(
-            "Font file too large after read ({} MB, max {} MB)",
-            font_data.len() / 1024 / 1024,
+            "Font file too large after read ({:.1} MB, max {} MB)",
+            font_data.len() as f64 / (1024.0 * 1024.0),
             MAX_FONT_DATA_SIZE / 1024 / 1024
         ));
     }
@@ -639,8 +689,8 @@ pub fn subset_font(
             // so a large font would cause excessive memory use in the frontend.
             if font_data.len() > MAX_FONT_FALLBACK_SIZE {
                 return Err(format!(
-                    "Subsetting failed and full font too large ({} MB, max {} MB for fallback)",
-                    font_data.len() / 1024 / 1024,
+                    "Subsetting failed and full font too large ({:.1} MB, max {} MB for fallback)",
+                    font_data.len() as f64 / (1024.0 * 1024.0),
                     MAX_FONT_FALLBACK_SIZE / 1024 / 1024
                 ));
             }

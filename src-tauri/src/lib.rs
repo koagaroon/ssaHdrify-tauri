@@ -7,13 +7,19 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
-            if cfg!(debug_assertions) {
-                app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .build(),
-                )?;
-            }
+            // Dev: INFO-level for full visibility while iterating.
+            // Release: WARN/ERROR only — keeps crash-diagnostic signals in
+            // bug reports without spamming healthy runs.
+            let level = if cfg!(debug_assertions) {
+                log::LevelFilter::Info
+            } else {
+                log::LevelFilter::Warn
+            };
+            app.handle().plugin(
+                tauri_plugin_log::Builder::default()
+                    .level(level)
+                    .build(),
+            )?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -24,5 +30,8 @@ pub fn run() {
             fonts::scan_font_files,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .unwrap_or_else(|e| {
+            eprintln!("fatal: tauri runtime failed to start: {e}");
+            std::process::exit(1);
+        });
 }

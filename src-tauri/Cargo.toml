@@ -1,6 +1,6 @@
 [package]
 name = "ssahdrify"
-version = "1.1.0"
+version = "1.2.0-preview.1"
 description = "SDR subtitle to HDR color space converter with font embedding and timing tools"
 authors = ["koagaroon"]
 license = "GPL-3.0-or-later"

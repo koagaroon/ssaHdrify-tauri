@@ -22,7 +22,18 @@
     "fs:allow-stat",
     {
       "identifier": "fs:scope",
-      "allow": [{ "path": "**" }]
+      "allow": [{ "path": "**" }],
+      "deny": [
+        { "path": "$HOME/.ssh/**" },
+        { "path": "$HOME/.aws/**" },
+        { "path": "$HOME/.gnupg/**" },
+        { "path": "$APPDATA/Microsoft/Credentials/**" },
+        { "path": "$APPDATA/Microsoft/Crypto/**" },
+        { "path": "$APPDATA/Microsoft/Protect/**" },
+        { "path": "$APPDATA/Microsoft/Windows/Start Menu/Programs/Startup/**" },
+        { "path": "$LOCALAPPDATA/Microsoft/Credentials/**" },
+        { "path": "$LOCALAPPDATA/Microsoft/Vault/**" }
+      ]
     }
   ]
 }
