@@ -782,10 +782,29 @@
 .font-stat {
   font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   letter-spacing: 0.03em;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+}
+
+/* Column header row for the detected-fonts card — sits between the
+   card title and the scrollable rows (Excel-freeze-row pattern, matches
+   .timeline-row-header). */
+.font-row-header {
+  background: var(--bg-secondary);
+  padding: 6px 14px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  border-top: 0;
+  border-bottom: 1px solid var(--border-light);
+  cursor: default;
+}
+.font-row-header:hover {
+  background: var(--bg-secondary);
 }
 
 /* Pill badges used on font rows and anywhere we signal state. */
@@ -811,6 +830,6 @@
   color: var(--badge-red-text);
 }
 .badge-mute {
-  background: color-mix(in srgb, var(--text-muted) 14%, transparent);
-  color: var(--text-muted);
+  background: color-mix(in srgb, var(--text-muted) 22%, transparent);
+  color: var(--text-secondary);
 }

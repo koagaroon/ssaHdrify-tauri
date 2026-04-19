@@ -379,7 +379,7 @@ export default function FontEmbed() {
         </button>
       </div>
       {fonts.length > 0 && (
-        <p className="text-xs -mt-2" style={{ color: "var(--text-muted)", opacity: 0.8 }}>
+        <p className="text-xs -mt-2" style={{ color: "var(--text-secondary)" }}>
           {t("fonts_full_embed_warning")}
         </p>
       )}
@@ -398,12 +398,20 @@ export default function FontEmbed() {
           </span>
         </div>
         {fonts.length > 0 ? (
-          <div className="max-h-64 overflow-y-auto">
-            {fonts.map((info, idx) => (
-              <label
-                key={idx}
-                className={"font-row" + (!info.filePath ? " missing" : "")}
-              >
+          <>
+            <div className="font-row font-row-header" aria-hidden="true">
+              <span />
+              <span>{t("col_font_name")}</span>
+              <span>{t("col_font_glyphs")}</span>
+              <span>{t("col_font_source")}</span>
+              <span>{t("col_font_status")}</span>
+            </div>
+            <div className="max-h-64 overflow-y-auto">
+              {fonts.map((info, idx) => (
+                <label
+                  key={idx}
+                  className={"font-row" + (!info.filePath ? " missing" : "")}
+                >
                 <input
                   type="checkbox"
                   id={`font-row-${idx}`}
@@ -433,19 +441,20 @@ export default function FontEmbed() {
                 </span>
               </label>
             ))}
-          </div>
+            </div>
+          </>
         ) : (
           <div className="px-4 py-8 text-center">
             {analyzing ? (
-              <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+              <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
                 {t("fonts_scanning")}
               </p>
             ) : (
               <div className="space-y-1">
-                <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+                <p className="text-sm" style={{ color: "var(--text-primary)" }}>
                   {t("fonts_empty")}
                 </p>
-                <p className="text-xs" style={{ color: "var(--text-muted)", opacity: 0.7 }}>
+                <p className="text-xs" style={{ color: "var(--text-secondary)" }}>
                   {t("fonts_empty_hint")}
                 </p>
               </div>
