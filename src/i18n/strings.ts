@@ -130,10 +130,15 @@ export const strings: Record<string, StringEntry> = {
   offset_hint: { en: "1 second = 1000 ms", zh: "1 秒 = 1000 毫秒" },
   threshold_label: { en: "Apply only after:", zh: "仅在此时间后应用：" },
   threshold_invalid: { en: "Invalid format (HH:MM:SS.mmm)", zh: "格式无效（HH:MM:SS.mmm）" },
-  preview_title: { en: "Preview (first {0} of {1})", zh: "预览（前 {0} 条，共 {1} 条）" },
+  preview_title: { en: "Preview — {0} captions", zh: "预览 — {0} 条字幕" },
   col_index: { en: "#", zh: "#" },
   col_original: { en: "Original", zh: "原始" },
   col_shifted: { en: "After Shift", zh: "偏移后" },
+  col_text: { en: "Text", zh: "原文" },
+  threshold_format_hint: {
+    en: "Format: HH:MM:SS.ms — hours : minutes : seconds . milliseconds",
+    zh: "格式：HH:MM:SS.ms — 时 : 分 : 秒 . 毫秒",
+  },
   btn_save_as: { en: "Save As...", zh: "另存为…" },
   msg_saved: { en: "Saved: {0} ({1} captions)", zh: "已保存：{0}（{1} 条字幕）" },
 

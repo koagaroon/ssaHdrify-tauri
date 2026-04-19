@@ -686,6 +686,24 @@
 .timeline-row:last-child {
   border-bottom: none;
 }
+
+/* Column header row — sits between the title bar and the scrollable list,
+   so it stays visible while rows scroll. Uppercase labels name each column
+   (Excel-freeze-row pattern). */
+.timeline-row-header {
+  background: var(--bg-secondary);
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--border-light);
+}
+.timeline-row-header > span {
+  color: var(--text-muted);
+}
 .timeline-row.unchanged {
   opacity: 0.55;
 }

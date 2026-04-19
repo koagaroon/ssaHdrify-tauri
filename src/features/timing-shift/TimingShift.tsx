@@ -25,7 +25,7 @@ export default function TimingShift() {
 
   const [detectedFormat, setDetectedFormat] = useState<string>("");
 
-  const [offsetValue, setOffsetValue] = useState(2000);
+  const [offsetValue, setOffsetValue] = useState(200);
   const [unit, setUnit] = useState<Unit>("ms");
   const [direction, setDirection] = useState<Direction>("slower");
 
@@ -361,12 +361,25 @@ export default function TimingShift() {
           </span>
         )}
       </div>
+      {useThreshold && (
+        <p className="text-xs" style={{ color: "var(--text-muted)", marginTop: "-0.5rem" }}>
+          {t("threshold_format_hint")}
+        </p>
+      )}
 
-      {/* Timeline preview — shifted captions with struck-through originals */}
+      {/* Timeline preview — full caption list with struck-through originals.
+          Column header row sits outside the scroll area so it stays visible
+          (Excel-style frozen header). */}
       {preview.length > 0 && (
         <div className="timeline-preview">
           <div className="timeline-preview-head">
-            <span>{t("preview_title", preview.length, captionCount)}</span>
+            <span>{t("preview_title", preview.length)}</span>
+          </div>
+          <div className="timeline-row timeline-row-header" aria-hidden="true">
+            <span>{t("col_index")}</span>
+            <span>{t("col_original")}</span>
+            <span>{t("col_shifted")}</span>
+            <span>{t("col_text")}</span>
           </div>
           <div className="timeline-list">
             {preview.map((entry) => (

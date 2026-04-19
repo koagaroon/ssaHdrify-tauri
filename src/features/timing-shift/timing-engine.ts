@@ -58,8 +58,10 @@ export function shiftSubtitles(content: string, options: ShiftOptions): ShiftRes
 
   const { output, format, captions, shifted } = shiftSubtitle(content, offsetMs, thresholdMs, fps);
 
-  // Build preview (first 15 entries)
-  const preview: PreviewEntry[] = captions.slice(0, 15).map((c, i) => {
+  // Build preview for every caption — the UI scroll container decides
+  // how many are visible at a time. Long lines are truncated to 60 chars
+  // so the DOM stays lean even on 1000+ caption files.
+  const preview: PreviewEntry[] = captions.map((c, i) => {
     const s = shifted[i];
     const wasShifted = c.start !== s.start || c.end !== s.end;
     return {
@@ -68,7 +70,7 @@ export function shiftSubtitles(content: string, options: ShiftOptions): ShiftRes
       originalEnd: c.end,
       shiftedStart: s.start,
       shiftedEnd: s.end,
-      text: c.text.slice(0, 60), // Truncate for preview
+      text: c.text.slice(0, 60),
       wasShifted,
     };
   });
