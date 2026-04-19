@@ -23,6 +23,10 @@ export const strings: Record<string, StringEntry> = {
   nit_unit: { en: "nits", zh: "尼特" },
   nit_presets_label: { en: "Quick presets", zh: "常用预设" },
   nit_presets_hint: { en: "click to apply a standard", zh: "点击应用标准" },
+  nit_interaction_hint: {
+    en: "Drag the track · click a preset · ← → adjust by 10 · Shift+← → by 100 · Home/End jump to ends",
+    zh: "拖动滑轨 · 点击预设 · ← → 步进 10 · Shift+← → 步进 100 · Home/End 跳两端",
+  },
   preset_sdr_desc: { en: "Standard", zh: "标清" },
   preset_bt2408_desc: { en: "Reference", zh: "参考白" },
   preset_hdr10_desc: { en: "Consumer", zh: "消费级" },

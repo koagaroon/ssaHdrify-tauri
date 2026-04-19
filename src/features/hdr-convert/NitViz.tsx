@@ -149,6 +149,8 @@ export default function NitViz({ value, onChange, disabled = false }: NitVizProp
           </button>
         ))}
       </div>
+
+      <div className="nit-interaction-hint">{t("nit_interaction_hint")}</div>
     </div>
   );
 }

@@ -501,40 +501,69 @@
   cursor: not-allowed;
   opacity: 0.5;
 }
+/* Active state — color-coding via border + background only.
+   Text stays on theme-aware primary/secondary for readability
+   regardless of which preset is lit or which theme is active.
+   (See feedback_visibility_priority.md — tinted-on-tinted text
+   fails contrast, especially in light mode.) */
 .nit-preset[aria-pressed="true"] {
   background: color-mix(in srgb, var(--accent) 18%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+}
+.nit-preset[aria-pressed="true"] .nit-preset-label {
   color: var(--text-primary);
 }
-/* Color-coded presets when active — matches the rainbow track bands */
+.nit-preset[aria-pressed="true"] .nit-preset-desc {
+  color: var(--text-secondary);
+}
+.nit-preset[aria-pressed="true"] .nit-preset-v {
+  color: var(--accent);
+}
+
+/* Per-preset color coding — border + background only.
+   The big number (.nit-preset-v) also tints, with light/dark
+   variants to keep contrast on either theme. */
 .nit-preset[aria-pressed="true"][data-key="sdr"] {
-  background: color-mix(in srgb, #8b6f40 22%, transparent);
-  border-color: color-mix(in srgb, #ffb347 55%, transparent);
+  background: color-mix(in srgb, #ffb347 22%, transparent);
+  border-color: #ffb347;
 }
-.nit-preset[aria-pressed="true"][data-key="sdr"] .nit-preset-label,
-.nit-preset[aria-pressed="true"][data-key="sdr"] .nit-preset-desc {
-  color: #ffc570;
+.nit-preset[aria-pressed="true"][data-key="sdr"] .nit-preset-v {
+  color: #b45309; /* dark amber — readable on light lilac */
 }
+[data-theme="dark"] .nit-preset[aria-pressed="true"][data-key="sdr"] .nit-preset-v {
+  color: #fbbf24; /* bright amber — readable on dark plum */
+}
+
 .nit-preset[aria-pressed="true"][data-key="bt2408"] {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  border-color: var(--accent);
 }
+.nit-preset[aria-pressed="true"][data-key="bt2408"] .nit-preset-v {
+  color: var(--accent);
+}
+
 .nit-preset[aria-pressed="true"][data-key="hdr10"] {
-  background: color-mix(in srgb, #2ee0ff 14%, transparent);
-  border-color: color-mix(in srgb, #2ee0ff 50%, transparent);
+  background: color-mix(in srgb, #2ee0ff 18%, transparent);
+  border-color: #2ee0ff;
 }
-.nit-preset[aria-pressed="true"][data-key="hdr10"] .nit-preset-label,
-.nit-preset[aria-pressed="true"][data-key="hdr10"] .nit-preset-desc {
-  color: #7eebff;
+.nit-preset[aria-pressed="true"][data-key="hdr10"] .nit-preset-v {
+  color: #0369a1; /* dark cyan — readable on light */
 }
+[data-theme="dark"] .nit-preset[aria-pressed="true"][data-key="hdr10"] .nit-preset-v {
+  color: #7dd3fc; /* bright cyan — readable on dark */
+}
+
 .nit-preset[aria-pressed="true"][data-key="dv"] {
-  background: color-mix(in srgb, #ff5caa 16%, transparent);
-  border-color: color-mix(in srgb, #ff5caa 55%, transparent);
+  background: color-mix(in srgb, #ff5caa 20%, transparent);
+  border-color: #ff5caa;
 }
-.nit-preset[aria-pressed="true"][data-key="dv"] .nit-preset-label,
-.nit-preset[aria-pressed="true"][data-key="dv"] .nit-preset-desc {
-  color: #ff9ccc;
+.nit-preset[aria-pressed="true"][data-key="dv"] .nit-preset-v {
+  color: #be185d; /* dark magenta — readable on light */
 }
+[data-theme="dark"] .nit-preset[aria-pressed="true"][data-key="dv"] .nit-preset-v {
+  color: #f9a8d4; /* bright pink — readable on dark */
+}
+
 .nit-preset-label {
   font-size: 9px;
   font-weight: 600;
@@ -542,13 +571,11 @@
   text-transform: uppercase;
   color: var(--text-muted);
 }
-.nit-preset[aria-pressed="true"] .nit-preset-label {
-  color: var(--accent);
-}
 .nit-preset-v {
   font-family: var(--font-mono);
   font-size: 12px;
   font-weight: 600;
+  color: var(--text-primary);
   font-variant-numeric: tabular-nums;
 }
 .nit-preset-desc {
@@ -557,6 +584,15 @@
   letter-spacing: 0.02em;
   margin-top: 1px;
 }
-.nit-preset[aria-pressed="true"] .nit-preset-desc {
-  color: color-mix(in srgb, var(--accent) 70%, var(--text-secondary));
+
+/* Interaction cheat-sheet — surfaces drag / click / keyboard controls so
+   users discover them without reading docs. Kept small + muted. */
+.nit-interaction-hint {
+  margin-top: 8px;
+  font-size: 10px;
+  color: var(--text-muted);
+  text-align: center;
+  letter-spacing: 0.01em;
+  font-family: var(--font-mono);
+  line-height: 1.4;
 }
