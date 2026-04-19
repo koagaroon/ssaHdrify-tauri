@@ -10,6 +10,7 @@ import {
   analyzeFonts,
   buildUserFontMap,
   embedFonts,
+  userFontKey,
   type FontInfo,
   type EmbedProgress,
 } from "./font-embedder";
@@ -19,12 +20,20 @@ import { useFileContext } from "../../lib/FileContext";
 import { useStatus } from "../../lib/StatusContext";
 import FontSourceModal, { type FontSource } from "./FontSourceModal";
 
-/** Indices of fonts that resolved to a file — used to pre-check them in the UI. */
-function indicesOfResolvedFonts(infos: FontInfo[]): Set<number> {
-  const out = new Set<number>();
-  infos.forEach((info, idx) => {
-    if (info.filePath) out.add(idx);
-  });
+/** Stable selection key — survives `fonts[]` reorders (e.g. after adding a
+ *  new font source triggers a reanalyze with a different ordering). Using
+ *  array indices here was the prior bug: indices shifted on reorder and the
+ *  user embedded fonts they hadn't checked. */
+function fontSelectionKey(info: FontInfo): string {
+  return userFontKey(info.key.family, info.key.bold, info.key.italic);
+}
+
+/** Stable keys of fonts that resolved to a file — used to pre-check them in the UI. */
+function keysOfResolvedFonts(infos: FontInfo[]): Set<string> {
+  const out = new Set<string>();
+  for (const info of infos) {
+    if (info.filePath) out.add(fontSelectionKey(info));
+  }
   return out;
 }
 
@@ -34,7 +43,7 @@ export default function FontEmbed() {
 
   const [fonts, setFonts] = useState<FontInfo[]>([]);
   const [fontUsages, setFontUsages] = useState<FontUsage[]>([]);
-  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [analyzing, setAnalyzing] = useState(false);
   const [embedding, setEmbedding] = useState(false);
   const [progress, setProgress] = useState<EmbedProgress | null>(null);
@@ -106,7 +115,7 @@ export default function FontEmbed() {
 
       setFontUsages(usages);
       setFonts(infos);
-      setSelected(indicesOfResolvedFonts(infos));
+      setSelected(keysOfResolvedFonts(infos));
 
       // Silent replace: see FileContext.tsx for design rationale
       setFontsFile({
@@ -131,13 +140,35 @@ export default function FontEmbed() {
   const reanalyzeWithSources = useCallback(
     async (nextSources: FontSource[]) => {
       if (!fileContent) return;
+      // Claim a generation before any await — if a second source is added
+      // while this one is still mid-analyze, or the user clears the file,
+      // every await below verifies the generation and drops the stale
+      // result. Without this guard the slower of two concurrent analyses
+      // wins and the UI shows results for an old source set.
+      const gen = (pickGenRef.current = pickGenRef.current + 1);
       const map = buildUserFontMap(nextSources.flatMap((src) => src.entries));
       try {
         const { infos, usages } = await analyzeFonts(fileContent, map);
+        if (gen !== pickGenRef.current) return;
         setFontUsages(usages);
         setFonts(infos);
-        setSelected(indicesOfResolvedFonts(infos));
+        // Merge: keep any user-overridden picks that are still resolvable,
+        // add defaults for newly-resolved fonts. Net effect: adding a new
+        // source pre-checks fonts it satisfies without blowing away manual
+        // unchecks on fonts the user had deselected.
+        setSelected((prev) => {
+          const resolved = keysOfResolvedFonts(infos);
+          const next = new Set<string>();
+          for (const key of prev) {
+            if (resolved.has(key)) next.add(key);
+          }
+          for (const key of resolved) {
+            if (!prev.has(key) && !next.has(key)) next.add(key);
+          }
+          return next;
+        });
       } catch (e) {
+        if (gen !== pickGenRef.current) return;
         setIsError(true);
         setStatus(t("error_prefix", e instanceof Error ? e.message : String(e)));
       }
@@ -184,13 +215,13 @@ export default function FontEmbed() {
     [fontSources, reanalyzeWithSources]
   );
 
-  const toggleSelect = (idx: number) => {
+  const toggleSelect = (key: string) => {
     setSelected((prev) => {
       const next = new Set(prev);
-      if (next.has(idx)) {
-        next.delete(idx);
+      if (next.has(key)) {
+        next.delete(key);
       } else {
-        next.add(idx);
+        next.add(key);
       }
       return next;
     });
@@ -199,7 +230,9 @@ export default function FontEmbed() {
   const handleEmbed = useCallback(async () => {
     if (!fileContent || !filePath) return;
 
-    const selectedFonts = fonts.filter((info, idx) => selected.has(idx) && info.filePath);
+    const selectedFonts = fonts.filter(
+      (info) => selected.has(fontSelectionKey(info)) && info.filePath
+    );
     if (selectedFonts.length === 0) {
       setStatus(t("msg_no_fonts_selected"));
       return;
@@ -234,6 +267,14 @@ export default function FontEmbed() {
         { name: "ASS Subtitles", extensions: ["ass"] },
       ]);
       if (!savePath) {
+        return;
+      }
+
+      // User could have clicked Cancel while the native save dialog was open;
+      // honor it before we actually write anything to disk.
+      if (cancelRef.current) {
+        setStatus("");
+        setIsError(false);
         return;
       }
 
@@ -287,7 +328,7 @@ export default function FontEmbed() {
       kind: "pending",
       message: t("status_fonts_pending", selected.size),
     });
-  }, [fileName, analyzing, embedding, selected.size, lastActionResult, setTabStatus, t]);
+  }, [fileName, analyzing, embedding, selected, lastActionResult, setTabStatus, t]);
 
   const formatFontLabel = (info: FontInfo) => fontKeyLabel(info.key);
 
@@ -450,17 +491,19 @@ export default function FontEmbed() {
               <span>{t("col_font_status")}</span>
             </div>
             <div className="max-h-64 overflow-y-auto">
-              {fonts.map((info, idx) => (
+              {fonts.map((info) => {
+                const selKey = fontSelectionKey(info);
+                return (
                 <label
-                  key={idx}
+                  key={selKey}
                   className={"font-row" + (!info.filePath ? " missing" : "")}
                 >
                 <input
                   type="checkbox"
-                  id={`font-row-${idx}`}
-                  name={`font-${idx}`}
-                  checked={selected.has(idx)}
-                  onChange={() => toggleSelect(idx)}
+                  id={`font-row-${selKey}`}
+                  name={`font-${selKey}`}
+                  checked={selected.has(selKey)}
+                  onChange={() => toggleSelect(selKey)}
                   disabled={!info.filePath || embedding}
                   className="rounded"
                   style={{
@@ -483,7 +526,8 @@ export default function FontEmbed() {
                   {info.filePath ? t("fonts_found") : t("fonts_missing")}
                 </span>
               </label>
-            ))}
+                );
+              })}
             </div>
           </>
         ) : (

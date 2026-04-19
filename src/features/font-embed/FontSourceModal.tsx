@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   pickFontDirectory,
   pickFontFiles,
@@ -80,7 +80,6 @@ export default function FontSourceModal(props: Props) {
   const [error, setError] = useState<string | null>(null);
   // info is non-error feedback ("added N fonts") shown in a neutral tone.
   const [info, setInfo] = useState<string | null>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
 
   // Close on Escape.
   useEffect(() => {
@@ -187,7 +186,7 @@ export default function FontSourceModal(props: Props) {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div ref={panelRef} className="modal">
+      <div className="modal">
         {/* ── Header — title + subtitle + close ──── */}
         <div className="modal-head">
           <div className="modal-head-text">

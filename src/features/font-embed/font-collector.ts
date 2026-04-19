@@ -113,8 +113,8 @@ export function collectFonts(assContent: string): FontUsage[] {
       const family = sanitizeFamily(normalizeFamily(style.Fontname || "Arial"));
       styleMap.set(style.Name, {
         family: family || "Arial",
-        bold: parseInt(style.Bold || "0") !== 0,
-        italic: parseInt(style.Italic || "0") !== 0,
+        bold: parseInt(style.Bold || "0", 10) !== 0,
+        italic: parseInt(style.Italic || "0", 10) !== 0,
       });
     }
   }
@@ -137,9 +137,13 @@ export function collectFonts(assContent: string): FontUsage[] {
         throw new Error(`Too many font variants: ${usageMap.size} (max 500)`);
       }
     }
+    // Upper-bound the per-variant codepoint set. 65536 is a defensive cap,
+    // not the Basic Multilingual Plane boundary (which caps at U+FFFF). Real
+    // fonts carry well under this; the cap only fires against crafted ASS
+    // that enumerates tens of thousands of distinct characters for one font.
+    const MAX_CODEPOINTS_PER_VARIANT = 65536;
     for (const char of text) {
-      if (usage.codepoints.size >= 65536) {
-        // BMP limit reached — no point collecting more codepoints for subsetting
+      if (usage.codepoints.size >= MAX_CODEPOINTS_PER_VARIANT) {
         break;
       }
       const cp = char.codePointAt(0);
@@ -207,8 +211,10 @@ function processDialogueText(
       const block = text.slice(i + 1, closeIdx);
       current = applyOverrideTags(block, current, initialFont);
       // Reset drawing on \p0 or \r — checked independently from \p[1-9]
-      // so that {\r\p1} correctly resets then re-enables drawing mode
-      if (/\\p0/.test(block) || /\\r/.test(block)) {
+      // so that {\r\p1} correctly resets then re-enables drawing mode.
+      // The \r anchor is `\r(?=\\|}|$|[A-Z])` so \rStyleName still matches
+      // while made-up tokens like \rnd do not trigger a false style reset.
+      if (/\\p0/.test(block) || /\\r(?=\\|}|$|[A-Z])/.test(block)) {
         isDrawing = false;
       }
       if (/\\p[1-9]/.test(block)) {
@@ -239,8 +245,9 @@ function applyOverrideTags(block: string, current: FontKey, initialFont: FontKey
   let result = { ...current };
 
   // \r[StyleName] — reset to base style (but don't return early;
-  // subsequent tags like \fn in the same block must still be applied)
-  if (/\\r/.test(block)) {
+  // subsequent tags like \fn in the same block must still be applied).
+  // The anchor avoids matching made-up tokens like \rnd.
+  if (/\\r(?=\\|}|$|[A-Z])/.test(block)) {
     result = { ...initialFont };
   }
 
@@ -261,7 +268,7 @@ function applyOverrideTags(block: string, current: FontKey, initialFont: FontKey
   // \b<0|1|weight> — bold
   const bMatch = block.match(/\\b(\d+)/);
   if (bMatch) {
-    const val = parseInt(bMatch[1]);
+    const val = parseInt(bMatch[1], 10);
     // \b0 = not bold, \b1 = bold, \b700+ = bold by weight
     result.bold = val === 1 || val >= 700;
   }
@@ -269,7 +276,7 @@ function applyOverrideTags(block: string, current: FontKey, initialFont: FontKey
   // \i<0|1> — italic
   const iMatch = block.match(/\\i(\d+)/);
   if (iMatch) {
-    result.italic = parseInt(iMatch[1]) !== 0;
+    result.italic = parseInt(iMatch[1], 10) !== 0;
   }
 
   return result;

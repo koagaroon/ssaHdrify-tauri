@@ -19,8 +19,11 @@ import { SECTION_HEADER_RE } from "../hdr-convert/ass-processor";
 
 // ── Types ─────────────────────────────────────────────────
 
-/** Where a resolved font came from. Shown as a badge in the main font list. */
-export type FontSource = "local" | "system";
+/** Where a resolved font came from. Shown as a badge in the main font list.
+ *  Named `FontProvenance` (not `FontSource`) to avoid colliding with
+ *  `FontSource` in FontSourceModal, which is a struct describing a
+ *  user-picked source (folder or file set). */
+export type FontProvenance = "local" | "system";
 
 export interface FontInfo {
   key: FontKey;
@@ -30,7 +33,7 @@ export interface FontInfo {
   fontIndex: number;
   error: string | null;
   /** null when the font could not be resolved */
-  source: FontSource | null;
+  source: FontProvenance | null;
 }
 
 /**
@@ -89,9 +92,10 @@ export async function analyzeFonts(
 
   // Development diagnostic: when a user reports "font X doesn't match", the
   // only way to confirm from logs is to see both the lookup key and every
-  // key actually present in the map. Format is tight so the console stays
-  // readable. Remove once this feature stabilizes in the wild.
-  if (userFontMap && userFontMap.size > 0) {
+  // key actually present in the map. Gated on DEV because font paths in the
+  // console would leak the user's machine layout in any shared screenshot.
+  const isDev = import.meta.env.DEV;
+  if (isDev && userFontMap && userFontMap.size > 0) {
     const sample = Array.from(userFontMap.keys()).slice(0, 20);
     console.debug(
       `[ssaHdrify] userFontMap has ${userFontMap.size} keys; first ${sample.length}:`,
@@ -105,7 +109,7 @@ export async function analyzeFonts(
 
     const local = userFontMap?.get(key);
     if (local) {
-      console.debug(`[ssaHdrify] '${usage.key.family}' → LOCAL ${local.path}`);
+      if (isDev) console.debug(`[ssaHdrify] '${usage.key.family}' → LOCAL ${local.path}`);
       infos.push({
         ...base,
         filePath: local.path,
@@ -118,7 +122,7 @@ export async function analyzeFonts(
 
     try {
       const result = await findSystemFont(usage.key.family, usage.key.bold, usage.key.italic);
-      console.debug(`[ssaHdrify] '${usage.key.family}' → SYSTEM ${result.path}`);
+      if (isDev) console.debug(`[ssaHdrify] '${usage.key.family}' → SYSTEM ${result.path}`);
       infos.push({
         ...base,
         filePath: result.path,
@@ -128,7 +132,9 @@ export async function analyzeFonts(
       });
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
-      console.debug(`[ssaHdrify] '${usage.key.family}' → MISS (key='${key}', reason=${reason})`);
+      if (isDev) {
+        console.debug(`[ssaHdrify] '${usage.key.family}' → MISS (key='${key}', reason=${reason})`);
+      }
       infos.push({
         ...base,
         filePath: null,
@@ -143,6 +149,23 @@ export async function analyzeFonts(
 }
 
 /**
+ * FNV-1a 32-bit hash, rendered as 8 lowercase hex chars. Used only as a
+ * filename suffix for fonts whose family name is entirely non-ASCII (typical
+ * for CJK fonts like "思源黑体"). Without the hash two different CJK fonts
+ * would both collapse to `font.ttf` and collide inside the embedded [Fonts]
+ * section — the renderer would then load whichever face hit the parser
+ * first, producing visual corruption that looks like a random font swap.
+ */
+function familyFnvHash(family: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < family.length; i++) {
+    h ^= family.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16).padStart(8, "0");
+}
+
+/**
  * Build the font name for the [Fonts] section entry.
  * Convention: family_bold_italic.ttf (all lowercase)
  */
@@ -152,7 +175,10 @@ function buildFontFileName(key: FontKey): string {
     .replace(/[^a-z0-9_-]/g, "_") // strip everything except safe chars
     .replace(/_+/g, "_") // collapse consecutive underscores
     .replace(/^_|_$/g, ""); // trim leading/trailing underscores
-  if (!name) name = "font"; // fallback if name becomes empty
+  // When the ASCII-only strip empties the name — common for pure-CJK family
+  // names — append a stable hash of the original so distinct CJK fonts don't
+  // collide on the same `font.ttf` filename inside the [Fonts] section.
+  if (!name) name = `font_${familyFnvHash(key.family)}`;
   if (key.bold) name += "_bold";
   if (key.italic) name += "_italic";
   return `${name}.ttf`;
