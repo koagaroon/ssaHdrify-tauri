@@ -1,7 +1,23 @@
 @import "tailwindcss";
 
+/* ── UI face — Inter (English body + display) ──────────────
+   Variable font, weights 100–900 in a single woff2. Primary
+   Latin face across both UI language modes; CJK characters
+   fall through to "Microsoft YaHei" / "PingFang SC" via the
+   per-glyph fallback chain in --font-sans.
+   © The Inter Project Authors (https://github.com/rsms/inter),
+   SIL Open Font License 1.1.
+   Bundled per OFL-1.1; see src/assets/fonts/inter/LICENSE.txt. */
+@font-face {
+  font-family: "Inter";
+  src: url("./assets/fonts/inter/InterVariable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 /* ── Display face — Smiley Sans Oblique (得意黑) ──────────
-   Display-only. App UI keeps system fonts via --font-sans.
+   Display-only, used for the hero title in Chinese mode.
    Font © 2022–2024 atelierAnchor, SIL Open Font License 1.1.
    Bundled per OFL-1.1; see src/assets/fonts/smiley-sans/LICENSE.txt. */
 @font-face {
@@ -91,11 +107,12 @@
   --progress-fill: #6d28d9;
 
   /* Type stack
-     --font-sans    → app UI (system-native)
-     --font-display → Smiley Sans Oblique — hero title / display only
-     --font-mono    → numbers, timecodes, tab index chips */
-  --font-sans: "Segoe UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
-  --font-display: "Smiley Sans", "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+     --font-sans    → app UI body (Inter-first, CJK fallback via MS YaHei)
+     --font-display → hero title (Inter in EN, Smiley Sans in ZH via :lang(zh))
+     --font-mono    → numbers, timecodes, tab index chips
+     Inter covers Latin/Greek/Cyrillic; CJK fallback is the OS font. */
+  --font-sans: "Inter", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  --font-display: "Inter", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
   --font-mono: ui-monospace, "SF Mono", Consolas, "Cascadia Mono", "Liberation Mono", monospace;
 
   /* Type scale */
@@ -188,6 +205,15 @@
   --cancel-text: #fca5a5;
   --progress-bg: #3a2a5c;
   --progress-fill: #a78bfa;
+}
+
+/* ── Chinese-locale font mapping ─────────────────────────
+   Hero title swaps to Smiley Sans Oblique so the Chinese
+   brand reads in its designed voice. Body stays Inter-first
+   since the existing stack falls through to Microsoft YaHei
+   for CJK characters automatically. */
+:lang(zh) {
+  --font-display: "Smiley Sans", "Microsoft YaHei", "PingFang SC", "Inter", system-ui, sans-serif;
 }
 
 /* ── Base ──────────────────────────────────────────────────

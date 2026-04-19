@@ -2,7 +2,7 @@
  * I18n context provider — detects system language on first launch,
  * persists user choice to localStorage.
  */
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { I18nContext } from "./useI18n";
 import type { Lang } from "./strings";
 
@@ -24,6 +24,13 @@ export default function I18nProvider({ children }: { children: ReactNode }) {
     setLangState(next);
     localStorage.setItem(STORAGE_KEY, next);
   };
+
+  // Reflect the active locale onto <html lang="…"> so CSS `:lang()`
+  // selectors (font stack switching in index.css) and screen readers
+  // both see the current UI language.
+  useEffect(() => {
+    document.documentElement.setAttribute("lang", lang);
+  }, [lang]);
 
   return <I18nContext.Provider value={{ lang, setLang }}>{children}</I18nContext.Provider>;
 }

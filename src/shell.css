@@ -172,7 +172,6 @@
 .app-title {
   font-family: var(--font-display);
   font-size: 26px;
-  font-style: oblique;
   font-weight: 600;
   letter-spacing: -0.03em;
   line-height: 0.95;
@@ -181,6 +180,11 @@
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
+}
+/* Oblique only in Chinese mode where Smiley Sans is designed for it;
+   English mode stays upright Inter since we bundle only roman. */
+:lang(zh) .app-title {
+  font-style: oblique;
 }
 .app-tagline {
   font-size: 10px;
