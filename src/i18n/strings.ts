@@ -191,6 +191,18 @@ export const strings: Record<string, StringEntry> = {
 
   // Font source modal
   font_sources_title: { en: "Font Sources", zh: "字体来源" },
+  font_sources_modal_sub: {
+    en: "Pick a folder or individual files — duplicates are filtered automatically",
+    zh: "可选择文件夹或单独文件，重复项会自动过滤",
+  },
+  font_sources_add_folder_sub: {
+    en: "Scan every font file in a folder",
+    zh: "扫描文件夹中所有字体文件",
+  },
+  font_sources_add_files_sub: {
+    en: "Pick one or more individual font files",
+    zh: "选择一个或多个字体文件",
+  },
   font_sources_empty_hint: {
     en: "No local sources yet. Add a folder or individual files to match fonts without installing them system-wide.",
     zh: "尚未添加本地字体来源。添加文件夹或独立文件即可在不安装字体的情况下完成匹配。",

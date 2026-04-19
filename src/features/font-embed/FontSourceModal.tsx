@@ -182,49 +182,52 @@ export default function FontSourceModal(props: Props) {
 
   return (
     <div
-      className="fixed inset-0 flex items-center justify-center z-50"
-      style={{ background: "rgba(0,0,0,0.45)" }}
+      className="modal-scrim"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div
-        ref={panelRef}
-        className="rounded-xl shadow-2xl w-full max-w-lg mx-4"
-        style={{
-          background: "var(--bg-app)",
-          border: "1px solid var(--border)",
-        }}
-      >
-        {/* ── Header ─────────────────────────────── */}
-        <div
-          className="px-5 py-3 flex items-center justify-between"
-          style={{ borderBottom: "1px solid var(--border)" }}
-        >
-          <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
-            {t("font_sources_title")}
-          </h2>
+      <div ref={panelRef} className="modal">
+        {/* ── Header — title + subtitle + close ──── */}
+        <div className="modal-head">
+          <div className="modal-head-text">
+            <div className="modal-title">{t("font_sources_title")}</div>
+            <div className="modal-sub">{t("font_sources_modal_sub")}</div>
+          </div>
           <button
+            type="button"
             onClick={onClose}
-            className="px-2 py-1 rounded text-sm"
-            style={{ color: "var(--text-muted)" }}
+            className="modal-close"
             title={t("font_sources_close")}
+            aria-label={t("font_sources_close")}
           >
-            ✕
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M18 6 6 18M6 6l12 12" />
+            </svg>
           </button>
         </div>
 
-        {/* ── Body ───────────────────────────────── */}
-        <div className="px-5 py-4 space-y-4">
-          {/* Source list */}
+        {/* ── Body — source list + option cards + status + coverage ── */}
+        <div className="modal-body">
+          {/* Existing sources */}
           {sources.length === 0 ? (
-            <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+            <p className="text-xs" style={{ color: "var(--text-secondary)" }}>
               {t("font_sources_empty_hint")}
             </p>
           ) : (
             <ul
               className="rounded-lg overflow-hidden"
-              style={{ border: "1px solid var(--border)" }}
+              style={{ border: "1px solid var(--border-light)" }}
             >
               {sources.map((src) => {
                 const label =
@@ -236,7 +239,8 @@ export default function FontSourceModal(props: Props) {
                     key={src.id}
                     className="flex items-center justify-between px-3 py-2 text-sm"
                     style={{
-                      borderBottom: "1px solid color-mix(in srgb, var(--border) 50%, transparent)",
+                      borderBottom:
+                        "1px solid color-mix(in srgb, var(--border-light) 50%, transparent)",
                       color: "var(--text-primary)",
                     }}
                   >
@@ -258,43 +262,60 @@ export default function FontSourceModal(props: Props) {
             </ul>
           )}
 
-          {/* Action buttons — both use the accent color because both are
-              equally valid entry points; only the transient "scanning" state
-              dims them. */}
-          <div className="flex gap-2">
-            <button
-              onClick={handleAddFolder}
-              disabled={scanning}
-              className="flex-1 px-4 py-2 rounded-lg font-medium text-sm transition-colors"
-              style={
-                scanning
-                  ? {
-                      background: "var(--accent-disabled-bg)",
-                      color: "var(--accent-disabled-text)",
-                      opacity: 0.6,
-                    }
-                  : { background: "var(--accent)", color: "white" }
-              }
-            >
-              {scanning ? t("font_sources_scanning") : `+ ${t("font_sources_add_folder")}`}
-            </button>
-            <button
-              onClick={handleAddFiles}
-              disabled={scanning}
-              className="flex-1 px-4 py-2 rounded-lg font-medium text-sm transition-colors"
-              style={
-                scanning
-                  ? {
-                      background: "var(--accent-disabled-bg)",
-                      color: "var(--accent-disabled-text)",
-                      opacity: 0.6,
-                    }
-                  : { background: "var(--accent)", color: "white" }
-              }
-            >
-              + {t("font_sources_add_files")}
-            </button>
-          </div>
+          {/* Option cards — two picker entry points */}
+          <button
+            type="button"
+            onClick={handleAddFolder}
+            disabled={scanning}
+            className="modal-opt"
+          >
+            <span className="modal-opt-icon" aria-hidden="true">
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
+              </svg>
+            </span>
+            <div className="modal-opt-text">
+              <div className="modal-opt-title">
+                {scanning ? t("font_sources_scanning") : t("font_sources_add_folder")}
+              </div>
+              <div className="modal-opt-sub">{t("font_sources_add_folder_sub")}</div>
+            </div>
+          </button>
+          <button
+            type="button"
+            onClick={handleAddFiles}
+            disabled={scanning}
+            className="modal-opt"
+          >
+            <span className="modal-opt-icon" aria-hidden="true">
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z" />
+                <path d="M14 2v6h6" />
+              </svg>
+            </span>
+            <div className="modal-opt-text">
+              <div className="modal-opt-title">{t("font_sources_add_files")}</div>
+              <div className="modal-opt-sub">{t("font_sources_add_files_sub")}</div>
+            </div>
+          </button>
 
           {error && (
             <p className="text-xs" style={{ color: "var(--error)" }}>
@@ -312,12 +333,12 @@ export default function FontSourceModal(props: Props) {
           <div
             className="rounded-lg px-3 py-3"
             style={{
-              border: "1px solid var(--border)",
+              border: "1px solid var(--border-light)",
               background: "var(--bg-panel)",
             }}
           >
             {!hasSubtitle ? (
-              <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+              <p className="text-xs" style={{ color: "var(--text-secondary)" }}>
                 {t("font_coverage_no_subtitle")}
               </p>
             ) : (
@@ -330,43 +351,17 @@ export default function FontSourceModal(props: Props) {
                 >
                   {t("font_coverage", covered, total)}
                   {coverageComplete && (
-                    <span
-                      className="ml-2 text-xs px-2 py-0.5 rounded"
-                      style={{
-                        background: "var(--badge-green-bg)",
-                        color: "var(--badge-green-text)",
-                      }}
-                    >
-                      {t("font_coverage_complete")}
-                    </span>
+                    <span className="ml-2 badge badge-green">{t("font_coverage_complete")}</span>
                   )}
                 </p>
                 {missing.length > 0 && (
-                  <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                  <p className="text-xs" style={{ color: "var(--text-secondary)" }}>
                     {t("font_coverage_missing", missing.join(", "))}
                   </p>
                 )}
               </div>
             )}
           </div>
-        </div>
-
-        {/* ── Footer ─────────────────────────────── */}
-        <div
-          className="px-5 py-3 flex justify-end"
-          style={{ borderTop: "1px solid var(--border)" }}
-        >
-          <button
-            onClick={onClose}
-            className="px-4 py-2 rounded-lg text-sm"
-            style={{
-              background: "var(--bg-input)",
-              color: "var(--text-primary)",
-              border: "1px solid var(--border)",
-            }}
-          >
-            {t("font_sources_close")}
-          </button>
         </div>
       </div>
     </div>

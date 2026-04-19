@@ -840,3 +840,149 @@
   background: color-mix(in srgb, var(--text-muted) 22%, transparent);
   color: var(--text-secondary);
 }
+
+/* ─────────────────────────────────────────────────────────────
+   MODAL — font source picker (scrim + pop + option cards)
+   ───────────────────────────────────────────────────────────── */
+.modal-scrim {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in srgb, var(--bg-app) 55%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  display: grid;
+  place-items: center;
+  z-index: 50;
+  animation: modal-fade-in 0.15s ease-out;
+}
+@keyframes modal-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.modal {
+  width: 460px;
+  max-width: calc(100% - 32px);
+  max-height: calc(100% - 64px);
+  background: var(--bg-app);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow:
+    0 24px 60px -10px rgba(0, 0, 0, 0.4),
+    0 0 80px -20px var(--accent);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: modal-pop 0.2s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+}
+@keyframes modal-pop {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.modal-head {
+  padding: 16px 20px 12px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  border-bottom: 1px solid var(--border-light);
+  flex-shrink: 0;
+}
+.modal-head-text {
+  flex: 1;
+  min-width: 0;
+}
+.modal-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+.modal-sub {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+.modal-close {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  color: var(--text-muted);
+  cursor: pointer;
+  border: 0;
+  background: none;
+  transition: background-color 0.15s, color 0.15s;
+  flex-shrink: 0;
+}
+.modal-close:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.modal-body {
+  padding: 12px 20px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+/* Option card — 40px rounded icon + title + subtitle. Both picker
+   paths (folder, files) get one. */
+.modal-opt {
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  gap: 14px;
+  padding: 12px 14px;
+  align-items: center;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  background: var(--bg-app);
+  text-align: left;
+  transition: background-color 0.15s, border-color 0.15s;
+  cursor: pointer;
+  font-family: inherit;
+  width: 100%;
+}
+.modal-opt:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg-app));
+}
+.modal-opt:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.modal-opt-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+.modal-opt-text {
+  min-width: 0;
+}
+.modal-opt-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+.modal-opt-sub {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
