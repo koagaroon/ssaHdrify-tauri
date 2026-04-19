@@ -57,6 +57,15 @@ export default function TimingShift() {
   );
   const thresholdInvalid = useThreshold && thresholdMs === null;
 
+  // Last caption's end time — used to warn when the threshold is past the
+  // entire file and would produce a zero-change "shifted" output.
+  const maxCaptionEnd = useMemo(
+    () => preview.reduce((max, e) => Math.max(max, e.originalEnd), 0),
+    [preview]
+  );
+  const thresholdExceedsFile =
+    useThreshold && thresholdMs !== null && maxCaptionEnd > 0 && thresholdMs >= maxCaptionEnd;
+
   // Derive file state from context
   const filePath = timingFile?.filePath ?? null;
   const fileName = timingFile?.fileName ?? "";
@@ -331,6 +340,8 @@ export default function TimingShift() {
         >
           <input
             type="checkbox"
+            id="timing-threshold-checkbox"
+            name="threshold-enabled"
             checked={useThreshold}
             onChange={(e) => setUseThreshold(e.target.checked)}
             className="rounded"
@@ -344,6 +355,8 @@ export default function TimingShift() {
         {useThreshold && (
           <input
             type="text"
+            id="timing-threshold-input"
+            name="threshold"
             value={thresholdText}
             onChange={(e) => setThresholdText(e.target.value)}
             placeholder="00:05:00.000"
@@ -358,6 +371,11 @@ export default function TimingShift() {
         {thresholdInvalid && (
           <span className="text-xs" style={{ color: "var(--error)" }}>
             {t("threshold_invalid")}
+          </span>
+        )}
+        {!thresholdInvalid && thresholdExceedsFile && (
+          <span className="text-xs" style={{ color: "var(--error)" }}>
+            {t("threshold_exceeds_file")}
           </span>
         )}
       </div>

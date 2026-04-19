@@ -139,6 +139,10 @@ export const strings: Record<string, StringEntry> = {
     en: "Format: HH:MM:SS.ms — hours : minutes : seconds . milliseconds",
     zh: "格式：HH:MM:SS.ms — 时 : 分 : 秒 . 毫秒",
   },
+  threshold_exceeds_file: {
+    en: "Threshold is past the last caption — nothing will shift",
+    zh: "阈值超过最后一条字幕 — 不会发生偏移",
+  },
   btn_save_as: { en: "Save As...", zh: "另存为…" },
   msg_saved: { en: "Saved: {0} ({1} captions)", zh: "已保存：{0}（{1} 条字幕）" },
 

@@ -714,7 +714,11 @@
 .timeline-row .t-orig {
   color: var(--text-muted);
   text-decoration: line-through;
-  text-decoration-color: var(--text-faint);
+  /* currentColor tracks --text-muted across themes, so the strike line
+     is always as visible as the text it crosses — prior var(--text-faint)
+     blended into --bg-panel in dark mode. */
+  text-decoration-color: currentColor;
+  text-decoration-thickness: 1.5px;
   font-variant-numeric: tabular-nums;
 }
 .timeline-row .t-new {
