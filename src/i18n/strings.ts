@@ -144,8 +144,8 @@ export const strings: Record<string, StringEntry> = {
   fonts_scanning: { en: "Scanning fonts...", zh: "扫描字体中…" },
   fonts_empty: { en: "No file loaded", zh: "未加载文件" },
   fonts_empty_hint: {
-    en: "Select an .ass file to detect fonts used in the subtitle",
-    zh: "选择 .ass 文件以检测字幕中使用的字体",
+    en: "Select an .ass or .ssa file to detect fonts used in the subtitle",
+    zh: "选择 .ass 或 .ssa 文件以检测字幕中使用的字体",
   },
   fonts_glyphs: { en: "— {0} glyphs referenced", zh: "— 引用 {0} 个字形" },
   fonts_found: { en: "Found", zh: "已找到" },
