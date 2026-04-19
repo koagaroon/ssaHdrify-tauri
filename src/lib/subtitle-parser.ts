@@ -31,7 +31,10 @@ export type SubtitleFormat = "srt" | "vtt" | "ass" | "sub" | "unknown";
 // ── Format Detection ──────────────────────────────────────
 
 const VTT_HEADER = /^WEBVTT/m;
-const SRT_TIMING = /\d{2}:\d{2}:\d{2},\d{3}\s*-->\s*\d{2}:\d{2}:\d{2},\d{3}/;
+// SRT hours use variable digit width in practice — many tools emit
+// `0:00:01,234` or `1:02:03,456`. Detection must accept any non-empty digit
+// run for the hour field; the caller's `parseSrtTime` already uses `\d+`.
+const SRT_TIMING = /\d+:\d{2}:\d{2},\d{3}\s*-->\s*\d+:\d{2}:\d{2},\d{3}/;
 const ASS_HEADER = /^\[Script Info\]/im;
 const SUB_LINE = /^\{\d+\}\{\d+\}/m;
 
@@ -50,7 +53,12 @@ export function detectFormat(content: string): SubtitleFormat {
 function parseSrtTime(ts: string): number {
   const m = ts.match(/(\d+):(\d{2}):(\d{2})[,.](\d{3})/);
   if (!m) return 0;
-  return parseInt(m[1]) * 3600000 + parseInt(m[2]) * 60000 + parseInt(m[3]) * 1000 + parseInt(m[4]);
+  return (
+    parseInt(m[1], 10) * 3600000 +
+    parseInt(m[2], 10) * 60000 +
+    parseInt(m[3], 10) * 1000 +
+    parseInt(m[4], 10)
+  );
 }
 
 /** Parse VTT timestamps — supports both "HH:MM:SS.mmm" and "MM:SS.mmm" (no hours) */
@@ -59,16 +67,18 @@ function parseVttTime(ts: string): number {
   const full = ts.match(/^(\d{2,}):(\d{2}):(\d{2})\.(\d{3})$/);
   if (full) {
     return (
-      parseInt(full[1]) * 3600000 +
-      parseInt(full[2]) * 60000 +
-      parseInt(full[3]) * 1000 +
-      parseInt(full[4])
+      parseInt(full[1], 10) * 3600000 +
+      parseInt(full[2], 10) * 60000 +
+      parseInt(full[3], 10) * 1000 +
+      parseInt(full[4], 10)
     );
   }
   // MM:SS.mmm (no hours — valid per WebVTT spec)
   const short = ts.match(/^(\d{2}):(\d{2})\.(\d{3})$/);
   if (short) {
-    return parseInt(short[1]) * 60000 + parseInt(short[2]) * 1000 + parseInt(short[3]);
+    return (
+      parseInt(short[1], 10) * 60000 + parseInt(short[2], 10) * 1000 + parseInt(short[3], 10)
+    );
   }
   return 0;
 }
@@ -78,7 +88,10 @@ function parseAssTime(ts: string): number {
   const m = ts.match(/(\d+):(\d{2}):(\d{2})\.(\d{2})/);
   if (!m) return 0;
   return (
-    parseInt(m[1]) * 3600000 + parseInt(m[2]) * 60000 + parseInt(m[3]) * 1000 + parseInt(m[4]) * 10
+    parseInt(m[1], 10) * 3600000 +
+    parseInt(m[2], 10) * 60000 +
+    parseInt(m[3], 10) * 1000 +
+    parseInt(m[4], 10) * 10
   );
 }
 
@@ -121,10 +134,10 @@ export function parseDisplayTime(ts: string): number | null {
   const m = ts.match(/^(\d+):(\d{2}):(\d{2})\.(\d{1,3})$/);
   if (!m) return null;
   return (
-    parseInt(m[1]) * 3600000 +
-    parseInt(m[2]) * 60000 +
-    parseInt(m[3]) * 1000 +
-    parseInt(m[4].padEnd(3, "0"))
+    parseInt(m[1], 10) * 3600000 +
+    parseInt(m[2], 10) * 60000 +
+    parseInt(m[3], 10) * 1000 +
+    parseInt(m[4].padEnd(3, "0"), 10)
   );
 }
 
@@ -244,6 +257,9 @@ function parseAss(content: string): Caption[] {
     /^(Dialogue:\s*\d+,)(\d+:\d{2}:\d{2}\.\d{2}),( *)(\d+:\d{2}:\d{2}\.\d{2}),(.*)$/gm;
   let match;
   while ((match = dialogueRe.exec(content)) !== null) {
+    if (captions.length >= 100000) {
+      throw new Error(`Too many subtitle entries: > 100,000`);
+    }
     captions.push({
       raw: match[0],
       start: parseAssTime(match[2]),
@@ -293,8 +309,8 @@ function parseSub(content: string, fps: number = DEFAULT_FPS): Caption[] {
     }
     captions.push({
       raw: match[0],
-      start: Math.round((parseInt(match[1]) / fps) * 1000),
-      end: Math.round((parseInt(match[2]) / fps) * 1000),
+      start: Math.round((parseInt(match[1], 10) / fps) * 1000),
+      end: Math.round((parseInt(match[2], 10) / fps) * 1000),
       text: match[3].replace(/\|/g, "\n"),
     });
   }

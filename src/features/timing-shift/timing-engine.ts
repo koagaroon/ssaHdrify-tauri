@@ -35,7 +35,10 @@ export interface PreviewEntry {
   originalEnd: number;
   shiftedStart: number;
   shiftedEnd: number;
+  /** Truncated text for DOM efficiency (max ~60 codepoints). Keep this for display. */
   text: string;
+  /** Full un-truncated text — used for hover tooltips so long lines remain readable. */
+  fullText: string;
   wasShifted: boolean;
 }
 
@@ -59,8 +62,20 @@ export function shiftSubtitles(content: string, options: ShiftOptions): ShiftRes
   const { output, format, captions, shifted } = shiftSubtitle(content, offsetMs, thresholdMs, fps);
 
   // Build preview for every caption — the UI scroll container decides
-  // how many are visible at a time. Long lines are truncated to 60 chars
-  // so the DOM stays lean even on 1000+ caption files.
+  // how many are visible at a time. Long lines are truncated to 60
+  // codepoints (not UTF-16 code units) so emoji and astral-plane glyphs
+  // aren't bisected mid-surrogate. The full text is preserved in fullText
+  // for hover tooltips.
+  const truncateCodepoints = (text: string, max: number): string => {
+    let cp = 0;
+    let out = "";
+    for (const ch of text) {
+      if (cp >= max) break;
+      out += ch;
+      cp++;
+    }
+    return out;
+  };
   const preview: PreviewEntry[] = captions.map((c, i) => {
     const s = shifted[i];
     const wasShifted = c.start !== s.start || c.end !== s.end;
@@ -70,7 +85,8 @@ export function shiftSubtitles(content: string, options: ShiftOptions): ShiftRes
       originalEnd: c.end,
       shiftedStart: s.start,
       shiftedEnd: s.end,
-      text: c.text.slice(0, 60),
+      text: truncateCodepoints(c.text, 60),
+      fullText: c.text,
       wasShifted,
     };
   });

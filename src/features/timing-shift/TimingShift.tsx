@@ -62,14 +62,17 @@ export default function TimingShift() {
   );
   const thresholdInvalid = useThreshold && thresholdMs === null;
 
-  // Last caption's end time — used to warn when the threshold is past the
-  // entire file and would produce a zero-change "shifted" output.
-  const maxCaptionEnd = useMemo(
-    () => preview.reduce((max, e) => Math.max(max, e.originalEnd), 0),
+  // Last caption's START time — shiftSubtitle uses `c.start >= threshold` to
+  // decide which captions move, so a threshold in the gap between the last
+  // caption's start and end still produces zero shifts. Comparing against
+  // maxCaptionStart rather than maxCaptionEnd makes the warning fire in that
+  // gap window too, matching the actual shift semantics users observe.
+  const maxCaptionStart = useMemo(
+    () => preview.reduce((max, e) => Math.max(max, e.originalStart), 0),
     [preview]
   );
   const thresholdExceedsFile =
-    useThreshold && thresholdMs !== null && maxCaptionEnd > 0 && thresholdMs >= maxCaptionEnd;
+    useThreshold && thresholdMs !== null && maxCaptionStart > 0 && thresholdMs > maxCaptionStart;
 
   // Derive file state from context
   const filePath = timingFile?.filePath ?? null;
@@ -280,10 +283,11 @@ export default function TimingShift() {
         )}
         <button
           onClick={handlePickFile}
+          disabled={busy}
           className="flex-none px-5 rounded-lg font-medium text-sm transition-colors"
           style={{
-            background: "var(--accent)",
-            color: "white",
+            background: busy ? "var(--bg-input)" : "var(--accent)",
+            color: busy ? "var(--text-muted)" : "white",
             height: "38px",
           }}
         >
@@ -470,7 +474,7 @@ export default function TimingShift() {
                 >
                   {formatDisplayTime(entry.shiftedStart)}
                 </span>
-                <span className="txt" title={entry.text}>
+                <span className="txt" title={entry.fullText}>
                   {entry.text}
                 </span>
               </div>
