@@ -244,7 +244,7 @@ export default function TimingShift() {
         </button>
       </div>
 
-      {/* Offset Controls */}
+      {/* Offset value + unit */}
       <div className="flex items-end gap-3">
         <div>
           <label
@@ -287,24 +287,39 @@ export default function TimingShift() {
           <option value="ms">{t("unit_ms")}</option>
           <option value="s">{t("unit_seconds")}</option>
         </select>
-        <select
-          id="timing-direction-select"
-          name="offset-direction"
-          aria-label={t("offset_label")}
-          value={direction}
-          onChange={(e) => setDirection(e.target.value as Direction)}
-          className="px-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-          style={{
-            background: "var(--bg-input)",
-            border: "1px solid var(--border)",
-            color: "var(--text-primary)",
-          }}
-        >
-          <option value="slower">{t("direction_slower")}</option>
-          <option value="faster">{t("direction_faster")}</option>
-        </select>
       </div>
-      <p className="text-xs" style={{ color: "var(--text-muted)", marginTop: "-0.5rem" }}>
+
+      {/* Direction picker — two big buttons with arrow glyphs */}
+      <div className="dir-picker" role="radiogroup" aria-label={t("offset_label")}>
+        <button
+          type="button"
+          className="dir-btn"
+          role="radio"
+          aria-pressed={direction === "faster"}
+          aria-checked={direction === "faster"}
+          onClick={() => setDirection("faster")}
+        >
+          <span className="dir-arrow" aria-hidden="true">
+            ←
+          </span>
+          <span className="dir-label">{t("direction_faster")}</span>
+        </button>
+        <button
+          type="button"
+          className="dir-btn"
+          role="radio"
+          aria-pressed={direction === "slower"}
+          aria-checked={direction === "slower"}
+          onClick={() => setDirection("slower")}
+        >
+          <span className="dir-label">{t("direction_slower")}</span>
+          <span className="dir-arrow" aria-hidden="true">
+            →
+          </span>
+        </button>
+      </div>
+
+      <p className="text-xs" style={{ color: "var(--text-muted)", marginTop: "-0.25rem" }}>
         {t("offset_hint")}
       </p>
 
@@ -347,68 +362,36 @@ export default function TimingShift() {
         )}
       </div>
 
-      {/* Preview */}
+      {/* Timeline preview — shifted captions with struck-through originals */}
       {preview.length > 0 && (
-        <div
-          className="rounded-lg"
-          style={{
-            border: "1px solid var(--border)",
-            background: "var(--bg-panel)",
-          }}
-        >
-          <div className="px-3 py-2" style={{ borderBottom: "1px solid var(--border)" }}>
-            <span className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>
-              {t("preview_title", preview.length, captionCount)}
-            </span>
+        <div className="timeline-preview">
+          <div className="timeline-preview-head">
+            <span>{t("preview_title", preview.length, captionCount)}</span>
           </div>
-          <div className="max-h-64 overflow-y-auto">
-            <table className="w-full text-xs font-mono">
-              <thead>
-                <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                  <th className="px-3 py-1.5 text-left" style={{ color: "var(--text-muted)" }}>
-                    {t("col_index")}
-                  </th>
-                  <th className="px-3 py-1.5 text-left" style={{ color: "var(--text-muted)" }}>
-                    {t("col_original")}
-                  </th>
-                  <th className="px-3 py-1.5 text-center" style={{ color: "var(--text-muted)" }}>
-                    →
-                  </th>
-                  <th className="px-3 py-1.5 text-left" style={{ color: "var(--text-muted)" }}>
-                    {t("col_shifted")}
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {preview.map((entry) => (
-                  <tr
-                    key={entry.index}
-                    className={entry.wasShifted ? "" : "opacity-50"}
-                    style={{
-                      borderBottom: "1px solid color-mix(in srgb, var(--border) 50%, transparent)",
-                    }}
-                  >
-                    <td className="px-3 py-1" style={{ color: "var(--text-muted)" }}>
-                      {entry.index}
-                    </td>
-                    <td className="px-3 py-1" style={{ color: "var(--text-muted)" }}>
-                      {formatDisplayTime(entry.originalStart)}
-                    </td>
-                    <td className="px-3 py-1 text-center" style={{ color: "var(--text-muted)" }}>
-                      {entry.wasShifted ? "→" : "·"}
-                    </td>
-                    <td
-                      className="px-3 py-1"
-                      style={{
-                        color: entry.wasShifted ? "var(--preview-shifted)" : "var(--text-muted)",
-                      }}
-                    >
-                      {formatDisplayTime(entry.shiftedStart)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="timeline-list">
+            {preview.map((entry) => (
+              <div
+                key={entry.index}
+                className={"timeline-row" + (entry.wasShifted ? "" : " unchanged")}
+              >
+                <span className="idx">{entry.index}</span>
+                <span
+                  className="t-orig"
+                  title={`${t("col_original")}: ${formatDisplayTime(entry.originalStart)}`}
+                >
+                  {formatDisplayTime(entry.originalStart)}
+                </span>
+                <span
+                  className="t-new"
+                  title={`${t("col_shifted")}: ${formatDisplayTime(entry.shiftedStart)}`}
+                >
+                  {formatDisplayTime(entry.shiftedStart)}
+                </span>
+                <span className="txt" title={entry.text}>
+                  {entry.text}
+                </span>
+              </div>
+            ))}
           </div>
         </div>
       )}
