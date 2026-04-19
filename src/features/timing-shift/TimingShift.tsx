@@ -289,6 +289,20 @@ export default function TimingShift() {
         >
           {t("btn_select_file")}
         </button>
+        <button
+          onClick={handleSave}
+          disabled={!filePath || thresholdInvalid}
+          className="flex-none px-6 rounded-lg font-medium text-sm transition-colors"
+          style={{
+            background: !filePath || thresholdInvalid ? "var(--bg-input)" : "var(--accent)",
+            color: !filePath || thresholdInvalid ? "var(--text-muted)" : "white",
+            opacity: !filePath ? 0.5 : 1,
+            height: "38px",
+            minWidth: "120px",
+          }}
+        >
+          {t("btn_save_as")}
+        </button>
       </div>
 
       {/* Offset value + unit */}
@@ -464,24 +478,6 @@ export default function TimingShift() {
           </div>
         </div>
       )}
-
-      {/* ── Action row: Save As ──────────────────────── */}
-      <div className="flex items-center justify-end">
-        <button
-          onClick={handleSave}
-          disabled={!filePath || thresholdInvalid}
-          className="px-6 rounded-lg font-medium text-sm transition-colors"
-          style={{
-            background: !filePath || thresholdInvalid ? "var(--bg-input)" : "var(--accent)",
-            color: !filePath || thresholdInvalid ? "var(--text-muted)" : "white",
-            opacity: !filePath ? 0.5 : 1,
-            height: "38px",
-            minWidth: "140px",
-          }}
-        >
-          {t("btn_save_as")}
-        </button>
-      </div>
 
       {/* Status */}
       {status && (

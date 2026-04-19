@@ -445,6 +445,35 @@ export default function HdrConvert() {
         >
           {t("btn_select_files")}
         </button>
+        {processing && (
+          <button
+            onClick={() => {
+              cancelRef.current = true;
+            }}
+            className="flex-none px-4 rounded-lg text-sm transition-colors"
+            style={{
+              background: "var(--cancel-bg)",
+              color: "var(--cancel-text)",
+              height: "38px",
+            }}
+          >
+            {t("btn_cancel")}
+          </button>
+        )}
+        <button
+          onClick={handleConvert}
+          disabled={convertDisabled}
+          className="flex-none px-6 rounded-lg font-medium text-sm transition-colors"
+          style={{
+            background: convertDisabled ? "var(--bg-input)" : "var(--accent)",
+            color: convertDisabled ? "var(--text-muted)" : "white",
+            opacity: !hdrFiles ? 0.5 : 1,
+            height: "38px",
+            minWidth: "120px",
+          }}
+        >
+          {processing ? t("btn_converting") : t("btn_convert")}
+        </button>
       </div>
 
       {/* ── Controls: EOTF + Brightness ─────────────── */}
@@ -715,39 +744,6 @@ export default function HdrConvert() {
             </div>
           </div>
         )}
-      </div>
-
-      {/* ── Action row: Convert (+ Cancel while processing) ── */}
-      <div className="flex items-center justify-end gap-2">
-        {processing && (
-          <button
-            onClick={() => {
-              cancelRef.current = true;
-            }}
-            className="px-4 rounded-lg text-sm transition-colors"
-            style={{
-              background: "var(--cancel-bg)",
-              color: "var(--cancel-text)",
-              height: "38px",
-            }}
-          >
-            {t("btn_cancel")}
-          </button>
-        )}
-        <button
-          onClick={handleConvert}
-          disabled={convertDisabled}
-          className="px-6 rounded-lg font-medium text-sm transition-colors"
-          style={{
-            background: convertDisabled ? "var(--bg-input)" : "var(--accent)",
-            color: convertDisabled ? "var(--text-muted)" : "white",
-            opacity: !hdrFiles ? 0.5 : 1,
-            height: "38px",
-            minWidth: "140px",
-          }}
-        >
-          {processing ? t("btn_converting") : t("btn_convert")}
-        </button>
       </div>
 
       {/* Log Output */}
