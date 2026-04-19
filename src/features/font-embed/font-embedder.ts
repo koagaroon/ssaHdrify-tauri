@@ -155,11 +155,23 @@ export async function analyzeFonts(
  * would both collapse to `font.ttf` and collide inside the embedded [Fonts]
  * section — the renderer would then load whichever face hit the parser
  * first, producing visual corruption that looks like a random font swap.
+ *
+ * Iterates over full codepoints (via `for...of`) rather than UTF-16 code
+ * units so that astral-plane CJK (Extension-B+) and emoji don't hash their
+ * surrogate halves independently — two fonts that differ only in the
+ * astral half could otherwise collide.
  */
 function familyFnvHash(family: string): string {
   let h = 0x811c9dc5;
-  for (let i = 0; i < family.length; i++) {
-    h ^= family.charCodeAt(i);
+  for (const ch of family) {
+    const cp = ch.codePointAt(0) ?? 0;
+    // Mix each byte of the 32-bit codepoint into the hash so astral-plane
+    // codepoints (U+10000..U+10FFFF) contribute all their bits.
+    h ^= cp & 0xff;
+    h = Math.imul(h, 0x01000193);
+    h ^= (cp >>> 8) & 0xff;
+    h = Math.imul(h, 0x01000193);
+    h ^= (cp >>> 16) & 0xff;
     h = Math.imul(h, 0x01000193);
   }
   return (h >>> 0).toString(16).padStart(8, "0");
@@ -285,8 +297,15 @@ function insertFontsSection(content: string, fontsSection: string): string {
   // Adapt fontsSection to match the file's line ending
   const adaptedFontsSection = fontsSection.replace(/\n/g, lineEnding);
 
-  // Check if [Fonts] section already exists
-  const existingFontsIdx = lines.findIndex((l) => l.trim().toLowerCase() === "[fonts]");
+  // Check if [Fonts] section already exists. The match is anchored at
+  // column 0 and only tolerates trailing whitespace — a UUEncode data
+  // line that happens to lowercase to `[fonts]` would never start at
+  // column 0 with `[` being the first byte and nothing but whitespace
+  // after `]`, because the 6-bit alphabet (33–96) does not include
+  // space (32). This closes the false-positive hole that a looser
+  // `.trim().toLowerCase()` comparison left open.
+  const HEADER_FONTS_RE = /^\[[Ff][Oo][Nn][Tt][Ss]\]\s*$/;
+  const existingFontsIdx = lines.findIndex((l) => HEADER_FONTS_RE.test(l));
 
   // Build "before" from a line slice: strip trailing blank lines so we control
   // the separator ourselves. Array.join() absorbs trailing "" elements into a
@@ -337,8 +356,10 @@ function insertFontsSection(content: string, fontsSection: string): string {
     return `${before}${sep}${adaptedFontsSection}${afterSep}${after}`;
   }
 
-  // No existing [Fonts] — insert before [Events]
-  const eventsIdx = lines.findIndex((l) => l.trim().toLowerCase() === "[events]");
+  // No existing [Fonts] — insert before [Events]. Same column-0 strict
+  // match as above for the same UUEncode-false-positive reason.
+  const HEADER_EVENTS_RE = /^\[[Ee][Vv][Ee][Nn][Tt][Ss]\]\s*$/;
+  const eventsIdx = lines.findIndex((l) => HEADER_EVENTS_RE.test(l));
 
   if (eventsIdx >= 0) {
     const { text: before, sep } = buildBefore(eventsIdx);

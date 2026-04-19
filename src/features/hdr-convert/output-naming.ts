@@ -55,13 +55,23 @@ const WINDOWS_RESERVED = new Set([
  * @throws Error if template resolves to unsafe path
  */
 export function resolveOutputPath(inputPath: string, template: string, eotf: Eotf): string {
-  // Extract directory and base name from input path
-  // Handle both forward and backslash separators
+  // Extract directory and base name from input path. We work on a
+  // forward-slash-normalized copy for path-parsing convenience, but remember
+  // whether the original used backslashes so the final output preserves the
+  // native separator on Windows — mixing `\\server\share\foo.hdr.ass`
+  // (input) with `//server/share/foo.hdr.ass` (output) would confuse
+  // downstream Win32 APIs and shell-integration tools.
+  const usedBackslash = inputPath.includes("\\") && !inputPath.includes("/");
   const normalized = inputPath.replace(/\\/g, "/");
   const lastSlash = normalized.lastIndexOf("/");
   const dir = lastSlash >= 0 ? normalized.slice(0, lastSlash) : ".";
   if (dir === "." || dir === "") {
     throw new Error("Input path must be absolute");
+  }
+  // Reject `C:` alone — that's drive-relative on Windows (refers to the
+  // CWD on drive C), not a root directory. Requires an explicit path.
+  if (/^[A-Za-z]:$/.test(dir)) {
+    throw new Error("Input path has no directory component");
   }
   const fullName = normalized.slice(lastSlash + 1);
   const dotIdx = fullName.lastIndexOf(".");
@@ -117,13 +127,12 @@ export function resolveOutputPath(inputPath: string, template: string, eotf: Eot
   const outputPath = `${dir}/${resolved}`;
 
   // Safety: reject paths that exceed Windows MAX_PATH limit.
-  // Long-path (`\\?\`) UNC paths support up to 32767 chars on Windows 10+
-  // when long-path mode is enabled; relax the cap when we detect that prefix.
-  // Note: this guard is conservative — on Linux/macOS the OS limit is much
-  // higher (PATH_MAX 4096) but enforcing Windows's 260 keeps the output
-  // portable across machines, which matches the user's cross-device workflow.
-  const isLongPathPrefixed = outputPath.startsWith("//?/") || outputPath.startsWith("////?");
-  const maxPathLen = isLongPathPrefixed ? 32767 : 260;
+  // Local long-path (`\\?\`) paths support up to 32767 chars on Windows 10+
+  // when long-path mode is enabled; relax the cap ONLY for that case. UNC
+  // long paths (`\\?\UNC\server\share\...`) may exceed OS limits on the
+  // server side, so we keep the 260 cap for those.
+  const isLongLocalPath = outputPath.startsWith("//?/") && !outputPath.startsWith("//?/UNC/");
+  const maxPathLen = isLongLocalPath ? 32767 : 260;
   if (outputPath.length > maxPathLen) {
     throw new Error(
       `Output path too long (${outputPath.length} chars, max ${maxPathLen})`
@@ -149,5 +158,8 @@ export function resolveOutputPath(inputPath: string, template: string, eotf: Eot
     throw new Error("Output path is the same as input (would overwrite source file)");
   }
 
-  return outputPath;
+  // Restore native Windows separators on the final return value when the
+  // input used them — keeps the output path shape consistent with the
+  // input shape across downstream IPC writes and user-visible log lines.
+  return usedBackslash ? outputPath.replace(/\//g, "\\") : outputPath;
 }

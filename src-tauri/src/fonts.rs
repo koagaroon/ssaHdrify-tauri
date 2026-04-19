@@ -16,10 +16,12 @@ const ALLOWED_FONT_EXTENSIONS: &[&str] = &["ttf", "otf", "ttc", "otc"];
 /// from blocking the UI thread.
 const MAX_FONTS_PER_SCAN: usize = 500;
 
-/// Maximum TTC face count we will enumerate before bailing out. Real fonts
-/// stay well under this; the cap is only defense-in-depth against malformed
-/// headers that might claim an absurd number of faces.
-const MAX_TTC_FACES: u32 = 64;
+/// Maximum TTC face count we will enumerate before bailing out. Real
+/// production fonts ship with 2–8 faces; 16 is generous while capping the
+/// work a crafted TTC can force us to do (e.g., a malicious file declaring
+/// 256 faces with every other one malformed would otherwise drive the
+/// per-file parse cost linearly).
+const MAX_TTC_FACES: u32 = 16;
 
 /// Cap on raw font data read for subsetting — prevents OOM with large CJK
 /// fonts and mirrors the front-end guard in `ass-uuencode.ts`.
@@ -31,10 +33,12 @@ const MAX_FONT_DATA_SIZE: u64 = 50 * 1024 * 1024;
 const MAX_FONT_FALLBACK_SIZE: usize = 10 * 1024 * 1024;
 
 /// Overall cap on the size of each provenance cache, as a defense against a
-/// pathological long-running session that accumulates thousands of scanned
-/// directories. A typical desktop has < 1000 installed fonts; 10k leaves
-/// plenty of headroom before the cap fires.
-const MAX_PROVENANCE_CACHE_SIZE: usize = 10_000;
+/// pathological long-running session that accumulates tens of thousands of
+/// scanned directories. A typical desktop has < 1000 installed fonts; 100k
+/// leaves plenty of headroom for power users who scan many folders while
+/// still bounding worst-case memory (each entry averages ≤200 bytes, so the
+/// cap is ~20 MB per cache).
+const MAX_PROVENANCE_CACHE_SIZE: usize = 100_000;
 
 /// Strip the Win32 extended-length UNC prefix (`\\?\`) that `canonicalize()`
 /// adds on Windows, so paths compare consistently across insert and lookup.
@@ -196,7 +200,19 @@ fn parse_local_font_file(canonical: &Path) -> Vec<LocalFontEntry> {
         return Vec::new();
     }
 
-    let size_bytes = fs::metadata(canonical).map(|m| m.len()).unwrap_or(0);
+    // Stat + size-cap guard before fs::read — a malicious user-picked
+    // directory could otherwise OOM the process by containing a .ttf
+    // that's actually a hundred-gigabyte impostor file. Aligns with
+    // subset_font's own MAX_FONT_DATA_SIZE cap.
+    let size_bytes = match fs::metadata(canonical) {
+        Ok(m) => {
+            if m.len() > MAX_FONT_DATA_SIZE {
+                return Vec::new();
+            }
+            m.len()
+        }
+        Err(_) => return Vec::new(),
+    };
     let is_collection = ext == "ttc" || ext == "otc";
     let max_faces = if is_collection { MAX_TTC_FACES } else { 1 };
 
@@ -211,12 +227,13 @@ fn parse_local_font_file(canonical: &Path) -> Vec<LocalFontEntry> {
     let arc_data = std::sync::Arc::new(data);
 
     let mut entries = Vec::new();
-    // Permit a small run of consecutive parse failures before giving up on
-    // the collection. In practice font_kit returns an error once `i` exceeds
-    // the real face count, so this also serves as our loop-termination
-    // condition. 3 consecutive gives resilience against an isolated corrupt
-    // face without scanning all 64 possible indices on every single-face TTF.
-    const MAX_CONSECUTIVE_FAILURES: u32 = 3;
+    // Permit a single consecutive parse failure before giving up. In practice
+    // font_kit returns an error once `i` exceeds the real face count, so one
+    // tolerance catches that natural end-of-collection while keeping the
+    // per-file parse cost bounded at 2 × face_count rather than 3 ×. Crafted
+    // TTCs cannot force us to parse all 64 slots just by salting every other
+    // face with bad data.
+    const MAX_CONSECUTIVE_FAILURES: u32 = 1;
     let mut consecutive_failures: u32 = 0;
     for i in 0..max_faces {
         // font-kit for weight/style — its enum API is simpler than reading
@@ -253,7 +270,11 @@ fn parse_local_font_file(canonical: &Path) -> Vec<LocalFontEntry> {
         let mut family_variants: HashSet<String> = HashSet::new();
         for id in [StringId::FAMILY_NAME, StringId::TYPOGRAPHIC_FAMILY_NAME] {
             for localized in font_ref.localized_strings(id) {
-                let name: String = localized.chars().collect();
+                // Take chars lazily with a short ceiling so a malformed
+                // font with a 2GB name-table entry can't OOM the process
+                // before the length guard fires. 257 chars is enough to
+                // detect ">256" overflow in the guard below.
+                let name: String = localized.chars().take(257).collect();
                 let trimmed = name.trim();
                 if !trimmed.is_empty() && trimmed.len() <= 256 {
                     family_variants.insert(trimmed.to_string());
@@ -281,12 +302,17 @@ fn parse_local_font_file(canonical: &Path) -> Vec<LocalFontEntry> {
         }
 
         // Register the path once per face — the allow-set is a HashSet so
-        // repeated inserts are cheap no-ops. Respect the overall cache cap
-        // to bound unbounded growth across a long session.
+        // repeated inserts are cheap no-ops. A genuinely-unbounded
+        // pathological session (user picks thousands of folders) is still
+        // bounded by MAX_PROVENANCE_CACHE_SIZE at the sibling cache's
+        // enforcement site below; the per-face insert here doesn't enforce
+        // the cap itself because silently dropping an insert here would
+        // cause `subset_font` to reject the same face later, confusing the
+        // user. The cap is enforced centrally in `register_font_path`
+        // (system fonts) and in `scan_font_directory` / `scan_font_files`
+        // (user fonts) by the total_added check below.
         if let Ok(mut cache) = ALLOWED_USER_FONT_PATHS.lock() {
-            if cache.len() < MAX_PROVENANCE_CACHE_SIZE || cache.contains(&canonical_string) {
-                cache.insert(canonical_string.clone());
-            }
+            cache.insert(canonical_string.clone());
         }
 
         // Stabilize the primary-name pick: prefer font-kit's family_name if
@@ -452,9 +478,16 @@ fn register_font_path(path: &Path, font_index: u32) -> Result<FontLookupResult, 
     let mut cache = ALLOWED_FONT_PATHS
         .lock()
         .map_err(|_| "Internal error: font path cache corrupted".to_string())?;
-    if cache.len() < MAX_PROVENANCE_CACHE_SIZE || cache.contains(&canonical_string) {
-        cache.insert(canonical_string.clone());
+    // Reject only when the cache is full AND we'd be adding a new entry;
+    // re-registering an existing path is always cheap. An explicit error
+    // beats silently succeeding here then failing later in subset_font.
+    if !cache.contains(&canonical_string) && cache.len() >= MAX_PROVENANCE_CACHE_SIZE {
+        return Err(format!(
+            "Too many registered font paths (> {MAX_PROVENANCE_CACHE_SIZE}). \
+             Restart the app to clear the cache."
+        ));
     }
+    cache.insert(canonical_string.clone());
 
     Ok(FontLookupResult {
         path: canonical_string,
@@ -505,7 +538,10 @@ fn is_in_system_fonts_dir(canonical: &Path) -> bool {
             "/Library/Fonts",
             "/System/Library/Fonts",
             "/System/Library/AssetsV2",
-            "/Library/Application Support",
+            // Narrow to Adobe/Fonts — the wider /Library/Application Support
+            // tree holds every app's data, not just fonts, so allowing the
+            // whole tree weakens the "system font directory" gate.
+            "/Library/Application Support/Adobe/Fonts",
             "/opt/homebrew/share/fonts",
             "/usr/local/share/fonts",
         ];

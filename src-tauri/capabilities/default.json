@@ -24,15 +24,35 @@
       "identifier": "fs:scope",
       "allow": [{ "path": "**" }],
       "deny": [
+        { "path": "$HOME/.ssh" },
         { "path": "$HOME/.ssh/**" },
+        { "path": "$HOME/.aws" },
         { "path": "$HOME/.aws/**" },
+        { "path": "$HOME/.gnupg" },
         { "path": "$HOME/.gnupg/**" },
+        { "path": "$HOME/.azure/**" },
+        { "path": "$HOME/.gcloud/**" },
+        { "path": "$HOME/.docker/**" },
+        { "path": "$HOME/.kube/**" },
+        { "path": "$HOME/.npmrc" },
+        { "path": "$HOME/.netrc" },
         { "path": "$APPDATA/Microsoft/Credentials/**" },
         { "path": "$APPDATA/Microsoft/Crypto/**" },
         { "path": "$APPDATA/Microsoft/Protect/**" },
-        { "path": "$APPDATA/Microsoft/Windows/Start Menu/Programs/Startup/**" },
-        { "path": "$LOCALAPPDATA/Microsoft/Credentials/**" },
-        { "path": "$LOCALAPPDATA/Microsoft/Vault/**" }
+        { "path": "$APPDATA/Microsoft/Windows/Start Menu/**" },
+        { "path": "$APPDATA/Microsoft/Windows/SendTo/**" },
+        { "path": "$APPDATA/Mozilla/**" },
+        { "path": "$APPDATA/Thunderbird/**" },
+        { "path": "$APPDATA/Signal/**" },
+        { "path": "$APPDATA/Telegram Desktop/**" },
+        { "path": "$APPDATA/PuTTY/**" },
+        { "path": "$LOCALDATA/Microsoft/Credentials/**" },
+        { "path": "$LOCALDATA/Microsoft/Vault/**" },
+        { "path": "$LOCALDATA/Microsoft/Windows/Start Menu/**" },
+        { "path": "$LOCALDATA/Google/Chrome/User Data/**" },
+        { "path": "$LOCALDATA/Chromium/User Data/**" },
+        { "path": "$LOCALDATA/Microsoft/Edge/User Data/**" },
+        { "path": "$LOCALDATA/BraveSoftware/**" }
       ]
     }
   ]

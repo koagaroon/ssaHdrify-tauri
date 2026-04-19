@@ -81,6 +81,19 @@ pub struct ReadTextResult {
 /// 3. Lossy UTF-8 fallback — if all else fails
 #[tauri::command]
 pub fn read_text_detect_encoding(path: String) -> Result<ReadTextResult, String> {
+    // Length and content guards on the IPC-supplied path itself. Reject
+    // obviously-hostile or pathological shapes BEFORE touching the
+    // filesystem. Control chars / NUL in a path on Windows can truncate
+    // the access target at the null byte; `..` segments, while mostly
+    // defanged by canonicalize later, are rejected here as an early
+    // signal that the caller is not the native file picker.
+    if path.is_empty() || path.len() > 4096 {
+        return Err("Path must be 1-4096 characters".to_string());
+    }
+    if path.chars().any(|c| c.is_control()) {
+        return Err("Path contains invalid characters".to_string());
+    }
+
     // Extension validation: only allow subtitle/text file types
     let path_ref = Path::new(&path);
     let ext = path_ref
@@ -92,8 +105,14 @@ pub fn read_text_detect_encoding(path: String) -> Result<ReadTextResult, String>
         return Err(format!("Unsupported file type: .{ext}"));
     }
 
+    // Canonicalize once — resolves symlinks, "..", and gives us a stable
+    // path to open. Using the canonical path for the open call mitigates
+    // the TOCTOU window where a symlink could be swapped between stat and
+    // open (std::fs holds a HANDLE after open, so a later swap is harmless).
+    let canonical = path_ref.canonicalize().map_err(|e| sanitize_io_error(&e, "resolve"))?;
+
     // Size check
-    let metadata = std::fs::metadata(&path).map_err(|e| sanitize_io_error(&e, "stat"))?;
+    let metadata = std::fs::metadata(&canonical).map_err(|e| sanitize_io_error(&e, "stat"))?;
     if metadata.len() > MAX_TEXT_SIZE {
         let size_mb = metadata.len() as f64 / (1024.0 * 1024.0);
         return Err(format!(
@@ -101,7 +120,7 @@ pub fn read_text_detect_encoding(path: String) -> Result<ReadTextResult, String>
         ));
     }
 
-    let bytes = std::fs::read(&path).map_err(|e| sanitize_io_error(&e, "read"))?;
+    let bytes = std::fs::read(&canonical).map_err(|e| sanitize_io_error(&e, "read"))?;
 
     // Post-read size check (TOCTOU mitigation — file could grow between stat and read)
     if bytes.len() as u64 > MAX_TEXT_SIZE {

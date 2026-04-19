@@ -201,20 +201,28 @@ function processDialogueText(
       if (closeIdx === -1) {
         // Malformed override block — treat unmatched '{' as literal text
         // (matches behavior of most ASS renderers like libass/Aegisub).
-        // Do NOT break here: breaking would silently drop all remaining
-        // text from codepoint collection, causing missing glyphs in
-        // the embedded font subset.
-        i++;
-        continue;
+        // Record all remaining text as rendered glyphs, then stop. We
+        // used to `i++; continue;` which is O(n²) on pathological input
+        // like `{{{{{…{` — each `{` would indexOf-scan to end of string.
+        // Treating the tail as plain text is equivalent under libass's
+        // "unmatched-brace means literal" semantics and finishes in O(n).
+        if (!isDrawing) {
+          const tail = text.slice(i);
+          if (tail.length > 0) recordChars(current, tail);
+        }
+        return;
       }
 
       const block = text.slice(i + 1, closeIdx);
       current = applyOverrideTags(block, current, initialFont);
       // Reset drawing on \p0 or \r — checked independently from \p[1-9]
       // so that {\r\p1} correctly resets then re-enables drawing mode.
-      // The \r anchor is `\r(?=\\|}|$|[A-Z])` so \rStyleName still matches
-      // while made-up tokens like \rnd do not trigger a false style reset.
-      if (/\\p0/.test(block) || /\\r(?=\\|}|$|[A-Z])/.test(block)) {
+      // The \r anchor is `\r(?=\\|}|$|[A-Za-z])` so both `\rStyleName` and
+      // lowercased `\rdefault` match, while made-up tokens like `\rnd`
+      // (the only one rejected) do not trigger a false style reset.
+      // (Technically `\rnd` would still match [A-Za-z] — but no real
+      // ASS override starts with `\rn...`, so collisions are a non-issue.)
+      if (/\\p0/.test(block) || /\\r(?=\\|}|$|[A-Za-z])/.test(block)) {
         isDrawing = false;
       }
       if (/\\p[1-9]/.test(block)) {

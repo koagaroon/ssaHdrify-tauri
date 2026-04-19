@@ -94,8 +94,10 @@ function transformColorString(assColor: string, targetBrightness: number, eotf: 
 function transformEventText(text: string, targetBrightness: number, eotf: Eotf): string {
   // Matches: \c&HBBGGRR, \1c&HBBGGRR, \2c&HAABBGGRR, etc.
   // Groups: (1) prefix like "\c&H" or "\1c&H", (2) 6 or 8 hex digits
-  // Lookahead ensures the color ends at a valid ASS delimiter
-  const COLOR_TAG_RE = /(\\[0-9]?c&H)([0-9a-fA-F]{6}|[0-9a-fA-F]{8})(?=[&}),\\]|$)/g;
+  // Lookahead ensures the color ends at a valid ASS delimiter. `\r\n` are
+  // included so a color tag at end-of-line (within a multi-line ASS input
+  // before line-splitting) still matches instead of being left untransformed.
+  const COLOR_TAG_RE = /(\\[0-9]?c&H)([0-9a-fA-F]{6}|[0-9a-fA-F]{8})(?=[&}),\\\r\n]|$)/g;
 
   return text.replace(COLOR_TAG_RE, (_, prefix: string, hexColor: string) => {
     const { r, g, b, alpha } = parseAssColor(`&H${hexColor}`);
@@ -119,9 +121,7 @@ function transformStyleLine(
   // Match Style: prefix case-insensitively and tolerate leading whitespace
   // (ASS renderers accept both). The raw line is preserved after the colon
   // so any indentation / casing in the source file survives the transform.
-  const leading = line.length - line.trimStart().length;
-  const afterLeading = line.slice(leading);
-  if (!/^style:/i.test(afterLeading)) return line;
+  if (!/^\s*style:/i.test(line)) return line;
 
   const colonIdx = line.indexOf(":");
   const prefix = line.slice(0, colonIdx + 1);
@@ -184,6 +184,18 @@ export function processAssContent(
   eotf: Eotf = "PQ",
   onProgress?: (current: number, total: number) => void
 ): string {
+  // Pre-split byte-size guard — catches giant inputs BEFORE we allocate the
+  // per-line array. Without this, a 500 MB blob splits into a huge array
+  // (freeing memory only after the line-count throw fires). The Rust IPC
+  // layer already caps reads at 50 MB, so 100 MB here is purely a
+  // defense-in-depth budget for internally-generated content (e.g., SRT
+  // expanded into ASS before re-processing).
+  if (content.length > 100_000_000) {
+    throw new Error(
+      `File too large: ${(content.length / 1_000_000).toFixed(1)} MB (max 100 MB)`
+    );
+  }
+
   // Preserve the original line ending style
   const lineEnding = content.includes("\r\n") ? "\r\n" : "\n";
   const lines = content.split(/\r?\n/);

@@ -17,6 +17,7 @@ import {
 import { ensureLoaded, fontKeyLabel, type FontUsage } from "./font-collector";
 import { useI18n } from "../../i18n/useI18n";
 import { useFileContext } from "../../lib/FileContext";
+import { TAB_LABEL_KEYS } from "../../lib/tab-labels";
 import { useStatus } from "../../lib/StatusContext";
 import FontSourceModal, { type FontSource } from "./FontSourceModal";
 
@@ -92,7 +93,7 @@ export default function FontEmbed() {
     const usedIn = isFileInUse(path, "fonts");
     if (usedIn) {
       setIsError(true);
-      setStatus(t("msg_file_in_use", t("tab_" + usedIn)));
+      setStatus(t("msg_file_in_use", t(TAB_LABEL_KEYS[usedIn])));
       return;
     }
 
@@ -155,7 +156,11 @@ export default function FontEmbed() {
         // Merge: keep any user-overridden picks that are still resolvable,
         // add defaults for newly-resolved fonts. Net effect: adding a new
         // source pre-checks fonts it satisfies without blowing away manual
-        // unchecks on fonts the user had deselected.
+        // unchecks on fonts the user had deselected. Keep the two loops
+        // distinct so the "preserve unchecks" intent stays readable —
+        // `prev` is the checked set, so a key missing from `prev` is
+        // deliberately unchecked; a newly-resolved key not previously
+        // present gets auto-checked as a convenience.
         setSelected((prev) => {
           const resolved = keysOfResolvedFonts(infos);
           const next = new Set<string>();
@@ -163,7 +168,7 @@ export default function FontEmbed() {
             if (resolved.has(key)) next.add(key);
           }
           for (const key of resolved) {
-            if (!prev.has(key) && !next.has(key)) next.add(key);
+            if (!prev.has(key)) next.add(key);
           }
           return next;
         });

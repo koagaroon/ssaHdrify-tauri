@@ -4,8 +4,8 @@
    tabs, controls) + footer.
 
    Port of the "bloom" direction from ssa Tauri revamp/src/styles.css,
-   shrunk ≈0.83× so the design's 1160×720 window fits inside our 960×680
-   Tauri window (20 px stage padding leaves a 920×640 inner window).
+   shrunk ≈0.83× so the design's 1160×720 window fits inside our 960×760
+   Tauri window (the stage now fills the OS window — no inset gutter).
    ======================================================================== */
 
 /* ── Stage — full-window backdrop for the frosted glass ───

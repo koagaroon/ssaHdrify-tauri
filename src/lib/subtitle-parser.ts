@@ -63,8 +63,10 @@ function parseSrtTime(ts: string): number {
 
 /** Parse VTT timestamps — supports both "HH:MM:SS.mmm" and "MM:SS.mmm" (no hours) */
 function parseVttTime(ts: string): number {
-  // HH:MM:SS.mmm (or H:MM:SS.mmm with variable-length hours)
-  const full = ts.match(/^(\d{2,}):(\d{2}):(\d{2})\.(\d{3})$/);
+  // HH:MM:SS.mmm (or H:MM:SS.mmm) — WebVTT spec mandates ≥2 hour digits but
+  // subsrt and other parsers are lenient. Match any non-empty digit run to
+  // stay consistent with parseSrtTime / parseAssTime.
+  const full = ts.match(/^(\d+):(\d{2}):(\d{2})\.(\d{3})$/);
   if (full) {
     return (
       parseInt(full[1], 10) * 3600000 +

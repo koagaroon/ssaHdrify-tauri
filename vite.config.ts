@@ -26,24 +26,34 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
  *   3. `v0.0.0-unknown` — last-resort sentinel; should never surface in practice.
  */
 function resolveAppVersion(): string {
-  try {
-    return execSync("git describe --tags --dirty --always", {
-      stdio: ["pipe", "pipe", "pipe"],
-    })
-      .toString()
-      .trim();
-  } catch {
-    // git unavailable or repo has no commits — fall back to npm version.
-  }
-  try {
-    const pkg = JSON.parse(readFileSync(resolve(__dirname, "package.json"), "utf8")) as {
-      version?: string;
-    };
-    if (pkg.version) return `v${pkg.version}`;
-  } catch {
-    // package.json missing or malformed — fall through to sentinel.
-  }
-  return "v0.0.0-unknown";
+  const raw = (() => {
+    try {
+      return execSync("git describe --tags --dirty --always", {
+        stdio: ["pipe", "pipe", "pipe"],
+      })
+        .toString()
+        .trim();
+    } catch {
+      // git unavailable or repo has no commits — fall back to npm version.
+    }
+    try {
+      const pkg = JSON.parse(readFileSync(resolve(__dirname, "package.json"), "utf8")) as {
+        version?: string;
+      };
+      if (pkg.version) return `v${pkg.version}`;
+    } catch {
+      // package.json missing or malformed — fall through to sentinel.
+    }
+    return "v0.0.0-unknown";
+  })();
+  // Defense-in-depth: git tag names can contain most bytes, and the raw
+  // string is injected into the bundle as `__APP_VERSION__`. We render it
+  // through React text nodes today (safe), but a future refactor that
+  // passes this value to `dangerouslySetInnerHTML` or a `<meta>` content
+  // attribute could become an injection vector. Restrict to the
+  // alphanumerics / punctuation that legitimate version strings use.
+  const sanitized = raw.replace(/[^a-zA-Z0-9._+-]/g, "");
+  return sanitized || "v0.0.0-unknown";
 }
 
 const APP_VERSION = resolveAppVersion();

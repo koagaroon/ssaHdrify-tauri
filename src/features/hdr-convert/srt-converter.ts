@@ -88,13 +88,15 @@ export function buildAssDocument(
   lines.push(
     "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding"
   );
-  // Sanitize fontName: strip control characters, commas (CSV corruption), and
-  // ASS override-tag meta characters (`{`, `}`, `\`) so a user-typed name like
-  // `Arial{\fn...}` can't smuggle markup into the generated Style line. Fall
-  // back to "Arial" if sanitization empties the string — an empty Fontname
-  // field produces a malformed Style CSV that ASS renderers treat unpredictably.
+  // Sanitize fontName: strip C0 + C1 control characters, commas (CSV
+  // corruption), Unicode line/paragraph separators, and ASS override-tag
+  // meta characters (`{`, `}`, `\`, `:`). A user-typed name like
+  // `Arial{\fn...}` or `Arial\u2028evil` would otherwise smuggle markup /
+  // line-break semantics into the generated Style line. Fall back to
+  // "Arial" if sanitization empties the string — an empty Fontname field
+  // produces a malformed Style CSV that ASS renderers treat unpredictably.
   // eslint-disable-next-line no-control-regex -- intentional: sanitize control chars from subtitle font names
-  const safeFontName = style.fontName.replace(/[\x00-\x1f\x7f,{}\\]/g, "") || "Arial";
+  const safeFontName = style.fontName.replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029,{}\\:]/g, "") || "Arial";
   lines.push(
     `Style: Default,${safeFontName},${style.fontSize},${style.primaryColor},&H000000FF,${style.outlineColor},&H00000000,0,0,0,0,100,100,0,0,1,${style.outlineWidth},${style.shadowDepth},2,10,10,10,1`
   );
@@ -120,7 +122,12 @@ export function buildAssDocument(
       .replace(/\\/g, "\\\\") // escape backslashes so they don't pair with following text
       .replace(/\{/g, "\\{")
       .replace(/\}/g, "\\}")
-      .replace(/\r?\n/g, "\\N")
+      // Normalize ALL line-break variants (LF, CRLF, bare CR, NEL,
+      // LINE SEPARATOR U+2028, PARAGRAPH SEPARATOR U+2029) to the ASS
+      // `\N` hard break. A bare `\r` would otherwise break the
+      // one-line-per-Dialogue invariant; U+2028 smuggles a line break
+      // past naive renderers.
+      .replace(/\r\n|\r|\n|\u0085|\u2028|\u2029/g, "\\N")
       .replace(/<b>/gi, "{\\b1}")
       .replace(/<\/b>/gi, "{\\b0}")
       .replace(/<i>/gi, "{\\i1}")

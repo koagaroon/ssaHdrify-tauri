@@ -15,6 +15,7 @@ import {
 } from "./timing-engine";
 import { useI18n } from "../../i18n/useI18n";
 import { useFileContext } from "../../lib/FileContext";
+import { TAB_LABEL_KEYS } from "../../lib/tab-labels";
 import { useStatus } from "../../lib/StatusContext";
 
 type Unit = "ms" | "s";
@@ -117,7 +118,7 @@ export default function TimingShift() {
     const usedIn = isFileInUse(path, "timing");
     if (usedIn) {
       setIsError(true);
-      setStatus(t("msg_file_in_use", t("tab_" + usedIn)));
+      setStatus(t("msg_file_in_use", t(TAB_LABEL_KEYS[usedIn])));
       return;
     }
 

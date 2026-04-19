@@ -41,8 +41,17 @@ function App() {
   const currentStatus = statuses[activeTab] ?? DEFAULT_STATUS;
   // Resolve the Tauri window handle once — doing this at module scope would
   // crash a non-Tauri host (e.g. a vitest env that accidentally imports
-  // App.tsx), even though only main.tsx imports it today.
-  const appWindow = useMemo(() => getCurrentWindow(), []);
+  // App.tsx), even though only main.tsx imports it today. Wrapped in
+  // try/catch so render-time failure inside a non-Tauri host produces a
+  // null handle rather than crashing the whole tree; the three titlebar
+  // buttons are null-guarded below.
+  const appWindow = useMemo(() => {
+    try {
+      return getCurrentWindow();
+    } catch {
+      return null;
+    }
+  }, []);
 
   const [themeOpen, setThemeOpen] = useState(false);
   const themeRef = useRef<HTMLDivElement>(null);
@@ -103,7 +112,7 @@ function App() {
           <div className="titlebar-spacer" />
           <button
             className="titlebar-btn"
-            onClick={() => appWindow.minimize()}
+            onClick={() => appWindow?.minimize()}
             aria-label={t("titlebar_minimize")}
             title={t("titlebar_minimize")}
           >
@@ -113,7 +122,7 @@ function App() {
           </button>
           <button
             className="titlebar-btn"
-            onClick={() => appWindow.toggleMaximize()}
+            onClick={() => appWindow?.toggleMaximize()}
             aria-label={t("titlebar_maximize")}
             title={t("titlebar_maximize")}
           >
@@ -123,7 +132,7 @@ function App() {
           </button>
           <button
             className="titlebar-btn close"
-            onClick={() => appWindow.close()}
+            onClick={() => appWindow?.close()}
             aria-label={t("titlebar_close")}
             title={t("titlebar_close")}
           >

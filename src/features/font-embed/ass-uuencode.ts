@@ -73,12 +73,13 @@ export function assUuencode(data: Uint8Array): string[] {
  * @returns Complete entry text including "fontname:" header
  */
 export function buildFontEntry(fontName: string, data: Uint8Array): string {
-  // Strip ALL control chars (not just CRLF) plus ':' — the header line is
-  // `fontname: <name>`, so a name containing ':' could break line parsing in
-  // naive renderers. Defense-in-depth: font-embedder.buildFontFileName
+  // Strip ALL control chars (C0 + C1), Unicode line separators, plus ':' —
+  // the header line is `fontname: <name>`, so a name containing `:` could
+  // break line parsing, and a `\u2028` could smuggle a line break into the
+  // [Fonts] section. Defense-in-depth: font-embedder.buildFontFileName
   // already sanitizes upstream, but this keeps the encoder self-contained.
   // eslint-disable-next-line no-control-regex -- sanitize control chars from filenames
-  const safeName = fontName.replace(/[\x00-\x1f\x7f:]/g, "_");
+  const safeName = fontName.replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029:]/g, "_");
   const encodedLines = assUuencode(data);
   return `fontname: ${safeName}\n${encodedLines.join("\n")}`;
 }
