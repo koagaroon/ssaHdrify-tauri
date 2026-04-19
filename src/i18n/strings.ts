@@ -14,6 +14,7 @@ export const strings: Record<string, StringEntry> = {
   app_title: { en: "SSA HDRify", zh: "SSA HDRify" },
   app_tagline: { en: "HDR subtitle toolkit", zh: "HDR 字幕工具箱" },
   footer_ready: { en: "Ready", zh: "就绪" },
+  file_empty: { en: "No file selected", zh: "未选择文件" },
   tab_hdr: { en: "HDR Convert", zh: "HDR 转换" },
   tab_hdr_desc: { en: "SDR → HDR color space conversion", zh: "SDR → HDR 色彩空间转换" },
   tab_timing: { en: "Time Shift", zh: "时间轴偏移" },

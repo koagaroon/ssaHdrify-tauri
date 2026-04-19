@@ -270,102 +270,119 @@ export default function FontEmbed() {
   }
 
   return (
-    <div className="space-y-5">
-      {/* ── Top area: file info left + buttons right ── */}
-      <div className="flex items-start justify-between gap-6">
-        {/* Left: file name */}
-        <div className="flex items-center gap-3 flex-1 min-w-0">
-          {fileName && (
-            <>
-              <span className="text-sm truncate" style={{ color: "var(--text-primary)" }}>
-                {fileName}
-              </span>
-              <button
-                onClick={handleClearFile}
-                disabled={embedding}
-                className="flex-none px-3 py-2 rounded-lg text-lg font-bold transition-colors"
-                style={{
-                  background: "var(--cancel-bg)",
-                  color: "var(--cancel-text)",
-                  opacity: embedding ? 0.4 : 1,
-                }}
-                title={t("btn_clear_file")}
-              >
-                ✕
-              </button>
-            </>
+    <div className="space-y-4">
+      {/* ── File strip — always visible; filename + clear + Select Subtitle ── */}
+      <div className="flex items-center gap-2">
+        <div
+          className="flex-1 min-w-0 flex items-center gap-2 px-3 rounded-lg text-sm"
+          style={{
+            background: fileName ? "var(--bg-panel)" : "var(--bg-input)",
+            border: "1px solid var(--border-light)",
+            minHeight: "38px",
+          }}
+        >
+          {fileName ? (
+            <span className="truncate flex-1" style={{ color: "var(--text-primary)" }}>
+              {fileName}
+            </span>
+          ) : (
+            <span className="italic" style={{ color: "var(--text-muted)" }}>
+              {t("file_empty")}
+            </span>
           )}
         </div>
-
-        {/* Right: stacked action buttons */}
-        <div className="flex flex-col gap-2 flex-none" style={{ minWidth: "150px" }}>
+        {fileName && (
           <button
-            onClick={handlePickFile}
-            disabled={analyzing || embedding}
-            className="w-full px-5 py-2.5 rounded-lg font-medium text-sm transition-colors"
+            onClick={handleClearFile}
+            disabled={embedding}
+            className="flex-none px-3 rounded-lg text-lg font-bold transition-colors"
             style={{
-              background: analyzing || embedding ? "var(--bg-input)" : "var(--accent)",
-              color: analyzing || embedding ? "var(--text-muted)" : "white",
+              background: "var(--cancel-bg)",
+              color: "var(--cancel-text)",
+              opacity: embedding ? 0.4 : 1,
+              height: "38px",
+            }}
+            title={t("btn_clear_file")}
+          >
+            ✕
+          </button>
+        )}
+        <button
+          onClick={handlePickFile}
+          disabled={analyzing || embedding}
+          className="flex-none px-5 rounded-lg font-medium text-sm transition-colors"
+          style={{
+            background: analyzing || embedding ? "var(--bg-input)" : "var(--accent)",
+            color: analyzing || embedding ? "var(--text-muted)" : "white",
+            height: "38px",
+          }}
+        >
+          {analyzing ? t("btn_analyzing") : t("btn_select_subtitle_file")}
+        </button>
+      </div>
+
+      {/* ── Action row: Select Font Files + Embed (+ Cancel during embed) ── */}
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => setSourceModalOpen(true)}
+          disabled={embedding || !filePath}
+          className="px-5 rounded-lg font-medium text-sm transition-colors"
+          style={
+            embedding || !filePath
+              ? {
+                  background: "var(--accent-disabled-bg)",
+                  color: "var(--accent-disabled-text)",
+                  opacity: 0.5,
+                  height: "38px",
+                }
+              : { background: "var(--accent)", color: "#fff", height: "38px" }
+          }
+          title={!filePath ? t("font_coverage_no_subtitle") : undefined}
+        >
+          {fontSources.length > 0
+            ? t("btn_select_font_files_with_count", fontSources.length)
+            : t("btn_select_font_files")}
+        </button>
+        <div className="flex-1" />
+        {embedding && (
+          <button
+            onClick={() => {
+              cancelRef.current = true;
+            }}
+            className="px-4 rounded-lg text-sm transition-colors"
+            style={{
+              background: "var(--cancel-bg)",
+              color: "var(--cancel-text)",
+              height: "38px",
             }}
           >
-            {analyzing ? t("btn_analyzing") : t("btn_select_subtitle_file")}
+            {t("btn_cancel")}
           </button>
-          <button
-            onClick={() => setSourceModalOpen(true)}
-            disabled={embedding || !filePath}
-            className="w-full px-5 py-2.5 rounded-lg font-medium text-sm transition-colors"
-            style={
-              embedding || !filePath
-                ? {
-                    background: "var(--accent-disabled-bg)",
-                    color: "var(--accent-disabled-text)",
-                    opacity: 0.5,
-                  }
-                : { background: "var(--accent)", color: "#fff" }
-            }
-            title={!filePath ? t("font_coverage_no_subtitle") : undefined}
-          >
-            {fontSources.length > 0
-              ? t("btn_select_font_files_with_count", fontSources.length)
-              : t("btn_select_font_files")}
-          </button>
-          <button
-            onClick={handleEmbed}
-            disabled={isEmbedDisabled}
-            className="w-full px-5 py-2.5 rounded-lg font-medium text-sm transition-colors"
-            style={
-              isEmbedDisabled
-                ? {
-                    background: "var(--accent-disabled-bg)",
-                    color: "var(--accent-disabled-text)",
-                    opacity: !filePath ? 0.5 : 1,
-                  }
-                : { background: "var(--accent)", color: "#fff" }
-            }
-          >
-            {embedButtonLabel()}
-          </button>
-          {fonts.length > 0 && (
-            <p className="text-xs" style={{ color: "var(--text-muted)", opacity: 0.8 }}>
-              {t("fonts_full_embed_warning")}
-            </p>
-          )}
-          {embedding && (
-            <button
-              onClick={() => {
-                cancelRef.current = true;
-              }}
-              className="w-full px-5 py-2.5 rounded-lg font-medium text-sm transition-colors"
-              style={{
-                background: "var(--cancel-bg)",
-                color: "var(--cancel-text)",
-              }}
-            >
-              {t("btn_cancel")}
-            </button>
-          )}
-        </div>
+        )}
+        <button
+          onClick={handleEmbed}
+          disabled={isEmbedDisabled}
+          className="px-6 rounded-lg font-medium text-sm transition-colors"
+          style={
+            isEmbedDisabled
+              ? {
+                  background: "var(--accent-disabled-bg)",
+                  color: "var(--accent-disabled-text)",
+                  opacity: !filePath ? 0.5 : 1,
+                  height: "38px",
+                  minWidth: "140px",
+                }
+              : { background: "var(--accent)", color: "#fff", height: "38px", minWidth: "140px" }
+          }
+        >
+          {embedButtonLabel()}
+        </button>
       </div>
+      {fonts.length > 0 && (
+        <p className="text-xs -mt-2" style={{ color: "var(--text-muted)", opacity: 0.8 }}>
+          {t("fonts_full_embed_warning")}
+        </p>
+      )}
 
       {/* Font List — always visible, shows empty state before file selection */}
       <div

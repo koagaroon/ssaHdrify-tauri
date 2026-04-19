@@ -178,14 +178,20 @@ export default function TimingShift() {
   }, [fileContent, filePath, fileName, effectiveOffsetMs, thresholdMs, thresholdInvalid, t]);
 
   return (
-    <div className="space-y-5">
-      {/* ── Top area: file info left + buttons right ── */}
-      <div className="flex items-start justify-between gap-6">
-        {/* Left: file name + format badge */}
-        <div className="flex items-center gap-3 flex-1 min-w-0">
-          {fileName && (
+    <div className="space-y-4">
+      {/* ── File strip — always visible; filename + badges + clear + Select ── */}
+      <div className="flex items-center gap-2">
+        <div
+          className="flex-1 min-w-0 flex items-center gap-2 px-3 rounded-lg text-sm"
+          style={{
+            background: fileName ? "var(--bg-panel)" : "var(--bg-input)",
+            border: "1px solid var(--border-light)",
+            minHeight: "38px",
+          }}
+        >
+          {fileName ? (
             <>
-              <span className="text-sm truncate" style={{ color: "var(--text-primary)" }}>
+              <span className="truncate flex-1" style={{ color: "var(--text-primary)" }}>
                 {fileName}
               </span>
               {detectedFormat && (
@@ -204,46 +210,38 @@ export default function TimingShift() {
                   {t("captions_count", captionCount)}
                 </span>
               )}
-              <button
-                onClick={handleClearFile}
-                className="flex-none px-3 py-2 rounded-lg text-lg font-bold transition-colors"
-                style={{
-                  background: "var(--cancel-bg)",
-                  color: "var(--cancel-text)",
-                }}
-                title={t("btn_clear_file")}
-              >
-                ✕
-              </button>
             </>
+          ) : (
+            <span className="italic" style={{ color: "var(--text-muted)" }}>
+              {t("file_empty")}
+            </span>
           )}
         </div>
-
-        {/* Right: stacked action buttons */}
-        <div className="flex flex-col gap-2 flex-none" style={{ minWidth: "130px" }}>
+        {fileName && (
           <button
-            onClick={handlePickFile}
-            className="w-full px-5 py-2.5 rounded-lg font-medium text-sm transition-colors"
+            onClick={handleClearFile}
+            className="flex-none px-3 rounded-lg text-lg font-bold transition-colors"
             style={{
-              background: "var(--accent)",
-              color: "white",
+              background: "var(--cancel-bg)",
+              color: "var(--cancel-text)",
+              height: "38px",
             }}
+            title={t("btn_clear_file")}
           >
-            {t("btn_select_file")}
+            ✕
           </button>
-          <button
-            onClick={handleSave}
-            disabled={!filePath || thresholdInvalid}
-            className="w-full px-5 py-2.5 rounded-lg font-medium text-sm transition-colors"
-            style={{
-              background: !filePath || thresholdInvalid ? "var(--bg-input)" : "var(--accent)",
-              color: !filePath || thresholdInvalid ? "var(--text-muted)" : "white",
-              opacity: !filePath ? 0.5 : 1,
-            }}
-          >
-            {t("btn_save_as")}
-          </button>
-        </div>
+        )}
+        <button
+          onClick={handlePickFile}
+          className="flex-none px-5 rounded-lg font-medium text-sm transition-colors"
+          style={{
+            background: "var(--accent)",
+            color: "white",
+            height: "38px",
+          }}
+        >
+          {t("btn_select_file")}
+        </button>
       </div>
 
       {/* Offset Controls */}
@@ -414,6 +412,24 @@ export default function TimingShift() {
           </div>
         </div>
       )}
+
+      {/* ── Action row: Save As ──────────────────────── */}
+      <div className="flex items-center justify-end">
+        <button
+          onClick={handleSave}
+          disabled={!filePath || thresholdInvalid}
+          className="px-6 rounded-lg font-medium text-sm transition-colors"
+          style={{
+            background: !filePath || thresholdInvalid ? "var(--bg-input)" : "var(--accent)",
+            color: !filePath || thresholdInvalid ? "var(--text-muted)" : "white",
+            opacity: !filePath ? 0.5 : 1,
+            height: "38px",
+            minWidth: "140px",
+          }}
+        >
+          {t("btn_save_as")}
+        </button>
+      </div>
 
       {/* Status */}
       {status && (

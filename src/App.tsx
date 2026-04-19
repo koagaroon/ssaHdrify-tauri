@@ -67,9 +67,22 @@ function App() {
             xmlns="http://www.w3.org/2000/svg"
             aria-hidden="true"
           >
-            <rect x="11" y="9" width="7" height="30" rx="1.2" fill="var(--accent)" />
-            <rect x="30" y="9" width="7" height="30" rx="1.2" fill="var(--accent)" />
-            <rect x="11" y="20" width="26" height="7" fill="var(--accent)" />
+            <defs>
+              <linearGradient id="tl-hdrV" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stopColor="#fbbf24" />
+                <stop offset="0.5" stopColor="#ec4899" />
+                <stop offset="1" stopColor="#6d28d9" />
+              </linearGradient>
+              <linearGradient id="tl-hdrH" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0" stopColor="#6b7280" />
+                <stop offset="0.38" stopColor="#7c3aed" />
+                <stop offset="0.72" stopColor="#ec4899" />
+                <stop offset="1" stopColor="#fbbf24" />
+              </linearGradient>
+            </defs>
+            <rect x="11" y="9" width="7" height="30" rx="1.2" fill="#64748b" />
+            <rect x="30" y="9" width="7" height="30" rx="1.2" fill="url(#tl-hdrV)" />
+            <rect x="11" y="20" width="26" height="7" fill="url(#tl-hdrH)" />
           </svg>
           <span className="titlebar-title">{t("app_title")}</span>
           <div className="titlebar-spacer" />
