@@ -747,9 +747,14 @@
    Coverage bar is reserved for a future stage when we can report
    per-font glyph coverage from the Rust side.
    ───────────────────────────────────────────────────────────── */
+/* Fixed widths on cols 3–5 are deliberate: CSS Grid computes `auto`
+   columns per-row, so a wide "— 1310 glyphs referenced" cell would
+   make data rows' GLYPHS column start further right than the header's,
+   visibly misaligning. Fixed widths force every row's columns into the
+   same positions. */
 .font-row {
   display: grid;
-  grid-template-columns: auto 1fr auto auto auto;
+  grid-template-columns: auto 1fr 200px 80px 90px;
   gap: 14px;
   align-items: center;
   padding: 10px 14px;
@@ -786,6 +791,8 @@
   letter-spacing: 0.03em;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Column header row for the detected-fonts card — sits between the
