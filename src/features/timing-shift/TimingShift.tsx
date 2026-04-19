@@ -15,6 +15,7 @@ import {
 } from "./timing-engine";
 import { useI18n } from "../../i18n/useI18n";
 import { useFileContext } from "../../lib/FileContext";
+import { useStatus } from "../../lib/StatusContext";
 
 type Unit = "ms" | "s";
 type Direction = "slower" | "faster";
@@ -36,6 +37,10 @@ export default function TimingShift() {
   const [captionCount, setCaptionCount] = useState(0);
   const [status, setStatus] = useState<string>("");
   const [isError, setIsError] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [lastActionResult, setLastActionResult] = useState<"success" | "error" | null>(null);
+  // Rename the context's setStatus to avoid shadowing the local one above.
+  const { setStatus: setTabStatus } = useStatus();
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const pickGenRef = useRef(0);
@@ -76,7 +81,6 @@ export default function TimingShift() {
     if (!fileContent) return;
     if (thresholdInvalid) {
       if (debounceRef.current) clearTimeout(debounceRef.current);
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- guard clause: clears stale preview, cannot cascade
       setPreview([]);
       return;
     }
@@ -158,6 +162,7 @@ export default function TimingShift() {
     if (!fileContent || !filePath) return;
     if (thresholdInvalid) return;
 
+    setBusy(true);
     try {
       // Always recompute from current parameters — do not cache. A cached result
       // can go stale if the user changes params and clicks Save within the 200ms
@@ -174,17 +179,50 @@ export default function TimingShift() {
       const defaultName = `${baseName}.shifted${ext}`;
 
       const savePath = await pickSavePath(defaultName);
-      if (!savePath) return;
+      if (!savePath) {
+        setBusy(false);
+        return;
+      }
 
       await writeText(savePath, result.content);
       const outName = fileNameFromPath(savePath);
       setIsError(false);
       setStatus(t("msg_saved", outName, result.captionCount));
+      setLastActionResult("success");
     } catch (e) {
       setIsError(true);
       setStatus(t("error_prefix", e instanceof Error ? e.message : String(e)));
+      setLastActionResult("error");
+    } finally {
+      setBusy(false);
     }
   }, [fileContent, filePath, fileName, effectiveOffsetMs, thresholdMs, thresholdInvalid, t]);
+
+  // Reset last-save outcome on file change so "done" doesn't stick around.
+  useEffect(() => {
+    setLastActionResult(null);
+  }, [timingFile]);
+
+  // Publish status to the shared context — footer picks it up per active tab.
+  useEffect(() => {
+    if (!fileName) {
+      setTabStatus("timing", { kind: "idle", message: t("status_timing_idle") });
+      return;
+    }
+    if (busy) {
+      setTabStatus("timing", { kind: "busy", message: t("status_timing_busy") });
+      return;
+    }
+    if (lastActionResult === "success") {
+      setTabStatus("timing", { kind: "done", message: t("status_timing_done") });
+      return;
+    }
+    if (lastActionResult === "error") {
+      setTabStatus("timing", { kind: "error", message: t("status_timing_error") });
+      return;
+    }
+    setTabStatus("timing", { kind: "pending", message: t("status_timing_pending") });
+  }, [fileName, busy, lastActionResult, setTabStatus, t]);
 
   return (
     <div className="space-y-4">

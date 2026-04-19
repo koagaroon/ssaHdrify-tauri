@@ -17,6 +17,7 @@ import NumberInput from "../../lib/NumberInput";
 import NitViz from "./NitViz";
 import { useI18n } from "../../i18n/useI18n";
 import { useFileContext } from "../../lib/FileContext";
+import { useStatus } from "../../lib/StatusContext";
 
 /** Convert ASS color "&H00BBGGRR" to HTML "#RRGGBB" */
 function assColorToHex(assColor: string): string {
@@ -79,10 +80,45 @@ export default function HdrConvert() {
   const [processing, setProcessing] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [showFileList, setShowFileList] = useState(false);
+  // Tracks whether the last convert finished — null between selections or
+  // while nothing has been attempted; gets cleared when hdrFiles changes
+  // so "done" doesn't linger after the user picks a new file.
+  const [lastActionResult, setLastActionResult] = useState<"success" | "error" | null>(null);
+  const { setStatus } = useStatus();
   const logIdRef = useRef(0);
   const cancelRef = useRef(false);
   const logEndRef = useRef<HTMLDivElement>(null);
   const fileContainerRef = useRef<HTMLDivElement>(null);
+
+  // Reset the last-convert outcome when the selection changes so the
+  // footer indicator doesn't stay green on a brand-new batch.
+  useEffect(() => {
+    setLastActionResult(null);
+  }, [hdrFiles]);
+
+  // Publish current status to the shared context — the footer reads it.
+  useEffect(() => {
+    if (!hdrFiles) {
+      setStatus("hdr", { kind: "idle", message: t("status_hdr_idle") });
+      return;
+    }
+    if (processing) {
+      setStatus("hdr", { kind: "busy", message: t("status_hdr_busy") });
+      return;
+    }
+    if (lastActionResult === "success") {
+      setStatus("hdr", { kind: "done", message: t("status_hdr_done") });
+      return;
+    }
+    if (lastActionResult === "error") {
+      setStatus("hdr", { kind: "error", message: t("status_hdr_error") });
+      return;
+    }
+    setStatus("hdr", {
+      kind: "pending",
+      message: t("status_hdr_pending", hdrFiles.filePaths.length),
+    });
+  }, [hdrFiles, processing, lastActionResult, setStatus, t]);
 
   // File-list dropdown: close on click outside or Escape
   useEffect(() => {
@@ -268,6 +304,9 @@ export default function HdrConvert() {
       if (!cancelRef.current) {
         addLog(t("msg_complete", successCount, paths.length), "success");
       }
+      // Record outcome for the footer status: any successful file counts
+      // as done; zero successes means it all failed.
+      setLastActionResult(successCount > 0 ? "success" : "error");
     } finally {
       setProcessing(false);
     }

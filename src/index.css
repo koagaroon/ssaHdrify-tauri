@@ -59,8 +59,9 @@
   --accent-disabled-bg: #c2b0dd;
   --accent-disabled-text: #6b6380;
 
-  /* Status — forest + rust */
+  /* Status — forest + rust + amber (pending/busy) */
   --success: #047857;
+  --warning: #d97706;
   --error: #b91c1c;
   --info: #6b6380;
 
@@ -157,8 +158,9 @@
   --accent-disabled-bg: #1e1a26;
   --accent-disabled-text: #4e4658;
 
-  /* Status — mint + rose */
+  /* Status — mint + amber + rose */
   --success: #86efac;
+  --warning: #fbbf24;
   --error: #fca5a5;
   --info: #a5a0b5;
 

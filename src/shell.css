@@ -312,12 +312,43 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--text-muted);
   flex-shrink: 0;
+  background: var(--text-muted);
+  transition:
+    background-color 0.2s,
+    box-shadow 0.2s;
 }
-.app-footer .dot.ready {
+/* Status indicator color states — red for idle/error, amber for
+   pending + busy (pulse when actually working), green for done.
+   Pulse applied via animation on .busy only. */
+.app-footer .dot.idle,
+.app-footer .dot.error {
+  background: var(--error);
+  box-shadow: 0 0 8px 0 var(--error);
+}
+.app-footer .dot.pending {
+  background: var(--warning);
+  box-shadow: 0 0 8px 0 var(--warning);
+}
+.app-footer .dot.busy {
+  background: var(--warning);
+  box-shadow: 0 0 8px 0 var(--warning);
+  animation: dot-pulse 1.5s ease-in-out infinite;
+}
+.app-footer .dot.done {
   background: var(--success);
   box-shadow: 0 0 8px 0 var(--success);
+}
+@keyframes dot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(0.8);
+  }
 }
 .app-footer .spacer {
   flex: 1;

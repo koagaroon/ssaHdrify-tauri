@@ -6,6 +6,7 @@ import FontEmbed from "./features/font-embed/FontEmbed";
 import { useI18n } from "./i18n/useI18n";
 import { useTheme } from "./theme/useTheme";
 import type { ThemeMode } from "./theme/useTheme";
+import { useStatus, type StatusTab } from "./lib/StatusContext";
 import "./shell.css";
 
 type Tab = "hdr" | "timing" | "fonts";
@@ -28,6 +29,8 @@ function App() {
   const [activeTab, setActiveTab] = useState<Tab>("hdr");
   const { t, lang, setLang } = useI18n();
   const { mode, appearance, setMode } = useTheme();
+  const { statuses } = useStatus();
+  const currentStatus = statuses[activeTab as StatusTab];
 
   const [themeOpen, setThemeOpen] = useState(false);
   const themeRef = useRef<HTMLDivElement>(null);
@@ -324,8 +327,8 @@ function App() {
 
         {/* ── Footer ──────────────────────────────── */}
         <footer className="app-footer">
-          <span className="dot ready" aria-hidden="true" />
-          <span>{t("footer_ready")}</span>
+          <span className={`dot ${currentStatus.kind}`} aria-hidden="true" />
+          <span>{currentStatus.message || t("footer_ready")}</span>
           <span className="spacer" />
           <span className="ver">{t("footer_version")}</span>
         </footer>

@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useMemo } from "react";
+import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import {
   pickAssFile,
   pickSavePath,
@@ -16,6 +16,7 @@ import {
 import { ensureLoaded, fontKeyLabel, type FontUsage } from "./font-collector";
 import { useI18n } from "../../i18n/useI18n";
 import { useFileContext } from "../../lib/FileContext";
+import { useStatus } from "../../lib/StatusContext";
 import FontSourceModal, { type FontSource } from "./FontSourceModal";
 
 /** Indices of fonts that resolved to a file — used to pre-check them in the UI. */
@@ -39,6 +40,9 @@ export default function FontEmbed() {
   const [progress, setProgress] = useState<EmbedProgress | null>(null);
   const [status, setStatus] = useState("");
   const [isError, setIsError] = useState(false);
+  const [lastActionResult, setLastActionResult] = useState<"success" | "error" | null>(null);
+  // Rename the context setter to avoid colliding with the local setStatus above.
+  const { setStatus: setTabStatus } = useStatus();
   const cancelRef = useRef(false);
   // Generation counter: incremented on each pick or clear to invalidate stale async results
   const pickGenRef = useRef(0);
@@ -237,14 +241,53 @@ export default function FontEmbed() {
       const outName = fileNameFromPath(savePath);
       setIsError(false);
       setStatus(t("msg_embed_saved", outName, result.embeddedCount));
+      setLastActionResult("success");
     } catch (e) {
       setIsError(true);
       setStatus(t("error_prefix", e instanceof Error ? e.message : String(e)));
+      setLastActionResult("error");
     } finally {
       setEmbedding(false);
       setProgress(null);
     }
   }, [fileContent, filePath, fileName, fonts, selected, fontUsages, t]);
+
+  // Reset last-action on file change so "done" clears for the new subtitle.
+  useEffect(() => {
+    setLastActionResult(null);
+  }, [fontsFile]);
+
+  // Publish status to the shared context — footer reads it per active tab.
+  useEffect(() => {
+    if (!fileName) {
+      setTabStatus("fonts", { kind: "idle", message: t("status_fonts_idle") });
+      return;
+    }
+    if (embedding) {
+      setTabStatus("fonts", { kind: "busy", message: t("status_fonts_busy") });
+      return;
+    }
+    if (analyzing) {
+      setTabStatus("fonts", { kind: "busy", message: t("status_fonts_analyzing") });
+      return;
+    }
+    if (lastActionResult === "success") {
+      setTabStatus("fonts", { kind: "done", message: t("status_fonts_done") });
+      return;
+    }
+    if (lastActionResult === "error") {
+      setTabStatus("fonts", { kind: "error", message: t("status_fonts_error") });
+      return;
+    }
+    if (selected.size === 0) {
+      setTabStatus("fonts", { kind: "pending", message: t("status_fonts_pick") });
+      return;
+    }
+    setTabStatus("fonts", {
+      kind: "pending",
+      message: t("status_fonts_pending", selected.size),
+    });
+  }, [fileName, analyzing, embedding, selected.size, lastActionResult, setTabStatus, t]);
 
   const formatFontLabel = (info: FontInfo) => fontKeyLabel(info.key);
 

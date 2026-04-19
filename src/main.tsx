@@ -5,13 +5,16 @@ import App from "./App.tsx";
 import I18nProvider from "./i18n/I18nProvider";
 import ThemeProvider from "./theme/ThemeProvider";
 import { FileProvider } from "./lib/FileContext";
+import StatusProvider from "./lib/StatusProvider";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <ThemeProvider>
       <I18nProvider>
         <FileProvider>
-          <App />
+          <StatusProvider>
+            <App />
+          </StatusProvider>
         </FileProvider>
       </I18nProvider>
     </ThemeProvider>
