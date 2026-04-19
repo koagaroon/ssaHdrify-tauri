@@ -254,8 +254,12 @@ function applyOverrideTags(block: string, current: FontKey, initialFont: FontKey
 
   // \r[StyleName] — reset to base style (but don't return early;
   // subsequent tags like \fn in the same block must still be applied).
-  // The anchor avoids matching made-up tokens like \rnd.
-  if (/\\r(?=\\|}|$|[A-Z])/.test(block)) {
+  // Lookahead accepts `[A-Za-z]` so both `\rBoldStyle` and the
+  // lowercase-named `\rdefault` match, matching the sibling check in
+  // `processDialogueText` above. The anchor avoids matching made-up
+  // tokens like the literal byte sequence `\r` + tailing text that
+  // doesn't form a style reset.
+  if (/\\r(?=\\|}|$|[A-Za-z])/.test(block)) {
     result = { ...initialFont };
   }
 

@@ -6,6 +6,7 @@
  */
 import { describe, it, expect } from "vitest";
 import {
+  escapeSrtUserText,
   preprocessSrtColors,
   buildAssDocument,
   isNativeAss,
@@ -142,5 +143,47 @@ describe("isConvertible", () => {
 
   it("rejects .vtt files", () => {
     expect(isConvertible("subtitle.vtt")).toBe(false);
+  });
+});
+
+// ── SRT pipeline integration — guards against the Round 3 regression
+// where buildAssDocument re-escaped preprocessSrtColors' injected tags,
+// silently breaking HDR color conversion.
+
+describe("SRT pipeline integration", () => {
+  it("preserves preprocessSrtColors' injected color tags through buildAssDocument", () => {
+    const srt = '<font color="#FF0000">Red text</font>';
+    const escaped = escapeSrtUserText(srt);
+    const withColors = preprocessSrtColors(escaped);
+    const doc = buildAssDocument([{ start: 0, end: 1000, text: withColors }]);
+    // The injected color tag must survive untouched — NOT escaped as
+    // `\{\\1c&H...` literal text. A passing test means SRT→HDR still
+    // carries user colors into the HDR color stage.
+    expect(doc).toMatch(/\{\\1c&H0000FF&\}/);
+    expect(doc).toContain("Red text");
+    // `{` must NOT appear escaped in the Dialogue line emitted for our tag
+    expect(doc).not.toMatch(/\\\{\\\\1c/);
+  });
+
+  it("escapes user braces so a crafted SRT cannot smuggle ASS overrides", () => {
+    const srt = "{\\an8}hello"; // user-supplied literal
+    const escaped = escapeSrtUserText(srt);
+    const doc = buildAssDocument([{ start: 0, end: 1000, text: escaped }]);
+    // The emitted Dialogue must carry escaped braces — libass renders as
+    // literal `{\an8}hello`, NOT as a repositioning override.
+    expect(doc).toContain("\\{\\\\an8\\}hello");
+  });
+
+  it("handles a composed SRT with both user braces and color tags correctly", () => {
+    const srt = '{literal}<font color="#00FF00">green</font>{more}';
+    const escaped = escapeSrtUserText(srt);
+    const withColors = preprocessSrtColors(escaped);
+    const doc = buildAssDocument([{ start: 0, end: 1000, text: withColors }]);
+    // User braces survive as literal text
+    expect(doc).toContain("\\{literal\\}");
+    expect(doc).toContain("\\{more\\}");
+    // Our injected color override survives unescaped (BGR order)
+    expect(doc).toMatch(/\{\\1c&H00FF00&\}/);
+    expect(doc).toContain("green");
   });
 });

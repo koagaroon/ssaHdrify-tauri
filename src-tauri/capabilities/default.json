@@ -16,8 +16,6 @@
     "dialog:allow-open",
     "dialog:allow-save",
     "fs:default",
-    "fs:allow-read-text-file",
-    "fs:allow-read-file",
     "fs:allow-write-text-file",
     "fs:allow-stat",
     {
@@ -39,6 +37,7 @@
         { "path": "$APPDATA/Microsoft/Credentials/**" },
         { "path": "$APPDATA/Microsoft/Crypto/**" },
         { "path": "$APPDATA/Microsoft/Protect/**" },
+        { "path": "$APPDATA/Microsoft/Vault/**" },
         { "path": "$APPDATA/Microsoft/Windows/Start Menu/**" },
         { "path": "$APPDATA/Microsoft/Windows/SendTo/**" },
         { "path": "$APPDATA/Mozilla/**" },
@@ -52,7 +51,8 @@
         { "path": "$LOCALDATA/Google/Chrome/User Data/**" },
         { "path": "$LOCALDATA/Chromium/User Data/**" },
         { "path": "$LOCALDATA/Microsoft/Edge/User Data/**" },
-        { "path": "$LOCALDATA/BraveSoftware/**" }
+        { "path": "$LOCALDATA/BraveSoftware/**" },
+        { "path": "$LOCALDATA/Mozilla/**" }
       ]
     }
   ]

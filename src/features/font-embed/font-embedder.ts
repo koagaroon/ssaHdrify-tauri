@@ -297,14 +297,13 @@ function insertFontsSection(content: string, fontsSection: string): string {
   // Adapt fontsSection to match the file's line ending
   const adaptedFontsSection = fontsSection.replace(/\n/g, lineEnding);
 
-  // Check if [Fonts] section already exists. The match is anchored at
-  // column 0 and only tolerates trailing whitespace — a UUEncode data
-  // line that happens to lowercase to `[fonts]` would never start at
-  // column 0 with `[` being the first byte and nothing but whitespace
-  // after `]`, because the 6-bit alphabet (33–96) does not include
-  // space (32). This closes the false-positive hole that a looser
-  // `.trim().toLowerCase()` comparison left open.
-  const HEADER_FONTS_RE = /^\[[Ff][Oo][Nn][Tt][Ss]\]\s*$/;
+  // Check if [Fonts] section already exists. Anchored at column 0 and
+  // trailing whitespace restricted to ASCII space/tab only — plain `\s*`
+  // would also match U+2028 / U+2029, letting a crafted ASS with
+  // `[FONTS]\u2028` on one line still match the header regex. This
+  // closes the false-positive hole that `.trim().toLowerCase()` left
+  // open AND blocks the Unicode-line-sep smuggle.
+  const HEADER_FONTS_RE = /^\[[Ff][Oo][Nn][Tt][Ss]\][ \t]*$/;
   const existingFontsIdx = lines.findIndex((l) => HEADER_FONTS_RE.test(l));
 
   // Build "before" from a line slice: strip trailing blank lines so we control
@@ -356,9 +355,10 @@ function insertFontsSection(content: string, fontsSection: string): string {
     return `${before}${sep}${adaptedFontsSection}${afterSep}${after}`;
   }
 
-  // No existing [Fonts] — insert before [Events]. Same column-0 strict
-  // match as above for the same UUEncode-false-positive reason.
-  const HEADER_EVENTS_RE = /^\[[Ee][Vv][Ee][Nn][Tt][Ss]\]\s*$/;
+  // No existing [Fonts] — insert before [Events]. Same ASCII-whitespace
+  // trailing match as above for the same UUEncode-false-positive +
+  // Unicode-line-sep smuggling reason.
+  const HEADER_EVENTS_RE = /^\[[Ee][Vv][Ee][Nn][Tt][Ss]\][ \t]*$/;
   const eventsIdx = lines.findIndex((l) => HEADER_EVENTS_RE.test(l));
 
   if (eventsIdx >= 0) {

@@ -11,6 +11,21 @@
 // ── SRT Color Preprocessing ──────────────────────────────
 
 /**
+ * Neutralize raw `\`, `{`, `}` in user-supplied SRT text BEFORE any of our
+ * own ASS override tags are injected (via `preprocessSrtColors` or the
+ * HTML-tag conversion in `buildAssDocument`). After this step runs, every
+ * `{…}` seen downstream in the pipeline is a tag WE emitted — so nothing
+ * can smuggle a libass override through user text.
+ *
+ * Callers MUST run this BEFORE `preprocessSrtColors` and must NOT re-escape
+ * after; re-escaping would turn our trusted `{\1c&H…}` injections into
+ * literal `\{\\1c&H…\}` text and silently break HDR color conversion.
+ */
+export function escapeSrtUserText(text: string): string {
+  return text.replace(/\\/g, "\\\\").replace(/\{/g, "\\{").replace(/\}/g, "\\}");
+}
+
+/**
  * Convert HTML-style font color tags to ASS inline color overrides.
  * <font color="#RRGGBB">text</font>  →  {\1c&HBBGGRR&}text{\1c}
  */
@@ -109,19 +124,14 @@ export function buildAssDocument(
   for (const entry of entries) {
     const startTime = msToAssTime(entry.start);
     const endTime = msToAssTime(entry.end);
-    // Pipeline:
-    //   1. Escape raw `{` / `}` from the SRT source FIRST. A user-supplied SRT
-    //      with literal `{\an8\pos(0,0)}` in the text would otherwise survive
-    //      into Dialogue as an active override and reposition / restyle the
-    //      renderer — a silent-injection vector. `{` / `}` become `\{` / `\}`
-    //      per libass convention.
-    //   2. THEN inject our own trusted override tags (bold/italic/etc.) which
-    //      use `{...}` by design — because we did step 1 first, the braces we
-    //      emit here are never confused with user-escaped ones.
+    // IMPORTANT: we do NOT escape `{` / `}` / `\` here. Callers are
+    // expected to have already run `escapeSrtUserText` on the ORIGINAL
+    // SRT content before `preprocessSrtColors` injected our trusted color
+    // override tags. Re-escaping at this stage would turn those injected
+    // `{\1c&H…}` tags into literal text, silently defeating SRT→HDR color
+    // conversion. See escapeSrtUserText's docstring for the required
+    // pipeline ordering.
     const cleanText = entry.text
-      .replace(/\\/g, "\\\\") // escape backslashes so they don't pair with following text
-      .replace(/\{/g, "\\{")
-      .replace(/\}/g, "\\}")
       // Normalize ALL line-break variants (LF, CRLF, bare CR, NEL,
       // LINE SEPARATOR U+2028, PARAGRAPH SEPARATOR U+2029) to the ASS
       // `\N` hard break. A bare `\r` would otherwise break the

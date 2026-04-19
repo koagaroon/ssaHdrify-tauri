@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { pickSubtitleFiles, readText, writeText, fileNameFromPath } from "../../lib/tauri-api";
 import { processAssContent, parseAssColor, formatAssColor } from "./ass-processor";
 import {
+  escapeSrtUserText,
   preprocessSrtColors,
   buildAssDocument,
   isNativeAss,
@@ -263,13 +264,21 @@ export default function HdrConvert() {
             // Direct ASS processing
             assContent = processAssContent(content, brightness, eotf);
           } else if (isConvertible(fileName)) {
-            // SRT/SUB → ASS conversion path
-            // Strip all curly-brace blocks from raw SRT before color preprocessing.
-            // SRT has no curly-brace syntax, so any {...} is either a leaked ASS
-            // override tag or content that would be misinterpreted by ASS renderers.
-            const sanitized = content.replace(/\{[^}]*\}/g, "");
-            // Preprocess SRT colors
-            const preprocessed = preprocessSrtColors(sanitized);
+            // SRT/SUB → ASS conversion path.
+            //
+            // Order matters:
+            //   1. escapeSrtUserText — neutralize raw `\` / `{` / `}` so a
+            //      crafted SRT cannot smuggle ASS overrides through user text
+            //      (libass would otherwise interpret a `{\an8\pos(0,0)}` in
+            //      the source verbatim).
+            //   2. preprocessSrtColors — inject OUR trusted color tags for
+            //      HDR conversion. Safe to emit unescaped `{…}` here because
+            //      step 1 already consumed every user brace.
+            //   3. parseSubtitle + buildAssDocument — downstream never
+            //      re-escapes, so our injected tags survive and the HDR
+            //      color stage sees them.
+            const escaped = escapeSrtUserText(content);
+            const preprocessed = preprocessSrtColors(escaped);
 
             // Parse with our browser-compatible parser
             const { captions } = parseSubtitle(preprocessed, style.fps);

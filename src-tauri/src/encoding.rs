@@ -90,7 +90,10 @@ pub fn read_text_detect_encoding(path: String) -> Result<ReadTextResult, String>
     if path.is_empty() || path.len() > 4096 {
         return Err("Path must be 1-4096 characters".to_string());
     }
-    if path.chars().any(|c| c.is_control()) {
+    if path
+        .chars()
+        .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}' | '\u{0085}'))
+    {
         return Err("Path contains invalid characters".to_string());
     }
 
@@ -105,14 +108,22 @@ pub fn read_text_detect_encoding(path: String) -> Result<ReadTextResult, String>
         return Err(format!("Unsupported file type: .{ext}"));
     }
 
-    // Canonicalize once — resolves symlinks, "..", and gives us a stable
-    // path to open. Using the canonical path for the open call mitigates
-    // the TOCTOU window where a symlink could be swapped between stat and
-    // open (std::fs holds a HANDLE after open, so a later swap is harmless).
-    let canonical = path_ref.canonicalize().map_err(|e| sanitize_io_error(&e, "resolve"))?;
+    // Canonicalize when possible — resolves symlinks, "..", and gives us a
+    // stable path to open. When canonicalize fails (OneDrive cloud-only
+    // files, network shares with permissions quirks, etc.), fall back to
+    // the raw path so we don't block legitimate workflows for a
+    // defense-in-depth step. TOCTOU protection is reduced in that case
+    // but the broad `fs:scope` + extension whitelist still apply.
+    let read_path: std::path::PathBuf = match path_ref.canonicalize() {
+        Ok(p) => p,
+        Err(e) => {
+            log::warn!("canonicalize fell back to raw path: {e}");
+            path_ref.to_path_buf()
+        }
+    };
 
     // Size check
-    let metadata = std::fs::metadata(&canonical).map_err(|e| sanitize_io_error(&e, "stat"))?;
+    let metadata = std::fs::metadata(&read_path).map_err(|e| sanitize_io_error(&e, "stat"))?;
     if metadata.len() > MAX_TEXT_SIZE {
         let size_mb = metadata.len() as f64 / (1024.0 * 1024.0);
         return Err(format!(
@@ -120,7 +131,7 @@ pub fn read_text_detect_encoding(path: String) -> Result<ReadTextResult, String>
         ));
     }
 
-    let bytes = std::fs::read(&canonical).map_err(|e| sanitize_io_error(&e, "read"))?;
+    let bytes = std::fs::read(&read_path).map_err(|e| sanitize_io_error(&e, "read"))?;
 
     // Post-read size check (TOCTOU mitigation — file could grow between stat and read)
     if bytes.len() as u64 > MAX_TEXT_SIZE {

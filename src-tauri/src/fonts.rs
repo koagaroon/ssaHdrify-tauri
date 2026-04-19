@@ -273,10 +273,15 @@ fn parse_local_font_file(canonical: &Path) -> Vec<LocalFontEntry> {
                 // Take chars lazily with a short ceiling so a malformed
                 // font with a 2GB name-table entry can't OOM the process
                 // before the length guard fires. 257 chars is enough to
-                // detect ">256" overflow in the guard below.
+                // detect ">256 chars" overflow in the guard below.
                 let name: String = localized.chars().take(257).collect();
                 let trimmed = name.trim();
-                if !trimmed.is_empty() && trimmed.len() <= 256 {
+                // Guard counts CODEPOINTS, not bytes — a 100-char CJK
+                // family name (300+ UTF-8 bytes) is perfectly legitimate,
+                // and the previous byte-length gate silently dropped such
+                // names on non-Latin fonts.
+                let char_count = trimmed.chars().count();
+                if !trimmed.is_empty() && char_count <= 256 {
                     family_variants.insert(trimmed.to_string());
                     if family_variants.len() >= MAX_FAMILY_VARIANTS_PER_FACE {
                         break;
@@ -302,17 +307,31 @@ fn parse_local_font_file(canonical: &Path) -> Vec<LocalFontEntry> {
         }
 
         // Register the path once per face — the allow-set is a HashSet so
-        // repeated inserts are cheap no-ops. A genuinely-unbounded
-        // pathological session (user picks thousands of folders) is still
-        // bounded by MAX_PROVENANCE_CACHE_SIZE at the sibling cache's
-        // enforcement site below; the per-face insert here doesn't enforce
-        // the cap itself because silently dropping an insert here would
-        // cause `subset_font` to reject the same face later, confusing the
-        // user. The cap is enforced centrally in `register_font_path`
-        // (system fonts) and in `scan_font_directory` / `scan_font_files`
-        // (user fonts) by the total_added check below.
-        if let Ok(mut cache) = ALLOWED_USER_FONT_PATHS.lock() {
-            cache.insert(canonical_string.clone());
+        // repeated inserts are cheap no-ops. Honor MAX_PROVENANCE_CACHE_SIZE
+        // (mirrors the system-side `register_font_path` enforcement): drop
+        // the whole face when the cache is full rather than registering a
+        // path that subset_font would later reject. `continue` takes us to
+        // the next face index, leaving partial results intact.
+        {
+            let cache_full = match ALLOWED_USER_FONT_PATHS.lock() {
+                Ok(mut cache) => {
+                    if !cache.contains(&canonical_string)
+                        && cache.len() >= MAX_PROVENANCE_CACHE_SIZE
+                    {
+                        true
+                    } else {
+                        cache.insert(canonical_string.clone());
+                        false
+                    }
+                }
+                Err(_) => true,
+            };
+            if cache_full {
+                log::warn!(
+                    "user font provenance cache full ({MAX_PROVENANCE_CACHE_SIZE}); dropping face"
+                );
+                continue;
+            }
         }
 
         // Stabilize the primary-name pick: prefer font-kit's family_name if
