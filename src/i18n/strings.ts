@@ -72,7 +72,7 @@ export const strings: Record<string, StringEntry> = {
   style_shadow_depth: { en: "Shadow Depth", zh: "阴影深度" },
   style_fps: { en: "FPS (SUB only)", zh: "帧率（仅 SUB）" },
   style_font_custom: { en: "Custom...", zh: "自定义…" },
-  btn_select_files: { en: "Select Subtitle File(s)", zh: "选择字幕文件" },
+  btn_select_files: { en: "Select Subtitle File(s)", zh: "选择字幕文件（可多选）" },
   btn_convert: { en: "Convert", zh: "转换" },
   btn_converting: { en: "Converting...", zh: "转换中…" },
   btn_cancel: { en: "Cancel", zh: "取消" },
