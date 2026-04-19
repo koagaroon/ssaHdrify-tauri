@@ -128,8 +128,11 @@ describe("processAssContent — inline color tags", () => {
   it("ignores 7-digit hex values (invalid ASS format)", () => {
     const input = makeAss("{\\1c&HFFFFFFF&}Hello");
     const output = processAssContent(input, 203, "PQ");
-    // 7-digit should pass through — regex matches exactly 6 or 8 digits
-    expect(output).toContain("FFFFFFF");
+    // 7-digit should pass through — regex matches exactly 6 or 8 digits.
+    // Assert on the EXACT token so the test fails if the transformer ever
+    // accidentally matches 6/8 digits inside a 7-digit run; `toContain`
+    // alone would still pass with a leftover 6-digit match.
+    expect(output).toContain("{\\1c&HFFFFFFF&}");
   });
 
   it("ignores short color values (< 6 hex digits)", () => {

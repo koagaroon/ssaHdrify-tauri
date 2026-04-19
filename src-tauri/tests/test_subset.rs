@@ -1,10 +1,28 @@
 //! Quick integration test: subset a real CJK font from the VCB-S pack.
-//! Run with: cargo test --manifest-path src-tauri/Cargo.toml --test test_subset
+//!
+//! This test is **ignored by default** because it needs a machine-local
+//! CJK font file that we cannot check into the repo (licensing). To run it:
+//!   SSAHDRIFY_TEST_CJK_FONT="<path/to/font.ttf>" cargo test --test test_subset -- --ignored
+//!
+//! Without the environment variable — or without the font at that path —
+//! the test is skipped instead of failing. This keeps `cargo test` green
+//! across every developer's machine and CI while still letting the author
+//! smoke-test the real subsetting pipeline on demand.
 
 #[test]
+#[ignore = "requires SSAHDRIFY_TEST_CJK_FONT env var pointing to a CJK .ttf"]
 fn subset_real_cjk_font() {
-    let font_path = r"C:\Users\lauti\Downloads\超级字体整合包 XZ\精简包\简体\Monotype（蒙纳）\MYoyo PRC Medium.ttf";
-    let font_data = std::fs::read(font_path).expect("Cannot read font file");
+    let Ok(font_path) = std::env::var("SSAHDRIFY_TEST_CJK_FONT") else {
+        eprintln!("SSAHDRIFY_TEST_CJK_FONT not set — skipping");
+        return;
+    };
+    let font_data = match std::fs::read(&font_path) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("Cannot read {font_path}: {e} — skipping");
+            return;
+        }
+    };
     let original_size = font_data.len();
 
     // Simulate a subtitle using ~50 Chinese characters + punctuation

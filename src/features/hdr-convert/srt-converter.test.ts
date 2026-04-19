@@ -80,7 +80,10 @@ describe("buildAssDocument", () => {
     };
     const result = buildAssDocument(entries, customStyle);
     expect(result).toContain("Noto Sans CJK");
-    expect(result).toContain(",36,");
+    // Anchor the font-size assertion to the Style line specifically — a bare
+    // `,36,` match could also land on the Alignment or Margin fields if any
+    // future default ever equals 36, producing a false green.
+    expect(result).toMatch(/Style:\s*Default,Noto Sans CJK,36,/);
   });
 
   it("handles multiple entries", () => {
