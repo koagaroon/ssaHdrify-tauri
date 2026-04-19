@@ -31,6 +31,10 @@ export const strings: Record<string, StringEntry> = {
   preset_bt2408_desc: { en: "Reference", zh: "参考白" },
   preset_hdr10_desc: { en: "Consumer", zh: "消费级" },
   preset_dv_desc: { en: "Dolby Vision", zh: "杜比视界" },
+  template_tokens_hint: {
+    en: "Placeholders — {name}: input filename without extension · {eotf}: pq or hlg (lowercase)",
+    zh: "占位符 — {name}：输入文件名（不含扩展名）· {eotf}：pq 或 hlg（小写）",
+  },
   tab_hdr: { en: "HDR Convert", zh: "HDR 转换" },
   tab_hdr_desc: { en: "SDR → HDR color space conversion", zh: "SDR → HDR 色彩空间转换" },
   tab_timing: { en: "Time Shift", zh: "时间轴偏移" },

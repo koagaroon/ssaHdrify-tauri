@@ -513,6 +513,9 @@ export default function HdrConvert() {
             />
           )}
         </div>
+        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+          {t("template_tokens_hint")}
+        </p>
       </div>
 
       {/* Collapsible Style Settings */}
