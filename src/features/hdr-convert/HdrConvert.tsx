@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { pickSubtitleFiles, readText, writeText, fileNameFromPath } from "../../lib/tauri-api";
 import { processAssContent, parseAssColor, formatAssColor } from "./ass-processor";
 import {
@@ -77,9 +77,31 @@ export default function HdrConvert() {
   const [style, setStyle] = useState<StyleConfig>({ ...DEFAULT_STYLE });
   const [processing, setProcessing] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [showFileList, setShowFileList] = useState(false);
   const logIdRef = useRef(0);
   const cancelRef = useRef(false);
   const logEndRef = useRef<HTMLDivElement>(null);
+  const fileContainerRef = useRef<HTMLDivElement>(null);
+
+  // File-list dropdown: close on click outside or Escape
+  useEffect(() => {
+    if (!showFileList) return;
+    const onClick = (e: MouseEvent) => {
+      if (fileContainerRef.current && !fileContainerRef.current.contains(e.target as Node)) {
+        setShowFileList(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setShowFileList(false);
+    };
+    const id = setTimeout(() => document.addEventListener("mousedown", onClick), 0);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      clearTimeout(id);
+      document.removeEventListener("mousedown", onClick);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [showFileList]);
 
   const addLog = useCallback((text: string, type: LogEntry["type"] = "info") => {
     const id = logIdRef.current++;
@@ -250,29 +272,103 @@ export default function HdrConvert() {
 
   return (
     <div className="space-y-4">
-      {/* ── File strip — always visible; filename + clear + Select button ── */}
+      {/* ── File strip — always visible; filename + clear + Select button ──
+           When >1 file is selected, the filename area becomes a clickable
+           dropdown showing all selected files (max ~5 rows, scroll beyond). */}
       <div className="flex items-center gap-2">
         <div
-          className="flex-1 min-w-0 flex items-center gap-2 px-3 rounded-lg text-sm"
-          style={{
-            background: hdrFiles ? "var(--bg-panel)" : "var(--bg-input)",
-            border: "1px solid var(--border-light)",
-            minHeight: "38px",
-          }}
+          ref={fileContainerRef}
+          className="flex-1 min-w-0"
+          style={{ position: "relative" }}
         >
-          {hdrFiles ? (
-            <>
-              <span className="truncate flex-1" style={{ color: "var(--text-primary)" }}>
-                {hdrFiles.fileNames.join(", ")}
-              </span>
+          {hdrFiles && hdrFiles.filePaths.length > 1 ? (
+            <button
+              type="button"
+              onClick={() => setShowFileList((v) => !v)}
+              className="w-full flex items-center gap-2 px-3 rounded-lg text-sm"
+              style={{
+                background: "var(--bg-panel)",
+                border: "1px solid var(--border-light)",
+                minHeight: "38px",
+                color: "var(--text-primary)",
+                textAlign: "left",
+                cursor: "pointer",
+              }}
+              aria-expanded={showFileList}
+              aria-haspopup="listbox"
+            >
+              <span className="truncate flex-1">{hdrFiles.fileNames.join(", ")}</span>
               <span className="flex-none text-xs" style={{ color: "var(--text-muted)" }}>
                 ({hdrFiles.filePaths.length})
               </span>
-            </>
+              <span className="flex-none text-xs" style={{ color: "var(--text-muted)" }}>
+                {showFileList ? "▲" : "▼"}
+              </span>
+            </button>
           ) : (
-            <span className="italic" style={{ color: "var(--text-muted)" }}>
-              {t("file_empty")}
-            </span>
+            <div
+              className="flex items-center gap-2 px-3 rounded-lg text-sm"
+              style={{
+                background: hdrFiles ? "var(--bg-panel)" : "var(--bg-input)",
+                border: "1px solid var(--border-light)",
+                minHeight: "38px",
+              }}
+            >
+              {hdrFiles ? (
+                <span className="truncate flex-1" style={{ color: "var(--text-primary)" }}>
+                  {hdrFiles.fileNames[0]}
+                </span>
+              ) : (
+                <span className="italic" style={{ color: "var(--text-muted)" }}>
+                  {t("file_empty")}
+                </span>
+              )}
+            </div>
+          )}
+
+          {showFileList && hdrFiles && hdrFiles.filePaths.length > 1 && (
+            <div
+              className="absolute rounded-lg overflow-hidden flex flex-col"
+              style={{
+                top: "100%",
+                left: 0,
+                right: 0,
+                marginTop: "4px",
+                background: "var(--bg-panel)",
+                border: "1px solid var(--border)",
+                boxShadow: "var(--shadow-popover)",
+                maxHeight: "190px",
+                zIndex: 20,
+              }}
+              role="listbox"
+            >
+              <div
+                className="px-3 py-2 flex-none"
+                style={{ borderBottom: "1px solid var(--border)" }}
+              >
+                <span className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>
+                  {t("hdr_files_title", hdrFiles.filePaths.length)}
+                </span>
+              </div>
+              <div className="overflow-y-auto flex-1">
+                {hdrFiles.fileNames.map((name, idx) => (
+                  <div
+                    key={idx}
+                    className="px-3 py-2 text-sm truncate"
+                    style={{
+                      color: "var(--text-primary)",
+                      borderBottom:
+                        idx < hdrFiles.fileNames.length - 1
+                          ? "1px solid color-mix(in srgb, var(--border) 50%, transparent)"
+                          : "none",
+                    }}
+                    title={hdrFiles.filePaths[idx]}
+                  >
+                    {name}
+                  </div>
+                ))}
+              </div>
+            </div>
           )}
         </div>
         {hdrFiles && (

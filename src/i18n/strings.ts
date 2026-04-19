@@ -15,6 +15,10 @@ export const strings: Record<string, StringEntry> = {
   app_tagline: { en: "HDR subtitle toolkit", zh: "HDR 字幕工具箱" },
   footer_ready: { en: "Ready", zh: "就绪" },
   file_empty: { en: "No file selected", zh: "未选择文件" },
+  hdr_files_title: {
+    en: "Selected subtitle files ({0})",
+    zh: "已选字幕文件（{0}）",
+  },
   tab_hdr: { en: "HDR Convert", zh: "HDR 转换" },
   tab_hdr_desc: { en: "SDR → HDR color space conversion", zh: "SDR → HDR 色彩空间转换" },
   tab_timing: { en: "Time Shift", zh: "时间轴偏移" },
@@ -68,7 +72,7 @@ export const strings: Record<string, StringEntry> = {
   style_shadow_depth: { en: "Shadow Depth", zh: "阴影深度" },
   style_fps: { en: "FPS (SUB only)", zh: "帧率（仅 SUB）" },
   style_font_custom: { en: "Custom...", zh: "自定义…" },
-  btn_select_files: { en: "Select File(s)", zh: "选择文件" },
+  btn_select_files: { en: "Select Subtitle File(s)", zh: "选择字幕文件" },
   btn_convert: { en: "Convert", zh: "转换" },
   btn_converting: { en: "Converting...", zh: "转换中…" },
   btn_cancel: { en: "Cancel", zh: "取消" },
@@ -145,10 +149,13 @@ export const strings: Record<string, StringEntry> = {
     zh: "字体已子集化为仅包含本字幕使用的字形，并自动包含安全填充（ASCII + CJK 全角字符）",
   },
   btn_select_subtitle_file: { en: "Select Subtitle File", zh: "选择字幕文件" },
-  btn_select_font_files: { en: "Select Font Files", zh: "选择字体文件" },
+  btn_select_font_files: {
+    en: "Select Font Files / Folder",
+    zh: "选择字体文件 / 文件夹",
+  },
   btn_select_font_files_with_count: {
-    en: "Select Font Files ({0})",
-    zh: "选择字体文件（{0}）",
+    en: "Font Sources ({0})",
+    zh: "字体来源（{0}）",
   },
   badge_local: { en: "Local", zh: "本地" },
   badge_system: { en: "System", zh: "系统" },
@@ -204,7 +211,7 @@ export const strings: Record<string, StringEntry> = {
   },
 
   // ── Shared ──────────────────────────────────────────────
-  btn_select_file: { en: "Select File", zh: "选择文件" },
+  btn_select_file: { en: "Select Subtitle File", zh: "选择字幕文件" },
   btn_clear_file: { en: "Clear", zh: "清除" },
   msg_file_in_use: {
     en: "This file is already loaded in the {0} tab. Clear it there first.",
