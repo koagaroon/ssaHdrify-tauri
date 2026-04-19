@@ -35,7 +35,9 @@ function hexToAssColor(htmlHex: string): string {
   return formatAssColor(r, g, b, "00");
 }
 
-// Common fonts available on most systems (cross-platform)
+// Common fonts available on most systems (cross-platform).
+// Kept as a plain array for <option> rendering order, plus a Set built once
+// for O(1) membership checks in the style panel's "is this a preset?" logic.
 const COMMON_FONTS = [
   "Arial",
   "Arial Black",
@@ -60,6 +62,7 @@ const COMMON_FONTS = [
   "Source Han Sans",
   "Source Han Serif",
 ];
+const COMMON_FONTS_SET = new Set(COMMON_FONTS);
 
 interface LogEntry {
   id: number;
@@ -215,18 +218,19 @@ export default function HdrConvert() {
         addLog(t("msg_processing", fileName));
 
         try {
+          // Check file extension FIRST — cheap test, avoids wasted work in
+          // resolveOutputPath / readText for obviously-unsupported files.
+          if (!isNativeAss(fileName) && !isConvertible(fileName)) {
+            addLog(t("msg_unsupported", fileName), "error");
+            continue;
+          }
+
           // Resolve output path
           let outputPath: string;
           try {
             outputPath = resolveOutputPath(filePath, activeTemplate, eotf);
           } catch (e) {
             addLog(t("msg_skipped", fileName, e instanceof Error ? e.message : String(e)), "error");
-            continue;
-          }
-
-          // Check file extension before reading — skip unsupported formats early
-          if (!isNativeAss(fileName) && !isConvertible(fileName)) {
-            addLog(t("msg_unsupported", fileName), "error");
             continue;
           }
 
@@ -606,7 +610,7 @@ export default function HdrConvert() {
                 {t("style_font")}
               </label>
               <select
-                value={COMMON_FONTS.includes(style.fontName) ? style.fontName : "__custom"}
+                value={COMMON_FONTS_SET.has(style.fontName) ? style.fontName : "__custom"}
                 onChange={(e) => {
                   if (e.target.value !== "__custom") {
                     setStyle({ ...style, fontName: e.target.value });
@@ -627,7 +631,7 @@ export default function HdrConvert() {
                 ))}
                 <option value="__custom">{t("style_font_custom")}</option>
               </select>
-              {!COMMON_FONTS.includes(style.fontName) && (
+              {!COMMON_FONTS_SET.has(style.fontName) && (
                 <input
                   type="text"
                   value={style.fontName}
@@ -650,7 +654,7 @@ export default function HdrConvert() {
               <NumberInput
                 value={style.fontSize}
                 onChange={(v) => {
-                  const n = parseInt(v);
+                  const n = parseInt(v, 10);
                   setStyle({ ...style, fontSize: Number.isNaN(n) ? 48 : n });
                 }}
                 min={1}

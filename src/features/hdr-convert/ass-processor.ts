@@ -116,7 +116,12 @@ function transformStyleLine(
   eotf: Eotf,
   styleColorIndices: number[]
 ): string {
-  if (!line.startsWith("Style:")) return line;
+  // Match Style: prefix case-insensitively and tolerate leading whitespace
+  // (ASS renderers accept both). The raw line is preserved after the colon
+  // so any indentation / casing in the source file survives the transform.
+  const leading = line.length - line.trimStart().length;
+  const afterLeading = line.slice(leading);
+  if (!/^style:/i.test(afterLeading)) return line;
 
   const colonIdx = line.indexOf(":");
   const prefix = line.slice(0, colonIdx + 1);
@@ -206,8 +211,10 @@ export function processAssContent(
 
     if (currentSection === "styles") {
       // Format lines declare the color-field positions for later Style lines;
-      // pass them through unchanged.
-      if (line.trimStart().startsWith("Format:")) {
+      // pass them through unchanged. Case-insensitive, tolerate leading
+      // whitespace — same lenience the style branch applies below.
+      const trimmedLeading = line.trimStart();
+      if (/^format:/i.test(trimmedLeading)) {
         const parsed = parseStyleFormatLine(line);
         if (parsed) {
           styleColorIndices = parsed;
@@ -216,8 +223,11 @@ export function processAssContent(
       } else {
         result.push(transformStyleLine(line, targetBrightness, eotf, styleColorIndices));
       }
-    } else if (currentSection === "events" && line.startsWith("Dialogue:")) {
-      // Comment: lines are non-rendering and must not be mutated
+    } else if (currentSection === "events" && /^\s*dialogue:/i.test(line)) {
+      // Comment: lines are non-rendering and must not be mutated.
+      // Dialogue: match is case-insensitive and accepts leading whitespace so
+      // renderers' lenience is mirrored here — otherwise "dialogue:" or
+      // " Dialogue:" would slip through untransformed.
       result.push(transformEventText(line, targetBrightness, eotf));
     } else {
       result.push(line);

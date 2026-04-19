@@ -26,15 +26,23 @@ const PRESETS: Preset[] = [
  * Maps [MIN_BRIGHTNESS, MAX_BRIGHTNESS] onto 0-100% using a log10 curve —
  * low values (100, 203) get more screen real estate than high ones (4000,
  * 10000), matching how human brightness perception actually scales.
+ *
+ * The formula generalizes for any MIN_BRIGHTNESS (not just 1) so bumping
+ * the constant won't silently desynchronize the marker position from the
+ * value returned on click. log10(MIN) == 0 only when MIN == 1, so the
+ * previous form was a special case that would drift if the constant moved.
  */
+const LOG_MIN = Math.log10(MIN_BRIGHTNESS);
+const LOG_MAX = Math.log10(MAX_BRIGHTNESS);
+const LOG_RANGE = LOG_MAX - LOG_MIN;
 function nitsToPct(nits: number): number {
   const clamped = Math.min(MAX_BRIGHTNESS, Math.max(MIN_BRIGHTNESS, nits));
-  return (Math.log10(clamped) / Math.log10(MAX_BRIGHTNESS)) * 100;
+  return ((Math.log10(clamped) - LOG_MIN) / LOG_RANGE) * 100;
 }
 
 function pctToNits(pct: number): number {
   const p = Math.min(1, Math.max(0, pct));
-  return Math.round(Math.pow(MAX_BRIGHTNESS, p));
+  return Math.round(Math.pow(10, LOG_MIN + p * LOG_RANGE));
 }
 
 export default function NitViz({ value, onChange, disabled = false }: NitVizProps) {
@@ -47,6 +55,7 @@ export default function NitViz({ value, onChange, disabled = false }: NitVizProp
       const el = trackRef.current;
       if (!el) return;
       const rect = el.getBoundingClientRect();
+      if (rect.width <= 0) return; // pre-layout or collapsed — ignore
       const pct = (clientX - rect.left) / rect.width;
       onChange(pctToNits(pct));
     },
@@ -55,15 +64,34 @@ export default function NitViz({ value, onChange, disabled = false }: NitVizProp
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (disabled) return;
+    // Only respond to primary (left) button; right-click and middle-click
+    // should not drag the marker.
+    if (e.button !== 0) return;
     e.preventDefault();
+    const el = trackRef.current;
+    if (!el) return;
+    // setPointerCapture routes subsequent pointermove / pointerup to the
+    // same element even if the pointer leaves the window, so we get a
+    // guaranteed pointerup and don't leak listeners if the user releases
+    // outside the viewport.
+    try {
+      el.setPointerCapture(e.pointerId);
+    } catch {
+      // not supported (very old webview) — fall through, listeners still fire
+    }
     setFromClientX(e.clientX);
     const onMove = (ev: PointerEvent) => setFromClientX(ev.clientX);
     const onUp = () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
+      el.removeEventListener("pointermove", onMove);
+      el.removeEventListener("pointerup", onUp);
+      try {
+        el.releasePointerCapture(e.pointerId);
+      } catch {
+        // ignore — capture may have already been released
+      }
     };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
+    el.addEventListener("pointermove", onMove);
+    el.addEventListener("pointerup", onUp);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -139,7 +167,7 @@ export default function NitViz({ value, onChange, disabled = false }: NitVizProp
             className="nit-preset"
             data-key={p.key}
             aria-pressed={value === p.v}
-            onClick={() => !disabled && onChange(p.v)}
+            onClick={() => onChange(p.v)}
             disabled={disabled}
             title={`${t(p.descKey)} · ${p.v} ${t("nit_unit")}`}
           >

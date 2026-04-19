@@ -88,11 +88,13 @@ export function buildAssDocument(
   lines.push(
     "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding"
   );
-  // Sanitize fontName: strip control characters and commas to prevent CSV corruption.
-  // Fall back to "Arial" if sanitization empties the string — an empty Fontname
+  // Sanitize fontName: strip control characters, commas (CSV corruption), and
+  // ASS override-tag meta characters (`{`, `}`, `\`) so a user-typed name like
+  // `Arial{\fn...}` can't smuggle markup into the generated Style line. Fall
+  // back to "Arial" if sanitization empties the string — an empty Fontname
   // field produces a malformed Style CSV that ASS renderers treat unpredictably.
   // eslint-disable-next-line no-control-regex -- intentional: sanitize control chars from subtitle font names
-  const safeFontName = style.fontName.replace(/[\x00-\x1f\x7f,]/g, "") || "Arial";
+  const safeFontName = style.fontName.replace(/[\x00-\x1f\x7f,{}\\]/g, "") || "Arial";
   lines.push(
     `Style: Default,${safeFontName},${style.fontSize},${style.primaryColor},&H000000FF,${style.outlineColor},&H00000000,0,0,0,0,100,100,0,0,1,${style.outlineWidth},${style.shadowDepth},2,10,10,10,1`
   );
@@ -105,8 +107,19 @@ export function buildAssDocument(
   for (const entry of entries) {
     const startTime = msToAssTime(entry.start);
     const endTime = msToAssTime(entry.end);
-    // Clean SRT formatting: convert line breaks, strip remaining HTML
+    // Pipeline:
+    //   1. Escape raw `{` / `}` from the SRT source FIRST. A user-supplied SRT
+    //      with literal `{\an8\pos(0,0)}` in the text would otherwise survive
+    //      into Dialogue as an active override and reposition / restyle the
+    //      renderer — a silent-injection vector. `{` / `}` become `\{` / `\}`
+    //      per libass convention.
+    //   2. THEN inject our own trusted override tags (bold/italic/etc.) which
+    //      use `{...}` by design — because we did step 1 first, the braces we
+    //      emit here are never confused with user-escaped ones.
     const cleanText = entry.text
+      .replace(/\\/g, "\\\\") // escape backslashes so they don't pair with following text
+      .replace(/\{/g, "\\{")
+      .replace(/\}/g, "\\}")
       .replace(/\r?\n/g, "\\N")
       .replace(/<b>/gi, "{\\b1}")
       .replace(/<\/b>/gi, "{\\b0}")

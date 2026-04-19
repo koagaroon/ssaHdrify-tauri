@@ -27,9 +27,9 @@ const HLG_L_W = 1000;
 /** System gamma for L_W = 1000 cd/m²: γ = 1.2 + 0.42 * log10(L_W / 1000) */
 const HLG_GAMMA = 1.2;
 
-/** Rec.2020 luminance coefficients */
+/** Rec.2020 luminance coefficients (BT.2020 / BT.2100) */
 const REC2020_LUM_R = 0.2627;
-const REC2020_LUM_G = 0.678;
+const REC2020_LUM_G = 0.6780;
 const REC2020_LUM_B = 0.0593;
 
 /** ARIB STD-B67 OETF constants */
@@ -116,7 +116,7 @@ function sRgbToHlg(
  * @param b - Blue channel 0-255
  * @param targetBrightness - Absolute luminance in nits (default 203, BT.2408)
  * @param eotf - Transfer function: "PQ" or "HLG"
- * @returns [R, G, B] in 0-255 range
+ * @returns [R, G, B] integers in 0-255 range (rounded via Math.round)
  */
 export function sRgbToHdr(
   r: number,
@@ -145,10 +145,10 @@ export function sRgbToHdr(
 
     // Scale luminance by target brightness.
     // Color.js xyz-d65 Y is relative (1.0 = D65 white).
-    // PQ's reference white is ~203 nits per BT.2408.
+    // PQ's reference white is DEFAULT_BRIGHTNESS nits per BT.2408.
     // Use a new Color object instead of mutating in place — avoids relying
     // on undocumented Color.js mutation-before-to() behavior.
-    const scale = targetBrightness / 203;
+    const scale = targetBrightness / DEFAULT_BRIGHTNESS;
     const scaledXyz = new Color("xyz-d65", [
       (xyz.coords[0] ?? 0) * scale,
       (xyz.coords[1] ?? 0) * scale,

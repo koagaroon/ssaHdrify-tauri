@@ -67,14 +67,23 @@ export function resolveOutputPath(inputPath: string, template: string, eotf: Eot
   const dotIdx = fullName.lastIndexOf(".");
   let baseName = dotIdx > 0 ? fullName.slice(0, dotIdx) : fullName;
 
-  // Strip existing .hdr / .sdr tags (any stacking order) to prevent doubling
-  while (/\.(hdr|sdr)$/i.test(baseName)) {
-    baseName = baseName.slice(0, -4);
-  }
+  // Strip existing .hdr / .sdr tags in a single regex pass — the previous
+  // while-loop version was O(n²) for pathological stacks like
+  // "foo.hdr.hdr.hdr....hdr.ass" (each slice allocates). A compiled regex
+  // collapses the whole tail in one pass.
+  baseName = baseName.replace(/(\.(hdr|sdr))+$/i, "");
 
   // Guard: reject filenames with no valid stem (e.g., ".ass")
   if (!baseName || !baseName.replace(/^\.+/, "").trim()) {
     throw new Error("Input filename has no valid stem");
+  }
+
+  // Guard: reject null bytes and control chars in the base name. Windows
+  // would truncate at the null byte, turning `evil\0.exe.ass` into `evil`
+  // and bypassing the trailing `.ass` extension check further down.
+  // eslint-disable-next-line no-control-regex -- intentional: reject control chars in filenames
+  if (/[\x00-\x1f\x7f]/.test(baseName)) {
+    throw new Error("Input filename contains control characters");
   }
 
   // Resolve template variables in a single pass to prevent double-substitution
@@ -83,8 +92,11 @@ export function resolveOutputPath(inputPath: string, template: string, eotf: Eot
     key === "name" ? baseName : eotf.toLowerCase()
   );
 
-  // Safety: reject characters that are illegal in filenames on Windows
-  const ILLEGAL_CHARS = /[<>:"|?*\\/]/;
+  // Safety: reject characters that are illegal in filenames on Windows, plus
+  // all control chars / DEL (tab / newline would pass the ordinary check and
+  // only fail when the OS rejects the write, producing an unhelpful error).
+  // eslint-disable-next-line no-control-regex -- intentional: reject control chars in filenames
+  const ILLEGAL_CHARS = /[\x00-\x1f\x7f<>:"|?*\\/]/;
   if (ILLEGAL_CHARS.test(resolved)) {
     throw new Error(`Output filename contains illegal characters: ${resolved}`);
   }
@@ -104,10 +116,17 @@ export function resolveOutputPath(inputPath: string, template: string, eotf: Eot
   // Build full output path
   const outputPath = `${dir}/${resolved}`;
 
-  // Safety: reject paths that exceed Windows MAX_PATH limit
-  if (outputPath.length > 260) {
+  // Safety: reject paths that exceed Windows MAX_PATH limit.
+  // Long-path (`\\?\`) UNC paths support up to 32767 chars on Windows 10+
+  // when long-path mode is enabled; relax the cap when we detect that prefix.
+  // Note: this guard is conservative — on Linux/macOS the OS limit is much
+  // higher (PATH_MAX 4096) but enforcing Windows's 260 keeps the output
+  // portable across machines, which matches the user's cross-device workflow.
+  const isLongPathPrefixed = outputPath.startsWith("//?/") || outputPath.startsWith("////?");
+  const maxPathLen = isLongPathPrefixed ? 32767 : 260;
+  if (outputPath.length > maxPathLen) {
     throw new Error(
-      `Output path too long (${outputPath.length} chars, max 260 for Windows compatibility)`
+      `Output path too long (${outputPath.length} chars, max ${maxPathLen})`
     );
   }
 
