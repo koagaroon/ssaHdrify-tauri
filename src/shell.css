@@ -277,7 +277,7 @@
   font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 500;
-  color: var(--text-faint);
+  color: var(--text-muted);
   letter-spacing: 0.08em;
 }
 .tab[data-active="true"] .tab-index {
@@ -323,7 +323,7 @@
   flex: 1;
 }
 .app-footer .ver {
-  color: var(--text-faint);
+  color: var(--text-muted);
   white-space: nowrap;
 }
 
@@ -708,7 +708,7 @@
   opacity: 0.55;
 }
 .timeline-row .idx {
-  color: var(--text-faint);
+  color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
 .timeline-row .t-orig {
