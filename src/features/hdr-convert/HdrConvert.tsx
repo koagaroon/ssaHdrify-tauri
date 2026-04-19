@@ -14,6 +14,7 @@ import { DEFAULT_BRIGHTNESS, MIN_BRIGHTNESS, MAX_BRIGHTNESS, type Eotf } from ".
 
 import { parseSubtitle } from "../../lib/subtitle-parser";
 import NumberInput from "../../lib/NumberInput";
+import NitViz from "./NitViz";
 import { useI18n } from "../../i18n/useI18n";
 import { useFileContext } from "../../lib/FileContext";
 
@@ -121,6 +122,12 @@ export default function HdrConvert() {
       setBrightness(num);
     }
   };
+
+  // Slider / preset paths emit a validated number — keep both state slots in sync.
+  const handleBrightnessFromNits = useCallback((nits: number) => {
+    setBrightness(nits);
+    setBrightnessText(String(nits));
+  }, []);
 
   const activeTemplate = template === "custom" ? customTemplate : template;
   const convertDisabled = !hdrFiles || processing;
@@ -455,6 +462,9 @@ export default function HdrConvert() {
           </p>
         </div>
       </div>
+
+      {/* ── Brightness visualization (rainbow slider + standard presets) ── */}
+      <NitViz value={brightness} onChange={handleBrightnessFromNits} disabled={processing} />
 
       {/* Output Template */}
       <div className="space-y-2">

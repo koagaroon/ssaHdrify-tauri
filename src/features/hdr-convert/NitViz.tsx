@@ -1,0 +1,154 @@
+import { useCallback, useRef } from "react";
+import { useI18n } from "../../i18n/useI18n";
+import { MIN_BRIGHTNESS, MAX_BRIGHTNESS } from "./color-engine";
+
+interface NitVizProps {
+  value: number;
+  onChange: (nits: number) => void;
+  disabled?: boolean;
+}
+
+interface Preset {
+  key: "sdr" | "bt2408" | "hdr10" | "dv";
+  label: string;
+  v: number;
+  descKey: string;
+}
+
+const PRESETS: Preset[] = [
+  { key: "sdr", label: "SDR", v: 100, descKey: "preset_sdr_desc" },
+  { key: "bt2408", label: "BT.2408", v: 203, descKey: "preset_bt2408_desc" },
+  { key: "hdr10", label: "HDR10", v: 1000, descKey: "preset_hdr10_desc" },
+  { key: "dv", label: "DV", v: 4000, descKey: "preset_dv_desc" },
+];
+
+/**
+ * Maps [MIN_BRIGHTNESS, MAX_BRIGHTNESS] onto 0-100% using a log10 curve —
+ * low values (100, 203) get more screen real estate than high ones (4000,
+ * 10000), matching how human brightness perception actually scales.
+ */
+function nitsToPct(nits: number): number {
+  const clamped = Math.min(MAX_BRIGHTNESS, Math.max(MIN_BRIGHTNESS, nits));
+  return (Math.log10(clamped) / Math.log10(MAX_BRIGHTNESS)) * 100;
+}
+
+function pctToNits(pct: number): number {
+  const p = Math.min(1, Math.max(0, pct));
+  return Math.round(Math.pow(MAX_BRIGHTNESS, p));
+}
+
+export default function NitViz({ value, onChange, disabled = false }: NitVizProps) {
+  const { t } = useI18n();
+  const trackRef = useRef<HTMLDivElement>(null);
+  const markerPct = nitsToPct(value);
+
+  const setFromClientX = useCallback(
+    (clientX: number) => {
+      const el = trackRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const pct = (clientX - rect.left) / rect.width;
+      onChange(pctToNits(pct));
+    },
+    [onChange]
+  );
+
+  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (disabled) return;
+    e.preventDefault();
+    setFromClientX(e.clientX);
+    const onMove = (ev: PointerEvent) => setFromClientX(ev.clientX);
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (disabled) return;
+    const step = e.shiftKey ? 100 : 10;
+    if (e.key === "ArrowLeft" || e.key === "ArrowDown") {
+      e.preventDefault();
+      onChange(Math.max(MIN_BRIGHTNESS, value - step));
+    } else if (e.key === "ArrowRight" || e.key === "ArrowUp") {
+      e.preventDefault();
+      onChange(Math.min(MAX_BRIGHTNESS, value + step));
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      onChange(MIN_BRIGHTNESS);
+    } else if (e.key === "End") {
+      e.preventDefault();
+      onChange(MAX_BRIGHTNESS);
+    }
+  };
+
+  return (
+    <div className="nit-viz" style={{ opacity: disabled ? 0.6 : 1 }}>
+      <div className="nit-head">
+        <span className="nit-head-label">{t("nit_target")}</span>
+        <span className="nit-readout">
+          <span className="v">{value}</span>
+          <span className="u">{t("nit_unit")}</span>
+        </span>
+      </div>
+
+      <div
+        ref={trackRef}
+        className="nit-track"
+        onPointerDown={handlePointerDown}
+        onKeyDown={handleKeyDown}
+        role="slider"
+        tabIndex={disabled ? -1 : 0}
+        aria-valuemin={MIN_BRIGHTNESS}
+        aria-valuemax={MAX_BRIGHTNESS}
+        aria-valuenow={value}
+        aria-valuetext={`${value} ${t("nit_unit")}`}
+        aria-disabled={disabled}
+        aria-label={t("nit_target")}
+      >
+        <div className="nit-ticks">
+          {Array.from({ length: 11 }).map((_, i) => (
+            <span key={i} />
+          ))}
+        </div>
+        <div className="nit-fill" style={{ width: `${markerPct}%` }} />
+        <div className="nit-marker" style={{ left: `calc(${markerPct}% - 8px)` }}>
+          <div className="nit-marker-dot" />
+        </div>
+      </div>
+
+      <div className="nit-scale">
+        <span>1</span>
+        <span>10</span>
+        <span>100</span>
+        <span>1k</span>
+        <span>10k</span>
+      </div>
+
+      <div className="nit-presets-label">
+        <span>{t("nit_presets_label")}</span>
+        <span className="nit-presets-hint">{t("nit_presets_hint")}</span>
+      </div>
+      <div className="nit-presets">
+        {PRESETS.map((p) => (
+          <button
+            key={p.key}
+            type="button"
+            className="nit-preset"
+            data-key={p.key}
+            aria-pressed={value === p.v}
+            onClick={() => !disabled && onChange(p.v)}
+            disabled={disabled}
+            title={`${t(p.descKey)} · ${p.v} ${t("nit_unit")}`}
+          >
+            <span className="nit-preset-label">{p.label}</span>
+            <span className="nit-preset-v">{p.v}</span>
+            <span className="nit-preset-desc">{t(p.descKey)}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}

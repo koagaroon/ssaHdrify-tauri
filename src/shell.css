@@ -326,3 +326,237 @@
   color: var(--text-faint);
   white-space: nowrap;
 }
+
+/* ─────────────────────────────────────────────────────────────
+   NIT VISUALIZATION — HDR tab brightness slider + presets
+   Log-scale rainbow track (1→10k nits), 4 standard presets,
+   large mono readout. Shrunk ≈0.85× from design spec.
+   ───────────────────────────────────────────────────────────── */
+.nit-viz {
+  display: flex;
+  flex-direction: column;
+  padding: 10px 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  position: relative;
+}
+.nit-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+  white-space: nowrap;
+}
+.nit-head-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+.nit-readout {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+}
+.nit-readout .v {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.nit-readout .u {
+  font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.nit-track {
+  height: 26px;
+  position: relative;
+  border-radius: 4px;
+  overflow: hidden;
+  cursor: pointer;
+  background: linear-gradient(
+    90deg,
+    #0a0614 0%,
+    #321850 10%,
+    #6e1d9c 28%,
+    #b347ff 46%,
+    #ff5caa 62%,
+    #ffb347 80%,
+    #2ee0ff 100%
+  );
+  touch-action: none;
+  user-select: none;
+}
+.nit-track:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.nit-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.08) 100%);
+  pointer-events: none;
+  border-right: 1px solid rgba(255, 255, 255, 0.35);
+}
+.nit-marker {
+  position: absolute;
+  top: -6px;
+  bottom: -6px;
+  width: 16px;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.nit-marker-dot {
+  width: 4px;
+  height: calc(100% + 12px);
+  background: #fff;
+  border-radius: 2px;
+  box-shadow:
+    0 0 0 2px rgba(0, 0, 0, 0.35),
+    0 0 24px 4px var(--accent),
+    0 0 40px 6px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+[data-theme="light"] .nit-marker-dot {
+  box-shadow:
+    0 0 0 2px rgba(0, 0, 0, 0.2),
+    0 0 16px 3px var(--accent);
+}
+.nit-ticks {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  justify-content: space-between;
+  pointer-events: none;
+}
+.nit-ticks span {
+  width: 1px;
+  background: rgba(255, 255, 255, 0.14);
+}
+.nit-scale {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-muted);
+  margin-top: 4px;
+  letter-spacing: 0.05em;
+}
+.nit-presets-label {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 8px;
+  margin-bottom: 5px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+.nit-presets-hint {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+.nit-presets {
+  display: flex;
+  gap: 5px;
+}
+.nit-preset {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 5px 6px 6px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: inherit;
+}
+.nit-preset:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.nit-preset:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.nit-preset[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--text-primary);
+}
+/* Color-coded presets when active — matches the rainbow track bands */
+.nit-preset[aria-pressed="true"][data-key="sdr"] {
+  background: color-mix(in srgb, #8b6f40 22%, transparent);
+  border-color: color-mix(in srgb, #ffb347 55%, transparent);
+}
+.nit-preset[aria-pressed="true"][data-key="sdr"] .nit-preset-label,
+.nit-preset[aria-pressed="true"][data-key="sdr"] .nit-preset-desc {
+  color: #ffc570;
+}
+.nit-preset[aria-pressed="true"][data-key="bt2408"] {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.nit-preset[aria-pressed="true"][data-key="hdr10"] {
+  background: color-mix(in srgb, #2ee0ff 14%, transparent);
+  border-color: color-mix(in srgb, #2ee0ff 50%, transparent);
+}
+.nit-preset[aria-pressed="true"][data-key="hdr10"] .nit-preset-label,
+.nit-preset[aria-pressed="true"][data-key="hdr10"] .nit-preset-desc {
+  color: #7eebff;
+}
+.nit-preset[aria-pressed="true"][data-key="dv"] {
+  background: color-mix(in srgb, #ff5caa 16%, transparent);
+  border-color: color-mix(in srgb, #ff5caa 55%, transparent);
+}
+.nit-preset[aria-pressed="true"][data-key="dv"] .nit-preset-label,
+.nit-preset[aria-pressed="true"][data-key="dv"] .nit-preset-desc {
+  color: #ff9ccc;
+}
+.nit-preset-label {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.nit-preset[aria-pressed="true"] .nit-preset-label {
+  color: var(--accent);
+}
+.nit-preset-v {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.nit-preset-desc {
+  font-size: 9px;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+  margin-top: 1px;
+}
+.nit-preset[aria-pressed="true"] .nit-preset-desc {
+  color: color-mix(in srgb, var(--accent) 70%, var(--text-secondary));
+}
