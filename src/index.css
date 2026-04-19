@@ -1,69 +1,68 @@
 @import "tailwindcss";
 
+/* ── Display face — Smiley Sans Oblique (得意黑) ──────────
+   Display-only. App UI keeps system fonts via --font-sans.
+   Font © 2022–2024 atelierAnchor, SIL Open Font License 1.1.
+   Bundled per OFL-1.1; see src/assets/fonts/smiley-sans/LICENSE.txt. */
+@font-face {
+  font-family: "Smiley Sans";
+  src: url("./assets/fonts/smiley-sans/SmileySans-Oblique.ttf.woff2") format("woff2");
+  font-style: oblique;
+  font-weight: 400 700;
+  font-display: swap;
+}
+
 /* ── Theme CSS Variables ───────────────────────────────────
    Light mode is default (:root).
    Dark mode is activated via data-theme="dark" on <html>.
    Components use var(--xxx) for all theme-sensitive colors.
+
+   ── Palette: Cinematic Violet (revamp) ────────────────────
+   Light mode is a cool lilac base — the violet identity reads
+   from the first pixel. Deep violet is the hero accent;
+   forest-green / rust are the status colors.
+
+   Dark mode is obsidian with saturated plum panels — more
+   dramatic than the previous parchment/subtle-plum pair.
+
+   Surface elevation layers (0 → 5):
+     Level 0  --bg-app        App background (lowest)
+     Level 1  --bg-header     Titlebar / navigation / footer
+     Level 2  --bg-secondary  Card headers, segmented controls
+     Level 3  --bg-panel      Cards, panels, log areas
+     Level 4  --bg-input      Input fields, spinners
+     Level 5  --bg-hover      Hover states
 */
 
-/*
- * ── Palette: Cinematic Violet ──────────────────────────────
- *
- * Light mode is a warm parchment base with deep violet as the hero accent
- * and forest-green / rust for status colors. Reads like a paper notebook.
- *
- * Dark mode is obsidian-plum with amethyst accent and mint / rose statuses.
- * Reads like "watching a film at night" — which is exactly this app's mood.
- *
- * Surface elevation layers (darkest → lightest in dark, lightest → slightly
- * deeper in light):
- *   Level 0  --bg-app     App background (lowest)
- *   Level 1  --bg-header  Navigation / header
- *   Level 2  --bg-panel   Cards, panels, log area
- *   Level 3  --bg-input   Input fields, dropdowns, interactive chrome
- *   Level 4  --bg-hover   Hover states, highest elevation
- */
-
 :root {
-  /* Surfaces — warm parchment */
-  --bg-app: #faf7f2;
-  --bg-header: #f5f0e6;
-  --bg-secondary: #ede6d5;
-  --bg-input: #ece4d3;
-  --bg-hover: rgba(109, 40, 217, 0.06);
-  --bg-panel: #f2ece0;
+  /* Surfaces — lilac rising 0→5 */
+  --bg-app: #ffffff;
+  --bg-header: #ebe4f5;
+  --bg-secondary: #d8cbeb;
+  --bg-panel: #e0d5f0;
+  --bg-input: #c2b0dd;
+  --bg-hover: rgba(109, 40, 217, 0.1);
 
-  /* Text — near-black with a hint of violet so it matches the accent temperature */
-  --text-primary: #1f1a2e;
-  --text-secondary: #4a4557;
-  --text-muted: #8b8695;
-  --text-faint: #c5bfc9;
+  /* Text — near-black with violet undertone */
+  --text-primary: #1e1a2e;
+  --text-secondary: #3f3857;
+  --text-muted: #6b6380;
+  --text-faint: #9a90b0;
 
   /* Structure */
-  --border: #ddd6c6;
-  --border-light: rgba(221, 214, 198, 0.5);
+  --border: #9d85c4;
+  --border-light: rgba(157, 133, 196, 0.5);
 
   /* Hero accent — deep violet */
   --accent: #6d28d9;
   --accent-hover: #5b21b6;
-  --accent-disabled-bg: #e5dfd0;
-  --accent-disabled-text: #a29c8b;
+  --accent-disabled-bg: #c2b0dd;
+  --accent-disabled-text: #6b6380;
 
-  /* Status — forest + rust for warmth */
+  /* Status — forest + rust */
   --success: #047857;
   --error: #b91c1c;
-  --info: #6b6575;
-
-  /* Scrollbar */
-  --scrollbar-track: #ede6d5;
-  --scrollbar-thumb: #c5bfc9;
-  --scrollbar-thumb-hover: #8b8695;
-
-  /* Spinner buttons on NumberInput */
-  --spinner-bg: #ede6d5;
-  --spinner-hover: #ddd6c6;
-  --spinner-active: #c5bfc9;
-  --spinner-icon: #6b6575;
+  --info: #6b6380;
 
   /* Status badges */
   --badge-green-bg: rgba(4, 120, 87, 0.1);
@@ -71,23 +70,76 @@
   --badge-red-bg: rgba(185, 28, 28, 0.1);
   --badge-red-text: #b91c1c;
 
+  /* Scrollbar */
+  --scrollbar-track: #d8cbeb;
+  --scrollbar-thumb: #9d85c4;
+  --scrollbar-thumb-hover: #7c63a8;
+
+  /* Spinner buttons on NumberInput */
+  --spinner-bg: #d8cbeb;
+  --spinner-hover: #c2b0dd;
+  --spinner-active: #9d85c4;
+  --spinner-icon: #3f3857;
+
   /* Misc */
   --preview-shifted: #6d28d9;
   --cancel-bg: rgba(185, 28, 28, 0.08);
   --cancel-bg-hover: rgba(185, 28, 28, 0.15);
   --cancel-text: #b91c1c;
-  --progress-bg: #ddd6c6;
+  --progress-bg: #c2b0dd;
   --progress-fill: #6d28d9;
+
+  /* Type stack
+     --font-sans    → app UI (system-native)
+     --font-display → Smiley Sans Oblique — hero title / display only
+     --font-mono    → numbers, timecodes, tab index chips */
+  --font-sans: "Segoe UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+  --font-display: "Smiley Sans", "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Consolas, "Cascadia Mono", "Liberation Mono", monospace;
+
+  /* Type scale */
+  --text-xs: 12px;
+  --text-sm: 14px;
+  --text-base: 16px;
+  --text-lg: 18px;
+
+  /* Weights */
+  --fw-normal: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+
+  /* Spacing (Tailwind-derived, 1 = 4px) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+
+  /* Radii */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+
+  /* Shadow (popover / menu) */
+  --shadow-popover:
+    0 10px 15px -3px rgba(0, 0, 0, 0.1),
+    0 4px 6px -4px rgba(0, 0, 0, 0.1);
+
+  /* Theme swap transition */
+  --transition-theme:
+    background-color 0.2s,
+    color 0.2s;
 }
 
 [data-theme="dark"] {
-  /* Surfaces — obsidian with plum tint that rises with elevation */
-  --bg-app: #0f0d15;
-  --bg-header: #17141e;
-  --bg-secondary: #17141e;
-  --bg-input: #241d2e;
-  --bg-hover: #2d2540;
-  --bg-panel: #1a1622;
+  /* Surfaces — obsidian → saturated plum, rising chroma per tier */
+  --bg-app: #0b0810;
+  --bg-header: #1f1630;
+  --bg-secondary: #1f1630;
+  --bg-panel: #3a2a5c;
+  --bg-input: #523d82;
+  --bg-hover: #6b50a8;
 
   /* Text — warm off-white with violet undertone */
   --text-primary: #e8e5f0;
@@ -96,62 +148,64 @@
   --text-faint: #3d3748;
 
   /* Structure */
-  --border: #2d2638;
-  --border-light: rgba(45, 38, 56, 0.5);
+  --border: #7c63a8;
+  --border-light: rgba(124, 99, 168, 0.5);
 
-  /* Hero accent — amethyst (bright enough to shine on the deep plum backdrop) */
+  /* Hero accent — amethyst */
   --accent: #a78bfa;
   --accent-hover: #c4b5fd;
   --accent-disabled-bg: #1e1a26;
   --accent-disabled-text: #4e4658;
 
-  /* Status — mint + rose stay readable on plum without fighting the accent */
+  /* Status — mint + rose */
   --success: #86efac;
   --error: #fca5a5;
   --info: #a5a0b5;
 
-  /* Scrollbar */
-  --scrollbar-track: #17141e;
-  --scrollbar-thumb: #2d2638;
-  --scrollbar-thumb-hover: #3d3748;
-
-  /* Spinner buttons */
-  --spinner-bg: #241d2e;
-  --spinner-hover: #2d2540;
-  --spinner-active: #382d4a;
-  --spinner-icon: #a5a0b5;
-
-  /* Status badges — slightly denser alpha so they pop against plum */
+  /* Status badges */
   --badge-green-bg: rgba(134, 239, 172, 0.14);
   --badge-green-text: #86efac;
   --badge-red-bg: rgba(252, 165, 165, 0.14);
   --badge-red-text: #fca5a5;
+
+  /* Scrollbar */
+  --scrollbar-track: #1f1630;
+  --scrollbar-thumb: #523d82;
+  --scrollbar-thumb-hover: #7c63a8;
+
+  /* Spinner buttons */
+  --spinner-bg: #523d82;
+  --spinner-hover: #6b50a8;
+  --spinner-active: #7c63a8;
+  --spinner-icon: #a5a0b5;
 
   /* Misc */
   --preview-shifted: #c4b5fd;
   --cancel-bg: rgba(252, 165, 165, 0.09);
   --cancel-bg-hover: rgba(252, 165, 165, 0.18);
   --cancel-text: #fca5a5;
-  --progress-bg: #1a1622;
+  --progress-bg: #3a2a5c;
   --progress-fill: #a78bfa;
 }
 
-/* ── Base ──────────────────────────────────────────────────*/
+/* ── Base ──────────────────────────────────────────────────
+   The OS window is transparent; the stage layer (see shell.css)
+   paints the backdrop. Keep body transparent so the stage
+   bloom can show through to the window edges. */
 html,
 body,
 #root {
   height: 100%;
   margin: 0;
-  background: var(--bg-app);
+  background: transparent;
   color: var(--text-primary);
-  font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
   -webkit-font-smoothing: antialiased;
-  transition:
-    background-color 0.2s,
-    color 0.2s;
+  transition: var(--transition-theme);
 }
 
-/* ── Scrollbar ─────────────────────────────────────────────*/
+/* ── Scrollbar ───────────────────────────────────────────── */
 ::-webkit-scrollbar {
   width: 8px;
 }
@@ -166,7 +220,7 @@ body,
   background: var(--scrollbar-thumb-hover);
 }
 
-/* ── Form controls ─────────────────────────────────────────*/
+/* ── Form controls ───────────────────────────────────────── */
 select {
   text-indent: 0;
   padding-left: 0.5rem;
@@ -181,4 +235,9 @@ input[type="number"]::-webkit-outer-spin-button {
 input[type="number"] {
   -moz-appearance: textfield;
   appearance: textfield;
+}
+
+::selection {
+  background: var(--accent);
+  color: #fff;
 }

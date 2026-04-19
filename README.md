@@ -258,6 +258,16 @@ All dependencies use licenses compatible with GPL-3.0.
 | [encoding_rs](https://github.com/hsivonen/encoding_rs)    | MIT OR Apache-2.0 | 编码转换 / Encoding conversion                                                                                 |
 | [serde](https://serde.rs/)                                | MIT OR Apache-2.0 | Rust 序列化 / Rust serialization                                                                               |
 
+#### 捆绑字体（随应用分发）| Bundled Fonts (shipped with the application)
+
+| 字体 / Font                                                                                                   | 许可证 / License                                                                  | 用途 / Usage                                                            |
+| ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| [Smiley Sans 得意黑](https://github.com/atelier-anchor/smiley-sans) · © 2022–2024 [atelierAnchor](https://atelier-anchor.com) | [SIL Open Font License 1.1](src/assets/fonts/smiley-sans/LICENSE.txt) · OFL-1.1 | 应用标题展示字体（仅作标题用）/ Application title display face (headline only) |
+
+> OFL-1.1 允许本字体与任何软件捆绑、嵌入、再分发，包括 GPL-3.0 项目；字体及其衍生作品必须保留该许可证，且不得单独销售或使用其保留字体名「Smiley」「得意黑」进行衍生命名。
+>
+> OFL-1.1 allows this font to be bundled, embedded, and redistributed alongside any software, including GPL-3.0 projects. The font and its derivatives must remain under OFL, must not be sold on their own, and must not reuse the Reserved Font Names "Smiley" / "得意黑" for modified versions.
+
 #### 构建时依赖（不随应用分发）| Build-time only (not shipped)
 
 | 组件 / Component                              | 许可证 / License | 用途 / Usage                         |

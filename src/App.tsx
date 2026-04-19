@@ -1,10 +1,12 @@
 import { useState, useRef, useEffect } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import HdrConvert from "./features/hdr-convert/HdrConvert";
 import TimingShift from "./features/timing-shift/TimingShift";
 import FontEmbed from "./features/font-embed/FontEmbed";
 import { useI18n } from "./i18n/useI18n";
 import { useTheme } from "./theme/useTheme";
 import type { ThemeMode } from "./theme/useTheme";
+import "./shell.css";
 
 type Tab = "hdr" | "timing" | "fonts";
 
@@ -20,16 +22,16 @@ const THEME_OPTIONS: { mode: ThemeMode; labelKey: string }[] = [
   { mode: "dark", labelKey: "theme_dark" },
 ];
 
+const appWindow = getCurrentWindow();
+
 function App() {
   const [activeTab, setActiveTab] = useState<Tab>("hdr");
   const { t, lang, setLang } = useI18n();
   const { mode, appearance, setMode } = useTheme();
 
-  // ── Theme popover state ─────────────────────────────────
   const [themeOpen, setThemeOpen] = useState(false);
   const themeRef = useRef<HTMLDivElement>(null);
 
-  // Close popover on click outside
   useEffect(() => {
     if (!themeOpen) return;
     const handler = (e: MouseEvent) => {
@@ -37,7 +39,6 @@ function App() {
         setThemeOpen(false);
       }
     };
-    // Defer to avoid catching the opening click
     const id = setTimeout(() => document.addEventListener("mousedown", handler), 0);
     return () => {
       clearTimeout(id);
@@ -45,7 +46,6 @@ function App() {
     };
   }, [themeOpen]);
 
-  // Close on Escape
   useEffect(() => {
     if (!themeOpen) return;
     const handler = (e: KeyboardEvent) => {
@@ -56,207 +56,267 @@ function App() {
   }, [themeOpen]);
 
   return (
-    <div
-      className="flex flex-col h-screen"
-      style={{ background: "var(--bg-app)", color: "var(--text-primary)" }}
-    >
-      {/* ── Header ─────────────────────────────────── */}
-      <header
-        className="flex-none"
-        style={{ borderBottom: "1px solid var(--border)", background: "var(--bg-header)" }}
-      >
-        <div className="px-5 pt-4 pb-0 flex items-start justify-between">
-          <div>
-            <h1 className="text-lg font-semibold tracking-tight">{t("app_title")}</h1>
-            <nav className="flex gap-1 mt-3" role="tablist">
-              {TAB_IDS.map((tab) => (
-                <button
-                  key={tab.id}
-                  id={`tab-${tab.id}`}
-                  role="tab"
-                  aria-selected={activeTab === tab.id}
-                  aria-controls={`panel-${tab.id}`}
-                  onClick={() => setActiveTab(tab.id)}
-                  className="px-4 py-2 text-sm font-medium rounded-t-lg transition-colors"
-                  style={
-                    activeTab === tab.id
-                      ? {
-                          background: "var(--bg-app)",
-                          color: "var(--text-primary)",
-                          borderTop: "1px solid var(--border)",
-                          borderLeft: "1px solid var(--border)",
-                          borderRight: "1px solid var(--border)",
-                        }
-                      : { color: "var(--text-muted)" }
-                  }
-                  onMouseEnter={(e) => {
-                    if (activeTab !== tab.id) e.currentTarget.style.color = "var(--text-secondary)";
-                  }}
-                  onMouseLeave={(e) => {
-                    if (activeTab !== tab.id) e.currentTarget.style.color = "var(--text-muted)";
-                  }}
-                >
-                  {t(tab.labelKey)}
-                </button>
-              ))}
-            </nav>
-          </div>
+    <div className="stage">
+      <div className="stage-bloom" aria-hidden="true" />
+      <div className="window">
+        {/* ── Titlebar ────────────────────────────── */}
+        <div className="titlebar" data-tauri-drag-region>
+          <svg
+            className="titlebar-logo"
+            viewBox="0 0 48 46"
+            xmlns="http://www.w3.org/2000/svg"
+            aria-hidden="true"
+          >
+            <rect x="11" y="9" width="7" height="30" rx="1.2" fill="var(--accent)" />
+            <rect x="30" y="9" width="7" height="30" rx="1.2" fill="var(--accent)" />
+            <rect x="11" y="20" width="26" height="7" fill="var(--accent)" />
+          </svg>
+          <span className="titlebar-title">{t("app_title")}</span>
+          <div className="titlebar-spacer" />
+          <button
+            className="titlebar-btn"
+            onClick={() => appWindow.minimize()}
+            aria-label="Minimize"
+            title="Minimize"
+          >
+            <svg width="10" height="10" viewBox="0 0 12 12" aria-hidden="true">
+              <path stroke="currentColor" d="M2 6h8" />
+            </svg>
+          </button>
+          <button
+            className="titlebar-btn"
+            onClick={() => appWindow.toggleMaximize()}
+            aria-label="Maximize"
+            title="Maximize"
+          >
+            <svg width="10" height="10" viewBox="0 0 12 12" aria-hidden="true">
+              <rect x="2" y="2" width="8" height="8" fill="none" stroke="currentColor" />
+            </svg>
+          </button>
+          <button
+            className="titlebar-btn close"
+            onClick={() => appWindow.close()}
+            aria-label="Close"
+            title="Close"
+          >
+            <svg width="10" height="10" viewBox="0 0 12 12" aria-hidden="true">
+              <path stroke="currentColor" d="M3 3l6 6M9 3l-6 6" />
+            </svg>
+          </button>
+        </div>
 
-          {/* ── Controls: Language + Theme ─────────── */}
-          <div className="flex items-center gap-2 mt-1">
-            {/* Language toggle */}
-            <button
-              onClick={() => setLang(lang === "en" ? "zh" : "en")}
-              className="w-8 h-8 flex items-center justify-center rounded-md text-xs font-medium transition-colors"
-              style={{
-                background: "var(--bg-input)",
-                border: "1px solid var(--border)",
-                color: "var(--text-secondary)",
-              }}
-              title={lang === "en" ? "切换到中文" : "Switch to English"}
-            >
-              {lang === "en" ? "中" : "EN"}
-            </button>
+        {/* ── App Header ──────────────────────────── */}
+        <div className="app-header">
+          <div className="app-title-row">
+            <div className="app-lockup">
+              <div className="app-logo">
+                <svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                  <defs>
+                    <linearGradient id="hl-bg" x1="0.2" y1="0" x2="1" y2="1">
+                      <stop offset="0" stopColor="#1e1628" />
+                      <stop offset="1" stopColor="#0a0710" />
+                    </linearGradient>
+                    <radialGradient id="hl-glow" cx="0.72" cy="0.38" r="0.75">
+                      <stop offset="0" stopColor="#a78bfa" stopOpacity="0.24" />
+                      <stop offset="0.5" stopColor="#a78bfa" stopOpacity="0.08" />
+                      <stop offset="1" stopColor="#a78bfa" stopOpacity="0" />
+                    </radialGradient>
+                    <linearGradient id="hl-hdrV" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0" stopColor="#fbbf24" />
+                      <stop offset="0.5" stopColor="#ec4899" />
+                      <stop offset="1" stopColor="#6d28d9" />
+                    </linearGradient>
+                    <linearGradient id="hl-hdrH" x1="0" y1="0" x2="1" y2="0">
+                      <stop offset="0" stopColor="#6b7280" />
+                      <stop offset="0.38" stopColor="#7c3aed" />
+                      <stop offset="0.72" stopColor="#ec4899" />
+                      <stop offset="1" stopColor="#fbbf24" />
+                    </linearGradient>
+                  </defs>
+                  <rect width="512" height="512" rx="108" ry="108" fill="url(#hl-bg)" />
+                  <rect width="512" height="512" rx="108" ry="108" fill="url(#hl-glow)" />
+                  <rect x="120" y="96" width="72" height="320" rx="12" ry="12" fill="#64748b" />
+                  <rect
+                    x="320"
+                    y="96"
+                    width="72"
+                    height="320"
+                    rx="12"
+                    ry="12"
+                    fill="url(#hl-hdrV)"
+                  />
+                  <rect x="120" y="220" width="272" height="72" fill="url(#hl-hdrH)" />
+                </svg>
+              </div>
+              <div className="app-title-group">
+                <div className="app-title">{t("app_title")}</div>
+                <div className="app-tagline">{t("app_tagline")}</div>
+              </div>
+            </div>
 
-            {/* Theme menu button + popover */}
-            <div className="relative" ref={themeRef}>
+            <div className="header-controls">
               <button
-                onClick={() => setThemeOpen(!themeOpen)}
-                className="w-8 h-8 flex items-center justify-center rounded-md transition-colors"
-                style={{
-                  background: "var(--bg-input)",
-                  border: "1px solid var(--border)",
-                  color: "var(--text-secondary)",
-                }}
-                title={t("theme_" + mode)}
+                className="icon-btn lang"
+                onClick={() => setLang(lang === "en" ? "zh" : "en")}
+                title={lang === "en" ? "切换到中文" : "Switch to English"}
               >
-                {appearance === "light" ? (
-                  <svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <circle cx="12" cy="12" r="5" />
-                    <line x1="12" y1="1" x2="12" y2="3" />
-                    <line x1="12" y1="21" x2="12" y2="23" />
-                    <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
-                    <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
-                    <line x1="1" y1="12" x2="3" y2="12" />
-                    <line x1="21" y1="12" x2="23" y2="12" />
-                    <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
-                    <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
-                  </svg>
-                ) : (
-                  <svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-                  </svg>
-                )}
+                {lang === "en" ? "中" : "EN"}
               </button>
 
-              {/* Popover menu */}
-              {themeOpen && (
-                <div
-                  className="absolute right-0 mt-1 py-1 rounded-lg shadow-lg z-50"
-                  style={{
-                    background: "var(--bg-app)",
-                    border: "1px solid var(--border)",
-                    minWidth: "140px",
-                  }}
+              <div ref={themeRef} style={{ position: "relative" }}>
+                <button
+                  className="icon-btn"
+                  onClick={() => setThemeOpen(!themeOpen)}
+                  title={t("theme_" + mode)}
                 >
-                  {THEME_OPTIONS.map((opt, idx) => (
-                    <div key={opt.mode}>
-                      {/* Separator after "Follow System" */}
-                      {idx === 1 && (
-                        <div
-                          className="my-1"
-                          style={{ height: "1px", background: "var(--border)" }}
-                        />
-                      )}
-                      <button
-                        onClick={() => {
-                          setMode(opt.mode);
-                          setThemeOpen(false);
-                        }}
-                        className="w-full text-left px-3 py-1.5 text-sm transition-colors flex items-center justify-between"
-                        style={{ color: "var(--text-primary)" }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.background = "var(--bg-hover)";
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.background = "transparent";
-                        }}
-                      >
-                        <span>{t(opt.labelKey)}</span>
-                        {/* Bullet indicator for active mode */}
-                        {mode === opt.mode && (
-                          <span
-                            style={{ color: "var(--accent)", fontSize: "1.25rem", lineHeight: 1 }}
-                          >
-                            {"\u2022"}
-                          </span>
+                  {appearance === "light" ? (
+                    <svg
+                      width="15"
+                      height="15"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      aria-hidden="true"
+                    >
+                      <circle cx="12" cy="12" r="5" />
+                      <line x1="12" y1="1" x2="12" y2="3" />
+                      <line x1="12" y1="21" x2="12" y2="23" />
+                      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+                      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+                      <line x1="1" y1="12" x2="3" y2="12" />
+                      <line x1="21" y1="12" x2="23" y2="12" />
+                      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+                      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+                    </svg>
+                  ) : (
+                    <svg
+                      width="15"
+                      height="15"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+                    </svg>
+                  )}
+                </button>
+
+                {themeOpen && (
+                  <div
+                    className="absolute right-0 mt-1 py-1 rounded-lg z-50"
+                    style={{
+                      background: "var(--bg-app)",
+                      border: "1px solid var(--border)",
+                      boxShadow: "var(--shadow-popover)",
+                      minWidth: "140px",
+                    }}
+                  >
+                    {THEME_OPTIONS.map((opt, idx) => (
+                      <div key={opt.mode}>
+                        {idx === 1 && (
+                          <div
+                            className="my-1"
+                            style={{ height: "1px", background: "var(--border-light)" }}
+                          />
                         )}
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
+                        <button
+                          onClick={() => {
+                            setMode(opt.mode);
+                            setThemeOpen(false);
+                          }}
+                          className="w-full text-left px-3 py-1.5 text-sm transition-colors flex items-center justify-between"
+                          style={{ color: "var(--text-primary)" }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.background = "var(--bg-hover)";
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.background = "transparent";
+                          }}
+                        >
+                          <span>{t(opt.labelKey)}</span>
+                          {mode === opt.mode && (
+                            <span
+                              style={{
+                                color: "var(--accent)",
+                                fontSize: "1.25rem",
+                                lineHeight: 1,
+                              }}
+                            >
+                              {"\u2022"}
+                            </span>
+                          )}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
-        </div>
-      </header>
 
-      {/* ── Tab content ──────────────────────────────
-           All tabs stay mounted (CSS visibility) so local state
-           (offset values, style panel, threshold, etc.) survives
-           tab switches. File state lives in FileContext above. */}
-      <main className="flex-1 overflow-y-auto p-5">
-        <div
-          id="panel-hdr"
-          role="tabpanel"
-          aria-labelledby="tab-hdr"
-          style={{ display: activeTab === "hdr" ? "block" : "none" }}
-        >
-          <HdrConvert />
+          {/* Tabs */}
+          <nav className="tabs" role="tablist">
+            {TAB_IDS.map((tab, i) => (
+              <button
+                key={tab.id}
+                id={`tab-${tab.id}`}
+                role="tab"
+                aria-selected={activeTab === tab.id}
+                aria-controls={`panel-${tab.id}`}
+                onClick={() => setActiveTab(tab.id)}
+                className="tab"
+                data-active={activeTab === tab.id}
+              >
+                <span className="tab-index">{String(i + 1).padStart(2, "0")}</span>
+                <span>{t(tab.labelKey)}</span>
+              </button>
+            ))}
+          </nav>
         </div>
-        <div
-          id="panel-timing"
-          role="tabpanel"
-          aria-labelledby="tab-timing"
-          style={{ display: activeTab === "timing" ? "block" : "none" }}
-        >
-          <TimingShift />
-        </div>
-        <div
-          id="panel-fonts"
-          role="tabpanel"
-          aria-labelledby="tab-fonts"
-          style={{ display: activeTab === "fonts" ? "block" : "none" }}
-        >
-          <FontEmbed />
-        </div>
-      </main>
 
-      {/* ── Footer ─────────────────────────────────── */}
-      <footer
-        className="flex-none px-5 py-2 text-xs"
-        style={{ color: "var(--text-muted)", borderTop: "1px solid var(--border)" }}
-      >
-        {t("footer_version")}
-      </footer>
+        {/* ── Main ────────────────────────────────── */}
+        <main className="app-main">
+          <div
+            id="panel-hdr"
+            role="tabpanel"
+            aria-labelledby="tab-hdr"
+            style={{ display: activeTab === "hdr" ? "block" : "none" }}
+          >
+            <HdrConvert />
+          </div>
+          <div
+            id="panel-timing"
+            role="tabpanel"
+            aria-labelledby="tab-timing"
+            style={{ display: activeTab === "timing" ? "block" : "none" }}
+          >
+            <TimingShift />
+          </div>
+          <div
+            id="panel-fonts"
+            role="tabpanel"
+            aria-labelledby="tab-fonts"
+            style={{ display: activeTab === "fonts" ? "block" : "none" }}
+          >
+            <FontEmbed />
+          </div>
+        </main>
+
+        {/* ── Footer ──────────────────────────────── */}
+        <footer className="app-footer">
+          <span className="dot ready" aria-hidden="true" />
+          <span>{t("footer_ready")}</span>
+          <span className="spacer" />
+          <span className="ver">{t("footer_version")}</span>
+        </footer>
+      </div>
     </div>
   );
 }

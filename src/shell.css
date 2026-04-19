@@ -1,0 +1,329 @@
+/* ========================================================================
+   SSA HDRify — Shell
+   Stage frame + frosted window + custom titlebar + app header (logo,
+   tabs, controls) + footer.
+
+   Port of the "bloom" direction from ssa Tauri revamp/src/styles.css,
+   shrunk ≈0.83× so the design's 1160×720 window fits inside our 960×680
+   Tauri window (20 px stage padding leaves a 920×640 inner window).
+   ======================================================================== */
+
+/* ── Stage — the window-in-a-viewport frame ──────────────── */
+.stage {
+  width: 100vw;
+  height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  position: relative;
+  overflow: hidden;
+  background: #eee1c8;
+}
+[data-theme="dark"] .stage {
+  background: #050309;
+}
+
+/* Animated radial-gradient bloom backdrop.
+   A real <div> (not a pseudo) — pseudos rendered unreliably with
+   the heavy blur+saturate combo. */
+.stage-bloom {
+  position: absolute;
+  inset: -12%;
+  z-index: 0;
+  pointer-events: none;
+  animation: bloom-drift 34s ease-in-out infinite alternate;
+}
+@keyframes bloom-drift {
+  0% {
+    transform: translate(0, 0) scale(1);
+  }
+  100% {
+    transform: translate(3%, -2%) scale(1.06);
+  }
+}
+
+[data-theme="dark"] .stage-bloom {
+  background:
+    radial-gradient(720px 620px at 8% 12%, #ff1744 0%, transparent 60%),
+    radial-gradient(660px 580px at 94% 6%, #ffb300 0%, transparent 60%),
+    radial-gradient(800px 720px at 52% 108%, #651fff 0%, transparent 62%),
+    radial-gradient(620px 560px at 102% 82%, #00e5ff 0%, transparent 62%),
+    radial-gradient(520px 480px at 42% 42%, #e040fb 0%, transparent 65%);
+  filter: blur(22px) saturate(220%);
+  opacity: 0.95;
+}
+
+[data-theme="light"] .stage-bloom {
+  background:
+    radial-gradient(660px 560px at 10% 18%, #ff9b5a 0%, transparent 58%),
+    radial-gradient(620px 560px at 92% 12%, #ffd866 0%, transparent 60%),
+    radial-gradient(720px 640px at 58% 100%, #ff6b8a 0%, transparent 62%),
+    radial-gradient(520px 500px at 98% 78%, #ffb347 0%, transparent 60%),
+    radial-gradient(480px 440px at 35% 50%, #c8a8ff 0%, transparent 60%);
+  filter: blur(30px) saturate(150%);
+  opacity: 0.85;
+}
+
+/* ── Window — frosted pane catching the stage bloom ──────── */
+.window {
+  width: 100%;
+  height: 100%;
+  max-width: 920px;
+  max-height: 640px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg-app) 62%, transparent);
+  backdrop-filter: blur(60px) saturate(180%);
+  -webkit-backdrop-filter: blur(60px) saturate(180%);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  box-shadow:
+    0 40px 80px -20px rgba(0, 0, 0, 0.65),
+    0 0 0 1px color-mix(in srgb, var(--border) 55%, transparent),
+    inset 0 1px 0 color-mix(in srgb, white 14%, transparent);
+  position: relative;
+  isolation: isolate;
+}
+[data-theme="light"] .window {
+  background: color-mix(in srgb, #fdfaf3 58%, transparent);
+  box-shadow:
+    0 30px 60px -20px rgba(40, 20, 60, 0.25),
+    0 0 0 1px color-mix(in srgb, var(--border) 40%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+
+/* ── Titlebar — custom, Windows-style ────────────────────── */
+.titlebar {
+  height: 32px;
+  background: var(--bg-header);
+  display: flex;
+  align-items: center;
+  padding: 0 0 0 10px;
+  gap: 8px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border-light);
+  -webkit-app-region: drag;
+  user-select: none;
+}
+.titlebar-logo {
+  width: 16px;
+  height: 15px;
+  flex-shrink: 0;
+}
+.titlebar-title {
+  font-size: 12px;
+  color: var(--text-secondary);
+  letter-spacing: 0.01em;
+}
+.titlebar-spacer {
+  flex: 1;
+}
+.titlebar-btn {
+  width: 46px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  color: var(--text-secondary);
+  border: 0;
+  background: none;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  transition: background-color 0.15s;
+}
+.titlebar-btn:hover {
+  background: var(--bg-hover);
+}
+.titlebar-btn.close:hover {
+  background: #e81123;
+  color: #fff;
+}
+
+/* ── App header — logo + tabs + controls ─────────────────── */
+.app-header {
+  padding: 16px 22px 0;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  position: relative;
+  z-index: 1;
+}
+.app-title-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 14px;
+}
+.app-lockup {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.app-logo {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.app-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.app-title {
+  font-family: var(--font-display);
+  font-size: 26px;
+  font-style: oblique;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 0.95;
+  color: var(--text-primary);
+  background: linear-gradient(120deg, var(--text-primary) 40%, var(--accent) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.app-tagline {
+  font-size: 10px;
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.header-controls {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.icon-btn {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  color: var(--text-secondary);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-light);
+  background: var(--bg-app);
+  cursor: pointer;
+  transition:
+    background-color 0.15s,
+    border-color 0.15s,
+    color 0.15s;
+}
+.icon-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--border);
+}
+.icon-btn.lang {
+  width: auto;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ── Tabs — underline with mono index chip ───────────────── */
+.tabs {
+  display: flex;
+  gap: 22px;
+  border-bottom: 1px solid var(--border-light);
+  padding: 0 4px;
+  margin-top: 2px;
+  flex-wrap: nowrap;
+}
+.tab {
+  position: relative;
+  padding: 8px 2px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-muted);
+  letter-spacing: -0.005em;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transition: color 0.15s;
+  white-space: nowrap;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font-family: inherit;
+}
+.tab:hover {
+  color: var(--text-secondary);
+}
+.tab[data-active="true"] {
+  color: var(--text-primary);
+}
+.tab[data-active="true"]::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 3px;
+  background: linear-gradient(
+    90deg,
+    var(--accent),
+    color-mix(in srgb, var(--accent) 40%, transparent)
+  );
+  border-radius: 2px 2px 0 0;
+  box-shadow: 0 0 20px 0 var(--accent);
+}
+.tab-index {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-faint);
+  letter-spacing: 0.08em;
+}
+.tab[data-active="true"] .tab-index {
+  color: var(--accent);
+}
+
+/* ── Main — tab panel host ───────────────────────────────── */
+.app-main {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 22px 12px;
+  position: relative;
+  z-index: 1;
+}
+
+/* ── Footer — status line ────────────────────────────────── */
+.app-footer {
+  flex-shrink: 0;
+  padding: 8px 22px;
+  border-top: 1px solid var(--border-light);
+  background: var(--bg-header);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
+}
+.app-footer .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  flex-shrink: 0;
+}
+.app-footer .dot.ready {
+  background: var(--success);
+  box-shadow: 0 0 8px 0 var(--success);
+}
+.app-footer .spacer {
+  flex: 1;
+}
+.app-footer .ver {
+  color: var(--text-faint);
+  white-space: nowrap;
+}
