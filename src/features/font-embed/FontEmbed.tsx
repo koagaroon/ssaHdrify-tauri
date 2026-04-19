@@ -402,15 +402,12 @@ export default function FontEmbed() {
             {fonts.map((info, idx) => (
               <label
                 key={idx}
-                className={`flex items-center gap-3 px-4 py-2.5 cursor-pointer transition-colors ${
-                  !info.filePath ? "opacity-50" : ""
-                }`}
-                style={{
-                  borderBottom: "1px solid color-mix(in srgb, var(--border) 50%, transparent)",
-                }}
+                className={"font-row" + (!info.filePath ? " missing" : "")}
               >
                 <input
                   type="checkbox"
+                  id={`font-row-${idx}`}
+                  name={`font-${idx}`}
                   checked={selected.has(idx)}
                   onChange={() => toggleSelect(idx)}
                   disabled={!info.filePath || embedding}
@@ -420,34 +417,18 @@ export default function FontEmbed() {
                     borderColor: "var(--border)",
                   }}
                 />
-                <div className="flex-1 min-w-0">
-                  <span className="text-sm" style={{ color: "var(--text-primary)" }}>
-                    {formatFontLabel(info)}
-                  </span>
-                  <span className="text-xs ml-2" style={{ color: "var(--text-muted)" }}>
-                    {t("fonts_glyphs", info.glyphCount)}
-                  </span>
-                </div>
-                {info.source && (
-                  <span
-                    className="text-xs px-2 py-0.5 rounded"
-                    style={{
-                      background: "var(--bg-input)",
-                      color: "var(--text-secondary)",
-                      border: "1px solid var(--border)",
-                    }}
-                  >
+                <span className="font-name" title={formatFontLabel(info)}>
+                  {formatFontLabel(info)}
+                </span>
+                <span className="font-stat">{t("fonts_glyphs", info.glyphCount)}</span>
+                {info.source ? (
+                  <span className="badge badge-mute">
                     {t(info.source === "local" ? "badge_local" : "badge_system")}
                   </span>
+                ) : (
+                  <span />
                 )}
-                <span
-                  className="text-xs px-2 py-0.5 rounded"
-                  style={
-                    info.filePath
-                      ? { background: "var(--badge-green-bg)", color: "var(--badge-green-text)" }
-                      : { background: "var(--badge-red-bg)", color: "var(--badge-red-text)" }
-                  }
-                >
+                <span className={"badge " + (info.filePath ? "badge-green" : "badge-red")}>
                   {info.filePath ? t("fonts_found") : t("fonts_missing")}
                 </span>
               </label>

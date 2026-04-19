@@ -741,3 +741,76 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* ─────────────────────────────────────────────────────────────
+   FONT EMBED — per-font row (name + glyph stat + source + status)
+   Coverage bar is reserved for a future stage when we can report
+   per-font glyph coverage from the Rust side.
+   ───────────────────────────────────────────────────────────── */
+.font-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto auto;
+  gap: 14px;
+  align-items: center;
+  padding: 10px 14px;
+  border-top: 1px solid color-mix(in srgb, var(--border-light) 50%, transparent);
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+.font-row:first-child {
+  border-top: 0;
+}
+.font-row:hover {
+  background: var(--bg-hover);
+}
+.font-row.missing {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.font-row.missing:hover {
+  background: transparent;
+}
+.font-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.font-stat {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Pill badges used on font rows and anywhere we signal state. */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: 999px;
+  letter-spacing: 0.02em;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+.badge-green {
+  background: var(--badge-green-bg);
+  color: var(--badge-green-text);
+}
+.badge-red {
+  background: var(--badge-red-bg);
+  color: var(--badge-red-text);
+}
+.badge-mute {
+  background: color-mix(in srgb, var(--text-muted) 14%, transparent);
+  color: var(--text-muted);
+}
