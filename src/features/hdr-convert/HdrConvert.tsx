@@ -235,8 +235,11 @@ export default function HdrConvert() {
             continue;
           }
 
-          // Check for duplicate output targets
-          const normalizedOut = outputPath.replace(/\\/g, "/").toLowerCase();
+          // Check for duplicate output targets. Unicode-normalize (NFC)
+          // before compare so that macOS HFS+/APFS-produced NFD filenames
+          // don't appear distinct from their NFC counterparts — same file
+          // on disk, same dedup bucket.
+          const normalizedOut = outputPath.normalize("NFC").replace(/\\/g, "/").toLowerCase();
           if (outputPaths.has(normalizedOut)) {
             addLog(t("msg_skipped_duplicate", fileName), "error");
             continue;

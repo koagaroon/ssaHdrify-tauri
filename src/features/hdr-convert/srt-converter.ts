@@ -28,13 +28,22 @@ export function escapeSrtUserText(text: string): string {
 /**
  * Convert HTML-style font color tags to ASS inline color overrides.
  * <font color="#RRGGBB">text</font>  →  {\1c&HBBGGRR&}text{\1c}
+ *
+ * CONTRACT: the `text` argument MUST have been passed through
+ * `escapeSrtUserText` first. That's the only way to guarantee the `{…}`
+ * sequences this function injects for color conversion are distinguishable
+ * from literal `{…}` in user-supplied text. Calling this on raw SRT content
+ * re-introduces an injection path that lets a hostile subtitle smuggle ASS
+ * overrides into the HDR pipeline.
  */
 export function preprocessSrtColors(text: string): string {
   // Regex defined inside function — no shared lastIndex state.
   // Matches: <font color="#RRGGBB"> or <font color=#RRGGBB>
-  // with up to 512 chars of other attributes before/after color (ReDoS guard)
+  // with up to 512 chars of other attributes before/after color (ReDoS guard).
+  // The hex alternation requires a non-hex char immediately after the 6- or
+  // 3-digit run so `#abcdef` is never parsed as 3-digit `abc`.
   const SRT_COLOR_OPEN_RE =
-    /<font\b[^>]{0,512}\bcolor="?#([0-9a-fA-F]{6}|[0-9a-fA-F]{3})"?[^>]{0,512}>/gi;
+    /<font\b[^>]{0,512}\bcolor="?#([0-9a-fA-F]{6}(?![0-9a-fA-F])|[0-9a-fA-F]{3}(?![0-9a-fA-F]))"?[^>]{0,512}>/gi;
   const SRT_COLOR_CLOSE_RE = /<\/font>/gi;
 
   // Convert opening tags with color
@@ -83,6 +92,13 @@ export const DEFAULT_STYLE: StyleConfig = {
 /**
  * Build a minimal ASS document from parsed subtitle entries.
  * This creates a properly formatted ASS file with styles and events.
+ *
+ * CONTRACT: each `entries[i].text` MUST have flowed through
+ * `escapeSrtUserText` → `preprocessSrtColors` → `parseSubtitle` on the way
+ * in. This function does NOT re-escape `{`/`}`/`\` — doing so would silently
+ * defeat our own injected color/bold/italic overrides and was the root of
+ * the Round 3 regression. The integration tests in `srt-converter.test.ts`
+ * guard against future callers dropping the escape step.
  */
 export function buildAssDocument(
   entries: { start: number; end: number; text: string }[],
@@ -155,6 +171,10 @@ export function buildAssDocument(
  * Convert milliseconds to ASS timestamp format: H:MM:SS.cc (centiseconds)
  */
 function msToAssTime(ms: number): string {
+  // NaN / Infinity guard matches subtitle-parser.ts:formatAssTime — without
+  // it, a malformed upstream caption (NaN start or end) would produce a
+  // literal "NaN:NaN:NaN.NaN" timestamp and corrupt the whole file.
+  if (!Number.isFinite(ms)) ms = 0;
   if (ms < 0) ms = 0;
   const totalCs = Math.round(ms / 10);
   const cs = totalCs % 100;

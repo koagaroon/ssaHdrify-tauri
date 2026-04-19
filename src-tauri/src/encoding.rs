@@ -110,15 +110,27 @@ pub fn read_text_detect_encoding(path: String) -> Result<ReadTextResult, String>
 
     // Canonicalize when possible — resolves symlinks, "..", and gives us a
     // stable path to open. When canonicalize fails (OneDrive cloud-only
-    // files, network shares with permissions quirks, etc.), fall back to
-    // the raw path so we don't block legitimate workflows for a
-    // defense-in-depth step. TOCTOU protection is reduced in that case
-    // but the broad `fs:scope` + extension whitelist still apply.
+    // placeholders, network shares with permissions quirks), fall back to
+    // the raw path BUT refuse to proceed if the raw path is itself a
+    // symlink/reparse point. Otherwise an attacker who plants a symlink
+    // `subtitle.ass` → `C:/Windows/System32/config/SAM` in a directory the
+    // user browses could bypass the extension allow-list (which only
+    // inspects the symlink's own filename) and the `fs:deny` list (which
+    // only compares literal path strings). The symlink-metadata check is
+    // cheap compared to the OS call that canonicalize would have made.
     let read_path: std::path::PathBuf = match path_ref.canonicalize() {
         Ok(p) => p,
         Err(e) => {
-            log::warn!("canonicalize fell back to raw path: {e}");
-            path_ref.to_path_buf()
+            log::warn!("canonicalize failed: {e}");
+            match std::fs::symlink_metadata(path_ref) {
+                Ok(m) if m.file_type().is_symlink() => {
+                    return Err(
+                        "Refusing to read symlink when canonicalize fails".to_string(),
+                    );
+                }
+                Ok(_) => path_ref.to_path_buf(),
+                Err(e) => return Err(sanitize_io_error(&e, "stat")),
+            }
         }
     };
 

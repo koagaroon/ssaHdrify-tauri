@@ -254,9 +254,14 @@ function buildVtt(captions: Caption[], header: string = "WEBVTT"): string {
 
 function parseAss(content: string): Caption[] {
   const captions: Caption[] = [];
-  // Regex defined inside function — no shared lastIndex state
+  // Regex defined inside function — no shared lastIndex state.
+  // `i` flag: ASS renderers are case-insensitive on `Dialogue:`; matching
+  // upstream ass-processor.ts and real-world files (some tooling emits
+  // `DIALOGUE:`). Leading `\s*` accepts indented Dialogue lines for the
+  // same tolerance parity — the captured whitespace is preserved via the
+  // prefix group so buildAss round-trips the indentation exactly.
   const dialogueRe =
-    /^(Dialogue:\s*\d+,)(\d+:\d{2}:\d{2}\.\d{2}),( *)(\d+:\d{2}:\d{2}\.\d{2}),(.*)$/gm;
+    /^(\s*Dialogue:\s*\d+,)(\d+:\d{2}:\d{2}\.\d{2}),( *)(\d+:\d{2}:\d{2}\.\d{2}),(.*)$/gim;
   let match;
   while ((match = dialogueRe.exec(content)) !== null) {
     if (captions.length >= 100000) {
@@ -273,10 +278,12 @@ function parseAss(content: string): Caption[] {
 }
 
 function buildAss(content: string, captions: Caption[]): string {
-  // For ASS, we replace timestamps in-place rather than rebuilding
-  // Regex defined inside function — no shared lastIndex state
+  // For ASS, we replace timestamps in-place rather than rebuilding.
+  // Regex flags must mirror parseAss exactly so the two sides agree on
+  // which lines are Dialogue candidates — otherwise buildAss would miss
+  // lines that parseAss matched (or vice versa) and timing would drift.
   const dialogueRe =
-    /^(Dialogue:\s*\d+,)(\d+:\d{2}:\d{2}\.\d{2}),( *)(\d+:\d{2}:\d{2}\.\d{2}),(.*)$/gm;
+    /^(\s*Dialogue:\s*\d+,)(\d+:\d{2}:\d{2}\.\d{2}),( *)(\d+:\d{2}:\d{2}\.\d{2}),(.*)$/gim;
   let idx = 0;
   const result = content.replace(dialogueRe, (original, prefix, _start, space, _end, rest) => {
     if (idx < captions.length) {

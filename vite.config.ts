@@ -30,6 +30,9 @@ function resolveAppVersion(): string {
     try {
       return execSync("git describe --tags --dirty --always", {
         stdio: ["pipe", "pipe", "pipe"],
+        // Cap the build-time git lookup so a pathological repo (huge packed
+        // refs, credential-prompt, LFS hang) can't stall the build forever.
+        timeout: 5000,
       })
         .toString()
         .trim();

@@ -267,7 +267,10 @@ function applyOverrideTags(block: string, current: FontKey, initialFont: FontKey
   // The `@` vertical-writing prefix is a rendering hint, not part of the
   // font identity; strip it so `\fn@Foo` and `\fnFoo` resolve to the same
   // font file and share a FontUsage entry (codepoints merge for subsetting).
-  const fnMatch = block.match(/\\fn([^\\}]*)/);
+  // Cap the capture at 128 chars: `sanitizeFamily` will also slice to 128,
+  // but bounding the match keeps allocator cost low against crafted ASS
+  // with absurdly long names inside an override block.
+  const fnMatch = block.match(/\\fn([^\\}]{0,128})/);
   if (fnMatch) {
     const rawFamily = normalizeFamily(fnMatch[1]);
     if (!rawFamily) {

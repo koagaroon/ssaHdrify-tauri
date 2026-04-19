@@ -17,7 +17,6 @@
     "dialog:allow-save",
     "fs:default",
     "fs:allow-write-text-file",
-    "fs:allow-stat",
     {
       "identifier": "fs:scope",
       "allow": [{ "path": "**" }],
@@ -28,12 +27,22 @@
         { "path": "$HOME/.aws/**" },
         { "path": "$HOME/.gnupg" },
         { "path": "$HOME/.gnupg/**" },
+        { "path": "$HOME/.azure" },
         { "path": "$HOME/.azure/**" },
+        { "path": "$HOME/.gcloud" },
         { "path": "$HOME/.gcloud/**" },
+        { "path": "$HOME/.docker" },
         { "path": "$HOME/.docker/**" },
+        { "path": "$HOME/.kube" },
         { "path": "$HOME/.kube/**" },
+        { "path": "$HOME/.config/gh/**" },
+        { "path": "$HOME/.config/git/credentials" },
+        { "path": "$HOME/.cargo/credentials" },
+        { "path": "$HOME/.cargo/credentials.toml" },
+        { "path": "$HOME/.git-credentials" },
         { "path": "$HOME/.npmrc" },
         { "path": "$HOME/.netrc" },
+        { "path": "$HOME/.pypirc" },
         { "path": "$APPDATA/Microsoft/Credentials/**" },
         { "path": "$APPDATA/Microsoft/Crypto/**" },
         { "path": "$APPDATA/Microsoft/Protect/**" },
@@ -52,7 +61,12 @@
         { "path": "$LOCALDATA/Chromium/User Data/**" },
         { "path": "$LOCALDATA/Microsoft/Edge/User Data/**" },
         { "path": "$LOCALDATA/BraveSoftware/**" },
-        { "path": "$LOCALDATA/Mozilla/**" }
+        { "path": "$LOCALDATA/Mozilla/**" },
+        { "path": "$LOCALDATA/Microsoft/WindowsApps/**" },
+        { "path": "$LOCALDATA/Packages/**" },
+        { "path": "$APPDATA/Code/User/**" },
+        { "path": "$APPDATA/npm/**" },
+        { "path": "$APPDATA/yarn/**" }
       ]
     }
   ]
