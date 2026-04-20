@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { pickSubtitleFiles, readText, writeText, fileNameFromPath } from "../../lib/tauri-api";
 import { processAssContent, parseAssColor, formatAssColor } from "./ass-processor";
 import {
@@ -18,7 +18,8 @@ import NumberInput from "../../lib/NumberInput";
 import NitViz from "./NitViz";
 import { useI18n } from "../../i18n/useI18n";
 import { useFileContext } from "../../lib/FileContext";
-import { useStatus } from "../../lib/StatusContext";
+import type { Status } from "../../lib/StatusContext";
+import { useTabStatus } from "../../lib/useTabStatus";
 
 /** Convert ASS color "&H00BBGGRR" to HTML "#RRGGBB" */
 function assColorToHex(assColor: string): string {
@@ -88,7 +89,6 @@ export default function HdrConvert() {
   // while nothing has been attempted; gets cleared when hdrFiles changes
   // so "done" doesn't linger after the user picks a new file.
   const [lastActionResult, setLastActionResult] = useState<"success" | "error" | null>(null);
-  const { setStatus } = useStatus();
   const logIdRef = useRef(0);
   const cancelRef = useRef(false);
   const logEndRef = useRef<HTMLDivElement>(null);
@@ -101,28 +101,17 @@ export default function HdrConvert() {
   }, [hdrFiles]);
 
   // Publish current status to the shared context — the footer reads it.
-  useEffect(() => {
-    if (!hdrFiles) {
-      setStatus("hdr", { kind: "idle", message: t("status_hdr_idle") });
-      return;
-    }
-    if (processing) {
-      setStatus("hdr", { kind: "busy", message: t("status_hdr_busy") });
-      return;
-    }
-    if (lastActionResult === "success") {
-      setStatus("hdr", { kind: "done", message: t("status_hdr_done") });
-      return;
-    }
-    if (lastActionResult === "error") {
-      setStatus("hdr", { kind: "error", message: t("status_hdr_error") });
-      return;
-    }
-    setStatus("hdr", {
+  const tabStatus = useMemo<Status>(() => {
+    if (!hdrFiles) return { kind: "idle", message: t("status_hdr_idle") };
+    if (processing) return { kind: "busy", message: t("status_hdr_busy") };
+    if (lastActionResult === "success") return { kind: "done", message: t("status_hdr_done") };
+    if (lastActionResult === "error") return { kind: "error", message: t("status_hdr_error") };
+    return {
       kind: "pending",
       message: t("status_hdr_pending", hdrFiles.filePaths.length),
-    });
-  }, [hdrFiles, processing, lastActionResult, setStatus, t]);
+    };
+  }, [hdrFiles, processing, lastActionResult, t]);
+  useTabStatus("hdr", tabStatus);
 
   // File-list dropdown: close on click outside or Escape
   useEffect(() => {

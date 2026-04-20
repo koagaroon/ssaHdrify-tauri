@@ -18,7 +18,8 @@ import { ensureLoaded, fontKeyLabel, type FontUsage } from "./font-collector";
 import { useI18n } from "../../i18n/useI18n";
 import { useFileContext } from "../../lib/FileContext";
 import { TAB_LABEL_KEYS } from "../../lib/tab-labels";
-import { useStatus } from "../../lib/StatusContext";
+import type { Status } from "../../lib/StatusContext";
+import { useTabStatus } from "../../lib/useTabStatus";
 import FontSourceModal, { type FontSource } from "./FontSourceModal";
 
 /** Stable selection key — survives `fonts[]` reorders (e.g. after adding a
@@ -51,8 +52,6 @@ export default function FontEmbed() {
   const [status, setStatus] = useState("");
   const [isError, setIsError] = useState(false);
   const [lastActionResult, setLastActionResult] = useState<"success" | "error" | null>(null);
-  // Rename the context setter to avoid colliding with the local setStatus above.
-  const { setStatus: setTabStatus } = useStatus();
   const cancelRef = useRef(false);
   // Generation counter: incremented on each pick or clear to invalidate stale async results
   const pickGenRef = useRef(0);
@@ -304,36 +303,16 @@ export default function FontEmbed() {
   }, [fontsFile]);
 
   // Publish status to the shared context — footer reads it per active tab.
-  useEffect(() => {
-    if (!fileName) {
-      setTabStatus("fonts", { kind: "idle", message: t("status_fonts_idle") });
-      return;
-    }
-    if (embedding) {
-      setTabStatus("fonts", { kind: "busy", message: t("status_fonts_busy") });
-      return;
-    }
-    if (analyzing) {
-      setTabStatus("fonts", { kind: "busy", message: t("status_fonts_analyzing") });
-      return;
-    }
-    if (lastActionResult === "success") {
-      setTabStatus("fonts", { kind: "done", message: t("status_fonts_done") });
-      return;
-    }
-    if (lastActionResult === "error") {
-      setTabStatus("fonts", { kind: "error", message: t("status_fonts_error") });
-      return;
-    }
-    if (selected.size === 0) {
-      setTabStatus("fonts", { kind: "pending", message: t("status_fonts_pick") });
-      return;
-    }
-    setTabStatus("fonts", {
-      kind: "pending",
-      message: t("status_fonts_pending", selected.size),
-    });
-  }, [fileName, analyzing, embedding, selected, lastActionResult, setTabStatus, t]);
+  const tabStatus = useMemo<Status>(() => {
+    if (!fileName) return { kind: "idle", message: t("status_fonts_idle") };
+    if (embedding) return { kind: "busy", message: t("status_fonts_busy") };
+    if (analyzing) return { kind: "busy", message: t("status_fonts_analyzing") };
+    if (lastActionResult === "success") return { kind: "done", message: t("status_fonts_done") };
+    if (lastActionResult === "error") return { kind: "error", message: t("status_fonts_error") };
+    if (selected.size === 0) return { kind: "pending", message: t("status_fonts_pick") };
+    return { kind: "pending", message: t("status_fonts_pending", selected.size) };
+  }, [fileName, analyzing, embedding, selected, lastActionResult, t]);
+  useTabStatus("fonts", tabStatus);
 
   const formatFontLabel = (info: FontInfo) => fontKeyLabel(info.key);
 

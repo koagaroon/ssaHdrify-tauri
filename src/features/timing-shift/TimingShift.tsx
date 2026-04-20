@@ -16,7 +16,8 @@ import {
 import { useI18n } from "../../i18n/useI18n";
 import { useFileContext } from "../../lib/FileContext";
 import { TAB_LABEL_KEYS } from "../../lib/tab-labels";
-import { useStatus } from "../../lib/StatusContext";
+import type { Status } from "../../lib/StatusContext";
+import { useTabStatus } from "../../lib/useTabStatus";
 
 type Unit = "ms" | "s";
 type Direction = "slower" | "faster";
@@ -40,8 +41,6 @@ export default function TimingShift() {
   const [isError, setIsError] = useState(false);
   const [busy, setBusy] = useState(false);
   const [lastActionResult, setLastActionResult] = useState<"success" | "error" | null>(null);
-  // Rename the context's setStatus to avoid shadowing the local one above.
-  const { setStatus: setTabStatus } = useStatus();
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const pickGenRef = useRef(0);
@@ -208,25 +207,14 @@ export default function TimingShift() {
   }, [timingFile]);
 
   // Publish status to the shared context — footer picks it up per active tab.
-  useEffect(() => {
-    if (!fileName) {
-      setTabStatus("timing", { kind: "idle", message: t("status_timing_idle") });
-      return;
-    }
-    if (busy) {
-      setTabStatus("timing", { kind: "busy", message: t("status_timing_busy") });
-      return;
-    }
-    if (lastActionResult === "success") {
-      setTabStatus("timing", { kind: "done", message: t("status_timing_done") });
-      return;
-    }
-    if (lastActionResult === "error") {
-      setTabStatus("timing", { kind: "error", message: t("status_timing_error") });
-      return;
-    }
-    setTabStatus("timing", { kind: "pending", message: t("status_timing_pending") });
-  }, [fileName, busy, lastActionResult, setTabStatus, t]);
+  const tabStatus = useMemo<Status>(() => {
+    if (!fileName) return { kind: "idle", message: t("status_timing_idle") };
+    if (busy) return { kind: "busy", message: t("status_timing_busy") };
+    if (lastActionResult === "success") return { kind: "done", message: t("status_timing_done") };
+    if (lastActionResult === "error") return { kind: "error", message: t("status_timing_error") };
+    return { kind: "pending", message: t("status_timing_pending") };
+  }, [fileName, busy, lastActionResult, t]);
+  useTabStatus("timing", tabStatus);
 
   return (
     <div className="space-y-4">
