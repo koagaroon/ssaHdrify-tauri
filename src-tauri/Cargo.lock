@@ -3752,7 +3752,7 @@ dependencies = [
 
 [[package]]
 name = "ssahdrify"
-version = "1.2.0-preview.1"
+version = "1.2.0"
 dependencies = [
  "chardetng",
  "encoding_rs",

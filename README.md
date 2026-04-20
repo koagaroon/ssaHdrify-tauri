@@ -152,9 +152,9 @@ npm run tauri dev
 npm run tauri build
 ```
 
-产出在 `src-tauri/target/release/bundle/` 目录。
+便携式 exe 产出于 `src-tauri/target/release/ssahdrify.exe`，可直接运行。如需额外构建 NSIS 安装包，将 `src-tauri/tauri.conf.json` 中的 `bundle.active` 改为 `true` 后重新构建即可。
 
-Output is in the `src-tauri/target/release/bundle/` directory.
+The portable exe is produced at `src-tauri/target/release/ssahdrify.exe` — ready to run directly. If you additionally want the NSIS installer, flip `bundle.active` to `true` in `src-tauri/tauri.conf.json` and rebuild.
 
 ### 测试 | Testing
 
