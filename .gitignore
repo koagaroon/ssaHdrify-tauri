@@ -22,3 +22,9 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Design / planning materials from the v1.2.0 UI revamp — kept locally, not tracked
+ssa Tauri revamp/
+
+# Built release artifacts (renamed portable exe staged for gh release create)
+SSA HDRify_v*_x64.exe
