@@ -230,6 +230,27 @@
   gap: 6px;
 }
 
+/* Theme picker popover — items get :hover via CSS instead of inline
+   onMouseEnter/Leave swaps, matching the spinner pattern. */
+.theme-menu-item {
+  width: 100%;
+  text-align: left;
+  padding: 6px 12px;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--text-primary);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  transition: background-color 0.15s;
+  font-family: inherit;
+}
+.theme-menu-item:hover {
+  background: var(--bg-hover);
+}
+
 /* ── Tabs — underline with mono index chip ───────────────── */
 .tabs {
   display: flex;

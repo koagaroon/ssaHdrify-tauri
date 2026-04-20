@@ -267,14 +267,7 @@ function App() {
                             setMode(opt.mode);
                             setThemeOpen(false);
                           }}
-                          className="w-full text-left px-3 py-1.5 text-sm transition-colors flex items-center justify-between"
-                          style={{ color: "var(--text-primary)" }}
-                          onMouseEnter={(e) => {
-                            e.currentTarget.style.background = "var(--bg-hover)";
-                          }}
-                          onMouseLeave={(e) => {
-                            e.currentTarget.style.background = "transparent";
-                          }}
+                          className="theme-menu-item"
                         >
                           <span>{t(opt.labelKey)}</span>
                           {mode === opt.mode && (
