@@ -22,6 +22,9 @@ import { useTabStatus } from "../../lib/useTabStatus";
 type Unit = "ms" | "s";
 type Direction = "slower" | "faster";
 
+/** Cap to ±1 year to prevent integer precision loss for extreme inputs. */
+const MAX_OFFSET_MS = 365 * 24 * 3600 * 1000;
+
 export default function TimingShift() {
   const { t } = useI18n();
   const { timingFile, setTimingFile, clearFile, isFileInUse } = useFileContext();
@@ -48,8 +51,6 @@ export default function TimingShift() {
   // Memoized derived values — prevents debounce effect from resetting on unrelated state updates
   const effectiveOffsetMs = useMemo(() => {
     const base = unit === "s" ? offsetValue * 1000 : offsetValue;
-    // Cap to ±1 year to prevent integer precision loss for extreme inputs
-    const MAX_OFFSET_MS = 365 * 24 * 3600 * 1000;
     const clamped = Math.max(-MAX_OFFSET_MS, Math.min(MAX_OFFSET_MS, base));
     return direction === "faster" ? -clamped : clamped;
   }, [unit, offsetValue, direction]);

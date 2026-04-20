@@ -18,6 +18,20 @@ import type { ParsedASS } from "ass-compiler";
 let parseFn: ((text: string) => ParsedASS) | null = null;
 let assCompilerReady: Promise<void> | null = null;
 
+/**
+ * Defense-in-depth caps against crafted ASS input. See `collectFonts` for how
+ * they interact — per-variant + total are both needed; either alone can be
+ * blown past by the other dimension.
+ *
+ * MAX_CODEPOINTS_PER_VARIANT (65536) is a defensive cap, not the Basic
+ * Multilingual Plane boundary (which caps at U+FFFF). Real fonts carry well
+ * under this; the cap only fires against crafted ASS enumerating tens of
+ * thousands of distinct characters for one font.
+ */
+const MAX_FONT_VARIANTS = 500;
+const MAX_CODEPOINTS_PER_VARIANT = 65536;
+const MAX_TOTAL_CODEPOINTS = 1_000_000;
+
 export interface FontKey {
   family: string;
   bold: boolean;
@@ -121,10 +135,6 @@ export function collectFonts(assContent: string): FontUsage[] {
 
   // Accumulate: fontKeyString → { key, codepoints }
   const usageMap = new Map<string, FontUsage>();
-  // Per-font caps are not enough on their own: 500 variants × 65,536 codepoints
-  // each would reach ~130 MB of Set overhead before any single cap triggers.
-  // Bound the combined codepoint count across all variants as defense-in-depth.
-  const MAX_TOTAL_CODEPOINTS = 1_000_000;
   let totalCodepoints = 0;
 
   function recordChars(key: FontKey, text: string) {
@@ -133,15 +143,10 @@ export function collectFonts(assContent: string): FontUsage[] {
     if (!usage) {
       usage = { key: { ...key }, codepoints: new Set() };
       usageMap.set(keyStr, usage);
-      if (usageMap.size > 500) {
-        throw new Error(`Too many font variants: ${usageMap.size} (max 500)`);
+      if (usageMap.size > MAX_FONT_VARIANTS) {
+        throw new Error(`Too many font variants: ${usageMap.size} (max ${MAX_FONT_VARIANTS})`);
       }
     }
-    // Upper-bound the per-variant codepoint set. 65536 is a defensive cap,
-    // not the Basic Multilingual Plane boundary (which caps at U+FFFF). Real
-    // fonts carry well under this; the cap only fires against crafted ASS
-    // that enumerates tens of thousands of distinct characters for one font.
-    const MAX_CODEPOINTS_PER_VARIANT = 65536;
     for (const char of text) {
       if (usage.codepoints.size >= MAX_CODEPOINTS_PER_VARIANT) {
         break;
