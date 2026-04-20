@@ -63,14 +63,7 @@ export default function NumberInput({
           tabIndex={-1}
           onClick={() => adjust(numStep)}
           disabled={disabled}
-          className="flex-1 flex items-center justify-center disabled:opacity-30 transition-colors"
-          style={{ background: "var(--spinner-bg)", color: "var(--spinner-icon)" }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = "var(--spinner-hover)";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "var(--spinner-bg)";
-          }}
+          className="num-spin"
         >
           <svg width="8" height="5" viewBox="0 0 8 5">
             <path d="M4 0L8 5H0L4 0Z" fill="currentColor" />
@@ -82,14 +75,7 @@ export default function NumberInput({
           tabIndex={-1}
           onClick={() => adjust(-numStep)}
           disabled={disabled}
-          className="flex-1 flex items-center justify-center disabled:opacity-30 transition-colors"
-          style={{ background: "var(--spinner-bg)", color: "var(--spinner-icon)" }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = "var(--spinner-hover)";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "var(--spinner-bg)";
-          }}
+          className="num-spin"
         >
           <svg width="8" height="5" viewBox="0 0 8 5">
             <path d="M4 5L0 0H8L4 5Z" fill="currentColor" />

@@ -363,6 +363,29 @@
 }
 
 /* ─────────────────────────────────────────────────────────────
+   NUMBER INPUT — up/down spinner buttons
+   Uses CSS :hover for the background swap; prior version ran
+   the same swap through inline JS onMouseEnter/Leave handlers,
+   which were per-render closures with no behavioral gain over
+   a pseudo-class.
+   ───────────────────────────────────────────────────────────── */
+.num-spin {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--spinner-bg);
+  color: var(--spinner-icon);
+  transition: background-color 0.15s;
+}
+.num-spin:hover:not(:disabled) {
+  background: var(--spinner-hover);
+}
+.num-spin:disabled {
+  opacity: 0.3;
+}
+
+/* ─────────────────────────────────────────────────────────────
    NIT VISUALIZATION — HDR tab brightness slider + presets
    Log-scale rainbow track (1→10k nits), 4 standard presets,
    large mono readout. Shrunk ≈0.85× from design spec.
