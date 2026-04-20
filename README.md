@@ -24,6 +24,14 @@ A Tauri desktop rewrite of [gky99/ssaHdrify](https://github.com/gky99/ssaHdrify)
 
 ---
 
+## 下载 | Download
+
+从 [Releases](https://github.com/koagaroon/ssaHdrify-tauri/releases/latest) 页面下载最新便携式 exe，双击即可运行，无需安装。macOS / Linux 用户请参考下方「从源码构建」。
+
+Download the latest portable exe from [Releases](https://github.com/koagaroon/ssaHdrify-tauri/releases/latest) — double-click to run, no install needed. macOS / Linux users, see "Build from Source" below.
+
+---
+
 ## 功能 | Features
 
 | 功能                                    | 说明                                                                                                                                                                                                                                                                                                                                                                 |
@@ -70,7 +78,7 @@ When playing HDR video, the display enters HDR mode. However, SSA/ASS subtitles 
 ### 时间轴偏移 / Timing Shift
 
 1. 选择字幕文件 / Select a subtitle file
-2. 输入偏移量（毫秒，正值延后、负值提前）/ Enter offset in ms (positive = delay, negative = advance)
+2. 输入偏移量（毫秒），选择方向「提前」或「延后」/ Enter offset amount (ms), then pick direction: Faster or Slower
 3. 可选：启用阈值过滤，仅偏移特定时间点后的字幕 / Optional: enable threshold to shift only captions after a specific timestamp
 4. 实时预览调整效果 / Preview changes in real time
 5. 导出 / Export
