@@ -6,7 +6,39 @@
 
 use chardetng::EncodingDetector;
 use std::io::ErrorKind;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+/// Verify a path's extension is in `ALLOWED_TEXT_EXTENSIONS`. Case-folded.
+fn ext_is_allowed(path: &Path) -> bool {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+    ALLOWED_TEXT_EXTENSIONS.contains(&ext.as_str())
+}
+
+/// On Windows, detect NTFS reparse points beyond plain symlinks (junctions,
+/// mount points, and similar) via the `FILE_ATTRIBUTE_REPARSE_POINT` bit.
+/// `std::fs::FileType::is_symlink()` only returns true for
+/// `IO_REPARSE_TAG_SYMLINK` — junctions and OneDrive placeholders slip past
+/// that check, so we need a broader test to stop a malicious junction like
+/// `foo.ass → C:/Users/<u>/.ssh` from being followed on the canonicalize
+/// fallback branch.
+#[cfg(windows)]
+fn is_reparse_point(path: &Path) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+    std::fs::symlink_metadata(path)
+        .map(|m| m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0)
+        .unwrap_or(false)
+}
+#[cfg(not(windows))]
+fn is_reparse_point(path: &Path) -> bool {
+    std::fs::symlink_metadata(path)
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
+}
 
 const MAX_TEXT_SIZE: u64 = 50 * 1024 * 1024; // 50 MB
 
@@ -99,43 +131,65 @@ pub fn read_text_detect_encoding(path: String) -> Result<ReadTextResult, String>
 
     // Extension validation: only allow subtitle/text file types
     let path_ref = Path::new(&path);
-    let ext = path_ref
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
-        .unwrap_or_default();
-    if !ALLOWED_TEXT_EXTENSIONS.contains(&ext.as_str()) {
+    if !ext_is_allowed(path_ref) {
+        let ext = path_ref
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_lowercase())
+            .unwrap_or_default();
         return Err(format!("Unsupported file type: .{ext}"));
     }
 
-    // Canonicalize when possible — resolves symlinks, "..", and gives us a
-    // stable path to open. When canonicalize fails (OneDrive cloud-only
-    // placeholders, network shares with permissions quirks), fall back to
-    // the raw path BUT refuse to proceed if the raw path is itself a
-    // symlink/reparse point. Otherwise an attacker who plants a symlink
-    // `subtitle.ass` → `C:/Windows/System32/config/SAM` in a directory the
-    // user browses could bypass the extension allow-list (which only
-    // inspects the symlink's own filename) and the `fs:deny` list (which
-    // only compares literal path strings). The symlink-metadata check is
-    // cheap compared to the OS call that canonicalize would have made.
-    let read_path: std::path::PathBuf = match path_ref.canonicalize() {
-        Ok(p) => p,
+    // Resolve symlinks / reparse points. Two attack surfaces drive the
+    // checks below:
+    //   (1) A plain symlink `foo.ass` → `C:/Users/<u>/.ssh/id_rsa`. The
+    //       extension allow-list above only sees the symlink's own name,
+    //       so without a second check we'd silently read the target file.
+    //   (2) An NTFS junction with the same shape (OneDrive-redirected
+    //       Documents, or a deliberate `mklink /J`). Rust's `is_symlink()`
+    //       returns FALSE for junctions (IO_REPARSE_TAG_MOUNT_POINT), so a
+    //       junction-based bypass slips past a naive symlink check.
+    //
+    // Defense: re-validate the CANONICAL path's extension after canonicalize
+    // succeeds — a malicious symlink to `SAM` resolves to a non-subtitle
+    // path that fails the allow-list. Legitimate OneDrive placeholders
+    // resolve to same-named subtitle files and still pass.
+    //
+    // When canonicalize FAILS (some OneDrive cloud-only placeholders, some
+    // network shares), fall back to the raw path ONLY if the raw path is
+    // not itself a reparse point — the `is_reparse_point` helper uses the
+    // raw `FILE_ATTRIBUTE_REPARSE_POINT` bit on Windows to catch junctions
+    // that `is_symlink()` misses.
+    let read_path: PathBuf = match path_ref.canonicalize() {
+        Ok(canonical) => {
+            if !ext_is_allowed(&canonical) {
+                return Err(
+                    "Resolved path is not a subtitle file (symlink to disallowed target?)"
+                        .to_string(),
+                );
+            }
+            canonical
+        }
         Err(e) => {
             log::warn!("canonicalize failed: {e}");
-            match std::fs::symlink_metadata(path_ref) {
-                Ok(m) if m.file_type().is_symlink() => {
-                    return Err(
-                        "Refusing to read symlink when canonicalize fails".to_string(),
-                    );
-                }
-                Ok(_) => path_ref.to_path_buf(),
-                Err(e) => return Err(sanitize_io_error(&e, "stat")),
+            if is_reparse_point(path_ref) {
+                return Err(
+                    "Refusing to read symlink / junction when canonicalize fails".to_string(),
+                );
             }
+            path_ref.to_path_buf()
         }
     };
 
     // Size check
     let metadata = std::fs::metadata(&read_path).map_err(|e| sanitize_io_error(&e, "stat"))?;
+    // Must be a regular file — directories, FIFOs, device files, and
+    // Windows device namespaces (`\\.\PhysicalDrive0` et al.) would
+    // otherwise slip through with a `.ass`-ended parent path, producing
+    // crashes or unbounded reads rather than a clean "unsupported" error.
+    if !metadata.file_type().is_file() {
+        return Err("Path does not point to a regular file".to_string());
+    }
     if metadata.len() > MAX_TEXT_SIZE {
         let size_mb = metadata.len() as f64 / (1024.0 * 1024.0);
         return Err(format!(
