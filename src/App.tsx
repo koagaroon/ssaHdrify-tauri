@@ -56,27 +56,26 @@ function App() {
   const [themeOpen, setThemeOpen] = useState(false);
   const themeRef = useRef<HTMLDivElement>(null);
 
+  // Close on click-outside + Escape. Mousedown is armed on the next tick
+  // so the initial click that opened the dropdown doesn't immediately
+  // close it. Matches the same pattern used by HdrConvert's file list.
   useEffect(() => {
     if (!themeOpen) return;
-    const handler = (e: MouseEvent) => {
+    const onClick = (e: MouseEvent) => {
       if (themeRef.current && !themeRef.current.contains(e.target as Node)) {
         setThemeOpen(false);
       }
     };
-    const id = setTimeout(() => document.addEventListener("mousedown", handler), 0);
-    return () => {
-      clearTimeout(id);
-      document.removeEventListener("mousedown", handler);
-    };
-  }, [themeOpen]);
-
-  useEffect(() => {
-    if (!themeOpen) return;
-    const handler = (e: KeyboardEvent) => {
+    const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setThemeOpen(false);
     };
-    document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
+    const id = setTimeout(() => document.addEventListener("mousedown", onClick), 0);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      clearTimeout(id);
+      document.removeEventListener("mousedown", onClick);
+      document.removeEventListener("keydown", onKey);
+    };
   }, [themeOpen]);
 
   return (
