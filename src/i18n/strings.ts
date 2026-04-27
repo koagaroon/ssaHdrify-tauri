@@ -23,6 +23,7 @@ export const strings: Record<string, StringEntry> = {
   status_hdr_busy: { en: "Converting…", zh: "转换中…" },
   status_hdr_done: { en: "Conversion complete", zh: "转换完成" },
   status_hdr_error: { en: "Conversion failed", zh: "转换失败" },
+  status_hdr_cancelled: { en: "Conversion cancelled", zh: "已取消转换" },
   status_timing_idle: { en: "No subtitle loaded", zh: "未加载字幕" },
   status_timing_pending: { en: "Adjust offset, then save", zh: "调整偏移后保存" },
   status_timing_busy: { en: "Saving…", zh: "保存中…" },

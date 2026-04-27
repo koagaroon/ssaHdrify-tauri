@@ -88,10 +88,15 @@ export default function HdrConvert() {
   const [processing, setProcessing] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [showFileList, setShowFileList] = useState(false);
-  // Tracks whether the last convert finished — null between selections or
-  // while nothing has been attempted; gets cleared when hdrFiles changes
-  // so "done" doesn't linger after the user picks a new file.
-  const [lastActionResult, setLastActionResult] = useState<"success" | "error" | null>(null);
+  // Tracks the outcome of the last convert attempt — null between
+  // selections or before any attempt; gets cleared when hdrFiles changes
+  // so "done" / "cancelled" don't linger after the user picks a new file.
+  // "cancelled" covers both pre-flight cancel (user dismissed the
+  // overwrite-confirm dialog) and mid-batch cancel (user clicked the
+  // in-flight Cancel button); both should read the same to the user.
+  const [lastActionResult, setLastActionResult] = useState<
+    "success" | "error" | "cancelled" | null
+  >(null);
   // N-of-M progress for the active batch, surfaced in the footer chip.
   // Null between batches; never persists past `setProcessing(false)` in
   // the convert finally block.
@@ -133,6 +138,13 @@ export default function HdrConvert() {
     }
     if (lastActionResult === "success") return { kind: "done", message: t("status_hdr_done") };
     if (lastActionResult === "error") return { kind: "error", message: t("status_hdr_error") };
+    if (lastActionResult === "cancelled") {
+      // Cancellation is neither a success nor a failure — the user
+      // intentionally stepped back. Use the "pending" kind (amber dot)
+      // since files are still loaded and a fresh attempt is one click
+      // away; only the message differs from default pending.
+      return { kind: "pending", message: t("status_hdr_cancelled") };
+    }
     return {
       kind: "pending",
       message: t("status_hdr_pending", hdrFiles.filePaths.length),
@@ -285,6 +297,7 @@ export default function HdrConvert() {
       });
       if (!confirmed) {
         addLog(t("msg_cancelled"), "info");
+        setLastActionResult("cancelled");
         return;
       }
     }
@@ -420,9 +433,16 @@ export default function HdrConvert() {
       if (!cancelRef.current) {
         addLog(t("msg_complete", successCount, paths.length), "success");
       }
-      // Record outcome for the footer status: any successful file counts
-      // as done; zero successes means it all failed.
-      setLastActionResult(successCount > 0 ? "success" : "error");
+      // Record outcome for the footer status. Order matters: a cancel
+      // takes precedence over partial success/error counts, because the
+      // user explicitly stepped back — surfacing "Conversion complete"
+      // when they cancelled mid-batch would be a lie. Only treat the
+      // outcome as success/error when the loop ran to completion.
+      if (cancelRef.current) {
+        setLastActionResult("cancelled");
+      } else {
+        setLastActionResult(successCount > 0 ? "success" : "error");
+      }
     } finally {
       setProcessing(false);
       setProgress(null);
