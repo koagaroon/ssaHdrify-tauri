@@ -104,6 +104,15 @@ export function FileProvider({ children }: { children: ReactNode }) {
     [hdrFiles, timingFiles, fontsFile]
   );
 
+  // INTENTIONALLY UNUSED — kept as a partial-skip alternative to the
+  // strict-reject pattern in `isFileInUse` + per-tab `checkConflicts`.
+  // Tabs currently reject the entire selection on any cross-tab conflict
+  // (so the user sees a single visible banner naming the conflicting
+  // tab) — but a future flow that wants "load what you can, skip the
+  // rest" semantics (a Tab-4 batch-rename multi-source merge, for
+  // example) can adopt this without re-deriving the loop logic. Do not
+  // delete as dead code: the strict-vs-skip choice belongs to the
+  // consumer, not the FileContext layer.
   const filterAvailablePaths = useCallback(
     (paths: string[], currentTab: TabId) => {
       const allowed: string[] = [];
