@@ -1,4 +1,10 @@
-@import url("tailwindcss");
+/* Tailwind v4 entry — must stay as the bare-string form. The Vite plugin
+   intercepts `@import "tailwindcss"` to generate utilities; rewriting to
+   `@import url(...)` turns it into a regular CSS import that 404s and
+   silently disables every Tailwind class. The stylelint `import-notation`
+   rule is pinned to "string" in .stylelintrc.json to prevent --fix from
+   changing this back. */
+@import "tailwindcss";
 
 /* ── UI face — Inter (English body + display) ──────────────
    Variable font, weights 100–900 in a single woff2. Primary
