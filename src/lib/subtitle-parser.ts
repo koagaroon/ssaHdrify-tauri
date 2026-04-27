@@ -78,9 +78,7 @@ function parseVttTime(ts: string): number {
   // MM:SS.mmm (no hours — valid per WebVTT spec)
   const short = ts.match(/^(\d{2}):(\d{2})\.(\d{3})$/);
   if (short) {
-    return (
-      parseInt(short[1], 10) * 60000 + parseInt(short[2], 10) * 1000 + parseInt(short[3], 10)
-    );
+    return parseInt(short[1], 10) * 60000 + parseInt(short[2], 10) * 1000 + parseInt(short[3], 10);
   }
   return 0;
 }

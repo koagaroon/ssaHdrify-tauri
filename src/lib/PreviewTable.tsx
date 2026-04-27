@@ -101,9 +101,7 @@ export function PreviewTable<T>({
                 style={{ gridTemplateColumns: gridTemplate }}
               >
                 {columns.map((col) => {
-                  const cellClass = ["preview-table-cell", col.className]
-                    .filter(Boolean)
-                    .join(" ");
+                  const cellClass = ["preview-table-cell", col.className].filter(Boolean).join(" ");
                   return (
                     <span
                       key={col.key}

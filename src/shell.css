@@ -23,6 +23,7 @@
   overflow: hidden;
   background: #eee1c8;
 }
+
 [data-theme="dark"] .stage {
   background: #050309;
 }
@@ -37,10 +38,12 @@
   pointer-events: none;
   animation: bloom-drift 34s ease-in-out infinite alternate;
 }
+
 @keyframes bloom-drift {
   0% {
     transform: translate(0, 0) scale(1);
   }
+
   100% {
     transform: translate(3%, -2%) scale(1.06);
   }
@@ -74,7 +77,6 @@
   height: 100%;
   background: color-mix(in srgb, var(--bg-app) 62%, transparent);
   backdrop-filter: blur(60px) saturate(180%);
-  -webkit-backdrop-filter: blur(60px) saturate(180%);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -82,9 +84,10 @@
   position: relative;
   isolation: isolate;
 }
+
 [data-theme="light"] .window {
   background: color-mix(in srgb, #fdfaf3 58%, transparent);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 60%);
 }
 
 /* ── Titlebar — custom, Windows-style ────────────────────── */
@@ -100,19 +103,23 @@
   -webkit-app-region: drag;
   user-select: none;
 }
+
 .titlebar-logo {
   width: 16px;
   height: 15px;
   flex-shrink: 0;
 }
+
 .titlebar-title {
   font-size: 12px;
   color: var(--text-secondary);
   letter-spacing: 0.01em;
 }
+
 .titlebar-spacer {
   flex: 1;
 }
+
 .titlebar-btn {
   width: 46px;
   height: 32px;
@@ -125,15 +132,18 @@
   -webkit-app-region: no-drag;
   transition: background-color 0.15s;
 }
+
 .titlebar-btn:hover {
   background: var(--bg-hover);
 }
+
 .titlebar-btn.close:hover {
   background: #e81123;
   color: #fff;
 }
 
 /* ── App header — logo + tabs + controls ─────────────────── */
+
 /* z-index 10 is deliberate: the theme popover lives inside this header
    and must paint above .app-main's tab content. Both share .window's
    stacking context; z-index ties default to later-in-DOM winning, which
@@ -147,16 +157,19 @@
   position: relative;
   z-index: 10;
 }
+
 .app-title-row {
   display: flex;
   align-items: flex-end;
   gap: 14px;
 }
+
 .app-lockup {
   display: flex;
   align-items: center;
   gap: 12px;
 }
+
 .app-logo {
   width: 30px;
   height: 30px;
@@ -164,28 +177,30 @@
   border-radius: 6px;
   overflow: hidden;
 }
+
 .app-title-group {
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
+
 .app-title {
   font-family: var(--font-display);
   font-size: 26px;
   font-weight: 600;
   letter-spacing: -0.03em;
   line-height: 0.95;
-  color: var(--text-primary);
   background: linear-gradient(120deg, var(--text-primary) 40%, var(--accent) 100%);
-  -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
 }
+
 /* Oblique only in Chinese mode where Smiley Sans is designed for it;
    English mode stays upright Inter since we bundle only roman. */
 :lang(zh) .app-title {
   font-style: oblique;
 }
+
 .app-tagline {
   font-size: 10px;
   color: var(--text-muted);
@@ -193,12 +208,14 @@
   text-transform: uppercase;
   white-space: nowrap;
 }
+
 .header-controls {
   margin-left: auto;
   display: flex;
   align-items: center;
   gap: 6px;
 }
+
 .icon-btn {
   width: 32px;
   height: 32px;
@@ -214,11 +231,13 @@
     border-color 0.15s,
     color 0.15s;
 }
+
 .icon-btn:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
   border-color: var(--border);
 }
+
 .icon-btn.lang {
   width: auto;
   padding: 0 10px;
@@ -247,6 +266,7 @@
   transition: background-color 0.15s;
   font-family: inherit;
 }
+
 .theme-menu-item:hover {
   background: var(--bg-hover);
 }
@@ -260,6 +280,7 @@
   margin-top: 2px;
   flex-wrap: nowrap;
 }
+
 .tab {
   position: relative;
   padding: 8px 2px 12px;
@@ -277,12 +298,15 @@
   cursor: pointer;
   font-family: inherit;
 }
+
 .tab:hover {
   color: var(--text-secondary);
 }
+
 .tab[data-active="true"] {
   color: var(--text-primary);
 }
+
 .tab[data-active="true"]::after {
   content: "";
   position: absolute;
@@ -298,6 +322,7 @@
   border-radius: 2px 2px 0 0;
   box-shadow: 0 0 20px 0 var(--accent);
 }
+
 .tab-index {
   font-family: var(--font-mono);
   font-size: 10px;
@@ -305,6 +330,7 @@
   color: var(--text-muted);
   letter-spacing: 0.08em;
 }
+
 .tab[data-active="true"] .tab-index {
   color: var(--accent);
 }
@@ -333,6 +359,7 @@
   font-family: var(--font-mono);
   letter-spacing: 0.02em;
 }
+
 .app-footer .dot {
   width: 8px;
   height: 8px;
@@ -343,6 +370,7 @@
     background-color 0.2s,
     box-shadow 0.2s;
 }
+
 /* Status indicator color states — red for idle/error, amber for
    pending + busy (pulse when actually working), green for done.
    Pulse applied via animation on .busy only. */
@@ -351,37 +379,45 @@
   background: var(--error);
   box-shadow: 0 0 8px 0 var(--error);
 }
+
 .app-footer .dot.pending {
   background: var(--warning);
   box-shadow: 0 0 8px 0 var(--warning);
 }
+
 .app-footer .dot.busy {
   background: var(--warning);
   box-shadow: 0 0 8px 0 var(--warning);
   animation: dot-pulse 1.5s ease-in-out infinite;
 }
+
 .app-footer .dot.done {
   background: var(--success);
   box-shadow: 0 0 8px 0 var(--success);
 }
+
 @keyframes dot-pulse {
   0%,
   100% {
     opacity: 1;
     transform: scale(1);
   }
+
   50% {
     opacity: 0.55;
     transform: scale(0.8);
   }
 }
+
 .app-footer .spacer {
   flex: 1;
 }
+
 .app-footer .ver {
   color: var(--text-muted);
   white-space: nowrap;
 }
+
 /* N-of-M progress chip — sits between the status message and the right-side
    spacer so it stays visually adjacent to whatever the message describes.
    Tabular nums keep the digits from jiggling as the count climbs. */
@@ -411,6 +447,7 @@
   background: var(--bg-panel);
   overflow: hidden;
 }
+
 .preview-table-title {
   padding: 8px 14px;
   display: flex;
@@ -423,6 +460,7 @@
   border-bottom: 1px solid var(--border-light);
   background: var(--bg-secondary);
 }
+
 .preview-table-head {
   display: grid;
   gap: 10px;
@@ -435,10 +473,12 @@
   color: var(--text-muted);
   border-bottom: 1px solid var(--border-light);
 }
+
 .preview-table-body {
   padding: 4px 0;
   overflow-y: auto;
 }
+
 .preview-table-row {
   display: grid;
   gap: 10px;
@@ -448,14 +488,17 @@
   align-items: center;
   border-bottom: 1px solid color-mix(in srgb, var(--border-light) 50%, transparent);
 }
+
 .preview-table-row:last-child {
   border-bottom: none;
 }
+
 .preview-table-cell {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
 .preview-table-empty {
   padding: 24px 14px;
   text-align: center;
@@ -479,9 +522,11 @@
   color: var(--spinner-icon);
   transition: background-color 0.15s;
 }
+
 .num-spin:hover:not(:disabled) {
   background: var(--spinner-hover);
 }
+
 .num-spin:disabled {
   opacity: 0.3;
 }
@@ -500,6 +545,7 @@
   border-radius: var(--radius-lg);
   position: relative;
 }
+
 .nit-head {
   display: flex;
   align-items: baseline;
@@ -508,6 +554,7 @@
   margin-bottom: 6px;
   white-space: nowrap;
 }
+
 .nit-head-label {
   font-size: 11px;
   font-weight: 500;
@@ -516,11 +563,13 @@
   letter-spacing: 0.08em;
   white-space: nowrap;
 }
+
 .nit-readout {
   display: inline-flex;
   align-items: baseline;
   gap: 5px;
 }
+
 .nit-readout .v {
   font-family: var(--font-mono);
   font-size: 22px;
@@ -530,12 +579,14 @@
   letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
 }
+
 .nit-readout .u {
   font-size: 11px;
   color: var(--text-muted);
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
+
 .nit-track {
   height: 26px;
   position: relative;
@@ -555,19 +606,22 @@
   touch-action: none;
   user-select: none;
 }
+
 .nit-track:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+
 .nit-fill {
   position: absolute;
   top: 0;
   bottom: 0;
   left: 0;
-  background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.08) 100%);
+  background: linear-gradient(90deg, transparent 0%, rgb(255 255 255 / 8%) 100%);
   pointer-events: none;
-  border-right: 1px solid rgba(255, 255, 255, 0.35);
+  border-right: 1px solid rgb(255 255 255 / 35%);
 }
+
 .nit-marker {
   position: absolute;
   top: -6px;
@@ -578,21 +632,24 @@
   align-items: center;
   justify-content: center;
 }
+
 .nit-marker-dot {
   width: 4px;
   height: calc(100% + 12px);
   background: #fff;
   border-radius: 2px;
   box-shadow:
-    0 0 0 2px rgba(0, 0, 0, 0.35),
+    0 0 0 2px rgb(0 0 0 / 35%),
     0 0 24px 4px var(--accent),
     0 0 40px 6px color-mix(in srgb, var(--accent) 40%, transparent);
 }
+
 [data-theme="light"] .nit-marker-dot {
   box-shadow:
-    0 0 0 2px rgba(0, 0, 0, 0.2),
+    0 0 0 2px rgb(0 0 0 / 20%),
     0 0 16px 3px var(--accent);
 }
+
 .nit-ticks {
   position: absolute;
   inset: 0;
@@ -600,10 +657,12 @@
   justify-content: space-between;
   pointer-events: none;
 }
+
 .nit-ticks span {
   width: 1px;
-  background: rgba(255, 255, 255, 0.14);
+  background: rgb(255 255 255 / 14%);
 }
+
 .nit-scale {
   display: flex;
   justify-content: space-between;
@@ -613,6 +672,7 @@
   margin-top: 4px;
   letter-spacing: 0.05em;
 }
+
 .nit-presets-label {
   display: flex;
   align-items: baseline;
@@ -626,6 +686,7 @@
   letter-spacing: 0.08em;
   white-space: nowrap;
 }
+
 .nit-presets-hint {
   text-transform: none;
   letter-spacing: 0;
@@ -633,10 +694,12 @@
   color: var(--text-muted);
   font-size: 10px;
 }
+
 .nit-presets {
   display: flex;
   gap: 5px;
 }
+
 .nit-preset {
   flex: 1;
   display: flex;
@@ -652,14 +715,17 @@
   transition: all 0.15s;
   font-family: inherit;
 }
+
 .nit-preset:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
 }
+
 .nit-preset:disabled {
   cursor: not-allowed;
   opacity: 0.5;
 }
+
 /* Active state — color-coding via border + background only.
    Text stays on theme-aware primary/secondary for readability
    regardless of which preset is lit or which theme is active.
@@ -669,12 +735,15 @@
   background: color-mix(in srgb, var(--accent) 18%, transparent);
   border-color: color-mix(in srgb, var(--accent) 60%, transparent);
 }
+
 .nit-preset[aria-pressed="true"] .nit-preset-label {
   color: var(--text-primary);
 }
+
 .nit-preset[aria-pressed="true"] .nit-preset-desc {
   color: var(--text-secondary);
 }
+
 .nit-preset[aria-pressed="true"] .nit-preset-v {
   color: var(--accent);
 }
@@ -686,9 +755,11 @@
   background: color-mix(in srgb, #ffb347 22%, transparent);
   border-color: #ffb347;
 }
+
 .nit-preset[aria-pressed="true"][data-key="sdr"] .nit-preset-v {
   color: #b45309; /* dark amber — readable on light lilac */
 }
+
 [data-theme="dark"] .nit-preset[aria-pressed="true"][data-key="sdr"] .nit-preset-v {
   color: #fbbf24; /* bright amber — readable on dark plum */
 }
@@ -697,6 +768,7 @@
   background: color-mix(in srgb, var(--accent) 20%, transparent);
   border-color: var(--accent);
 }
+
 .nit-preset[aria-pressed="true"][data-key="bt2408"] .nit-preset-v {
   color: var(--accent);
 }
@@ -705,9 +777,11 @@
   background: color-mix(in srgb, #2ee0ff 18%, transparent);
   border-color: #2ee0ff;
 }
+
 .nit-preset[aria-pressed="true"][data-key="hdr10"] .nit-preset-v {
   color: #0369a1; /* dark cyan — readable on light */
 }
+
 [data-theme="dark"] .nit-preset[aria-pressed="true"][data-key="hdr10"] .nit-preset-v {
   color: #7dd3fc; /* bright cyan — readable on dark */
 }
@@ -716,9 +790,11 @@
   background: color-mix(in srgb, #ff5caa 20%, transparent);
   border-color: #ff5caa;
 }
+
 .nit-preset[aria-pressed="true"][data-key="dv"] .nit-preset-v {
   color: #be185d; /* dark magenta — readable on light */
 }
+
 [data-theme="dark"] .nit-preset[aria-pressed="true"][data-key="dv"] .nit-preset-v {
   color: #f9a8d4; /* bright pink — readable on dark */
 }
@@ -730,6 +806,7 @@
   text-transform: uppercase;
   color: var(--text-muted);
 }
+
 .nit-preset-v {
   font-family: var(--font-mono);
   font-size: 12px;
@@ -737,6 +814,7 @@
   color: var(--text-primary);
   font-variant-numeric: tabular-nums;
 }
+
 .nit-preset-desc {
   font-size: 9px;
   color: var(--text-muted);
@@ -764,6 +842,7 @@
   grid-template-columns: 1fr 1fr;
   gap: 8px;
 }
+
 .dir-btn {
   height: 46px;
   border: 1px solid var(--border-light);
@@ -779,10 +858,12 @@
   cursor: pointer;
   font-family: inherit;
 }
+
 .dir-btn:hover {
   border-color: var(--border);
   background: var(--bg-hover);
 }
+
 .dir-btn[aria-pressed="true"] {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 10%, var(--bg-app));
@@ -791,6 +872,7 @@
     0 0 0 1px var(--accent),
     0 0 20px -8px var(--accent);
 }
+
 .dir-arrow {
   font-family: var(--font-mono);
   font-size: 20px;
@@ -798,9 +880,11 @@
   line-height: 1;
   color: var(--text-muted);
 }
+
 .dir-btn[aria-pressed="true"] .dir-arrow {
   color: var(--accent);
 }
+
 .dir-label {
   font-size: 12px;
   letter-spacing: 0.02em;
@@ -815,6 +899,7 @@
   background: var(--bg-panel);
   overflow: hidden;
 }
+
 .timeline-preview-head {
   padding: 8px 14px;
   display: flex;
@@ -827,11 +912,13 @@
   border-bottom: 1px solid var(--border-light);
   background: var(--bg-secondary);
 }
+
 .timeline-list {
   padding: 4px 0;
   max-height: 280px;
   overflow-y: auto;
 }
+
 .timeline-row {
   display: grid;
   grid-template-columns: 32px 92px 92px 1fr;
@@ -842,6 +929,7 @@
   align-items: center;
   border-bottom: 1px solid color-mix(in srgb, var(--border-light) 50%, transparent);
 }
+
 .timeline-row:last-child {
   border-bottom: none;
 }
@@ -860,38 +948,47 @@
   padding: 6px 14px;
   border-bottom: 1px solid var(--border-light);
 }
+
 .timeline-row-header > span {
   color: var(--text-muted);
 }
+
 .timeline-row.unchanged {
   opacity: 0.55;
 }
+
 .timeline-row .idx {
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
+
 .timeline-row .t-orig {
   color: var(--text-muted);
   text-decoration: line-through;
+
   /* currentColor tracks --text-muted across themes, so the strike line
      is always as visible as the text it crosses — prior var(--text-faint)
      blended into --bg-panel in dark mode. */
-  text-decoration-color: currentColor;
+  text-decoration-color: currentcolor;
   text-decoration-thickness: 1.5px;
   font-variant-numeric: tabular-nums;
 }
+
 .timeline-row .t-new {
   color: var(--preview-shifted);
   font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
+
 .timeline-row.unchanged .t-orig {
   text-decoration: none;
 }
+
 .timeline-row.unchanged .t-new {
   color: var(--text-muted);
   font-weight: 400;
 }
+
 .timeline-row .txt {
   font-family: var(--font-sans);
   font-size: 12px;
@@ -906,6 +1003,7 @@
    Coverage bar is reserved for a future stage when we can report
    per-font glyph coverage from the Rust side.
    ───────────────────────────────────────────────────────────── */
+
 /* Fixed widths on cols 3–5 are deliberate: CSS Grid computes `auto`
    columns per-row, so a wide "— 1310 glyphs referenced" cell would
    make data rows' GLYPHS column start further right than the header's,
@@ -921,19 +1019,24 @@
   cursor: pointer;
   transition: background-color 0.15s;
 }
+
 .font-row:first-child {
   border-top: 0;
 }
+
 .font-row:hover {
   background: var(--bg-hover);
 }
+
 .font-row.missing {
   opacity: 0.6;
   cursor: not-allowed;
 }
+
 .font-row.missing:hover {
   background: transparent;
 }
+
 .font-name {
   font-size: 13px;
   font-weight: 500;
@@ -943,6 +1046,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
 .font-stat {
   font-family: var(--font-mono);
   font-size: 11px;
@@ -969,6 +1073,7 @@
   border-bottom: 1px solid var(--border-light);
   cursor: default;
 }
+
 .font-row-header:hover {
   background: var(--bg-secondary);
 }
@@ -987,14 +1092,17 @@
   font-family: var(--font-mono);
   white-space: nowrap;
 }
+
 .badge-green {
   background: var(--badge-green-bg);
   color: var(--badge-green-text);
 }
+
 .badge-red {
   background: var(--badge-red-bg);
   color: var(--badge-red-text);
 }
+
 .badge-mute {
   background: color-mix(in srgb, var(--text-muted) 22%, transparent);
   color: var(--text-secondary);
@@ -1008,20 +1116,22 @@
   inset: 0;
   background: color-mix(in srgb, var(--bg-app) 55%, transparent);
   backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
   display: grid;
   place-items: center;
   z-index: 50;
   animation: modal-fade-in 0.15s ease-out;
 }
+
 @keyframes modal-fade-in {
   from {
     opacity: 0;
   }
+
   to {
     opacity: 1;
   }
 }
+
 .modal {
   width: 460px;
   max-width: calc(100% - 32px);
@@ -1030,23 +1140,26 @@
   border: 1px solid var(--border);
   border-radius: 12px;
   box-shadow:
-    0 24px 60px -10px rgba(0, 0, 0, 0.4),
+    0 24px 60px -10px rgb(0 0 0 / 40%),
     0 0 80px -20px var(--accent);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   animation: modal-pop 0.2s cubic-bezier(0.2, 0.9, 0.3, 1.2);
 }
+
 @keyframes modal-pop {
   from {
     opacity: 0;
     transform: translateY(6px) scale(0.98);
   }
+
   to {
     opacity: 1;
     transform: none;
   }
 }
+
 .modal-head {
   padding: 16px 20px 12px;
   display: flex;
@@ -1055,21 +1168,25 @@
   border-bottom: 1px solid var(--border-light);
   flex-shrink: 0;
 }
+
 .modal-head-text {
   flex: 1;
   min-width: 0;
 }
+
 .modal-title {
   font-size: 15px;
   font-weight: 600;
   color: var(--text-primary);
   letter-spacing: -0.01em;
 }
+
 .modal-sub {
   font-size: 12px;
   color: var(--text-secondary);
   margin-top: 2px;
 }
+
 .modal-close {
   width: 28px;
   height: 28px;
@@ -1080,13 +1197,17 @@
   cursor: pointer;
   border: 0;
   background: none;
-  transition: background-color 0.15s, color 0.15s;
+  transition:
+    background-color 0.15s,
+    color 0.15s;
   flex-shrink: 0;
 }
+
 .modal-close:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
 }
+
 .modal-body {
   padding: 12px 20px 16px;
   display: flex;
@@ -1109,19 +1230,24 @@
   border-radius: var(--radius-lg);
   background: var(--bg-app);
   text-align: left;
-  transition: background-color 0.15s, border-color 0.15s;
+  transition:
+    background-color 0.15s,
+    border-color 0.15s;
   cursor: pointer;
   font-family: inherit;
   width: 100%;
 }
+
 .modal-opt:hover:not(:disabled) {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 6%, var(--bg-app));
 }
+
 .modal-opt:disabled {
   cursor: not-allowed;
   opacity: 0.5;
 }
+
 .modal-opt-icon {
   width: 40px;
   height: 40px;
@@ -1132,14 +1258,17 @@
   place-items: center;
   flex-shrink: 0;
 }
+
 .modal-opt-text {
   min-width: 0;
 }
+
 .modal-opt-title {
   font-size: 14px;
   font-weight: 500;
   color: var(--text-primary);
 }
+
 .modal-opt-sub {
   font-size: 12px;
   color: var(--text-secondary);

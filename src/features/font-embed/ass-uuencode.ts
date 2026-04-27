@@ -29,9 +29,7 @@ const MAX_FONT_DATA_SIZE = 50 * 1024 * 1024;
  */
 export function assUuencode(data: Uint8Array): string[] {
   if (data.length > MAX_FONT_DATA_SIZE) {
-    throw new Error(
-      `Font data too large: ${data.length} bytes (max ${MAX_FONT_DATA_SIZE})`
-    );
+    throw new Error(`Font data too large: ${data.length} bytes (max ${MAX_FONT_DATA_SIZE})`);
   }
   const lines: string[] = [];
   let currentLine = "";

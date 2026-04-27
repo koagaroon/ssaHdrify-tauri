@@ -26,10 +26,7 @@ function uuencode(data) {
 
     const c0 = String.fromCharCode((b0 >> 2) + 33);
     const c1 = String.fromCharCode((((b0 & 0x03) << 4) | (b1 >> 4)) + 33);
-    const c2 =
-      remaining > 1
-        ? String.fromCharCode((((b1 & 0x0f) << 2) | (b2 >> 6)) + 33)
-        : "";
+    const c2 = remaining > 1 ? String.fromCharCode((((b1 & 0x0f) << 2) | (b2 >> 6)) + 33) : "";
     const c3 = remaining > 2 ? String.fromCharCode((b2 & 0x3f) + 33) : "";
 
     line += c0 + c1 + c2 + c3;
@@ -94,4 +91,6 @@ writeFileSync(outPath, output, "utf-8");
 
 console.log(`\nOutput: ${outPath}`);
 console.log(`Font entries: ${fontEntries.length}`);
-console.log(`\nTo verify: play the video with this subtitle in mpv and check if fonts render correctly.`);
+console.log(
+  `\nTo verify: play the video with this subtitle in mpv and check if fonts render correctly.`
+);

@@ -1,0 +1,31 @@
+{
+  "extends": "stylelint-config-standard",
+  "rules": {
+    "no-descending-specificity": null,
+    "at-rule-no-unknown": [
+      true,
+      {
+        "ignoreAtRules": [
+          "tailwind",
+          "apply",
+          "config",
+          "theme",
+          "screen",
+          "layer",
+          "variants",
+          "responsive",
+          "source",
+          "utility",
+          "custom-variant",
+          "reference"
+        ]
+      }
+    ],
+    "selector-pseudo-class-no-unknown": [
+      true,
+      {
+        "ignorePseudoClasses": ["lang", "global", "local"]
+      }
+    ]
+  }
+}

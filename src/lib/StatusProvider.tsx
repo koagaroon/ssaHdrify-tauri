@@ -6,12 +6,7 @@
  * See StatusContext.tsx for the context / hook / type definitions.
  */
 import { useCallback, useMemo, useState, type ReactNode } from "react";
-import {
-  StatusContext,
-  DEFAULT_STATUSES,
-  type Status,
-  type StatusTab,
-} from "./StatusContext";
+import { StatusContext, DEFAULT_STATUSES, type Status, type StatusTab } from "./StatusContext";
 
 export default function StatusProvider({ children }: { children: ReactNode }) {
   const [statuses, setStatuses] = useState<Record<StatusTab, Status>>(DEFAULT_STATUSES);
@@ -27,11 +22,7 @@ export default function StatusProvider({ children }: { children: ReactNode }) {
       const sameProgress =
         current.progress?.processed === status.progress?.processed &&
         current.progress?.total === status.progress?.total;
-      if (
-        current.kind === status.kind &&
-        current.message === status.message &&
-        sameProgress
-      ) {
+      if (current.kind === status.kind && current.message === status.message && sameProgress) {
         return prev;
       }
       return { ...prev, [tab]: status };

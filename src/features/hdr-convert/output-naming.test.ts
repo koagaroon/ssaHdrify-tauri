@@ -83,42 +83,30 @@ describe("resolveOutputPath — security", () => {
 
 describe("resolveOutputPath — {video_name} and {lang} tokens", () => {
   it("substitutes {video_name} from options, stripping extension", () => {
-    const result = resolveOutputPath(
-      `${BASE}/EP01.srt`,
-      "{video_name}.ass",
-      "PQ",
-      { videoName: "Show.S01E01.1080p.mkv" }
-    );
+    const result = resolveOutputPath(`${BASE}/EP01.srt`, "{video_name}.ass", "PQ", {
+      videoName: "Show.S01E01.1080p.mkv",
+    });
     expect(result).toContain("Show.S01E01.1080p.ass");
   });
 
   it("accepts {video_name} without extension", () => {
-    const result = resolveOutputPath(
-      `${BASE}/EP01.srt`,
-      "{video_name}.ass",
-      "PQ",
-      { videoName: "Show.S01E01" }
-    );
+    const result = resolveOutputPath(`${BASE}/EP01.srt`, "{video_name}.ass", "PQ", {
+      videoName: "Show.S01E01",
+    });
     expect(result).toContain("Show.S01E01.ass");
   });
 
   it("auto-extracts {lang} from filename's last dotted segment", () => {
-    const result = resolveOutputPath(
-      `${BASE}/movie.zh.srt`,
-      "{name}.{lang}.ass",
-      "PQ"
-    );
+    const result = resolveOutputPath(`${BASE}/movie.zh.srt`, "{name}.{lang}.ass", "PQ");
     // `{name}` resolves to `movie.zh` (full stem); `{lang}` resolves to `zh`
     expect(result).toContain("movie.zh.zh.ass");
   });
 
   it("explicit lang option overrides filename extraction", () => {
-    const result = resolveOutputPath(
-      `${BASE}/movie.en.srt`,
-      "{video_name}.{lang}.ass",
-      "PQ",
-      { videoName: "Movie", lang: "zh" }
-    );
+    const result = resolveOutputPath(`${BASE}/movie.en.srt`, "{video_name}.{lang}.ass", "PQ", {
+      videoName: "Movie",
+      lang: "zh",
+    });
     expect(result).toContain("Movie.zh.ass");
   });
 
@@ -135,32 +123,22 @@ describe("resolveOutputPath — {video_name} and {lang} tokens", () => {
   });
 
   it("recognizes common language tags case-insensitively", () => {
-    const result = resolveOutputPath(
-      `${BASE}/EP01.JA.srt`,
-      "{video_name}.{lang}.ass",
-      "PQ",
-      { videoName: "Show.EP01" }
-    );
+    const result = resolveOutputPath(`${BASE}/EP01.JA.srt`, "{video_name}.{lang}.ass", "PQ", {
+      videoName: "Show.EP01",
+    });
     expect(result).toContain("Show.EP01.ja.ass");
   });
 
   it("returns empty {lang} for filenames without dotted segments", () => {
-    const result = resolveOutputPath(
-      `${BASE}/EP01.srt`,
-      "{video_name}.{lang}.ass",
-      "PQ",
-      { videoName: "Show" }
-    );
+    const result = resolveOutputPath(`${BASE}/EP01.srt`, "{video_name}.{lang}.ass", "PQ", {
+      videoName: "Show",
+    });
     // No {lang} match, no explicit option → empty → collapse
     expect(result).toContain("Show.ass");
   });
 
   it("treats {video_name} as empty when option omitted, collapsing dots", () => {
-    const result = resolveOutputPath(
-      `${BASE}/EP01.srt`,
-      "{video_name}.{name}.ass",
-      "PQ"
-    );
+    const result = resolveOutputPath(`${BASE}/EP01.srt`, "{video_name}.{name}.ass", "PQ");
     // videoStem="" + "." + "EP01" + ".ass" → ".EP01.ass" → no collapse needed
     // (the leading dot is preserved as a hidden-file marker)
     expect(result).toContain(".EP01.ass");
@@ -168,12 +146,9 @@ describe("resolveOutputPath — {video_name} and {lang} tokens", () => {
 
   it("paired Tab 4 default template produces clean output", () => {
     // Common Tab 4 case: pick one .zh.ass sub for a paired video.
-    const result = resolveOutputPath(
-      `${BASE}/EP01.zh.ass`,
-      "{video_name}.{lang}.ass",
-      "PQ",
-      { videoName: "Show.S01E01.1080p.mkv" }
-    );
+    const result = resolveOutputPath(`${BASE}/EP01.zh.ass`, "{video_name}.{lang}.ass", "PQ", {
+      videoName: "Show.S01E01.1080p.mkv",
+    });
     expect(result).toContain("Show.S01E01.1080p.zh.ass");
   });
 });

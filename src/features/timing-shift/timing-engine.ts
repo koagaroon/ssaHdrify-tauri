@@ -98,4 +98,3 @@ export function shiftSubtitles(content: string, options: ShiftOptions): ShiftRes
     captionCount: captions.length,
   };
 }
-

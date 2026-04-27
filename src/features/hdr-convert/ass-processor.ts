@@ -191,9 +191,7 @@ export function processAssContent(
   // defense-in-depth budget for internally-generated content (e.g., SRT
   // expanded into ASS before re-processing).
   if (content.length > 100_000_000) {
-    throw new Error(
-      `File too large: ${(content.length / 1_000_000).toFixed(1)} MB (max 100 MB)`
-    );
+    throw new Error(`File too large: ${(content.length / 1_000_000).toFixed(1)} MB (max 100 MB)`);
   }
 
   // Preserve the original line ending style

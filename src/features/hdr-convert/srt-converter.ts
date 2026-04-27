@@ -127,7 +127,8 @@ export function buildAssDocument(
   // "Arial" if sanitization empties the string — an empty Fontname field
   // produces a malformed Style CSV that ASS renderers treat unpredictably.
   // eslint-disable-next-line no-control-regex -- intentional: sanitize control chars from subtitle font names
-  const safeFontName = style.fontName.replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029,{}\\:]/g, "") || "Arial";
+  const fontNameSanitizer = /[\x00-\x1f\x7f-\x9f\u2028\u2029,{}\\:]/g;
+  const safeFontName = style.fontName.replace(fontNameSanitizer, "") || "Arial";
   lines.push(
     `Style: Default,${safeFontName},${style.fontSize},${style.primaryColor},&H000000FF,${style.outlineColor},&H00000000,0,0,0,0,100,100,0,0,1,${style.outlineWidth},${style.shadowDepth},2,10,10,10,1`
   );

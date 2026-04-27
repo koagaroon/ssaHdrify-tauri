@@ -478,38 +478,35 @@ export default function FontEmbed() {
               {fonts.map((info) => {
                 const selKey = fontSelectionKey(info);
                 return (
-                <label
-                  key={selKey}
-                  className={"font-row" + (!info.filePath ? " missing" : "")}
-                >
-                <input
-                  type="checkbox"
-                  id={`font-row-${selKey}`}
-                  name={`font-${selKey}`}
-                  checked={selected.has(selKey)}
-                  onChange={() => toggleSelect(selKey)}
-                  disabled={!info.filePath || embedding}
-                  className="rounded"
-                  style={{
-                    background: "var(--bg-input)",
-                    borderColor: "var(--border)",
-                  }}
-                />
-                <span className="font-name" title={formatFontLabel(info)}>
-                  {formatFontLabel(info)}
-                </span>
-                <span className="font-stat">{t("fonts_glyphs", info.glyphCount)}</span>
-                {info.source ? (
-                  <span className="badge badge-mute">
-                    {t(info.source === "local" ? "badge_local" : "badge_system")}
-                  </span>
-                ) : (
-                  <span />
-                )}
-                <span className={"badge " + (info.filePath ? "badge-green" : "badge-red")}>
-                  {info.filePath ? t("fonts_found") : t("fonts_missing")}
-                </span>
-              </label>
+                  <label key={selKey} className={"font-row" + (!info.filePath ? " missing" : "")}>
+                    <input
+                      type="checkbox"
+                      id={`font-row-${selKey}`}
+                      name={`font-${selKey}`}
+                      checked={selected.has(selKey)}
+                      onChange={() => toggleSelect(selKey)}
+                      disabled={!info.filePath || embedding}
+                      className="rounded"
+                      style={{
+                        background: "var(--bg-input)",
+                        borderColor: "var(--border)",
+                      }}
+                    />
+                    <span className="font-name" title={formatFontLabel(info)}>
+                      {formatFontLabel(info)}
+                    </span>
+                    <span className="font-stat">{t("fonts_glyphs", info.glyphCount)}</span>
+                    {info.source ? (
+                      <span className="badge badge-mute">
+                        {t(info.source === "local" ? "badge_local" : "badge_system")}
+                      </span>
+                    ) : (
+                      <span />
+                    )}
+                    <span className={"badge " + (info.filePath ? "badge-green" : "badge-red")}>
+                      {info.filePath ? t("fonts_found") : t("fonts_missing")}
+                    </span>
+                  </label>
                 );
               })}
             </div>

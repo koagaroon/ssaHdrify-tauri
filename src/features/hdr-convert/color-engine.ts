@@ -29,7 +29,7 @@ const HLG_GAMMA = 1.2;
 
 /** Rec.2020 luminance coefficients (BT.2020 / BT.2100) */
 const REC2020_LUM_R = 0.2627;
-const REC2020_LUM_G = 0.6780;
+const REC2020_LUM_G = 0.678;
 const REC2020_LUM_B = 0.0593;
 
 /** ARIB STD-B67 OETF constants */

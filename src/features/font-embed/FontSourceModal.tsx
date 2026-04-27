@@ -262,12 +262,7 @@ export default function FontSourceModal(props: Props) {
           )}
 
           {/* Option cards — two picker entry points */}
-          <button
-            type="button"
-            onClick={handleAddFolder}
-            disabled={scanning}
-            className="modal-opt"
-          >
+          <button type="button" onClick={handleAddFolder} disabled={scanning} className="modal-opt">
             <span className="modal-opt-icon" aria-hidden="true">
               <svg
                 width="20"
@@ -289,12 +284,7 @@ export default function FontSourceModal(props: Props) {
               <div className="modal-opt-sub">{t("font_sources_add_folder_sub")}</div>
             </div>
           </button>
-          <button
-            type="button"
-            onClick={handleAddFiles}
-            disabled={scanning}
-            className="modal-opt"
-          >
+          <button type="button" onClick={handleAddFiles} disabled={scanning} className="modal-opt">
             <span className="modal-opt-icon" aria-hidden="true">
               <svg
                 width="20"

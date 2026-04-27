@@ -1,4 +1,4 @@
-@import "tailwindcss";
+@import url("tailwindcss");
 
 /* ── UI face — Inter (English body + display) ──────────────
    Variable font, weights 100–900 in a single woff2. Primary
@@ -9,7 +9,7 @@
    SIL Open Font License 1.1.
    Bundled per OFL-1.1; see src/assets/fonts/inter/LICENSE.txt. */
 @font-face {
-  font-family: "Inter";
+  font-family: Inter;
   src: url("./assets/fonts/inter/InterVariable.woff2") format("woff2");
   font-weight: 100 900;
   font-style: normal;
@@ -52,12 +52,12 @@
 
 :root {
   /* Surfaces — lilac rising 0→5 */
-  --bg-app: #ffffff;
+  --bg-app: #fff;
   --bg-header: #ebe4f5;
   --bg-secondary: #d8cbeb;
   --bg-panel: #e0d5f0;
   --bg-input: #c2b0dd;
-  --bg-hover: rgba(109, 40, 217, 0.1);
+  --bg-hover: rgb(109 40 217 / 10%);
 
   /* Text — near-black with violet undertone */
   --text-primary: #1e1a2e;
@@ -67,7 +67,7 @@
 
   /* Structure */
   --border: #9d85c4;
-  --border-light: rgba(157, 133, 196, 0.5);
+  --border-light: rgb(157 133 196 / 50%);
 
   /* Hero accent — deep violet */
   --accent: #6d28d9;
@@ -82,9 +82,9 @@
   --info: #6b6380;
 
   /* Status badges */
-  --badge-green-bg: rgba(4, 120, 87, 0.1);
+  --badge-green-bg: rgb(4 120 87 / 10%);
   --badge-green-text: #047857;
-  --badge-red-bg: rgba(185, 28, 28, 0.1);
+  --badge-red-bg: rgb(185 28 28 / 10%);
   --badge-red-text: #b91c1c;
 
   /* Scrollbar */
@@ -100,8 +100,8 @@
 
   /* Misc */
   --preview-shifted: #6d28d9;
-  --cancel-bg: rgba(185, 28, 28, 0.08);
-  --cancel-bg-hover: rgba(185, 28, 28, 0.15);
+  --cancel-bg: rgb(185 28 28 / 8%);
+  --cancel-bg-hover: rgb(185 28 28 / 15%);
   --cancel-text: #b91c1c;
   --progress-bg: #c2b0dd;
   --progress-fill: #6d28d9;
@@ -113,7 +113,7 @@
      Inter covers Latin/Greek/Cyrillic; CJK fallback is the OS font. */
   --font-sans: "Inter", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
   --font-display: "Inter", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", Consolas, "Cascadia Mono", "Liberation Mono", monospace;
+  --font-mono: ui-monospace, "SF Mono", consolas, "Cascadia Mono", "Liberation Mono", monospace;
 
   /* Type scale */
   --text-xs: 12px;
@@ -140,14 +140,10 @@
   --radius-lg: 8px;
 
   /* Shadow (popover / menu) */
-  --shadow-popover:
-    0 10px 15px -3px rgba(0, 0, 0, 0.1),
-    0 4px 6px -4px rgba(0, 0, 0, 0.1);
+  --shadow-popover: 0 10px 15px -3px rgb(0 0 0 / 10%), 0 4px 6px -4px rgb(0 0 0 / 10%);
 
   /* Theme swap transition */
-  --transition-theme:
-    background-color 0.2s,
-    color 0.2s;
+  --transition-theme: background-color 0.2s, color 0.2s;
 }
 
 [data-theme="dark"] {
@@ -167,7 +163,7 @@
 
   /* Structure */
   --border: #7c63a8;
-  --border-light: rgba(124, 99, 168, 0.5);
+  --border-light: rgb(124 99 168 / 50%);
 
   /* Hero accent — amethyst */
   --accent: #a78bfa;
@@ -182,9 +178,9 @@
   --info: #a5a0b5;
 
   /* Status badges */
-  --badge-green-bg: rgba(134, 239, 172, 0.14);
+  --badge-green-bg: rgb(134 239 172 / 14%);
   --badge-green-text: #86efac;
-  --badge-red-bg: rgba(252, 165, 165, 0.14);
+  --badge-red-bg: rgb(252 165 165 / 14%);
   --badge-red-text: #fca5a5;
 
   /* Scrollbar */
@@ -200,8 +196,8 @@
 
   /* Misc */
   --preview-shifted: #c4b5fd;
-  --cancel-bg: rgba(252, 165, 165, 0.09);
-  --cancel-bg-hover: rgba(252, 165, 165, 0.18);
+  --cancel-bg: rgb(252 165 165 / 9%);
+  --cancel-bg-hover: rgb(252 165 165 / 18%);
   --cancel-text: #fca5a5;
   --progress-bg: #3a2a5c;
   --progress-fill: #a78bfa;
@@ -237,13 +233,16 @@ body,
 ::-webkit-scrollbar {
   width: 8px;
 }
+
 ::-webkit-scrollbar-track {
   background: var(--scrollbar-track);
 }
+
 ::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb);
   border-radius: 4px;
 }
+
 ::-webkit-scrollbar-thumb:hover {
   background: var(--scrollbar-thumb-hover);
 }
@@ -256,12 +255,11 @@ select {
 
 input[type="number"]::-webkit-inner-spin-button,
 input[type="number"]::-webkit-outer-spin-button {
-  -webkit-appearance: none;
   appearance: none;
   margin: 0;
 }
+
 input[type="number"] {
-  -moz-appearance: textfield;
   appearance: textfield;
 }
 

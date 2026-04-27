@@ -327,11 +327,7 @@ export default function HdrConvert() {
            When >1 file is selected, the filename area becomes a clickable
            dropdown showing all selected files (max ~5 rows, scroll beyond). */}
       <div className="flex items-center gap-2">
-        <div
-          ref={fileContainerRef}
-          className="flex-1 min-w-0"
-          style={{ position: "relative" }}
-        >
+        <div ref={fileContainerRef} className="flex-1 min-w-0" style={{ position: "relative" }}>
           {hdrFiles && hdrFiles.filePaths.length > 1 ? (
             <button
               type="button"

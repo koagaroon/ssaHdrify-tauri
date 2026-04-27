@@ -251,9 +251,7 @@ export function resolveOutputPath(
   const isLongLocalPath = outputPath.startsWith("//?/") && !outputPath.startsWith("//?/UNC/");
   const maxPathLen = isLongLocalPath ? 32767 : 260;
   if (outputPath.length > maxPathLen) {
-    throw new Error(
-      `Output path too long (${outputPath.length} chars, max ${maxPathLen})`
-    );
+    throw new Error(`Output path too long (${outputPath.length} chars, max ${maxPathLen})`);
   }
 
   // Safety: reject path traversal — check unconditionally
