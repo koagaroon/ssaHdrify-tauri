@@ -11,6 +11,7 @@ import {
   type FileAnalysis,
   type FontInfo,
   type EmbedProgress,
+  type SystemFontResolution,
 } from "./font-embedder";
 import { ensureLoaded, fontKeyLabel, type FontUsage } from "./font-collector";
 import { useI18n } from "../../i18n/useI18n";
@@ -179,6 +180,12 @@ export default function FontEmbed() {
         if (gen !== pickGenRef.current) return;
 
         const cache = new Map<string, FileAnalysis>();
+        // Shared system-font cache for the whole batch — without this
+        // every file repeats the same findSystemFont IPC for the same
+        // missing font names, blowing up the Rust log with N×M warnings
+        // and adding pointless latency to ingest. One cache per ingest
+        // run keeps it scoped and disposable.
+        const sysCache = new Map<string, SystemFontResolution>();
         for (const path of paths) {
           if (gen !== pickGenRef.current) return;
           let content: string;
@@ -190,7 +197,7 @@ export default function FontEmbed() {
             continue;
           }
           if (gen !== pickGenRef.current) return;
-          const analyzed = await analyzeFonts(content, userFontMap);
+          const analyzed = await analyzeFonts(content, userFontMap, sysCache);
           if (gen !== pickGenRef.current) return;
           cache.set(path, { content, infos: analyzed.infos, usages: analyzed.usages });
         }
@@ -270,9 +277,12 @@ export default function FontEmbed() {
       const map = buildUserFontMap(nextSources.flatMap((src) => src.entries));
       try {
         const newCache = new Map<string, FileAnalysis>();
+        // Same batch-shared cache as ingestPaths — one round of system
+        // lookups per source change, not per (file × font).
+        const sysCache = new Map<string, SystemFontResolution>();
         for (const [path, prev] of cache) {
           if (gen !== pickGenRef.current) return;
-          const analyzed = await analyzeFonts(prev.content, map);
+          const analyzed = await analyzeFonts(prev.content, map, sysCache);
           if (gen !== pickGenRef.current) return;
           newCache.set(path, {
             content: prev.content,

@@ -36,6 +36,12 @@ export interface FontInfo {
   source: FontProvenance | null;
 }
 
+/** Resolution-only fields for a system-font lookup — everything in
+ *  FontInfo except the per-file `key` and `glyphCount`. Used as the
+ *  value type of the system-font cache so a single (family, bold,
+ *  italic) lookup can be reused across every file in a batch. */
+export type SystemFontResolution = Pick<FontInfo, "filePath" | "fontIndex" | "error" | "source">;
+
 /**
  * Map key for the user font map: "family|bold|italic" with family lowercased.
  * Kept as a plain string so React state can memo-compare equality cheaply and
@@ -83,7 +89,8 @@ export function buildUserFontMap(faces: LocalFontEntry[]): Map<string, LocalFont
  */
 export async function analyzeFonts(
   assContent: string,
-  userFontMap?: Map<string, LocalFontEntry>
+  userFontMap?: Map<string, LocalFontEntry>,
+  systemFontCache?: Map<string, SystemFontResolution>
 ): Promise<{ infos: FontInfo[]; usages: FontUsage[] }> {
   await ensureCollectorLoaded();
 
@@ -120,28 +127,41 @@ export async function analyzeFonts(
       continue;
     }
 
+    // System lookup — first check the optional batch-shared cache so the
+    // same (family, bold, italic) doesn't trigger N findSystemFont IPC
+    // calls for an N-file batch. Cache holds both successful matches AND
+    // misses; reusing a known miss avoids re-running a guaranteed-failing
+    // lookup on every subsequent file that references the same font.
+    const cached = systemFontCache?.get(key);
+    if (cached) {
+      infos.push({ ...base, ...cached });
+      continue;
+    }
+
     try {
       const result = await findSystemFont(usage.key.family, usage.key.bold, usage.key.italic);
       if (isDev) console.debug(`[ssaHdrify] '${usage.key.family}' → SYSTEM ${result.path}`);
-      infos.push({
-        ...base,
+      const resolution: SystemFontResolution = {
         filePath: result.path,
         fontIndex: result.index,
         error: null,
         source: "system",
-      });
+      };
+      systemFontCache?.set(key, resolution);
+      infos.push({ ...base, ...resolution });
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
       if (isDev) {
         console.debug(`[ssaHdrify] '${usage.key.family}' → MISS (key='${key}', reason=${reason})`);
       }
-      infos.push({
-        ...base,
+      const resolution: SystemFontResolution = {
         filePath: null,
         fontIndex: 0,
         error: reason,
         source: null,
-      });
+      };
+      systemFontCache?.set(key, resolution);
+      infos.push({ ...base, ...resolution });
     }
   }
 

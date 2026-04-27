@@ -16,8 +16,16 @@ pub fn run() {
             } else {
                 log::LevelFilter::Warn
             };
-            app.handle()
-                .plugin(tauri_plugin_log::Builder::default().level(level).build())?;
+            // UseLocal so terminal log timestamps match the user's wall
+            // clock instead of UTC — at UTC+8 the default-UTC output
+            // looks 8 hours off, which reads as a real bug at first
+            // glance even though the times are technically correct.
+            app.handle().plugin(
+                tauri_plugin_log::Builder::default()
+                    .level(level)
+                    .timezone_strategy(tauri_plugin_log::TimezoneStrategy::UseLocal)
+                    .build(),
+            )?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

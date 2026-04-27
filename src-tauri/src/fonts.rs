@@ -134,7 +134,12 @@ pub fn find_system_font(
         .map_err(|e| {
             // Log the detailed error server-side; return a generic message
             // to the frontend so OS-level paths never surface in user toasts.
-            log::warn!("font lookup failed for '{family}' (bold={bold}, italic={italic}): {e}");
+            // INFO not WARN: a missed system lookup is normal flow when the
+            // user hasn't picked local font sources yet, and the frontend
+            // surfaces "Missing" badges per font anyway. Bumping to warn
+            // would spam dev logs every time a batch is analyzed before
+            // sources are added; release builds (Warn+) hide info entirely.
+            log::info!("font lookup failed for '{family}' (bold={bold}, italic={italic}): {e}");
             format!("Font not found: {family} (bold={bold}, italic={italic})")
         })?;
 
