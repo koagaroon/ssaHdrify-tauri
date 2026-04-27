@@ -98,7 +98,14 @@ export default function HdrConvert() {
   const [dropActive, setDropActive] = useState(false);
   const logIdRef = useRef(0);
   const cancelRef = useRef(false);
-  const logEndRef = useRef<HTMLDivElement>(null);
+  // Scroll container ref — the inner overflow-y-auto div of the Log
+  // section. We set scrollTop directly on it to follow new entries
+  // instead of using `scrollIntoView`, which in Chromium walks up the
+  // ancestor chain and scrolls every scrollable container — including
+  // the .window itself, despite overflow: hidden, because programmatic
+  // scrolls bypass the user-driven block. That bug clipped the
+  // titlebar / app-header / file strip during batch conversion.
+  const logScrollRef = useRef<HTMLDivElement>(null);
   const fileContainerRef = useRef<HTMLDivElement>(null);
   const dropZoneRef = useRef<HTMLDivElement>(null);
 
@@ -158,8 +165,14 @@ export default function HdrConvert() {
       // Trim to 200 entries max
       return next.length > 200 ? next.slice(-200) : next;
     });
-    // Auto-scroll
-    setTimeout(() => logEndRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
+    // Auto-scroll the log container only — set scrollTop directly so the
+    // scroll never propagates up the ancestor chain. `scrollIntoView`
+    // would scroll .window too in Chromium even though .window has
+    // overflow: hidden, hiding the titlebar / header during batch runs.
+    setTimeout(() => {
+      const el = logScrollRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
+    }, 50);
   }, []);
 
   const handleBrightnessChange = (value: string) => {
@@ -851,7 +864,10 @@ export default function HdrConvert() {
               {t("log_clear")}
             </button>
           </div>
-          <div className="max-h-48 overflow-y-auto p-3 font-mono text-xs space-y-0.5">
+          <div
+            ref={logScrollRef}
+            className="max-h-48 overflow-y-auto p-3 font-mono text-xs space-y-0.5"
+          >
             {logs.map((log) => (
               <div
                 key={log.id}
@@ -866,7 +882,6 @@ export default function HdrConvert() {
                 {log.text}
               </div>
             ))}
-            <div ref={logEndRef} />
           </div>
         </div>
       )}
