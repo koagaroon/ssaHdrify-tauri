@@ -1,23 +1,19 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
-import {
-  pickSubtitleFile,
-  pickSavePath,
-  readText,
-  writeText,
-  fileNameFromPath,
-} from "../../lib/tauri-api";
+import { pickSubtitleFiles, readText, writeText, fileNameFromPath } from "../../lib/tauri-api";
+import { ask } from "@tauri-apps/plugin-dialog";
 import {
   shiftSubtitles,
   formatDisplayTime,
   parseDisplayTime,
-  type ShiftResult,
+  deriveShiftedPath,
   type PreviewEntry,
 } from "./timing-engine";
 import { useI18n } from "../../i18n/useI18n";
 import { useFileContext } from "../../lib/FileContext";
-import { TAB_LABEL_KEYS } from "../../lib/tab-labels";
 import type { Status } from "../../lib/StatusContext";
 import { useTabStatus } from "../../lib/useTabStatus";
+import { useFolderDrop } from "../../lib/useFolderDrop";
+import { countExistingFiles } from "../../lib/output-collisions";
 
 type Unit = "ms" | "s";
 type Direction = "slower" | "faster";
@@ -25,49 +21,73 @@ type Direction = "slower" | "faster";
 /** Cap to ±1 year to prevent integer precision loss for extreme inputs. */
 const MAX_OFFSET_MS = 365 * 24 * 3600 * 1000;
 
+interface LogEntry {
+  id: number;
+  text: string;
+  type: "info" | "error" | "success";
+}
+
+// Subtitle extensions Time Shift accepts. Used by the folder-drop filter
+// to keep videos and unrelated files out of the batch when a user drops
+// a whole show folder.
+const SUBTITLE_EXTS = new Set(["ass", "ssa", "srt", "vtt", "sub", "sbv", "lrc"]);
+
+function fileNameHasSubtitleExt(name: string): boolean {
+  const dot = name.lastIndexOf(".");
+  if (dot < 0) return false;
+  return SUBTITLE_EXTS.has(name.slice(dot + 1).toLowerCase());
+}
+
 export default function TimingShift() {
   const { t } = useI18n();
-  const { timingFile, setTimingFile, clearFile, isFileInUse } = useFileContext();
+  const { timingFiles, setTimingFiles, clearFile, filterAvailablePaths } = useFileContext();
 
   const [detectedFormat, setDetectedFormat] = useState<string>("");
-
   const [offsetValue, setOffsetValue] = useState(200);
   const [unit, setUnit] = useState<Unit>("ms");
   const [direction, setDirection] = useState<Direction>("slower");
-
   const [useThreshold, setUseThreshold] = useState(false);
   const [thresholdText, setThresholdText] = useState("00:05:00.000");
-
   const [preview, setPreview] = useState<PreviewEntry[]>([]);
   const [captionCount, setCaptionCount] = useState(0);
-  const [status, setStatus] = useState<string>("");
-  const [isError, setIsError] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [lastActionResult, setLastActionResult] = useState<"success" | "error" | null>(null);
+  // Same shape as HdrConvert — "cancelled" is its own visible state so
+  // the footer and log can both acknowledge that the user stepped back
+  // (overwrite-confirm dismissed OR mid-batch cancel button).
+  const [lastActionResult, setLastActionResult] = useState<
+    "success" | "error" | "cancelled" | null
+  >(null);
+  const [progress, setProgress] = useState<{ processed: number; total: number } | null>(null);
+  const [dropActive, setDropActive] = useState(false);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [showFileList, setShowFileList] = useState(false);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const pickGenRef = useRef(0);
+  const cancelRef = useRef(false);
+  const logIdRef = useRef(0);
+  const dropZoneRef = useRef<HTMLDivElement>(null);
+  // Scroll container for the log — see HdrConvert for the rationale
+  // behind avoiding scrollIntoView (it walks ancestors and can scroll
+  // .window past the titlebar in Chromium).
+  const logScrollRef = useRef<HTMLDivElement>(null);
+  const fileContainerRef = useRef<HTMLDivElement>(null);
 
-  // Memoized derived values — prevents debounce effect from resetting on unrelated state updates
   const effectiveOffsetMs = useMemo(() => {
     const base = unit === "s" ? offsetValue * 1000 : offsetValue;
     const clamped = Math.max(-MAX_OFFSET_MS, Math.min(MAX_OFFSET_MS, base));
     return direction === "faster" ? -clamped : clamped;
   }, [unit, offsetValue, direction]);
 
-  // Returns number when valid, null when invalid or disabled.
-  // Consistently null (not undefined) so all guards can use strict === null.
   const thresholdMs = useMemo(
     () => (useThreshold ? parseDisplayTime(thresholdText) : null),
     [useThreshold, thresholdText]
   );
   const thresholdInvalid = useThreshold && thresholdMs === null;
 
-  // Last caption's START time — shiftSubtitle uses `c.start >= threshold` to
-  // decide which captions move, so a threshold in the gap between the last
-  // caption's start and end still produces zero shifts. Comparing against
-  // maxCaptionStart rather than maxCaptionEnd makes the warning fire in that
-  // gap window too, matching the actual shift semantics users observe.
+  // Last caption's START time — shiftSubtitle uses `c.start >= threshold`,
+  // so a threshold past the last START produces zero shifts even if it
+  // falls before the last caption's END.
   const maxCaptionStart = useMemo(
     () => preview.reduce((max, e) => Math.max(max, e.originalStart), 0),
     [preview]
@@ -75,14 +95,22 @@ export default function TimingShift() {
   const thresholdExceedsFile =
     useThreshold && thresholdMs !== null && maxCaptionStart > 0 && thresholdMs > maxCaptionStart;
 
-  // Derive file state from context
-  const filePath = timingFile?.filePath ?? null;
-  const fileName = timingFile?.fileName ?? "";
-  const fileContent = timingFile?.fileContent ?? "";
+  const filePaths = useMemo(() => timingFiles?.filePaths ?? [], [timingFiles]);
+  const fileNames = useMemo(() => timingFiles?.fileNames ?? [], [timingFiles]);
+  const firstFileContent = timingFiles?.firstFileContent ?? "";
+  const primaryFileName = fileNames[0] ?? "";
+  const fileCount = filePaths.length;
 
-  // Update preview whenever parameters change (debounced to avoid reprocessing on every keystroke)
+  // Live preview is computed from the FIRST file only. The same offset
+  // applies uniformly to every file in a batch, so a sample of file #1
+  // is honest; we don't re-render the timeline as the loop runs.
   useEffect(() => {
-    if (!fileContent) return;
+    if (!firstFileContent) {
+      setPreview([]);
+      setCaptionCount(0);
+      setDetectedFormat("");
+      return;
+    }
     if (thresholdInvalid) {
       if (debounceRef.current) clearTimeout(debounceRef.current);
       setPreview([]);
@@ -91,7 +119,7 @@ export default function TimingShift() {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
       try {
-        const result = shiftSubtitles(fileContent, {
+        const result = shiftSubtitles(firstFileContent, {
           offsetMs: effectiveOffsetMs,
           thresholdMs: thresholdMs ?? undefined,
         });
@@ -105,135 +133,273 @@ export default function TimingShift() {
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [fileContent, effectiveOffsetMs, thresholdMs, thresholdInvalid]);
+  }, [firstFileContent, effectiveOffsetMs, thresholdMs, thresholdInvalid]);
 
-  const handlePickFile = useCallback(async () => {
+  // Reset last-save outcome on selection change so "done" / "cancelled"
+  // don't linger after the user picks a brand-new batch.
+  useEffect(() => {
+    setLastActionResult(null);
+  }, [timingFiles]);
+
+  // File-list dropdown: close on click-outside / Escape (mirrors HDR).
+  useEffect(() => {
+    if (!showFileList) return;
+    const onClick = (e: MouseEvent) => {
+      if (fileContainerRef.current && !fileContainerRef.current.contains(e.target as Node)) {
+        setShowFileList(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setShowFileList(false);
+    };
+    const id = setTimeout(() => document.addEventListener("mousedown", onClick), 0);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      clearTimeout(id);
+      document.removeEventListener("mousedown", onClick);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [showFileList]);
+
+  const addLog = useCallback((text: string, type: LogEntry["type"] = "info") => {
+    const id = logIdRef.current++;
+    setLogs((prev) => {
+      const next = [...prev, { id, text, type }];
+      return next.length > 200 ? next.slice(-200) : next;
+    });
+    setTimeout(() => {
+      const el = logScrollRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
+    }, 50);
+  }, []);
+
+  // Footer status. Busy carries the N-of-M progress; cancelled is its
+  // own visible footer state, separate from done/error.
+  const tabStatus = useMemo<Status>(() => {
+    if (fileCount === 0) return { kind: "idle", message: t("status_timing_idle") };
+    if (busy) {
+      return {
+        kind: "busy",
+        message: t("status_timing_busy"),
+        progress: progress ?? undefined,
+      };
+    }
+    if (lastActionResult === "success") return { kind: "done", message: t("status_timing_done") };
+    if (lastActionResult === "error") return { kind: "error", message: t("status_timing_error") };
+    if (lastActionResult === "cancelled") {
+      return { kind: "pending", message: t("status_timing_cancelled") };
+    }
+    return { kind: "pending", message: t("status_timing_pending") };
+  }, [fileCount, busy, lastActionResult, progress, t]);
+  useTabStatus("timing", tabStatus);
+
+  // Shared ingestion path: cross-tab dedup → load first file's body
+  // for the live preview → publish to context. The rest of the batch
+  // is read on demand during the save loop, so memory stays flat even
+  // for a 24-episode drop.
+  const ingestPaths = useCallback(
+    async (paths: string[], gen: number) => {
+      const { allowed, skippedCount } = filterAvailablePaths(paths, "timing");
+      if (skippedCount > 0) {
+        addLog(t("msg_files_skipped_in_use", skippedCount), "error");
+      }
+      if (allowed.length === 0) return;
+
+      let firstContent: string;
+      try {
+        firstContent = await readText(allowed[0]);
+      } catch (e) {
+        addLog(t("error_prefix", e instanceof Error ? e.message : String(e)), "error");
+        return;
+      }
+      if (gen !== pickGenRef.current) return;
+
+      const names = allowed.map(fileNameFromPath);
+      setTimingFiles({
+        filePaths: allowed,
+        fileNames: names,
+        firstFileContent: firstContent,
+      });
+    },
+    [filterAvailablePaths, setTimingFiles, addLog, t]
+  );
+
+  const handlePickFiles = useCallback(async () => {
     const gen = (pickGenRef.current = pickGenRef.current + 1);
-
-    const path = await pickSubtitleFile();
+    const paths = await pickSubtitleFiles();
     if (gen !== pickGenRef.current) return;
-    if (!path) return;
+    if (!paths || paths.length === 0) return;
+    await ingestPaths(paths, gen);
+  }, [ingestPaths]);
 
-    // Cross-tab duplicate guard
-    const usedIn = isFileInUse(path, "timing");
-    if (usedIn) {
-      setIsError(true);
-      setStatus(t("msg_file_in_use", t(TAB_LABEL_KEYS[usedIn])));
-      return;
-    }
+  const handleDroppedPaths = useCallback(
+    async (paths: string[]) => {
+      const subtitlePaths = paths.filter((p) => fileNameHasSubtitleExt(fileNameFromPath(p)));
+      if (subtitlePaths.length === 0) {
+        addLog(t("msg_no_subtitle_in_drop"), "error");
+        return;
+      }
+      const gen = (pickGenRef.current = pickGenRef.current + 1);
+      await ingestPaths(subtitlePaths, gen);
+    },
+    [ingestPaths, addLog, t]
+  );
 
-    setStatus("");
-    setIsError(false);
+  useFolderDrop({
+    ref: dropZoneRef,
+    onPaths: handleDroppedPaths,
+    onActiveChange: setDropActive,
+    disabled: busy,
+  });
 
-    try {
-      clearFile("timing");
-      const content = await readText(path);
-      if (gen !== pickGenRef.current) return;
-      const name = fileNameFromPath(path);
-
-      const result = shiftSubtitles(content, {
-        offsetMs: effectiveOffsetMs,
-        thresholdMs: thresholdMs ?? undefined,
-      });
-      setPreview(result.preview);
-      setCaptionCount(result.captionCount);
-      setDetectedFormat(result.format.toUpperCase());
-
-      // Silent replace: see FileContext.tsx for design rationale
-      setTimingFile({
-        filePath: path,
-        fileName: name,
-        fileContent: content,
-      });
-    } catch (e) {
-      if (gen !== pickGenRef.current) return;
-      setIsError(true);
-      setStatus(t("error_prefix", e instanceof Error ? e.message : String(e)));
-    }
-  }, [effectiveOffsetMs, thresholdMs, isFileInUse, setTimingFile, clearFile, t]);
-
-  const handleClearFile = useCallback(() => {
+  const handleClearFiles = useCallback(() => {
     pickGenRef.current = pickGenRef.current + 1;
     clearFile("timing");
     setPreview([]);
     setCaptionCount(0);
     setDetectedFormat("");
-    setStatus("");
-    setIsError(false);
   }, [clearFile]);
 
-  const handleSave = useCallback(async () => {
-    if (!fileContent || !filePath) return;
-    if (thresholdInvalid) return;
+  const handleSaveAll = useCallback(async () => {
+    if (fileCount === 0 || thresholdInvalid) return;
 
-    setBusy(true);
-    try {
-      // Always recompute from current parameters — do not cache. A cached result
-      // can go stale if the user changes params and clicks Save within the 200ms
-      // debounce window, producing output that doesn't match the UI settings.
-      const result: ShiftResult = shiftSubtitles(fileContent, {
-        offsetMs: effectiveOffsetMs,
-        thresholdMs: thresholdMs ?? undefined,
+    const paths = filePaths;
+
+    // Pre-flight overwrite check — same project-wide pattern as HDR
+    // Convert. Template-derived output paths would silently overwrite
+    // a previous run otherwise; one ask() before the batch is the
+    // single safety net.
+    const projectedOutputs = paths.map((p) => deriveShiftedPath(p));
+    const existingCount = await countExistingFiles(projectedOutputs);
+    if (existingCount > 0) {
+      const confirmed = await ask(t("msg_overwrite_confirm", existingCount, paths.length), {
+        title: t("dialog_overwrite_title"),
+        kind: "warning",
       });
-
-      // Suggest output filename
-      const lastDot = fileName.lastIndexOf(".");
-      const ext = lastDot > 0 ? fileName.slice(lastDot) : "";
-      const baseName = lastDot > 0 ? fileName.slice(0, lastDot) : fileName;
-      const defaultName = `${baseName}.shifted${ext}`;
-
-      const savePath = await pickSavePath(defaultName);
-      if (!savePath) {
-        setBusy(false);
+      if (!confirmed) {
+        addLog(t("msg_timing_cancelled"), "info");
+        setLastActionResult("cancelled");
         return;
       }
+    }
 
-      await writeText(savePath, result.content);
-      const outName = fileNameFromPath(savePath);
-      setIsError(false);
-      setStatus(t("msg_saved", outName, result.captionCount));
-      setLastActionResult("success");
-    } catch (e) {
-      setIsError(true);
-      setStatus(t("error_prefix", e instanceof Error ? e.message : String(e)));
-      setLastActionResult("error");
+    setBusy(true);
+    setProgress({ processed: 0, total: paths.length });
+    cancelRef.current = false;
+
+    try {
+      addLog(t("msg_timing_start", paths.length, effectiveOffsetMs));
+
+      let successCount = 0;
+      let processedCount = 0;
+      const seenOutputs = new Set<string>();
+
+      for (let i = 0; i < paths.length; i++) {
+        const filePath = paths[i];
+
+        if (cancelRef.current) {
+          addLog(t("msg_timing_cancelled"), "info");
+          break;
+        }
+
+        const fileName = fileNameFromPath(filePath);
+        addLog(t("msg_processing", fileName));
+
+        try {
+          const outputPath = deriveShiftedPath(filePath);
+
+          // Within-batch dedup. Two inputs that resolve to the same
+          // output path (different paths on disk pointing at the same
+          // file via symlink, junction, etc.) would otherwise overwrite
+          // each other. NFC + forward-slash + lowercase normalization
+          // matches HDR Convert's dedup semantics.
+          const normalizedOut = outputPath.normalize("NFC").replace(/\\/g, "/").toLowerCase();
+          if (seenOutputs.has(normalizedOut)) {
+            addLog(t("msg_skipped_duplicate", fileName), "error");
+            continue;
+          }
+          seenOutputs.add(normalizedOut);
+
+          let content: string;
+          try {
+            content = await readText(filePath);
+          } catch (e) {
+            addLog(
+              t("msg_read_error", fileName, e instanceof Error ? e.message : String(e)),
+              "error"
+            );
+            continue;
+          }
+
+          if (cancelRef.current) break;
+
+          const result = shiftSubtitles(content, {
+            offsetMs: effectiveOffsetMs,
+            thresholdMs: thresholdMs ?? undefined,
+          });
+
+          if (cancelRef.current) break;
+
+          await writeText(outputPath, result.content);
+          const outName = fileNameFromPath(outputPath);
+          addLog(t("msg_saved", outName, result.captionCount), "success");
+          successCount++;
+        } catch (e) {
+          addLog(
+            t("msg_timing_error", fileName, e instanceof Error ? e.message : String(e)),
+            "error"
+          );
+        } finally {
+          processedCount++;
+          setProgress({ processed: processedCount, total: paths.length });
+        }
+      }
+
+      if (!cancelRef.current) {
+        addLog(t("msg_timing_complete", successCount, paths.length), "success");
+      }
+
+      // Cancel takes precedence over success/error — surfacing
+      // "complete" when the user cancelled mid-batch would lie.
+      if (cancelRef.current) {
+        setLastActionResult("cancelled");
+      } else {
+        setLastActionResult(successCount > 0 ? "success" : "error");
+      }
     } finally {
       setBusy(false);
+      setProgress(null);
     }
-  }, [fileContent, filePath, fileName, effectiveOffsetMs, thresholdMs, thresholdInvalid, t]);
+  }, [fileCount, filePaths, effectiveOffsetMs, thresholdMs, thresholdInvalid, addLog, t]);
 
-  // Reset last-save outcome on file change so "done" doesn't stick around.
-  useEffect(() => {
-    setLastActionResult(null);
-  }, [timingFile]);
-
-  // Publish status to the shared context — footer picks it up per active tab.
-  const tabStatus = useMemo<Status>(() => {
-    if (!fileName) return { kind: "idle", message: t("status_timing_idle") };
-    if (busy) return { kind: "busy", message: t("status_timing_busy") };
-    if (lastActionResult === "success") return { kind: "done", message: t("status_timing_done") };
-    if (lastActionResult === "error") return { kind: "error", message: t("status_timing_error") };
-    return { kind: "pending", message: t("status_timing_pending") };
-  }, [fileName, busy, lastActionResult, t]);
-  useTabStatus("timing", tabStatus);
+  const saveDisabled = fileCount === 0 || thresholdInvalid || busy;
+  const saveLabel = fileCount > 1 ? t("btn_save_all", fileCount) : t("btn_save");
 
   return (
     <div className="space-y-4">
-      {/* ── File strip — always visible; filename + badges + clear + Select ── */}
-      <div className="flex items-center gap-2">
-        <div
-          className="flex-1 min-w-0 flex items-center gap-2 px-3 rounded-lg text-sm"
-          style={{
-            background: fileName ? "var(--bg-panel)" : "var(--bg-input)",
-            border: "1px solid var(--border-light)",
-            minHeight: "38px",
-          }}
-        >
-          {fileName ? (
-            <>
-              <span className="truncate flex-1" style={{ color: "var(--text-primary)" }}>
-                {fileName}
-              </span>
+      {/* File strip — drop zone + filename(s) + clear + Select + Cancel + Save */}
+      <div
+        ref={dropZoneRef}
+        className={`drop-zone flex items-center gap-2${dropActive ? " drop-active" : ""}`}
+      >
+        <div ref={fileContainerRef} className="flex-1 min-w-0" style={{ position: "relative" }}>
+          {fileCount > 1 ? (
+            <button
+              type="button"
+              onClick={() => setShowFileList((v) => !v)}
+              className="w-full flex items-center gap-2 px-3 rounded-lg text-sm"
+              style={{
+                background: "var(--bg-panel)",
+                border: "1px solid var(--border-light)",
+                minHeight: "38px",
+                color: "var(--text-primary)",
+                textAlign: "left",
+                cursor: "pointer",
+              }}
+              aria-expanded={showFileList}
+              aria-haspopup="listbox"
+            >
+              <span className="truncate flex-1">{fileNames.join(", ")}</span>
               {detectedFormat && (
                 <span
                   className="flex-none px-2 py-0.5 rounded text-xs"
@@ -245,25 +411,106 @@ export default function TimingShift() {
                   {detectedFormat}
                 </span>
               )}
-              {captionCount > 0 && (
-                <span className="flex-none text-xs" style={{ color: "var(--text-muted)" }}>
-                  {t("captions_count", captionCount)}
+              <span className="flex-none text-xs" style={{ color: "var(--text-muted)" }}>
+                ({fileCount})
+              </span>
+              <span className="flex-none text-xs" style={{ color: "var(--text-muted)" }}>
+                {showFileList ? "▲" : "▼"}
+              </span>
+            </button>
+          ) : (
+            <div
+              className="flex items-center gap-2 px-3 rounded-lg text-sm"
+              style={{
+                background: fileCount > 0 ? "var(--bg-panel)" : "var(--bg-input)",
+                border: "1px solid var(--border-light)",
+                minHeight: "38px",
+              }}
+            >
+              {fileCount > 0 ? (
+                <>
+                  <span className="truncate flex-1" style={{ color: "var(--text-primary)" }}>
+                    {primaryFileName}
+                  </span>
+                  {detectedFormat && (
+                    <span
+                      className="flex-none px-2 py-0.5 rounded text-xs"
+                      style={{
+                        background: "var(--bg-input)",
+                        color: "var(--text-muted)",
+                      }}
+                    >
+                      {detectedFormat}
+                    </span>
+                  )}
+                  {captionCount > 0 && (
+                    <span className="flex-none text-xs" style={{ color: "var(--text-muted)" }}>
+                      {t("captions_count", captionCount)}
+                    </span>
+                  )}
+                </>
+              ) : (
+                <span className="italic" style={{ color: "var(--text-muted)" }}>
+                  {t("file_empty")}
                 </span>
               )}
-            </>
-          ) : (
-            <span className="italic" style={{ color: "var(--text-muted)" }}>
-              {t("file_empty")}
-            </span>
+            </div>
+          )}
+
+          {showFileList && fileCount > 1 && (
+            <div
+              className="absolute rounded-lg overflow-hidden flex flex-col"
+              style={{
+                top: "100%",
+                left: 0,
+                right: 0,
+                marginTop: "4px",
+                background: "var(--bg-panel)",
+                border: "1px solid var(--border)",
+                boxShadow: "var(--shadow-popover)",
+                maxHeight: "190px",
+                zIndex: 20,
+              }}
+              role="listbox"
+            >
+              <div
+                className="px-3 py-2 flex-none"
+                style={{ borderBottom: "1px solid var(--border)" }}
+              >
+                <span className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>
+                  {t("hdr_files_title", fileCount)}
+                </span>
+              </div>
+              <div className="overflow-y-auto flex-1">
+                {fileNames.map((name, idx) => (
+                  <div
+                    key={idx}
+                    className="px-3 py-2 text-sm truncate"
+                    style={{
+                      color: "var(--text-primary)",
+                      borderBottom:
+                        idx < fileNames.length - 1
+                          ? "1px solid color-mix(in srgb, var(--border) 50%, transparent)"
+                          : "none",
+                    }}
+                    title={filePaths[idx]}
+                  >
+                    {name}
+                  </div>
+                ))}
+              </div>
+            </div>
           )}
         </div>
-        {fileName && (
+        {fileCount > 0 && (
           <button
-            onClick={handleClearFile}
+            onClick={handleClearFiles}
+            disabled={busy}
             className="flex-none px-3 rounded-lg text-lg font-bold transition-colors"
             style={{
               background: "var(--cancel-bg)",
               color: "var(--cancel-text)",
+              opacity: busy ? 0.4 : 1,
               height: "38px",
             }}
             title={t("btn_clear_file")}
@@ -272,7 +519,7 @@ export default function TimingShift() {
           </button>
         )}
         <button
-          onClick={handlePickFile}
+          onClick={handlePickFiles}
           disabled={busy}
           className="flex-none px-5 rounded-lg font-medium text-sm transition-colors"
           style={{
@@ -281,23 +528,45 @@ export default function TimingShift() {
             height: "38px",
           }}
         >
-          {t("btn_select_file")}
+          {t("btn_select_files")}
         </button>
+        {busy && (
+          <button
+            onClick={() => {
+              cancelRef.current = true;
+            }}
+            className="flex-none px-4 rounded-lg text-sm transition-colors"
+            style={{
+              background: "var(--cancel-bg)",
+              color: "var(--cancel-text)",
+              height: "38px",
+            }}
+          >
+            {t("btn_cancel")}
+          </button>
+        )}
         <button
-          onClick={handleSave}
-          disabled={!filePath || thresholdInvalid}
+          onClick={handleSaveAll}
+          disabled={saveDisabled}
           className="flex-none px-6 rounded-lg font-medium text-sm transition-colors"
           style={{
-            background: !filePath || thresholdInvalid ? "var(--bg-input)" : "var(--accent)",
-            color: !filePath || thresholdInvalid ? "var(--text-muted)" : "white",
-            opacity: !filePath ? 0.5 : 1,
+            background: saveDisabled ? "var(--bg-input)" : "var(--accent)",
+            color: saveDisabled ? "var(--text-muted)" : "white",
+            opacity: fileCount === 0 ? 0.5 : 1,
             height: "38px",
             minWidth: "120px",
           }}
         >
-          {t("btn_save_as")}
+          {saveLabel}
         </button>
       </div>
+
+      {/* Drop-zone discoverability hint — visible only when idle. */}
+      {fileCount === 0 && (
+        <p className="text-xs ml-1" style={{ color: "var(--text-muted)" }}>
+          {t("timing_drop_hint")}
+        </p>
+      )}
 
       {/* Offset value + unit */}
       <div className="flex items-end gap-3">
@@ -318,6 +587,7 @@ export default function TimingShift() {
               const n = parseInt(e.target.value, 10);
               if (!Number.isNaN(n)) setOffsetValue(n);
             }}
+            disabled={busy}
             className="w-28 px-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             style={{
               background: "var(--bg-input)",
@@ -332,6 +602,7 @@ export default function TimingShift() {
           aria-label={t("offset_label")}
           value={unit}
           onChange={(e) => setUnit(e.target.value as Unit)}
+          disabled={busy}
           className="px-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           style={{
             background: "var(--bg-input)",
@@ -353,6 +624,7 @@ export default function TimingShift() {
           aria-pressed={direction === "faster"}
           aria-checked={direction === "faster"}
           onClick={() => setDirection("faster")}
+          disabled={busy}
         >
           <span className="dir-arrow" aria-hidden="true">
             ←
@@ -366,6 +638,7 @@ export default function TimingShift() {
           aria-pressed={direction === "slower"}
           aria-checked={direction === "slower"}
           onClick={() => setDirection("slower")}
+          disabled={busy}
         >
           <span className="dir-label">{t("direction_slower")}</span>
           <span className="dir-arrow" aria-hidden="true">
@@ -390,6 +663,7 @@ export default function TimingShift() {
             name="threshold-enabled"
             checked={useThreshold}
             onChange={(e) => setUseThreshold(e.target.checked)}
+            disabled={busy}
             className="rounded"
             style={{
               background: "var(--bg-input)",
@@ -405,6 +679,7 @@ export default function TimingShift() {
             name="threshold"
             value={thresholdText}
             onChange={(e) => setThresholdText(e.target.value)}
+            disabled={busy}
             placeholder="00:05:00.000"
             className="w-40 px-3 py-1.5 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
             style={{
@@ -431,13 +706,17 @@ export default function TimingShift() {
         </p>
       )}
 
-      {/* Timeline preview — full caption list with struck-through originals.
-          Column header row sits outside the scroll area so it stays visible
-          (Excel-style frozen header). */}
+      {/* Timeline preview — shows the FIRST file's captions in batch mode
+          (the same offset applies uniformly, so file #1 is a representative
+          sample). Frozen header sits outside the scroll area. */}
       {preview.length > 0 && (
         <div className="timeline-preview">
           <div className="timeline-preview-head">
-            <span>{t("preview_title", preview.length)}</span>
+            <span>
+              {fileCount > 1
+                ? t("preview_title_first", preview.length, primaryFileName)
+                : t("preview_title", preview.length)}
+            </span>
           </div>
           <div className="timeline-row timeline-row-header" aria-hidden="true">
             <span>{t("col_index")}</span>
@@ -473,16 +752,47 @@ export default function TimingShift() {
         </div>
       )}
 
-      {/* Status */}
-      {status && (
-        <p
-          className="text-sm"
-          style={{
-            color: isError ? "var(--error)" : "var(--success)",
-          }}
+      {/* Log */}
+      {logs.length > 0 && (
+        <div
+          className="rounded-lg"
+          style={{ border: "1px solid var(--border)", background: "var(--bg-panel)" }}
         >
-          {status}
-        </p>
+          <div
+            className="flex items-center justify-between px-3 py-2"
+            style={{ borderBottom: "1px solid var(--border)" }}
+          >
+            <span className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>
+              {t("log_title")}
+            </span>
+            <button
+              onClick={() => setLogs([])}
+              className="text-xs"
+              style={{ color: "var(--text-muted)" }}
+            >
+              {t("log_clear")}
+            </button>
+          </div>
+          <div
+            ref={logScrollRef}
+            className="max-h-48 overflow-y-auto p-3 font-mono text-xs space-y-0.5"
+          >
+            {logs.map((log) => (
+              <div
+                key={log.id}
+                style={{
+                  color: {
+                    error: "var(--error)",
+                    success: "var(--success)",
+                    info: "var(--text-muted)",
+                  }[log.type],
+                }}
+              >
+                {log.text}
+              </div>
+            ))}
+          </div>
+        </div>
       )}
     </div>
   );

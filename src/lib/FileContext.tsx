@@ -30,10 +30,15 @@ export interface HdrFileState {
   fileNames: string[];
 }
 
-export interface TimingFileState {
-  filePath: string;
-  fileName: string;
-  fileContent: string;
+export interface TimingFilesState {
+  filePaths: string[];
+  fileNames: string[];
+  /** Content of `filePaths[0]` only, cached for the live timeline preview.
+   *  In a batch of N>1 files we don't pre-load all bodies — they're read
+   *  during the save loop. The preview is a sample of what the offset
+   *  does to the first file; the same offset applies uniformly to the
+   *  rest, so single-file preview is honest for batch too. */
+  firstFileContent: string;
 }
 
 export interface FontsFileState {
@@ -44,11 +49,11 @@ export interface FontsFileState {
 
 interface FileContextValue {
   hdrFiles: HdrFileState | null;
-  timingFile: TimingFileState | null;
+  timingFiles: TimingFilesState | null;
   fontsFile: FontsFileState | null;
 
   setHdrFiles: (state: HdrFileState | null) => void;
-  setTimingFile: (state: TimingFileState | null) => void;
+  setTimingFiles: (state: TimingFilesState | null) => void;
   setFontsFile: (state: FontsFileState | null) => void;
   clearFile: (tab: TabId) => void;
 
@@ -75,7 +80,7 @@ const FileContext = createContext<FileContextValue | null>(null);
 
 export function FileProvider({ children }: { children: ReactNode }) {
   const [hdrFiles, setHdrFiles] = useState<HdrFileState | null>(null);
-  const [timingFile, setTimingFile] = useState<TimingFileState | null>(null);
+  const [timingFiles, setTimingFiles] = useState<TimingFilesState | null>(null);
   const [fontsFile, setFontsFile] = useState<FontsFileState | null>(null);
 
   const isFileInUse = useCallback(
@@ -88,7 +93,7 @@ export function FileProvider({ children }: { children: ReactNode }) {
       if (excludeTab !== "hdr" && hdrFiles?.filePaths.some((p) => norm(p) === np)) {
         return "hdr";
       }
-      if (excludeTab !== "timing" && timingFile && norm(timingFile.filePath) === np) {
+      if (excludeTab !== "timing" && timingFiles?.filePaths.some((p) => norm(p) === np)) {
         return "timing";
       }
       if (excludeTab !== "fonts" && fontsFile && norm(fontsFile.filePath) === np) {
@@ -96,7 +101,7 @@ export function FileProvider({ children }: { children: ReactNode }) {
       }
       return null;
     },
-    [hdrFiles, timingFile, fontsFile]
+    [hdrFiles, timingFiles, fontsFile]
   );
 
   const filterAvailablePaths = useCallback(
@@ -121,7 +126,7 @@ export function FileProvider({ children }: { children: ReactNode }) {
         setHdrFiles(null);
         break;
       case "timing":
-        setTimingFile(null);
+        setTimingFiles(null);
         break;
       case "fonts":
         setFontsFile(null);
@@ -135,16 +140,16 @@ export function FileProvider({ children }: { children: ReactNode }) {
   const value = useMemo(
     () => ({
       hdrFiles,
-      timingFile,
+      timingFiles,
       fontsFile,
       setHdrFiles,
-      setTimingFile,
+      setTimingFiles,
       setFontsFile,
       clearFile,
       isFileInUse,
       filterAvailablePaths,
     }),
-    [hdrFiles, timingFile, fontsFile, clearFile, isFileInUse, filterAvailablePaths]
+    [hdrFiles, timingFiles, fontsFile, clearFile, isFileInUse, filterAvailablePaths]
   );
 
   return <FileContext.Provider value={value}>{children}</FileContext.Provider>;

@@ -24,11 +24,12 @@ export const strings: Record<string, StringEntry> = {
   status_hdr_done: { en: "Conversion complete", zh: "转换完成" },
   status_hdr_error: { en: "Conversion failed", zh: "转换失败" },
   status_hdr_cancelled: { en: "Conversion cancelled", zh: "已取消转换" },
-  status_timing_idle: { en: "No subtitle loaded", zh: "未加载字幕" },
+  status_timing_idle: { en: "No subtitles loaded", zh: "未加载字幕" },
   status_timing_pending: { en: "Adjust offset, then save", zh: "调整偏移后保存" },
   status_timing_busy: { en: "Saving…", zh: "保存中…" },
-  status_timing_done: { en: "Saved", zh: "已保存" },
+  status_timing_done: { en: "Save complete", zh: "保存完成" },
   status_timing_error: { en: "Save failed", zh: "保存失败" },
+  status_timing_cancelled: { en: "Save cancelled", zh: "已取消保存" },
   status_fonts_idle: { en: "No subtitle loaded", zh: "未加载字幕" },
   status_fonts_analyzing: { en: "Analyzing fonts…", zh: "分析字体中…" },
   status_fonts_pick: { en: "Pick fonts to embed", zh: "选择要嵌入的字体" },
@@ -184,7 +185,27 @@ export const strings: Record<string, StringEntry> = {
     zh: "阈值超过最后一条字幕 — 不会发生偏移",
   },
   btn_save_as: { en: "Save As...", zh: "另存为…" },
+  btn_save: { en: "Save", zh: "保存" },
+  btn_save_all: { en: "Save All ({0})", zh: "全部保存（{0}）" },
   msg_saved: { en: "Saved: {0} ({1} captions)", zh: "已保存：{0}（{1} 条字幕）" },
+  msg_timing_start: {
+    en: "Starting save: {0} file(s), offset {1} ms",
+    zh: "开始保存：{0} 个文件，偏移 {1} 毫秒",
+  },
+  msg_timing_complete: {
+    en: "Save complete: {0}/{1} file(s) processed",
+    zh: "保存完成：已处理 {0}/{1} 个文件",
+  },
+  msg_timing_cancelled: { en: "Save cancelled.", zh: "已取消保存。" },
+  msg_timing_error: { en: "Error saving {0}: {1}", zh: "保存 {0} 出错：{1}" },
+  preview_title_first: {
+    en: "Preview — {0} captions ({1})",
+    zh: "预览 — {1} 的 {0} 条字幕",
+  },
+  timing_drop_hint: {
+    en: "Tip: drag subtitle files or a folder onto the file strip above (videos in the folder are skipped automatically)",
+    zh: "提示：可将字幕文件或文件夹拖到上方文件栏（文件夹内的视频会自动忽略）",
+  },
 
   // ── Font Embed ──────────────────────────────────────────
   btn_analyzing: { en: "Analyzing...", zh: "分析中…" },

@@ -98,3 +98,33 @@ export function shiftSubtitles(content: string, options: ShiftOptions): ShiftRes
     captionCount: captions.length,
   };
 }
+
+/**
+ * Derive the `.shifted` output path for a given input subtitle path.
+ *
+ * Used by the batch save flow — Time Shift writes outputs alongside
+ * inputs with a `.shifted` infix, preserving the original extension
+ * (`EP01.srt` → `EP01.shifted.srt`, `EP01.ass` → `EP01.shifted.ass`).
+ * The native separator of the input path is preserved so the result
+ * round-trips through Win32 APIs and shell-integration tools without
+ * mixing slashes.
+ *
+ * Why a derived path instead of `pickSavePath` per file: native save
+ * dialogs are blocking and don't scale to N files. The same-directory
+ * convention matches the most common workflow (shift in place beside
+ * the existing subs) and gives the user a single overwrite-confirm
+ * gate via `countExistingFiles` before the batch begins.
+ */
+export function deriveShiftedPath(inputPath: string): string {
+  const usedBackslash = inputPath.includes("\\") && !inputPath.includes("/");
+  const normalized = inputPath.replace(/\\/g, "/");
+  const lastSlash = normalized.lastIndexOf("/");
+  const dir = lastSlash >= 0 ? normalized.slice(0, lastSlash) : "";
+  const fullName = lastSlash >= 0 ? normalized.slice(lastSlash + 1) : normalized;
+  const lastDot = fullName.lastIndexOf(".");
+  const baseName = lastDot > 0 ? fullName.slice(0, lastDot) : fullName;
+  const ext = lastDot > 0 ? fullName.slice(lastDot) : "";
+  const outputName = `${baseName}.shifted${ext}`;
+  const outputPath = dir ? `${dir}/${outputName}` : outputName;
+  return usedBackslash ? outputPath.replace(/\//g, "\\") : outputPath;
+}
