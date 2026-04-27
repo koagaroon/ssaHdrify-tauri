@@ -153,6 +153,11 @@ export const strings: Record<string, StringEntry> = {
     en: "Tip: drag subtitle files or a folder onto the file strip above (videos in the folder are skipped automatically)",
     zh: "提示：可将字幕文件或文件夹拖到上方文件栏（文件夹内的视频会自动忽略）",
   },
+  msg_overwrite_confirm: {
+    en: "{0} of {1} output file(s) already exist. Overwrite them?",
+    zh: "{0}/{1} 个输出文件已存在，确认覆盖？",
+  },
+  dialog_overwrite_title: { en: "Confirm Overwrite", zh: "确认覆盖" },
 
   // ── Time Shift ──────────────────────────────────────────
   captions_count: { en: "{0} captions", zh: "{0} 条字幕" },

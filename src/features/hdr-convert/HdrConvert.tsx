@@ -12,6 +12,7 @@ import {
 } from "./srt-converter";
 import { resolveOutputPath, OUTPUT_PRESETS, DEFAULT_TEMPLATE } from "./output-naming";
 import { DEFAULT_BRIGHTNESS, MIN_BRIGHTNESS, MAX_BRIGHTNESS, type Eotf } from "./color-engine";
+import { ask } from "@tauri-apps/plugin-dialog";
 
 import { parseSubtitle } from "../../lib/subtitle-parser";
 import NumberInput from "../../lib/NumberInput";
@@ -21,6 +22,7 @@ import { useFileContext } from "../../lib/FileContext";
 import type { Status } from "../../lib/StatusContext";
 import { useTabStatus } from "../../lib/useTabStatus";
 import { useFolderDrop } from "../../lib/useFolderDrop";
+import { countExistingFiles } from "../../lib/output-collisions";
 
 /** Convert ASS color "&H00BBGGRR" to HTML "#RRGGBB" */
 function assColorToHex(assColor: string): string {
@@ -257,6 +259,36 @@ export default function HdrConvert() {
     }
 
     const paths = hdrFiles.filePaths;
+
+    // Pre-flight overwrite check. Template-derived output paths are
+    // deterministic — re-clicking Convert (e.g., the user came back to
+    // the window after minimizing and forgot the run already finished)
+    // would silently overwrite previous outputs. Stat each projected
+    // path; if any already exist, surface a single ask() dialog before
+    // entering the busy state. Failed-to-resolve paths skip pre-flight
+    // (the main loop will log per-file errors as before).
+    const projectedOutputs: string[] = [];
+    for (const filePath of paths) {
+      try {
+        projectedOutputs.push(resolveOutputPath(filePath, activeTemplate, eotf));
+      } catch {
+        // Resolution failure logged in the main loop with file context;
+        // pre-flight just skips so the existence check doesn't see an
+        // invalid path.
+      }
+    }
+    const existingCount = await countExistingFiles(projectedOutputs);
+    if (existingCount > 0) {
+      const confirmed = await ask(t("msg_overwrite_confirm", existingCount, paths.length), {
+        title: t("dialog_overwrite_title"),
+        kind: "warning",
+      });
+      if (!confirmed) {
+        addLog(t("msg_cancelled"), "info");
+        return;
+      }
+    }
+
     setProcessing(true);
     setProgress({ processed: 0, total: paths.length });
     cancelRef.current = false;
