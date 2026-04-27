@@ -2,11 +2,13 @@ import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { pickAssFiles, readText, writeText, fileNameFromPath } from "../../lib/tauri-api";
 import { ask } from "@tauri-apps/plugin-dialog";
 import {
+  aggregateFonts,
   analyzeFonts,
   buildUserFontMap,
   embedFonts,
   userFontKey,
   deriveEmbeddedPath,
+  type FileAnalysis,
   type FontInfo,
   type EmbedProgress,
 } from "./font-embedder";
@@ -86,6 +88,13 @@ export default function FontEmbed() {
   const cancelRef = useRef(false);
   const pickGenRef = useRef(0);
   const logIdRef = useRef(0);
+  // Per-file analysis cache: <path → {content, infos, usages}>. Holds
+  // all batch contents in memory so the unified detection grid + the
+  // embed loop don't have to re-read or re-parse on every interaction.
+  // Source-change reanalysis runs against this map; embed reads from
+  // it directly. Ref instead of state — UI consumes the AGGREGATE
+  // (fonts / fontUsages state below), not the cache directly.
+  const perFileAnalysisRef = useRef<Map<string, FileAnalysis>>(new Map());
   const dropZoneRef = useRef<HTMLDivElement>(null);
   // Scroll container for the log — see HdrConvert for the rationale
   // behind avoiding scrollIntoView (it walks ancestors and can scroll
@@ -108,7 +117,6 @@ export default function FontEmbed() {
 
   const filePaths = useMemo(() => fontsFiles?.filePaths ?? [], [fontsFiles]);
   const fileNames = useMemo(() => fontsFiles?.fileNames ?? [], [fontsFiles]);
-  const firstFileContent = fontsFiles?.firstFileContent ?? "";
   const primaryFileName = fileNames[0] ?? "";
   const fileCount = filePaths.length;
   const isSingleFile = fileCount === 1;
@@ -147,10 +155,11 @@ export default function FontEmbed() {
     [isFileInUse, t]
   );
 
-  // Shared ingestion path. Analyzes ONLY the first file for the detection
-  // grid (single-file mode); batch entries are re-analyzed during the
-  // embed loop so memory stays flat and font-source changes between pick
-  // and embed are honored per file.
+  // Shared ingestion path. Loads + analyzes EVERY file in the selection
+  // upfront so the unified detection grid can show real coverage across
+  // the whole batch (single-file is just N=1 of this code path). Cached
+  // contents stay in memory for source-change reanalysis and the embed
+  // loop. Sequential analyze keeps findSystemFont IPC pressure bounded.
   const ingestPaths = useCallback(
     async (paths: string[], gen: number) => {
       const conflictMsg = checkConflicts(paths);
@@ -169,22 +178,41 @@ export default function FontEmbed() {
         await ensureLoaded();
         if (gen !== pickGenRef.current) return;
 
-        let firstContent: string;
-        try {
-          firstContent = await readText(paths[0]);
-        } catch (e) {
-          addLog(t("error_prefix", e instanceof Error ? e.message : String(e)), "error");
+        const cache = new Map<string, FileAnalysis>();
+        for (const path of paths) {
+          if (gen !== pickGenRef.current) return;
+          let content: string;
+          try {
+            content = await readText(path);
+          } catch (e) {
+            const reason = e instanceof Error ? e.message : String(e);
+            addLog(t("msg_read_error", fileNameFromPath(path), reason), "error");
+            continue;
+          }
+          if (gen !== pickGenRef.current) return;
+          const analyzed = await analyzeFonts(content, userFontMap);
+          if (gen !== pickGenRef.current) return;
+          cache.set(path, { content, infos: analyzed.infos, usages: analyzed.usages });
+        }
+
+        if (cache.size === 0) {
+          // No file made it through (all reads failed). Don't enter a
+          // half-loaded state.
           return;
         }
-        if (gen !== pickGenRef.current) return;
 
-        const { infos, usages } = await analyzeFonts(firstContent, userFontMap);
-        if (gen !== pickGenRef.current) return;
+        perFileAnalysisRef.current = cache;
+        const { infos: aggInfos, usages: aggUsages } = aggregateFonts(cache);
+        setFontUsages(aggUsages);
+        setFonts(aggInfos);
+        setSelected(keysOfResolvedFonts(aggInfos));
 
-        setFontUsages(usages);
-        setFonts(infos);
-        setSelected(keysOfResolvedFonts(infos));
-
+        // Use the first SUCCESSFUL file's content for the
+        // FontsFilesState.firstFileContent slot — the field is kept for
+        // FileContext compatibility but the cache is the authoritative
+        // store from here on.
+        const firstSuccessfulPath = paths.find((p) => cache.has(p)) ?? paths[0];
+        const firstContent = cache.get(firstSuccessfulPath)?.content ?? "";
         const names = paths.map(fileNameFromPath);
         setFontsFiles({
           filePaths: paths,
@@ -229,25 +257,34 @@ export default function FontEmbed() {
     disabled: embedding,
   });
 
-  // ── Font source management (only affects first file's grid) ──────
-  // Adding/removing a source: append/remove to the list, then re-run
-  // analyzeFonts on the FIRST file with the fresh user font map so the
-  // grid updates its found/missing badges. Batch files pick up the new
-  // sources naturally during the embed loop (which builds userFontMap
-  // afresh each iteration via the global memo).
+  // ── Font source management ──────────────────────────────────────
+  // Adding/removing a source: rebuild userFontMap, then re-analyze
+  // EVERY cached file's content with the fresh map so the unified
+  // detection grid + per-file embed cache both reflect the new
+  // resolution. Cached contents avoid disk re-reads.
   const reanalyzeWithSources = useCallback(
     async (nextSources: FontSource[]) => {
-      if (!firstFileContent) return;
+      const cache = perFileAnalysisRef.current;
+      if (cache.size === 0) return;
       const gen = (pickGenRef.current = pickGenRef.current + 1);
       const map = buildUserFontMap(nextSources.flatMap((src) => src.entries));
       try {
-        const { infos, usages } = await analyzeFonts(firstFileContent, map);
-        if (gen !== pickGenRef.current) return;
+        const newCache = new Map<string, FileAnalysis>();
+        for (const [path, prev] of cache) {
+          if (gen !== pickGenRef.current) return;
+          const analyzed = await analyzeFonts(prev.content, map);
+          if (gen !== pickGenRef.current) return;
+          newCache.set(path, {
+            content: prev.content,
+            infos: analyzed.infos,
+            usages: analyzed.usages,
+          });
+        }
+        perFileAnalysisRef.current = newCache;
+        const { infos, usages } = aggregateFonts(newCache);
         setFontUsages(usages);
         setFonts(infos);
         // Merge: keep manual unchecks; auto-check newly resolved fonts.
-        // See the original implementation comment in font-embedder for
-        // the full rationale.
         setSelected((prev) => {
           const resolved = keysOfResolvedFonts(infos);
           const next = new Set<string>();
@@ -264,8 +301,17 @@ export default function FontEmbed() {
         addLog(t("error_prefix", e instanceof Error ? e.message : String(e)), "error");
       }
     },
-    [firstFileContent, addLog, t]
+    [addLog, t]
   );
+
+  // Clear all font sources at once. Mirrors the file-strip ✕ pattern
+  // — sources persist across subtitle clears by design, but the
+  // separate ✕ on the source button gives the user one-click recovery
+  // without diving into the modal.
+  const handleClearFontSources = useCallback(() => {
+    setFontSources([]);
+    void reanalyzeWithSources([]);
+  }, [reanalyzeWithSources]);
 
   const handleAddFontSource = useCallback(
     (source: FontSource): { added: number; duplicated: number } => {
@@ -389,38 +435,37 @@ export default function FontEmbed() {
           }
           seenOutputs.add(normalizedOut);
 
-          let content: string;
-          try {
-            content = await readText(filePath);
-          } catch (e) {
-            addLog(
-              t("msg_read_error", fileName, e instanceof Error ? e.message : String(e)),
-              "error"
-            );
-            continue;
-          }
-          if (cancelRef.current) break;
-
-          // Pick the right (infos, usages) for this file:
-          // - Single-file mode (i === 0 only): use the in-memory grid
-          //   state so the user's checkbox unchecks are honored.
-          // - Batch mode: re-analyze each file fresh; selection is
-          //   "embed all found fonts" (no per-font UI in batch).
-          let fileInfos: FontInfo[];
-          let fileUsages: FontUsage[];
-          if (isSingleFile && i === 0) {
-            fileInfos = fonts;
-            fileUsages = fontUsages;
-          } else {
+          // Pull from the per-file analysis cache populated at ingest.
+          // The cache holds content, infos, and usages so the embed
+          // loop avoids any disk re-read or re-analysis. Fall back to
+          // a fresh read + analyze if cache somehow missed this path
+          // (shouldn't happen — we ingest every file before showing
+          // the grid — but defensive).
+          let cached = perFileAnalysisRef.current.get(filePath);
+          if (!cached) {
+            let content: string;
+            try {
+              content = await readText(filePath);
+            } catch (e) {
+              addLog(
+                t("msg_read_error", fileName, e instanceof Error ? e.message : String(e)),
+                "error"
+              );
+              continue;
+            }
+            if (cancelRef.current) break;
             const analyzed = await analyzeFonts(content, userFontMap);
-            fileInfos = analyzed.infos;
-            fileUsages = analyzed.usages;
+            cached = { content, infos: analyzed.infos, usages: analyzed.usages };
           }
           if (cancelRef.current) break;
 
-          const selectedFonts = isSingleFile
-            ? fileInfos.filter((info) => selected.has(fontSelectionKey(info)) && info.filePath)
-            : fileInfos.filter((info) => info.filePath);
+          // Filter to fonts THIS FILE references AND the user kept
+          // checked in the global aggregate grid AND that resolved to
+          // a real font file. The aggregate keys are the same shape
+          // as per-file keys, so set membership is direct.
+          const selectedFonts = cached.infos.filter(
+            (info) => selected.has(fontSelectionKey(info)) && info.filePath
+          );
 
           if (selectedFonts.length === 0) {
             addLog(t("msg_no_fonts_selected"), "error");
@@ -433,9 +478,9 @@ export default function FontEmbed() {
           const onProgress = isSingleFile ? (p: EmbedProgress) => setProgress(p) : undefined;
 
           const result = await embedFonts(
-            content,
+            cached.content,
             selectedFonts,
-            fileUsages,
+            cached.usages,
             onProgress,
             () => cancelRef.current,
             t
@@ -477,7 +522,7 @@ export default function FontEmbed() {
       setBatchProgress(null);
       setProgress(null);
     }
-  }, [fileCount, filePaths, isSingleFile, fonts, fontUsages, selected, userFontMap, addLog, t]);
+  }, [fileCount, filePaths, isSingleFile, selected, userFontMap, addLog, t]);
 
   // Footer status — busy carries N-of-M progress; cancelled is its own
   // visible state.
@@ -496,13 +541,16 @@ export default function FontEmbed() {
     if (lastActionResult === "cancelled") {
       return { kind: "pending", message: t("status_fonts_cancelled") };
     }
-    if (isSingleFile && selected.size === 0) {
+    if (selected.size === 0) {
       return { kind: "pending", message: t("status_fonts_pick") };
     }
     if (isSingleFile) {
       return { kind: "pending", message: t("status_fonts_pending", selected.size) };
     }
-    return { kind: "pending", message: t("status_fonts_batch_ready", fileCount) };
+    return {
+      kind: "pending",
+      message: t("status_fonts_batch_pending", selected.size, fileCount),
+    };
   }, [fileCount, isSingleFile, analyzing, embedding, batchProgress, selected, lastActionResult, t]);
   useTabStatus("fonts", tabStatus);
 
@@ -517,13 +565,16 @@ export default function FontEmbed() {
     setAnalyzing(false);
     setProgress(null);
     setDropError(null);
+    perFileAnalysisRef.current = new Map();
   }, [clearFile]);
 
-  const isEmbedDisabled = embedding || (isSingleFile && selected.size === 0) || fileCount === 0;
+  // Now that the batch grid carries per-font checkboxes too, the
+  // disabled rule is uniform: 0 selected = nothing to embed, single
+  // or batch.
+  const isEmbedDisabled = embedding || selected.size === 0 || fileCount === 0;
 
   function embedButtonLabel(): string {
     if (embedding) return t("btn_embedding");
-    if (isBatch) return t("btn_embed_all", fileCount);
     if (selected.size > 0) return t("btn_embed", selected.size);
     return t("btn_embed_default");
   }
@@ -709,6 +760,22 @@ export default function FontEmbed() {
             ? t("btn_select_font_files_with_count", fontSources.length)
             : t("btn_select_font_files")}
         </button>
+        {fontSources.length > 0 && (
+          <button
+            onClick={handleClearFontSources}
+            disabled={embedding}
+            className="flex-none px-3 rounded-lg text-lg font-bold transition-colors"
+            style={{
+              background: "var(--cancel-bg)",
+              color: "var(--cancel-text)",
+              opacity: embedding ? 0.4 : 1,
+              height: "38px",
+            }}
+            title={t("btn_clear_font_sources")}
+          >
+            ✕
+          </button>
+        )}
         <div className="flex-1" />
         {embedding && (
           <button
@@ -744,108 +811,97 @@ export default function FontEmbed() {
           {embedButtonLabel()}
         </button>
       </div>
-      {fonts.length > 0 && isSingleFile && (
+      {fonts.length > 0 && (
         <p className="text-xs -mt-2" style={{ color: "var(--text-secondary)" }}>
           {t("fonts_full_embed_warning")}
         </p>
       )}
 
-      {/* Detection grid — single-file only. In batch mode, replaced by a
-           placeholder describing what happens at embed time. */}
-      {isBatch ? (
-        <div
-          className="rounded-lg px-4 py-6 text-center"
-          style={{
-            border: "1px solid var(--border)",
-            background: "var(--bg-panel)",
-          }}
-        >
-          <p className="text-sm" style={{ color: "var(--text-primary)" }}>
-            {t("fonts_batch_placeholder_title", fileCount)}
-          </p>
-          <p className="text-xs mt-1" style={{ color: "var(--text-secondary)" }}>
-            {t("fonts_batch_placeholder_body")}
-          </p>
+      {/* Detection grid — same UI for single and batch. In batch the
+           rows represent the UNION of unique fonts referenced anywhere
+           in the selection; checkboxes act as a global filter applied
+           per-file at embed time. */}
+      <div
+        className="rounded-lg"
+        style={{
+          border: "1px solid var(--border)",
+          background: "var(--bg-panel)",
+        }}
+      >
+        <div className="px-3 py-2" style={{ borderBottom: "1px solid var(--border)" }}>
+          <span className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>
+            {fonts.length > 0
+              ? isBatch
+                ? t("fonts_title_count_batch", fonts.length, fileCount)
+                : t("fonts_title_count", fonts.length)
+              : t("fonts_title")}
+          </span>
         </div>
-      ) : (
-        <div
-          className="rounded-lg"
-          style={{
-            border: "1px solid var(--border)",
-            background: "var(--bg-panel)",
-          }}
-        >
-          <div className="px-3 py-2" style={{ borderBottom: "1px solid var(--border)" }}>
-            <span className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>
-              {fonts.length > 0 ? t("fonts_title_count", fonts.length) : t("fonts_title")}
-            </span>
-          </div>
-          {fonts.length > 0 ? (
-            <>
-              <div className="font-row font-row-header" aria-hidden="true">
-                <span />
-                <span>{t("col_font_name")}</span>
-                <span>{t("col_font_glyphs")}</span>
-                <span>{t("col_font_source")}</span>
-                <span>{t("col_font_status")}</span>
-              </div>
-              <div className="max-h-64 overflow-y-auto">
-                {fonts.map((info) => {
-                  const selKey = fontSelectionKey(info);
-                  return (
-                    <label key={selKey} className={"font-row" + (!info.filePath ? " missing" : "")}>
-                      <input
-                        type="checkbox"
-                        id={`font-row-${selKey}`}
-                        name={`font-${selKey}`}
-                        checked={selected.has(selKey)}
-                        onChange={() => toggleSelect(selKey)}
-                        disabled={!info.filePath || embedding}
-                        className="rounded"
-                        style={{
-                          background: "var(--bg-input)",
-                          borderColor: "var(--border)",
-                        }}
-                      />
-                      <span className="font-name" title={formatFontLabel(info)}>
-                        {formatFontLabel(info)}
-                      </span>
-                      <span className="font-stat">{t("fonts_glyphs", info.glyphCount)}</span>
-                      {info.source ? (
-                        <span className="badge badge-mute">
-                          {t(info.source === "local" ? "badge_local" : "badge_system")}
-                        </span>
-                      ) : (
-                        <span />
-                      )}
-                      <span className={"badge " + (info.filePath ? "badge-green" : "badge-red")}>
-                        {info.filePath ? t("fonts_found") : t("fonts_missing")}
-                      </span>
-                    </label>
-                  );
-                })}
-              </div>
-            </>
-          ) : (
-            <div className="px-4 py-8 text-center">
-              {analyzing ? (
-                <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
-                  {t("fonts_scanning")}
-                </p>
-              ) : (
-                <div className="space-y-1">
-                  <p className="text-sm" style={{ color: "var(--text-primary)" }}>
-                    {t("fonts_empty")}
-                  </p>
-                  <p className="text-xs" style={{ color: "var(--text-secondary)" }}>
-                    {t("fonts_empty_hint")}
-                  </p>
-                </div>
-              )}
+        {fonts.length > 0 ? (
+          <>
+            <div className="font-row font-row-header" aria-hidden="true">
+              <span />
+              <span>{t("col_font_name")}</span>
+              <span>{t("col_font_glyphs")}</span>
+              <span>{t("col_font_source")}</span>
+              <span>{t("col_font_status")}</span>
             </div>
-          )}
-        </div>
-      )}
+            <div className="max-h-64 overflow-y-auto">
+              {fonts.map((info) => {
+                const selKey = fontSelectionKey(info);
+                return (
+                  <label key={selKey} className={"font-row" + (!info.filePath ? " missing" : "")}>
+                    <input
+                      type="checkbox"
+                      id={`font-row-${selKey}`}
+                      name={`font-${selKey}`}
+                      checked={selected.has(selKey)}
+                      onChange={() => toggleSelect(selKey)}
+                      disabled={!info.filePath || embedding}
+                      className="rounded"
+                      style={{
+                        background: "var(--bg-input)",
+                        borderColor: "var(--border)",
+                      }}
+                    />
+                    <span className="font-name" title={formatFontLabel(info)}>
+                      {formatFontLabel(info)}
+                    </span>
+                    <span className="font-stat">{t("fonts_glyphs", info.glyphCount)}</span>
+                    {info.source ? (
+                      <span className="badge badge-mute">
+                        {t(info.source === "local" ? "badge_local" : "badge_system")}
+                      </span>
+                    ) : (
+                      <span />
+                    )}
+                    <span className={"badge " + (info.filePath ? "badge-green" : "badge-red")}>
+                      {info.filePath ? t("fonts_found") : t("fonts_missing")}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          </>
+        ) : (
+          <div className="px-4 py-8 text-center">
+            {analyzing ? (
+              <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
+                {t("fonts_scanning")}
+              </p>
+            ) : (
+              <div className="space-y-1">
+                <p className="text-sm" style={{ color: "var(--text-primary)" }}>
+                  {t("fonts_empty")}
+                </p>
+                <p className="text-xs" style={{ color: "var(--text-secondary)" }}>
+                  {t("fonts_empty_hint")}
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Per-font subsetting progress (single-file only — batch uses
            the footer N-of-M chip). */}

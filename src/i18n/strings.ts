@@ -45,6 +45,10 @@ export const strings: Record<string, StringEntry> = {
     en: "Ready to embed · {0} file(s)",
     zh: "可嵌入 · {0} 个文件",
   },
+  status_fonts_batch_pending: {
+    en: "Ready to embed · {0} font(s) across {1} file(s)",
+    zh: "可嵌入 · 跨 {1} 个文件的 {0} 个字体",
+  },
   file_empty: { en: "No file selected", zh: "未选择文件" },
   hdr_files_title: {
     en: "Selected subtitle files ({0})",
@@ -216,6 +220,10 @@ export const strings: Record<string, StringEntry> = {
   btn_analyzing: { en: "Analyzing...", zh: "分析中…" },
   fonts_title: { en: "Detected Fonts", zh: "检测到的字体" },
   fonts_title_count: { en: "Detected Fonts ({0})", zh: "检测到的字体（{0}）" },
+  fonts_title_count_batch: {
+    en: "Detected Fonts ({0} unique across {1} files)",
+    zh: "检测到的字体（{1} 个文件中 {0} 个独立字体）",
+  },
   fonts_scanning: { en: "Scanning fonts...", zh: "扫描字体中…" },
   fonts_empty: { en: "No file loaded", zh: "未加载文件" },
   fonts_empty_hint: {
@@ -334,6 +342,7 @@ export const strings: Record<string, StringEntry> = {
   },
   font_sources_close: { en: "Close", zh: "关闭" },
   font_sources_remove: { en: "Remove source", zh: "移除此来源" },
+  btn_clear_font_sources: { en: "Clear all font sources", zh: "清除所有字体来源" },
   font_sources_all_duplicate: {
     en: "All fonts from this selection are already loaded.",
     zh: "此选择的字体已全部加载过。",

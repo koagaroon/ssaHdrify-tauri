@@ -196,6 +196,76 @@ function buildFontFileName(key: FontKey): string {
   return `${name}.ttf`;
 }
 
+/** Per-file analysis cache entry — content stays in memory so the
+ *  detection grid + aggregate can re-render on font-source changes
+ *  without re-reading from disk, and the embed loop can reuse the
+ *  already-resolved per-file (infos, usages) without a second pass. */
+export interface FileAnalysis {
+  content: string;
+  infos: FontInfo[];
+  usages: FontUsage[];
+}
+
+/**
+ * Aggregate per-file analyses into a unified font list.
+ *
+ * Used by the batch detection grid: the user sees ONE row per unique
+ * `(family, bold, italic)` triple referenced anywhere in the batch,
+ * with `glyphCount` reflecting the UNION of codepoints across every
+ * file that uses that font. Source / status comes from any file's
+ * resolution (all files were analyzed against the same userFontMap,
+ * so the resolution is identical) — first occurrence wins.
+ *
+ * The returned `usages` carries the same union codepoints, suitable
+ * for the FontSourceModal's batch-wide coverage stats. The per-file
+ * `usages` from the cache stay authoritative for the embed loop's
+ * per-file subsetting (each file embeds only the codepoints IT uses).
+ */
+export function aggregateFonts(perFile: Map<string, FileAnalysis>): {
+  infos: FontInfo[];
+  usages: FontUsage[];
+} {
+  // Union codepoints per font key across all files.
+  const usageMap = new Map<string, { key: FontKey; codepoints: Set<number> }>();
+  for (const analysis of perFile.values()) {
+    for (const u of analysis.usages) {
+      const k = userFontKey(u.key.family, u.key.bold, u.key.italic);
+      const existing = usageMap.get(k);
+      if (existing) {
+        for (const cp of u.codepoints) existing.codepoints.add(cp);
+      } else {
+        usageMap.set(k, { key: u.key, codepoints: new Set(u.codepoints) });
+      }
+    }
+  }
+
+  // Resolution map — first occurrence per key. All per-file infos came
+  // from the same userFontMap, so source/status are consistent across
+  // files; we just need ONE FontInfo per key as the row template.
+  const infoTemplate = new Map<string, FontInfo>();
+  for (const analysis of perFile.values()) {
+    for (const info of analysis.infos) {
+      const k = userFontKey(info.key.family, info.key.bold, info.key.italic);
+      if (!infoTemplate.has(k)) {
+        infoTemplate.set(k, info);
+      }
+    }
+  }
+
+  const aggInfos: FontInfo[] = [];
+  const aggUsages: FontUsage[] = [];
+  for (const [key, usage] of usageMap) {
+    const tmpl = infoTemplate.get(key);
+    if (!tmpl) continue;
+    aggInfos.push({
+      ...tmpl,
+      glyphCount: usage.codepoints.size,
+    });
+    aggUsages.push({ key: usage.key, codepoints: usage.codepoints });
+  }
+  return { infos: aggInfos, usages: aggUsages };
+}
+
 /**
  * Derive the `.embedded.ass` output path for a given input ASS path.
  *
