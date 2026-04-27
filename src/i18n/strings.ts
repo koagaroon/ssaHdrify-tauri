@@ -145,6 +145,14 @@ export const strings: Record<string, StringEntry> = {
     zh: "转换完成：已处理 {0}/{1} 个文件",
   },
   msg_cancelled: { en: "Conversion cancelled.", zh: "转换已取消。" },
+  msg_no_subtitle_in_drop: {
+    en: "No supported subtitle files in the dropped items",
+    zh: "拖入的内容中没有支持的字幕文件",
+  },
+  hdr_drop_hint: {
+    en: "Tip: drag subtitle files or a folder onto the file strip above (videos in the folder are skipped automatically)",
+    zh: "提示：可将字幕文件或文件夹拖到上方文件栏（文件夹内的视频会自动忽略）",
+  },
 
   // ── Time Shift ──────────────────────────────────────────
   captions_count: { en: "{0} captions", zh: "{0} 条字幕" },

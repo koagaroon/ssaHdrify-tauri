@@ -20,6 +20,7 @@ import { useI18n } from "../../i18n/useI18n";
 import { useFileContext } from "../../lib/FileContext";
 import type { Status } from "../../lib/StatusContext";
 import { useTabStatus } from "../../lib/useTabStatus";
+import { useFolderDrop } from "../../lib/useFolderDrop";
 
 /** Convert ASS color "&H00BBGGRR" to HTML "#RRGGBB" */
 function assColorToHex(assColor: string): string {
@@ -89,10 +90,17 @@ export default function HdrConvert() {
   // while nothing has been attempted; gets cleared when hdrFiles changes
   // so "done" doesn't linger after the user picks a new file.
   const [lastActionResult, setLastActionResult] = useState<"success" | "error" | null>(null);
+  // N-of-M progress for the active batch, surfaced in the footer chip.
+  // Null between batches; never persists past `setProcessing(false)` in
+  // the convert finally block.
+  const [progress, setProgress] = useState<{ processed: number; total: number } | null>(null);
+  // Drag-active highlight on the file strip — toggled by useFolderDrop.
+  const [dropActive, setDropActive] = useState(false);
   const logIdRef = useRef(0);
   const cancelRef = useRef(false);
   const logEndRef = useRef<HTMLDivElement>(null);
   const fileContainerRef = useRef<HTMLDivElement>(null);
+  const dropZoneRef = useRef<HTMLDivElement>(null);
 
   // Reset the last-convert outcome when the selection changes so the
   // footer indicator doesn't stay green on a brand-new batch.
@@ -103,14 +111,24 @@ export default function HdrConvert() {
   // Publish current status to the shared context — the footer reads it.
   const tabStatus = useMemo<Status>(() => {
     if (!hdrFiles) return { kind: "idle", message: t("status_hdr_idle") };
-    if (processing) return { kind: "busy", message: t("status_hdr_busy") };
+    if (processing) {
+      // Pass progress only while it's a real { processed, total } object —
+      // the footer chip suppresses itself when total === 0 anyway, but
+      // keeping the field undefined (vs zeroed) avoids a brief 0/0 flash
+      // on the first render of `processing = true`.
+      return {
+        kind: "busy",
+        message: t("status_hdr_busy"),
+        progress: progress ?? undefined,
+      };
+    }
     if (lastActionResult === "success") return { kind: "done", message: t("status_hdr_done") };
     if (lastActionResult === "error") return { kind: "error", message: t("status_hdr_error") };
     return {
       kind: "pending",
       message: t("status_hdr_pending", hdrFiles.filePaths.length),
     };
-  }, [hdrFiles, processing, lastActionResult, t]);
+  }, [hdrFiles, processing, lastActionResult, progress, t]);
   useTabStatus("hdr", tabStatus);
 
   // File-list dropdown: close on click outside or Escape
@@ -178,6 +196,43 @@ export default function HdrConvert() {
     setHdrFiles({ filePaths: allowed, fileNames: names });
   }, [filterAvailablePaths, setHdrFiles, addLog, t]);
 
+  // ── Folder drag-drop ingestion ──────────────────────────
+  // Dropped paths come back from Rust expansion already flat-listed (one
+  // level deep). HDR Convert is a subtitle-only tab, so video files in a
+  // mixed-folder drop are filtered out via the same isNativeAss /
+  // isConvertible gate the convert loop uses. This keeps "drop a show
+  // folder" working even when it contains .mkv siblings.
+  const handleDroppedPaths = useCallback(
+    (paths: string[]) => {
+      const subtitlePaths = paths.filter((p) => {
+        const name = fileNameFromPath(p);
+        return isNativeAss(name) || isConvertible(name);
+      });
+
+      if (subtitlePaths.length === 0) {
+        addLog(t("msg_no_subtitle_in_drop"), "error");
+        return;
+      }
+
+      const { allowed, skippedCount } = filterAvailablePaths(subtitlePaths, "hdr");
+      if (skippedCount > 0) {
+        addLog(t("msg_files_skipped_in_use", skippedCount), "error");
+      }
+      if (allowed.length === 0) return;
+
+      const names = allowed.map(fileNameFromPath);
+      setHdrFiles({ filePaths: allowed, fileNames: names });
+    },
+    [filterAvailablePaths, setHdrFiles, addLog, t]
+  );
+
+  useFolderDrop({
+    ref: dropZoneRef,
+    onPaths: handleDroppedPaths,
+    onActiveChange: setDropActive,
+    disabled: processing,
+  });
+
   // ── Conversion (uses already-selected files) ───────────
   const handleConvert = useCallback(async () => {
     if (!hdrFiles) return;
@@ -190,6 +245,7 @@ export default function HdrConvert() {
 
     const paths = hdrFiles.filePaths;
     setProcessing(true);
+    setProgress({ processed: 0, total: paths.length });
     cancelRef.current = false;
 
     try {
@@ -197,6 +253,7 @@ export default function HdrConvert() {
 
       const outputPaths = new Set<string>();
       let successCount = 0;
+      let processedCount = 0;
 
       for (const filePath of paths) {
         if (cancelRef.current) {
@@ -303,6 +360,15 @@ export default function HdrConvert() {
             t("msg_convert_error", fileName, e instanceof Error ? e.message : String(e)),
             "error"
           );
+        } finally {
+          // Bump the N-of-M counter once per iteration regardless of
+          // outcome (success / skip / error). Cancel-mid-flight files
+          // increment too — the few extras between the cancel signal and
+          // the next loop check are cosmetically counted, then the outer
+          // finally clears `progress` to null so the chip vanishes; the
+          // user sees the cancel message in the log either way.
+          processedCount++;
+          setProgress({ processed: processedCount, total: paths.length });
         }
       }
 
@@ -314,6 +380,7 @@ export default function HdrConvert() {
       setLastActionResult(successCount > 0 ? "success" : "error");
     } finally {
       setProcessing(false);
+      setProgress(null);
     }
   }, [hdrFiles, brightness, eotf, activeTemplate, style, addLog, t]);
 
@@ -325,8 +392,14 @@ export default function HdrConvert() {
     <div className="space-y-4">
       {/* ── File strip — always visible; filename + clear + Select button ──
            When >1 file is selected, the filename area becomes a clickable
-           dropdown showing all selected files (max ~5 rows, scroll beyond). */}
-      <div className="flex items-center gap-2">
+           dropdown showing all selected files (max ~5 rows, scroll beyond).
+           The strip doubles as a drag-drop target: drop subtitle files or a
+           folder anywhere on it, video siblings inside the folder are
+           silently filtered out. */}
+      <div
+        ref={dropZoneRef}
+        className={`drop-zone flex items-center gap-2${dropActive ? " drop-active" : ""}`}
+      >
         <div ref={fileContainerRef} className="flex-1 min-w-0" style={{ position: "relative" }}>
           {hdrFiles && hdrFiles.filePaths.length > 1 ? (
             <button
@@ -476,6 +549,16 @@ export default function HdrConvert() {
           {processing ? t("btn_converting") : t("btn_convert")}
         </button>
       </div>
+
+      {/* Drop-zone discoverability hint — drag is invisible without
+           prompting; surface it inline so users don't have to read docs.
+           Visible only when the strip is empty (idle), where the hint is
+           most useful. Hidden mid-batch to avoid distraction. */}
+      {!hdrFiles && (
+        <p className="text-xs ml-1" style={{ color: "var(--text-muted)" }}>
+          {t("hdr_drop_hint")}
+        </p>
+      )}
 
       {/* ── Controls: EOTF + Brightness ─────────────── */}
       <div className="flex items-start gap-6">

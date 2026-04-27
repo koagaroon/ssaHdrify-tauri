@@ -507,6 +507,28 @@
 }
 
 /* ─────────────────────────────────────────────────────────────
+   DROP ZONE — drag-drop highlight overlay
+   Used by feature tabs that accept folder / file drops via
+   useFolderDrop. Outline-only highlight (no padding / border
+   width changes) so the active state doesn't shift sibling
+   layout. Reserved transparent outline keeps the layout stable
+   even on first render.
+   ───────────────────────────────────────────────────────────── */
+.drop-zone {
+  border-radius: var(--radius-lg);
+  outline: 2px dashed transparent;
+  outline-offset: 4px;
+  transition:
+    background-color 0.15s,
+    outline-color 0.15s;
+}
+
+.drop-zone.drop-active {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  outline-color: var(--accent);
+}
+
+/* ─────────────────────────────────────────────────────────────
    NUMBER INPUT — up/down spinner buttons
    Uses CSS :hover for the background swap; prior version ran
    the same swap through inline JS onMouseEnter/Leave handlers,
