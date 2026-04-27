@@ -738,14 +738,20 @@ export default function FontEmbed() {
         </p>
       )}
 
-      {/* Action row: select fonts + embed + cancel */}
+      {/* Action row: select fonts + embed + cancel.
+           Font source picking is intentionally decoupled from subtitle
+           loading — the user can pick fonts first OR a subtitle first
+           in any order. Both feed into the same `userFontMap` that
+           ingestPaths consumes when subtitles arrive, and the modal's
+           coverage stats already gracefully handle the no-subtitle
+           case (shows `font_coverage_no_subtitle` hint inside). */}
       <div className="flex items-center gap-2">
         <button
           onClick={() => setSourceModalOpen(true)}
-          disabled={embedding || fileCount === 0}
+          disabled={embedding}
           className="px-5 rounded-lg font-medium text-sm transition-colors"
           style={
-            embedding || fileCount === 0
+            embedding
               ? {
                   background: "var(--accent-disabled-bg)",
                   color: "var(--accent-disabled-text)",
@@ -754,7 +760,6 @@ export default function FontEmbed() {
                 }
               : { background: "var(--accent)", color: "#fff", height: "38px" }
           }
-          title={fileCount === 0 ? t("font_coverage_no_subtitle") : undefined}
         >
           {fontSources.length > 0
             ? t("btn_select_font_files_with_count", fontSources.length)
