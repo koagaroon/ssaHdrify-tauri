@@ -1,6 +1,6 @@
 [package]
 name = "ssahdrify"
-version = "1.2.0"
+version = "1.2.1"
 description = "SDR subtitle to HDR color space converter with font embedding and timing tools"
 authors = ["koagaroon"]
 license = "GPL-3.0-or-later"
@@ -27,7 +27,7 @@ tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 font-kit = "0.14"
 once_cell = "1"
-chardetng = "0.1"
+chardetng = "1.0"
 encoding_rs = "0.8"
 fontcull = "2"
 fontcull-klippa = "0.1"

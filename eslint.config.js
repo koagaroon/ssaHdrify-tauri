@@ -22,5 +22,18 @@ export default defineConfig([
       ecmaVersion: 2023,
       globals: globals.browser,
     },
+    rules: {
+      // ESLint 10 + react-hooks 7 introduced this rule as an error. Five
+      // sites in this codebase intentionally call setState inside useEffect
+      // to clear transient UI status (e.g. last-action result, preview list,
+      // error banner) when a dependency context changes — typically when
+      // the user picks a different subtitle file. The textbook React-19
+      // alternative is "remount via `key` prop on a wrapper component", but
+      // for a status banner that's a heavier refactor than the pattern
+      // warrants. The extra cascading render is one frame of work on a
+      // tiny piece of state, not a perf concern. Keep the pattern; relax
+      // the rule.
+      'react-hooks/set-state-in-effect': 'off',
+    },
   },
 ])

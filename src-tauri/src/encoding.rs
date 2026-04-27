@@ -73,9 +73,18 @@ pub fn decode_bytes(bytes: &[u8]) -> ReadTextResult {
     }
 
     // 2. chardetng heuristic
-    let mut detector = EncodingDetector::new();
+    //
+    // chardetng 1.0 broke two API points compared with 0.1:
+    //   - `EncodingDetector::new()` now takes an `Iso2022JpDetection`
+    //     argument controlling whether ISO-2022-JP is even considered.
+    //     `Allow` reproduces 0.1's always-on behavior (subtitle files
+    //     occasionally land in this encoding for older Japanese sources).
+    //   - `guess()`'s second arg switched from `bool` to a two-variant
+    //     `Utf8Detection` enum. `Allow` matches the old `true` (UTF-8 is
+    //     a permissible guess result).
+    let mut detector = EncodingDetector::new(chardetng::Iso2022JpDetection::Allow);
     detector.feed(bytes, true);
-    let encoding = detector.guess(None, true);
+    let encoding = detector.guess(None, chardetng::Utf8Detection::Allow);
 
     let (cow, _, had_errors) = encoding.decode(bytes);
     if had_errors {
