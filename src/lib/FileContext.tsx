@@ -41,20 +41,23 @@ export interface TimingFilesState {
   firstFileContent: string;
 }
 
-export interface FontsFileState {
-  filePath: string;
-  fileName: string;
-  fileContent: string;
+export interface FontsFilesState {
+  filePaths: string[];
+  fileNames: string[];
+  /** Content of `filePaths[0]` only — used in single-file mode for the
+   *  detection grid + per-font selection. In batch (length > 1) the grid
+   *  is hidden and remaining files are analyzed during the embed loop. */
+  firstFileContent: string;
 }
 
 interface FileContextValue {
   hdrFiles: HdrFileState | null;
   timingFiles: TimingFilesState | null;
-  fontsFile: FontsFileState | null;
+  fontsFiles: FontsFilesState | null;
 
   setHdrFiles: (state: HdrFileState | null) => void;
   setTimingFiles: (state: TimingFilesState | null) => void;
-  setFontsFile: (state: FontsFileState | null) => void;
+  setFontsFiles: (state: FontsFilesState | null) => void;
   clearFile: (tab: TabId) => void;
 
   /**
@@ -81,7 +84,7 @@ const FileContext = createContext<FileContextValue | null>(null);
 export function FileProvider({ children }: { children: ReactNode }) {
   const [hdrFiles, setHdrFiles] = useState<HdrFileState | null>(null);
   const [timingFiles, setTimingFiles] = useState<TimingFilesState | null>(null);
-  const [fontsFile, setFontsFile] = useState<FontsFileState | null>(null);
+  const [fontsFiles, setFontsFiles] = useState<FontsFilesState | null>(null);
 
   const isFileInUse = useCallback(
     (path: string, excludeTab?: TabId): TabId | null => {
@@ -96,12 +99,12 @@ export function FileProvider({ children }: { children: ReactNode }) {
       if (excludeTab !== "timing" && timingFiles?.filePaths.some((p) => norm(p) === np)) {
         return "timing";
       }
-      if (excludeTab !== "fonts" && fontsFile && norm(fontsFile.filePath) === np) {
+      if (excludeTab !== "fonts" && fontsFiles?.filePaths.some((p) => norm(p) === np)) {
         return "fonts";
       }
       return null;
     },
-    [hdrFiles, timingFiles, fontsFile]
+    [hdrFiles, timingFiles, fontsFiles]
   );
 
   // INTENTIONALLY UNUSED — kept as a partial-skip alternative to the
@@ -138,7 +141,7 @@ export function FileProvider({ children }: { children: ReactNode }) {
         setTimingFiles(null);
         break;
       case "fonts":
-        setFontsFile(null);
+        setFontsFiles(null);
         break;
     }
   }, []);
@@ -150,15 +153,15 @@ export function FileProvider({ children }: { children: ReactNode }) {
     () => ({
       hdrFiles,
       timingFiles,
-      fontsFile,
+      fontsFiles,
       setHdrFiles,
       setTimingFiles,
-      setFontsFile,
+      setFontsFiles,
       clearFile,
       isFileInUse,
       filterAvailablePaths,
     }),
-    [hdrFiles, timingFiles, fontsFile, clearFile, isFileInUse, filterAvailablePaths]
+    [hdrFiles, timingFiles, fontsFiles, clearFile, isFileInUse, filterAvailablePaths]
   );
 
   return <FileContext.Provider value={value}>{children}</FileContext.Provider>;

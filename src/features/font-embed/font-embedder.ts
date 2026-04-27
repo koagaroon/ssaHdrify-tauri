@@ -197,6 +197,37 @@ function buildFontFileName(key: FontKey): string {
 }
 
 /**
+ * Derive the `.embedded.ass` output path for a given input ASS path.
+ *
+ * Used by the batch embed flow — Font Embed writes outputs alongside
+ * inputs with a `.embedded` infix and a normalized `.ass` extension
+ * (`EP01.ass` → `EP01.embedded.ass`, `EP01.ssa` → `EP01.embedded.ass`).
+ * The native separator of the input path is preserved so the result
+ * round-trips through Win32 APIs and shell-integration tools without
+ * mixing slashes.
+ *
+ * Why a derived path instead of `pickSavePath` per file: native save
+ * dialogs are blocking and don't scale to N files. The same-directory
+ * convention matches the most common workflow and gives the user a
+ * single overwrite-confirm gate via `countExistingFiles` before the
+ * batch begins.
+ */
+export function deriveEmbeddedPath(inputPath: string): string {
+  const usedBackslash = inputPath.includes("\\") && !inputPath.includes("/");
+  const normalized = inputPath.replace(/\\/g, "/");
+  const lastSlash = normalized.lastIndexOf("/");
+  const dir = lastSlash >= 0 ? normalized.slice(0, lastSlash) : "";
+  const fullName = lastSlash >= 0 ? normalized.slice(lastSlash + 1) : normalized;
+  const lastDot = fullName.lastIndexOf(".");
+  const baseName = lastDot > 0 ? fullName.slice(0, lastDot) : fullName;
+  // Output is always .ass — the embed step rebuilds an ASS-format file
+  // regardless of whether the input was .ass or .ssa.
+  const outputName = `${baseName}.embedded.ass`;
+  const outputPath = dir ? `${dir}/${outputName}` : outputName;
+  return usedBackslash ? outputPath.replace(/\//g, "\\") : outputPath;
+}
+
+/**
  * Embed selected fonts into an ASS file.
  *
  * @param assContent - Original ASS file content

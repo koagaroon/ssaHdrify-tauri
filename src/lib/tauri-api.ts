@@ -57,6 +57,15 @@ export async function pickAssFile(): Promise<string | null> {
   );
 }
 
+/** Open a multi-file picker for ASS files. Used by Font Embed batch flow,
+ *  which only applies to ASS/SSA inputs (other subtitle formats don't
+ *  carry font references). */
+export async function pickAssFiles(): Promise<string[] | null> {
+  return toMultiplePaths(
+    await open({ multiple: true, filters: ASS_FILTERS, title: "Select .ass files" })
+  );
+}
+
 /** Open a directory picker for a local font folder. Returns path or null. */
 export async function pickFontDirectory(): Promise<string | null> {
   return toSinglePath(

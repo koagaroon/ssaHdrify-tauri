@@ -40,6 +40,11 @@ export const strings: Record<string, StringEntry> = {
   status_fonts_busy: { en: "Embedding…", zh: "嵌入中…" },
   status_fonts_done: { en: "Fonts embedded", zh: "字体已嵌入" },
   status_fonts_error: { en: "Embed failed", zh: "嵌入失败" },
+  status_fonts_cancelled: { en: "Embed cancelled", zh: "已取消嵌入" },
+  status_fonts_batch_ready: {
+    en: "Ready to embed · {0} file(s)",
+    zh: "可嵌入 · {0} 个文件",
+  },
   file_empty: { en: "No file selected", zh: "未选择文件" },
   hdr_files_title: {
     en: "Selected subtitle files ({0})",
@@ -226,6 +231,29 @@ export const strings: Record<string, StringEntry> = {
   fonts_missing: { en: "Missing", zh: "缺失" },
   btn_embed: { en: "Embed Selected Fonts ({0})", zh: "嵌入已选字体（{0}）" },
   btn_embed_default: { en: "Embed Fonts", zh: "嵌入字体" },
+  btn_embed_all: { en: "Embed All ({0})", zh: "全部嵌入（{0}）" },
+  msg_fonts_start: {
+    en: "Starting embed: {0} file(s)",
+    zh: "开始嵌入：{0} 个文件",
+  },
+  msg_fonts_complete: {
+    en: "Embed complete: {0}/{1} file(s) processed",
+    zh: "嵌入完成：已处理 {0}/{1} 个文件",
+  },
+  msg_fonts_cancelled: { en: "Embed cancelled.", zh: "已取消嵌入。" },
+  msg_fonts_error: { en: "Error embedding {0}: {1}", zh: "嵌入 {0} 出错：{1}" },
+  fonts_drop_hint: {
+    en: "Tip: drag .ass / .ssa files or a folder onto the file strip above (other files in the folder are skipped automatically)",
+    zh: "提示：可将 .ass / .ssa 文件或文件夹拖到上方文件栏（文件夹内其他类型文件会自动忽略）",
+  },
+  fonts_batch_placeholder_title: {
+    en: "Batch mode — {0} files queued",
+    zh: "批量模式 — {0} 个文件已就绪",
+  },
+  fonts_batch_placeholder_body: {
+    en: "Each file is analyzed individually at embed time. Detected fonts that match a local source or system install are embedded automatically.",
+    zh: "嵌入时每个文件单独分析。检测到的字体若能匹配本地来源或系统字体，将自动嵌入。",
+  },
   btn_embedding: { en: "Embedding...", zh: "嵌入中…" },
   msg_subsetting: { en: "Subsetting {0}...", zh: "子集化 {0}..." },
   msg_font_skipped: { en: "Skipped {0}: {1}", zh: "跳过 {0}：{1}" },
