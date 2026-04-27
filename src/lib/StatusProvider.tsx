@@ -19,7 +19,19 @@ export default function StatusProvider({ children }: { children: ReactNode }) {
   const setStatus = useCallback((tab: StatusTab, status: Status) => {
     setStatuses((prev) => {
       const current = prev[tab];
-      if (current.kind === status.kind && current.message === status.message) {
+      // Optional-chained access intentionally folds the four progress
+      // shapes (both undefined / one undefined / both defined / mismatch)
+      // into a single primitive comparison: undefined === undefined ⇒ true,
+      // undefined === number ⇒ false. Avoids a separate "are both
+      // present?" branch.
+      const sameProgress =
+        current.progress?.processed === status.progress?.processed &&
+        current.progress?.total === status.progress?.total;
+      if (
+        current.kind === status.kind &&
+        current.message === status.message &&
+        sameProgress
+      ) {
         return prev;
       }
       return { ...prev, [tab]: status };

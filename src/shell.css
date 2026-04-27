@@ -382,6 +382,86 @@
   color: var(--text-muted);
   white-space: nowrap;
 }
+/* N-of-M progress chip — sits between the status message and the right-side
+   spacer so it stays visually adjacent to whatever the message describes.
+   Tabular nums keep the digits from jiggling as the count climbs. */
+.app-footer .footer-progress {
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-light);
+  background: color-mix(in srgb, var(--bg-panel) 70%, transparent);
+  white-space: nowrap;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   PREVIEW TABLE — generic column-driven table component
+   Used by batch flows in HDR Convert / Time Shift / Font Embed
+   (3-col input→action→output) and the upcoming Tab 4 pairing
+   grid (5-col # / video / subtitle / source / remove). The
+   grid-template-columns value is set inline at the call site so
+   the same CSS handles any column count.
+   ───────────────────────────────────────────────────────────── */
+.preview-table {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+  overflow: hidden;
+}
+.preview-table-title {
+  padding: 8px 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border-light);
+  background: var(--bg-secondary);
+}
+.preview-table-head {
+  display: grid;
+  gap: 10px;
+  padding: 6px 14px;
+  background: var(--bg-secondary);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border-light);
+}
+.preview-table-body {
+  padding: 4px 0;
+  overflow-y: auto;
+}
+.preview-table-row {
+  display: grid;
+  gap: 10px;
+  padding: 6px 14px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  align-items: center;
+  border-bottom: 1px solid color-mix(in srgb, var(--border-light) 50%, transparent);
+}
+.preview-table-row:last-child {
+  border-bottom: none;
+}
+.preview-table-cell {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.preview-table-empty {
+  padding: 24px 14px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 12px;
+}
 
 /* ─────────────────────────────────────────────────────────────
    NUMBER INPUT — up/down spinner buttons

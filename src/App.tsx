@@ -342,6 +342,11 @@ function App() {
         <footer className="app-footer">
           <span className={`dot ${currentStatus.kind}`} aria-hidden="true" />
           <span>{currentStatus.message || t("footer_ready")}</span>
+          {currentStatus.progress && currentStatus.progress.total > 0 && (
+            <span className="footer-progress" aria-live="polite">
+              {currentStatus.progress.processed}/{currentStatus.progress.total}
+            </span>
+          )}
           <span className="spacer" />
           <span className="ver">{t("footer_version")}</span>
         </footer>

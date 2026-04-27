@@ -19,8 +19,17 @@ import { useStatus, type Status, type StatusTab } from "./StatusContext";
 
 export function useTabStatus(tab: StatusTab, status: Status): void {
   const { setStatus } = useStatus();
-  const { kind, message } = status;
+  const { kind, message, progress } = status;
+  // Destructure progress to primitive deps so callers can pass a freshly
+  // allocated `progress` object on every render without re-publishing.
+  const processed = progress?.processed;
+  const total = progress?.total;
   useEffect(() => {
-    setStatus(tab, { kind, message });
-  }, [tab, kind, message, setStatus]);
+    setStatus(
+      tab,
+      processed != null && total != null
+        ? { kind, message, progress: { processed, total } }
+        : { kind, message }
+    );
+  }, [tab, kind, message, processed, total, setStatus]);
 }

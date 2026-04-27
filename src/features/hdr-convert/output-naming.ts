@@ -16,6 +16,77 @@ export const OUTPUT_PRESETS = [
 
 export const DEFAULT_TEMPLATE = OUTPUT_PRESETS[0];
 
+// ── Language tag detection ────────────────────────────────
+// Recognized language tags found between dots in subtitle filenames
+// (e.g., `EP01.zh.ass` → "zh"). Used to auto-extract the {lang} token
+// when no explicit lang is supplied via options. Limited to the subset
+// fan-sub workflows actually use; widening later is cheap.
+const LANG_TAGS = new Set([
+  "zh",
+  "en",
+  "ja",
+  "jp",
+  "ko",
+  "fr",
+  "de",
+  "es",
+  "it",
+  "ru",
+  "pt",
+  "chs",
+  "cht",
+  "jpn",
+  "eng",
+  "kor",
+  "sc",
+  "tc",
+]);
+
+/** Extract a known language tag from a basename's last dotted segment.
+ *  Returns "" when no recognized tag is present. Case-folded for matching;
+ *  the returned value is lowercase. */
+function extractLangFromBaseName(baseName: string): string {
+  const dotIdx = baseName.lastIndexOf(".");
+  if (dotIdx <= 0) return "";
+  const candidate = baseName.slice(dotIdx + 1).toLowerCase();
+  return LANG_TAGS.has(candidate) ? candidate : "";
+}
+
+/** Recognized video container extensions. Used to strip the trailing
+ *  extension from a video filename when computing {video_name}. Naming
+ *  conventions like `Show.S01E01.1080p` are common, so only known video
+ *  extensions are stripped — never any trailing dotted segment. */
+const VIDEO_EXTENSIONS = new Set([
+  "mkv",
+  "mp4",
+  "avi",
+  "mov",
+  "ts",
+  "m2ts",
+  "webm",
+  "flv",
+  "wmv",
+  "mpg",
+  "mpeg",
+  "m4v",
+  "ogv",
+  "rmvb",
+]);
+
+/** Strip a recognized video extension from a filename, returning the stem.
+ *  Conservative on purpose — names like `Show.S01E01` without an extension
+ *  retain their trailing dotted segment. Path separators are tolerated so
+ *  callers may pass either a bare name or a full path. */
+function stripVideoExtension(fileName: string): string {
+  if (!fileName) return "";
+  const sepIdx = Math.max(fileName.lastIndexOf("/"), fileName.lastIndexOf("\\"));
+  const tail = sepIdx >= 0 ? fileName.slice(sepIdx + 1) : fileName;
+  const dotIdx = tail.lastIndexOf(".");
+  if (dotIdx <= 0) return tail;
+  const ext = tail.slice(dotIdx + 1).toLowerCase();
+  return VIDEO_EXTENSIONS.has(ext) ? tail.slice(0, dotIdx) : tail;
+}
+
 // ── Windows Reserved Names ────────────────────────────────
 // These filenames are forbidden on Windows regardless of extension
 const WINDOWS_RESERVED = new Set([
@@ -45,16 +116,37 @@ const WINDOWS_RESERVED = new Set([
   "CONOUT$",
 ]);
 
+/** Optional resolution context for tokens that depend on out-of-band data
+ *  (a paired video filename, an explicit language tag). All fields default
+ *  to empty when omitted. {video_name} requires `videoName`; {lang} prefers
+ *  explicit `lang` over auto-extraction from the input filename. */
+export interface ResolveOptions {
+  /** Filename (with or without extension) of the paired video. The basename
+   *  without extension is substituted for `{video_name}`. Empty when not
+   *  paired (Tab 1–3 workflows). */
+  videoName?: string;
+  /** Explicit language tag for `{lang}`. When omitted, the resolver
+   *  auto-extracts a tag from the input filename's trailing dotted segment
+   *  (e.g., `EP01.zh.ass` → "zh"). */
+  lang?: string;
+}
+
 /**
  * Resolve an output path from a template and input file path.
  *
  * @param inputPath - Full path to the input file
  * @param template - Output template string (e.g., "{name}.hdr.ass")
  * @param eotf - Transfer function for {eotf} variable
+ * @param options - Optional context for {video_name} and {lang} tokens
  * @returns Resolved output file path
  * @throws Error if template resolves to unsafe path
  */
-export function resolveOutputPath(inputPath: string, template: string, eotf: Eotf): string {
+export function resolveOutputPath(
+  inputPath: string,
+  template: string,
+  eotf: Eotf,
+  options: ResolveOptions = {}
+): string {
   // Extract directory and base name from input path. We work on a
   // forward-slash-normalized copy for path-parsing convenience, but remember
   // whether the original used backslashes so the final output preserves the
@@ -96,11 +188,36 @@ export function resolveOutputPath(inputPath: string, template: string, eotf: Eot
     throw new Error("Input filename contains control characters");
   }
 
+  // Resolve token values once. {lang} prefers the explicit option; falling
+  // back to filename extraction lets simple Tab 1–3 workflows benefit when
+  // their input is already tagged (`EP01.zh.srt`). `videoName` is purely
+  // pair-driven (Tab 4); empty otherwise.
+  const langValue = (options.lang ?? extractLangFromBaseName(baseName)).toLowerCase();
+  const videoStem = stripVideoExtension(options.videoName ?? "");
+
   // Resolve template variables in a single pass to prevent double-substitution
   // (e.g., a filename containing literal "{eotf}" being expanded by the second replace)
-  const resolved = template.replace(/\{(name|eotf)\}/g, (_, key: string) =>
-    key === "name" ? baseName : eotf.toLowerCase()
-  );
+  const resolved = template
+    .replace(/\{(name|eotf|video_name|lang)\}/g, (_, key: string) => {
+      switch (key) {
+        case "name":
+          return baseName;
+        case "eotf":
+          return eotf.toLowerCase();
+        case "video_name":
+          return videoStem;
+        case "lang":
+          return langValue;
+        default:
+          return "";
+      }
+    })
+    // Collapse adjacent-dot artifacts produced when an optional token
+    // ({lang} or {video_name}) resolves to an empty string in the middle
+    // of a template like `{video_name}.{lang}.ass`. Templates without
+    // empty tokens are unchanged. Side note: input filenames containing
+    // literal `..` (very rare, almost always a typo) collapse here too.
+    .replace(/\.{2,}/g, ".");
 
   // Safety: reject characters that are illegal in filenames on Windows, plus
   // all control chars / DEL (tab / newline would pass the ordinary check and

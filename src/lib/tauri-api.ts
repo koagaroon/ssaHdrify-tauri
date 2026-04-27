@@ -202,6 +202,16 @@ export async function scanFontFiles(paths: string[]): Promise<LocalFontEntry[]> 
   return raw.map(fromRawLocalFontEntry);
 }
 
+/**
+ * Expand a list of paths from a drag-drop event into a flat list of file
+ * paths. Folders are walked one level deep; files pass through unchanged.
+ * Hidden entries, symlinks, and reparse points are skipped on the Rust
+ * side. Returns an empty array when nothing usable was dropped.
+ */
+export async function expandDroppedPaths(paths: string[]): Promise<string[]> {
+  return invoke<string[]>("expand_dropped_paths", { paths });
+}
+
 // Rust serializes `size_bytes` (snake_case); translate to camelCase here so
 // the rest of the frontend stays in JS conventions.
 interface RawLocalFontEntry {

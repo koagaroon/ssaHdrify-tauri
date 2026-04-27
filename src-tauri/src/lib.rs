@@ -1,3 +1,4 @@
+pub mod dropzone;
 pub mod encoding;
 pub mod fonts;
 
@@ -15,14 +16,12 @@ pub fn run() {
             } else {
                 log::LevelFilter::Warn
             };
-            app.handle().plugin(
-                tauri_plugin_log::Builder::default()
-                    .level(level)
-                    .build(),
-            )?;
+            app.handle()
+                .plugin(tauri_plugin_log::Builder::default().level(level).build())?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            dropzone::expand_dropped_paths,
             encoding::read_text_detect_encoding,
             fonts::find_system_font,
             fonts::subset_font,

@@ -134,9 +134,7 @@ pub fn find_system_font(
         .map_err(|e| {
             // Log the detailed error server-side; return a generic message
             // to the frontend so OS-level paths never surface in user toasts.
-            log::warn!(
-                "font lookup failed for '{family}' (bold={bold}, italic={italic}): {e}"
-            );
+            log::warn!("font lookup failed for '{family}' (bold={bold}, italic={italic}): {e}");
             format!("Font not found: {family} (bold={bold}, italic={italic})")
         })?;
 
