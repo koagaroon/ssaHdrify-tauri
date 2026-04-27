@@ -23,6 +23,8 @@ import type { Status } from "../../lib/StatusContext";
 import { useTabStatus } from "../../lib/useTabStatus";
 import { useFolderDrop } from "../../lib/useFolderDrop";
 import { countExistingFiles } from "../../lib/output-collisions";
+import { TAB_LABEL_KEYS } from "../../lib/tab-labels";
+import type { TabId } from "../../lib/FileContext";
 
 /** Convert ASS color "&H00BBGGRR" to HTML "#RRGGBB" */
 function assColorToHex(assColor: string): string {
@@ -77,7 +79,7 @@ interface LogEntry {
 
 export default function HdrConvert() {
   const { t } = useI18n();
-  const { hdrFiles, setHdrFiles, clearFile, filterAvailablePaths } = useFileContext();
+  const { hdrFiles, setHdrFiles, clearFile, isFileInUse } = useFileContext();
   const [eotf, setEotf] = useState<Eotf>("PQ");
   const [brightness, setBrightness] = useState(DEFAULT_BRIGHTNESS);
   const [brightnessText, setBrightnessText] = useState(String(DEFAULT_BRIGHTNESS));
@@ -103,6 +105,11 @@ export default function HdrConvert() {
   const [progress, setProgress] = useState<{ processed: number; total: number } | null>(null);
   // Drag-active highlight on the file strip — toggled by useFolderDrop.
   const [dropActive, setDropActive] = useState(false);
+  // Error banner shown above the file strip when a selection is rejected
+  // (e.g., cross-tab dedup conflict). Strict mode: any conflict rejects
+  // the entire drop, no state change, banner persists until the next
+  // selection attempt or until the user clicks Clear.
+  const [dropError, setDropError] = useState<string | null>(null);
   const logIdRef = useRef(0);
   const cancelRef = useRef(false);
   // Scroll container ref — the inner overflow-y-auto div of the Log
@@ -206,22 +213,47 @@ export default function HdrConvert() {
   const activeTemplate = template === "custom" ? customTemplate : template;
   const convertDisabled = !hdrFiles || processing;
 
+  // Strict cross-tab dedup. If ANY path is loaded in another tab, the
+  // whole selection is rejected — the user gets a visible banner naming
+  // the conflicting tab and the count, no hdrFiles change occurs (so the
+  // previous selection stays intact). Returns null when the selection is
+  // safe to load. Reason for strict over silent-skip: the prior
+  // "filter-and-proceed" approach left contradictions where the log said
+  // "skipped" but the button still looked active because it reflected
+  // the previous selection, not the new attempt.
+  const checkConflicts = useCallback(
+    (paths: string[]): string | null => {
+      let conflictCount = 0;
+      let conflictTab: TabId | null = null;
+      for (const p of paths) {
+        const usedIn = isFileInUse(p, "hdr");
+        if (usedIn) {
+          if (conflictTab === null) conflictTab = usedIn;
+          conflictCount++;
+        }
+      }
+      if (conflictTab === null) return null;
+      return t("msg_dedup_blocked", conflictCount, t(TAB_LABEL_KEYS[conflictTab]));
+    },
+    [isFileInUse, t]
+  );
+
   // ── File selection (separate from conversion) ──────────
   const handleSelectFiles = useCallback(async () => {
     const paths = await pickSubtitleFiles();
     if (!paths || paths.length === 0) return;
 
-    // Cross-tab duplicate guard: skip files already loaded in other tabs
-    const { allowed, skippedCount } = filterAvailablePaths(paths, "hdr");
-    if (skippedCount > 0) {
-      addLog(t("msg_files_skipped_in_use", skippedCount), "error");
+    const conflictMsg = checkConflicts(paths);
+    if (conflictMsg) {
+      setDropError(conflictMsg);
+      return;
     }
-    if (allowed.length === 0) return;
+    setDropError(null);
 
     // Silent replace: see FileContext.tsx for design rationale
-    const names = allowed.map(fileNameFromPath);
-    setHdrFiles({ filePaths: allowed, fileNames: names });
-  }, [filterAvailablePaths, setHdrFiles, addLog, t]);
+    const names = paths.map(fileNameFromPath);
+    setHdrFiles({ filePaths: paths, fileNames: names });
+  }, [checkConflicts, setHdrFiles]);
 
   // ── Folder drag-drop ingestion ──────────────────────────
   // Dropped paths come back from Rust expansion already flat-listed (one
@@ -241,16 +273,17 @@ export default function HdrConvert() {
         return;
       }
 
-      const { allowed, skippedCount } = filterAvailablePaths(subtitlePaths, "hdr");
-      if (skippedCount > 0) {
-        addLog(t("msg_files_skipped_in_use", skippedCount), "error");
+      const conflictMsg = checkConflicts(subtitlePaths);
+      if (conflictMsg) {
+        setDropError(conflictMsg);
+        return;
       }
-      if (allowed.length === 0) return;
+      setDropError(null);
 
-      const names = allowed.map(fileNameFromPath);
-      setHdrFiles({ filePaths: allowed, fileNames: names });
+      const names = subtitlePaths.map(fileNameFromPath);
+      setHdrFiles({ filePaths: subtitlePaths, fileNames: names });
     },
-    [filterAvailablePaths, setHdrFiles, addLog, t]
+    [checkConflicts, setHdrFiles, addLog, t]
   );
 
   useFolderDrop({
@@ -451,6 +484,7 @@ export default function HdrConvert() {
 
   const handleClearFiles = useCallback(() => {
     clearFile("hdr");
+    setDropError(null);
   }, [clearFile]);
 
   return (
@@ -615,11 +649,38 @@ export default function HdrConvert() {
         </button>
       </div>
 
+      {/* Selection-rejected banner. Sticky until the next selection
+           attempt or until the user clicks ✕ on the file strip. The
+           dismiss button gives the user a way to clear it without
+           making another selection. */}
+      {dropError && (
+        <div
+          className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg text-sm"
+          role="alert"
+          style={{
+            background: "var(--cancel-bg)",
+            border: "1px solid var(--error)",
+            color: "var(--error)",
+          }}
+        >
+          <span>{dropError}</span>
+          <button
+            type="button"
+            onClick={() => setDropError(null)}
+            aria-label={t("btn_clear_file")}
+            className="flex-none text-base"
+            style={{ color: "var(--error)", lineHeight: 1 }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Drop-zone discoverability hint — drag is invisible without
            prompting; surface it inline so users don't have to read docs.
            Visible only when the strip is empty (idle), where the hint is
            most useful. Hidden mid-batch to avoid distraction. */}
-      {!hdrFiles && (
+      {!hdrFiles && !dropError && (
         <p className="text-xs ml-1" style={{ color: "var(--text-muted)" }}>
           {t("hdr_drop_hint")}
         </p>

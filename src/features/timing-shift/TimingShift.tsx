@@ -14,6 +14,8 @@ import type { Status } from "../../lib/StatusContext";
 import { useTabStatus } from "../../lib/useTabStatus";
 import { useFolderDrop } from "../../lib/useFolderDrop";
 import { countExistingFiles } from "../../lib/output-collisions";
+import { TAB_LABEL_KEYS } from "../../lib/tab-labels";
+import type { TabId } from "../../lib/FileContext";
 
 type Unit = "ms" | "s";
 type Direction = "slower" | "faster";
@@ -40,7 +42,7 @@ function fileNameHasSubtitleExt(name: string): boolean {
 
 export default function TimingShift() {
   const { t } = useI18n();
-  const { timingFiles, setTimingFiles, clearFile, filterAvailablePaths } = useFileContext();
+  const { timingFiles, setTimingFiles, clearFile, isFileInUse } = useFileContext();
 
   const [detectedFormat, setDetectedFormat] = useState<string>("");
   const [offsetValue, setOffsetValue] = useState(200);
@@ -61,6 +63,10 @@ export default function TimingShift() {
   const [dropActive, setDropActive] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [showFileList, setShowFileList] = useState(false);
+  // Selection-rejection banner — see HdrConvert for the full rationale.
+  // Strict cross-tab dedup: any conflict in the new selection rejects
+  // the entire drop, leaving the prior state untouched.
+  const [dropError, setDropError] = useState<string | null>(null);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const pickGenRef = useRef(0);
@@ -193,35 +199,57 @@ export default function TimingShift() {
   }, [fileCount, busy, lastActionResult, progress, t]);
   useTabStatus("timing", tabStatus);
 
-  // Shared ingestion path: cross-tab dedup → load first file's body
-  // for the live preview → publish to context. The rest of the batch
-  // is read on demand during the save loop, so memory stays flat even
+  // Strict cross-tab dedup. If any path is loaded in another tab, the
+  // whole selection is rejected — the user gets a visible banner naming
+  // the conflicting tab and the count, and timingFiles stays untouched.
+  // Same rationale as HdrConvert.checkConflicts.
+  const checkConflicts = useCallback(
+    (paths: string[]): string | null => {
+      let conflictCount = 0;
+      let conflictTab: TabId | null = null;
+      for (const p of paths) {
+        const usedIn = isFileInUse(p, "timing");
+        if (usedIn) {
+          if (conflictTab === null) conflictTab = usedIn;
+          conflictCount++;
+        }
+      }
+      if (conflictTab === null) return null;
+      return t("msg_dedup_blocked", conflictCount, t(TAB_LABEL_KEYS[conflictTab]));
+    },
+    [isFileInUse, t]
+  );
+
+  // Shared ingestion path: conflict check → load first file's body for
+  // the live preview → publish to context. The rest of the batch is
+  // read on demand during the save loop, so memory stays flat even
   // for a 24-episode drop.
   const ingestPaths = useCallback(
     async (paths: string[], gen: number) => {
-      const { allowed, skippedCount } = filterAvailablePaths(paths, "timing");
-      if (skippedCount > 0) {
-        addLog(t("msg_files_skipped_in_use", skippedCount), "error");
+      const conflictMsg = checkConflicts(paths);
+      if (conflictMsg) {
+        setDropError(conflictMsg);
+        return;
       }
-      if (allowed.length === 0) return;
+      setDropError(null);
 
       let firstContent: string;
       try {
-        firstContent = await readText(allowed[0]);
+        firstContent = await readText(paths[0]);
       } catch (e) {
         addLog(t("error_prefix", e instanceof Error ? e.message : String(e)), "error");
         return;
       }
       if (gen !== pickGenRef.current) return;
 
-      const names = allowed.map(fileNameFromPath);
+      const names = paths.map(fileNameFromPath);
       setTimingFiles({
-        filePaths: allowed,
+        filePaths: paths,
         fileNames: names,
         firstFileContent: firstContent,
       });
     },
-    [filterAvailablePaths, setTimingFiles, addLog, t]
+    [checkConflicts, setTimingFiles, addLog, t]
   );
 
   const handlePickFiles = useCallback(async () => {
@@ -258,6 +286,7 @@ export default function TimingShift() {
     setPreview([]);
     setCaptionCount(0);
     setDetectedFormat("");
+    setDropError(null);
   }, [clearFile]);
 
   const handleSaveAll = useCallback(async () => {
@@ -561,8 +590,32 @@ export default function TimingShift() {
         </button>
       </div>
 
+      {/* Selection-rejected banner — same UX as HdrConvert. */}
+      {dropError && (
+        <div
+          className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg text-sm"
+          role="alert"
+          style={{
+            background: "var(--cancel-bg)",
+            border: "1px solid var(--error)",
+            color: "var(--error)",
+          }}
+        >
+          <span>{dropError}</span>
+          <button
+            type="button"
+            onClick={() => setDropError(null)}
+            aria-label={t("btn_clear_file")}
+            className="flex-none text-base"
+            style={{ color: "var(--error)", lineHeight: 1 }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Drop-zone discoverability hint — visible only when idle. */}
-      {fileCount === 0 && (
+      {fileCount === 0 && !dropError && (
         <p className="text-xs ml-1" style={{ color: "var(--text-muted)" }}>
           {t("timing_drop_hint")}
         </p>

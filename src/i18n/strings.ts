@@ -330,5 +330,9 @@ export const strings: Record<string, StringEntry> = {
     en: "Skipped {0} file(s) already loaded in other tabs",
     zh: "已跳过 {0} 个在其他标签页中已加载的文件",
   },
+  msg_dedup_blocked: {
+    en: "Can't load — {0} file(s) already loaded in the {1} tab. Clear them there first.",
+    zh: "无法加载 — {0} 个文件已在「{1}」标签页中。请先在该标签页中清除。",
+  },
   error_prefix: { en: "Error: {0}", zh: "错误：{0}" },
 };
