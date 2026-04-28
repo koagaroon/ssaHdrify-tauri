@@ -1,13 +1,13 @@
 /**
  * Batch Rename — Tab 4.
  *
- * Stage 5a (this commit): tab plumbing + ingestion. The user can drop or
- * pick a mix of video and subtitle files (or a folder); auto-categorize
- * by extension; see counts in summary chips. Cross-tab dedup mirrors the
- * other tabs' strict reject + banner pattern.
- *
- * Stage 5b will add the pairing engine + preview-table grid; Stage 5c
- * will add output-mode selection + execution.
+ * Stage 5a: tab plumbing + ingestion (file pick / folder drop, auto
+ *   categorization, count chips, cross-tab dedup).
+ * Stage 5b (this commit): pairing engine + preview grid. Each row
+ *   represents one (video, subtitle) pair. Multi-language subs for the
+ *   same video produce N rows with the first selected by default.
+ * Stage 5c will add output-mode radios (rename / copy-to-video-dir /
+ *   copy-to-chosen) + per-row checkbox toggles + manual edit + run.
  */
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { pickRenameInputs, fileNameFromPath } from "../../lib/tauri-api";
@@ -18,6 +18,13 @@ import type { TabId } from "../../lib/FileContext";
 import type { Status } from "../../lib/StatusContext";
 import { useTabStatus } from "../../lib/useTabStatus";
 import { useFolderDrop } from "../../lib/useFolderDrop";
+import { PreviewTable, type PreviewTableColumn } from "../../lib/PreviewTable";
+import {
+  buildPairings,
+  parseFilename,
+  type PairingRow,
+  type PairingSource,
+} from "./pairing-engine";
 
 interface LogEntry {
   id: number;
@@ -74,6 +81,59 @@ function categorizePaths(paths: string[]): Categorized {
   return { videos, subtitles, unknown };
 }
 
+// Source badge — color-coded chip per pairing's `source` field. Uses
+// existing palette tokens (success / warning / muted / accent) so the
+// theme swap stays consistent across light/dark.
+function renderSourceBadge(
+  source: PairingSource,
+  t: (key: string, ...args: (string | number)[]) => string
+): JSX.Element {
+  const map: Record<PairingSource, { labelKey: string; color: string; bg: string }> = {
+    regex: {
+      labelKey: "rename_source_regex",
+      color: "var(--success)",
+      bg: "var(--badge-green-bg)",
+    },
+    lcs: {
+      labelKey: "rename_source_lcs",
+      color: "var(--text-muted)",
+      bg: "var(--bg-input)",
+    },
+    manual: {
+      labelKey: "rename_source_manual",
+      color: "var(--accent)",
+      bg: "var(--bg-input)",
+    },
+    unmatched: {
+      labelKey: "rename_source_unmatched",
+      color: "var(--text-muted)",
+      bg: "transparent",
+    },
+    warning: {
+      labelKey: "rename_source_warning",
+      color: "var(--warning)",
+      bg: "color-mix(in srgb, var(--warning) 15%, transparent)",
+    },
+  };
+  const { labelKey, color, bg } = map[source];
+  return (
+    <span
+      style={{
+        display: "inline-block",
+        padding: "1px 8px",
+        borderRadius: "4px",
+        fontSize: "10px",
+        fontWeight: 600,
+        letterSpacing: "0.04em",
+        color,
+        background: bg,
+      }}
+    >
+      {t(labelKey)}
+    </span>
+  );
+}
+
 export default function BatchRename() {
   const { t } = useI18n();
   const { renameFiles, setRenameFiles, clearFile, isFileInUse } = useFileContext();
@@ -108,6 +168,62 @@ export default function BatchRename() {
   const videoCount = videoPaths.length;
   const subtitleCount = subtitlePaths.length;
   const totalCount = videoCount + subtitleCount;
+
+  // Pairing — recomputed whenever the file lists change. Pure function
+  // so memoizing on the array references is enough; the engine has no
+  // hidden state.
+  const pairingRows = useMemo<PairingRow[]>(() => {
+    if (totalCount === 0) return [];
+    const parsedVideos = videoPaths.map((p, i) => parseFilename(p, videoNames[i] ?? ""));
+    const parsedSubs = subtitlePaths.map((p, i) => parseFilename(p, subtitleNames[i] ?? ""));
+    return buildPairings(parsedVideos, parsedSubs);
+  }, [videoPaths, videoNames, subtitlePaths, subtitleNames, totalCount]);
+
+  const warningCount = useMemo(
+    () => pairingRows.filter((r) => r.source === "warning").length,
+    [pairingRows]
+  );
+
+  const pairingColumns = useMemo<PreviewTableColumn<PairingRow>[]>(
+    () => [
+      {
+        key: "idx",
+        header: t("col_index"),
+        width: "32px",
+        render: (_row, i) => i + 1,
+        className: "row-idx",
+      },
+      {
+        key: "video",
+        header: t("rename_col_video"),
+        width: "1fr",
+        render: (row) =>
+          row.video ? (
+            <span title={row.video.name}>{row.video.name}</span>
+          ) : (
+            <span style={{ color: "var(--text-muted)", fontStyle: "italic" }}>—</span>
+          ),
+      },
+      {
+        key: "sub",
+        header: t("rename_col_subtitle"),
+        width: "1fr",
+        render: (row) =>
+          row.subtitle ? (
+            <span title={row.subtitle.name}>{row.subtitle.name}</span>
+          ) : (
+            <span style={{ color: "var(--text-muted)", fontStyle: "italic" }}>—</span>
+          ),
+      },
+      {
+        key: "source",
+        header: t("rename_col_source"),
+        width: "100px",
+        render: (row) => renderSourceBadge(row.source, t),
+      },
+    ],
+    [t]
+  );
 
   const addLog = useCallback((text: string, type: LogEntry["type"] = "info") => {
     const id = logIdRef.current++;
@@ -346,100 +462,31 @@ export default function BatchRename() {
         </p>
       )}
 
-      {/* Stage 5b will replace this placeholder with the pairing
-           preview-table; Stage 5c adds output mode + run controls. */}
+      {/* Pairing preview grid. The engine produces one row per
+           (video, subtitle) pair; multi-language subs for the same
+           video collapse to N rows. Source badge tells the user which
+           algorithm decided the pair (regex / LCS / manual / unmatched
+           / warning for ambiguous keys). Stage 5c will add per-row
+           checkbox toggle + manual edit. */}
       {totalCount > 0 && (
-        <div
-          className="rounded-lg px-4 py-6 text-center"
-          style={{
-            border: "1px solid var(--border)",
-            background: "var(--bg-panel)",
-          }}
-        >
-          <p className="text-sm" style={{ color: "var(--text-primary)" }}>
-            {t("rename_stage5a_placeholder_title")}
-          </p>
-          <p className="text-xs mt-1" style={{ color: "var(--text-secondary)" }}>
-            {t("rename_stage5a_placeholder_body", videoCount, subtitleCount)}
-          </p>
-        </div>
-      )}
-
-      {/* Per-file file lists — useful in Stage 5a for verifying the
-           categorization. Will be replaced by the pairing grid in 5b. */}
-      {totalCount > 0 && (
-        <div className="grid grid-cols-2 gap-3">
-          <div
-            className="rounded-lg"
-            style={{
-              border: "1px solid var(--border-light)",
-              background: "var(--bg-panel)",
-            }}
-          >
-            <div
-              className="px-3 py-2 text-xs font-medium"
-              style={{
-                color: "var(--text-muted)",
-                borderBottom: "1px solid var(--border-light)",
-              }}
-            >
-              {t("rename_chip_videos", videoCount)}
-            </div>
-            <div className="max-h-48 overflow-y-auto">
-              {videoNames.length === 0 ? (
-                <p className="px-3 py-2 text-xs italic" style={{ color: "var(--text-muted)" }}>
-                  —
-                </p>
-              ) : (
-                videoNames.map((name, idx) => (
-                  <div
-                    key={`${idx}-${name}`}
-                    className="px-3 py-1 text-xs truncate"
-                    style={{ color: "var(--text-primary)" }}
-                    title={videoPaths[idx]}
-                  >
-                    {name}
-                  </div>
-                ))
+        <PreviewTable
+          rows={pairingRows}
+          rowKey={(row) => row.id}
+          columns={pairingColumns}
+          title={
+            <>
+              <span>{t("rename_grid_title", pairingRows.length)}</span>
+              {warningCount > 0 && (
+                <span style={{ color: "var(--warning)" }}>
+                  {" · "}
+                  {t("rename_grid_warning_suffix", warningCount)}
+                </span>
               )}
-            </div>
-          </div>
-          <div
-            className="rounded-lg"
-            style={{
-              border: "1px solid var(--border-light)",
-              background: "var(--bg-panel)",
-            }}
-          >
-            <div
-              className="px-3 py-2 text-xs font-medium"
-              style={{
-                color: "var(--text-muted)",
-                borderBottom: "1px solid var(--border-light)",
-              }}
-            >
-              {t("rename_chip_subtitles", subtitleCount)}
-            </div>
-            <div className="max-h-48 overflow-y-auto">
-              {subtitleNames.length === 0 ? (
-                <p className="px-3 py-2 text-xs italic" style={{ color: "var(--text-muted)" }}>
-                  —
-                </p>
-              ) : (
-                subtitleNames.map((name, idx) => (
-                  <div
-                    key={`${idx}-${name}`}
-                    className="px-3 py-1 text-xs truncate"
-                    style={{ color: "var(--text-primary)" }}
-                    title={subtitlePaths[idx]}
-                  >
-                    {name}
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        </div>
+            </>
+          }
+          emptyMessage={t("rename_no_pairings")}
+          rowClassName={(row) => (row.source === "warning" ? "preview-row-warning" : undefined)}
+        />
       )}
 
       {/* Log */}

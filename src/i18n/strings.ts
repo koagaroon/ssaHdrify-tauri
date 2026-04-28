@@ -407,12 +407,24 @@ export const strings: Record<string, StringEntry> = {
     en: "Skipped {0} file(s) — neither video nor subtitle",
     zh: "已跳过 {0} 个文件 — 既非视频也非字幕",
   },
-  rename_stage5a_placeholder_title: {
-    en: "Pairing engine — coming next",
-    zh: "配对引擎 — 即将上线",
+  rename_grid_title: {
+    en: "Pairing preview · {0} row(s)",
+    zh: "配对预览 · {0} 行",
   },
-  rename_stage5a_placeholder_body: {
-    en: "Stage 5a: ingestion only. {0} videos and {1} subtitles loaded; pairing + rename run in the next iteration.",
-    zh: "阶段 5a：仅完成文件录入。已加载 {0} 个视频与 {1} 个字幕；配对与重命名将在下一阶段实现。",
+  rename_grid_warning_suffix: {
+    en: "{0} warning(s)",
+    zh: "{0} 个警告",
   },
+  rename_no_pairings: {
+    en: "No pairings yet — load videos and subtitles to begin.",
+    zh: "暂无配对 — 加载视频与字幕后开始。",
+  },
+  rename_col_video: { en: "Video", zh: "视频" },
+  rename_col_subtitle: { en: "Subtitle", zh: "字幕" },
+  rename_col_source: { en: "Source", zh: "来源" },
+  rename_source_regex: { en: "regex", zh: "正则" },
+  rename_source_lcs: { en: "LCS", zh: "LCS" },
+  rename_source_manual: { en: "manual", zh: "手动" },
+  rename_source_unmatched: { en: "—", zh: "—" },
+  rename_source_warning: { en: "warning", zh: "冲突" },
 };

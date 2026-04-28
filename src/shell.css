@@ -506,6 +506,13 @@
   font-size: 12px;
 }
 
+/* Per-row state class — warning rows in the Tab 4 pairing grid get a
+   yellow tint so the user can spot ambiguous keys (multiple videos
+   sharing the same season+episode) at a glance. Subtle, not loud. */
+.preview-table-row.preview-row-warning {
+  background: color-mix(in srgb, var(--warning) 6%, transparent);
+}
+
 /* ─────────────────────────────────────────────────────────────
    DROP ZONE — drag-drop highlight overlay
    Used by feature tabs that accept folder / file drops via
