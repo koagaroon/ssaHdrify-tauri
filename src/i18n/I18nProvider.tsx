@@ -11,9 +11,14 @@ const STORAGE_KEY = "ssahdrify-lang";
 function loadLang(): Lang {
   const stored = localStorage.getItem(STORAGE_KEY);
   if (stored === "en" || stored === "zh") return stored;
-  // First launch defaults to Chinese by project choice — not a fallback for
-  // undetected system language. Users can switch to English via the header
-  // toggle; the choice persists in localStorage.
+  // First launch defaults to Chinese by project choice: the primary user
+  // base for fan-sub workflows runs Chinese-language subtitles, and most
+  // first-time users land via Chinese-language community channels. We
+  // skip navigator.language detection on purpose — Windows users in CN
+  // commonly run an English-display OS while still wanting CN UI, so a
+  // language-detect default would mis-fit the modal user. Users can
+  // switch to English via the header toggle; the choice persists in
+  // localStorage.
   return "zh";
 }
 

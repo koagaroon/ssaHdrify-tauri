@@ -86,20 +86,20 @@ describe("resolveOutputPath — {video_name} and {lang} tokens", () => {
     const result = resolveOutputPath(`${BASE}/EP01.srt`, "{video_name}.ass", "PQ", {
       videoName: "Show.S01E01.1080p.mkv",
     });
-    expect(result).toContain("Show.S01E01.1080p.ass");
+    expect(result).toBe(`${BASE}/Show.S01E01.1080p.ass`);
   });
 
   it("accepts {video_name} without extension", () => {
     const result = resolveOutputPath(`${BASE}/EP01.srt`, "{video_name}.ass", "PQ", {
       videoName: "Show.S01E01",
     });
-    expect(result).toContain("Show.S01E01.ass");
+    expect(result).toBe(`${BASE}/Show.S01E01.ass`);
   });
 
   it("auto-extracts {lang} from filename's last dotted segment", () => {
     const result = resolveOutputPath(`${BASE}/movie.zh.srt`, "{name}.{lang}.ass", "PQ");
     // `{name}` resolves to `movie.zh` (full stem); `{lang}` resolves to `zh`
-    expect(result).toContain("movie.zh.zh.ass");
+    expect(result).toBe(`${BASE}/movie.zh.zh.ass`);
   });
 
   it("explicit lang option overrides filename extraction", () => {
@@ -107,7 +107,7 @@ describe("resolveOutputPath — {video_name} and {lang} tokens", () => {
       videoName: "Movie",
       lang: "zh",
     });
-    expect(result).toContain("Movie.zh.ass");
+    expect(result).toBe(`${BASE}/Movie.zh.ass`);
   });
 
   it("collapses double dots when {lang} resolves empty in middle of template", () => {

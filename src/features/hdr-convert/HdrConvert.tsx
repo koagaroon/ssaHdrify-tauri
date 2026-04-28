@@ -2,8 +2,7 @@ import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { pickSubtitleFiles, readText, writeText, fileNameFromPath } from "../../lib/tauri-api";
 import { processAssContent, parseAssColor, formatAssColor } from "./ass-processor";
 import {
-  escapeSrtUserText,
-  preprocessSrtColors,
+  processSrtUserText,
   buildAssDocument,
   isNativeAss,
   isConvertible,
@@ -404,21 +403,11 @@ export default function HdrConvert() {
             // Direct ASS processing
             assContent = processAssContent(content, brightness, eotf);
           } else if (isConvertible(fileName)) {
-            // SRT/SUB → ASS conversion path.
-            //
-            // Order matters:
-            //   1. escapeSrtUserText — neutralize raw `\` / `{` / `}` so a
-            //      crafted SRT cannot smuggle ASS overrides through user text
-            //      (libass would otherwise interpret a `{\an8\pos(0,0)}` in
-            //      the source verbatim).
-            //   2. preprocessSrtColors — inject OUR trusted color tags for
-            //      HDR conversion. Safe to emit unescaped `{…}` here because
-            //      step 1 already consumed every user brace.
-            //   3. parseSubtitle + buildAssDocument — downstream never
-            //      re-escapes, so our injected tags survive and the HDR
-            //      color stage sees them.
-            const escaped = escapeSrtUserText(content);
-            const preprocessed = preprocessSrtColors(escaped);
+            // SRT/SUB → ASS conversion path. processSrtUserText composes
+            // the two-step user-text pipeline (escape user braces, then
+            // inject our trusted color tags) so the order can't be swapped
+            // or one step skipped by a future caller.
+            const preprocessed = processSrtUserText(content);
 
             // Parse with our browser-compatible parser
             const { captions } = parseSubtitle(preprocessed, style.fps);
@@ -640,7 +629,6 @@ export default function HdrConvert() {
           style={{
             background: convertDisabled ? "var(--bg-input)" : "var(--accent)",
             color: convertDisabled ? "var(--text-muted)" : "white",
-            opacity: !hdrFiles ? 0.5 : 1,
             height: "38px",
             minWidth: "120px",
           }}

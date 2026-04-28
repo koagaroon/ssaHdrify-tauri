@@ -33,6 +33,15 @@ export default defineConfig([
       // warrants. The extra cascading render is one frame of work on a
       // tiny piece of state, not a perf concern. Keep the pattern; relax
       // the rule.
+      //
+      // Audit recipe — to find every set-state-in-effect site (and confirm
+      // none are accidental new growth), grep:
+      //
+      //   rg -nU 'useEffect\([^)]*\{[^}]*\bset[A-Z]\w*\(' src --multiline
+      //
+      // The five legitimate sites all clear transient banners or preview
+      // lists. Any new match should be reviewed for a `key`-based remount
+      // alternative before being accepted.
       "react-hooks/set-state-in-effect": "off",
     },
   },

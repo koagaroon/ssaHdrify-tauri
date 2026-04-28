@@ -632,6 +632,18 @@
   position: relative;
 }
 
+/* Disabled rainbow track: desaturate the gradient and dim the border instead
+   of dropping the whole viz to opacity:0.6 (washed-out reads worse than
+   gray). Pointer events are off so the track can't be dragged. */
+.nit-viz.is-disabled {
+  border-color: var(--border-muted, var(--border-light));
+}
+
+.nit-viz.is-disabled .nit-track {
+  filter: grayscale(1);
+  pointer-events: none;
+}
+
 .nit-head {
   display: flex;
   align-items: baseline;

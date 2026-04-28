@@ -41,6 +41,8 @@ export const LANG_TAGS: ReadonlySet<string> = new Set([
  */
 export function extractLangFromBaseName(baseName: string): string {
   const dotIdx = baseName.lastIndexOf(".");
+  // Reject -1 (no dot at all) AND 0 (a leading-dot name like ".zh" — that's
+  // a hidden file with no real basename, not a "zh-tagged" subtitle).
   if (dotIdx <= 0) return "";
   const candidate = baseName.slice(dotIdx + 1).toLowerCase();
   return LANG_TAGS.has(candidate) ? candidate : "";

@@ -66,6 +66,12 @@ export interface EmbedProgress {
  * both resolve to the same (path, index) tuple. This is what lets an ASS
  * script's Fontname match the font no matter which language the typesetter
  * chose to reference.
+ *
+ * Provenance: assumes `faces` originate from `scanFontDirectory` /
+ * `scanFontFiles` (which registered the paths in `ALLOWED_USER_FONT_PATHS`
+ * on the Rust side). The caller's responsibility — `entry.path` is trusted
+ * here because the Rust subset_font command will reject any path not in
+ * that allowlist when it's later asked to read the bytes.
  */
 export function buildUserFontMap(faces: LocalFontEntry[]): Map<string, LocalFontEntry> {
   const map = new Map<string, LocalFontEntry>();

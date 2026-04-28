@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   pickFontDirectory,
   pickFontFiles,
@@ -81,6 +81,16 @@ export default function FontSourceModal(props: Props) {
   // info is non-error feedback ("added N fonts") shown in a neutral tone.
   const [info, setInfo] = useState<string | null>(null);
 
+  // a11y: stable id to wire `aria-labelledby` from the dialog div to the
+  // visible title element. useId is React-stable across renders.
+  const titleId = useId();
+  // a11y: initial-focus target on open. The close button is a safe default —
+  // it's always present, doesn't trigger a destructive action on Enter, and
+  // gives keyboard users an obvious starting point. Full focus-trap is not
+  // implemented; the modal is short enough that Tab cycling out is a known
+  // limitation rather than a usability blocker.
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+
   // Close on Escape.
   useEffect(() => {
     if (!open) return;
@@ -90,6 +100,14 @@ export default function FontSourceModal(props: Props) {
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
   }, [open, onClose]);
+
+  // Move keyboard focus into the modal on open so screen readers and
+  // keyboard-only users land on a sensible starting point. Without this,
+  // Tab would still address the focused element behind the scrim.
+  useEffect(() => {
+    if (!open) return;
+    closeButtonRef.current?.focus();
+  }, [open]);
 
   // Reset transient messages whenever the modal reopens.
   useEffect(() => {
@@ -186,14 +204,26 @@ export default function FontSourceModal(props: Props) {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="modal">
+      <div
+        className="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        // The dialog itself is keyboard-focusable so the initial-focus
+        // useEffect lands somewhere predictable even before the close
+        // button mounts on slow renders.
+        tabIndex={-1}
+      >
         {/* ── Header — title + subtitle + close ──── */}
         <div className="modal-head">
           <div className="modal-head-text">
-            <div className="modal-title">{t("font_sources_title")}</div>
+            <div id={titleId} className="modal-title">
+              {t("font_sources_title")}
+            </div>
             <div className="modal-sub">{t("font_sources_modal_sub")}</div>
           </div>
           <button
+            ref={closeButtonRef}
             type="button"
             onClick={onClose}
             className="modal-close"

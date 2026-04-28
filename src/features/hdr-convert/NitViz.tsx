@@ -113,7 +113,7 @@ export default function NitViz({ value, onChange, disabled = false }: NitVizProp
   };
 
   return (
-    <div className="nit-viz" style={{ opacity: disabled ? 0.6 : 1 }}>
+    <div className={`nit-viz${disabled ? " is-disabled" : ""}`}>
       <div className="nit-head">
         <span className="nit-head-label">{t("nit_target")}</span>
         <span className="nit-readout">

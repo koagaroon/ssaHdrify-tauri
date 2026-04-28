@@ -56,6 +56,15 @@ function resolveAppVersion(): string {
   // attribute could become an injection vector. Restrict to the
   // alphanumerics / punctuation that legitimate version strings use.
   const sanitized = raw.replace(/[^a-zA-Z0-9._+-]/g, "");
+  if (raw && !sanitized) {
+    // Raw was non-empty but sanitization stripped everything — the upstream
+    // git tag or package.json version contains nothing that survives the
+    // allowlist. Surface the root cause; a silent fallback here would mask
+    // a corrupt tag and ship `v0.0.0-unknown` without anyone noticing.
+    console.warn(
+      `[vite] resolveAppVersion: raw value "${raw}" sanitized to empty; falling back to v0.0.0-unknown`
+    );
+  }
   return sanitized || "v0.0.0-unknown";
 }
 

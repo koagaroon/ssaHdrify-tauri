@@ -60,8 +60,7 @@ describe("sRgbToHdr — HLG mode", () => {
 });
 
 describe("sRgbToHdr — edge cases", () => {
-  it("returns black for zero brightness (graceful, no throw)", () => {
-    // Python version throws ValueError; Tauri version returns black gracefully
+  it("returns [0,0,0] for zero brightness (graceful — Python reference throws)", () => {
     const result = sRgbToHdr(128, 128, 128, 0, "PQ");
     expect(result).toEqual([0, 0, 0]);
   });

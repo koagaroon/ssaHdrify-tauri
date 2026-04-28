@@ -65,7 +65,7 @@ describe("analyzeFonts — match priority", () => {
     findSystemFontMock.mockReset();
   });
 
-  it("prefers a user-supplied local font over a system match", async () => {
+  it("skips findSystemFont when a local font matches (and reports source=local)", async () => {
     // System would have returned something, but the user's map wins first.
     findSystemFontMock.mockResolvedValue({ path: "C:/Windows/Fonts/FZ.ttf", index: 0 });
     const userFontMap = new Map<string, LocalFontEntry>();

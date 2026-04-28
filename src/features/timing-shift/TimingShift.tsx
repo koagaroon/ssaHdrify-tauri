@@ -761,9 +761,12 @@ export default function TimingShift() {
 
       {/* Timeline preview — shows the FIRST file's captions in batch mode
           (the same offset applies uniformly, so file #1 is a representative
-          sample). Frozen header sits outside the scroll area. */}
+          sample). Frozen header sits outside the scroll area.
+          aria-live polite: SR users hear when the preview recomputes after
+          offset / unit / direction / threshold changes; "polite" defers to
+          the user's current speech rather than interrupting. */}
       {preview.length > 0 && (
-        <div className="timeline-preview">
+        <div className="timeline-preview" aria-live="polite">
           <div className="timeline-preview-head">
             <span>
               {fileCount > 1

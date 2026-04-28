@@ -35,6 +35,10 @@ export function escapeSrtUserText(text: string): string {
  * from literal `{…}` in user-supplied text. Calling this on raw SRT content
  * re-introduces an injection path that lets a hostile subtitle smuggle ASS
  * overrides into the HDR pipeline.
+ *
+ * Production callers should prefer `processSrtUserText`, which composes
+ * the two steps in the correct order. Direct exports remain for unit
+ * tests that need to exercise each step in isolation.
  */
 export function preprocessSrtColors(text: string): string {
   // Regex defined inside function — no shared lastIndex state.
@@ -63,6 +67,18 @@ export function preprocessSrtColors(text: string): string {
   result = result.replace(SRT_COLOR_CLOSE_RE, () => "{\\r}");
 
   return result;
+}
+
+/**
+ * Composed SRT-user-text pipeline: escape user text, then inject our
+ * trusted color tags. This is the only entry point production callers
+ * should use — it makes the contract between the two steps a single
+ * function call rather than a documented call ordering, eliminating
+ * the regression class where a future caller swaps the order or skips
+ * the escape step.
+ */
+export function processSrtUserText(text: string): string {
+  return preprocessSrtColors(escapeSrtUserText(text));
 }
 
 // ── Style Configuration ──────────────────────────────────

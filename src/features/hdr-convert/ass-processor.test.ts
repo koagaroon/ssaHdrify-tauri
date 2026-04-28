@@ -114,8 +114,10 @@ describe("processAssContent — inline color tags", () => {
     expect(output).toContain("Hello");
     // White (FFFFFF) should be converted to a different HDR value
     expect(output).not.toMatch(/\\1c&H(?:00)?FFFFFF/);
-    // Tag structure preserved
-    expect(output).toContain("\\1c&H");
+    // Tag structure preserved AND the replacement is a legal 6/8-digit
+    // hex sequence (not a malformed run that could survive through the
+    // pipeline as plain text).
+    expect(output).toMatch(/\\1c&H[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?&/);
   });
 
   it("transforms 8-digit color tags (with alpha)", () => {

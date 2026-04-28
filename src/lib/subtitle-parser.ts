@@ -299,7 +299,13 @@ function buildAss(content: string, captions: Caption[]): string {
   // (or the two sides drifted): the output would carry wrong timestamps.
   // Hard-fail rather than warn; silent timing drift is the worst kind.
   if (idx !== captions.length) {
-    throw new Error(`buildAss/parseAss drift: consumed ${idx}/${captions.length} shifted entries`);
+    const firstUnconsumed = captions[idx]?.raw ?? "(no raw line captured)";
+    const excerpt =
+      firstUnconsumed.length > 120 ? `${firstUnconsumed.slice(0, 120)}…` : firstUnconsumed;
+    throw new Error(
+      `buildAss/parseAss drift: consumed ${idx}/${captions.length} shifted entries; ` +
+        `first unconsumed entry index=${idx}, raw="${excerpt}"`
+    );
   }
   return result;
 }
@@ -349,6 +355,13 @@ function buildSub(captions: Caption[], fps: number = DEFAULT_FPS): string {
  * Parse a subtitle file and extract captions with timestamps.
  */
 export function parseSubtitle(content: string, fps?: number): ParseResult {
+  // Strip a leading BOM. Production callers receive content via the Rust
+  // read_text_detect_encoding IPC (which already strips it), so this is
+  // defense-in-depth for unit tests and any future internal caller that
+  // bypasses the IPC layer with raw fixture content. No subtitle format
+  // legitimately starts with U+FEFF, so the strip is safe.
+  if (content.charCodeAt(0) === 0xfeff) content = content.slice(1);
+
   const format = detectFormat(content);
   let captions: Caption[];
 

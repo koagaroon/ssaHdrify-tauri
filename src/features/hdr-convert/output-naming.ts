@@ -122,6 +122,9 @@ export function resolveOutputPath(
   const normalized = inputPath.replace(/\\/g, "/");
   const lastSlash = normalized.lastIndexOf("/");
   const dir = lastSlash >= 0 ? normalized.slice(0, lastSlash) : ".";
+  // Tauri's pickSubtitleFiles always returns absolute paths; this guard
+  // catches programmatic callers (tests, future internal code) that hand
+  // in a bare filename or relative path before we resolve the output.
   if (dir === "." || dir === "") {
     throw new Error("Input path must be absolute");
   }

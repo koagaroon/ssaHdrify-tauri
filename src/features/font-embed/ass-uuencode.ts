@@ -40,7 +40,11 @@ export function assUuencode(data: Uint8Array): string[] {
     const b1 = i + 1 < data.length ? data[i + 1] : 0;
     const b2 = i + 2 < data.length ? data[i + 2] : 0;
 
-    // Split 24 bits into four 6-bit values and add 33
+    // Split 24 bits into four 6-bit values and add 33. Each 6-bit value is
+    // in [0, 63], so the encoded char is in [33, 96] by construction —
+    // exactly the ASS [Fonts] section's printable-ASCII alphabet. No
+    // post-encode validation needed because the arithmetic itself bounds
+    // the output range.
     const c0 = String.fromCharCode((b0 >> 2) + 33);
     const c1 = String.fromCharCode((((b0 & 0x03) << 4) | (b1 >> 4)) + 33);
     const c2 = String.fromCharCode((((b1 & 0x0f) << 2) | (b2 >> 6)) + 33);

@@ -118,7 +118,7 @@ describe("extractEpisode — Western fallbacks", () => {
 });
 
 describe("extractEpisode — should NOT match", () => {
-  it("returns null for filenames without recognized episode markers", () => {
+  it("returns null for a filename without any recognized episode marker", () => {
     expect(extractEpisode("RandomFile.mkv", bracketCleanup("RandomFile.mkv"))).toBeNull();
   });
 
@@ -290,14 +290,14 @@ describe("buildPairings — common shapes", () => {
   });
 
   it("videos without paired subtitles all show as unmatched", () => {
-    const matched = parse("[G][Show][01][1080p].mkv");
-    const random = parse("README.mkv");
-    const rows = buildPairings([matched, random], []);
+    const episodeNamed = parse("[G][Show][01][1080p].mkv");
+    const nonEpisodeName = parse("README.mkv");
+    const rows = buildPairings([episodeNamed, nonEpisodeName], []);
     expect(rows.length).toBe(2);
     expect(rows[0].source).toBe("unmatched");
-    expect(rows[0].video?.path).toBe(matched.path);
+    expect(rows[0].video?.path).toBe(episodeNamed.path);
     expect(rows[1].source).toBe("unmatched");
-    expect(rows[1].video?.path).toBe(random.path);
+    expect(rows[1].video?.path).toBe(nonEpisodeName.path);
     expect(rows[1].key).toBe("unmatched");
   });
 });
