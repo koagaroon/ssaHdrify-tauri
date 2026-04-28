@@ -4,6 +4,7 @@
 //! Returns UTF-8 text + detected encoding name so the frontend always gets
 //! clean Unicode regardless of the original file encoding.
 
+use crate::util::is_reparse_point;
 use chardetng::EncodingDetector;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -16,28 +17,6 @@ fn ext_is_allowed(path: &Path) -> bool {
         .map(|e| e.to_lowercase())
         .unwrap_or_default();
     ALLOWED_TEXT_EXTENSIONS.contains(&ext.as_str())
-}
-
-/// On Windows, detect NTFS reparse points beyond plain symlinks (junctions,
-/// mount points, and similar) via the `FILE_ATTRIBUTE_REPARSE_POINT` bit.
-/// `std::fs::FileType::is_symlink()` only returns true for
-/// `IO_REPARSE_TAG_SYMLINK` — junctions and OneDrive placeholders slip past
-/// that check, so we need a broader test to stop a malicious junction like
-/// `foo.ass → C:/Users/<u>/.ssh` from being followed on the canonicalize
-/// fallback branch.
-#[cfg(windows)]
-fn is_reparse_point(path: &Path) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
-    std::fs::symlink_metadata(path)
-        .map(|m| m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0)
-        .unwrap_or(false)
-}
-#[cfg(not(windows))]
-fn is_reparse_point(path: &Path) -> bool {
-    std::fs::symlink_metadata(path)
-        .map(|m| m.file_type().is_symlink())
-        .unwrap_or(false)
 }
 
 const MAX_TEXT_SIZE: u64 = 50 * 1024 * 1024; // 50 MB

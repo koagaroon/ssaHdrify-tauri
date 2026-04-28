@@ -50,8 +50,9 @@ import {
 } from "./pairing-engine";
 
 // Categorization sets — drive both the picker filter (in tauri-api) and
-// the post-drop classification here. Kept in sync manually for now;
-// extracting to a shared constant could be a Stage 5c cleanup.
+// the post-drop classification here. Kept in sync manually; the duplication
+// is small enough that introducing a shared constant would add an import
+// for two values each side. Revisit if the lists grow or diverge.
 const VIDEO_EXTS = new Set([
   "mp4",
   "mkv",
@@ -400,6 +401,12 @@ export default function BatchRename() {
         return;
       }
 
+      // gen-guard is defensive in this synchronous handler — without an
+      // `await` suspension, pickGenRef.current can't advance mid-function,
+      // so the early returns above won't see a stale generation. The
+      // check is kept for shape consistency with the async ingestion
+      // paths in HDR/Timing/FontEmbed, which DO need it after their
+      // readText / scanFontFiles awaits.
       if (gen !== pickGenRef.current) return;
 
       setRenameFiles({
@@ -554,7 +561,19 @@ export default function BatchRename() {
     cancelRef.current = false;
 
     try {
-      addLog(t("msg_rename_start", targets.length, t(`rename_mode_${outputMode}_short`)));
+      // Switch on the literal OutputMode union so adding a new value forces
+      // a TypeScript exhaustiveness error here, instead of silently emitting
+      // an i18n key that doesn't exist (the previous template-literal form
+      // would have rendered the bare key string as fallback). Every other
+      // call site in the codebase passes literal i18n keys; keep this one
+      // consistent.
+      const modeLabel =
+        outputMode === "rename"
+          ? t("rename_mode_rename_short")
+          : outputMode === "copy_to_video"
+            ? t("rename_mode_copy_to_video_short")
+            : t("rename_mode_copy_to_chosen_short");
+      addLog(t("msg_rename_start", targets.length, modeLabel));
 
       let successCount = 0;
       let processedCount = 0;

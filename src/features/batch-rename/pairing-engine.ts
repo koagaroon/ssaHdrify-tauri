@@ -7,9 +7,10 @@
  *   2. priority-ordered episode  regex set (first match wins)
  *   3. season parallel scan      (only when ep regex didn't carry it)
  *   4. pair by (season, episode) tuple
- *   5. LCS fallback              [NOT in Stage 5b — regex covers all
- *                                 7 documented fan-sub samples; LCS
- *                                 lands when a real failure surfaces]
+ *   5. LCS fallback              [intentionally unimplemented — regex
+ *                                 covers all 7 documented fan-sub
+ *                                 samples; LCS lands only if a real
+ *                                 failure surfaces in the wild]
  *
  * Pattern coverage: validated against representative real-world
  * fan-sub naming variants (bilingual CJK titles, season-suffix

@@ -116,18 +116,15 @@ describe("extractEpisode — should NOT match", () => {
     expect(extractEpisode("RandomFile.mkv", bracketCleanup("RandomFile.mkv"))).toBeNull();
   });
 
-  it("does not mistake 1080P resolution tag for an episode", () => {
+  it("never returns 1080 as the episode (resolution-tag rejection)", () => {
     // [1080P] has 'P' suffix so Pattern B's `\d+\]` doesn't capture.
+    // The engine may still match ` 1080P` via other regex paths; the
+    // load-bearing guarantee is that "1080" is never reported as the
+    // episode number, regardless of whether the engine returns null
+    // or some other (legitimate) episode picked from the input.
     const name = "[Group][Show][1080P][.ass";
     const ep = extractEpisode(name, bracketCleanup(name));
-    // Engine may still match ` 1080P` via different regex paths; the
-    // important guarantee is that "1080" alone (the pixel height) is
-    // not the chosen episode for a normal sample with both resolution
-    // AND a real episode tag — that's covered by the named samples
-    // above. Here we just assert it doesn't claim 1080.
-    if (ep !== null) {
-      expect(ep.episode).not.toBe(1080);
-    }
+    expect(ep?.episode).not.toBe(1080);
   });
 });
 

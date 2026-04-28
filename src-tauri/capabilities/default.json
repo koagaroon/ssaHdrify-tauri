@@ -17,6 +17,7 @@
     "fs:allow-write-text-file",
     "fs:allow-copy-file",
     "fs:allow-rename",
+    "fs:allow-exists",
     {
       "identifier": "fs:scope",
       "allow": [{ "path": "**" }],

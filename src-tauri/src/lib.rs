@@ -1,6 +1,7 @@
 pub mod dropzone;
 pub mod encoding;
 pub mod fonts;
+pub mod util;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

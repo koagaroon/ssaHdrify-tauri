@@ -13,6 +13,7 @@
 //! fonts.rs) enforce their own extension/provenance allowlists, so even
 //! a path leak here can't be turned into an arbitrary read.
 
+use crate::util::is_reparse_point;
 use std::path::Path;
 
 const MAX_RESULT_FILES: usize = 5000;
@@ -105,24 +106,6 @@ fn walk_one_level(dir: &Path, out: &mut Vec<String>) {
         }
         // No recursion — one level only.
     }
-}
-
-/// Detect symlinks AND Windows junctions / OneDrive placeholders. Mirrors
-/// the helper in encoding.rs; duplicated here to keep the module
-/// self-contained until a shared `util.rs` is justified.
-#[cfg(windows)]
-fn is_reparse_point(path: &Path) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
-    std::fs::symlink_metadata(path)
-        .map(|m| m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0)
-        .unwrap_or(false)
-}
-#[cfg(not(windows))]
-fn is_reparse_point(path: &Path) -> bool {
-    std::fs::symlink_metadata(path)
-        .map(|m| m.file_type().is_symlink())
-        .unwrap_or(false)
 }
 
 #[cfg(test)]
