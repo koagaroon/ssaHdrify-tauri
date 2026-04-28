@@ -196,13 +196,13 @@ The portable exe is produced at `src-tauri/target/release/ssahdrify.exe` — rea
 ### 测试 | Testing
 
 ```bash
-npx vitest run                                    # 前端单元测试 / Frontend unit tests
+npm run test:run                                  # 前端单元测试 / Frontend unit tests
 cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端测试 / Rust backend tests
 ```
 
-> `npm test` 默认进入 watch 模式（开发用）；`npx vitest run` 是单次运行。
+> `npm test` 默认进入 watch 模式（开发用）；`npm run test:run` 是单次运行。
 >
-> `npm test` defaults to watch mode (development); use `npx vitest run` for a single-pass run.
+> `npm test` defaults to watch mode (development); use `npm run test:run` for a single-pass run.
 
 ---
 

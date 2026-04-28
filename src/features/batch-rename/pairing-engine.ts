@@ -221,9 +221,11 @@ export interface PairingRow {
   subtitle: { path: string; name: string } | null;
   source: PairingSource;
   /** Default selection: first (video, sub) pair per video gets true,
-   *  additional rows for the same video get false. Stage 5c will let
-   *  the user toggle this. Rows without both video + sub default to
-   *  false (nothing to do at output). */
+   *  additional rows for the same video get false. The user toggles
+   *  this per row via the grid checkbox, and assignSubtitleToRow
+   *  auto-flips it to true when a sub is manually picked from the
+   *  dropdown. Rows without both video + sub default to false
+   *  (nothing to do at output). */
   selected: boolean;
   /** Pairing key — `${season}|${episode}` for matched, `unmatched` for
    *  files where the regex set found no episode. Used for sorting and
@@ -237,8 +239,9 @@ function pairingKeyTuple(season: number, episode: number): string {
 
 /** Compose a stable row ID from the file paths. Survives reorders and
  *  reanalysis as long as the same (video, subtitle) pair is still
- *  produced — required so user-driven per-row overrides (Stage 5c
- *  selection toggle) don't get orphaned when files come and go. */
+ *  produced — required so user-driven per-row overrides (the selection
+ *  checkbox and manual subtitle picks) don't get orphaned when files
+ *  come and go. */
 export function makeRowId(
   videoPath: string | null | undefined,
   subtitlePath: string | null | undefined
