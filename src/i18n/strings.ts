@@ -73,6 +73,7 @@ export const strings: Record<string, StringEntry> = {
   tab_hdr: { en: "HDR Convert", zh: "HDR 转换" },
   tab_timing: { en: "Time Shift", zh: "时间轴偏移" },
   tab_fonts: { en: "Font Embed", zh: "字体嵌入" },
+  tab_rename: { en: "Batch Rename", zh: "批量重命名" },
   // Titlebar window controls — localized so screen readers and tooltip
   // hovers stay consistent with the app's current language.
   titlebar_minimize: { en: "Minimize", zh: "最小化" },
@@ -372,4 +373,46 @@ export const strings: Record<string, StringEntry> = {
     zh: "无法加载 — {0} 个文件已在「{1}」标签页中。请先在该标签页中清除。",
   },
   error_prefix: { en: "Error: {0}", zh: "错误：{0}" },
+
+  // ── Batch Rename (Tab 4) ────────────────────────────────
+  status_rename_idle: { en: "No files loaded", zh: "未加载文件" },
+  status_rename_pending: {
+    en: "{0} video(s) · {1} subtitle(s)",
+    zh: "{0} 个视频 · {1} 个字幕",
+  },
+  status_rename_busy: { en: "Renaming…", zh: "重命名中…" },
+  status_rename_done: { en: "Rename complete", zh: "重命名完成" },
+  status_rename_error: { en: "Rename failed", zh: "重命名失败" },
+  status_rename_cancelled: { en: "Rename cancelled", zh: "已取消重命名" },
+  rename_drop_hint: {
+    en: "Tip: drag video and subtitle files (or a whole show folder) onto the file strip above — videos and subs auto-categorize",
+    zh: "提示：可将视频与字幕文件（或整个剧集文件夹）拖到上方文件栏 — 视频与字幕自动归类",
+  },
+  rename_chip_videos: { en: "{0} videos", zh: "{0} 个视频" },
+  rename_chip_subtitles: { en: "{0} subtitles", zh: "{0} 个字幕" },
+  rename_chip_unknown: { en: "{0} unknown", zh: "{0} 个未识别" },
+  rename_chip_unknown_hint: {
+    en: "Files without a video or subtitle extension are excluded from pairing",
+    zh: "扩展名既非视频也非字幕的文件不参与配对",
+  },
+  btn_select_rename_inputs: {
+    en: "Select Videos & Subtitles",
+    zh: "选择视频与字幕",
+  },
+  msg_no_rename_inputs_in_drop: {
+    en: "No videos or subtitles found in the dropped items",
+    zh: "拖入的内容中未找到视频或字幕",
+  },
+  msg_rename_unknown_skipped: {
+    en: "Skipped {0} file(s) — neither video nor subtitle",
+    zh: "已跳过 {0} 个文件 — 既非视频也非字幕",
+  },
+  rename_stage5a_placeholder_title: {
+    en: "Pairing engine — coming next",
+    zh: "配对引擎 — 即将上线",
+  },
+  rename_stage5a_placeholder_body: {
+    en: "Stage 5a: ingestion only. {0} videos and {1} subtitles loaded; pairing + rename run in the next iteration.",
+    zh: "阶段 5a：仅完成文件录入。已加载 {0} 个视频与 {1} 个字幕；配对与重命名将在下一阶段实现。",
+  },
 };

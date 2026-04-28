@@ -23,7 +23,7 @@ import { createContext, useCallback, useContext, useMemo, useState, type ReactNo
 
 // ── Types ────────────────────────────────────────────────
 
-export type TabId = "hdr" | "timing" | "fonts";
+export type TabId = "hdr" | "timing" | "fonts" | "rename";
 
 export interface HdrFileState {
   filePaths: string[];
@@ -50,14 +50,27 @@ export interface FontsFilesState {
   firstFileContent: string;
 }
 
+/** Tab 4 (Batch Rename) holds two parallel arrays — videos and
+ *  subtitles. Cross-tab dedup only treats SUBTITLES as conflict sources
+ *  (other tabs don't care about videos), but within Tab 4 we track both
+ *  for the pairing UI. */
+export interface BatchRenameFilesState {
+  videoPaths: string[];
+  videoNames: string[];
+  subtitlePaths: string[];
+  subtitleNames: string[];
+}
+
 interface FileContextValue {
   hdrFiles: HdrFileState | null;
   timingFiles: TimingFilesState | null;
   fontsFiles: FontsFilesState | null;
+  renameFiles: BatchRenameFilesState | null;
 
   setHdrFiles: (state: HdrFileState | null) => void;
   setTimingFiles: (state: TimingFilesState | null) => void;
   setFontsFiles: (state: FontsFilesState | null) => void;
+  setRenameFiles: (state: BatchRenameFilesState | null) => void;
   clearFile: (tab: TabId) => void;
 
   /**
@@ -85,6 +98,7 @@ export function FileProvider({ children }: { children: ReactNode }) {
   const [hdrFiles, setHdrFiles] = useState<HdrFileState | null>(null);
   const [timingFiles, setTimingFiles] = useState<TimingFilesState | null>(null);
   const [fontsFiles, setFontsFiles] = useState<FontsFilesState | null>(null);
+  const [renameFiles, setRenameFiles] = useState<BatchRenameFilesState | null>(null);
 
   const isFileInUse = useCallback(
     (path: string, excludeTab?: TabId): TabId | null => {
@@ -102,9 +116,18 @@ export function FileProvider({ children }: { children: ReactNode }) {
       if (excludeTab !== "fonts" && fontsFiles?.filePaths.some((p) => norm(p) === np)) {
         return "fonts";
       }
+      // Tab 4 holds both videos and subtitles, but only the SUBTITLE
+      // entries are subject to cross-tab dedup with other tabs (HDR /
+      // Timing / Fonts all consume subtitles). Videos in Tab 4 don't
+      // conflict with anything in the other three tabs. Within Tab 4
+      // itself, both lists are checked (excludeTab === "rename" skips
+      // this whole block).
+      if (excludeTab !== "rename" && renameFiles?.subtitlePaths.some((p) => norm(p) === np)) {
+        return "rename";
+      }
       return null;
     },
-    [hdrFiles, timingFiles, fontsFiles]
+    [hdrFiles, timingFiles, fontsFiles, renameFiles]
   );
 
   // INTENTIONALLY UNUSED — kept as a partial-skip alternative to the
@@ -143,6 +166,9 @@ export function FileProvider({ children }: { children: ReactNode }) {
       case "fonts":
         setFontsFiles(null);
         break;
+      case "rename":
+        setRenameFiles(null);
+        break;
     }
   }, []);
 
@@ -154,14 +180,16 @@ export function FileProvider({ children }: { children: ReactNode }) {
       hdrFiles,
       timingFiles,
       fontsFiles,
+      renameFiles,
       setHdrFiles,
       setTimingFiles,
       setFontsFiles,
+      setRenameFiles,
       clearFile,
       isFileInUse,
       filterAvailablePaths,
     }),
-    [hdrFiles, timingFiles, fontsFiles, clearFile, isFileInUse, filterAvailablePaths]
+    [hdrFiles, timingFiles, fontsFiles, renameFiles, clearFile, isFileInUse, filterAvailablePaths]
   );
 
   return <FileContext.Provider value={value}>{children}</FileContext.Provider>;

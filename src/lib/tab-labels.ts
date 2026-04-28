@@ -13,4 +13,5 @@ export const TAB_LABEL_KEYS: Record<TabId, string> = {
   hdr: "tab_hdr",
   timing: "tab_timing",
   fonts: "tab_fonts",
+  rename: "tab_rename",
 };

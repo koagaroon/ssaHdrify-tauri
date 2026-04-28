@@ -66,6 +66,67 @@ export async function pickAssFiles(): Promise<string[] | null> {
   );
 }
 
+const VIDEO_AND_SUBTITLE_FILTERS: FileFilter[] = [
+  {
+    name: "Video & Subtitle Files",
+    extensions: [
+      "mp4",
+      "mkv",
+      "avi",
+      "mov",
+      "ts",
+      "m2ts",
+      "webm",
+      "flv",
+      "wmv",
+      "mpg",
+      "mpeg",
+      "m4v",
+      "ass",
+      "ssa",
+      "srt",
+      "sub",
+      "vtt",
+      "sbv",
+      "lrc",
+    ],
+  },
+  {
+    name: "Video Files",
+    extensions: [
+      "mp4",
+      "mkv",
+      "avi",
+      "mov",
+      "ts",
+      "m2ts",
+      "webm",
+      "flv",
+      "wmv",
+      "mpg",
+      "mpeg",
+      "m4v",
+    ],
+  },
+  {
+    name: "Subtitle Files",
+    extensions: ["ass", "ssa", "srt", "sub", "vtt", "sbv", "lrc"],
+  },
+  { name: "All Files", extensions: ["*"] },
+];
+
+/** Open a multi-file picker accepting both videos and subtitles. Used by
+ *  the Batch Rename tab, which auto-categorizes by extension after pick. */
+export async function pickRenameInputs(): Promise<string[] | null> {
+  return toMultiplePaths(
+    await open({
+      multiple: true,
+      filters: VIDEO_AND_SUBTITLE_FILTERS,
+      title: "Select videos and subtitles",
+    })
+  );
+}
+
 /** Open a directory picker for a local font folder. Returns path or null. */
 export async function pickFontDirectory(): Promise<string | null> {
   return toSinglePath(

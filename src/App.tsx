@@ -3,6 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import HdrConvert from "./features/hdr-convert/HdrConvert";
 import TimingShift from "./features/timing-shift/TimingShift";
 import FontEmbed from "./features/font-embed/FontEmbed";
+import BatchRename from "./features/batch-rename/BatchRename";
 import { useI18n } from "./i18n/useI18n";
 import { useTheme } from "./theme/useTheme";
 import type { ThemeMode } from "./theme/useTheme";
@@ -16,6 +17,7 @@ const TAB_IDS: { id: Tab; labelKey: string }[] = [
   { id: "hdr", labelKey: "tab_hdr" },
   { id: "timing", labelKey: "tab_timing" },
   { id: "fonts", labelKey: "tab_fonts" },
+  { id: "rename", labelKey: "tab_rename" },
 ];
 
 const THEME_OPTIONS: { mode: ThemeMode; labelKey: string }[] = [
@@ -335,6 +337,14 @@ function App() {
             style={{ display: activeTab === "fonts" ? "block" : "none" }}
           >
             <FontEmbed />
+          </div>
+          <div
+            id="panel-rename"
+            role="tabpanel"
+            aria-labelledby="tab-rename"
+            style={{ display: activeTab === "rename" ? "block" : "none" }}
+          >
+            <BatchRename />
           </div>
         </main>
 

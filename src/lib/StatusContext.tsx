@@ -32,7 +32,7 @@ export interface Status {
   progress?: StatusProgress;
 }
 
-export type StatusTab = "hdr" | "timing" | "fonts";
+export type StatusTab = "hdr" | "timing" | "fonts" | "rename";
 
 export interface StatusContextValue {
   statuses: Record<StatusTab, Status>;
@@ -51,6 +51,7 @@ export const DEFAULT_STATUSES: Record<StatusTab, Status> = {
   hdr: { ...DEFAULT_STATUS },
   timing: { ...DEFAULT_STATUS },
   fonts: { ...DEFAULT_STATUS },
+  rename: { ...DEFAULT_STATUS },
 };
 
 export const StatusContext = createContext<StatusContextValue>({
