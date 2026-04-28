@@ -116,7 +116,7 @@ describe("resolveOutputPath — {video_name} and {lang} tokens", () => {
       { videoName: "Movie" }
     );
     // `unknown_tag` is not in LANG_TAGS → langValue=""; collapse `..` → `.`
-    expect(result).toContain("Movie.ass");
+    expect(result).toBe(`${BASE}/Movie.ass`);
     expect(result).not.toContain("Movie..ass");
   });
 
@@ -124,7 +124,7 @@ describe("resolveOutputPath — {video_name} and {lang} tokens", () => {
     const result = resolveOutputPath(`${BASE}/EP01.JA.srt`, "{video_name}.{lang}.ass", "PQ", {
       videoName: "Show.EP01",
     });
-    expect(result).toContain("Show.EP01.ja.ass");
+    expect(result).toBe(`${BASE}/Show.EP01.ja.ass`);
   });
 
   it("returns empty {lang} for filenames without dotted segments", () => {
@@ -132,14 +132,14 @@ describe("resolveOutputPath — {video_name} and {lang} tokens", () => {
       videoName: "Show",
     });
     // No {lang} match, no explicit option → empty → collapse
-    expect(result).toContain("Show.ass");
+    expect(result).toBe(`${BASE}/Show.ass`);
   });
 
   it("treats {video_name} as empty when option omitted, collapsing dots", () => {
     const result = resolveOutputPath(`${BASE}/EP01.srt`, "{video_name}.{name}.ass", "PQ");
     // videoStem="" + "." + "EP01" + ".ass" → ".EP01.ass" → no collapse needed
     // (the leading dot is preserved as a hidden-file marker)
-    expect(result).toContain(".EP01.ass");
+    expect(result).toBe(`${BASE}/.EP01.ass`);
   });
 
   it("paired Tab 4 default template produces clean output", () => {
@@ -147,6 +147,6 @@ describe("resolveOutputPath — {video_name} and {lang} tokens", () => {
     const result = resolveOutputPath(`${BASE}/EP01.zh.ass`, "{video_name}.{lang}.ass", "PQ", {
       videoName: "Show.S01E01.1080p.mkv",
     });
-    expect(result).toContain("Show.S01E01.1080p.zh.ass");
+    expect(result).toBe(`${BASE}/Show.S01E01.1080p.zh.ass`);
   });
 });

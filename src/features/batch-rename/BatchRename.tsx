@@ -788,7 +788,6 @@ export default function BatchRename() {
               ? {
                   background: "var(--accent-disabled-bg)",
                   color: "var(--accent-disabled-text)",
-                  opacity: actionableCount === 0 ? 0.5 : 1,
                   height: "38px",
                   minWidth: "140px",
                 }
