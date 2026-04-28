@@ -276,18 +276,9 @@ mod tests {
 
     /// Helper: read fixture file and decode
     fn decode_fixture(name: &str) -> ReadTextResult {
-        let path = format!(
-            "{}/../src-tauri/tests/fixtures/{}",
-            env!("CARGO_MANIFEST_DIR"),
-            name
-        );
-        // Try direct path first, then relative to manifest
-        let bytes = std::fs::read(&path)
-            .or_else(|_| {
-                let alt = format!("{}/tests/fixtures/{}", env!("CARGO_MANIFEST_DIR"), name);
-                std::fs::read(alt)
-            })
-            .unwrap_or_else(|e| panic!("Cannot read fixture {name}: {e}"));
+        let path = format!("{}/tests/fixtures/{}", env!("CARGO_MANIFEST_DIR"), name);
+        let bytes =
+            std::fs::read(&path).unwrap_or_else(|e| panic!("Cannot read fixture {name}: {e}"));
         decode_bytes(&bytes)
     }
 

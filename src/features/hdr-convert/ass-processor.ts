@@ -93,7 +93,10 @@ function transformColorString(assColor: string, targetBrightness: number, eotf: 
  */
 function transformEventText(text: string, targetBrightness: number, eotf: Eotf): string {
   // Matches: \c&HBBGGRR, \1c&HBBGGRR, \2c&HAABBGGRR, etc.
-  // Groups: (1) prefix like "\c&H" or "\1c&H", (2) 6 or 8 hex digits
+  // Groups: (1) prefix like "\c&H" or "\1c&H", (2) 6 or 8 hex digits.
+  // Strict 6/8 length is per ASS spec — any other count (e.g. a 7-digit
+  // run from a malformed file) is intentionally left un-transformed
+  // rather than risk corrupting unknown content.
   // Lookahead ensures the color ends at a valid ASS delimiter. `\r\n` are
   // included so a color tag at end-of-line (within a multi-line ASS input
   // before line-splitting) still matches instead of being left untransformed.

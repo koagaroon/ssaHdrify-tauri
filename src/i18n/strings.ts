@@ -50,7 +50,7 @@ export const strings: Record<string, StringEntry> = {
     zh: "可嵌入 · 跨 {1} 个文件的 {0} 个字体",
   },
   file_empty: { en: "No file selected", zh: "未选择文件" },
-  hdr_files_title: {
+  files_selected_title: {
     en: "Selected subtitle files ({0})",
     zh: "已选字幕文件（{0}）",
   },

@@ -152,8 +152,11 @@ export function collectFonts(assContent: string): FontUsage[] {
         break;
       }
       const cp = char.codePointAt(0);
-      if (cp !== undefined && cp > 32 && cp <= 0x10ffff) {
-        // Skip control chars, space, and invalid codepoints
+      // Skip control chars (incl. U+007F DEL), ASCII space, and invalid
+      // codepoints. Space is dropped here because the Rust subset always
+      // pads the full ASCII printable range (0x20–0x7E), so counting it
+      // would double-bill what the subset already includes for free.
+      if (cp !== undefined && cp > 32 && cp !== 0x7f && cp <= 0x10ffff) {
         const before = usage.codepoints.size;
         usage.codepoints.add(cp);
         if (usage.codepoints.size !== before) {

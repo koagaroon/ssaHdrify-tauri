@@ -8,6 +8,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
+            // Snapshot env-derived system-fonts paths eagerly, before any
+            // user action can run. Defense-in-depth against post-launch
+            // env-var manipulation; see fonts::init_system_dirs.
+            fonts::init_system_dirs();
+
             // Dev: INFO-level for full visibility while iterating.
             // Release: WARN/ERROR only — keeps crash-diagnostic signals in
             // bug reports without spamming healthy runs.

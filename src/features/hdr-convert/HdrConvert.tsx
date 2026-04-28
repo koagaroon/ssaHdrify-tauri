@@ -566,7 +566,7 @@ export default function HdrConvert() {
                 style={{ borderBottom: "1px solid var(--border)" }}
               >
                 <span className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>
-                  {t("hdr_files_title", hdrFiles.filePaths.length)}
+                  {t("files_selected_title", hdrFiles.filePaths.length)}
                 </span>
               </div>
               <div className="overflow-y-auto flex-1">

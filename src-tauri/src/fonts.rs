@@ -248,7 +248,7 @@ fn parse_local_font_file(canonical: &Path) -> Vec<LocalFontEntry> {
             }
             Err(_) => {
                 consecutive_failures += 1;
-                if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
+                if consecutive_failures > MAX_CONSECUTIVE_FAILURES {
                     break;
                 }
                 continue;
@@ -263,7 +263,7 @@ fn parse_local_font_file(canonical: &Path) -> Vec<LocalFontEntry> {
             Ok(f) => f,
             Err(_) => {
                 consecutive_failures += 1;
-                if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
+                if consecutive_failures > MAX_CONSECUTIVE_FAILURES {
                     break;
                 }
                 continue;
@@ -524,33 +524,79 @@ fn path_under_dir(path: &str, dir: &str, sep: &str) -> bool {
     path == dir || path.starts_with(&format!("{dir}{sep}"))
 }
 
+/// Cached, normalized system-fonts dir derived from `SYSTEMROOT` + `\Fonts`.
+///
+/// Captured eagerly at app startup via `init_system_dirs` (see `lib.rs`) so
+/// the value is locked in before any user action could indirectly trigger
+/// an `std::env::set_var` call. The cache is `Lazy` rather than a plain
+/// `OnceCell` so that any code path which somehow runs before
+/// `init_system_dirs` (e.g., a unit test in this module) still gets a
+/// well-defined value rather than a panic.
+///
+/// Defense-in-depth note: a deeper hardening would call
+/// `GetSystemWindowsDirectoryW` directly, which reads from a kernel-set
+/// process buffer immune to env-var manipulation. We rely on the eager
+/// init plus the project's no-`set_var` policy instead, since adding Win32
+/// FFI for one path read is not justified at the current threat model
+/// (attacker would already need code execution to mutate env vars).
+#[cfg(windows)]
+static WINDOWS_SYSTEM_FONTS_DIR: Lazy<String> = Lazy::new(|| {
+    let sys_root = std::env::var("SYSTEMROOT")
+        .unwrap_or_else(|_| "C:\\Windows".to_string())
+        .to_lowercase()
+        .replace("/", "\\");
+    format!("{sys_root}\\fonts")
+});
+
+/// Cached, normalized per-user fonts dir (Windows 10 1809+). `None` if
+/// `LOCALAPPDATA` was unset at startup. Same caching rationale as
+/// `WINDOWS_SYSTEM_FONTS_DIR`.
+#[cfg(windows)]
+static WINDOWS_USER_FONTS_DIR: Lazy<Option<String>> = Lazy::new(|| {
+    std::env::var("LOCALAPPDATA").ok().map(|p| {
+        format!(
+            "{}\\microsoft\\windows\\fonts",
+            p.to_lowercase().replace("/", "\\")
+        )
+    })
+});
+
+/// Force-initialize the cached system-fonts directory paths. Called from
+/// `lib.rs::run` at app startup so the env-var snapshot is taken before
+/// any user action could indirectly mutate the process environment.
+pub fn init_system_dirs() {
+    #[cfg(windows)]
+    {
+        Lazy::force(&WINDOWS_SYSTEM_FONTS_DIR);
+        Lazy::force(&WINDOWS_USER_FONTS_DIR);
+    }
+}
+
 /// Check whether a canonicalized path is under a known system fonts directory.
 fn is_in_system_fonts_dir(canonical: &Path) -> bool {
     let canonical_str = normalize_canonical_path(&canonical.to_string_lossy());
 
     if cfg!(windows) {
-        let lower = canonical_str.to_lowercase().replace("/", "\\");
-        let under = |dir: &str| path_under_dir(&lower, dir, "\\");
+        #[cfg(windows)]
+        {
+            let lower = canonical_str.to_lowercase().replace("/", "\\");
+            let under = |dir: &str| path_under_dir(&lower, dir, "\\");
 
-        // System fonts directory — use SYSTEMROOT to support non-C: installs
-        let sys_root = std::env::var("SYSTEMROOT")
-            .unwrap_or_else(|_| "C:\\Windows".to_string())
-            .to_lowercase()
-            .replace("/", "\\");
-        if under(&format!("{sys_root}\\fonts")) {
-            return true;
-        }
-        // Per-user fonts directory (Windows 10 1809+)
-        if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
-            let user_font_dir = format!(
-                "{}\\microsoft\\windows\\fonts",
-                local_app_data.to_lowercase().replace("/", "\\")
-            );
-            if under(&user_font_dir) {
+            if under(&WINDOWS_SYSTEM_FONTS_DIR) {
                 return true;
             }
+            if let Some(user_dir) = WINDOWS_USER_FONTS_DIR.as_ref() {
+                if under(user_dir) {
+                    return true;
+                }
+            }
+            false
         }
-        false
+        #[cfg(not(windows))]
+        {
+            let _ = canonical_str;
+            false
+        }
     } else if cfg!(target_os = "macos") {
         // APFS is case-insensitive by default; compare in lowercase so symlink
         // chains that surface mixed-case paths still match canonical targets.

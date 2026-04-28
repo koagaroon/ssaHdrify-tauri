@@ -150,8 +150,10 @@ function parseSrt(content: string): Caption[] {
   if (blocks.length > 100000) {
     throw new Error(`Too many subtitle blocks: ${blocks.length} (max 100,000)`);
   }
-  // Regex defined inside function — no shared lastIndex state
-  const timingRe = /^(\d{2}:\d{2}:\d{2},\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2},\d{3})/;
+  // Regex defined inside function — no shared lastIndex state.
+  // Hours use `\d+` to accept the single-digit form some tools emit
+  // (`0:00:01,000`), matching detectFormat's SRT_TIMING.
+  const timingRe = /^(\d+:\d{2}:\d{2},\d{3})\s*-->\s*(\d+:\d{2}:\d{2},\d{3})/;
 
   for (const block of blocks) {
     const lines = block.replace(/^\r?\n/, "").split(/\r?\n/);
@@ -250,16 +252,23 @@ function buildVtt(captions: Caption[], header: string = "WEBVTT"): string {
 
 // ── ASS/SSA Parser (timing only) ─────────────────────────
 
+// Single source of truth for the Dialogue line regex.
+// `i`: ASS renderers are case-insensitive on `Dialogue:` — real-world tooling
+// sometimes emits `DIALOGUE:`. Leading `\s*` tolerates indentation; the
+// captured whitespace is preserved via the prefix group so buildAss
+// round-trips it exactly. A factory (not a shared instance) is used so each
+// call gets a fresh `lastIndex` — guarding against pollution if a previous
+// parseAss call threw mid-loop.
+const DIALOGUE_PATTERN = String.raw`^(\s*Dialogue:\s*\d+,)(\d+:\d{2}:\d{2}\.\d{2}),( *)(\d+:\d{2}:\d{2}\.\d{2}),(.*)$`;
+const DIALOGUE_FLAGS = "gim";
+
+function createDialogueRe(): RegExp {
+  return new RegExp(DIALOGUE_PATTERN, DIALOGUE_FLAGS);
+}
+
 function parseAss(content: string): Caption[] {
   const captions: Caption[] = [];
-  // Regex defined inside function — no shared lastIndex state.
-  // `i` flag: ASS renderers are case-insensitive on `Dialogue:`; matching
-  // upstream ass-processor.ts and real-world files (some tooling emits
-  // `DIALOGUE:`). Leading `\s*` accepts indented Dialogue lines for the
-  // same tolerance parity — the captured whitespace is preserved via the
-  // prefix group so buildAss round-trips the indentation exactly.
-  const dialogueRe =
-    /^(\s*Dialogue:\s*\d+,)(\d+:\d{2}:\d{2}\.\d{2}),( *)(\d+:\d{2}:\d{2}\.\d{2}),(.*)$/gim;
+  const dialogueRe = createDialogueRe();
   let match;
   while ((match = dialogueRe.exec(content)) !== null) {
     if (captions.length >= 100000) {
@@ -277,11 +286,7 @@ function parseAss(content: string): Caption[] {
 
 function buildAss(content: string, captions: Caption[]): string {
   // For ASS, we replace timestamps in-place rather than rebuilding.
-  // Regex flags must mirror parseAss exactly so the two sides agree on
-  // which lines are Dialogue candidates — otherwise buildAss would miss
-  // lines that parseAss matched (or vice versa) and timing would drift.
-  const dialogueRe =
-    /^(\s*Dialogue:\s*\d+,)(\d+:\d{2}:\d{2}\.\d{2}),( *)(\d+:\d{2}:\d{2}\.\d{2}),(.*)$/gim;
+  const dialogueRe = createDialogueRe();
   let idx = 0;
   const result = content.replace(dialogueRe, (original, prefix, _start, space, _end, rest) => {
     if (idx < captions.length) {
@@ -290,10 +295,11 @@ function buildAss(content: string, captions: Caption[]): string {
     }
     return original;
   });
-  // Verify all shifted entries were consumed — a mismatch means
-  // parseAss and buildAss diverged on which lines are Dialogue entries
+  // A mismatch means the input changed shape between parseAss and buildAss
+  // (or the two sides drifted): the output would carry wrong timestamps.
+  // Hard-fail rather than warn; silent timing drift is the worst kind.
   if (idx !== captions.length) {
-    console.warn(`buildAss: consumed ${idx}/${captions.length} shifted entries`);
+    throw new Error(`buildAss/parseAss drift: consumed ${idx}/${captions.length} shifted entries`);
   }
   return result;
 }

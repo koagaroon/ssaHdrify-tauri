@@ -507,7 +507,7 @@ export default function TimingShift() {
                 style={{ borderBottom: "1px solid var(--border)" }}
               >
                 <span className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>
-                  {t("hdr_files_title", fileCount)}
+                  {t("files_selected_title", fileCount)}
                 </span>
               </div>
               <div className="overflow-y-auto flex-1">

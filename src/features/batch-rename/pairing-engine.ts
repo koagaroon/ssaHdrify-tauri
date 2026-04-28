@@ -333,8 +333,11 @@ export function buildPairings(videos: ParsedFile[], subtitles: ParsedFile[]): Pa
 }
 
 function compareKeys(a: string, b: string): number {
-  const [as, ae] = a.split("|").map((n) => parseInt(n, 10));
-  const [bs, be] = b.split("|").map((n) => parseInt(n, 10));
+  // `|| 0` floors NaN to 0 so a malformed key (shouldn't happen — keys are
+  // always integer pairs constructed by buildPairings) sorts deterministically
+  // rather than producing NaN comparisons that violate sort transitivity.
+  const [as, ae] = a.split("|").map((n) => parseInt(n, 10) || 0);
+  const [bs, be] = b.split("|").map((n) => parseInt(n, 10) || 0);
   if (as !== bs) return as - bs;
   return ae - be;
 }

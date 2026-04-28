@@ -289,7 +289,7 @@ describe("buildPairings — common shapes", () => {
     expect(rows[1].subtitle?.path).toBe(s2.path);
   });
 
-  it("video without episode regex goes to unmatched bucket at the end", () => {
+  it("videos without paired subtitles all show as unmatched", () => {
     const matched = parse("[G][Show][01][1080p].mkv");
     const random = parse("README.mkv");
     const rows = buildPairings([matched, random], []);

@@ -233,7 +233,6 @@ export default function BatchRename() {
   // even when the row's subtitle changes. The engine's content-based
   // IDs would shift the moment the user picks a different sub.
   const baseRows = useMemo<PairingRow[]>(() => {
-    if (totalCount === 0) return [];
     const parsedVideos = videoPaths.map((p, i) => parseFilename(p, videoNames[i] ?? ""));
     const parsedSubs = subtitlePaths.map((p, i) => parseFilename(p, subtitleNames[i] ?? ""));
     let counter = 0;
@@ -241,7 +240,7 @@ export default function BatchRename() {
       ...r,
       id: `b${++counter}`,
     }));
-  }, [videoPaths, videoNames, subtitlePaths, subtitleNames, totalCount]);
+  }, [videoPaths, videoNames, subtitlePaths, subtitleNames]);
 
   // Reset edits when the input file lists change. baseRows only
   // recomputes when the user re-picks / clears, so this isn't a
@@ -480,7 +479,6 @@ export default function BatchRename() {
     clearFile("rename");
     setUnknownCount(0);
     setDropError(null);
-    setRowOverrides(new Map());
   }, [clearFile]);
 
   const handlePickChosenDir = useCallback(async () => {
