@@ -18,6 +18,8 @@
  * Pattern B (`][NN][`), with the original set kept as fallback.
  */
 
+import { normalizeOutputKey } from "../../lib/dedup-helpers";
+
 // ── Bracket cleanup ──────────────────────────────────────
 
 const BRACKET_RE = /\[[^\]]*\]/g;
@@ -463,8 +465,7 @@ export function assignSubtitleToRow(
  *  acceptable on Linux/macOS too — file-management UI on those
  *  platforms typically discourages case-only renames anyway. */
 export function isNoOpRename(subtitlePath: string, outputPath: string): boolean {
-  const norm = (p: string) => p.normalize("NFC").replace(/\\/g, "/").toLowerCase();
-  return norm(subtitlePath) === norm(outputPath);
+  return normalizeOutputKey(subtitlePath) === normalizeOutputKey(outputPath);
 }
 
 function baseName(path: string): string {
