@@ -5,6 +5,7 @@
  * tag stripping, and safety checks (path traversal, reserved names).
  */
 import type { Eotf } from "./color-engine";
+import { extractLangFromBaseName } from "../../lib/lang-detection";
 
 // ── Template Presets ──────────────────────────────────────
 
@@ -15,42 +16,6 @@ export const OUTPUT_PRESETS = [
 ] as const;
 
 export const DEFAULT_TEMPLATE = OUTPUT_PRESETS[0];
-
-// ── Language tag detection ────────────────────────────────
-// Recognized language tags found between dots in subtitle filenames
-// (e.g., `EP01.zh.ass` → "zh"). Used to auto-extract the {lang} token
-// when no explicit lang is supplied via options. Limited to the subset
-// fan-sub workflows actually use; widening later is cheap.
-const LANG_TAGS = new Set([
-  "zh",
-  "en",
-  "ja",
-  "jp",
-  "ko",
-  "fr",
-  "de",
-  "es",
-  "it",
-  "ru",
-  "pt",
-  "chs",
-  "cht",
-  "jpn",
-  "eng",
-  "kor",
-  "sc",
-  "tc",
-]);
-
-/** Extract a known language tag from a basename's last dotted segment.
- *  Returns "" when no recognized tag is present. Case-folded for matching;
- *  the returned value is lowercase. */
-function extractLangFromBaseName(baseName: string): string {
-  const dotIdx = baseName.lastIndexOf(".");
-  if (dotIdx <= 0) return "";
-  const candidate = baseName.slice(dotIdx + 1).toLowerCase();
-  return LANG_TAGS.has(candidate) ? candidate : "";
-}
 
 /** Recognized video container extensions. Used to strip the trailing
  *  extension from a video filename when computing {video_name}. Naming

@@ -3,14 +3,24 @@
  *
  * Stage 5a: tab plumbing + ingestion (file pick / folder drop, auto
  *   categorization, count chips, cross-tab dedup).
- * Stage 5b (this commit): pairing engine + preview grid. Each row
- *   represents one (video, subtitle) pair. Multi-language subs for the
- *   same video produce N rows with the first selected by default.
- * Stage 5c will add output-mode radios (rename / copy-to-video-dir /
- *   copy-to-chosen) + per-row checkbox toggles + manual edit + run.
+ * Stage 5b: pairing engine + preview grid (one row per video↔subtitle
+ *   pair, multi-language subs collapse to N rows with first selected).
+ * Stage 5c (this commit): output-mode radios (rename / copy-to-video /
+ *   copy-to-chosen) + per-row checkbox toggle + run flow with rename-
+ *   confirm + countExistingFiles overwrite-confirm + cancel mid-batch.
+ *   Manual edit (drag/click re-pair) is deferred to a follow-up — the
+ *   engine + override layer support it, only the UI bindings are
+ *   missing.
  */
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
-import { pickRenameInputs, fileNameFromPath } from "../../lib/tauri-api";
+import {
+  pickRenameInputs,
+  pickOutputDirectory,
+  renamePath,
+  copyPath,
+  fileNameFromPath,
+} from "../../lib/tauri-api";
+import { ask } from "@tauri-apps/plugin-dialog";
 import { useI18n } from "../../i18n/useI18n";
 import { useFileContext } from "../../lib/FileContext";
 import { TAB_LABEL_KEYS } from "../../lib/tab-labels";
@@ -19,11 +29,14 @@ import type { Status } from "../../lib/StatusContext";
 import { useTabStatus } from "../../lib/useTabStatus";
 import { useFolderDrop } from "../../lib/useFolderDrop";
 import { PreviewTable, type PreviewTableColumn } from "../../lib/PreviewTable";
+import { countExistingFiles } from "../../lib/output-collisions";
 import {
   buildPairings,
   parseFilename,
+  deriveRenameOutputPath,
   type PairingRow,
   type PairingSource,
+  type OutputMode,
 } from "./pairing-engine";
 
 interface LogEntry {
@@ -138,13 +151,8 @@ export default function BatchRename() {
   const { t } = useI18n();
   const { renameFiles, setRenameFiles, clearFile, isFileInUse } = useFileContext();
 
-  // Stage 5a: rename hasn't been triggered yet, so `busy` is always
-  // false and `progress` is always null. Both come back as full state
-  // in Stage 5c when Save All lands. Keeping them as inert constants
-  // here lets tabStatus + the strip's disabled rules read the same
-  // shape they will once 5c lights up.
-  const busy = false;
-  const progress: { processed: number; total: number } | null = null;
+  const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<{ processed: number; total: number } | null>(null);
   const [lastActionResult, setLastActionResult] = useState<
     "success" | "error" | "cancelled" | null
   >(null);
@@ -155,9 +163,21 @@ export default function BatchRename() {
   // Reset whenever renameFiles changes.
   const [unknownCount, setUnknownCount] = useState(0);
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  // Output strategy — three modes per design doc 已决定 #3.
+  // Default `copy_to_video` matches the most common fan-sub workflow
+  // (subs end up in the same folder as the videos, originals untouched).
+  const [outputMode, setOutputMode] = useState<OutputMode>("copy_to_video");
+  // Picked target directory for the `copy_to_chosen` mode. Required
+  // before Run when that mode is active.
+  const [chosenDir, setChosenDir] = useState<string | null>(null);
+  // Per-row selection overrides. Map<rowId, { selected }> — the engine
+  // computes a default per row, the user toggles override it. Stable
+  // row IDs (content-based) keep overrides valid across re-pair.
+  const [rowOverrides, setRowOverrides] = useState<Map<string, { selected: boolean }>>(new Map());
 
   const pickGenRef = useRef(0);
   const logIdRef = useRef(0);
+  const cancelRef = useRef(false);
   const dropZoneRef = useRef<HTMLDivElement>(null);
   const logScrollRef = useRef<HTMLDivElement>(null);
 
@@ -172,12 +192,49 @@ export default function BatchRename() {
   // Pairing — recomputed whenever the file lists change. Pure function
   // so memoizing on the array references is enough; the engine has no
   // hidden state.
-  const pairingRows = useMemo<PairingRow[]>(() => {
+  const baseRows = useMemo<PairingRow[]>(() => {
     if (totalCount === 0) return [];
     const parsedVideos = videoPaths.map((p, i) => parseFilename(p, videoNames[i] ?? ""));
     const parsedSubs = subtitlePaths.map((p, i) => parseFilename(p, subtitleNames[i] ?? ""));
     return buildPairings(parsedVideos, parsedSubs);
   }, [videoPaths, videoNames, subtitlePaths, subtitleNames, totalCount]);
+
+  // Apply user overrides over the base rows. Only `selected` is
+  // overridable today; manual edit (drag/click re-pair) is a future
+  // expansion of this layer.
+  const pairingRows = useMemo<PairingRow[]>(
+    () =>
+      baseRows.map((r) => {
+        const o = rowOverrides.get(r.id);
+        return o ? { ...r, selected: o.selected } : r;
+      }),
+    [baseRows, rowOverrides]
+  );
+
+  // Prune stale overrides whenever the base rows change (file selection
+  // edited so some old rows no longer exist). Without this, the
+  // overrides Map grows unbounded across pick/clear cycles.
+  useEffect(() => {
+    setRowOverrides((prev) => {
+      if (prev.size === 0) return prev;
+      const validIds = new Set(baseRows.map((r) => r.id));
+      const next = new Map<string, { selected: boolean }>();
+      let changed = false;
+      for (const [id, val] of prev) {
+        if (validIds.has(id)) next.set(id, val);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [baseRows]);
+
+  const toggleRow = useCallback((rowId: string, currentlySelected: boolean) => {
+    setRowOverrides((prev) => {
+      const next = new Map(prev);
+      next.set(rowId, { selected: !currentlySelected });
+      return next;
+    });
+  }, []);
 
   const warningCount = useMemo(
     () => pairingRows.filter((r) => r.source === "warning").length,
@@ -187,11 +244,31 @@ export default function BatchRename() {
   const pairingColumns = useMemo<PreviewTableColumn<PairingRow>[]>(
     () => [
       {
+        key: "select",
+        header: "",
+        width: "28px",
+        render: (row) => {
+          // Checkbox is only meaningful for rows with both video AND
+          // subtitle — orphan rows have nothing to write, so the
+          // checkbox is hidden for those.
+          const canSelect = row.video !== null && row.subtitle !== null;
+          if (!canSelect) return null;
+          return (
+            <input
+              type="checkbox"
+              checked={row.selected}
+              disabled={busy}
+              onChange={() => toggleRow(row.id, row.selected)}
+              aria-label={t("rename_row_select_aria")}
+            />
+          );
+        },
+      },
+      {
         key: "idx",
         header: t("col_index"),
         width: "32px",
         render: (_row, i) => i + 1,
-        className: "row-idx",
       },
       {
         key: "video",
@@ -222,8 +299,14 @@ export default function BatchRename() {
         render: (row) => renderSourceBadge(row.source, t),
       },
     ],
-    [t]
+    [t, busy, toggleRow]
   );
+
+  const actionableRows = useMemo(
+    () => pairingRows.filter((r) => r.selected && r.video !== null && r.subtitle !== null),
+    [pairingRows]
+  );
+  const actionableCount = actionableRows.length;
 
   const addLog = useCallback((text: string, type: LogEntry["type"] = "info") => {
     const id = logIdRef.current++;
@@ -318,7 +401,159 @@ export default function BatchRename() {
     clearFile("rename");
     setUnknownCount(0);
     setDropError(null);
+    setRowOverrides(new Map());
   }, [clearFile]);
+
+  const handlePickChosenDir = useCallback(async () => {
+    const dir = await pickOutputDirectory();
+    if (dir) setChosenDir(dir);
+  }, []);
+
+  const handleRunRename = useCallback(async () => {
+    if (busy || actionableCount === 0) return;
+
+    if (outputMode === "copy_to_chosen" && !chosenDir) {
+      addLog(t("msg_rename_no_chosen_dir"), "error");
+      return;
+    }
+
+    // Derive output paths up front so all confirmation dialogs see
+    // the final names. Catch derive errors per-row — a bad row gets
+    // logged + skipped, the rest of the batch proceeds.
+    const targets: { row: PairingRow; outputPath: string }[] = [];
+    for (const row of actionableRows) {
+      try {
+        const outputPath = deriveRenameOutputPath(
+          row.video!.path,
+          row.subtitle!.path,
+          outputMode,
+          chosenDir
+        );
+        targets.push({ row, outputPath });
+      } catch (e) {
+        const reason = e instanceof Error ? e.message : String(e);
+        addLog(t("msg_rename_skipped", row.subtitle!.name, reason), "error");
+      }
+    }
+    if (targets.length === 0) {
+      addLog(t("msg_rename_nothing_to_do"), "error");
+      return;
+    }
+
+    // In-place rename is destructive (source disappears). Show a
+    // confirmation dialog with the first 3 sample names so the user
+    // sees exactly what will happen before committing.
+    if (outputMode === "rename") {
+      const samples = targets
+        .slice(0, 3)
+        .map((t2) => `${t2.row.subtitle!.name} → ${fileNameFromPath(t2.outputPath)}`)
+        .join("\n");
+      const moreCount = targets.length - 3;
+      const moreSuffix = moreCount > 0 ? "\n" + t("msg_rename_inplace_more", moreCount) : "";
+      const confirmed = await ask(
+        t("msg_rename_inplace_confirm", targets.length) + "\n\n" + samples + moreSuffix,
+        { title: t("dialog_rename_inplace_title"), kind: "warning" }
+      );
+      if (!confirmed) {
+        addLog(t("msg_rename_cancelled"), "info");
+        setLastActionResult("cancelled");
+        return;
+      }
+    }
+
+    // Pre-flight overwrite check — same project-wide pattern as the
+    // other batch tabs. ANY existing target → single ask() with the
+    // count; cancel preserves prior state, confirm proceeds.
+    const projectedOutputs = targets.map((t2) => t2.outputPath);
+    const existingCount = await countExistingFiles(projectedOutputs);
+    if (existingCount > 0) {
+      const confirmed = await ask(t("msg_overwrite_confirm", existingCount, targets.length), {
+        title: t("dialog_overwrite_title"),
+        kind: "warning",
+      });
+      if (!confirmed) {
+        addLog(t("msg_rename_cancelled"), "info");
+        setLastActionResult("cancelled");
+        return;
+      }
+    }
+
+    setBusy(true);
+    setProgress({ processed: 0, total: targets.length });
+    cancelRef.current = false;
+
+    try {
+      addLog(t("msg_rename_start", targets.length, t(`rename_mode_${outputMode}_short`)));
+
+      let successCount = 0;
+      let processedCount = 0;
+      const seenOutputs = new Set<string>();
+
+      for (let i = 0; i < targets.length; i++) {
+        if (cancelRef.current) {
+          addLog(t("msg_rename_cancelled"), "info");
+          break;
+        }
+
+        const { row, outputPath } = targets[i];
+        const subName = row.subtitle!.name;
+        const outName = fileNameFromPath(outputPath);
+        addLog(t("msg_processing", subName));
+
+        try {
+          // Within-batch dedup. Two rows producing the same output
+          // path (e.g., user pre-edited filenames in a way that
+          // collides) would otherwise overwrite each other.
+          const normalizedOut = outputPath.normalize("NFC").replace(/\\/g, "/").toLowerCase();
+          if (seenOutputs.has(normalizedOut)) {
+            addLog(t("msg_skipped_duplicate", subName), "error");
+            continue;
+          }
+          seenOutputs.add(normalizedOut);
+
+          // No-op guard: rename in place where the source already
+          // matches the target. Skip silently rather than calling
+          // rename on the same path (some OSes throw).
+          const sameAsSource =
+            row.subtitle!.path.normalize("NFC").replace(/\\/g, "/").toLowerCase() === normalizedOut;
+          if (outputMode === "rename" && sameAsSource) {
+            addLog(t("msg_rename_already_named", subName), "info");
+            successCount++;
+            continue;
+          }
+
+          if (cancelRef.current) break;
+
+          if (outputMode === "rename") {
+            await renamePath(row.subtitle!.path, outputPath);
+          } else {
+            await copyPath(row.subtitle!.path, outputPath);
+          }
+          addLog(t("msg_rename_done", subName, outName), "success");
+          successCount++;
+        } catch (e) {
+          const reason = e instanceof Error ? e.message : String(e);
+          addLog(t("msg_rename_error", subName, reason), "error");
+        } finally {
+          processedCount++;
+          setProgress({ processed: processedCount, total: targets.length });
+        }
+      }
+
+      if (!cancelRef.current) {
+        addLog(t("msg_rename_complete", successCount, targets.length), "success");
+      }
+
+      if (cancelRef.current) {
+        setLastActionResult("cancelled");
+      } else {
+        setLastActionResult(successCount > 0 ? "success" : "error");
+      }
+    } finally {
+      setBusy(false);
+      setProgress(null);
+    }
+  }, [busy, actionableCount, actionableRows, outputMode, chosenDir, addLog, t]);
 
   // Reset last-action on selection change.
   useEffect(() => {
@@ -462,12 +697,106 @@ export default function BatchRename() {
         </p>
       )}
 
+      {/* Output-mode strategy. Three modes (per design doc 已决定 #3)
+           with a chosen-dir picker visible only when the third mode is
+           selected. The mode persists across selection changes; the
+           chosen-dir is cleared when files clear. */}
+      {totalCount > 0 && (
+        <fieldset
+          className="rounded-lg px-4 py-3"
+          style={{ border: "1px solid var(--border-light)", background: "var(--bg-panel)" }}
+          disabled={busy}
+        >
+          <legend className="px-2 text-xs font-medium" style={{ color: "var(--text-muted)" }}>
+            {t("rename_mode_label")}
+          </legend>
+          <div className="flex flex-col gap-1.5">
+            <label
+              className="flex items-center gap-2 text-sm cursor-pointer"
+              style={{ color: "var(--text-primary)" }}
+            >
+              <input
+                type="radio"
+                name="rename-mode"
+                value="copy_to_video"
+                checked={outputMode === "copy_to_video"}
+                onChange={() => setOutputMode("copy_to_video")}
+                disabled={busy}
+              />
+              <span>{t("rename_mode_copy_to_video")}</span>
+              <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+                {t("rename_mode_default")}
+              </span>
+            </label>
+            <label
+              className="flex items-center gap-2 text-sm cursor-pointer"
+              style={{ color: "var(--text-primary)" }}
+            >
+              <input
+                type="radio"
+                name="rename-mode"
+                value="copy_to_chosen"
+                checked={outputMode === "copy_to_chosen"}
+                onChange={() => setOutputMode("copy_to_chosen")}
+                disabled={busy}
+              />
+              <span>{t("rename_mode_copy_to_chosen")}</span>
+            </label>
+            {outputMode === "copy_to_chosen" && (
+              <div className="flex items-center gap-2 ml-6">
+                <button
+                  onClick={handlePickChosenDir}
+                  disabled={busy}
+                  className="px-3 py-1 rounded text-xs font-medium"
+                  style={{
+                    background: busy ? "var(--bg-input)" : "var(--accent)",
+                    color: busy ? "var(--text-muted)" : "white",
+                  }}
+                >
+                  {t("btn_pick_chosen_dir")}
+                </button>
+                {chosenDir ? (
+                  <span
+                    className="text-xs truncate flex-1"
+                    style={{ color: "var(--text-secondary)" }}
+                    title={chosenDir}
+                  >
+                    {chosenDir}
+                  </span>
+                ) : (
+                  <span className="text-xs italic" style={{ color: "var(--text-muted)" }}>
+                    {t("rename_chosen_dir_empty")}
+                  </span>
+                )}
+              </div>
+            )}
+            <label
+              className="flex items-center gap-2 text-sm cursor-pointer"
+              style={{ color: "var(--text-primary)" }}
+            >
+              <input
+                type="radio"
+                name="rename-mode"
+                value="rename"
+                checked={outputMode === "rename"}
+                onChange={() => setOutputMode("rename")}
+                disabled={busy}
+              />
+              <span>{t("rename_mode_in_place")}</span>
+              <span className="text-xs" style={{ color: "var(--warning)" }}>
+                {t("rename_mode_in_place_hint")}
+              </span>
+            </label>
+          </div>
+        </fieldset>
+      )}
+
       {/* Pairing preview grid. The engine produces one row per
            (video, subtitle) pair; multi-language subs for the same
            video collapse to N rows. Source badge tells the user which
-           algorithm decided the pair (regex / LCS / manual / unmatched
-           / warning for ambiguous keys). Stage 5c will add per-row
-           checkbox toggle + manual edit. */}
+           algorithm decided the pair. Checkbox column lets the user
+           pick which subtitle gets renamed/copied; default is the
+           first sub per video selected. */}
       {totalCount > 0 && (
         <PreviewTable
           rows={pairingRows}
@@ -487,6 +816,49 @@ export default function BatchRename() {
           emptyMessage={t("rename_no_pairings")}
           rowClassName={(row) => (row.source === "warning" ? "preview-row-warning" : undefined)}
         />
+      )}
+
+      {/* Run / Cancel action row. Run is enabled only when at least
+           one row is checked AND has both video + subtitle (orphan
+           rows can't be renamed). The button label shows the actionable
+           count so the user sees the scope of the operation. */}
+      {totalCount > 0 && (
+        <div className="flex items-center gap-2">
+          <div className="flex-1" />
+          {busy && (
+            <button
+              onClick={() => {
+                cancelRef.current = true;
+              }}
+              className="px-4 rounded-lg text-sm transition-colors"
+              style={{
+                background: "var(--cancel-bg)",
+                color: "var(--cancel-text)",
+                height: "38px",
+              }}
+            >
+              {t("btn_cancel")}
+            </button>
+          )}
+          <button
+            onClick={handleRunRename}
+            disabled={busy || actionableCount === 0}
+            className="px-6 rounded-lg font-medium text-sm transition-colors"
+            style={
+              busy || actionableCount === 0
+                ? {
+                    background: "var(--accent-disabled-bg)",
+                    color: "var(--accent-disabled-text)",
+                    opacity: actionableCount === 0 ? 0.5 : 1,
+                    height: "38px",
+                    minWidth: "140px",
+                  }
+                : { background: "var(--accent)", color: "#fff", height: "38px", minWidth: "140px" }
+            }
+          >
+            {busy ? t("btn_renaming") : t("btn_rename_run", actionableCount)}
+          </button>
+        </div>
       )}
 
       {/* Log */}

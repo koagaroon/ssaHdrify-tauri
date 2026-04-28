@@ -3,7 +3,7 @@
  * Centralizes all native interactions so feature code stays pure JS.
  */
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { writeTextFile } from "@tauri-apps/plugin-fs";
+import { writeTextFile, rename, copyFile } from "@tauri-apps/plugin-fs";
 import { invoke } from "@tauri-apps/api/core";
 
 // ── File Dialogs ──────────────────────────────────────────
@@ -127,6 +127,14 @@ export async function pickRenameInputs(): Promise<string[] | null> {
   );
 }
 
+/** Open a directory picker for the Batch Rename "copy to chosen
+ *  directory" output mode. Returns absolute path or null on cancel. */
+export async function pickOutputDirectory(): Promise<string | null> {
+  return toSinglePath(
+    await open({ directory: true, multiple: false, title: "Choose output directory" })
+  );
+}
+
 /** Open a directory picker for a local font folder. Returns path or null. */
 export async function pickFontDirectory(): Promise<string | null> {
   return toSinglePath(
@@ -194,6 +202,23 @@ export async function readTextDetectEncoding(path: string): Promise<ReadTextResu
 /** Write a text file with explicit UTF-8. */
 export async function writeText(path: string, content: string): Promise<void> {
   await writeTextFile(path, content);
+}
+
+/** Rename / move a file. Atomic on the same volume; falls back to the
+ *  OS's copy-then-delete on cross-volume targets (Tauri plugin-fs
+ *  semantics). Used by Batch Rename's "rename in place" mode where
+ *  the source file disappears. Throws on failure — collisions surface
+ *  as the OS rejecting the rename, which the caller logs per-file. */
+export async function renamePath(from: string, to: string): Promise<void> {
+  await rename(from, to);
+}
+
+/** Copy a file. Source is preserved. Used by Batch Rename's two copy
+ *  modes (copy-to-video-directory / copy-to-chosen). Overwrites the
+ *  target if it exists — pre-flight overwrite confirmation lives at
+ *  the caller. */
+export async function copyPath(from: string, to: string): Promise<void> {
+  await copyFile(from, to);
 }
 
 // ── Path Utilities ───────────────────────────────────────

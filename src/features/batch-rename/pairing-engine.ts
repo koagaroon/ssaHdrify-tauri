@@ -17,6 +17,7 @@
  * samples; this set hits all seven via Pattern A (` - NN [...]`) and
  * Pattern B (`][NN][`), with the original set kept as fallback.
  */
+import { extractLangFromBaseName } from "../../lib/lang-detection";
 
 // ── Bracket cleanup ──────────────────────────────────────
 
@@ -231,10 +232,20 @@ function pairingKeyTuple(season: number, episode: number): string {
   return `${season}|${episode}`;
 }
 
+/** Compose a stable row ID from the file paths. Survives reorders and
+ *  reanalysis as long as the same (video, subtitle) pair is still
+ *  produced — required so user-driven per-row overrides (Stage 5c
+ *  selection toggle) don't get orphaned when files come and go. */
+export function makeRowId(
+  videoPath: string | null | undefined,
+  subtitlePath: string | null | undefined
+): string {
+  return `${videoPath ?? "_"}|||${subtitlePath ?? "_"}`;
+}
+
 export function buildPairings(videos: ParsedFile[], subtitles: ParsedFile[]): PairingRow[] {
   const rows: PairingRow[] = [];
-  let idCounter = 0;
-  const newId = () => `row-${idCounter++}`;
+  const newId = (v: ParsedFile | null, s: ParsedFile | null) => makeRowId(v?.path, s?.path);
 
   // Bucket matched files; collect unmatched separately.
   const matchedVideos = new Map<string, ParsedFile[]>();
@@ -276,7 +287,7 @@ export function buildPairings(videos: ParsedFile[], subtitles: ParsedFile[]): Pa
       // Subs without a matching video — orphan row, not selectable.
       for (const s of ss) {
         rows.push({
-          id: newId(),
+          id: newId(null, s),
           video: null,
           subtitle: { path: s.path, name: s.name },
           source: "unmatched",
@@ -288,7 +299,7 @@ export function buildPairings(videos: ParsedFile[], subtitles: ParsedFile[]): Pa
       // Video without subs — orphan row, not selectable.
       for (const v of vs) {
         rows.push({
-          id: newId(),
+          id: newId(v, null),
           video: { path: v.path, name: v.name },
           subtitle: null,
           source: "unmatched",
@@ -302,7 +313,7 @@ export function buildPairings(videos: ParsedFile[], subtitles: ParsedFile[]): Pa
       // — matches the user's typical "pick one subtitle" workflow.
       for (let i = 0; i < ss.length; i++) {
         rows.push({
-          id: newId(),
+          id: newId(vs[0], ss[i]),
           video: { path: vs[0].path, name: vs[0].name },
           subtitle: { path: ss[i].path, name: ss[i].name },
           source: "regex",
@@ -317,7 +328,7 @@ export function buildPairings(videos: ParsedFile[], subtitles: ParsedFile[]): Pa
       const max = Math.max(vs.length, ss.length);
       for (let i = 0; i < max; i++) {
         rows.push({
-          id: newId(),
+          id: newId(vs[i] ?? null, ss[i] ?? null),
           video: vs[i] ? { path: vs[i].path, name: vs[i].name } : null,
           subtitle: ss[i] ? { path: ss[i].path, name: ss[i].name } : null,
           source: "warning",
@@ -332,7 +343,7 @@ export function buildPairings(videos: ParsedFile[], subtitles: ParsedFile[]): Pa
   // pollute the sorted main grid.
   for (const v of unmatchedVideos) {
     rows.push({
-      id: newId(),
+      id: newId(v, null),
       video: { path: v.path, name: v.name },
       subtitle: null,
       source: "unmatched",
@@ -342,7 +353,7 @@ export function buildPairings(videos: ParsedFile[], subtitles: ParsedFile[]): Pa
   }
   for (const s of unmatchedSubs) {
     rows.push({
-      id: newId(),
+      id: newId(null, s),
       video: null,
       subtitle: { path: s.path, name: s.name },
       source: "unmatched",
@@ -359,4 +370,81 @@ function compareKeys(a: string, b: string): number {
   const [bs, be] = b.split("|").map((n) => parseInt(n, 10));
   if (as !== bs) return as - bs;
   return ae - be;
+}
+
+// ── Output path derivation ──────────────────────────────
+
+export type OutputMode = "rename" | "copy_to_video" | "copy_to_chosen";
+
+/** Derive the output path for renaming a subtitle to match a video.
+ *
+ * Output filename = `<video_basename><.lang_suffix><sub_extension>`.
+ * The lang suffix is preserved when the source subtitle had one
+ * (e.g., `.zh.ass`, `.sc.ass`) so multi-language subs for the same
+ * video remain distinguishable post-rename. When no recognized lang
+ * is present, no suffix is added — output is `<video_basename><ext>`.
+ *
+ * Target directory varies by mode:
+ *   - rename          : same directory as the SUBTITLE (source disappears)
+ *   - copy_to_video   : same directory as the VIDEO (source preserved)
+ *   - copy_to_chosen  : caller-provided directory (source preserved)
+ *
+ * Native path separator is preserved by inspecting the subtitle path
+ * (the canonical "source" for the file we're operating on). Mixing
+ * `/` and `\` confuses Win32 APIs and shell-integration tools.
+ */
+export function deriveRenameOutputPath(
+  videoPath: string,
+  subtitlePath: string,
+  mode: OutputMode,
+  chosenDir: string | null
+): string {
+  // Video basename (without extension)
+  const videoBaseFull = baseName(videoPath);
+  const videoBase = stripExtension(videoBaseFull);
+
+  // Subtitle name pieces
+  const subFull = baseName(subtitlePath);
+  const subDot = subFull.lastIndexOf(".");
+  const subExt = subDot > 0 ? subFull.slice(subDot) : ""; // ".ass" / ".srt" / etc.
+  const subBaseWithDots = subDot > 0 ? subFull.slice(0, subDot) : subFull;
+  // Lang suffix: detect from the subtitle's stem (e.g., "EP01.zh" → "zh").
+  const lang = extractLangFromBaseName(subBaseWithDots);
+  const langSuffix = lang ? `.${lang}` : "";
+
+  const outName = `${videoBase}${langSuffix}${subExt}`;
+
+  // Pick target directory per mode
+  let targetDir: string;
+  if (mode === "rename") {
+    targetDir = dirname(subtitlePath);
+  } else if (mode === "copy_to_video") {
+    targetDir = dirname(videoPath);
+  } else {
+    if (!chosenDir) {
+      throw new Error("deriveRenameOutputPath: chosenDir required for copy_to_chosen");
+    }
+    targetDir = chosenDir;
+  }
+
+  // Preserve native path separator from the subtitle path
+  const usedBackslash = subtitlePath.includes("\\") && !subtitlePath.includes("/");
+  const normTargetDir = targetDir.replace(/\\/g, "/").replace(/\/$/, "");
+  const outputPath = normTargetDir ? `${normTargetDir}/${outName}` : outName;
+  return usedBackslash ? outputPath.replace(/\//g, "\\") : outputPath;
+}
+
+function baseName(path: string): string {
+  const norm = path.replace(/\\/g, "/");
+  const lastSlash = norm.lastIndexOf("/");
+  return lastSlash >= 0 ? norm.slice(lastSlash + 1) : norm;
+}
+
+function dirname(path: string): string {
+  const norm = path.replace(/\\/g, "/");
+  const lastSlash = norm.lastIndexOf("/");
+  if (lastSlash < 0) return "";
+  const usedBackslash = path.includes("\\") && !path.includes("/");
+  const dir = norm.slice(0, lastSlash);
+  return usedBackslash ? dir.replace(/\//g, "\\") : dir;
 }

@@ -427,4 +427,80 @@ export const strings: Record<string, StringEntry> = {
   rename_source_manual: { en: "manual", zh: "手动" },
   rename_source_unmatched: { en: "—", zh: "—" },
   rename_source_warning: { en: "warning", zh: "冲突" },
+
+  // ── Output-mode + run flow (Stage 5c) ────────────────────
+  rename_row_select_aria: { en: "Select this pair", zh: "选中此对" },
+  rename_mode_label: { en: "Output mode", zh: "输出方式" },
+  rename_mode_copy_to_video: {
+    en: "Copy to video directory",
+    zh: "复制到视频所在目录",
+  },
+  rename_mode_copy_to_chosen: {
+    en: "Copy to a chosen directory",
+    zh: "复制到指定目录",
+  },
+  rename_mode_in_place: { en: "Rename in place", zh: "原地重命名" },
+  rename_mode_default: { en: "(default)", zh: "（默认）" },
+  rename_mode_in_place_hint: {
+    en: "destructive — original subtitle filename is replaced",
+    zh: "破坏性 — 原字幕文件名将被替换",
+  },
+  rename_mode_rename_short: { en: "rename", zh: "原地改名" },
+  rename_mode_copy_to_video_short: { en: "copy → video dir", zh: "复制 → 视频目录" },
+  rename_mode_copy_to_chosen_short: { en: "copy → chosen dir", zh: "复制 → 指定目录" },
+  btn_pick_chosen_dir: {
+    en: "Choose folder…",
+    zh: "选择文件夹…",
+  },
+  rename_chosen_dir_empty: {
+    en: "No folder chosen yet",
+    zh: "尚未选择文件夹",
+  },
+  btn_rename_run: { en: "Run ({0})", zh: "执行（{0}）" },
+  btn_renaming: { en: "Running…", zh: "执行中…" },
+  msg_rename_no_chosen_dir: {
+    en: "Choose an output folder first.",
+    zh: "请先选择输出文件夹。",
+  },
+  msg_rename_skipped: {
+    en: "Skipped {0}: {1}",
+    zh: "已跳过 {0}：{1}",
+  },
+  msg_rename_nothing_to_do: {
+    en: "Nothing to do — all selected rows produced invalid output paths.",
+    zh: "无可执行项 — 所选行的输出路径均无效。",
+  },
+  msg_rename_inplace_confirm: {
+    en: "Rename {0} subtitle file(s) in place? This replaces the original filename.",
+    zh: "原地重命名 {0} 个字幕文件？原文件名将被替换。",
+  },
+  msg_rename_inplace_more: {
+    en: "...and {0} more",
+    zh: "……及其他 {0} 个",
+  },
+  dialog_rename_inplace_title: {
+    en: "Confirm Rename",
+    zh: "确认重命名",
+  },
+  msg_rename_cancelled: { en: "Rename cancelled.", zh: "已取消重命名。" },
+  msg_rename_start: {
+    en: "Starting: {0} file(s) · {1}",
+    zh: "开始执行：{0} 个文件 · {1}",
+  },
+  msg_rename_done: {
+    en: "{0} → {1}",
+    zh: "{0} → {1}",
+  },
+  msg_rename_error: {
+    en: "Error renaming {0}: {1}",
+    zh: "重命名 {0} 出错：{1}",
+  },
+  msg_rename_complete: {
+    en: "Rename complete: {0}/{1} file(s) processed",
+    zh: "重命名完成：已处理 {0}/{1} 个文件",
+  },
+  msg_rename_already_named: {
+    en: "Already correctly named: {0} (skipped no-op)",
+    zh: "已是目标名：{0}（无需操作）",
+  },
 };
