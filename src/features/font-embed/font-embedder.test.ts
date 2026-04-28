@@ -133,9 +133,8 @@ describe("analyzeFonts — real-world anime-release scenario", () => {
     findSystemFontMock.mockReset();
   });
 
-  // Simulates the exact scan output from the DBD-Raws test folder — ONE
-  // entry per face, with every localized family-name variant packed inside
-  // the `families` array.
+  // Simulates a real-world raw-pack scan output — ONE entry per face, with
+  // every localized family-name variant packed inside the `families` array.
   const SCAN_OUTPUT: LocalFontEntry[] = [
     makeMultiFamilyEntry(["方正粗黑宋简体", "FZCuHeiSongS-B-GB"], false, false, "C:/R/FZCHSJW.TTF"),
     makeMultiFamilyEntry(
@@ -181,9 +180,9 @@ Dialogue: 0,0:00:10.00,0:00:15.00,Default,green
   });
 
   it("strips the ASS @ vertical-writing prefix so @Foo resolves the same file as Foo", async () => {
-    // Mimics the real bug caught in the DBD-Raws ASS: a `\fn@青鸟华光简粗黑`
-    // override tag produced a lookup key '@青鸟华光简粗黑|0|0' that never
-    // matched '青鸟华光简粗黑|0|0' in the user font map.
+    // Regression test for a real bug: a `\fn@青鸟华光简粗黑` override tag
+    // produced a lookup key '@青鸟华光简粗黑|0|0' that never matched
+    // '青鸟华光简粗黑|0|0' in the user font map.
     findSystemFontMock.mockRejectedValue(new Error("should not be called"));
 
     const map = buildUserFontMap(SCAN_OUTPUT);

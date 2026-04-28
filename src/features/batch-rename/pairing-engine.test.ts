@@ -1,15 +1,15 @@
 /**
  * Pairing-engine tests.
  *
- * Anchored to real fan-sub naming captured in the design doc:
- *   - LoliHouse (Pattern A: ` - NN [`)
- *   - Haruhana, Nekomoe&LoliHouse (Pattern A)
- *   - Airota, Nekomoe kissaten (Pattern B: `][NN][`)
- *   - 樱桃花字幕组 (Pattern A, bilingual romaji/Chinese)
- *   - DBD-Raws (Pattern B)
+ * Anchored to representative real-world fan-sub naming patterns:
+ *   - Pattern A: bracket-group prefix + ` - NN [` episode marker
+ *     (single group, joint releases, bilingual CJK + romaji titles,
+ *      season-suffix variants)
+ *   - Pattern B: adjacent-bracket `][NN][` episode marker
+ *     (single group, raw-pack style with multi-language sub variants)
  *
  * The original Western-TV regex set (S\dE\d / EP\d / 第N话) hit ZERO
- * of these seven samples; this suite locks in coverage so a future
+ * of these samples; this suite locks in coverage so a future
  * "simplification" can't quietly regress the fan-sub paths.
  */
 import { describe, it, expect } from "vitest";
@@ -44,56 +44,50 @@ describe("bracketCleanup", () => {
 });
 
 describe("extractEpisode — documented fan-sub samples", () => {
-  it("Pattern A — LoliHouse Isekai Nonbiri Nouka 2 - 03", () => {
-    const name = "[LoliHouse] Isekai Nonbiri Nouka 2 - 03 [WebRip 1080p HEVC-10bit AAC SRTx2].mkv";
+  it("Pattern A — SubA Show Two 2 - 03", () => {
+    const name = "[SubA] Show Two 2 - 03 [WebRip 1080p HEVC-10bit AAC SRTx2].mkv";
     const ep = extractEpisode(name, bracketCleanup(name));
     expect(ep?.episode).toBe(3);
   });
 
-  it("Pattern A — LoliHouse Tensei shitara ... 2nd Season - 24", () => {
-    const name =
-      "[LoliHouse] Tensei shitara Dainana Ouji Datta node, Kimama ni Majutsu wo Kiwamemasu 2nd Season - 24 [WebRip 1080p HEVC-10bit AAC SRTx2].mkv";
+  it("Pattern A — SubA Long Sample Title 2nd Season - 24", () => {
+    const name = "[SubA] Long Sample Title 2nd Season - 24 [WebRip 1080p HEVC-10bit AAC SRTx2].mkv";
     const ep = extractEpisode(name, bracketCleanup(name));
     expect(ep?.episode).toBe(24);
   });
 
-  it("Pattern A — 樱桃花字幕组 bilingual - 24", () => {
-    const name =
-      "[樱桃花字幕组]转生为第七王子，随心所欲的魔法学习之路 第二季 Dainanaoji S2 - 24 [1080p][简日内嵌].mp4";
+  it("Pattern A — 字幕组Z bilingual - 24", () => {
+    const name = "[字幕组Z]中文示例标题 第二季 RomajiTitle S2 - 24 [1080p][简日内嵌].mp4";
     const ep = extractEpisode(name, bracketCleanup(name));
     expect(ep?.episode).toBe(24);
   });
 
-  it("Pattern A — Haruhana Kamiina Botan - 02", () => {
-    const name =
-      "[Haruhana] Kamiina Botan, Yoeru Sugata wa Yuri no Hana - 02 [WebRip][HEVC-10bit 1080p][CHI_JPN].mkv";
+  it("Pattern A — SubB Sample Show - 02", () => {
+    const name = "[SubB] Sample Show Title - 02 [WebRip][HEVC-10bit 1080p][CHI_JPN].mkv";
     const ep = extractEpisode(name, bracketCleanup(name));
     expect(ep?.episode).toBe(2);
   });
 
-  it("Pattern A — Nekomoe&LoliHouse Kamiina Botan - 03", () => {
-    const name =
-      "[Nekomoe kissaten&LoliHouse] Kamiina Botan, Yoeru Sugata wa Yuri no Hana - 03 [WebRip 1080p HEVC-10bit AAC ASSx2].mkv";
+  it("Pattern A — SubC&SubA Sample Show - 03", () => {
+    const name = "[SubC&SubA] Sample Show Title - 03 [WebRip 1080p HEVC-10bit AAC ASSx2].mkv";
     const ep = extractEpisode(name, bracketCleanup(name));
     expect(ep?.episode).toBe(3);
   });
 
-  it("Pattern B — Airota Kamiina Botan [03]", () => {
-    const name =
-      "[Airota][Kamiina Botan, Yoeru Sugata wa Yuri no Hana][03][1080p AVC AAC][CHT].mp4";
+  it("Pattern B — SubD Sample Show [03]", () => {
+    const name = "[SubD][Sample Show Title][03][1080p AVC AAC][CHT].mp4";
     const ep = extractEpisode(name, bracketCleanup(name));
     expect(ep?.episode).toBe(3);
   });
 
-  it("Pattern B — Nekomoe kissaten Kamiina Botan [03]", () => {
-    const name =
-      "[Nekomoe kissaten][Kamiina Botan, Yoeru Sugata wa Yuri no Hana][03][1080p][JPTC].mp4";
+  it("Pattern B — SubC Sample Show [03]", () => {
+    const name = "[SubC][Sample Show Title][03][1080p][JPTC].mp4";
     const ep = extractEpisode(name, bracketCleanup(name));
     expect(ep?.episode).toBe(3);
   });
 
-  it("Pattern B — DBD-Raws Isekai Nonbiri Nouka [01]", () => {
-    const name = "[DBD-Raws][Isekai Nonbiri Nouka][01][1080P][BDRip][HEVC-10bit][FLAC].sc.ass";
+  it("Pattern B — RawsX Show Title [01]", () => {
+    const name = "[RawsX][Show Title][01][1080P][BDRip][HEVC-10bit][FLAC].sc.ass";
     const ep = extractEpisode(name, bracketCleanup(name));
     expect(ep?.episode).toBe(1);
   });
@@ -179,12 +173,10 @@ describe("extractSeason", () => {
 });
 
 describe("parseFilename — end-to-end (season, episode)", () => {
-  it("LoliHouse Isekai Nonbiri Nouka 2 - 03 → (2, 3)", () => {
-    const p = parse(
-      "[LoliHouse] Isekai Nonbiri Nouka 2 - 03 [WebRip 1080p HEVC-10bit AAC SRTx2].mkv"
-    );
+  it("SubA Show Two 2 - 03 → (2, 3)", () => {
+    const p = parse("[SubA] Show Two 2 - 03 [WebRip 1080p HEVC-10bit AAC SRTx2].mkv");
     expect(p.episode).toBe(3);
-    // "Isekai Nonbiri Nouka 2" — the bare digit 2 isn't picked up by
+    // "Show Two 2" — the bare digit 2 isn't picked up by
     // any season pattern (we don't want to false-match every "X 2"),
     // so this reports season=1. Acceptable: Pattern A doesn't carry
     // season info for that style; if user has cross-season episodes
@@ -192,32 +184,28 @@ describe("parseFilename — end-to-end (season, episode)", () => {
     expect(p.season).toBe(1);
   });
 
-  it("LoliHouse Tensei ... 2nd Season - 24 → (2, 24)", () => {
+  it("SubA Long Sample Title 2nd Season - 24 → (2, 24)", () => {
     const p = parse(
-      "[LoliHouse] Tensei shitara Dainana Ouji Datta node, Kimama ni Majutsu wo Kiwamemasu 2nd Season - 24 [WebRip 1080p HEVC-10bit AAC SRTx2].mkv"
+      "[SubA] Long Sample Title 2nd Season - 24 [WebRip 1080p HEVC-10bit AAC SRTx2].mkv"
     );
     expect(p.episode).toBe(24);
     expect(p.season).toBe(2);
   });
 
-  it("樱桃花字幕组 第二季 Dainanaoji S2 - 24 → (2, 24)", () => {
-    const p = parse(
-      "[樱桃花字幕组]转生为第七王子，随心所欲的魔法学习之路 第二季 Dainanaoji S2 - 24 [1080p][简日内嵌].mp4"
-    );
+  it("字幕组Z 第二季 RomajiTitle S2 - 24 → (2, 24)", () => {
+    const p = parse("[字幕组Z]中文示例标题 第二季 RomajiTitle S2 - 24 [1080p][简日内嵌].mp4");
     expect(p.episode).toBe(24);
     expect(p.season).toBe(2);
   });
 
-  it("Airota [Kamiina Botan][03] → (1, 3)", () => {
-    const p = parse(
-      "[Airota][Kamiina Botan, Yoeru Sugata wa Yuri no Hana][03][1080p AVC AAC][CHT].mp4"
-    );
+  it("SubD [Sample Show][03] → (1, 3)", () => {
+    const p = parse("[SubD][Sample Show Title][03][1080p AVC AAC][CHT].mp4");
     expect(p.episode).toBe(3);
     expect(p.season).toBe(1);
   });
 
-  it("DBD-Raws [Isekai Nonbiri Nouka][01] → (1, 1)", () => {
-    const p = parse("[DBD-Raws][Isekai Nonbiri Nouka][01][1080P][BDRip][HEVC-10bit][FLAC].sc.ass");
+  it("RawsX [Show Title][01] → (1, 1)", () => {
+    const p = parse("[RawsX][Show Title][01][1080P][BDRip][HEVC-10bit][FLAC].sc.ass");
     expect(p.episode).toBe(1);
     expect(p.season).toBe(1);
   });
@@ -307,16 +295,16 @@ describe("deriveRenameOutputPath — exact basename match (no lang suffix)", () 
   // like `.sc` / `.tc` / `.zh` in the source filename are stripped so
   // the player loads the sub by exact-name match.
   const dir = "C:\\foo\\";
-  const expected = `${dir}[DBD-Raws][Isekai Nonbiri Nouka][01][1080P][BDRip][HEVC-10bit][FLAC].ass`;
-  const video = `${dir}[DBD-Raws][Isekai Nonbiri Nouka][01][1080P][BDRip][HEVC-10bit][FLAC].mkv`;
-  const subSc = `${dir}[DBD-Raws][Isekai Nonbiri Nouka][01][1080P][BDRip][HEVC-10bit][FLAC].sc.ass`;
-  const subTc = `${dir}[DBD-Raws][Isekai Nonbiri Nouka][01][1080P][BDRip][HEVC-10bit][FLAC].tc.ass`;
+  const expected = `${dir}[RawsX][Show Title][01][1080P][BDRip][HEVC-10bit][FLAC].ass`;
+  const video = `${dir}[RawsX][Show Title][01][1080P][BDRip][HEVC-10bit][FLAC].mkv`;
+  const subSc = `${dir}[RawsX][Show Title][01][1080P][BDRip][HEVC-10bit][FLAC].sc.ass`;
+  const subTc = `${dir}[RawsX][Show Title][01][1080P][BDRip][HEVC-10bit][FLAC].tc.ass`;
 
-  it("DBD-Raws .sc.ass → strips lang, output uses video basename", () => {
+  it("RawsX .sc.ass → strips lang, output uses video basename", () => {
     expect(deriveRenameOutputPath(video, subSc, "copy_to_video", null)).toBe(expected);
   });
 
-  it("DBD-Raws .tc.ass → strips lang, output uses video basename", () => {
+  it("RawsX .tc.ass → strips lang, output uses video basename", () => {
     expect(deriveRenameOutputPath(video, subTc, "copy_to_video", null)).toBe(expected);
   });
 
@@ -327,9 +315,7 @@ describe("deriveRenameOutputPath — exact basename match (no lang suffix)", () 
   it("copy_to_chosen → target dir is the chosen directory", () => {
     const chosen = "D:\\out";
     const out = deriveRenameOutputPath(video, subSc, "copy_to_chosen", chosen);
-    expect(out).toBe(
-      `D:\\out\\[DBD-Raws][Isekai Nonbiri Nouka][01][1080P][BDRip][HEVC-10bit][FLAC].ass`
-    );
+    expect(out).toBe(`D:\\out\\[RawsX][Show Title][01][1080P][BDRip][HEVC-10bit][FLAC].ass`);
   });
 
   it("preserves subtitle's own extension (.srt → .srt)", () => {

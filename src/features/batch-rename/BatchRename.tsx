@@ -483,7 +483,7 @@ export default function BatchRename() {
     }
 
     // No-op pre-flight. When a sub is already correctly named for its
-    // paired video (e.g., DBD-Raws external-sub releases ship subs
+    // paired video (e.g. raw-pack external-sub releases that ship subs
     // matching `<videoBase>.<lang>.ass`), the derived output equals the
     // source path. Filtering these out BEFORE the overwrite dialog
     // avoids a spurious "N files already exist, overwrite?" prompt

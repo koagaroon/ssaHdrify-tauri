@@ -11,8 +11,9 @@
  *                                 7 documented fan-sub samples; LCS
  *                                 lands when a real failure surfaces]
  *
- * Pattern coverage: validated against LoliHouse / Haruhana / Airota /
- * Nekomoe kissaten / 樱桃花字幕组 / DBD-Raws naming. The original
+ * Pattern coverage: validated against representative real-world
+ * fan-sub naming variants (bilingual CJK titles, season-suffix
+ * variants, external-sub multi-language packs). The original
  * Western-TV regex set (S\dE\d / EP\d / 第N话) hit zero of seven
  * samples; this set hits all seven via Pattern A (` - NN [...]`) and
  * Pattern B (`][NN][`), with the original set kept as fallback.
@@ -62,7 +63,7 @@ const EPISODE_PATTERNS: EpisodePattern[] = [
     }),
   },
   // Pattern B — `][NN][` — must run on raw (brackets are the cue).
-  // Airota / Nekomoe-style fan-sub naming.
+  // Common in adjacent-bracket fan-sub naming styles.
   {
     regex: /\]\s*\[\s*0*(\d+)\s*\]/,
     useRaw: true,
@@ -70,8 +71,8 @@ const EPISODE_PATTERNS: EpisodePattern[] = [
   },
   // Pattern A — ` - NN [` or ` - NN.ext` — runs on raw because the
   // trailing bracket / extension boundary is the right anchor. Most
-  // common format across the documented samples (LoliHouse, Haruhana,
-  // Nekomoe&LoliHouse, 樱桃花字幕组).
+  // common format across the documented sample set, including bilingual
+  // CJK titles and joint-release naming styles.
   {
     regex: /\s-\s*0*(\d+)\s*(?:\[|\.[a-z0-9]+$)/i,
     useRaw: true,
@@ -248,10 +249,10 @@ export function makeRowId(
  * Build pairing rows from the input file lists. Video-centric:
  *
  *   - Exactly one row per video. Subtitles are a property of the row,
- *     not their own row. Multi-language batches (e.g., DBD-Raws's
- *     `.sc.ass` + `.tc.ass` per video) get the first regex-paired sub
- *     selected by default; the others stay reachable through the UI's
- *     subtitle dropdown without inflating the grid.
+ *     not their own row. Multi-language batches (e.g. raw-release
+ *     packs that ship `.sc.ass` + `.tc.ass` per video) get the first
+ *     regex-paired sub selected by default; the others stay reachable
+ *     through the UI's subtitle dropdown without inflating the grid.
  *   - Subtitles whose episode regex didn't match any video are NOT
  *     given their own row. They remain in the input subtitle list and
  *     are still selectable via any video row's dropdown — the user is
@@ -471,7 +472,7 @@ export function assignSubtitleToRow(
 /** Path equality test for the rename pre-flight no-op detector.
  *  Two paths are "the same file" for our purposes when, after NFC
  *  normalization, slash-style folding, and case folding, they are
- *  identical strings. The fix this helper supports: a DBD-Raws-style
+ *  identical strings. The fix this helper supports: a raw-pack-style
  *  release where the subtitle is already correctly named for the
  *  paired video — running rename/copy on it has no effect (or fails,
  *  for copyFile(src, src) on Windows) and must be filtered out before

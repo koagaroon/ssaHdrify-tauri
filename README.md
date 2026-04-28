@@ -120,9 +120,9 @@ For the subtitle ↔ video rename workflow, [arition/SubRenamer](https://github.
 
 > **配对算法 | Pairing Algorithm**
 >
-> 流水线：括号清理 → 优先级化的剧集号正则集（`S\d+E\d+`、`][NN][`、`- NN`、`第N话`、`EP\d+`）→ 季度并行扫描 → `(season, episode)` 配对键 → LCS 回退 → 手动网格作为最终安全网。算法基于 LoliHouse / Haruhana / Airota / Nekomoe kissaten / 樱桃花字幕组 / DBD-Raws 等真实命名样本校核。
+> 流水线：括号清理 → 优先级化的剧集号正则集（`S\d+E\d+`、`][NN][`、`- NN`、`第N话`、`EP\d+`）→ 季度并行扫描 → `(season, episode)` 配对键 → LCS 回退 → 手动网格作为最终安全网。模式覆盖在多组真实 fan-sub 命名样本（中日双语、外挂多语字幕、季度后缀变体等）上验证过。
 >
-> Pipeline: bracket cleanup → priority-ordered episode regex (`S\d+E\d+`, `][NN][`, `- NN`, `第N话`, `EP\d+`) → parallel season scan → `(season, episode)` pairing key → LCS fallback → manual grid as the final safety net. Validated against real fan-sub naming from LoliHouse / Haruhana / Airota / Nekomoe kissaten / 樱桃花字幕组 / DBD-Raws.
+> Pipeline: bracket cleanup → priority-ordered episode regex (`S\d+E\d+`, `][NN][`, `- NN`, `第N话`, `EP\d+`) → parallel season scan → `(season, episode)` pairing key → LCS fallback → manual grid as the final safety net. Pattern coverage was validated against representative real-world fan-sub naming variants (bilingual CJK titles, externally-shipped multi-language subs, season-suffix variants, and so on).
 
 ---
 
