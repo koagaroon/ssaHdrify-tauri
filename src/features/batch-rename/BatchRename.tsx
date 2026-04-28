@@ -743,9 +743,8 @@ export default function BatchRename() {
             disabled={busy}
             className="flex-none px-3 rounded-lg text-lg font-bold transition-colors"
             style={{
-              background: "var(--cancel-bg)",
-              color: "var(--cancel-text)",
-              opacity: busy ? 0.4 : 1,
+              background: busy ? "var(--bg-input)" : "var(--cancel-bg)",
+              color: busy ? "var(--text-muted)" : "var(--cancel-text)",
               height: "38px",
             }}
             title={t("btn_clear_file")}

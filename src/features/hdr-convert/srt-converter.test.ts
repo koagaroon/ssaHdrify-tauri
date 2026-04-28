@@ -8,6 +8,7 @@ import { describe, it, expect } from "vitest";
 import {
   escapeSrtUserText,
   preprocessSrtColors,
+  processSrtUserText,
   buildAssDocument,
   isNativeAss,
   isConvertible,
@@ -48,6 +49,42 @@ describe("preprocessSrtColors", () => {
     const result = preprocessSrtColors(input);
     // No color attribute → font tag should be stripped but no color override
     expect(result).toContain("Styled");
+  });
+});
+
+// ── processSrtUserText (composed entry point) ───────────
+
+describe("processSrtUserText", () => {
+  it("escapes user braces before injecting our color tags", () => {
+    // Hostile-looking input: a literal `{\\an8}` ASS override embedded in
+    // user text plus a real <font color> tag. The composed entry point
+    // must escape the user's braces FIRST, then inject our trusted color
+    // tag — otherwise the override would survive as a libass directive.
+    const input = '{\\an8}<font color="#FF0000">Red</font>';
+    const out = processSrtUserText(input);
+    // User's `{` got escaped — no raw `{\` of user origin remains.
+    expect(out).toContain("\\{\\\\an8\\}");
+    // Our injected color tag DID land in the output (real `{\1c…}`).
+    expect(out).toMatch(/\{\\1c&H/);
+  });
+
+  it("equals preprocessSrtColors(escapeSrtUserText(text)) by composition", () => {
+    // Pin the composition contract — if a future refactor reorders or
+    // skips a step inside processSrtUserText, this test fails.
+    const samples = [
+      "Plain text only",
+      '<font color="#00FF00">Green</font>',
+      'Text with {literal-braces} and a <font color="#FFFF00">tag</font>',
+      "Backslash \\ + brace { + close }",
+    ];
+    for (const s of samples) {
+      expect(processSrtUserText(s)).toBe(preprocessSrtColors(escapeSrtUserText(s)));
+    }
+  });
+
+  it("is idempotent on text with no user braces and no color tags", () => {
+    const plain = "Hello world, no markup at all.";
+    expect(processSrtUserText(plain)).toBe(plain);
   });
 });
 

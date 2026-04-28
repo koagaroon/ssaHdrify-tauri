@@ -212,10 +212,12 @@ export function resolveOutputPath(
   const outputPath = `${dir}/${resolved}`;
 
   // Safety: reject paths that exceed Windows MAX_PATH limit.
-  // Local long-path (`\\?\`) paths support up to 32767 chars on Windows 10+
-  // when long-path mode is enabled; relax the cap ONLY for that case. UNC
-  // long paths (`\\?\UNC\server\share\...`) may exceed OS limits on the
-  // server side, so we keep the 260 cap for those.
+  // Local long-path paths (input form `\\?\C:\...`, normalized here to
+  // `//?/C:/...` because we ran `inputPath.replace(/\\/g, "/")` on the
+  // way in) support up to 32767 chars on Windows 10+ when long-path mode
+  // is enabled; relax the cap ONLY for that case. UNC long paths
+  // (`\\?\UNC\server\share\...` → `//?/UNC/...`) may exceed OS limits on
+  // the server side, so we keep the 260 cap for those.
   const isLongLocalPath = outputPath.startsWith("//?/") && !outputPath.startsWith("//?/UNC/");
   const maxPathLen = isLongLocalPath ? 32767 : 260;
   if (outputPath.length > maxPathLen) {

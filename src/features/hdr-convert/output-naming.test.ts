@@ -13,31 +13,29 @@ const BASE = "C:/movies";
 describe("resolveOutputPath — template resolution", () => {
   it("default template produces {name}.hdr.ass", () => {
     const result = resolveOutputPath(`${BASE}/subtitle.srt`, DEFAULT_TEMPLATE, "PQ");
-    expect(result).toContain("subtitle.hdr.ass");
+    expect(result).toBe(`${BASE}/subtitle.hdr.ass`);
   });
 
   it("substitutes {eotf} with lowercase EOTF name", () => {
     const result = resolveOutputPath(`${BASE}/subtitle.ass`, "{name}.{eotf}.ass", "HLG");
-    expect(result).toContain("subtitle.hlg.ass");
+    expect(result).toBe(`${BASE}/subtitle.hlg.ass`);
   });
 
   it("strips existing .hdr tag to prevent double tagging", () => {
     // Use .srt extension so output differs from input (avoids self-overwrite guard)
     const result = resolveOutputPath(`${BASE}/subtitle.hdr.srt`, "{name}.hdr.ass", "PQ");
     // Should be subtitle.hdr.ass, NOT subtitle.hdr.hdr.ass
-    expect(result).toContain("subtitle.hdr.ass");
-    expect(result).not.toContain("subtitle.hdr.hdr.ass");
+    expect(result).toBe(`${BASE}/subtitle.hdr.ass`);
   });
 
   it("preserves non-tag suffixes like .eng", () => {
     const result = resolveOutputPath(`${BASE}/subtitle.eng.srt`, "{name}.hdr.ass", "PQ");
-    expect(result).toContain("subtitle.eng.hdr.ass");
+    expect(result).toBe(`${BASE}/subtitle.eng.hdr.ass`);
   });
 
   it("strips stacked .hdr.sdr tags", () => {
     const result = resolveOutputPath(`${BASE}/subtitle.hdr.sdr.ass`, "{name}.hdr.ass", "PQ");
-    expect(result).toContain("subtitle.hdr.ass");
-    expect(result).not.toContain("subtitle.hdr.hdr.ass");
+    expect(result).toBe(`${BASE}/subtitle.hdr.ass`);
   });
 });
 

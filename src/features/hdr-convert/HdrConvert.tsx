@@ -585,9 +585,8 @@ export default function HdrConvert() {
             disabled={processing}
             className="flex-none px-3 rounded-lg text-lg font-bold transition-colors"
             style={{
-              background: "var(--cancel-bg)",
-              color: "var(--cancel-text)",
-              opacity: processing ? 0.4 : 1,
+              background: processing ? "var(--bg-input)" : "var(--cancel-bg)",
+              color: processing ? "var(--text-muted)" : "var(--cancel-text)",
               height: "38px",
             }}
             title={t("btn_clear_file")}

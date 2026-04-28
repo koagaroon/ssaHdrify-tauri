@@ -693,9 +693,8 @@ export default function FontEmbed() {
             disabled={embedding}
             className="flex-none px-3 rounded-lg text-lg font-bold transition-colors"
             style={{
-              background: "var(--cancel-bg)",
-              color: "var(--cancel-text)",
-              opacity: embedding ? 0.4 : 1,
+              background: embedding ? "var(--bg-input)" : "var(--cancel-bg)",
+              color: embedding ? "var(--text-muted)" : "var(--cancel-text)",
               height: "38px",
             }}
             title={t("btn_clear_file")}
@@ -765,7 +764,6 @@ export default function FontEmbed() {
               ? {
                   background: "var(--accent-disabled-bg)",
                   color: "var(--accent-disabled-text)",
-                  opacity: 0.5,
                   height: "38px",
                 }
               : { background: "var(--accent)", color: "#fff", height: "38px" }
@@ -781,9 +779,8 @@ export default function FontEmbed() {
             disabled={embedding}
             className="flex-none px-3 rounded-lg text-lg font-bold transition-colors"
             style={{
-              background: "var(--cancel-bg)",
-              color: "var(--cancel-text)",
-              opacity: embedding ? 0.4 : 1,
+              background: embedding ? "var(--bg-input)" : "var(--cancel-bg)",
+              color: embedding ? "var(--text-muted)" : "var(--cancel-text)",
               height: "38px",
             }}
             title={t("btn_clear_font_sources")}
@@ -816,7 +813,6 @@ export default function FontEmbed() {
               ? {
                   background: "var(--accent-disabled-bg)",
                   color: "var(--accent-disabled-text)",
-                  opacity: fileCount === 0 ? 0.5 : 1,
                   height: "38px",
                   minWidth: "140px",
                 }

@@ -537,9 +537,8 @@ export default function TimingShift() {
             disabled={busy}
             className="flex-none px-3 rounded-lg text-lg font-bold transition-colors"
             style={{
-              background: "var(--cancel-bg)",
-              color: "var(--cancel-text)",
-              opacity: busy ? 0.4 : 1,
+              background: busy ? "var(--bg-input)" : "var(--cancel-bg)",
+              color: busy ? "var(--text-muted)" : "var(--cancel-text)",
               height: "38px",
             }}
             title={t("btn_clear_file")}
@@ -581,7 +580,6 @@ export default function TimingShift() {
           style={{
             background: saveDisabled ? "var(--bg-input)" : "var(--accent)",
             color: saveDisabled ? "var(--text-muted)" : "white",
-            opacity: fileCount === 0 ? 0.5 : 1,
             height: "38px",
             minWidth: "120px",
           }}
