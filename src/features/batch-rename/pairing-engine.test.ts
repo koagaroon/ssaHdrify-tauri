@@ -19,6 +19,8 @@ import {
   extractEpisode,
   extractSeason,
   buildPairings,
+  deriveRenameOutputPath,
+  isNoOpRename,
 } from "./pairing-engine";
 
 function parse(name: string) {
@@ -292,5 +294,85 @@ describe("buildPairings — common shapes", () => {
     expect(rows[1].source).toBe("unmatched");
     expect(rows[1].video?.path).toBe(random.path);
     expect(rows[1].key).toBe("unmatched");
+  });
+});
+
+describe("deriveRenameOutputPath — exact basename match (no lang suffix)", () => {
+  // Output basename equals the video basename verbatim. Lang tokens
+  // like `.sc` / `.tc` / `.zh` in the source filename are stripped so
+  // the player loads the sub by exact-name match.
+  const dir = "C:\\foo\\";
+  const expected = `${dir}[DBD-Raws][Isekai Nonbiri Nouka][01][1080P][BDRip][HEVC-10bit][FLAC].ass`;
+  const video = `${dir}[DBD-Raws][Isekai Nonbiri Nouka][01][1080P][BDRip][HEVC-10bit][FLAC].mkv`;
+  const subSc = `${dir}[DBD-Raws][Isekai Nonbiri Nouka][01][1080P][BDRip][HEVC-10bit][FLAC].sc.ass`;
+  const subTc = `${dir}[DBD-Raws][Isekai Nonbiri Nouka][01][1080P][BDRip][HEVC-10bit][FLAC].tc.ass`;
+
+  it("DBD-Raws .sc.ass → strips lang, output uses video basename", () => {
+    expect(deriveRenameOutputPath(video, subSc, "copy_to_video", null)).toBe(expected);
+  });
+
+  it("DBD-Raws .tc.ass → strips lang, output uses video basename", () => {
+    expect(deriveRenameOutputPath(video, subTc, "copy_to_video", null)).toBe(expected);
+  });
+
+  it("rename mode → target dir is the subtitle's dir, basename matches video", () => {
+    expect(deriveRenameOutputPath(video, subSc, "rename", null)).toBe(expected);
+  });
+
+  it("copy_to_chosen → target dir is the chosen directory", () => {
+    const chosen = "D:\\out";
+    const out = deriveRenameOutputPath(video, subSc, "copy_to_chosen", chosen);
+    expect(out).toBe(
+      `D:\\out\\[DBD-Raws][Isekai Nonbiri Nouka][01][1080P][BDRip][HEVC-10bit][FLAC].ass`
+    );
+  });
+
+  it("preserves subtitle's own extension (.srt → .srt)", () => {
+    const subSrt = `${dir}EP01.zh.srt`;
+    const v = `${dir}MyShow.S01E01.mkv`;
+    expect(deriveRenameOutputPath(v, subSrt, "copy_to_video", null)).toBe(
+      `${dir}MyShow.S01E01.srt`
+    );
+  });
+
+  it("running rename twice on already-renamed sub is a no-op", () => {
+    // First run produced `expected`. Pretending the user re-runs after,
+    // the source is now `expected`; a second derivation lands on the
+    // same path → genuine no-op the orchestration should detect.
+    const out2 = deriveRenameOutputPath(video, expected, "copy_to_video", null);
+    expect(out2).toBe(expected);
+    expect(isNoOpRename(expected, out2)).toBe(true);
+  });
+});
+
+describe("isNoOpRename", () => {
+  it("returns true for identical paths", () => {
+    const p = "C:\\foo\\bar.ass";
+    expect(isNoOpRename(p, p)).toBe(true);
+  });
+
+  it("returns true when paths differ only in slash style", () => {
+    expect(isNoOpRename("C:\\foo\\bar.ass", "C:/foo/bar.ass")).toBe(true);
+  });
+
+  it("returns true when paths differ only in case (Windows)", () => {
+    expect(isNoOpRename("C:\\Foo\\Bar.ASS", "c:\\foo\\bar.ass")).toBe(true);
+  });
+
+  it("returns false for paths with different filenames", () => {
+    expect(isNoOpRename("C:\\foo\\bar.ass", "C:\\foo\\baz.ass")).toBe(false);
+  });
+
+  it("returns false for paths in different directories", () => {
+    expect(isNoOpRename("C:\\foo\\bar.ass", "C:\\bar\\bar.ass")).toBe(false);
+  });
+
+  it("treats NFC- and NFD-equivalent CJK paths as equal", () => {
+    // NFC vs NFD normalization difference (composed vs decomposed).
+    // Path equality must ignore the form so a sub with a decomposed
+    // OS-supplied path doesn't false-positive against the NFC target.
+    const nfc = "C:\\foo\\é.ass".normalize("NFC");
+    const nfd = "C:\\foo\\é.ass".normalize("NFD");
+    expect(isNoOpRename(nfc, nfd)).toBe(true);
   });
 });

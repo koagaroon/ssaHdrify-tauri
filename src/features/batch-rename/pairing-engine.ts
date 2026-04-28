@@ -17,7 +17,6 @@
  * samples; this set hits all seven via Pattern A (` - NN [...]`) and
  * Pattern B (`][NN][`), with the original set kept as fallback.
  */
-import { extractLangFromBaseName } from "../../lib/lang-detection";
 
 // ── Bracket cleanup ──────────────────────────────────────
 
@@ -378,11 +377,15 @@ export type OutputMode = "rename" | "copy_to_video" | "copy_to_chosen";
 
 /** Derive the output path for renaming a subtitle to match a video.
  *
- * Output filename = `<video_basename><.lang_suffix><sub_extension>`.
- * The lang suffix is preserved when the source subtitle had one
- * (e.g., `.zh.ass`, `.sc.ass`) so multi-language subs for the same
- * video remain distinguishable post-rename. When no recognized lang
- * is present, no suffix is added — output is `<video_basename><ext>`.
+ * Output filename = `<video_basename><sub_extension>` — the subtitle
+ * basename is replaced with the video basename verbatim (no lang
+ * suffix preservation). User intent is exact basename match so a
+ * media player auto-loads the sub; modern players already pick up
+ * `.zh.ass` / `.sc.ass`-suffixed siblings, so preserving the lang
+ * tag would defeat the rename's whole purpose. When the user wants
+ * multiple language subs for the same video, the grid checkbox
+ * picks ONE per video; collisions on additional checked rows are
+ * caught by within-batch dedup.
  *
  * Target directory varies by mode:
  *   - rename          : same directory as the SUBTITLE (source disappears)
@@ -403,16 +406,14 @@ export function deriveRenameOutputPath(
   const videoBaseFull = baseName(videoPath);
   const videoBase = stripExtension(videoBaseFull);
 
-  // Subtitle name pieces
+  // Keep only the subtitle's file extension; the rest of the sub name
+  // (including any `.zh` / `.sc` / `.tc` lang token) is discarded so
+  // the output basename equals the video basename verbatim.
   const subFull = baseName(subtitlePath);
   const subDot = subFull.lastIndexOf(".");
   const subExt = subDot > 0 ? subFull.slice(subDot) : ""; // ".ass" / ".srt" / etc.
-  const subBaseWithDots = subDot > 0 ? subFull.slice(0, subDot) : subFull;
-  // Lang suffix: detect from the subtitle's stem (e.g., "EP01.zh" → "zh").
-  const lang = extractLangFromBaseName(subBaseWithDots);
-  const langSuffix = lang ? `.${lang}` : "";
 
-  const outName = `${videoBase}${langSuffix}${subExt}`;
+  const outName = `${videoBase}${subExt}`;
 
   // Pick target directory per mode
   let targetDir: string;
@@ -432,6 +433,22 @@ export function deriveRenameOutputPath(
   const normTargetDir = targetDir.replace(/\\/g, "/").replace(/\/$/, "");
   const outputPath = normTargetDir ? `${normTargetDir}/${outName}` : outName;
   return usedBackslash ? outputPath.replace(/\//g, "\\") : outputPath;
+}
+
+/** Path equality test for the rename pre-flight no-op detector.
+ *  Two paths are "the same file" for our purposes when, after NFC
+ *  normalization, slash-style folding, and case folding, they are
+ *  identical strings. The fix this helper supports: a DBD-Raws-style
+ *  release where the subtitle is already correctly named for the
+ *  paired video — running rename/copy on it has no effect (or fails,
+ *  for copyFile(src, src) on Windows) and must be filtered out before
+ *  the overwrite-confirm dialog so the user doesn't see a spurious
+ *  warning. Case folding is OK on Windows (case-insensitive FS) and
+ *  acceptable on Linux/macOS too — file-management UI on those
+ *  platforms typically discourages case-only renames anyway. */
+export function isNoOpRename(subtitlePath: string, outputPath: string): boolean {
+  const norm = (p: string) => p.normalize("NFC").replace(/\\/g, "/").toLowerCase();
+  return norm(subtitlePath) === norm(outputPath);
 }
 
 function baseName(path: string): string {

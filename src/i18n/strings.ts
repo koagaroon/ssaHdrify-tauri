@@ -384,6 +384,10 @@ export const strings: Record<string, StringEntry> = {
   status_rename_done: { en: "Rename complete", zh: "重命名完成" },
   status_rename_error: { en: "Rename failed", zh: "重命名失败" },
   status_rename_cancelled: { en: "Rename cancelled", zh: "已取消重命名" },
+  status_rename_noop: {
+    en: "Nothing changed — files already match",
+    zh: "未做改动 — 文件已与视频同名",
+  },
   rename_drop_hint: {
     en: "Tip: drag video and subtitle files (or a whole show folder) onto the file strip above — videos and subs auto-categorize",
     zh: "提示：可将视频与字幕文件（或整个剧集文件夹）拖到上方文件栏 — 视频与字幕自动归类",
@@ -502,5 +506,9 @@ export const strings: Record<string, StringEntry> = {
   msg_rename_already_named: {
     en: "Already correctly named: {0} (skipped no-op)",
     zh: "已是目标名：{0}（无需操作）",
+  },
+  msg_rename_all_already_named: {
+    en: "All {0} subtitle file(s) already match their videos — nothing to do.",
+    zh: "全部 {0} 个字幕文件已与视频同名 — 无需操作。",
   },
 };

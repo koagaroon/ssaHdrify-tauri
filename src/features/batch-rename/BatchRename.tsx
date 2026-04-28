@@ -34,6 +34,7 @@ import {
   buildPairings,
   parseFilename,
   deriveRenameOutputPath,
+  isNoOpRename,
   type PairingRow,
   type PairingSource,
   type OutputMode,
@@ -64,7 +65,34 @@ const VIDEO_EXTS = new Set([
 ]);
 const SUBTITLE_EXTS = new Set(["ass", "ssa", "srt", "sub", "vtt", "sbv", "lrc"]);
 
-type Category = "video" | "subtitle" | "unknown";
+// Extensions we intentionally drop on the floor during folder ingestion.
+// These are companions that ship in fan-sub release folders but have no
+// place in this app's workflow — surfacing them in the unknown counter
+// would be noise, not signal. Categories:
+//   - source / metadata       : torrent
+//   - common archive formats  : zip, rar, 7z, tar, gz, bz2, xz, tgz
+//   - companion audio tracks  : mka, flac, mp3, m4a, aac (e.g., separate
+//                                audio supplied alongside an HEVC video)
+// Add to this set when a release-folder staple shows up that can never
+// be a Tab 4 input.
+const IGNORED_EXTS = new Set([
+  "torrent",
+  "zip",
+  "rar",
+  "7z",
+  "tar",
+  "gz",
+  "bz2",
+  "xz",
+  "tgz",
+  "mka",
+  "flac",
+  "mp3",
+  "m4a",
+  "aac",
+]);
+
+type Category = "video" | "subtitle" | "ignored" | "unknown";
 
 function categorize(name: string): Category {
   const dot = name.lastIndexOf(".");
@@ -72,6 +100,7 @@ function categorize(name: string): Category {
   const ext = name.slice(dot + 1).toLowerCase();
   if (VIDEO_EXTS.has(ext)) return "video";
   if (SUBTITLE_EXTS.has(ext)) return "subtitle";
+  if (IGNORED_EXTS.has(ext)) return "ignored";
   return "unknown";
 }
 
@@ -89,6 +118,7 @@ function categorizePaths(paths: string[]): Categorized {
     const cat = categorize(fileNameFromPath(p));
     if (cat === "video") videos.push(p);
     else if (cat === "subtitle") subtitles.push(p);
+    else if (cat === "ignored") continue;
     else unknown.push(p);
   }
   return { videos, subtitles, unknown };
@@ -154,7 +184,7 @@ export default function BatchRename() {
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<{ processed: number; total: number } | null>(null);
   const [lastActionResult, setLastActionResult] = useState<
-    "success" | "error" | "cancelled" | null
+    "success" | "error" | "cancelled" | "noop" | null
   >(null);
   const [dropActive, setDropActive] = useState(false);
   const [dropError, setDropError] = useState<string | null>(null);
@@ -420,7 +450,7 @@ export default function BatchRename() {
     // Derive output paths up front so all confirmation dialogs see
     // the final names. Catch derive errors per-row — a bad row gets
     // logged + skipped, the rest of the batch proceeds.
-    const targets: { row: PairingRow; outputPath: string }[] = [];
+    const derivedTargets: { row: PairingRow; outputPath: string }[] = [];
     for (const row of actionableRows) {
       try {
         const outputPath = deriveRenameOutputPath(
@@ -429,14 +459,42 @@ export default function BatchRename() {
           outputMode,
           chosenDir
         );
-        targets.push({ row, outputPath });
+        derivedTargets.push({ row, outputPath });
       } catch (e) {
         const reason = e instanceof Error ? e.message : String(e);
         addLog(t("msg_rename_skipped", row.subtitle!.name, reason), "error");
       }
     }
-    if (targets.length === 0) {
+    if (derivedTargets.length === 0) {
       addLog(t("msg_rename_nothing_to_do"), "error");
+      return;
+    }
+
+    // No-op pre-flight. When a sub is already correctly named for its
+    // paired video (e.g., DBD-Raws external-sub releases ship subs
+    // matching `<videoBase>.<lang>.ass`), the derived output equals the
+    // source path. Filtering these out BEFORE the overwrite dialog
+    // avoids a spurious "N files already exist, overwrite?" prompt
+    // followed by copyFile(src, src) failures. The remaining work goes
+    // through the regular flow.
+    const noopTargets: { row: PairingRow; outputPath: string }[] = [];
+    const targets: { row: PairingRow; outputPath: string }[] = [];
+    for (const tgt of derivedTargets) {
+      if (isNoOpRename(tgt.row.subtitle!.path, tgt.outputPath)) {
+        noopTargets.push(tgt);
+      } else {
+        targets.push(tgt);
+      }
+    }
+    for (const tgt of noopTargets) {
+      addLog(t("msg_rename_already_named", tgt.row.subtitle!.name), "info");
+    }
+    if (targets.length === 0) {
+      // Nothing was actually written. Logging this as success + green
+      // footer would suggest the rename worked; route through "noop"
+      // (amber pending) so the user sees that the run made no changes.
+      addLog(t("msg_rename_all_already_named", noopTargets.length), "info");
+      setLastActionResult("noop");
       return;
     }
 
@@ -463,7 +521,8 @@ export default function BatchRename() {
 
     // Pre-flight overwrite check — same project-wide pattern as the
     // other batch tabs. ANY existing target → single ask() with the
-    // count; cancel preserves prior state, confirm proceeds.
+    // count; cancel preserves prior state, confirm proceeds. No-op
+    // targets were filtered above so they don't inflate the count.
     const projectedOutputs = targets.map((t2) => t2.outputPath);
     const existingCount = await countExistingFiles(projectedOutputs);
     if (existingCount > 0) {
@@ -503,24 +562,14 @@ export default function BatchRename() {
         try {
           // Within-batch dedup. Two rows producing the same output
           // path (e.g., user pre-edited filenames in a way that
-          // collides) would otherwise overwrite each other.
+          // collides) would otherwise overwrite each other. No-op
+          // rows (target == source) were filtered pre-flight.
           const normalizedOut = outputPath.normalize("NFC").replace(/\\/g, "/").toLowerCase();
           if (seenOutputs.has(normalizedOut)) {
             addLog(t("msg_skipped_duplicate", subName), "error");
             continue;
           }
           seenOutputs.add(normalizedOut);
-
-          // No-op guard: rename in place where the source already
-          // matches the target. Skip silently rather than calling
-          // rename on the same path (some OSes throw).
-          const sameAsSource =
-            row.subtitle!.path.normalize("NFC").replace(/\\/g, "/").toLowerCase() === normalizedOut;
-          if (outputMode === "rename" && sameAsSource) {
-            addLog(t("msg_rename_already_named", subName), "info");
-            successCount++;
-            continue;
-          }
 
           if (cancelRef.current) break;
 
@@ -573,6 +622,9 @@ export default function BatchRename() {
     if (lastActionResult === "error") return { kind: "error", message: t("status_rename_error") };
     if (lastActionResult === "cancelled") {
       return { kind: "pending", message: t("status_rename_cancelled") };
+    }
+    if (lastActionResult === "noop") {
+      return { kind: "pending", message: t("status_rename_noop") };
     }
     return {
       kind: "pending",
@@ -666,6 +718,39 @@ export default function BatchRename() {
         >
           {t("btn_select_rename_inputs")}
         </button>
+        {busy && (
+          <button
+            onClick={() => {
+              cancelRef.current = true;
+            }}
+            className="flex-none px-4 rounded-lg text-sm transition-colors"
+            style={{
+              background: "var(--cancel-bg)",
+              color: "var(--cancel-text)",
+              height: "38px",
+            }}
+          >
+            {t("btn_cancel")}
+          </button>
+        )}
+        <button
+          onClick={handleRunRename}
+          disabled={busy || actionableCount === 0}
+          className="flex-none px-6 rounded-lg font-medium text-sm transition-colors"
+          style={
+            busy || actionableCount === 0
+              ? {
+                  background: "var(--accent-disabled-bg)",
+                  color: "var(--accent-disabled-text)",
+                  opacity: actionableCount === 0 ? 0.5 : 1,
+                  height: "38px",
+                  minWidth: "140px",
+                }
+              : { background: "var(--accent)", color: "#fff", height: "38px", minWidth: "140px" }
+          }
+        >
+          {busy ? t("btn_renaming") : t("btn_rename_run", actionableCount)}
+        </button>
       </div>
 
       {dropError && (
@@ -700,16 +785,19 @@ export default function BatchRename() {
       {/* Output-mode strategy. Three modes (per design doc 已决定 #3)
            with a chosen-dir picker visible only when the third mode is
            selected. The mode persists across selection changes; the
-           chosen-dir is cleared when files clear. */}
+           chosen-dir is cleared when files clear. Styled as a plain
+           div+heading rather than fieldset+legend — the browser default
+           legend-on-border styling reads as a layout bug. Per-input
+           disabled={busy} on each radio gives the same gating fieldset
+           did. */}
       {totalCount > 0 && (
-        <fieldset
+        <div
           className="rounded-lg px-4 py-3"
           style={{ border: "1px solid var(--border-light)", background: "var(--bg-panel)" }}
-          disabled={busy}
         >
-          <legend className="px-2 text-xs font-medium" style={{ color: "var(--text-muted)" }}>
+          <div className="text-xs font-medium mb-2" style={{ color: "var(--text-muted)" }}>
             {t("rename_mode_label")}
-          </legend>
+          </div>
           <div className="flex flex-col gap-1.5">
             <label
               className="flex items-center gap-2 text-sm cursor-pointer"
@@ -788,7 +876,7 @@ export default function BatchRename() {
               </span>
             </label>
           </div>
-        </fieldset>
+        </div>
       )}
 
       {/* Pairing preview grid. The engine produces one row per
@@ -816,49 +904,6 @@ export default function BatchRename() {
           emptyMessage={t("rename_no_pairings")}
           rowClassName={(row) => (row.source === "warning" ? "preview-row-warning" : undefined)}
         />
-      )}
-
-      {/* Run / Cancel action row. Run is enabled only when at least
-           one row is checked AND has both video + subtitle (orphan
-           rows can't be renamed). The button label shows the actionable
-           count so the user sees the scope of the operation. */}
-      {totalCount > 0 && (
-        <div className="flex items-center gap-2">
-          <div className="flex-1" />
-          {busy && (
-            <button
-              onClick={() => {
-                cancelRef.current = true;
-              }}
-              className="px-4 rounded-lg text-sm transition-colors"
-              style={{
-                background: "var(--cancel-bg)",
-                color: "var(--cancel-text)",
-                height: "38px",
-              }}
-            >
-              {t("btn_cancel")}
-            </button>
-          )}
-          <button
-            onClick={handleRunRename}
-            disabled={busy || actionableCount === 0}
-            className="px-6 rounded-lg font-medium text-sm transition-colors"
-            style={
-              busy || actionableCount === 0
-                ? {
-                    background: "var(--accent-disabled-bg)",
-                    color: "var(--accent-disabled-text)",
-                    opacity: actionableCount === 0 ? 0.5 : 1,
-                    height: "38px",
-                    minWidth: "140px",
-                  }
-                : { background: "var(--accent)", color: "#fff", height: "38px", minWidth: "140px" }
-            }
-          >
-            {busy ? t("btn_renaming") : t("btn_rename_run", actionableCount)}
-          </button>
-        </div>
       )}
 
       {/* Log */}
