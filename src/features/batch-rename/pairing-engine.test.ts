@@ -380,6 +380,20 @@ describe("assignSubtitleToRow — manual edit", () => {
     // Row "a" loses its sub — it's now uniquely owned by row "b".
     expect(out.find((r) => r.id === "a")?.subtitle).toBeNull();
     expect(out.find((r) => r.id === "a")?.source).toBe("manual");
+    // Unpaired row preserves its prior selected state — the docstring
+    // promises "selected... is preserved as the user's prior intent".
+    // Both rows defaulted to selected=true, so row "a" stays true.
+    expect(out.find((r) => r.id === "a")?.selected).toBe(true);
+  });
+
+  it("unpair branch preserves the source row's selected=false too", () => {
+    // Parallel to the swap test, but row "a" starts unticked. The docstring
+    // promises preserve-as-is on the unpaired row regardless of the prior
+    // value, so row "a" must stay false after losing its sub.
+    const rows = [row("a", "/v01.mkv", "/s01.ass", false), row("b", "/v02.mkv", "/s02.ass", true)];
+    const out = assignSubtitleToRow(rows, "b", sub("/s01.ass"));
+    expect(out.find((r) => r.id === "a")?.subtitle).toBeNull();
+    expect(out.find((r) => r.id === "a")?.selected).toBe(false);
   });
 
   it("clears a row's subtitle when sub is null", () => {

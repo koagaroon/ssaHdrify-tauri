@@ -34,15 +34,16 @@ Download the latest portable exe from [Releases](https://github.com/koagaroon/ss
 
 ## 功能 | Features
 
-| 功能                                    | 说明                                                                                                                                                                                                                                                                                                                                                                 |
-| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **HDR 色彩转换 / HDR Color Conversion** | sRGB → BT.2100 PQ 或 HLG，基于 Color.js 实现 / sRGB → BT.2100 PQ or HLG, powered by Color.js                                                                                                                                                                                                                                                                         |
-| **多格式支持 / Multi-format Support**   | 输入：ASS / SSA / SRT / SUB / VTT / SBV / LRC → 输出：ASS / Input: ASS/SSA/SRT/SUB/VTT/SBV/LRC → Output: ASS                                                                                                                                                                                                                                                         |
-| **时间轴偏移 / Timing Shift**           | 批量偏移字幕时间戳，支持阈值过滤和实时预览 / Batch offset timestamps with threshold filter and live preview                                                                                                                                                                                                                                                          |
-| **字体嵌入 / Font Embedding**           | 自动检测字幕所用字体，从系统字体或本地文件夹匹配并嵌入 ASS 文件；支持多语言家族名（中/英/Typographic）与 ASS `@` 竖排前缀；含字体子集化 / Auto-detect fonts, match from system OR a user-picked local folder, embed into ASS. Handles multi-locale family names (Chinese / English / Typographic) and the ASS `@` vertical-writing prefix. Font subsetting included. |
-| **多编码支持 / Multi-encoding**         | 自动检测 UTF-8、UTF-16、GBK、Big5、Shift-JIS 等编码 / Auto-detects UTF-8, UTF-16, GBK, Big5, Shift-JIS, and more                                                                                                                                                                                                                                                     |
-| **多语言 / i18n**                       | 中英双语界面，自动记住语言偏好 / Chinese/English UI, persists preference                                                                                                                                                                                                                                                                                             |
-| **深浅色主题 / Themes**                 | 深色 / 浅色 / 跟随系统，自动记住主题偏好 / Dark / Light / Auto, persists preference                                                                                                                                                                                                                                                                                  |
+| 功能                                    | 说明                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **HDR 色彩转换 / HDR Color Conversion** | sRGB → BT.2100 PQ 或 HLG，基于 Color.js 实现 / sRGB → BT.2100 PQ or HLG, powered by Color.js                                                                                                                                                                                                                                                                                                                                       |
+| **多格式支持 / Multi-format Support**   | 输入：ASS / SSA / SRT / SUB / VTT / SBV / LRC → 输出：ASS / Input: ASS/SSA/SRT/SUB/VTT/SBV/LRC → Output: ASS                                                                                                                                                                                                                                                                                                                       |
+| **时间轴偏移 / Timing Shift**           | 批量偏移字幕时间戳，支持阈值过滤和实时预览 / Batch offset timestamps with threshold filter and live preview                                                                                                                                                                                                                                                                                                                        |
+| **字体嵌入 / Font Embedding**           | 自动检测字幕所用字体，从系统字体或本地文件夹匹配并嵌入 ASS 文件；支持多语言家族名（中/英/Typographic）与 ASS `@` 竖排前缀；含字体子集化 / Auto-detect fonts, match from system OR a user-picked local folder, embed into ASS. Handles multi-locale family names (Chinese / English / Typographic) and the ASS `@` vertical-writing prefix. Font subsetting included.                                                               |
+| **批量重命名 / Batch Rename**           | 字幕↔视频文件配对，按视频文件名重命名字幕；fan-sub 命名（`[Group][Show][NN][...]`、`Show - NN [...]`、`第N话` 等）由优先级正则识别；多语言（`.zh / .en / .jp`）字幕共享同一视频；网格内可手动微调配对 / Pair subtitle ↔ video files and rename subs to match the video filenames; fan-sub naming patterns recognized by priority-ordered regex; multi-lang subs (`.zh / .en / .jp`) share one video; manual re-pairing in the grid |
+| **多编码支持 / Multi-encoding**         | 自动检测 UTF-8、UTF-16、GBK、Big5、Shift-JIS 等编码 / Auto-detects UTF-8, UTF-16, GBK, Big5, Shift-JIS, and more                                                                                                                                                                                                                                                                                                                   |
+| **多语言 / i18n**                       | 中英双语界面，自动记住语言偏好 / Chinese/English UI, persists preference                                                                                                                                                                                                                                                                                                                                                           |
+| **深浅色主题 / Themes**                 | 深色 / 浅色 / 跟随系统，自动记住主题偏好 / Dark / Light / Auto, persists preference                                                                                                                                                                                                                                                                                                                                                |
 
 > [!TIP]
 > **中文路径完全支持** — 文件路径中包含中文或其他非 ASCII 字符不会导致任何问题。Tauri 和 Rust 底层使用 Unicode API，不受传统 ANSI 编码限制。
@@ -62,6 +63,10 @@ When playing HDR video, the display enters HDR mode. However, SSA/ASS subtitles 
 > If your player already handles subtitle brightness correctly (e.g. mpv with `blend-subtitles=video`, or madVR with xy-SubFilter color management), you don't need this tool.
 
 相关讨论 / Related discussion: [libass/libass#297](https://github.com/libass/libass/issues/297)
+
+相关工具 / Related tool: 字幕↔视频重命名工作流的另一个选项是 [arition/SubRenamer](https://github.com/arition/SubRenamer)（按字母序+下标配对）。本项目的批量重命名（Tab 4）走基于 fan-sub 命名习惯的正则配对路径，独立实现。
+
+For the subtitle ↔ video rename workflow, [arition/SubRenamer](https://github.com/arition/SubRenamer) is another option (alphabetical-index pairing). This project's Batch Rename (Tab 4) uses a fan-sub-aware regex pairing approach, independently implemented.
 
 ---
 
@@ -104,6 +109,20 @@ When playing HDR video, the display enters HDR mode. However, SSA/ASS subtitles 
 > | ----------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
 > | EOTF curve        | PQ               | PQ (ST 2084) 用于 HDR10/杜比视界；HLG 用于广播 HDR / PQ for HDR10/Dolby Vision; HLG for broadcast HDR                                     |
 > | Target brightness | 203 nits         | SDR 字幕亮度峰值（BT.2408 标准值）。字幕太亮就调低，太暗就调高 / Peak brightness per BT.2408. Decrease if too bright, increase if too dim |
+
+### 批量重命名 / Batch Rename
+
+1. 拖入一个包含视频和字幕的文件夹（或点击「选择文件 / Select Files」分别挑选）；扩展名自动归类 / Drop a folder containing both videos and subtitles (or click **Select Files** to pick them separately); extensions are auto-categorized
+2. 引擎按 fan-sub 命名习惯做剧集号正则配对，预填配对网格 / The engine pre-pairs by fan-sub episode regex and fills the pairing grid
+3. 若引擎错配或漏配，从该行下拉框直接换字幕；选中即纳入批次（无需再点勾选框）/ If a row is mispaired or unpaired, swap subtitles via the row's dropdown — picking auto-includes the row (no second click needed)
+4. 选择输出策略：原地改名 / 复制到视频目录 / 复制到自选目录 / Pick the output strategy: rename in place, copy to video directory, or copy to a chosen directory
+5. 点击运行；若目标路径已存在文件，会先弹覆盖确认对话框 / Click Run; if any target path already exists, an overwrite-confirm dialog runs first
+
+> **配对算法 | Pairing Algorithm**
+>
+> 流水线：括号清理 → 优先级化的剧集号正则集（`S\d+E\d+`、`][NN][`、`- NN`、`第N话`、`EP\d+`）→ 季度并行扫描 → `(season, episode)` 配对键 → LCS 回退 → 手动网格作为最终安全网。算法基于 LoliHouse / Haruhana / Airota / Nekomoe kissaten / 樱桃花字幕组 / DBD-Raws 等真实命名样本校核。
+>
+> Pipeline: bracket cleanup → priority-ordered episode regex (`S\d+E\d+`, `][NN][`, `- NN`, `第N话`, `EP\d+`) → parallel season scan → `(season, episode)` pairing key → LCS fallback → manual grid as the final safety net. Validated against real fan-sub naming from LoliHouse / Haruhana / Airota / Nekomoe kissaten / 樱桃花字幕组 / DBD-Raws.
 
 ---
 
@@ -167,9 +186,13 @@ The portable exe is produced at `src-tauri/target/release/ssahdrify.exe` — rea
 ### 测试 | Testing
 
 ```bash
-npm test              # 前端单元测试 (Vitest) / Frontend unit tests (Vitest)
-cargo test -p ssahdrify  # Rust 后端测试 / Rust backend tests
+npx vitest run                                    # 前端单元测试 / Frontend unit tests
+cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端测试 / Rust backend tests
 ```
+
+> `npm test` 默认进入 watch 模式（开发用）；`npx vitest run` 是单次运行。
+>
+> `npm test` defaults to watch mode (development); use `npx vitest run` for a single-pass run.
 
 ---
 
@@ -180,10 +203,12 @@ cargo test -p ssahdrify  # Rust 后端测试 / Rust backend tests
 │                   Tauri 2 Application                      │
 │  ┌──────────────────────────────────────────────────────┐  │
 │  │  Web Frontend (React + Tailwind CSS)                 │  │
-│  │  - 3 tabs: HDR Convert, Time Shift, Font Embed       │  │
+│  │  - 4 tabs: HDR Convert, Time Shift, Font Embed,      │  │
+│  │    Batch Rename                                      │  │
 │  │  - Color.js for sRGB → HDR color math                │  │
 │  │  - ass-compiler for ASS parsing (font tab)           │  │
-│  │  - Custom subtitle parser (timing tab)               │  │
+│  │  - Custom subtitle parser (timing + rename tabs)     │  │
+│  │  - Fan-sub regex pairing engine (rename tab)         │  │
 │  │  - FontSourceModal: folder/file picker + coverage UI │  │
 │  │  - i18n (zh/en), dark/light/auto theme               │  │
 │  └──────────────┬───────────────────────────────────────┘  │
