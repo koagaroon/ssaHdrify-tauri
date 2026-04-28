@@ -24,6 +24,20 @@ A Tauri desktop rewrite of [gky99/ssaHdrify](https://github.com/gky99/ssaHdrify)
 
 ---
 
+## 目录 | Contents
+
+- [下载 | Download](#下载--download)
+- [功能 | Features](#功能--features)
+- [使用方法 | Usage](#使用方法--usage)
+- [使用场景 | Background](#使用场景--background)
+- [转换原理 | How It Works](#转换原理--how-it-works)
+- [从源码构建 | Build from Source](#从源码构建--build-from-source)
+- [架构 | Architecture](#架构--architecture)
+- [致谢 | Credits](#致谢--credits)
+- [许可证 | License](#许可证--license)
+
+---
+
 ## 下载 | Download
 
 从 [Releases](https://github.com/koagaroon/ssaHdrify-tauri/releases/latest) 页面下载最新便携式 exe，双击即可运行，无需安装。macOS / Linux 用户请参考下方「从源码构建」。
@@ -34,39 +48,17 @@ Download the latest portable exe from [Releases](https://github.com/koagaroon/ss
 
 ## 功能 | Features
 
-| 功能                                    | 说明                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **HDR 色彩转换 / HDR Color Conversion** | sRGB → BT.2100 PQ 或 HLG，基于 Color.js 实现 / sRGB → BT.2100 PQ or HLG, powered by Color.js                                                                                                                                                                                                                                                                                                                                       |
-| **多格式支持 / Multi-format Support**   | 输入：ASS / SSA / SRT / SUB / VTT / SBV / LRC → 输出：ASS / Input: ASS/SSA/SRT/SUB/VTT/SBV/LRC → Output: ASS                                                                                                                                                                                                                                                                                                                       |
-| **时间轴偏移 / Timing Shift**           | 批量偏移字幕时间戳，支持阈值过滤和实时预览 / Batch offset timestamps with threshold filter and live preview                                                                                                                                                                                                                                                                                                                        |
-| **字体嵌入 / Font Embedding**           | 自动检测字幕所用字体，从系统字体或本地文件夹匹配并嵌入 ASS 文件；支持多语言家族名（中/英/Typographic）与 ASS `@` 竖排前缀；含字体子集化 / Auto-detect fonts, match from system OR a user-picked local folder, embed into ASS. Handles multi-locale family names (Chinese / English / Typographic) and the ASS `@` vertical-writing prefix. Font subsetting included.                                                               |
-| **批量重命名 / Batch Rename**           | 字幕↔视频文件配对，按视频文件名重命名字幕；fan-sub 命名（`[Group][Show][NN][...]`、`Show - NN [...]`、`第N话` 等）由优先级正则识别；多语言（`.zh / .en / .jp`）字幕共享同一视频；网格内可手动微调配对 / Pair subtitle ↔ video files and rename subs to match the video filenames; fan-sub naming patterns recognized by priority-ordered regex; multi-lang subs (`.zh / .en / .jp`) share one video; manual re-pairing in the grid |
-| **多编码支持 / Multi-encoding**         | 自动检测 UTF-8、UTF-16、GBK、Big5、Shift-JIS 等编码 / Auto-detects UTF-8, UTF-16, GBK, Big5, Shift-JIS, and more                                                                                                                                                                                                                                                                                                                   |
-| **多语言 / i18n**                       | 中英双语界面，自动记住语言偏好 / Chinese/English UI, persists preference                                                                                                                                                                                                                                                                                                                                                           |
-| **深浅色主题 / Themes**                 | 深色 / 浅色 / 跟随系统，自动记住主题偏好 / Dark / Light / Auto, persists preference                                                                                                                                                                                                                                                                                                                                                |
+| 标签页 / Tab                            | 功能 / Function                                                                                                                                                                                                                       |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **HDR 色彩转换 / HDR Color Conversion** | 字幕颜色从 sRGB 转换到 BT.2100 PQ 或 HLG 色彩空间 / Convert subtitle colors from sRGB to BT.2100 PQ or HLG color space                                                                                                                |
+| **时间轴偏移 / Timing Shift**           | 批量偏移字幕时间戳，支持阈值过滤和实时预览 / Batch-offset subtitle timestamps with threshold filter and live preview                                                                                                                  |
+| **字体嵌入 / Font Embedding**           | 自动检测字幕所用字体，从系统字体或本地文件夹匹配并以子集化形式嵌入 ASS 文件 / Auto-detect fonts referenced by the subtitle, match against system fonts or a local folder, and embed them (subset) into the ASS                        |
+| **批量重命名 / Batch Rename**           | 字幕↔视频文件配对，按视频文件名重命名字幕；多语言字幕共享同一视频；网格内可手动微调配对 / Pair subtitle ↔ video files and rename subs to match the video filename; multi-language subs share one video; manual re-pairing in the grid |
 
 > [!TIP]
 > **中文路径完全支持** — 文件路径中包含中文或其他非 ASCII 字符不会导致任何问题。Tauri 和 Rust 底层使用 Unicode API，不受传统 ANSI 编码限制。
 >
 > **Non-ASCII paths fully supported** — File paths containing Chinese, Japanese, or other non-ASCII characters work correctly. Tauri and Rust use native Unicode APIs under the hood.
-
----
-
-## 使用场景 | Background
-
-播放 HDR 视频时，显示器会进入 HDR 模式。然而 SSA/ASS 字幕格式没有色彩空间元数据，字幕渲染器会将颜色当作 SDR 处理，导致字幕**过饱和、过亮**。
-
-When playing HDR video, the display enters HDR mode. However, SSA/ASS subtitles lack color space metadata — the renderer treats them as SDR, causing subtitles to appear **oversaturated and overly bright**.
-
-> 如果你的播放器已经能正确处理字幕亮度（例如 mpv 的 `blend-subtitles=video`，或 madVR 配合 xy-SubFilter 的字幕色彩管理），则不需要本工具。
->
-> If your player already handles subtitle brightness correctly (e.g. mpv with `blend-subtitles=video`, or madVR with xy-SubFilter color management), you don't need this tool.
-
-相关讨论 / Related discussion: [libass/libass#297](https://github.com/libass/libass/issues/297)
-
-相关工具 / Related tool: 字幕↔视频重命名工作流的另一个选项是 [arition/SubRenamer](https://github.com/arition/SubRenamer)（按字母序+下标配对）。本项目的批量重命名（Tab 4）走基于 fan-sub 命名习惯的正则配对路径，独立实现。
-
-For the subtitle ↔ video rename workflow, [arition/SubRenamer](https://github.com/arition/SubRenamer) is another option (alphabetical-index pairing). This project's Batch Rename (Tab 4) uses a fan-sub-aware regex pairing approach, independently implemented.
 
 ---
 
@@ -123,6 +115,24 @@ For the subtitle ↔ video rename workflow, [arition/SubRenamer](https://github.
 > 流水线：括号清理 → 优先级化的剧集号正则集（`S\d+E\d+`、`][NN][`、`- NN`、`第N话`、`EP\d+`）→ 季度并行扫描 → `(season, episode)` 配对键 → LCS 回退 → 手动网格作为最终安全网。模式覆盖在多组真实 fan-sub 命名样本（中日双语、外挂多语字幕、季度后缀变体等）上验证过。
 >
 > Pipeline: bracket cleanup → priority-ordered episode regex (`S\d+E\d+`, `][NN][`, `- NN`, `第N话`, `EP\d+`) → parallel season scan → `(season, episode)` pairing key → LCS fallback → manual grid as the final safety net. Pattern coverage was validated against representative real-world fan-sub naming variants (bilingual CJK titles, externally-shipped multi-language subs, season-suffix variants, and so on).
+
+---
+
+## 使用场景 | Background
+
+播放 HDR 视频时，显示器会进入 HDR 模式。然而 SSA/ASS 字幕格式没有色彩空间元数据，字幕渲染器会将颜色当作 SDR 处理，导致字幕**过饱和、过亮**。
+
+When playing HDR video, the display enters HDR mode. However, SSA/ASS subtitles lack color space metadata — the renderer treats them as SDR, causing subtitles to appear **oversaturated and overly bright**.
+
+> 如果你的播放器已经能正确处理字幕亮度（例如 mpv 的 `blend-subtitles=video`，或 madVR 配合 xy-SubFilter 的字幕色彩管理），则不需要本工具。
+>
+> If your player already handles subtitle brightness correctly (e.g. mpv with `blend-subtitles=video`, or madVR with xy-SubFilter color management), you don't need this tool.
+
+相关讨论 / Related discussion: [libass/libass#297](https://github.com/libass/libass/issues/297)
+
+相关工具 / Related tool: 字幕↔视频重命名工作流的另一个选项是 [arition/SubRenamer](https://github.com/arition/SubRenamer)（按字母序+下标配对）。本项目的批量重命名（Tab 4）走基于 fan-sub 命名习惯的正则配对路径，独立实现。
+
+For the subtitle ↔ video rename workflow, [arition/SubRenamer](https://github.com/arition/SubRenamer) is another option (alphabetical-index pairing). This project's Batch Rename (Tab 4) uses a fan-sub-aware regex pairing approach, independently implemented.
 
 ---
 
