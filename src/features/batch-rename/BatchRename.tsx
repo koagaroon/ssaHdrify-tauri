@@ -3,14 +3,19 @@
  *
  * Stage 5a: tab plumbing + ingestion (file pick / folder drop, auto
  *   categorization, count chips, cross-tab dedup).
- * Stage 5b: pairing engine + preview grid (one row per video↔subtitle
- *   pair, multi-language subs collapse to N rows with first selected).
- * Stage 5c (this commit): output-mode radios (rename / copy-to-video /
- *   copy-to-chosen) + per-row checkbox toggle + run flow with rename-
- *   confirm + countExistingFiles overwrite-confirm + cancel mid-batch.
- *   Manual edit (drag/click re-pair) is deferred to a follow-up — the
- *   engine + override layer support it, only the UI bindings are
- *   missing.
+ * Stage 5b: pairing engine + preview grid.
+ * Stage 5c: output-mode radios (rename / copy-to-video / copy-to-chosen)
+ *   + per-row checkbox toggle + run flow with rename-confirm +
+ *   countExistingFiles overwrite-confirm + cancel mid-batch.
+ * Stage 5d: manual edit. Video-centric grid — exactly one row per
+ *   video. The subtitle column is a dropdown listing every subtitle
+ *   in the batch; the first regex-paired sub is pre-selected. The
+ *   user re-pairs by picking a different sub; subs already paired
+ *   with another video are unpaired automatically (uniquely owned).
+ *   Subtitles whose episode regex didn't match any video are hidden
+ *   from the grid but stay in the dropdown — the workflow is
+ *   video-first ("I have a video, find me a sub for it"). ↺ Reset
+ *   restores the engine's seed.
  */
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import {
@@ -35,6 +40,7 @@ import {
   parseFilename,
   deriveRenameOutputPath,
   isNoOpRename,
+  assignSubtitleToRow,
   type PairingRow,
   type PairingSource,
   type OutputMode,
@@ -200,10 +206,12 @@ export default function BatchRename() {
   // Picked target directory for the `copy_to_chosen` mode. Required
   // before Run when that mode is active.
   const [chosenDir, setChosenDir] = useState<string | null>(null);
-  // Per-row selection overrides. Map<rowId, { selected }> — the engine
-  // computes a default per row, the user toggles override it. Stable
-  // row IDs (content-based) keep overrides valid across re-pair.
-  const [rowOverrides, setRowOverrides] = useState<Map<string, { selected: boolean }>>(new Map());
+  // Pairing rows are direct state, not a derived view over an
+  // overrides Map. The engine seeds them from the input file lists;
+  // user actions (toggle / dropdown pick) mutate rows in place,
+  // marking edited rows as `source: 'manual'`. ↺ Reset restores the
+  // engine's seed.
+  const [editedRows, setEditedRows] = useState<PairingRow[]>([]);
 
   const pickGenRef = useRef(0);
   const logIdRef = useRef(0);
@@ -219,52 +227,62 @@ export default function BatchRename() {
   const subtitleCount = subtitlePaths.length;
   const totalCount = videoCount + subtitleCount;
 
-  // Pairing — recomputed whenever the file lists change. Pure function
-  // so memoizing on the array references is enough; the engine has no
-  // hidden state.
+  // Pairing seed — recomputed whenever the file lists change. Each
+  // row gets a fresh stable ID with a `b<n>` prefix (counter-local to
+  // this useMemo) so subsequent manual edits can reference rows by ID
+  // even when the row's subtitle changes. The engine's content-based
+  // IDs would shift the moment the user picks a different sub.
   const baseRows = useMemo<PairingRow[]>(() => {
     if (totalCount === 0) return [];
     const parsedVideos = videoPaths.map((p, i) => parseFilename(p, videoNames[i] ?? ""));
     const parsedSubs = subtitlePaths.map((p, i) => parseFilename(p, subtitleNames[i] ?? ""));
-    return buildPairings(parsedVideos, parsedSubs);
+    let counter = 0;
+    return buildPairings(parsedVideos, parsedSubs).map((r) => ({
+      ...r,
+      id: `b${++counter}`,
+    }));
   }, [videoPaths, videoNames, subtitlePaths, subtitleNames, totalCount]);
 
-  // Apply user overrides over the base rows. Only `selected` is
-  // overridable today; manual edit (drag/click re-pair) is a future
-  // expansion of this layer.
-  const pairingRows = useMemo<PairingRow[]>(
-    () =>
-      baseRows.map((r) => {
-        const o = rowOverrides.get(r.id);
-        return o ? { ...r, selected: o.selected } : r;
-      }),
-    [baseRows, rowOverrides]
-  );
-
-  // Prune stale overrides whenever the base rows change (file selection
-  // edited so some old rows no longer exist). Without this, the
-  // overrides Map grows unbounded across pick/clear cycles.
+  // Reset edits when the input file lists change. baseRows only
+  // recomputes when the user re-picks / clears, so this isn't a
+  // surprise — it's an explicit "start fresh" point.
   useEffect(() => {
-    setRowOverrides((prev) => {
-      if (prev.size === 0) return prev;
-      const validIds = new Set(baseRows.map((r) => r.id));
-      const next = new Map<string, { selected: boolean }>();
-      let changed = false;
-      for (const [id, val] of prev) {
-        if (validIds.has(id)) next.set(id, val);
-        else changed = true;
-      }
-      return changed ? next : prev;
-    });
+    setEditedRows(baseRows);
   }, [baseRows]);
 
-  const toggleRow = useCallback((rowId: string, currentlySelected: boolean) => {
-    setRowOverrides((prev) => {
-      const next = new Map(prev);
-      next.set(rowId, { selected: !currentlySelected });
-      return next;
-    });
+  const pairingRows = editedRows;
+
+  const toggleRow = useCallback((rowId: string) => {
+    setEditedRows((rows) =>
+      rows.map((r) => (r.id === rowId ? { ...r, selected: !r.selected } : r))
+    );
   }, []);
+
+  // Subtitle pool for every row's dropdown. Built from the original
+  // subtitle inputs (not from row state) so subs that aren't paired
+  // with any row are still selectable — the user-supplied sub list
+  // is the source of truth for what's available to pair.
+  const availableSubtitles = useMemo(
+    () => subtitlePaths.map((p, i) => ({ path: p, name: subtitleNames[i] ?? p })),
+    [subtitlePaths, subtitleNames]
+  );
+
+  const assignSubtitleLocal = useCallback(
+    (rowId: string, subPath: string | null) => {
+      const sub = subPath ? availableSubtitles.find((s) => s.path === subPath) : null;
+      // Defensive: caller should never pass an unknown path, but
+      // guard against it rather than producing a broken row.
+      if (subPath && !sub) return;
+      setEditedRows((rows) => assignSubtitleToRow(rows, rowId, sub ?? null));
+    },
+    [availableSubtitles]
+  );
+
+  const resetPairings = useCallback(() => {
+    setEditedRows(baseRows);
+  }, [baseRows]);
+
+  const hasManualEdits = useMemo(() => editedRows.some((r) => r.source === "manual"), [editedRows]);
 
   const warningCount = useMemo(
     () => pairingRows.filter((r) => r.source === "warning").length,
@@ -288,7 +306,7 @@ export default function BatchRename() {
               type="checkbox"
               checked={row.selected}
               disabled={busy}
-              onChange={() => toggleRow(row.id, row.selected)}
+              onChange={() => toggleRow(row.id)}
               aria-label={t("rename_row_select_aria")}
             />
           );
@@ -315,12 +333,43 @@ export default function BatchRename() {
         key: "sub",
         header: t("rename_col_subtitle"),
         width: "1fr",
-        render: (row) =>
-          row.subtitle ? (
-            <span title={row.subtitle.name}>{row.subtitle.name}</span>
-          ) : (
-            <span style={{ color: "var(--text-muted)", fontStyle: "italic" }}>—</span>
-          ),
+        render: (row) => {
+          // Empty-video orphan rows (no video either — shouldn't
+          // happen in the video-centric grid, but render a dash
+          // defensively rather than an interactable dropdown).
+          if (!row.video) {
+            return <span style={{ color: "var(--text-muted)", fontStyle: "italic" }}>—</span>;
+          }
+          // Universal dropdown: always render, regardless of whether
+          // the row currently has a sub. Picking the empty option
+          // unpairs; picking a sub assigns it (and unpairs that sub
+          // from any other row that had it). The select is disabled
+          // when there are no subs at all in the batch — otherwise
+          // it would be useless and the muted "(none)" placeholder
+          // would mislead.
+          const currentValue = row.subtitle?.path ?? "";
+          return (
+            <select
+              name={`subtitle-picker-${row.id}`}
+              value={currentValue}
+              disabled={busy || availableSubtitles.length === 0}
+              onChange={(e) => {
+                const path = e.target.value;
+                assignSubtitleLocal(row.id, path === "" ? null : path);
+              }}
+              className={`rename-row-picker${row.subtitle ? " is-paired" : ""}`}
+              aria-label={t("rename_pick_subtitle")}
+              title={row.subtitle?.name}
+            >
+              <option value="">{t("rename_pick_subtitle_none")}</option>
+              {availableSubtitles.map((s) => (
+                <option key={s.path} value={s.path}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          );
+        },
       },
       {
         key: "source",
@@ -329,7 +378,7 @@ export default function BatchRename() {
         render: (row) => renderSourceBadge(row.source, t),
       },
     ],
-    [t, busy, toggleRow]
+    [t, busy, toggleRow, assignSubtitleLocal, availableSubtitles]
   );
 
   const actionableRows = useMemo(
@@ -781,6 +830,11 @@ export default function BatchRename() {
           {t("rename_drop_hint")}
         </p>
       )}
+      {totalCount > 0 && (
+        <p className="text-xs ml-1" style={{ color: "var(--text-muted)" }}>
+          {t("rename_manual_edit_hint")}
+        </p>
+      )}
 
       {/* Output-mode strategy. Three modes (per design doc 已决定 #3)
            with a chosen-dir picker visible only when the third mode is
@@ -879,19 +933,23 @@ export default function BatchRename() {
         </div>
       )}
 
-      {/* Pairing preview grid. The engine produces one row per
-           (video, subtitle) pair; multi-language subs for the same
-           video collapse to N rows. Source badge tells the user which
-           algorithm decided the pair. Checkbox column lets the user
-           pick which subtitle gets renamed/copied; default is the
-           first sub per video selected. */}
+      {/* Pairing preview grid. Video-centric: one row per video, with
+           the first regex-paired sub pre-selected. The subtitle column
+           is a universal dropdown — pick a different sub to re-pair,
+           pick "— none —" to unpair. Subtitles whose episode regex
+           didn't match any video aren't given their own row but stay
+           in the dropdown options (the workflow is "find a sub for
+           this video", not the other way around). Source badge tells
+           the user which algorithm decided the pair; rows the user
+           edited flip to `manual`. ↺ Reset surfaces only when any row
+           has a manual edit. */}
       {totalCount > 0 && (
         <PreviewTable
           rows={pairingRows}
           rowKey={(row) => row.id}
           columns={pairingColumns}
           title={
-            <>
+            <div className="flex items-center gap-2">
               <span>{t("rename_grid_title", pairingRows.length)}</span>
               {warningCount > 0 && (
                 <span style={{ color: "var(--warning)" }}>
@@ -899,7 +957,19 @@ export default function BatchRename() {
                   {t("rename_grid_warning_suffix", warningCount)}
                 </span>
               )}
-            </>
+              <span className="flex-1" />
+              {hasManualEdits && (
+                <button
+                  type="button"
+                  onClick={resetPairings}
+                  disabled={busy}
+                  className="rename-reset-button"
+                  title={t("rename_reset_pairings_hint")}
+                >
+                  ↺ {t("rename_reset_pairings")}
+                </button>
+              )}
+            </div>
           }
           emptyMessage={t("rename_no_pairings")}
           rowClassName={(row) => (row.source === "warning" ? "preview-row-warning" : undefined)}

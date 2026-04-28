@@ -242,16 +242,47 @@ export function makeRowId(
   return `${videoPath ?? "_"}|||${subtitlePath ?? "_"}`;
 }
 
+/**
+ * Build pairing rows from the input file lists. Video-centric:
+ *
+ *   - Exactly one row per video. Subtitles are a property of the row,
+ *     not their own row. Multi-language batches (e.g., DBD-Raws's
+ *     `.sc.ass` + `.tc.ass` per video) get the first regex-paired sub
+ *     selected by default; the others stay reachable through the UI's
+ *     subtitle dropdown without inflating the grid.
+ *   - Subtitles whose episode regex didn't match any video are NOT
+ *     given their own row. They remain in the input subtitle list and
+ *     are still selectable via any video row's dropdown — the user is
+ *     looking for a sub for a video, not the other way around.
+ *   - Ambiguous case (multiple videos share `(season, episode)`):
+ *     each video gets its own row, all marked `warning`. Default
+ *     pre-pairs by index so the user sees a defensible default.
+ *   - Orphan video (no matching sub): one row, subtitle null, source
+ *     `unmatched`. Selected = false until the user picks a sub.
+ *
+ * Rows are sorted by `(season, episode)`; unmatched videos go at the
+ * bottom in their input order.
+ */
 export function buildPairings(videos: ParsedFile[], subtitles: ParsedFile[]): PairingRow[] {
   const rows: PairingRow[] = [];
-  const newId = (v: ParsedFile | null, s: ParsedFile | null) => makeRowId(v?.path, s?.path);
+  const newId = (v: ParsedFile, s: ParsedFile | null) => makeRowId(v.path, s?.path);
 
-  // Bucket matched files; collect unmatched separately.
-  const matchedVideos = new Map<string, ParsedFile[]>();
+  // Bucket matched subs by key. Unmatched subs are intentionally
+  // dropped from the row set per the video-centric model — they
+  // stay accessible through the UI's per-row dropdown.
   const matchedSubs = new Map<string, ParsedFile[]>();
-  const unmatchedVideos: ParsedFile[] = [];
-  const unmatchedSubs: ParsedFile[] = [];
+  for (const s of subtitles) {
+    if (s.episode === null) continue;
+    const key = pairingKeyTuple(s.season, s.episode);
+    const arr = matchedSubs.get(key) ?? [];
+    arr.push(s);
+    matchedSubs.set(key, arr);
+  }
 
+  // Bucket videos by key (preserving order within each key) plus a
+  // tail bucket for videos whose regex didn't match.
+  const matchedVideos = new Map<string, ParsedFile[]>();
+  const unmatchedVideos: ParsedFile[] = [];
   for (const v of videos) {
     if (v.episode === null) {
       unmatchedVideos.push(v);
@@ -262,99 +293,36 @@ export function buildPairings(videos: ParsedFile[], subtitles: ParsedFile[]): Pa
     arr.push(v);
     matchedVideos.set(key, arr);
   }
-  for (const s of subtitles) {
-    if (s.episode === null) {
-      unmatchedSubs.push(s);
-      continue;
-    }
-    const key = pairingKeyTuple(s.season, s.episode);
-    const arr = matchedSubs.get(key) ?? [];
-    arr.push(s);
-    matchedSubs.set(key, arr);
-  }
 
-  const allKeys = new Set<string>();
-  for (const k of matchedVideos.keys()) allKeys.add(k);
-  for (const k of matchedSubs.keys()) allKeys.add(k);
-  const sortedKeys = Array.from(allKeys).sort(compareKeys);
+  const sortedKeys = Array.from(matchedVideos.keys()).sort(compareKeys);
 
   for (const key of sortedKeys) {
     const vs = matchedVideos.get(key) ?? [];
     const ss = matchedSubs.get(key) ?? [];
+    const ambiguous = vs.length > 1;
 
-    if (vs.length === 0) {
-      // Subs without a matching video — orphan row, not selectable.
-      for (const s of ss) {
-        rows.push({
-          id: newId(null, s),
-          video: null,
-          subtitle: { path: s.path, name: s.name },
-          source: "unmatched",
-          selected: false,
-          key,
-        });
-      }
-    } else if (ss.length === 0) {
-      // Video without subs — orphan row, not selectable.
-      for (const v of vs) {
-        rows.push({
-          id: newId(v, null),
-          video: { path: v.path, name: v.name },
-          subtitle: null,
-          source: "unmatched",
-          selected: false,
-          key,
-        });
-      }
-    } else if (vs.length === 1) {
-      // Common case: 1 video + N subs (multi-language). Generate one
-      // row per (video, subtitle) pair; first selected, rest unchecked
-      // — matches the user's typical "pick one subtitle" workflow.
-      for (let i = 0; i < ss.length; i++) {
-        rows.push({
-          id: newId(vs[0], ss[i]),
-          video: { path: vs[0].path, name: vs[0].name },
-          subtitle: { path: ss[i].path, name: ss[i].name },
-          source: "regex",
-          selected: i === 0,
-          key,
-        });
-      }
-    } else {
-      // Ambiguous: multiple videos share a key. Likely user has same
-      // episode from different release groups. Pair by index, mark all
-      // as warning so user resolves manually in Stage 5c.
-      const max = Math.max(vs.length, ss.length);
-      for (let i = 0; i < max; i++) {
-        rows.push({
-          id: newId(vs[i] ?? null, ss[i] ?? null),
-          video: vs[i] ? { path: vs[i].path, name: vs[i].name } : null,
-          subtitle: ss[i] ? { path: ss[i].path, name: ss[i].name } : null,
-          source: "warning",
-          selected: i === 0 && vs[i] !== undefined && ss[i] !== undefined,
-          key,
-        });
-      }
+    for (let i = 0; i < vs.length; i++) {
+      const v = vs[i];
+      // Index-pair videos to subs in the ambiguous case so the user
+      // sees a defensible default pre-pick. In the common one-video
+      // case, the first sub is always the chosen one.
+      const sub = ambiguous ? (ss[i] ?? null) : (ss[0] ?? null);
+      rows.push({
+        id: newId(v, sub),
+        video: { path: v.path, name: v.name },
+        subtitle: sub ? { path: sub.path, name: sub.name } : null,
+        source: ambiguous ? "warning" : sub ? "regex" : "unmatched",
+        selected: sub !== null,
+        key,
+      });
     }
   }
 
-  // Append unmatched files at the end so they're visible but don't
-  // pollute the sorted main grid.
   for (const v of unmatchedVideos) {
     rows.push({
       id: newId(v, null),
       video: { path: v.path, name: v.name },
       subtitle: null,
-      source: "unmatched",
-      selected: false,
-      key: "unmatched",
-    });
-  }
-  for (const s of unmatchedSubs) {
-    rows.push({
-      id: newId(null, s),
-      video: null,
-      subtitle: { path: s.path, name: s.name },
       source: "unmatched",
       selected: false,
       key: "unmatched",
@@ -433,6 +401,51 @@ export function deriveRenameOutputPath(
   const normTargetDir = targetDir.replace(/\\/g, "/").replace(/\/$/, "");
   const outputPath = normTargetDir ? `${normTargetDir}/${outName}` : outName;
   return usedBackslash ? outputPath.replace(/\//g, "\\") : outputPath;
+}
+
+// ── Manual edit ─────────────────────────────────────────
+
+/** Assign a subtitle (or null to unpair) to a target row. The single
+ *  manual-edit primitive in the video-centric grid:
+ *
+ *    - Target row's subtitle becomes `sub`. Source flips to `manual`
+ *      so the user sees which rows they've touched.
+ *    - If `sub` is non-null and was previously paired with another
+ *      row, that other row becomes `(video, null)` source `manual`.
+ *      A subtitle is uniquely owned — same path can't appear in two
+ *      rows, since both would rename to the same target name.
+ *    - Picking the row's current subtitle again is a no-op.
+ *    - Picking a subtitle that has no metadata (caller couldn't find
+ *      it in the batch's subtitle pool) is a defensive no-op.
+ *
+ *  The caller passes `sub` as a `{ path, name }` object built from
+ *  the batch's subtitle list (not from existing rows), so subs that
+ *  aren't currently paired with any row are still selectable. */
+export function assignSubtitleToRow(
+  rows: PairingRow[],
+  targetRowId: string,
+  sub: { path: string; name: string } | null
+): PairingRow[] {
+  const target = rows.find((r) => r.id === targetRowId);
+  if (!target) return rows;
+
+  // No-op when the row already has exactly this subtitle (or both
+  // null). Compare by path because object identity may differ.
+  const currentPath = target.subtitle?.path ?? null;
+  const newPath = sub?.path ?? null;
+  if (currentPath === newPath) return rows;
+
+  return rows.map((r) => {
+    if (r.id === targetRowId) {
+      return { ...r, subtitle: sub, source: "manual" as PairingSource };
+    }
+    if (sub && r.subtitle?.path === sub.path) {
+      // Same sub was paired with another row — unpair it there so
+      // the sub stays uniquely owned.
+      return { ...r, subtitle: null, source: "manual" as PairingSource };
+    }
+    return r;
+  });
 }
 
 /** Path equality test for the rename pre-flight no-op detector.

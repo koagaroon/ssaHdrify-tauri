@@ -21,6 +21,8 @@ import {
   buildPairings,
   deriveRenameOutputPath,
   isNoOpRename,
+  assignSubtitleToRow,
+  type PairingRow,
 } from "./pairing-engine";
 
 function parse(name: string) {
@@ -228,19 +230,18 @@ describe("parseFilename — end-to-end (season, episode)", () => {
 });
 
 describe("buildPairings — common shapes", () => {
-  it("1 video + 2 subs (multi-language) → 2 rows, first selected", () => {
+  it("1 video + 2 subs (multi-language) → 1 row, first sub selected", () => {
     const v = parse("[Group][Show][01][1080p].mkv");
     const s1 = parse("[Group][Show][01][1080p].sc.ass");
     const s2 = parse("[Group][Show][01][1080p].tc.ass");
     const rows = buildPairings([v], [s1, s2]);
-    expect(rows.length).toBe(2);
+    // Video-centric: ONE row per video. Other lang subs stay in
+    // the input pool, reachable via the UI dropdown.
+    expect(rows.length).toBe(1);
     expect(rows[0].video?.path).toBe(v.path);
     expect(rows[0].subtitle?.path).toBe(s1.path);
     expect(rows[0].selected).toBe(true);
     expect(rows[0].source).toBe("regex");
-    expect(rows[1].video?.path).toBe(v.path);
-    expect(rows[1].subtitle?.path).toBe(s2.path);
-    expect(rows[1].selected).toBe(false);
   });
 
   it("orphan video — 1 row, not selected, source=unmatched", () => {
@@ -253,14 +254,14 @@ describe("buildPairings — common shapes", () => {
     expect(rows[0].selected).toBe(false);
   });
 
-  it("orphan subs (no video for the batch) — N rows, unmatched", () => {
+  it("subs without a paired video produce no rows (stays in input pool)", () => {
+    // Video-centric: an orphan subtitle isn't given its own row.
+    // The user is looking for a sub for a video, not the other way
+    // around. The sub stays available via every row's dropdown.
     const s1 = parse("[Group][Show][01][1080p].sc.ass");
     const s2 = parse("[Group][Show][02][1080p].sc.ass");
     const rows = buildPairings([], [s1, s2]);
-    expect(rows.length).toBe(2);
-    expect(rows[0].video).toBeNull();
-    expect(rows[0].source).toBe("unmatched");
-    expect(rows[1].video).toBeNull();
+    expect(rows.length).toBe(0);
   });
 
   it("rows are sorted by (season, episode)", () => {
@@ -273,7 +274,7 @@ describe("buildPairings — common shapes", () => {
     expect(rows[2].video?.path).toBe(v3.path);
   });
 
-  it("ambiguous (2 videos + 2 subs at same key) → warning rows", () => {
+  it("ambiguous (2 videos + 2 subs at same key) → 2 warning rows, index-paired", () => {
     const v1 = parse("[G1][Show][01][1080p].mkv");
     const v2 = parse("[G2][Show][01][1080p].mkv");
     const s1 = parse("[G1][Show][01][1080p].sc.ass");
@@ -281,12 +282,16 @@ describe("buildPairings — common shapes", () => {
     const rows = buildPairings([v1, v2], [s1, s2]);
     expect(rows.length).toBe(2);
     expect(rows[0].source).toBe("warning");
+    expect(rows[0].video?.path).toBe(v1.path);
+    expect(rows[0].subtitle?.path).toBe(s1.path);
     expect(rows[1].source).toBe("warning");
+    expect(rows[1].video?.path).toBe(v2.path);
+    expect(rows[1].subtitle?.path).toBe(s2.path);
   });
 
-  it("files with no episode regex go into unmatched bucket at the end", () => {
+  it("video without episode regex goes to unmatched bucket at the end", () => {
     const matched = parse("[G][Show][01][1080p].mkv");
-    const random = parse("README.txt");
+    const random = parse("README.mkv");
     const rows = buildPairings([matched, random], []);
     expect(rows.length).toBe(2);
     expect(rows[0].source).toBe("unmatched");
@@ -342,6 +347,87 @@ describe("deriveRenameOutputPath — exact basename match (no lang suffix)", () 
     const out2 = deriveRenameOutputPath(video, expected, "copy_to_video", null);
     expect(out2).toBe(expected);
     expect(isNoOpRename(expected, out2)).toBe(true);
+  });
+});
+
+describe("assignSubtitleToRow — manual edit", () => {
+  function row(id: string, videoPath: string, subPath: string | null, selected = true): PairingRow {
+    return {
+      id,
+      video: { path: videoPath, name: videoPath.split("/").pop() ?? "" },
+      subtitle: subPath ? { path: subPath, name: subPath.split("/").pop() ?? "" } : null,
+      source: subPath ? "regex" : "unmatched",
+      selected,
+      key: subPath ? "1|1" : "unmatched",
+    };
+  }
+  const sub = (path: string) => ({ path, name: path.split("/").pop() ?? "" });
+
+  it("assigns a sub to an orphan-video row", () => {
+    const rows = [row("a", "/v02.mkv", null)];
+    const out = assignSubtitleToRow(rows, "a", sub("/s02.ass"));
+    expect(out).toHaveLength(1);
+    expect(out[0].subtitle?.path).toBe("/s02.ass");
+    expect(out[0].source).toBe("manual");
+  });
+
+  it("swaps subs between rows — target gets the new sub, source row becomes (video, null)", () => {
+    const rows = [row("a", "/v01.mkv", "/s01.ass"), row("b", "/v02.mkv", "/s02.ass")];
+    const out = assignSubtitleToRow(rows, "b", sub("/s01.ass"));
+    expect(out).toHaveLength(2);
+    expect(out.find((r) => r.id === "b")?.subtitle?.path).toBe("/s01.ass");
+    expect(out.find((r) => r.id === "b")?.source).toBe("manual");
+    // Row "a" loses its sub — it's now uniquely owned by row "b".
+    expect(out.find((r) => r.id === "a")?.subtitle).toBeNull();
+    expect(out.find((r) => r.id === "a")?.source).toBe("manual");
+  });
+
+  it("clears a row's subtitle when sub is null", () => {
+    const rows = [row("a", "/v01.mkv", "/s01.ass")];
+    const out = assignSubtitleToRow(rows, "a", null);
+    expect(out).toHaveLength(1);
+    expect(out[0].subtitle).toBeNull();
+    expect(out[0].source).toBe("manual");
+  });
+
+  it("picking the row's current subtitle is a no-op", () => {
+    const rows = [row("a", "/v01.mkv", "/s01.ass")];
+    const out = assignSubtitleToRow(rows, "a", sub("/s01.ass"));
+    expect(out).toBe(rows);
+  });
+
+  it("picking null on an already-null row is a no-op", () => {
+    const rows = [row("a", "/v01.mkv", null)];
+    const out = assignSubtitleToRow(rows, "a", null);
+    expect(out).toBe(rows);
+  });
+
+  it("target row id that doesn't exist → no-op", () => {
+    const rows = [row("a", "/v01.mkv", "/s01.ass")];
+    const out = assignSubtitleToRow(rows, "ghost", sub("/s99.ass"));
+    expect(out).toBe(rows);
+  });
+
+  it("assigning a sub never paired in any row works (sub came from input pool)", () => {
+    // Common case in the new model: the sub was an "orphan" that
+    // didn't get its own row. Caller looked it up in availableSubtitles
+    // and passed it in. No previous row owned it, so no row is
+    // unpaired as a side effect.
+    const rows = [row("a", "/v01.mkv", "/s01.ass")];
+    const out = assignSubtitleToRow(rows, "a", sub("/sX.ass"));
+    expect(out).toHaveLength(1);
+    expect(out[0].subtitle?.path).toBe("/sX.ass");
+    expect(out[0].source).toBe("manual");
+  });
+
+  it("round-trip: pick sub2, then pick sub1 back → original assignments restored (manual badges remain)", () => {
+    const rows = [row("a", "/v01.mkv", "/s01.ass"), row("b", "/v02.mkv", "/s02.ass")];
+    const step1 = assignSubtitleToRow(rows, "b", sub("/s01.ass"));
+    // After step1: a=(v01, null), b=(v02, s01)
+    const step2 = assignSubtitleToRow(step1, "a", sub("/s02.ass"));
+    expect(step2.find((r) => r.id === "a")?.subtitle?.path).toBe("/s02.ass");
+    expect(step2.find((r) => r.id === "b")?.subtitle?.path).toBe("/s01.ass");
+    expect(step2.every((r) => r.source === "manual")).toBe(true);
   });
 });
 

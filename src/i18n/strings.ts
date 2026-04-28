@@ -388,6 +388,26 @@ export const strings: Record<string, StringEntry> = {
     en: "Nothing changed — files already match",
     zh: "未做改动 — 文件已与视频同名",
   },
+  rename_manual_edit_hint: {
+    en: "Tip: pick a different subtitle from any row's dropdown to re-pair. ↺ Reset undoes all manual edits.",
+    zh: "提示：从下拉框中选择其他字幕即可重新配对。↺ 重置 撤销全部手动改动。",
+  },
+  rename_pick_subtitle: {
+    en: "Pick subtitle",
+    zh: "选择字幕",
+  },
+  rename_pick_subtitle_none: {
+    en: "— none —",
+    zh: "— 无 —",
+  },
+  rename_reset_pairings: {
+    en: "Reset",
+    zh: "重置",
+  },
+  rename_reset_pairings_hint: {
+    en: "Restore the engine's automatic pairing, discarding manual edits",
+    zh: "恢复引擎自动配对，丢弃手动改动",
+  },
   rename_drop_hint: {
     en: "Tip: drag video and subtitle files (or a whole show folder) onto the file strip above — videos and subs auto-categorize",
     zh: "提示：可将视频与字幕文件（或整个剧集文件夹）拖到上方文件栏 — 视频与字幕自动归类",

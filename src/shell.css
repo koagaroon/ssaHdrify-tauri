@@ -513,6 +513,63 @@
   background: color-mix(in srgb, var(--warning) 6%, transparent);
 }
 
+/* Per-row subtitle picker — universal dropdown in the Batch Rename
+   grid's subtitle column. Empty rows (no sub) get a dashed border
+   and muted color cueing "you need to pick something". Filled rows
+   (`.is-paired`) flip to a solid border + primary text so they
+   read as a normal label. The same control handles unpair (pick
+   the empty option) and re-pair (pick a different sub). */
+.rename-row-picker {
+  width: 100%;
+  padding: 2px 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--bg-input);
+  border: 1px dashed var(--border-light);
+  border-radius: 4px;
+  cursor: pointer;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.rename-row-picker.is-paired {
+  color: var(--text-primary);
+  border-style: solid;
+}
+
+.rename-row-picker:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Reset-pairings button surfacing in the grid title strip when the
+   user has any manual edits. Compact, secondary-styled. */
+.rename-reset-button {
+  flex: none;
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  cursor: pointer;
+  transition:
+    background-color 0.12s,
+    color 0.12s;
+}
+
+.rename-reset-button:hover:not(:disabled) {
+  background: var(--bg-panel);
+  color: var(--text-primary);
+}
+
+.rename-reset-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* ─────────────────────────────────────────────────────────────
    DROP ZONE — drag-drop highlight overlay
    Used by feature tabs that accept folder / file drops via

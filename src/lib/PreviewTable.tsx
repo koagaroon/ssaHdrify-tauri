@@ -12,7 +12,7 @@
  * fragile across browsers, so the header is a sibling that mirrors the
  * row's grid template.
  */
-import type { ReactNode } from "react";
+import type { HTMLAttributes, ReactNode } from "react";
 
 export interface PreviewTableColumn<T> {
   /** Stable key for React reconciliation across columns. */
@@ -51,6 +51,11 @@ export interface PreviewTableProps<T> {
   /** Per-row className computed from data — for state-driven row styling
    *  (e.g., "warning" rows, dimmed unchanged rows). */
   rowClassName?: (row: T, rowIndex: number) => string | undefined;
+  /** Per-row HTML attributes — drag/drop handlers, ARIA, dataset etc.
+   *  Returned object is spread onto the row's container div. The
+   *  `key`, `className`, and `style` slots are owned by PreviewTable
+   *  and will not be overridden. */
+  rowProps?: (row: T, rowIndex: number) => HTMLAttributes<HTMLDivElement>;
 }
 
 export function PreviewTable<T>({
@@ -62,6 +67,7 @@ export function PreviewTable<T>({
   maxHeight = "280px",
   className,
   rowClassName,
+  rowProps,
 }: PreviewTableProps<T>): JSX.Element {
   // Inline grid-template-columns so any number of columns / track sizes
   // can be declared at the call site without touching CSS. The body
@@ -94,8 +100,10 @@ export function PreviewTable<T>({
           rows.map((row, rowIndex) => {
             const extraClass = rowClassName?.(row, rowIndex);
             const rowClass = ["preview-table-row", extraClass].filter(Boolean).join(" ");
+            const extraProps = rowProps?.(row, rowIndex) ?? {};
             return (
               <div
+                {...extraProps}
                 key={rowKey(row, rowIndex)}
                 className={rowClass}
                 style={{ gridTemplateColumns: gridTemplate }}
