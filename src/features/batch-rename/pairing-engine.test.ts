@@ -429,6 +429,42 @@ describe("assignSubtitleToRow — manual edit", () => {
     expect(step2.find((r) => r.id === "b")?.subtitle?.path).toBe("/s01.ass");
     expect(step2.every((r) => r.source === "manual")).toBe(true);
   });
+
+  it("auto-ticks the row when assigning a sub to an unselected orphan", () => {
+    // The user's pain point: a video with no auto-paired sub starts
+    // unticked, and forgetting to tick it after manual selection silently
+    // drops it from the rename batch. Picking a sub from the dropdown
+    // is itself "yes, include this row".
+    const rows = [row("a", "/v02.mkv", null, false)];
+    const out = assignSubtitleToRow(rows, "a", sub("/s02.ass"));
+    expect(out[0].selected).toBe(true);
+    expect(out[0].subtitle?.path).toBe("/s02.ass");
+  });
+
+  it("preserves selected=true when reassigning a sub on an already-selected row", () => {
+    const rows = [row("a", "/v01.mkv", "/s01.ass", true)];
+    const out = assignSubtitleToRow(rows, "a", sub("/sX.ass"));
+    expect(out[0].selected).toBe(true);
+    expect(out[0].subtitle?.path).toBe("/sX.ass");
+  });
+
+  it("auto-ticks when assigning over a previously unticked, sub-bearing row", () => {
+    // User had auto-paired row, unticked it, then changed their mind
+    // and picked a different sub — the manual sub pick re-arms intent.
+    const rows = [row("a", "/v01.mkv", "/s01.ass", false)];
+    const out = assignSubtitleToRow(rows, "a", sub("/sX.ass"));
+    expect(out[0].selected).toBe(true);
+  });
+
+  it("clearing (sub=null) preserves the row's prior selected state", () => {
+    // No auto-flip on clear. A null-sub row is already a no-op in the
+    // rename loop, so the prior tick is a stale-but-harmless signal
+    // that gets re-armed if the user picks a new sub later.
+    const rowsTrue = [row("a", "/v01.mkv", "/s01.ass", true)];
+    expect(assignSubtitleToRow(rowsTrue, "a", null)[0].selected).toBe(true);
+    const rowsFalse = [row("a", "/v01.mkv", "/s01.ass", false)];
+    expect(assignSubtitleToRow(rowsFalse, "a", null)[0].selected).toBe(false);
+  });
 });
 
 describe("isNoOpRename", () => {

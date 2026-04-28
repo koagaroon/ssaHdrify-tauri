@@ -415,10 +415,19 @@ export function deriveRenameOutputPath(
  *
  *    - Target row's subtitle becomes `sub`. Source flips to `manual`
  *      so the user sees which rows they've touched.
+ *    - When `sub` is non-null, the target row is auto-selected. The
+ *      act of picking a subtitle from the dropdown is itself a
+ *      "yes, include this row" signal — making the user check the
+ *      box separately is double work, and forgetting that second
+ *      click silently drops the row from the rename batch. Clearing
+ *      (`sub=null`) leaves `selected` as-is; a row with no subtitle
+ *      is already skipped in the rename loop regardless.
  *    - If `sub` is non-null and was previously paired with another
  *      row, that other row becomes `(video, null)` source `manual`.
  *      A subtitle is uniquely owned — same path can't appear in two
- *      rows, since both would rename to the same target name.
+ *      rows, since both would rename to the same target name. The
+ *      unpaired row's `selected` is preserved as the user's prior
+ *      intent, even though the row is now a no-op until re-paired.
  *    - Picking the row's current subtitle again is a no-op.
  *    - Picking a subtitle that has no metadata (caller couldn't find
  *      it in the batch's subtitle pool) is a defensive no-op.
@@ -442,7 +451,13 @@ export function assignSubtitleToRow(
 
   return rows.map((r) => {
     if (r.id === targetRowId) {
-      return { ...r, subtitle: sub, source: "manual" as PairingSource };
+      return {
+        ...r,
+        subtitle: sub,
+        source: "manual" as PairingSource,
+        // Auto-tick on assignment; preserve prior state on clear.
+        selected: sub ? true : r.selected,
+      };
     }
     if (sub && r.subtitle?.path === sub.path) {
       // Same sub was paired with another row — unpair it there so
