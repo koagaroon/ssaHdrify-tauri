@@ -12,15 +12,15 @@ A Tauri desktop rewrite of [gky99/ssaHdrify](https://github.com/gky99/ssaHdrify)
 
 ### 浅色主题（中文）/ Light Theme (Chinese)
 
-|                         HDR 转换                          |                         时间轴偏移                          |                        字体嵌入                         |
-| :-------------------------------------------------------: | :---------------------------------------------------------: | :-----------------------------------------------------: |
-| ![HDR Convert](docs/screenshots/hdr-convert-light-zh.jpg) | ![Timing Shift](docs/screenshots/timing-shift-light-zh.jpg) | ![Font Embed](docs/screenshots/font-embed-light-zh.jpg) |
+|                         HDR 转换                          |                         时间轴偏移                          |                        字体嵌入                         |                         批量重命名                          |
+| :-------------------------------------------------------: | :---------------------------------------------------------: | :-----------------------------------------------------: | :---------------------------------------------------------: |
+| ![HDR Convert](docs/screenshots/hdr-convert-light-zh.jpg) | ![Timing Shift](docs/screenshots/timing-shift-light-zh.jpg) | ![Font Embed](docs/screenshots/font-embed-light-zh.jpg) | ![Batch Rename](docs/screenshots/batch-rename-light-zh.jpg) |
 
 ### 深色主题（英文）/ Dark Theme (English)
 
-|                       HDR Convert                        |                         Time Shift                         |                       Font Embed                       |
-| :------------------------------------------------------: | :--------------------------------------------------------: | :----------------------------------------------------: |
-| ![HDR Convert](docs/screenshots/hdr-convert-dark-en.jpg) | ![Timing Shift](docs/screenshots/timing-shift-dark-en.jpg) | ![Font Embed](docs/screenshots/font-embed-dark-en.jpg) |
+|                       HDR Convert                        |                         Time Shift                         |                       Font Embed                       |                        Batch Rename                        |
+| :------------------------------------------------------: | :--------------------------------------------------------: | :----------------------------------------------------: | :--------------------------------------------------------: |
+| ![HDR Convert](docs/screenshots/hdr-convert-dark-en.jpg) | ![Timing Shift](docs/screenshots/timing-shift-dark-en.jpg) | ![Font Embed](docs/screenshots/font-embed-dark-en.jpg) | ![Batch Rename](docs/screenshots/batch-rename-dark-en.jpg) |
 
 ---
 
