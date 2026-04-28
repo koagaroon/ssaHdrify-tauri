@@ -2,7 +2,7 @@
  * Thin wrappers around Tauri IPC for file I/O and dialogs.
  * Centralizes all native interactions so feature code stays pure JS.
  */
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { open } from "@tauri-apps/plugin-dialog";
 import { writeTextFile, rename, copyFile } from "@tauri-apps/plugin-fs";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -47,13 +47,6 @@ function toMultiplePaths(result: string | string[] | null): string[] | null {
 export async function pickSubtitleFiles(): Promise<string[] | null> {
   return toMultiplePaths(
     await open({ multiple: true, filters: SUBTITLE_FILTERS, title: "Select subtitle files" })
-  );
-}
-
-/** Open a single-file picker for ASS files. */
-export async function pickAssFile(): Promise<string | null> {
-  return toSinglePath(
-    await open({ multiple: false, filters: ASS_FILTERS, title: "Select .ass file" })
   );
 }
 
@@ -147,26 +140,6 @@ export async function pickFontFiles(): Promise<string[] | null> {
   return toMultiplePaths(
     await open({ multiple: true, filters: FONT_FILTERS, title: "Select font files" })
   );
-}
-
-/** Open a single-file picker for any subtitle format. */
-export async function pickSubtitleFile(): Promise<string | null> {
-  return toSinglePath(
-    await open({ multiple: false, filters: SUBTITLE_FILTERS, title: "Select subtitle file" })
-  );
-}
-
-/** Save dialog — returns chosen path or null if cancelled. */
-export async function pickSavePath(
-  defaultName: string,
-  filters?: FileFilter[]
-): Promise<string | null> {
-  const result = await save({
-    defaultPath: defaultName,
-    filters: filters ?? SUBTITLE_FILTERS,
-    title: "Save subtitle file",
-  });
-  return result ?? null;
 }
 
 // ── File I/O ──────────────────────────────────────────────

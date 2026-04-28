@@ -22,8 +22,11 @@ import type { Status } from "../../lib/StatusContext";
 import { useTabStatus } from "../../lib/useTabStatus";
 import { useFolderDrop } from "../../lib/useFolderDrop";
 import { countExistingFiles } from "../../lib/output-collisions";
-import { TAB_LABEL_KEYS } from "../../lib/tab-labels";
-import type { TabId } from "../../lib/FileContext";
+import { useClickOutside } from "../../lib/useClickOutside";
+import { useLogPanel } from "../../lib/useLogPanel";
+import { LogPanel } from "../../lib/LogPanel";
+import { DropErrorBanner } from "../../lib/DropErrorBanner";
+import { buildConflictMessage, normalizeOutputKey } from "../../lib/dedup-helpers";
 
 /** Convert ASS color "&H00BBGGRR" to HTML "#RRGGBB" */
 function assColorToHex(assColor: string): string {
@@ -70,12 +73,6 @@ const COMMON_FONTS = [
 ];
 const COMMON_FONTS_SET = new Set(COMMON_FONTS);
 
-interface LogEntry {
-  id: number;
-  text: string;
-  type: "info" | "error" | "success";
-}
-
 export default function HdrConvert() {
   const { t } = useI18n();
   const { hdrFiles, setHdrFiles, clearFile, isFileInUse } = useFileContext();
@@ -87,7 +84,7 @@ export default function HdrConvert() {
   const [showStylePanel, setShowStylePanel] = useState(false);
   const [style, setStyle] = useState<StyleConfig>({ ...DEFAULT_STYLE });
   const [processing, setProcessing] = useState(false);
-  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const { logs, addLog, clearLogs, logScrollRef } = useLogPanel();
   const [showFileList, setShowFileList] = useState(false);
   // Tracks the outcome of the last convert attempt — null between
   // selections or before any attempt; gets cleared when hdrFiles changes
@@ -109,16 +106,7 @@ export default function HdrConvert() {
   // the entire drop, no state change, banner persists until the next
   // selection attempt or until the user clicks Clear.
   const [dropError, setDropError] = useState<string | null>(null);
-  const logIdRef = useRef(0);
   const cancelRef = useRef(false);
-  // Scroll container ref — the inner overflow-y-auto div of the Log
-  // section. We set scrollTop directly on it to follow new entries
-  // instead of using `scrollIntoView`, which in Chromium walks up the
-  // ancestor chain and scrolls every scrollable container — including
-  // the .window itself, despite overflow: hidden, because programmatic
-  // scrolls bypass the user-driven block. That bug clipped the
-  // titlebar / app-header / file strip during batch conversion.
-  const logScrollRef = useRef<HTMLDivElement>(null);
   const fileContainerRef = useRef<HTMLDivElement>(null);
   const dropZoneRef = useRef<HTMLDivElement>(null);
 
@@ -158,42 +146,8 @@ export default function HdrConvert() {
   }, [hdrFiles, processing, lastActionResult, progress, t]);
   useTabStatus("hdr", tabStatus);
 
-  // File-list dropdown: close on click outside or Escape
-  useEffect(() => {
-    if (!showFileList) return;
-    const onClick = (e: MouseEvent) => {
-      if (fileContainerRef.current && !fileContainerRef.current.contains(e.target as Node)) {
-        setShowFileList(false);
-      }
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setShowFileList(false);
-    };
-    const id = setTimeout(() => document.addEventListener("mousedown", onClick), 0);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      clearTimeout(id);
-      document.removeEventListener("mousedown", onClick);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [showFileList]);
-
-  const addLog = useCallback((text: string, type: LogEntry["type"] = "info") => {
-    const id = logIdRef.current++;
-    setLogs((prev) => {
-      const next = [...prev, { id, text, type }];
-      // Trim to 200 entries max
-      return next.length > 200 ? next.slice(-200) : next;
-    });
-    // Auto-scroll the log container only — set scrollTop directly so the
-    // scroll never propagates up the ancestor chain. `scrollIntoView`
-    // would scroll .window too in Chromium even though .window has
-    // overflow: hidden, hiding the titlebar / header during batch runs.
-    setTimeout(() => {
-      const el = logScrollRef.current;
-      if (el) el.scrollTop = el.scrollHeight;
-    }, 50);
-  }, []);
+  // File-list dropdown: close on click outside or Escape.
+  useClickOutside(showFileList, fileContainerRef, () => setShowFileList(false));
 
   const handleBrightnessChange = (value: string) => {
     setBrightnessText(value);
@@ -212,37 +166,14 @@ export default function HdrConvert() {
   const activeTemplate = template === "custom" ? customTemplate : template;
   const convertDisabled = !hdrFiles || processing;
 
-  // Strict cross-tab dedup. If ANY path is loaded in another tab, the
-  // whole selection is rejected — the user gets a visible banner naming
-  // the conflicting tab and the count, no hdrFiles change occurs (so the
-  // previous selection stays intact). Returns null when the selection is
-  // safe to load. Reason for strict over silent-skip: the prior
-  // "filter-and-proceed" approach left contradictions where the log said
-  // "skipped" but the button still looked active because it reflected
-  // the previous selection, not the new attempt.
-  const checkConflicts = useCallback(
-    (paths: string[]): string | null => {
-      let conflictCount = 0;
-      let conflictTab: TabId | null = null;
-      for (const p of paths) {
-        const usedIn = isFileInUse(p, "hdr");
-        if (usedIn) {
-          if (conflictTab === null) conflictTab = usedIn;
-          conflictCount++;
-        }
-      }
-      if (conflictTab === null) return null;
-      return t("msg_dedup_blocked", conflictCount, t(TAB_LABEL_KEYS[conflictTab]));
-    },
-    [isFileInUse, t]
-  );
-
   // ── File selection (separate from conversion) ──────────
+  // Strict cross-tab dedup contract: any conflict rejects the WHOLE
+  // selection — see buildConflictMessage / FileContext for rationale.
   const handleSelectFiles = useCallback(async () => {
     const paths = await pickSubtitleFiles();
     if (!paths || paths.length === 0) return;
 
-    const conflictMsg = checkConflicts(paths);
+    const conflictMsg = buildConflictMessage(paths, "hdr", isFileInUse, t);
     if (conflictMsg) {
       setDropError(conflictMsg);
       return;
@@ -252,7 +183,7 @@ export default function HdrConvert() {
     // Silent replace: see FileContext.tsx for design rationale
     const names = paths.map(fileNameFromPath);
     setHdrFiles({ filePaths: paths, fileNames: names });
-  }, [checkConflicts, setHdrFiles]);
+  }, [isFileInUse, setHdrFiles, t]);
 
   // ── Folder drag-drop ingestion ──────────────────────────
   // Dropped paths come back from Rust expansion already flat-listed (one
@@ -272,7 +203,7 @@ export default function HdrConvert() {
         return;
       }
 
-      const conflictMsg = checkConflicts(subtitlePaths);
+      const conflictMsg = buildConflictMessage(subtitlePaths, "hdr", isFileInUse, t);
       if (conflictMsg) {
         setDropError(conflictMsg);
         return;
@@ -282,7 +213,7 @@ export default function HdrConvert() {
       const names = subtitlePaths.map(fileNameFromPath);
       setHdrFiles({ filePaths: subtitlePaths, fileNames: names });
     },
-    [checkConflicts, setHdrFiles, addLog, t]
+    [isFileInUse, setHdrFiles, addLog, t]
   );
 
   useFolderDrop({
@@ -371,11 +302,9 @@ export default function HdrConvert() {
             continue;
           }
 
-          // Check for duplicate output targets. Unicode-normalize (NFC)
-          // before compare so that macOS HFS+/APFS-produced NFD filenames
-          // don't appear distinct from their NFC counterparts — same file
-          // on disk, same dedup bucket.
-          const normalizedOut = outputPath.normalize("NFC").replace(/\\/g, "/").toLowerCase();
+          // Within-batch output dedup — see normalizeOutputKey for the
+          // NFC + forward-slash + lowercase semantics.
+          const normalizedOut = normalizeOutputKey(outputPath);
           if (outputPaths.has(normalizedOut)) {
             addLog(t("msg_skipped_duplicate", fileName), "error");
             continue;
@@ -637,31 +566,8 @@ export default function HdrConvert() {
       </div>
 
       {/* Selection-rejected banner. Sticky until the next selection
-           attempt or until the user clicks ✕ on the file strip. The
-           dismiss button gives the user a way to clear it without
-           making another selection. */}
-      {dropError && (
-        <div
-          className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg text-sm"
-          role="alert"
-          style={{
-            background: "var(--cancel-bg)",
-            border: "1px solid var(--error)",
-            color: "var(--error)",
-          }}
-        >
-          <span>{dropError}</span>
-          <button
-            type="button"
-            onClick={() => setDropError(null)}
-            aria-label={t("btn_clear_file")}
-            className="flex-none text-base"
-            style={{ color: "var(--error)", lineHeight: 1 }}
-          >
-            ✕
-          </button>
-        </div>
-      )}
+           attempt or until the user clicks ✕ on the file strip. */}
+      <DropErrorBanner message={dropError} onDismiss={() => setDropError(null)} />
 
       {/* Drop-zone discoverability hint — drag is invisible without
            prompting; surface it inline so users don't have to read docs.
@@ -944,47 +850,7 @@ export default function HdrConvert() {
       </div>
 
       {/* Log Output */}
-      {logs.length > 0 && (
-        <div
-          className="rounded-lg"
-          style={{ border: "1px solid var(--border)", background: "var(--bg-panel)" }}
-        >
-          <div
-            className="flex items-center justify-between px-3 py-2"
-            style={{ borderBottom: "1px solid var(--border)" }}
-          >
-            <span className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>
-              {t("log_title")}
-            </span>
-            <button
-              onClick={() => setLogs([])}
-              className="text-xs"
-              style={{ color: "var(--text-muted)" }}
-            >
-              {t("log_clear")}
-            </button>
-          </div>
-          <div
-            ref={logScrollRef}
-            className="max-h-48 overflow-y-auto p-3 font-mono text-xs space-y-0.5"
-          >
-            {logs.map((log) => (
-              <div
-                key={log.id}
-                style={{
-                  color: {
-                    error: "var(--error)",
-                    success: "var(--success)",
-                    info: "var(--text-muted)",
-                  }[log.type],
-                }}
-              >
-                {log.text}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      <LogPanel logs={logs} onClear={clearLogs} scrollRef={logScrollRef} />
     </div>
   );
 }

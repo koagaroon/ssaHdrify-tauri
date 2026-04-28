@@ -14,20 +14,17 @@ import type { Status } from "../../lib/StatusContext";
 import { useTabStatus } from "../../lib/useTabStatus";
 import { useFolderDrop } from "../../lib/useFolderDrop";
 import { countExistingFiles } from "../../lib/output-collisions";
-import { TAB_LABEL_KEYS } from "../../lib/tab-labels";
-import type { TabId } from "../../lib/FileContext";
+import { useClickOutside } from "../../lib/useClickOutside";
+import { useLogPanel } from "../../lib/useLogPanel";
+import { LogPanel } from "../../lib/LogPanel";
+import { DropErrorBanner } from "../../lib/DropErrorBanner";
+import { buildConflictMessage, normalizeOutputKey } from "../../lib/dedup-helpers";
 
 type Unit = "ms" | "s";
 type Direction = "slower" | "faster";
 
 /** Cap to ±1 year to prevent integer precision loss for extreme inputs. */
 const MAX_OFFSET_MS = 365 * 24 * 3600 * 1000;
-
-interface LogEntry {
-  id: number;
-  text: string;
-  type: "info" | "error" | "success";
-}
 
 // Subtitle extensions Time Shift accepts. Used by the folder-drop filter
 // to keep videos and unrelated files out of the batch when a user drops
@@ -61,7 +58,7 @@ export default function TimingShift() {
   >(null);
   const [progress, setProgress] = useState<{ processed: number; total: number } | null>(null);
   const [dropActive, setDropActive] = useState(false);
-  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const { logs, addLog, clearLogs, logScrollRef } = useLogPanel();
   const [showFileList, setShowFileList] = useState(false);
   // Selection-rejection banner — see HdrConvert for the full rationale.
   // Strict cross-tab dedup: any conflict in the new selection rejects
@@ -71,12 +68,7 @@ export default function TimingShift() {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const pickGenRef = useRef(0);
   const cancelRef = useRef(false);
-  const logIdRef = useRef(0);
   const dropZoneRef = useRef<HTMLDivElement>(null);
-  // Scroll container for the log — see HdrConvert for the rationale
-  // behind avoiding scrollIntoView (it walks ancestors and can scroll
-  // .window past the titlebar in Chromium).
-  const logScrollRef = useRef<HTMLDivElement>(null);
   const fileContainerRef = useRef<HTMLDivElement>(null);
 
   const effectiveOffsetMs = useMemo(() => {
@@ -148,36 +140,7 @@ export default function TimingShift() {
   }, [timingFiles]);
 
   // File-list dropdown: close on click-outside / Escape (mirrors HDR).
-  useEffect(() => {
-    if (!showFileList) return;
-    const onClick = (e: MouseEvent) => {
-      if (fileContainerRef.current && !fileContainerRef.current.contains(e.target as Node)) {
-        setShowFileList(false);
-      }
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setShowFileList(false);
-    };
-    const id = setTimeout(() => document.addEventListener("mousedown", onClick), 0);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      clearTimeout(id);
-      document.removeEventListener("mousedown", onClick);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [showFileList]);
-
-  const addLog = useCallback((text: string, type: LogEntry["type"] = "info") => {
-    const id = logIdRef.current++;
-    setLogs((prev) => {
-      const next = [...prev, { id, text, type }];
-      return next.length > 200 ? next.slice(-200) : next;
-    });
-    setTimeout(() => {
-      const el = logScrollRef.current;
-      if (el) el.scrollTop = el.scrollHeight;
-    }, 50);
-  }, []);
+  useClickOutside(showFileList, fileContainerRef, () => setShowFileList(false));
 
   // Footer status. Busy carries the N-of-M progress; cancelled is its
   // own visible footer state, separate from done/error.
@@ -199,34 +162,15 @@ export default function TimingShift() {
   }, [fileCount, busy, lastActionResult, progress, t]);
   useTabStatus("timing", tabStatus);
 
-  // Strict cross-tab dedup. If any path is loaded in another tab, the
-  // whole selection is rejected — the user gets a visible banner naming
-  // the conflicting tab and the count, and timingFiles stays untouched.
-  // Same rationale as HdrConvert.checkConflicts.
-  const checkConflicts = useCallback(
-    (paths: string[]): string | null => {
-      let conflictCount = 0;
-      let conflictTab: TabId | null = null;
-      for (const p of paths) {
-        const usedIn = isFileInUse(p, "timing");
-        if (usedIn) {
-          if (conflictTab === null) conflictTab = usedIn;
-          conflictCount++;
-        }
-      }
-      if (conflictTab === null) return null;
-      return t("msg_dedup_blocked", conflictCount, t(TAB_LABEL_KEYS[conflictTab]));
-    },
-    [isFileInUse, t]
-  );
-
   // Shared ingestion path: conflict check → load first file's body for
   // the live preview → publish to context. The rest of the batch is
   // read on demand during the save loop, so memory stays flat even
-  // for a 24-episode drop.
+  // for a 24-episode drop. Strict cross-tab dedup contract: any
+  // conflict rejects the WHOLE selection — see buildConflictMessage /
+  // FileContext for the rationale.
   const ingestPaths = useCallback(
     async (paths: string[], gen: number) => {
-      const conflictMsg = checkConflicts(paths);
+      const conflictMsg = buildConflictMessage(paths, "timing", isFileInUse, t);
       if (conflictMsg) {
         setDropError(conflictMsg);
         return;
@@ -249,7 +193,7 @@ export default function TimingShift() {
         firstFileContent: firstContent,
       });
     },
-    [checkConflicts, setTimingFiles, addLog, t]
+    [isFileInUse, setTimingFiles, addLog, t]
   );
 
   const handlePickFiles = useCallback(async () => {
@@ -340,9 +284,9 @@ export default function TimingShift() {
           // Within-batch dedup. Two inputs that resolve to the same
           // output path (different paths on disk pointing at the same
           // file via symlink, junction, etc.) would otherwise overwrite
-          // each other. NFC + forward-slash + lowercase normalization
-          // matches HDR Convert's dedup semantics.
-          const normalizedOut = outputPath.normalize("NFC").replace(/\\/g, "/").toLowerCase();
+          // each other. See normalizeOutputKey for the NFC + forward
+          // slash + lowercase semantics.
+          const normalizedOut = normalizeOutputKey(outputPath);
           if (seenOutputs.has(normalizedOut)) {
             addLog(t("msg_skipped_duplicate", fileName), "error");
             continue;
@@ -589,28 +533,7 @@ export default function TimingShift() {
       </div>
 
       {/* Selection-rejected banner — same UX as HdrConvert. */}
-      {dropError && (
-        <div
-          className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg text-sm"
-          role="alert"
-          style={{
-            background: "var(--cancel-bg)",
-            border: "1px solid var(--error)",
-            color: "var(--error)",
-          }}
-        >
-          <span>{dropError}</span>
-          <button
-            type="button"
-            onClick={() => setDropError(null)}
-            aria-label={t("btn_clear_file")}
-            className="flex-none text-base"
-            style={{ color: "var(--error)", lineHeight: 1 }}
-          >
-            ✕
-          </button>
-        </div>
-      )}
+      <DropErrorBanner message={dropError} onDismiss={() => setDropError(null)} />
 
       {/* Drop-zone discoverability hint — visible only when idle. */}
       {fileCount === 0 && !dropError && (
@@ -807,47 +730,7 @@ export default function TimingShift() {
       )}
 
       {/* Log */}
-      {logs.length > 0 && (
-        <div
-          className="rounded-lg"
-          style={{ border: "1px solid var(--border)", background: "var(--bg-panel)" }}
-        >
-          <div
-            className="flex items-center justify-between px-3 py-2"
-            style={{ borderBottom: "1px solid var(--border)" }}
-          >
-            <span className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>
-              {t("log_title")}
-            </span>
-            <button
-              onClick={() => setLogs([])}
-              className="text-xs"
-              style={{ color: "var(--text-muted)" }}
-            >
-              {t("log_clear")}
-            </button>
-          </div>
-          <div
-            ref={logScrollRef}
-            className="max-h-48 overflow-y-auto p-3 font-mono text-xs space-y-0.5"
-          >
-            {logs.map((log) => (
-              <div
-                key={log.id}
-                style={{
-                  color: {
-                    error: "var(--error)",
-                    success: "var(--success)",
-                    info: "var(--text-muted)",
-                  }[log.type],
-                }}
-              >
-                {log.text}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      <LogPanel logs={logs} onClear={clearLogs} scrollRef={logScrollRef} />
     </div>
   );
 }

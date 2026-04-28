@@ -12,7 +12,7 @@
  * fragile across browsers, so the header is a sibling that mirrors the
  * row's grid template.
  */
-import type { HTMLAttributes, ReactNode } from "react";
+import type { HTMLAttributes, JSX, ReactNode } from "react";
 
 export interface PreviewTableColumn<T> {
   /** Stable key for React reconciliation across columns. */

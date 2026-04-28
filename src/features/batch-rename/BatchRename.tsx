@@ -18,6 +18,7 @@
  *   restores the engine's seed.
  */
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
+import type { JSX } from "react";
 import {
   pickRenameInputs,
   pickOutputDirectory,
@@ -28,13 +29,15 @@ import {
 import { ask } from "@tauri-apps/plugin-dialog";
 import { useI18n } from "../../i18n/useI18n";
 import { useFileContext } from "../../lib/FileContext";
-import { TAB_LABEL_KEYS } from "../../lib/tab-labels";
-import type { TabId } from "../../lib/FileContext";
 import type { Status } from "../../lib/StatusContext";
 import { useTabStatus } from "../../lib/useTabStatus";
 import { useFolderDrop } from "../../lib/useFolderDrop";
 import { PreviewTable, type PreviewTableColumn } from "../../lib/PreviewTable";
 import { countExistingFiles } from "../../lib/output-collisions";
+import { useLogPanel } from "../../lib/useLogPanel";
+import { LogPanel } from "../../lib/LogPanel";
+import { DropErrorBanner } from "../../lib/DropErrorBanner";
+import { buildConflictMessage, normalizeOutputKey } from "../../lib/dedup-helpers";
 import {
   buildPairings,
   parseFilename,
@@ -45,12 +48,6 @@ import {
   type PairingSource,
   type OutputMode,
 } from "./pairing-engine";
-
-interface LogEntry {
-  id: number;
-  text: string;
-  type: "info" | "error" | "success";
-}
 
 // Categorization sets — drive both the picker filter (in tauri-api) and
 // the post-drop classification here. Kept in sync manually for now;
@@ -198,7 +195,7 @@ export default function BatchRename() {
   // renameFiles state, since the unknown bucket isn't pairing material.
   // Reset whenever renameFiles changes.
   const [unknownCount, setUnknownCount] = useState(0);
-  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const { logs, addLog, clearLogs, logScrollRef } = useLogPanel();
   // Output strategy — three modes per design doc 已决定 #3.
   // Default `copy_to_video` matches the most common fan-sub workflow
   // (subs end up in the same folder as the videos, originals untouched).
@@ -214,10 +211,8 @@ export default function BatchRename() {
   const [editedRows, setEditedRows] = useState<PairingRow[]>([]);
 
   const pickGenRef = useRef(0);
-  const logIdRef = useRef(0);
   const cancelRef = useRef(false);
   const dropZoneRef = useRef<HTMLDivElement>(null);
-  const logScrollRef = useRef<HTMLDivElement>(null);
 
   const videoPaths = useMemo(() => renameFiles?.videoPaths ?? [], [renameFiles]);
   const videoNames = useMemo(() => renameFiles?.videoNames ?? [], [renameFiles]);
@@ -386,44 +381,14 @@ export default function BatchRename() {
   );
   const actionableCount = actionableRows.length;
 
-  const addLog = useCallback((text: string, type: LogEntry["type"] = "info") => {
-    const id = logIdRef.current++;
-    setLogs((prev) => {
-      const next = [...prev, { id, text, type }];
-      return next.length > 200 ? next.slice(-200) : next;
-    });
-    setTimeout(() => {
-      const el = logScrollRef.current;
-      if (el) el.scrollTop = el.scrollHeight;
-    }, 50);
-  }, []);
-
-  // Strict cross-tab dedup. Only SUBTITLES are checked against the
-  // other tabs (HDR / Timing / Fonts) — videos are unique to Tab 4.
-  const checkConflicts = useCallback(
-    (subtitlePathsToCheck: string[]): string | null => {
-      let conflictCount = 0;
-      let conflictTab: TabId | null = null;
-      for (const p of subtitlePathsToCheck) {
-        const usedIn = isFileInUse(p, "rename");
-        if (usedIn) {
-          if (conflictTab === null) conflictTab = usedIn;
-          conflictCount++;
-        }
-      }
-      if (conflictTab === null) return null;
-      return t("msg_dedup_blocked", conflictCount, t(TAB_LABEL_KEYS[conflictTab]));
-    },
-    [isFileInUse, t]
-  );
-
   const ingestPaths = useCallback(
     (paths: string[], gen: number) => {
       const { videos, subtitles, unknown } = categorizePaths(paths);
 
       // Conflict check applies only to subtitles — videos can't collide
-      // with another tab.
-      const conflictMsg = checkConflicts(subtitles);
+      // with another tab. Strict cross-tab dedup contract: any conflict
+      // rejects the WHOLE selection (see buildConflictMessage).
+      const conflictMsg = buildConflictMessage(subtitles, "rename", isFileInUse, t);
       if (conflictMsg) {
         setDropError(conflictMsg);
         return;
@@ -448,7 +413,7 @@ export default function BatchRename() {
         addLog(t("msg_rename_unknown_skipped", unknown.length), "info");
       }
     },
-    [checkConflicts, setRenameFiles, addLog, t]
+    [isFileInUse, setRenameFiles, addLog, t]
   );
 
   const handlePickFiles = useCallback(async () => {
@@ -611,7 +576,7 @@ export default function BatchRename() {
           // path (e.g., user pre-edited filenames in a way that
           // collides) would otherwise overwrite each other. No-op
           // rows (target == source) were filtered pre-flight.
-          const normalizedOut = outputPath.normalize("NFC").replace(/\\/g, "/").toLowerCase();
+          const normalizedOut = normalizeOutputKey(outputPath);
           if (seenOutputs.has(normalizedOut)) {
             addLog(t("msg_skipped_duplicate", subName), "error");
             continue;
@@ -798,28 +763,7 @@ export default function BatchRename() {
         </button>
       </div>
 
-      {dropError && (
-        <div
-          className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg text-sm"
-          role="alert"
-          style={{
-            background: "var(--cancel-bg)",
-            border: "1px solid var(--error)",
-            color: "var(--error)",
-          }}
-        >
-          <span>{dropError}</span>
-          <button
-            type="button"
-            onClick={() => setDropError(null)}
-            aria-label={t("btn_clear_file")}
-            className="flex-none text-base"
-            style={{ color: "var(--error)", lineHeight: 1 }}
-          >
-            ✕
-          </button>
-        </div>
-      )}
+      <DropErrorBanner message={dropError} onDismiss={() => setDropError(null)} />
 
       {totalCount === 0 && !dropError && (
         <p className="text-xs ml-1" style={{ color: "var(--text-muted)" }}>
@@ -973,47 +917,7 @@ export default function BatchRename() {
       )}
 
       {/* Log */}
-      {logs.length > 0 && (
-        <div
-          className="rounded-lg"
-          style={{ border: "1px solid var(--border)", background: "var(--bg-panel)" }}
-        >
-          <div
-            className="flex items-center justify-between px-3 py-2"
-            style={{ borderBottom: "1px solid var(--border)" }}
-          >
-            <span className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>
-              {t("log_title")}
-            </span>
-            <button
-              onClick={() => setLogs([])}
-              className="text-xs"
-              style={{ color: "var(--text-muted)" }}
-            >
-              {t("log_clear")}
-            </button>
-          </div>
-          <div
-            ref={logScrollRef}
-            className="max-h-48 overflow-y-auto p-3 font-mono text-xs space-y-0.5"
-          >
-            {logs.map((log) => (
-              <div
-                key={log.id}
-                style={{
-                  color: {
-                    error: "var(--error)",
-                    success: "var(--success)",
-                    info: "var(--text-muted)",
-                  }[log.type],
-                }}
-              >
-                {log.text}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      <LogPanel logs={logs} onClear={clearLogs} scrollRef={logScrollRef} />
     </div>
   );
 }

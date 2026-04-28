@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo } from "react";
+import { useState, useRef, useMemo } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import HdrConvert from "./features/hdr-convert/HdrConvert";
 import TimingShift from "./features/timing-shift/TimingShift";
@@ -8,6 +8,7 @@ import { useI18n } from "./i18n/useI18n";
 import { useTheme } from "./theme/useTheme";
 import type { ThemeMode } from "./theme/useTheme";
 import { useStatus, type StatusTab, DEFAULT_STATUS } from "./lib/StatusContext";
+import { useClickOutside } from "./lib/useClickOutside";
 import "./shell.css";
 
 // Tab ids also serve as StatusTab keys — single source of truth.
@@ -57,28 +58,9 @@ function App() {
 
   const [themeOpen, setThemeOpen] = useState(false);
   const themeRef = useRef<HTMLDivElement>(null);
-
-  // Close on click-outside + Escape. Mousedown is armed on the next tick
-  // so the initial click that opened the dropdown doesn't immediately
-  // close it. Matches the same pattern used by HdrConvert's file list.
-  useEffect(() => {
-    if (!themeOpen) return;
-    const onClick = (e: MouseEvent) => {
-      if (themeRef.current && !themeRef.current.contains(e.target as Node)) {
-        setThemeOpen(false);
-      }
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setThemeOpen(false);
-    };
-    const id = setTimeout(() => document.addEventListener("mousedown", onClick), 0);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      clearTimeout(id);
-      document.removeEventListener("mousedown", onClick);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [themeOpen]);
+  // Close on click-outside + Escape — see useClickOutside for the
+  // armed-on-next-tick rationale.
+  useClickOutside(themeOpen, themeRef, () => setThemeOpen(false));
 
   return (
     <div className="stage">

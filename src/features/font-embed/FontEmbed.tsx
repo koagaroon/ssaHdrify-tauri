@@ -16,13 +16,16 @@ import {
 import { ensureLoaded, fontKeyLabel, type FontUsage } from "./font-collector";
 import { useI18n } from "../../i18n/useI18n";
 import { useFileContext } from "../../lib/FileContext";
-import { TAB_LABEL_KEYS } from "../../lib/tab-labels";
-import type { TabId } from "../../lib/FileContext";
 import type { Status } from "../../lib/StatusContext";
 import { useTabStatus } from "../../lib/useTabStatus";
 import FontSourceModal, { type FontSource } from "./FontSourceModal";
 import { useFolderDrop } from "../../lib/useFolderDrop";
 import { countExistingFiles } from "../../lib/output-collisions";
+import { useClickOutside } from "../../lib/useClickOutside";
+import { useLogPanel } from "../../lib/useLogPanel";
+import { LogPanel } from "../../lib/LogPanel";
+import { DropErrorBanner } from "../../lib/DropErrorBanner";
+import { buildConflictMessage, normalizeOutputKey } from "../../lib/dedup-helpers";
 
 /** Stable selection key — survives `fonts[]` reorders (e.g. after adding a
  *  new font source triggers a reanalyze with a different ordering). Using
@@ -39,12 +42,6 @@ function keysOfResolvedFonts(infos: FontInfo[]): Set<string> {
     if (info.filePath) out.add(fontSelectionKey(info));
   }
   return out;
-}
-
-interface LogEntry {
-  id: number;
-  text: string;
-  type: "info" | "error" | "success";
 }
 
 // Font Embed only operates on ASS / SSA — other subtitle formats don't carry
@@ -81,14 +78,13 @@ export default function FontEmbed() {
   const [lastActionResult, setLastActionResult] = useState<
     "success" | "error" | "cancelled" | null
   >(null);
-  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const { logs, addLog, clearLogs, logScrollRef } = useLogPanel();
   const [showFileList, setShowFileList] = useState(false);
   const [dropActive, setDropActive] = useState(false);
   const [dropError, setDropError] = useState<string | null>(null);
 
   const cancelRef = useRef(false);
   const pickGenRef = useRef(0);
-  const logIdRef = useRef(0);
   // Per-file analysis cache: <path → {content, infos, usages}>. Holds
   // all batch contents in memory so the unified detection grid + the
   // embed loop don't have to re-read or re-parse on every interaction.
@@ -97,10 +93,6 @@ export default function FontEmbed() {
   // (fonts / fontUsages state below), not the cache directly.
   const perFileAnalysisRef = useRef<Map<string, FileAnalysis>>(new Map());
   const dropZoneRef = useRef<HTMLDivElement>(null);
-  // Scroll container for the log — see HdrConvert for the rationale
-  // behind avoiding scrollIntoView (it walks ancestors and can scroll
-  // .window past the titlebar in Chromium).
-  const logScrollRef = useRef<HTMLDivElement>(null);
   const fileContainerRef = useRef<HTMLDivElement>(null);
 
   // ── Local font sources (persist for the tab session) ─────
@@ -123,47 +115,16 @@ export default function FontEmbed() {
   const isSingleFile = fileCount === 1;
   const isBatch = fileCount > 1;
 
-  const addLog = useCallback((text: string, type: LogEntry["type"] = "info") => {
-    const id = logIdRef.current++;
-    setLogs((prev) => {
-      const next = [...prev, { id, text, type }];
-      return next.length > 200 ? next.slice(-200) : next;
-    });
-    setTimeout(() => {
-      const el = logScrollRef.current;
-      if (el) el.scrollTop = el.scrollHeight;
-    }, 50);
-  }, []);
-
-  // Strict cross-tab dedup. If any path is loaded in another tab, the
-  // whole selection is rejected — same UX contract as HDR Convert and
-  // Time Shift: visible banner naming the conflicting tab, no state
-  // change, the previous selection is preserved.
-  const checkConflicts = useCallback(
-    (paths: string[]): string | null => {
-      let conflictCount = 0;
-      let conflictTab: TabId | null = null;
-      for (const p of paths) {
-        const usedIn = isFileInUse(p, "fonts");
-        if (usedIn) {
-          if (conflictTab === null) conflictTab = usedIn;
-          conflictCount++;
-        }
-      }
-      if (conflictTab === null) return null;
-      return t("msg_dedup_blocked", conflictCount, t(TAB_LABEL_KEYS[conflictTab]));
-    },
-    [isFileInUse, t]
-  );
-
   // Shared ingestion path. Loads + analyzes EVERY file in the selection
   // upfront so the unified detection grid can show real coverage across
   // the whole batch (single-file is just N=1 of this code path). Cached
   // contents stay in memory for source-change reanalysis and the embed
   // loop. Sequential analyze keeps findSystemFont IPC pressure bounded.
+  // Strict cross-tab dedup contract: any conflict rejects the WHOLE
+  // selection — see buildConflictMessage / FileContext for rationale.
   const ingestPaths = useCallback(
     async (paths: string[], gen: number) => {
-      const conflictMsg = checkConflicts(paths);
+      const conflictMsg = buildConflictMessage(paths, "fonts", isFileInUse, t);
       if (conflictMsg) {
         setDropError(conflictMsg);
         return;
@@ -233,7 +194,7 @@ export default function FontEmbed() {
         if (gen === pickGenRef.current) setAnalyzing(false);
       }
     },
-    [checkConflicts, setFontsFiles, addLog, t, userFontMap]
+    [isFileInUse, setFontsFiles, addLog, t, userFontMap]
   );
 
   const handlePickFiles = useCallback(async () => {
@@ -376,24 +337,7 @@ export default function FontEmbed() {
   }, [fontsFiles]);
 
   // File-list dropdown: close on click-outside / Escape (mirrors HDR).
-  useEffect(() => {
-    if (!showFileList) return;
-    const onClick = (e: MouseEvent) => {
-      if (fileContainerRef.current && !fileContainerRef.current.contains(e.target as Node)) {
-        setShowFileList(false);
-      }
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setShowFileList(false);
-    };
-    const id = setTimeout(() => document.addEventListener("mousedown", onClick), 0);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      clearTimeout(id);
-      document.removeEventListener("mousedown", onClick);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [showFileList]);
+  useClickOutside(showFileList, fileContainerRef, () => setShowFileList(false));
 
   // ── Embed handler — handles both single-file and batch modes ─────
   const handleEmbed = useCallback(async () => {
@@ -438,7 +382,7 @@ export default function FontEmbed() {
 
         try {
           const outputPath = deriveEmbeddedPath(filePath);
-          const normalizedOut = outputPath.normalize("NFC").replace(/\\/g, "/").toLowerCase();
+          const normalizedOut = normalizeOutputKey(outputPath);
           if (seenOutputs.has(normalizedOut)) {
             addLog(t("msg_skipped_duplicate", fileName), "error");
             continue;
@@ -717,28 +661,7 @@ export default function FontEmbed() {
       </div>
 
       {/* Selection-rejected banner */}
-      {dropError && (
-        <div
-          className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg text-sm"
-          role="alert"
-          style={{
-            background: "var(--cancel-bg)",
-            border: "1px solid var(--error)",
-            color: "var(--error)",
-          }}
-        >
-          <span>{dropError}</span>
-          <button
-            type="button"
-            onClick={() => setDropError(null)}
-            aria-label={t("btn_clear_file")}
-            className="flex-none text-base"
-            style={{ color: "var(--error)", lineHeight: 1 }}
-          >
-            ✕
-          </button>
-        </div>
-      )}
+      <DropErrorBanner message={dropError} onDismiss={() => setDropError(null)} />
 
       {/* Drop hint when idle */}
       {fileCount === 0 && !dropError && (
@@ -937,47 +860,7 @@ export default function FontEmbed() {
       )}
 
       {/* Log */}
-      {logs.length > 0 && (
-        <div
-          className="rounded-lg"
-          style={{ border: "1px solid var(--border)", background: "var(--bg-panel)" }}
-        >
-          <div
-            className="flex items-center justify-between px-3 py-2"
-            style={{ borderBottom: "1px solid var(--border)" }}
-          >
-            <span className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>
-              {t("log_title")}
-            </span>
-            <button
-              onClick={() => setLogs([])}
-              className="text-xs"
-              style={{ color: "var(--text-muted)" }}
-            >
-              {t("log_clear")}
-            </button>
-          </div>
-          <div
-            ref={logScrollRef}
-            className="max-h-48 overflow-y-auto p-3 font-mono text-xs space-y-0.5"
-          >
-            {logs.map((log) => (
-              <div
-                key={log.id}
-                style={{
-                  color: {
-                    error: "var(--error)",
-                    success: "var(--success)",
-                    info: "var(--text-muted)",
-                  }[log.type],
-                }}
-              >
-                {log.text}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      <LogPanel logs={logs} onClear={clearLogs} scrollRef={logScrollRef} />
 
       {/* Font source modal — uses first file's usages for coverage stats
            in single-file mode; in batch the modal still shows but the

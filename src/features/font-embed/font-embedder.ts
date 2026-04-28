@@ -302,7 +302,7 @@ export function aggregateFonts(perFile: Map<string, FileAnalysis>): {
  * round-trips through Win32 APIs and shell-integration tools without
  * mixing slashes.
  *
- * Why a derived path instead of `pickSavePath` per file: native save
+ * Why a derived path instead of a per-file native save dialog: those
  * dialogs are blocking and don't scale to N files. The same-directory
  * convention matches the most common workflow and gives the user a
  * single overwrite-confirm gate via `countExistingFiles` before the
