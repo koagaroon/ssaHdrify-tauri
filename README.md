@@ -2,9 +2,9 @@
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](LICENSE) [![GitHub release](https://img.shields.io/github/v/release/koagaroon/ssaHdrify-tauri?include_prereleases)](https://github.com/koagaroon/ssaHdrify-tauri/releases) ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)
 
-> **将 SSA/ASS 字幕颜色从 SDR 色彩空间转换到 HDR 色彩空间的桌面工具，附带时间轴偏移和字体嵌入功能。**
+> **将 SSA/ASS 字幕颜色从 SDR 色彩空间转换到 HDR 色彩空间的桌面工具，附带时间轴偏移、字体嵌入和批量重命名功能。**
 >
-> _A desktop tool to convert SSA/ASS subtitle colors from SDR to HDR color space, with timing shift and font embedding._
+> _A desktop tool to convert SSA/ASS subtitle colors from SDR to HDR color space, with timing shift, font embedding, and batch rename._
 
 Tauri 桌面重写版，基于 [gky99/ssaHdrify](https://github.com/gky99/ssaHdrify)（Python 原版）。
 
@@ -12,21 +12,21 @@ A Tauri desktop rewrite of [gky99/ssaHdrify](https://github.com/gky99/ssaHdrify)
 
 ### 浅色主题（中文）/ Light Theme (Chinese)
 
-|                              HDR 转换                              |                             时间轴偏移                              |
+|                       HDR 转换 / HDR Convert                       |                       时间轴偏移 / Time Shift                       |
 | :----------------------------------------------------------------: | :-----------------------------------------------------------------: |
 | <img src="docs/screenshots/hdr-convert-light-zh.jpg" width="450"/> | <img src="docs/screenshots/timing-shift-light-zh.jpg" width="450"/> |
 
-|                             字体嵌入                              |                             批量重命名                              |
+|                       字体嵌入 / Font Embed                       |                      批量重命名 / Batch Rename                      |
 | :---------------------------------------------------------------: | :-----------------------------------------------------------------: |
 | <img src="docs/screenshots/font-embed-light-zh.jpg" width="450"/> | <img src="docs/screenshots/batch-rename-light-zh.jpg" width="450"/> |
 
 ### 深色主题（英文）/ Dark Theme (English)
 
-|                            HDR Convert                            |                             Time Shift                             |
+|                      HDR 转换 / HDR Convert                       |                      时间轴偏移 / Time Shift                       |
 | :---------------------------------------------------------------: | :----------------------------------------------------------------: |
 | <img src="docs/screenshots/hdr-convert-dark-en.jpg" width="450"/> | <img src="docs/screenshots/timing-shift-dark-en.jpg" width="450"/> |
 
-|                            Font Embed                            |                            Batch Rename                            |
+|                      字体嵌入 / Font Embed                       |                     批量重命名 / Batch Rename                      |
 | :--------------------------------------------------------------: | :----------------------------------------------------------------: |
 | <img src="docs/screenshots/font-embed-dark-en.jpg" width="450"/> | <img src="docs/screenshots/batch-rename-dark-en.jpg" width="450"/> |
 
@@ -72,13 +72,20 @@ Download the latest portable exe from [Releases](https://github.com/koagaroon/ss
 
 ## 使用方法 | Usage
 
-### HDR 色彩转换
+### HDR 色彩转换 / HDR Color Conversion
 
 1. 选择 EOTF 曲线（PQ 或 HLG）/ Select EOTF curve (PQ or HLG)
 2. 设置字幕目标亮度（默认 203 nits）/ Set target subtitle brightness (default: 203 nits)
 3. 选择字幕文件（支持多选）/ Select subtitle files (multi-select supported)
 4. 点击转换 / Click convert
 5. 输出文件扩展名为 `.hdr.ass` / Output files have the `.hdr.ass` extension
+
+> **参数说明 | Parameter Guide**
+>
+> | 参数 / Parameter  | 默认值 / Default | 说明 / Description                                                                                                                        |
+> | ----------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+> | EOTF curve        | PQ               | PQ (ST 2084) 用于 HDR10/杜比视界；HLG 用于广播 HDR / PQ for HDR10/Dolby Vision; HLG for broadcast HDR                                     |
+> | Target brightness | 203 nits         | SDR 字幕亮度峰值（BT.2408 标准值）。字幕太亮就调低，太暗就调高 / Peak brightness per BT.2408. Decrease if too bright, increase if too dim |
 
 ### 时间轴偏移 / Timing Shift
 
@@ -102,13 +109,6 @@ Download the latest portable exe from [Releases](https://github.com/koagaroon/ss
 > 工具会读取字体文件的 OpenType `name` 表并索引**所有**语言变体（英文、中文、Typographic 名等）——ASS 脚本引用任何一个名字都能命中同一个字体文件。ASS 的 `@家族名` 竖排前缀也会被正确识别为同一字体。
 >
 > The tool reads each font's OpenType `name` table and indexes **every** localized family-name variant (English, Chinese, Typographic, etc.) — an ASS script referencing any of them resolves to the same file. The ASS `@FamilyName` vertical-writing prefix is correctly treated as the same font.
-
-> **参数说明 | Parameter Guide**
->
-> | 参数 / Parameter  | 默认值 / Default | 说明 / Description                                                                                                                        |
-> | ----------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-> | EOTF curve        | PQ               | PQ (ST 2084) 用于 HDR10/杜比视界；HLG 用于广播 HDR / PQ for HDR10/Dolby Vision; HLG for broadcast HDR                                     |
-> | Target brightness | 203 nits         | SDR 字幕亮度峰值（BT.2408 标准值）。字幕太亮就调低，太暗就调高 / Peak brightness per BT.2408. Decrease if too bright, increase if too dim |
 
 ### 批量重命名 / Batch Rename
 
