@@ -38,7 +38,7 @@ A Tauri desktop rewrite of [gky99/ssaHdrify](https://github.com/gky99/ssaHdrify)
 - [功能 | Features](#功能--features)
 - [使用方法 | Usage](#使用方法--usage)
 - [使用场景 | Background](#使用场景--background)
-- [转换原理 | How It Works](#转换原理--how-it-works)
+- [HDR 转换原理 | How HDR Conversion Works](#hdr-转换原理--how-hdr-conversion-works)
 - [从源码构建 | Build from Source](#从源码构建--build-from-source)
 - [架构 | Architecture](#架构--architecture)
 - [致谢 | Credits](#致谢--credits)
@@ -136,7 +136,7 @@ When playing HDR video, the display enters HDR mode. However, SSA/ASS subtitles 
 >
 > If your player already handles subtitle brightness correctly (e.g. mpv with `blend-subtitles=video`, or madVR with xy-SubFilter color management), you don't need this tool.
 
-相关讨论 / Related discussion: [libass/libass#297](https://github.com/libass/libass/issues/297)
+<sub>相关讨论 / Related discussion: [libass/libass#297](https://github.com/libass/libass/issues/297)</sub>
 
 相关工具 / Related tool: 字幕↔视频重命名工作流的另一个选项是 [arition/SubRenamer](https://github.com/arition/SubRenamer)（按字母序+下标配对）。本项目的批量重命名（Tab 4）走基于 fan-sub 命名习惯的正则配对路径，独立实现。
 
@@ -144,7 +144,7 @@ For the subtitle ↔ video rename workflow, [arition/SubRenamer](https://github.
 
 ---
 
-## 转换原理 | How It Works
+## HDR 转换原理 | How HDR Conversion Works
 
 ```
 SSA/ASS 字幕颜色 (sRGB)
