@@ -324,6 +324,15 @@ export const strings: Record<string, StringEntry> = {
     zh: "所选 {0} 个文件中未找到字体。",
   },
   font_sources_scanning: { en: "Scanning...", zh: "扫描中…" },
+  font_scan_progress: {
+    en: "Scanned {0} fonts so far…",
+    zh: "已扫描 {0} 个字体…",
+  },
+  font_scan_cancel: { en: "Cancel", zh: "取消" },
+  font_scan_cancelled: {
+    en: "Scan cancelled — kept {0} fonts.",
+    zh: "已取消扫描，保留 {0} 个字体。",
+  },
   font_coverage: { en: "Local coverage: {0} / {1}", zh: "本地覆盖：{0} / {1}" },
   font_coverage_complete: {
     en: "All required fonts covered locally",

@@ -1,14 +1,48 @@
 //! Smoke test for the directory-scan path.
 //!
 //! Scans the OS font directory (a guaranteed-present folder with real
-//! fonts). Verifies that `scan_font_directory` returns entries, that each
-//! entry's path came back canonicalized, and that the family/bold/italic
-//! fields are populated.
+//! fonts) and asserts that `scan_font_directory` streams `Batch` events
+//! containing canonicalized entries. Path-validation tests use a no-op
+//! channel since the rejection happens before any batch could be emitted.
 //!
 //! Run with:
 //!     cargo test --manifest-path src-tauri/Cargo.toml --test test_scan
 
-use app_lib::fonts::scan_font_directory;
+use std::sync::{Arc, Mutex};
+
+use app_lib::fonts::{scan_font_directory, LocalFontEntry, ScanProgress};
+use tauri::ipc::{Channel, InvokeResponseBody};
+
+/// A `Channel<ScanProgress>` that drops every event. Used for path-validation
+/// tests where the scan errors out before any batch is emitted.
+fn discard_channel() -> Channel<ScanProgress> {
+    Channel::new(|_: InvokeResponseBody| Ok(()))
+}
+
+/// A `Channel<ScanProgress>` that decodes each batch back into entries and
+/// pushes them onto a shared `Vec`. Returned alongside the buffer so the
+/// test can assert on the streamed payload after the scan completes.
+fn collecting_channel() -> (Channel<ScanProgress>, Arc<Mutex<Vec<LocalFontEntry>>>) {
+    let collected: Arc<Mutex<Vec<LocalFontEntry>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = collected.clone();
+    let channel = Channel::new(move |body: InvokeResponseBody| {
+        let json = match body {
+            InvokeResponseBody::Json(s) => s,
+            // The Rust side only emits JSON for ScanProgress; raw bodies
+            // would indicate an unrelated message and can be ignored.
+            InvokeResponseBody::Raw(_) => return Ok(()),
+        };
+        let event: serde_json::Value = serde_json::from_str(&json).unwrap();
+        if event.get("kind").and_then(|v| v.as_str()) != Some("batch") {
+            return Ok(());
+        }
+        let entries = event.get("entries").cloned().unwrap_or(serde_json::Value::Null);
+        let parsed: Vec<LocalFontEntry> = serde_json::from_value(entries).unwrap_or_default();
+        sink.lock().unwrap().extend(parsed);
+        Ok(())
+    });
+    (channel, collected)
+}
 
 #[cfg(windows)]
 fn os_font_dir() -> String {
@@ -29,10 +63,13 @@ fn os_font_dir() -> String {
 #[test]
 fn scans_os_font_directory_and_populates_metadata() {
     let dir = os_font_dir();
-    let entries = match scan_font_directory(dir.clone()) {
-        Ok(e) => e,
-        Err(e) => panic!("scan_font_directory failed for '{dir}': {e}"),
-    };
+    let (channel, collected) = collecting_channel();
+    if let Err(e) = scan_font_directory(dir.clone(), channel) {
+        panic!("scan_font_directory failed for '{dir}': {e}");
+    }
+    // Move the collected entries out so subsequent assertions don't hold
+    // the mutex; LocalFontEntry isn't Clone, so we can't snapshot via copy.
+    let entries: Vec<LocalFontEntry> = std::mem::take(&mut *collected.lock().unwrap());
 
     assert!(
         !entries.is_empty(),
@@ -60,23 +97,28 @@ fn scans_os_font_directory_and_populates_metadata() {
         );
     }
 
+    let unique_files = entries
+        .iter()
+        .map(|e| e.path.as_str())
+        .collect::<std::collections::HashSet<_>>()
+        .len();
     let total_variants: usize = entries.iter().map(|e| e.families.len()).sum();
     println!(
         "Scanned '{}' → {} faces, {} unique files, {} family-name variants",
         dir,
         entries.len(),
-        entries
-            .iter()
-            .map(|e| &e.path)
-            .collect::<std::collections::HashSet<_>>()
-            .len(),
+        unique_files,
         total_variants,
     );
 }
 
 #[test]
 fn rejects_invalid_directory_inputs() {
-    assert!(scan_font_directory(String::new()).is_err());
-    assert!(scan_font_directory("\0path\0with\0nulls".to_string()).is_err());
-    assert!(scan_font_directory("Z:\\definitely\\does\\not\\exist".to_string()).is_err());
+    assert!(scan_font_directory(String::new(), discard_channel()).is_err());
+    assert!(scan_font_directory("\0path\0with\0nulls".to_string(), discard_channel()).is_err());
+    assert!(scan_font_directory(
+        "Z:\\definitely\\does\\not\\exist".to_string(),
+        discard_channel()
+    )
+    .is_err());
 }

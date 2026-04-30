@@ -41,6 +41,7 @@ pub fn run() {
             fonts::subset_font,
             fonts::scan_font_directory,
             fonts::scan_font_files,
+            fonts::cancel_font_scan,
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {

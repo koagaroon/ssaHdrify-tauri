@@ -6,15 +6,33 @@ use once_cell::sync::Lazy;
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 /// Allowed font file extensions (lowercase).
 const ALLOWED_FONT_EXTENSIONS: &[&str] = &["ttf", "otf", "ttc", "otc"];
 
-/// Cap on fonts parsed from a single directory or file-list scan. Bounds the
-/// IPC payload and prevents a malicious/mistaken pick of a huge directory
-/// from blocking the UI thread.
-const MAX_FONTS_PER_SCAN: usize = 500;
+/// Defense-in-depth ceiling on faces emitted from a single scan. Not a UX
+/// limit — real font-collection users with thousands of files should never
+/// hit this. Caps malicious/runaway directories whose IPC payload would
+/// otherwise pin the JS heap (each LocalFontEntry serializes to ~500 bytes,
+/// so 100k entries ≈ 50 MB end-to-end). Above this the channel-streaming
+/// architecture is the wrong tool — partial results are preserved and the
+/// scan stops.
+const MAX_FONTS_PER_SCAN: usize = 100_000;
+
+/// Number of faces accumulated before flushing a `ScanProgress::Batch` to
+/// the frontend. Small enough that a 10k-font folder produces visible UI
+/// progress (~200 batches), large enough that IPC overhead stays below the
+/// per-face parse cost.
+const SCAN_BATCH_SIZE: usize = 50;
+
+/// Maximum wall-clock interval between progress emits during a slow scan.
+/// Forces a flush even when the per-batch threshold hasn't been hit yet,
+/// so the UI keeps rolling on a folder whose files happen to parse slowly
+/// (large CJK fonts, network-mounted drives, etc.).
+const SCAN_BATCH_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Maximum TTC face count we will enumerate before bailing out. Real
 /// production fonts ship with 2–8 faces; 16 is generous while capping the
@@ -64,6 +82,25 @@ static ALLOWED_FONT_PATHS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::ne
 static ALLOWED_USER_FONT_PATHS: Lazy<Mutex<HashSet<String>>> =
     Lazy::new(|| Mutex::new(HashSet::new()));
 
+/// Cooperative cancel flag for the active font scan. The UI exposes only a
+/// single scan at a time (FontSourceModal disables both pickers while one
+/// is running), so a single global is sufficient. `scan_font_directory` and
+/// `scan_font_files` clear the flag on entry — if the user clicks cancel
+/// before a new scan starts, the stale signal is harmlessly reset.
+static SCAN_CANCEL_FLAG: AtomicBool = AtomicBool::new(false);
+
+/// Streaming progress event for the font scan commands. The `Batch` variant
+/// carries newly-parsed faces in chunks; the command's `Result<(), String>`
+/// return signals overall completion. The frontend treats early termination
+/// (cancel or error) as "keep what's already been streamed."
+#[derive(serde::Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ScanProgress {
+    /// One chunk of newly-parsed faces. Multiple `Batch` events are emitted
+    /// per scan; the frontend appends them to its accumulator.
+    Batch { entries: Vec<LocalFontEntry> },
+}
+
 /// Result of font lookup — includes path and face index for TTC files.
 #[derive(serde::Serialize)]
 pub struct FontLookupResult {
@@ -85,7 +122,12 @@ pub struct FontLookupResult {
 /// The entry count reported to users reflects font files/faces (not variants),
 /// so a folder with 3 TTFs shows as "3 fonts" even if we pulled 8 matchable
 /// name variants from them.
-#[derive(serde::Serialize)]
+///
+/// `Deserialize` is derived for the integration tests in `tests/test_scan.rs`,
+/// which round-trip the streamed `ScanProgress::Batch` JSON back into entries
+/// for assertion. The frontend never deserializes this on the Rust side, so
+/// it is a benign addition.
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct LocalFontEntry {
     /// Canonical path to the font file (may be shared across entries for TTC)
     pub path: String,
@@ -364,34 +406,44 @@ fn parse_local_font_file(canonical: &Path) -> Vec<LocalFontEntry> {
     entries
 }
 
-/// Scan a user-picked directory (one level deep) for font files.
+/// Streaming scan of a user-picked directory (one level deep). Faces are
+/// emitted to `emit_batch` in chunks of `SCAN_BATCH_SIZE` (or every
+/// `SCAN_BATCH_INTERVAL` when parsing is slower than batching). Returns the
+/// total face count on success, or an error if the directory is unreadable.
+/// Cancellation via `SCAN_CANCEL_FLAG` returns `Ok(total_so_far)` with all
+/// already-emitted batches retained by the caller.
+///
 /// Does NOT recurse — the `Fonts/` convention is flat by tradition, and
 /// limiting recursion keeps the "only files under the picked directory"
 /// security reasoning straightforward.
-#[tauri::command]
-pub fn scan_font_directory(dir: String) -> Result<Vec<LocalFontEntry>, String> {
-    if dir.is_empty() || dir.len() > 4096 {
-        return Err("Directory path must be 1-4096 characters".to_string());
-    }
-    if dir.chars().any(|c| c.is_control()) {
-        return Err("Directory path contains invalid characters".to_string());
-    }
-
-    let canonical_dir = Path::new(&dir).canonicalize().map_err(|e| {
-        log::warn!("canonicalize directory failed: {e}");
-        "Cannot resolve directory path".to_string()
-    })?;
-    if !canonical_dir.is_dir() {
-        return Err("Not a directory".to_string());
-    }
-
-    let read = fs::read_dir(&canonical_dir).map_err(|e| {
+fn scan_directory_inner<F: FnMut(Vec<LocalFontEntry>)>(
+    canonical_dir: &Path,
+    mut emit_batch: F,
+) -> Result<usize, String> {
+    let read = fs::read_dir(canonical_dir).map_err(|e| {
         log::warn!("read_dir failed for '{}': {e}", canonical_dir.display());
         "Cannot read directory".to_string()
     })?;
 
-    let mut result = Vec::new();
+    let mut buffer: Vec<LocalFontEntry> = Vec::new();
+    let mut total: usize = 0;
+    let mut last_emit = Instant::now();
+
     for entry in read {
+        if SCAN_CANCEL_FLAG.load(Ordering::Relaxed) {
+            // Flush any in-flight batch before returning so the frontend
+            // sees every face we managed to parse before cancellation.
+            if !buffer.is_empty() {
+                emit_batch(std::mem::take(&mut buffer));
+            }
+            log::info!(
+                "font scan cancelled in directory '{}' after {} faces",
+                canonical_dir.display(),
+                total
+            );
+            return Ok(total);
+        }
+
         let entry = match entry {
             Ok(e) => e,
             Err(_) => continue,
@@ -409,58 +461,102 @@ pub fn scan_font_directory(dir: String) -> Result<Vec<LocalFontEntry>, String> {
             Ok(c) => c,
             Err(_) => continue,
         };
-        if !canonical.starts_with(&canonical_dir) {
+        if !canonical.starts_with(canonical_dir) {
             continue;
         }
 
         for font_entry in parse_local_font_file(&canonical) {
-            result.push(font_entry);
-            if result.len() > MAX_FONTS_PER_SCAN {
+            buffer.push(font_entry);
+            total += 1;
+            if total > MAX_FONTS_PER_SCAN {
+                if !buffer.is_empty() {
+                    emit_batch(std::mem::take(&mut buffer));
+                }
                 return Err(format!(
-                    "Too many fonts in directory ({} found, max {MAX_FONTS_PER_SCAN}). \
-                     Pick a more specific folder or split into multiple.",
-                    result.len()
+                    "Too many fonts in directory (> {MAX_FONTS_PER_SCAN}). \
+                     The defense-in-depth ceiling was exceeded — split the \
+                     folder into smaller batches."
                 ));
             }
         }
+
+        if buffer.len() >= SCAN_BATCH_SIZE || last_emit.elapsed() >= SCAN_BATCH_INTERVAL {
+            emit_batch(std::mem::take(&mut buffer));
+            last_emit = Instant::now();
+        }
     }
 
-    log_scan_summary(
-        &format!("font directory '{}'", canonical_dir.display()),
-        &result,
-    );
-    Ok(result)
+    if !buffer.is_empty() {
+        emit_batch(buffer);
+    }
+
+    Ok(total)
 }
 
-/// Log a scan-result summary with face/file/variant counts.
-///
-/// Entries map 1:1 to faces. Files ≤ faces (TTC collections hold multiple
-/// faces per file); variants per face are folded inside each entry.
-fn log_scan_summary(source: &str, result: &[LocalFontEntry]) {
-    let file_count = result.iter().map(|e| &e.path).collect::<HashSet<_>>().len();
-    let variant_count: usize = result.iter().map(|e| e.families.len()).sum();
-    log::info!(
-        "Scanned {}: {} faces / {} files / {} name variants",
-        source,
-        result.len(),
-        file_count,
-        variant_count,
-    );
-}
-
-/// Scan a user-picked list of individual font files. Same per-file logic as
-/// `scan_font_directory`, but the caller supplies paths directly.
+/// Tauri command wrapping `scan_directory_inner` with a typed progress
+/// channel. Frontend creates a `Channel<ScanProgress>`, passes it as
+/// `progress`, and receives `Batch` events as faces are parsed.
 #[tauri::command]
-pub fn scan_font_files(paths: Vec<String>) -> Result<Vec<LocalFontEntry>, String> {
-    if paths.len() > MAX_FONTS_PER_SCAN {
-        return Err(format!(
-            "Too many files ({}, max {MAX_FONTS_PER_SCAN})",
-            paths.len()
-        ));
+pub fn scan_font_directory(
+    dir: String,
+    progress: tauri::ipc::Channel<ScanProgress>,
+) -> Result<(), String> {
+    if dir.is_empty() || dir.len() > 4096 {
+        return Err("Directory path must be 1-4096 characters".to_string());
+    }
+    if dir.chars().any(|c| c.is_control()) {
+        return Err("Directory path contains invalid characters".to_string());
     }
 
-    let mut result = Vec::new();
+    let canonical_dir = Path::new(&dir).canonicalize().map_err(|e| {
+        log::warn!("canonicalize directory failed: {e}");
+        "Cannot resolve directory path".to_string()
+    })?;
+    if !canonical_dir.is_dir() {
+        return Err("Not a directory".to_string());
+    }
+
+    // Reset the cancel flag at scan start. A cancel intent that arrived
+    // between scans (after the previous one finished, before this one
+    // started) gets cleared — there's no scan to cancel at that moment,
+    // so dropping the stale signal is correct.
+    SCAN_CANCEL_FLAG.store(false, Ordering::Relaxed);
+
+    let total = scan_directory_inner(&canonical_dir, |batch| {
+        // Channel send fails only when the frontend has dropped the
+        // channel (modal closed mid-scan). Treat as soft cancel — keep
+        // parsing but stop emitting.
+        let _ = progress.send(ScanProgress::Batch { entries: batch });
+    })?;
+
+    log::info!(
+        "Scanned font directory '{}': {} faces total",
+        canonical_dir.display(),
+        total
+    );
+    Ok(())
+}
+
+/// Streaming scan of a user-picked file list. Mirrors
+/// `scan_directory_inner`, with cancel checks between files and the same
+/// batching cadence.
+fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>)>(
+    paths: Vec<String>,
+    mut emit_batch: F,
+) -> Result<usize, String> {
+    let mut buffer: Vec<LocalFontEntry> = Vec::new();
+    let mut total: usize = 0;
+    let mut last_emit = Instant::now();
+
     for p in paths {
+        if SCAN_CANCEL_FLAG.load(Ordering::Relaxed) {
+            if !buffer.is_empty() {
+                emit_batch(std::mem::take(&mut buffer));
+            }
+            log::info!("font scan cancelled in file list after {} faces", total);
+            return Ok(total);
+        }
+
         if p.is_empty() || p.len() > 4096 {
             continue;
         }
@@ -477,17 +573,57 @@ pub fn scan_font_files(paths: Vec<String>) -> Result<Vec<LocalFontEntry>, String
         }
 
         for font_entry in parse_local_font_file(&canonical) {
-            result.push(font_entry);
-            if result.len() > MAX_FONTS_PER_SCAN {
+            buffer.push(font_entry);
+            total += 1;
+            if total > MAX_FONTS_PER_SCAN {
+                if !buffer.is_empty() {
+                    emit_batch(std::mem::take(&mut buffer));
+                }
                 return Err(format!(
                     "Too many font faces across files (> {MAX_FONTS_PER_SCAN})"
                 ));
             }
         }
+
+        if buffer.len() >= SCAN_BATCH_SIZE || last_emit.elapsed() >= SCAN_BATCH_INTERVAL {
+            emit_batch(std::mem::take(&mut buffer));
+            last_emit = Instant::now();
+        }
     }
 
-    log_scan_summary("local font files", &result);
-    Ok(result)
+    if !buffer.is_empty() {
+        emit_batch(buffer);
+    }
+
+    Ok(total)
+}
+
+/// Tauri command wrapping `scan_files_inner` with a typed progress channel.
+/// Same shape as `scan_font_directory` — frontend supplies the list of
+/// paths and a `Channel<ScanProgress>` for incremental delivery.
+#[tauri::command]
+pub fn scan_font_files(
+    paths: Vec<String>,
+    progress: tauri::ipc::Channel<ScanProgress>,
+) -> Result<(), String> {
+    SCAN_CANCEL_FLAG.store(false, Ordering::Relaxed);
+
+    let total = scan_files_inner(paths, |batch| {
+        let _ = progress.send(ScanProgress::Batch { entries: batch });
+    })?;
+
+    log::info!("Scanned local font files: {} faces total", total);
+    Ok(())
+}
+
+/// Cooperative cancel for an active font scan. Sets the global flag; the
+/// running scan checks it between files and returns early with all
+/// already-emitted batches retained on the frontend. Idempotent — calling
+/// when no scan is active just leaves a stale flag, which the next scan
+/// resets on entry.
+#[tauri::command]
+pub fn cancel_font_scan() {
+    SCAN_CANCEL_FLAG.store(true, Ordering::Relaxed);
 }
 
 /// Register a font path in the provenance cache and return the lookup result.
@@ -839,4 +975,67 @@ fn subset_with_index(font_data: &[u8], index: u32, codepoints: &[u32]) -> Result
     );
 
     subset_font(&font, &plan).map_err(|e| format!("Subset failed for face {index}: {e:?}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `scan_directory_inner` on a non-existent path surfaces the read_dir
+    /// error as the user-facing string. The closure is never called.
+    #[test]
+    fn directory_inner_rejects_missing_dir() {
+        let mut emitted: Vec<Vec<LocalFontEntry>> = Vec::new();
+        let bogus = Path::new("Z:\\absolutely-not-a-real-directory\\for-testing");
+        let result = scan_directory_inner(bogus, |batch| emitted.push(batch));
+        assert!(result.is_err());
+        assert!(emitted.is_empty());
+    }
+
+    /// `scan_files_inner` skips invalid entries (empty / oversized / control
+    /// chars) silently and emits nothing when none of the inputs resolve to
+    /// a real font file. The streaming contract holds for the empty case:
+    /// the closure receives zero batches.
+    #[test]
+    fn files_inner_skips_invalid_paths_without_emitting() {
+        SCAN_CANCEL_FLAG.store(false, Ordering::Relaxed);
+        let mut emitted: Vec<Vec<LocalFontEntry>> = Vec::new();
+        let bad_paths = vec![
+            String::new(),                    // empty
+            "x".repeat(5000),                 // oversized
+            "has\u{0000}control".to_string(), // control char
+            "Z:\\does-not-exist.ttf".to_string(),
+        ];
+        let total = scan_files_inner(bad_paths, |batch| emitted.push(batch))
+            .expect("invalid paths should be skipped, not error");
+        assert_eq!(total, 0);
+        assert!(emitted.is_empty());
+    }
+
+    /// Cancel flag set before scan entry causes an immediate return on the
+    /// first iteration. Validates the cancel-poll path without depending on
+    /// real font files. Buffer is empty so no batch is emitted.
+    #[test]
+    fn files_inner_honors_pre_set_cancel_flag() {
+        SCAN_CANCEL_FLAG.store(true, Ordering::Relaxed);
+        let mut emitted: Vec<Vec<LocalFontEntry>> = Vec::new();
+        let total = scan_files_inner(vec!["irrelevant.ttf".to_string()], |batch| {
+            emitted.push(batch)
+        })
+        .expect("cancel returns Ok with partial results");
+        assert_eq!(total, 0);
+        assert!(emitted.is_empty());
+        // Reset for any subsequent tests in the same process.
+        SCAN_CANCEL_FLAG.store(false, Ordering::Relaxed);
+    }
+
+    /// `cancel_font_scan` flips the global flag. Smoke test — the command
+    /// is otherwise a one-liner.
+    #[test]
+    fn cancel_command_sets_flag() {
+        SCAN_CANCEL_FLAG.store(false, Ordering::Relaxed);
+        cancel_font_scan();
+        assert!(SCAN_CANCEL_FLAG.load(Ordering::Relaxed));
+        SCAN_CANCEL_FLAG.store(false, Ordering::Relaxed);
+    }
 }

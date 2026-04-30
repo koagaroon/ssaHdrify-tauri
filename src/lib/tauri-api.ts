@@ -4,7 +4,7 @@
  */
 import { open } from "@tauri-apps/plugin-dialog";
 import { writeTextFile, rename, copyFile } from "@tauri-apps/plugin-fs";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, Channel } from "@tauri-apps/api/core";
 
 // ── File Dialogs ──────────────────────────────────────────
 
@@ -253,21 +253,71 @@ export interface LocalFontEntry {
   sizeBytes: number;
 }
 
+/** Streaming progress payload from the Rust scan commands. Frontend
+ *  appends `Batch` events to its accumulator until the invoke promise
+ *  resolves (success), rejects (error), or the user cancels (resolves
+ *  with whatever was accumulated so far). */
+type RawScanProgress = { kind: "batch"; entries: RawLocalFontEntry[] };
+
+/** Optional callback for streaming font scan results. Called once per
+ *  Rust-side batch (every ~50 faces or ~100ms). The accumulated list
+ *  remains available in the resolved return value too — `onBatch` only
+ *  exists so the UI can update progressively. */
+export type ScanProgressCallback = (delta: LocalFontEntry[], total: number) => void;
+
 /**
- * Scan a user-picked directory (one level deep) for font files. Returns one
- * entry per face — TTC files produce multiple entries sharing the same path.
- * Each returned path is registered on the Rust side so subset_font will
- * accept it.
+ * Scan a user-picked directory (one level deep) for font files. Streams
+ * results back via `onBatch`; the resolved value is the same complete list
+ * for callers that just want the final result. TTC files produce multiple
+ * entries sharing the same path. Each returned path is registered on the
+ * Rust side so subset_font will accept it.
+ *
+ * Cancellation: call {@link cancelFontScan} from a button handler. The
+ * Rust scan returns early; the resolved value contains the partial set
+ * accumulated up to that point (no rejection — partial preservation is
+ * the contract).
  */
-export async function scanFontDirectory(dir: string): Promise<LocalFontEntry[]> {
-  const raw = await invoke<RawLocalFontEntry[]>("scan_font_directory", { dir });
-  return raw.map(fromRawLocalFontEntry);
+export async function scanFontDirectory(
+  dir: string,
+  onBatch?: ScanProgressCallback
+): Promise<LocalFontEntry[]> {
+  return runStreamingScan("scan_font_directory", { dir }, onBatch);
 }
 
-/** Scan a user-supplied list of individual font file paths. */
-export async function scanFontFiles(paths: string[]): Promise<LocalFontEntry[]> {
-  const raw = await invoke<RawLocalFontEntry[]>("scan_font_files", { paths });
-  return raw.map(fromRawLocalFontEntry);
+/** Scan a user-supplied list of individual font file paths. Same streaming
+ *  contract as {@link scanFontDirectory}. */
+export async function scanFontFiles(
+  paths: string[],
+  onBatch?: ScanProgressCallback
+): Promise<LocalFontEntry[]> {
+  return runStreamingScan("scan_font_files", { paths }, onBatch);
+}
+
+/** Request the current font scan be cancelled. Idempotent — safe to call
+ *  even when no scan is active. The running scan returns its partial list
+ *  via the same Promise the caller is awaiting. */
+export async function cancelFontScan(): Promise<void> {
+  await invoke("cancel_font_scan");
+}
+
+/** Shared streaming-invoke wrapper for both scan commands. Constructs a
+ *  Channel<ScanProgress>, accumulates batches in-order, and resolves with
+ *  the full list once the Rust side returns. */
+async function runStreamingScan(
+  command: "scan_font_directory" | "scan_font_files",
+  args: Record<string, unknown>,
+  onBatch?: ScanProgressCallback
+): Promise<LocalFontEntry[]> {
+  const accumulated: LocalFontEntry[] = [];
+  const channel = new Channel<RawScanProgress>();
+  channel.onmessage = (msg) => {
+    if (msg.kind !== "batch") return;
+    const converted = msg.entries.map(fromRawLocalFontEntry);
+    accumulated.push(...converted);
+    onBatch?.(converted, accumulated.length);
+  };
+  await invoke(command, { ...args, progress: channel });
+  return accumulated;
 }
 
 /**

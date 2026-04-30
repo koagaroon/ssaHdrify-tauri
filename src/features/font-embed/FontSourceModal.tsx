@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
+  cancelFontScan,
   pickFontDirectory,
   pickFontFiles,
   scanFontDirectory,
@@ -77,6 +78,14 @@ export default function FontSourceModal(props: Props) {
   const { t } = useI18n();
 
   const [scanning, setScanning] = useState(false);
+  // Live count for the "Scanned N fonts so far…" progress row. Updated on
+  // every Channel batch from Rust during a scan; reset to 0 when a new one
+  // begins. Held in state (not a ref) because the row reads it for display.
+  const [scanProgress, setScanProgress] = useState(0);
+  // Tracks whether the user clicked Cancel during the current scan, so the
+  // post-scan info message can distinguish "you cancelled, here are your
+  // partial results" from a normal completion. Reset at scan entry.
+  const cancelledRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   // info is non-error feedback ("added N fonts") shown in a neutral tone.
   const [info, setInfo] = useState<string | null>(null);
@@ -134,16 +143,30 @@ export default function FontSourceModal(props: Props) {
     [t]
   );
 
+  const handleCancelScan = useCallback(() => {
+    cancelledRef.current = true;
+    void cancelFontScan();
+  }, []);
+
   const handleAddFolder = useCallback(async () => {
     setError(null);
     setInfo(null);
     const dir = await pickFontDirectory();
     if (!dir) return;
+    cancelledRef.current = false;
+    setScanProgress(0);
     setScanning(true);
     try {
-      const entries = await scanFontDirectory(dir);
+      const entries = await scanFontDirectory(dir, (_, total) => setScanProgress(total));
       if (entries.length === 0) {
-        setError(t("font_sources_no_fonts_in_folder", basename(dir)));
+        // Cancellation before any face was parsed — distinguish from
+        // "folder genuinely has no fonts" so the user knows their click
+        // was honored rather than the folder being empty.
+        if (cancelledRef.current) {
+          setInfo(t("font_scan_cancelled", 0));
+        } else {
+          setError(t("font_sources_no_fonts_in_folder", basename(dir)));
+        }
         return;
       }
       const result = onAddSource({
@@ -153,6 +176,11 @@ export default function FontSourceModal(props: Props) {
         entries,
       });
       applyAddResult(result);
+      // Cancellation with partial results: surface it explicitly so the
+      // user sees that their kept N fonts came from an interrupted scan.
+      if (cancelledRef.current) {
+        setInfo(t("font_scan_cancelled", entries.length));
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -165,11 +193,17 @@ export default function FontSourceModal(props: Props) {
     setInfo(null);
     const paths = await pickFontFiles();
     if (!paths || paths.length === 0) return;
+    cancelledRef.current = false;
+    setScanProgress(0);
     setScanning(true);
     try {
-      const entries = await scanFontFiles(paths);
+      const entries = await scanFontFiles(paths, (_, total) => setScanProgress(total));
       if (entries.length === 0) {
-        setError(t("font_sources_no_fonts_in_files", paths.length));
+        if (cancelledRef.current) {
+          setInfo(t("font_scan_cancelled", 0));
+        } else {
+          setError(t("font_sources_no_fonts_in_files", paths.length));
+        }
         return;
       }
       const result = onAddSource({
@@ -179,6 +213,9 @@ export default function FontSourceModal(props: Props) {
         entries,
       });
       applyAddResult(result);
+      if (cancelledRef.current) {
+        setInfo(t("font_scan_cancelled", entries.length));
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -335,6 +372,32 @@ export default function FontSourceModal(props: Props) {
               <div className="modal-opt-sub">{t("font_sources_add_files_sub")}</div>
             </div>
           </button>
+
+          {scanning && (
+            <div
+              className="rounded-lg px-3 py-2 flex items-center justify-between gap-3"
+              style={{
+                border: "1px solid var(--border-light)",
+                background: "var(--bg-panel)",
+                color: "var(--text-primary)",
+              }}
+              role="status"
+              aria-live="polite"
+            >
+              <span className="text-sm">{t("font_scan_progress", scanProgress)}</span>
+              <button
+                type="button"
+                onClick={handleCancelScan}
+                className="px-2 py-0.5 rounded text-xs"
+                style={{
+                  background: "var(--cancel-bg)",
+                  color: "var(--cancel-text)",
+                }}
+              >
+                {t("font_scan_cancel")}
+              </button>
+            </div>
+          )}
 
           {error && (
             <p className="text-xs" style={{ color: "var(--error)" }}>
