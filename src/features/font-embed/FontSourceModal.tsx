@@ -108,15 +108,20 @@ export default function FontSourceModal(props: Props) {
   // limitation rather than a usability blocker.
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
 
+  const requestClose = useCallback(() => {
+    if (scanning) return;
+    onClose();
+  }, [scanning, onClose]);
+
   // Close on Escape.
   useEffect(() => {
     if (!open) return;
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") requestClose();
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [open, onClose]);
+  }, [open, requestClose]);
 
   // Move keyboard focus into the modal on open so screen readers and
   // keyboard-only users land on a sensible starting point. Without this,
@@ -300,7 +305,7 @@ export default function FontSourceModal(props: Props) {
     <div
       className="modal-scrim"
       onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
+        if (e.target === e.currentTarget) requestClose();
       }}
     >
       <div
@@ -324,9 +329,10 @@ export default function FontSourceModal(props: Props) {
           <button
             ref={closeButtonRef}
             type="button"
-            onClick={onClose}
+            onClick={requestClose}
+            disabled={scanning}
             className="modal-close"
-            title={t("font_sources_close")}
+            title={scanning ? t("font_sources_scanning") : t("font_sources_close")}
             aria-label={t("font_sources_close")}
           >
             <svg

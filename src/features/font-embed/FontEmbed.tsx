@@ -107,6 +107,10 @@ export default function FontEmbed() {
     () => buildUserFontMap(fontSources.flatMap((src) => src.entries)),
     [fontSources]
   );
+  const fontSourceEntryCount = useMemo(
+    () => fontSources.reduce((sum, src) => sum + src.entries.length, 0),
+    [fontSources]
+  );
 
   const filePaths = useMemo(() => fontsFiles?.filePaths ?? [], [fontsFiles]);
   const fileNames = useMemo(() => fontsFiles?.fileNames ?? [], [fontsFiles]);
@@ -699,6 +703,15 @@ export default function FontEmbed() {
             ? t("btn_select_font_files_with_count", fontSources.length)
             : t("btn_select_font_files")}
         </button>
+        {fontSources.length > 0 && (
+          <span
+            className="min-w-0 truncate text-xs"
+            style={{ color: "var(--text-secondary)" }}
+            title={t("font_sources_loaded_summary", fontSourceEntryCount, fontSources.length)}
+          >
+            {t("font_sources_loaded_summary", fontSourceEntryCount, fontSources.length)}
+          </span>
+        )}
         {fontSources.length > 0 && (
           <button
             onClick={handleClearFontSources}

@@ -284,6 +284,10 @@ export const strings: Record<string, StringEntry> = {
     en: "Font Sources ({0})",
     zh: "字体来源（{0}）",
   },
+  font_sources_loaded_summary: {
+    en: "{0} local font(s) loaded from {1} source(s)",
+    zh: "已从 {1} 个来源加载 {0} 个本地字体",
+  },
   badge_local: { en: "Local", zh: "本地" },
   badge_system: { en: "System", zh: "系统" },
 

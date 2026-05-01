@@ -1301,9 +1301,14 @@
   flex-shrink: 0;
 }
 
-.modal-close:hover {
+.modal-close:hover:not(:disabled) {
   background: var(--bg-hover);
   color: var(--text-primary);
+}
+
+.modal-close:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 /* Inline cancel pill — used by the font-scan progress row. The base
