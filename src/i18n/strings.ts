@@ -333,6 +333,10 @@ export const strings: Record<string, StringEntry> = {
     en: "Scan cancelled — kept {0} fonts.",
     zh: "已取消扫描，保留 {0} 个字体。",
   },
+  font_scan_cancelled_with_dupes: {
+    en: "Scan cancelled — kept {0} new font(s); {1} were already loaded.",
+    zh: "已取消扫描，保留 {0} 个新字体；{1} 个为已加载的重复项。",
+  },
   font_coverage: { en: "Local coverage: {0} / {1}", zh: "本地覆盖：{0} / {1}" },
   font_coverage_complete: {
     en: "All required fonts covered locally",

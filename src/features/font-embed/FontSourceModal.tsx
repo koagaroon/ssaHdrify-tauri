@@ -143,6 +143,26 @@ export default function FontSourceModal(props: Props) {
     [t]
   );
 
+  // Compose the post-scan info message. When the scan was cancelled AND
+  // some entries were duplicates, fold both facts into a single message
+  // (font_scan_cancelled_with_dupes) instead of letting the cancellation
+  // notice clobber the dedup notice.
+  const reportSourceAdded = useCallback(
+    (result: AddSourceResult) => {
+      if (cancelledRef.current) {
+        setError(null);
+        if (result.duplicated > 0) {
+          setInfo(t("font_scan_cancelled_with_dupes", result.added, result.duplicated));
+        } else {
+          setInfo(t("font_scan_cancelled", result.added));
+        }
+        return;
+      }
+      applyAddResult(result);
+    },
+    [t, applyAddResult]
+  );
+
   const handleCancelScan = useCallback(() => {
     cancelledRef.current = true;
     void cancelFontScan();
@@ -175,18 +195,13 @@ export default function FontSourceModal(props: Props) {
         label: basename(dir),
         entries,
       });
-      applyAddResult(result);
-      // Cancellation with partial results: surface it explicitly so the
-      // user sees that their kept N fonts came from an interrupted scan.
-      if (cancelledRef.current) {
-        setInfo(t("font_scan_cancelled", entries.length));
-      }
+      reportSourceAdded(result);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setScanning(false);
     }
-  }, [onAddSource, t, applyAddResult]);
+  }, [onAddSource, t, reportSourceAdded]);
 
   const handleAddFiles = useCallback(async () => {
     setError(null);
@@ -212,16 +227,13 @@ export default function FontSourceModal(props: Props) {
         label: t("font_sources_files_entry", paths.length, entries.length),
         entries,
       });
-      applyAddResult(result);
-      if (cancelledRef.current) {
-        setInfo(t("font_scan_cancelled", entries.length));
-      }
+      reportSourceAdded(result);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setScanning(false);
     }
-  }, [onAddSource, t, applyAddResult]);
+  }, [onAddSource, t, reportSourceAdded]);
 
   // Coverage: how many required families are matched by ANY source
   // (local map OR — informationally — any other means). In this modal we
@@ -388,11 +400,7 @@ export default function FontSourceModal(props: Props) {
               <button
                 type="button"
                 onClick={handleCancelScan}
-                className="px-2 py-0.5 rounded text-xs"
-                style={{
-                  background: "var(--cancel-bg)",
-                  color: "var(--cancel-text)",
-                }}
+                className="btn-cancel-pill px-2 py-0.5 rounded text-xs"
               >
                 {t("font_scan_cancel")}
               </button>

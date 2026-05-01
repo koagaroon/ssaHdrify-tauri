@@ -1306,6 +1306,29 @@
   color: var(--text-primary);
 }
 
+/* Inline cancel pill — used by the font-scan progress row. The base
+   colors come from the cancel palette in index.css; hover deepens the
+   tint and active scales down briefly so a click registers visually
+   even when the click eventually no-ops (e.g., scan completes before
+   the cancel reaches Rust). */
+.btn-cancel-pill {
+  background: var(--cancel-bg);
+  color: var(--cancel-text);
+  border: 0;
+  cursor: pointer;
+  transition:
+    background-color 0.15s,
+    transform 0.05s;
+}
+
+.btn-cancel-pill:hover {
+  background: var(--cancel-bg-hover);
+}
+
+.btn-cancel-pill:active {
+  transform: scale(0.96);
+}
+
 .modal-body {
   padding: 12px 20px 16px;
   display: flex;
