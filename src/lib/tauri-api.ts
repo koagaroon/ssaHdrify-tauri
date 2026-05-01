@@ -258,55 +258,56 @@ export interface LocalFontEntry {
  *  every batch has drained. The sentinel exists because Tauri's Channel
  *  splits delivery between sync `webview.eval()` (payloads < 8 KB) and
  *  async fetch (payloads ≥ 8 KB). The invoke promise resolves before the
- *  async batches arrive — without `Done` the accumulator would be empty
- *  for any scan whose batches exceed 8 KB. The Channel layer guarantees
+ *  async batches arrive — without `Done` the UI could report completion
+ *  before every progress callback drained. The Channel layer guarantees
  *  in-order delivery, so `Done` only fires after every preceding batch
  *  has been processed. See A-bug-1 in v1.3.1 design doc. */
 type RawScanProgress =
-  | { kind: "batch"; entries: RawLocalFontEntry[] }
-  | { kind: "done"; cancelled: boolean };
+  | { kind: "batch"; total: number }
+  | { kind: "done"; cancelled: boolean; added: number; duplicated: number };
 
 /** Optional callback for streaming font scan results. Called once per
  *  Rust-side batch (cadence determined by `SCAN_BATCH_SIZE` and
  *  `SCAN_BATCH_INTERVAL` in `src-tauri/src/fonts.rs` — currently 40 faces
- *  or 100 ms, whichever fires first). The accumulated list remains
- *  available in the resolved return value too — `onBatch` only exists so
- *  the UI can update progressively. */
-export type ScanProgressCallback = (delta: LocalFontEntry[], total: number) => void;
+ *  or 100 ms, whichever fires first). The heavy font-source index stays in
+ *  Rust; this callback only exposes the displayed cumulative count. */
+export type ScanProgressCallback = (total: number) => void;
 
 export interface FontScanResult {
-  entries: LocalFontEntry[];
+  added: number;
+  duplicated: number;
   cancelled: boolean;
 }
 
 /**
- * Scan a user-picked directory (one level deep) for font files. Streams
- * results back via `onBatch`; the resolved value contains the complete list
- * plus whether Rust actually honoured cancellation. TTC files produce multiple
- * entries sharing the same path. Each returned path is registered on the
- * Rust side so subset_font will accept it.
+ * Scan a user-picked directory (one level deep) for font files. Rust keeps
+ * the heavy source index; the frontend receives progress counts plus how
+ * many faces were registered after dedup. TTC files may contribute multiple
+ * faces sharing the same path.
  *
  * Cancellation: call {@link cancelFontScan} from a button handler. The
- * Rust scan returns early; the resolved result contains the partial set
- * accumulated up to that point (no rejection — partial preservation is
- * the contract).
+ * Rust scan returns early; the resolved result reports the partial set
+ * registered up to that point (no rejection — partial preservation is the
+ * contract).
  */
 export async function scanFontDirectory(
   dir: string,
+  sourceId: string,
   scanId: number,
   onBatch?: ScanProgressCallback
 ): Promise<FontScanResult> {
-  return runStreamingScan("scan_font_directory", { dir, scanId }, onBatch);
+  return runStreamingScan("scan_font_directory", { dir, sourceId, scanId }, onBatch);
 }
 
 /** Scan a user-supplied list of individual font file paths. Same streaming
  *  contract as {@link scanFontDirectory}. */
 export async function scanFontFiles(
   paths: string[],
+  sourceId: string,
   scanId: number,
   onBatch?: ScanProgressCallback
 ): Promise<FontScanResult> {
-  return runStreamingScan("scan_font_files", { paths, scanId }, onBatch);
+  return runStreamingScan("scan_font_files", { paths, sourceId, scanId }, onBatch);
 }
 
 /** Request the current font scan be cancelled. Idempotent — safe to call
@@ -316,15 +317,30 @@ export async function cancelFontScan(scanId: number): Promise<void> {
   await invoke("cancel_font_scan", { scanId });
 }
 
+export async function resolveUserFont(
+  family: string,
+  bold: boolean,
+  italic: boolean
+): Promise<FontLookupResult | null> {
+  return invoke<FontLookupResult | null>("resolve_user_font", { family, bold, italic });
+}
+
+export async function removeFontSource(sourceId: string): Promise<void> {
+  await invoke("remove_font_source", { sourceId });
+}
+
+export async function clearFontSources(): Promise<void> {
+  await invoke("clear_font_sources");
+}
+
 /** Shared streaming-invoke wrapper for both scan commands. Constructs a
- *  Channel<ScanProgress>, accumulates batches in-order, and resolves with
- *  the full list and cancellation outcome once the Rust side returns. */
+ *  Channel<ScanProgress>, waits for Done, and resolves with the Rust-side
+ *  registration counts and cancellation outcome. */
 async function runStreamingScan(
   command: "scan_font_directory" | "scan_font_files",
   args: Record<string, unknown>,
   onBatch?: ScanProgressCallback
 ): Promise<FontScanResult> {
-  const accumulated: LocalFontEntry[] = [];
   const channel = new Channel<RawScanProgress>();
   // Resolved by the `Done` handler. Awaited after invoke so the function
   // returns only once every preceding `Batch` (sync OR async) has fired.
@@ -332,23 +348,23 @@ async function runStreamingScan(
   const donePromise = new Promise<void>((resolve) => {
     resolveDone = resolve;
   });
-  let cancelled = false;
+  const result: FontScanResult = { added: 0, duplicated: 0, cancelled: false };
   channel.onmessage = (msg) => {
     if (msg.kind === "batch") {
-      const converted = msg.entries.map(fromRawLocalFontEntry);
-      accumulated.push(...converted);
-      onBatch?.(converted, accumulated.length);
+      onBatch?.(msg.total);
     } else if (msg.kind === "done") {
-      cancelled = msg.cancelled;
+      result.cancelled = msg.cancelled;
+      result.added = msg.added;
+      result.duplicated = msg.duplicated;
       resolveDone?.();
     }
   };
   await invoke(command, { ...args, progress: channel });
   // Rust always emits Done on the Ok path. Channel guarantees in-order
   // delivery of Batch+Done, so awaiting Done forces every async-fetched
-  // batch to be processed before we read `accumulated`.
+  // progress event to drain before we report the final counts.
   await donePromise;
-  return { entries: accumulated, cancelled };
+  return result;
 }
 
 /**
@@ -359,26 +375,4 @@ async function runStreamingScan(
  */
 export async function expandDroppedPaths(paths: string[]): Promise<string[]> {
   return invoke<string[]>("expand_dropped_paths", { paths });
-}
-
-// Rust serializes `size_bytes` (snake_case); translate to camelCase here so
-// the rest of the frontend stays in JS conventions.
-interface RawLocalFontEntry {
-  path: string;
-  index: number;
-  families: string[];
-  bold: boolean;
-  italic: boolean;
-  size_bytes: number;
-}
-
-function fromRawLocalFontEntry(raw: RawLocalFontEntry): LocalFontEntry {
-  return {
-    path: raw.path,
-    index: raw.index,
-    families: raw.families,
-    bold: raw.bold,
-    italic: raw.italic,
-    sizeBytes: raw.size_bytes,
-  };
 }

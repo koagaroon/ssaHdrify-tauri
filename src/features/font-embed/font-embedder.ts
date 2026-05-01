@@ -14,7 +14,12 @@ import {
   type FontKey,
 } from "./font-collector";
 import { buildFontEntry } from "./ass-uuencode";
-import { findSystemFont, subsetFont, type LocalFontEntry } from "../../lib/tauri-api";
+import {
+  findSystemFont,
+  resolveUserFont,
+  subsetFont,
+  type LocalFontEntry,
+} from "../../lib/tauri-api";
 import { SECTION_HEADER_RE } from "../hdr-convert/ass-processor";
 
 // ── Types ─────────────────────────────────────────────────
@@ -67,11 +72,9 @@ export interface EmbedProgress {
  * script's Fontname match the font no matter which language the typesetter
  * chose to reference.
  *
- * Provenance: assumes `faces` originate from `scanFontDirectory` /
- * `scanFontFiles` (which registered the paths in `ALLOWED_USER_FONT_PATHS`
- * on the Rust side). The caller's responsibility — `entry.path` is trusted
- * here because the Rust subset_font command will reject any path not in
- * that allowlist when it's later asked to read the bytes.
+ * Production now resolves scanned sources through Rust's session-local index.
+ * This helper remains for focused tests and small in-memory callers that
+ * already have trusted `LocalFontEntry` objects.
  */
 export function buildUserFontMap(faces: LocalFontEntry[]): Map<string, LocalFontEntry> {
   const map = new Map<string, LocalFontEntry>();
@@ -90,13 +93,16 @@ export function buildUserFontMap(faces: LocalFontEntry[]): Map<string, LocalFont
  * @param assContent - Full ASS file content
  * @param userFontMap - Optional map keyed by `userFontKey(family, bold, italic)`.
  *                     Build with `buildUserFontMap()`. When present, entries
- *                     override system matches so that user-supplied fonts
- *                     always win.
+ *                     override system matches so that tests and small
+ *                     in-memory callers can inject local fonts directly.
+ * @param useRustUserFonts - Production path: ask Rust's session-local source
+ *                           index for a match before falling back to system.
  */
 export async function analyzeFonts(
   assContent: string,
-  userFontMap?: Map<string, LocalFontEntry>,
-  systemFontCache?: Map<string, SystemFontResolution>
+  userFontMap?: Map<string, LocalFontEntry> | null,
+  systemFontCache?: Map<string, SystemFontResolution>,
+  useRustUserFonts = false
 ): Promise<{ infos: FontInfo[]; usages: FontUsage[] }> {
   await ensureCollectorLoaded();
 
@@ -131,6 +137,21 @@ export async function analyzeFonts(
         source: "local",
       });
       continue;
+    }
+
+    if (useRustUserFonts) {
+      const localResult = await resolveUserFont(usage.key.family, usage.key.bold, usage.key.italic);
+      if (localResult) {
+        if (isDev) console.debug(`[ssaHdrify] '${usage.key.family}' → LOCAL ${localResult.path}`);
+        infos.push({
+          ...base,
+          filePath: localResult.path,
+          fontIndex: localResult.index,
+          error: null,
+          source: "local",
+        });
+        continue;
+      }
     }
 
     // System lookup — first check the optional batch-shared cache so the
@@ -239,7 +260,7 @@ export interface FileAnalysis {
  * `(family, bold, italic)` triple referenced anywhere in the batch,
  * with `glyphCount` reflecting the UNION of codepoints across every
  * file that uses that font. Source / status comes from any file's
- * resolution (all files were analyzed against the same userFontMap,
+ * resolution (all files were analyzed against the same local-font resolver,
  * so the resolution is identical) — first occurrence wins.
  *
  * The returned `usages` carries the same union codepoints, suitable
@@ -266,7 +287,7 @@ export function aggregateFonts(perFile: Map<string, FileAnalysis>): {
   }
 
   // Resolution map — first occurrence per key. All per-file infos came
-  // from the same userFontMap, so source/status are consistent across
+  // from the same local-font resolver, so source/status are consistent across
   // files; we just need ONE FontInfo per key as the row template.
   const infoTemplate = new Map<string, FontInfo>();
   for (const analysis of perFile.values()) {

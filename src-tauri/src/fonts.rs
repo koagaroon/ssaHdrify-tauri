@@ -3,7 +3,7 @@ use font_kit::handle::Handle;
 use font_kit::properties::{Properties, Style, Weight};
 use font_kit::source::SystemSource;
 use once_cell::sync::Lazy;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -16,10 +16,10 @@ const ALLOWED_FONT_EXTENSIONS: &[&str] = &["ttf", "otf", "ttc", "otc"];
 /// Defense-in-depth ceiling on faces emitted from a single scan. Not a UX
 /// limit — real font-collection users with thousands of files should never
 /// hit this. Caps malicious/runaway directories whose IPC payload would
-/// otherwise pin the JS heap (each LocalFontEntry serializes to ~500 bytes,
-/// so 100k entries ≈ 50 MB end-to-end). Above this the channel-streaming
-/// architecture is the wrong tool — partial results are preserved and the
-/// scan stops. The check fires when `total > MAX_FONTS_PER_SCAN`, so the
+/// otherwise pin the Rust source index and scan worker heap. Above this the
+/// in-memory source-index architecture is the wrong tool — partial results
+/// are preserved and the scan stops. The check fires when
+/// `total > MAX_FONTS_PER_SCAN`, so the
 /// permitted-then-rejected entry is the (MAX + 1)th — cosmetic off-by-one
 /// kept as-is so the buffer flush emits everything that was parseable.
 const MAX_FONTS_PER_SCAN: usize = 100_000;
@@ -36,21 +36,15 @@ const MAX_INPUT_PATHS: usize = 1000;
 ///
 /// This value is a UX choice, NOT a correctness gate. Correctness lives in
 /// the `ScanProgress::Done` sentinel — the frontend awaits Done before
-/// reading its accumulator, so any batch that happens to slip onto Tauri's
-/// async `plugin:__TAURI_CHANNEL__|fetch` path (8192-byte threshold) is
-/// still delivered in order before Done fires. Do NOT remove the Done
-/// sentinel as "redundant" because batches are sized small here — that
-/// would reintroduce a silent zero-result for any oversize batch.
+/// reporting final registration counts. Do NOT remove the Done sentinel as
+/// "redundant" because it is still the end-of-stream marker for Channel
+/// delivery and Rust-side source registration.
 ///
-/// What this size DOES buy: keeping typical batches near the 8 KB
-/// threshold makes them travel via Tauri's synchronous direct-eval path,
-/// so they fire the JS callback during the scan rather than in a single
-/// burst at the end. Concretely: progress UI climbs visibly, cancel clicks
-/// land on a responsive JS thread, and React renders the count
-/// incrementally. With BIG-style Latin entries (~150 bytes JSON, varies
-/// with path length and family-variant count), 40 faces yields roughly
-/// 6 KB per batch. CJK fonts with several localized family-name variants
-/// can still exceed 8 KB — that's fine, correctness still holds via Done.
+/// What this size DOES buy: it controls how often the scan worker moves
+/// parsed faces into the Rust source buffer and emits a tiny count-only
+/// progress event. Keeping this modest makes progress visible and gives the
+/// cancel path regular chances to land without sending thousands of large
+/// font-entry objects through WebView2.
 ///
 /// The flush check lives inside the per-file face loop, so actual emitted
 /// batches are capped at this face count even when one TTC/OTC file expands
@@ -111,6 +105,54 @@ static ALLOWED_FONT_PATHS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::ne
 static ALLOWED_USER_FONT_PATHS: Lazy<Mutex<HashSet<String>>> =
     Lazy::new(|| Mutex::new(HashSet::new()));
 
+#[derive(Clone, Copy)]
+struct IndexedFaceRef {
+    source_index: usize,
+    entry_index: usize,
+}
+
+struct UserFontSource {
+    entries: Vec<LocalFontEntry>,
+}
+
+#[derive(Default)]
+struct UserFontSources {
+    order: Vec<String>,
+    sources: HashMap<String, UserFontSource>,
+    index: HashMap<String, IndexedFaceRef>,
+}
+
+impl UserFontSources {
+    fn rebuild_index(&mut self) {
+        self.index.clear();
+        for (source_index, source_id) in self.order.iter().enumerate() {
+            let Some(source) = self.sources.get(source_id) else {
+                continue;
+            };
+            for (entry_index, entry) in source.entries.iter().enumerate() {
+                for family in &entry.families {
+                    self.index.insert(
+                        user_font_key(family, entry.bold, entry.italic),
+                        IndexedFaceRef {
+                            source_index,
+                            entry_index,
+                        },
+                    );
+                }
+            }
+        }
+    }
+}
+
+static USER_FONT_SOURCES: Lazy<Mutex<UserFontSources>> =
+    Lazy::new(|| Mutex::new(UserFontSources::default()));
+
+#[derive(Debug, Clone, Copy)]
+struct ImportOutcome {
+    added: usize,
+    duplicated: usize,
+}
+
 /// No frontend-created scan may use this id. Keeping zero reserved lets the
 /// Rust side distinguish "no active/cancelled scan" from real work.
 const NO_SCAN_ID: u64 = 0;
@@ -128,16 +170,16 @@ static ACTIVE_SCAN_ID: AtomicU64 = AtomicU64::new(NO_SCAN_ID);
 static CANCEL_SCAN_ID: AtomicU64 = AtomicU64::new(NO_SCAN_ID);
 
 /// Streaming progress event for the font scan commands. The `Batch` variant
-/// carries newly-parsed faces in chunks; `Done` is the end-of-stream
-/// sentinel the frontend awaits before returning the accumulator.
+/// carries only a cumulative parsed-face count; `Done` is the end-of-stream
+/// sentinel the frontend awaits before trusting the registered source count.
 ///
 /// **Why Done is required**: Tauri's `Channel` uses two delivery paths
 /// internally. Payloads under 8 KB go via direct `webview.eval()` and fire
 /// the JS callback synchronously *during* the command execution. Payloads
 /// ≥ 8 KB use an async `plugin:__TAURI_CHANNEL__|fetch` round-trip — those
 /// callbacks fire *after* the command's invoke promise has already
-/// resolved. Without a sentinel the frontend would `return accumulated`
-/// while large batches were still in flight, producing an empty list.
+/// resolved. Without a sentinel the frontend could report completion before
+/// every progress callback had drained.
 /// `Done` is small (under the threshold), travels via direct eval, but the
 /// Channel layer enforces in-order delivery — so the frontend's `Done`
 /// handler only fires *after* every preceding `Batch` has been processed.
@@ -145,14 +187,19 @@ static CANCEL_SCAN_ID: AtomicU64 = AtomicU64::new(NO_SCAN_ID);
 #[derive(serde::Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ScanProgress {
-    /// One chunk of newly-parsed faces. Multiple `Batch` events are emitted
-    /// per scan; the frontend appends them to its accumulator.
-    Batch { entries: Vec<LocalFontEntry> },
+    /// Progress after one chunk of newly-parsed faces. Multiple `Batch`
+    /// events are emitted per scan; the frontend only needs the cumulative
+    /// count because the heavy source index stays in Rust.
+    Batch { total: usize },
     /// End-of-stream sentinel. Always emitted on the `Ok` path (success or
     /// cancel). NOT emitted on the `Err` path — the invoke rejection
     /// already signals failure and the frontend must not block waiting for
     /// a `Done` that will never arrive.
-    Done { cancelled: bool },
+    Done {
+        cancelled: bool,
+        added: usize,
+        duplicated: usize,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -214,11 +261,10 @@ pub struct FontLookupResult {
 /// so a folder with 3 TTFs shows as "3 fonts" even if we pulled 8 matchable
 /// name variants from them.
 ///
-/// `Deserialize` is derived for the integration tests in `tests/test_scan.rs`,
-/// which round-trip the streamed `ScanProgress::Batch` JSON back into entries
-/// for assertion. The frontend never deserializes this on the Rust side, so
-/// it is a benign addition.
-#[derive(serde::Serialize, serde::Deserialize)]
+/// `Deserialize` is derived for focused Rust tests. The production frontend
+/// no longer receives these entries; it keeps only source summaries while the
+/// heavy index stays in Rust.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct LocalFontEntry {
     /// Canonical path to the font file (may be shared across entries for TTC)
     pub path: String,
@@ -233,6 +279,74 @@ pub struct LocalFontEntry {
     pub italic: bool,
     /// File size on disk — useful for UI display.
     pub size_bytes: u64,
+}
+
+fn user_font_key(family: &str, bold: bool, italic: bool) -> String {
+    format!(
+        "{}|{}|{}",
+        family.to_lowercase(),
+        if bold { "1" } else { "0" },
+        if italic { "1" } else { "0" }
+    )
+}
+
+fn validate_font_source_id(source_id: &str) -> Result<(), String> {
+    if source_id.is_empty() || source_id.len() > 128 {
+        return Err("Font source id must be 1-128 characters".to_string());
+    }
+    if source_id.chars().any(|c| c.is_control() || c == '\x7f') {
+        return Err("Font source id contains invalid characters".to_string());
+    }
+    Ok(())
+}
+
+fn face_key(entry: &LocalFontEntry) -> String {
+    format!("{}|{}", entry.path, entry.index)
+}
+
+fn import_user_font_source(
+    source_id: String,
+    entries: Vec<LocalFontEntry>,
+) -> Result<ImportOutcome, String> {
+    validate_font_source_id(&source_id)?;
+
+    let mut state = USER_FONT_SOURCES
+        .lock()
+        .map_err(|_| "Internal error: user font source index corrupted".to_string())?;
+    if state.sources.contains_key(&source_id) {
+        return Err("Font source id already exists".to_string());
+    }
+
+    let mut registered = HashSet::new();
+    for source in state.sources.values() {
+        for entry in &source.entries {
+            registered.insert(face_key(entry));
+        }
+    }
+
+    let mut added_entries = Vec::new();
+    let mut duplicated = 0;
+    for entry in entries {
+        if registered.insert(face_key(&entry)) {
+            added_entries.push(entry);
+        } else {
+            duplicated += 1;
+        }
+    }
+
+    let added = added_entries.len();
+    if added > 0 {
+        state.order.push(source_id.clone());
+        state.sources.insert(
+            source_id,
+            UserFontSource {
+                entries: added_entries,
+            },
+        );
+        state.rebuild_index();
+    }
+
+    Ok(ImportOutcome { added, duplicated })
 }
 
 /// Find a system font file path by family name, bold, and italic flags.
@@ -602,6 +716,7 @@ pub async fn scan_font_directory(
     dir: String,
     progress: tauri::ipc::Channel<ScanProgress>,
     scan_id: u64,
+    source_id: String,
 ) -> Result<(), String> {
     if dir.is_empty() || dir.len() > 4096 {
         return Err("Directory path must be 1-4096 characters".to_string());
@@ -609,6 +724,7 @@ pub async fn scan_font_directory(
     if dir.chars().any(|c| c.is_control()) {
         return Err("Directory path contains invalid characters".to_string());
     }
+    validate_font_source_id(&source_id)?;
 
     let active_scan = begin_font_scan(scan_id)?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -621,28 +737,31 @@ pub async fn scan_font_directory(
             return Err("Not a directory".to_string());
         }
 
+        let mut entries: Vec<LocalFontEntry> = Vec::new();
         let outcome = scan_directory_inner(&canonical_dir, scan_id, |batch| {
-            // Channel send fails when the frontend has dropped the channel
-            // (e.g., modal closed mid-scan). Subsequent sends are harmless
-            // no-ops on the same dropped channel — we keep parsing because
-            // the caller may still consume the final Ok return, and the
-            // wasted CPU is bounded by MAX_FONTS_PER_SCAN.
-            let _ = progress.send(ScanProgress::Batch { entries: batch });
+            entries.extend(batch);
+            let _ = progress.send(ScanProgress::Batch {
+                total: entries.len(),
+            });
         })?;
+        let import = import_user_font_source(source_id, entries)?;
 
         // End-of-stream sentinel; see ScanProgress::Done. MUST be the last
-        // send on the Ok path so the frontend's accumulator is full when
-        // its Done handler fires. Skipped on the Err path above (the `?`
-        // short-circuits before reaching here).
+        // send on the Ok path so every progress event has drained before
+        // the frontend reports the registered source count.
         let _ = progress.send(ScanProgress::Done {
             cancelled: outcome.cancelled,
+            added: import.added,
+            duplicated: import.duplicated,
         });
 
         log::info!(
-            "Scanned font directory '{}' with scan {}: {} faces total{}",
+            "Scanned font directory '{}' with scan {}: {} faces total, {} added, {} duplicate{}",
             canonical_dir.display(),
             scan_id,
             outcome.total,
+            import.added,
+            import.duplicated,
             if outcome.cancelled {
                 " (cancelled)"
             } else {
@@ -735,6 +854,7 @@ pub async fn scan_font_files(
     paths: Vec<String>,
     progress: tauri::ipc::Channel<ScanProgress>,
     scan_id: u64,
+    source_id: String,
 ) -> Result<(), String> {
     if paths.len() > MAX_INPUT_PATHS {
         return Err(format!(
@@ -742,23 +862,33 @@ pub async fn scan_font_files(
             paths.len()
         ));
     }
+    validate_font_source_id(&source_id)?;
 
     let active_scan = begin_font_scan(scan_id)?;
     tauri::async_runtime::spawn_blocking(move || {
         let _active_scan = active_scan;
+        let mut entries: Vec<LocalFontEntry> = Vec::new();
         let outcome = scan_files_inner(paths, scan_id, |batch| {
-            let _ = progress.send(ScanProgress::Batch { entries: batch });
+            entries.extend(batch);
+            let _ = progress.send(ScanProgress::Batch {
+                total: entries.len(),
+            });
         })?;
+        let import = import_user_font_source(source_id, entries)?;
 
         // See scan_font_directory for why Done is mandatory on the Ok path.
         let _ = progress.send(ScanProgress::Done {
             cancelled: outcome.cancelled,
+            added: import.added,
+            duplicated: import.duplicated,
         });
 
         log::info!(
-            "Scanned local font files with scan {}: {} faces total{}",
+            "Scanned local font files with scan {}: {} faces total, {} added, {} duplicate{}",
             scan_id,
             outcome.total,
+            import.added,
+            import.duplicated,
             if outcome.cancelled {
                 " (cancelled)"
             } else {
@@ -781,6 +911,65 @@ pub fn cancel_font_scan(scan_id: u64) {
         return;
     }
     CANCEL_SCAN_ID.fetch_max(scan_id, Ordering::Relaxed);
+}
+
+#[tauri::command]
+pub fn resolve_user_font(
+    family: String,
+    bold: bool,
+    italic: bool,
+) -> Result<Option<FontLookupResult>, String> {
+    if family.is_empty() || family.len() > 256 {
+        return Err("Font family name must be 1-256 characters".to_string());
+    }
+    if family.chars().any(|c| c.is_control() || c == '\x7f') {
+        return Err("Font family name contains invalid characters".to_string());
+    }
+
+    let state = USER_FONT_SOURCES
+        .lock()
+        .map_err(|_| "Internal error: user font source index corrupted".to_string())?;
+    let key = user_font_key(&family, bold, italic);
+    let Some(index_ref) = state.index.get(&key) else {
+        return Ok(None);
+    };
+    let Some(source_id) = state.order.get(index_ref.source_index) else {
+        return Ok(None);
+    };
+    let Some(source) = state.sources.get(source_id) else {
+        return Ok(None);
+    };
+    let Some(entry) = source.entries.get(index_ref.entry_index) else {
+        return Ok(None);
+    };
+
+    Ok(Some(FontLookupResult {
+        path: entry.path.clone(),
+        index: entry.index,
+    }))
+}
+
+#[tauri::command]
+pub fn remove_font_source(source_id: String) -> Result<(), String> {
+    validate_font_source_id(&source_id)?;
+    let mut state = USER_FONT_SOURCES
+        .lock()
+        .map_err(|_| "Internal error: user font source index corrupted".to_string())?;
+    state.sources.remove(&source_id);
+    state.order.retain(|id| id != &source_id);
+    state.rebuild_index();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn clear_font_sources() -> Result<(), String> {
+    let mut state = USER_FONT_SOURCES
+        .lock()
+        .map_err(|_| "Internal error: user font source index corrupted".to_string())?;
+    state.sources.clear();
+    state.order.clear();
+    state.index.clear();
+    Ok(())
 }
 
 /// Register a font path in the provenance cache and return the lookup result.

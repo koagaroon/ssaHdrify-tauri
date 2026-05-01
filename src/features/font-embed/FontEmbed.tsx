@@ -1,10 +1,16 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
-import { pickAssFiles, readText, writeText, fileNameFromPath } from "../../lib/tauri-api";
+import {
+  clearFontSources,
+  fileNameFromPath,
+  pickAssFiles,
+  readText,
+  removeFontSource,
+  writeText,
+} from "../../lib/tauri-api";
 import { ask } from "@tauri-apps/plugin-dialog";
 import {
   aggregateFonts,
   analyzeFonts,
-  buildUserFontMap,
   embedFonts,
   userFontKey,
   deriveEmbeddedPath,
@@ -61,7 +67,8 @@ export default function FontEmbed() {
   // Per-file state — populated for the FIRST file when a selection lands.
   // In single-file mode the user interacts with this grid + checkbox set
   // directly. In batch mode the grid is hidden; remaining files are
-  // analyzed during the embed loop using userFontMap built from sources.
+  // analyzed during the embed loop using the Rust-owned local font-source
+  // index.
   const [fonts, setFonts] = useState<FontInfo[]>([]);
   const [fontUsages, setFontUsages] = useState<FontUsage[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -99,18 +106,17 @@ export default function FontEmbed() {
   const [fontSources, setFontSources] = useState<FontSource[]>([]);
   const [sourceModalOpen, setSourceModalOpen] = useState(false);
 
-  // Derived: flattened user font map. Built once per sources change via the
-  // canonical helper so every match site (initial analyze, reanalyze, batch
-  // loop) uses identical indexing logic. Each face contributes multiple keys
-  // — one per localized family name variant — all pointing at the same entry.
-  const userFontMap = useMemo(
-    () => buildUserFontMap(fontSources.flatMap((src) => src.entries)),
-    [fontSources]
-  );
   const fontSourceEntryCount = useMemo(
-    () => fontSources.reduce((sum, src) => sum + src.entries.length, 0),
+    () => fontSources.reduce((sum, src) => sum + src.count, 0),
     [fontSources]
   );
+  const localCoveredKeys = useMemo(() => {
+    const out = new Set<string>();
+    for (const info of fonts) {
+      if (info.source === "local") out.add(fontSelectionKey(info));
+    }
+    return out;
+  }, [fonts]);
 
   const filePaths = useMemo(() => fontsFiles?.filePaths ?? [], [fontsFiles]);
   const fileNames = useMemo(() => fontsFiles?.fileNames ?? [], [fontsFiles]);
@@ -162,7 +168,7 @@ export default function FontEmbed() {
             continue;
           }
           if (gen !== pickGenRef.current) return;
-          const analyzed = await analyzeFonts(content, userFontMap, sysCache);
+          const analyzed = await analyzeFonts(content, null, sysCache, true);
           if (gen !== pickGenRef.current) return;
           cache.set(path, { content, infos: analyzed.infos, usages: analyzed.usages });
         }
@@ -198,7 +204,7 @@ export default function FontEmbed() {
         if (gen === pickGenRef.current) setAnalyzing(false);
       }
     },
-    [isFileInUse, setFontsFiles, addLog, t, userFontMap]
+    [isFileInUse, setFontsFiles, addLog, t]
   );
 
   const handlePickFiles = useCallback(async () => {
@@ -230,97 +236,90 @@ export default function FontEmbed() {
   });
 
   // ── Font source management ──────────────────────────────────────
-  // Adding/removing a source: rebuild userFontMap, then re-analyze
-  // EVERY cached file's content with the fresh map so the unified
+  // Adding/removing a source: Rust owns the local font-source index; re-analyze
+  // EVERY cached file's content against that fresh index so the unified
   // detection grid + per-file embed cache both reflect the new
   // resolution. Cached contents avoid disk re-reads.
-  const reanalyzeWithSources = useCallback(
-    async (nextSources: FontSource[]) => {
-      const cache = perFileAnalysisRef.current;
-      if (cache.size === 0) return;
-      const gen = (pickGenRef.current = pickGenRef.current + 1);
-      const map = buildUserFontMap(nextSources.flatMap((src) => src.entries));
-      try {
-        const newCache = new Map<string, FileAnalysis>();
-        // Same batch-shared cache as ingestPaths — one round of system
-        // lookups per source change, not per (file × font).
-        const sysCache = new Map<string, SystemFontResolution>();
-        for (const [path, prev] of cache) {
-          if (gen !== pickGenRef.current) return;
-          const analyzed = await analyzeFonts(prev.content, map, sysCache);
-          if (gen !== pickGenRef.current) return;
-          newCache.set(path, {
-            content: prev.content,
-            infos: analyzed.infos,
-            usages: analyzed.usages,
-          });
-        }
-        perFileAnalysisRef.current = newCache;
-        const { infos, usages } = aggregateFonts(newCache);
-        setFontUsages(usages);
-        setFonts(infos);
-        // Merge: keep manual unchecks; auto-check newly resolved fonts.
-        setSelected((prev) => {
-          const resolved = keysOfResolvedFonts(infos);
-          const next = new Set<string>();
-          for (const key of prev) {
-            if (resolved.has(key)) next.add(key);
-          }
-          for (const key of resolved) {
-            if (!prev.has(key)) next.add(key);
-          }
-          return next;
-        });
-      } catch (e) {
+  const reanalyzeWithSources = useCallback(async () => {
+    const cache = perFileAnalysisRef.current;
+    if (cache.size === 0) return;
+    const gen = (pickGenRef.current = pickGenRef.current + 1);
+    try {
+      const newCache = new Map<string, FileAnalysis>();
+      // Same batch-shared cache as ingestPaths — one round of system
+      // lookups per source change, not per (file × font).
+      const sysCache = new Map<string, SystemFontResolution>();
+      for (const [path, prev] of cache) {
         if (gen !== pickGenRef.current) return;
-        addLog(t("error_prefix", e instanceof Error ? e.message : String(e)), "error");
+        const analyzed = await analyzeFonts(prev.content, null, sysCache, true);
+        if (gen !== pickGenRef.current) return;
+        newCache.set(path, {
+          content: prev.content,
+          infos: analyzed.infos,
+          usages: analyzed.usages,
+        });
       }
-    },
-    [addLog, t]
-  );
+      perFileAnalysisRef.current = newCache;
+      const { infos, usages } = aggregateFonts(newCache);
+      setFontUsages(usages);
+      setFonts(infos);
+      // Merge: keep manual unchecks; auto-check newly resolved fonts.
+      setSelected((prev) => {
+        const resolved = keysOfResolvedFonts(infos);
+        const next = new Set<string>();
+        for (const key of prev) {
+          if (resolved.has(key)) next.add(key);
+        }
+        for (const key of resolved) {
+          if (!prev.has(key)) next.add(key);
+        }
+        return next;
+      });
+    } catch (e) {
+      if (gen !== pickGenRef.current) return;
+      addLog(t("error_prefix", e instanceof Error ? e.message : String(e)), "error");
+    }
+  }, [addLog, t]);
 
   // Clear all font sources at once. Mirrors the file-strip ✕ pattern
   // — sources persist across subtitle clears by design, but the
   // separate ✕ on the source button gives the user one-click recovery
   // without diving into the modal.
   const handleClearFontSources = useCallback(() => {
-    setFontSources([]);
-    void reanalyzeWithSources([]);
-  }, [reanalyzeWithSources]);
+    void (async () => {
+      try {
+        await clearFontSources();
+        setFontSources([]);
+        await reanalyzeWithSources();
+      } catch (e) {
+        addLog(t("error_prefix", e instanceof Error ? e.message : String(e)), "error");
+      }
+    })();
+  }, [reanalyzeWithSources, addLog, t]);
 
   const handleAddFontSource = useCallback(
-    (source: FontSource): { added: number; duplicated: number } => {
-      // Dedup against faces already registered in any existing source.
-      // A face is uniquely identified by (path, index) — multiple
-      // family-name variants live INSIDE one face, so we must not dedup
-      // on family.
-      const registered = new Set<string>();
-      for (const src of fontSources) {
-        for (const e of src.entries) {
-          registered.add(`${e.path}|${e.index}`);
-        }
-      }
-      const newEntries = source.entries.filter((e) => !registered.has(`${e.path}|${e.index}`));
-      const duplicated = source.entries.length - newEntries.length;
-      if (newEntries.length === 0) {
-        return { added: 0, duplicated };
-      }
-      const filtered: FontSource = { ...source, entries: newEntries };
-      const nextSources = [...fontSources, filtered];
+    (source: FontSource) => {
+      const nextSources = [...fontSources, source];
       setFontSources(nextSources);
-      void reanalyzeWithSources(nextSources);
-      return { added: newEntries.length, duplicated };
+      void reanalyzeWithSources();
     },
     [fontSources, reanalyzeWithSources]
   );
 
   const handleRemoveFontSource = useCallback(
     (id: string) => {
-      const nextSources = fontSources.filter((s) => s.id !== id);
-      setFontSources(nextSources);
-      void reanalyzeWithSources(nextSources);
+      void (async () => {
+        try {
+          await removeFontSource(id);
+          const nextSources = fontSources.filter((s) => s.id !== id);
+          setFontSources(nextSources);
+          await reanalyzeWithSources();
+        } catch (e) {
+          addLog(t("error_prefix", e instanceof Error ? e.message : String(e)), "error");
+        }
+      })();
     },
-    [fontSources, reanalyzeWithSources]
+    [fontSources, reanalyzeWithSources, addLog, t]
   );
 
   const toggleSelect = (key: string) => {
@@ -415,7 +414,7 @@ export default function FontEmbed() {
               continue;
             }
             if (cancelRef.current) break;
-            const analyzed = await analyzeFonts(content, userFontMap);
+            const analyzed = await analyzeFonts(content, null, undefined, true);
             cached = { content, infos: analyzed.infos, usages: analyzed.usages };
           }
           if (cancelRef.current) break;
@@ -483,7 +482,7 @@ export default function FontEmbed() {
       setBatchProgress(null);
       setProgress(null);
     }
-  }, [fileCount, filePaths, isSingleFile, selected, userFontMap, addLog, t]);
+  }, [fileCount, filePaths, isSingleFile, selected, addLog, t]);
 
   // Footer status — busy carries N-of-M progress; cancelled is its own
   // visible state.
@@ -680,7 +679,7 @@ export default function FontEmbed() {
       {/* Action row: select fonts + embed + cancel.
            Font source picking is intentionally decoupled from subtitle
            loading — the user can pick fonts first OR a subtitle first
-           in any order. Both feed into the same `userFontMap` that
+           in any order. Sources live in Rust's local font index, which
            ingestPaths consumes when subtitles arrive, and the modal's
            coverage stats already gracefully handle the no-subtitle
            case (shows `font_coverage_no_subtitle` hint inside). */}
@@ -886,7 +885,7 @@ export default function FontEmbed() {
         onClose={() => setSourceModalOpen(false)}
         sources={fontSources}
         usages={fontUsages}
-        userFontMap={userFontMap}
+        localCoveredKeys={localCoveredKeys}
         hasSubtitle={fileCount > 0}
         onAddSource={handleAddFontSource}
         onRemoveSource={handleRemoveFontSource}

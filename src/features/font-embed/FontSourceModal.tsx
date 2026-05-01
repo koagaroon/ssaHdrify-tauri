@@ -5,7 +5,6 @@ import {
   pickFontFiles,
   scanFontDirectory,
   scanFontFiles,
-  type LocalFontEntry,
 } from "../../lib/tauri-api";
 import { useI18n } from "../../i18n/useI18n";
 import type { FontUsage } from "./font-collector";
@@ -19,11 +18,11 @@ export interface FontSource {
   kind: "dir" | "files";
   /** Display label: folder basename or "N files". */
   label: string;
-  /** Font entries this source contributed. */
-  entries: LocalFontEntry[];
+  /** Number of font faces this source contributed after dedup. */
+  count: number;
 }
 
-/** Diagnostic the parent returns after attempting to add a source. */
+/** Diagnostic Rust returns after attempting to add a source. */
 export interface AddSourceResult {
   /** How many entries made it into the source list (after dedup). */
   added: number;
@@ -36,9 +35,9 @@ interface Props {
   onClose: () => void;
   sources: FontSource[];
   usages: FontUsage[];
-  userFontMap: Map<string, LocalFontEntry>;
+  localCoveredKeys: Set<string>;
   hasSubtitle: boolean;
-  onAddSource: (source: FontSource) => AddSourceResult;
+  onAddSource: (source: FontSource) => void;
   onRemoveSource: (id: string) => void;
 }
 
@@ -56,10 +55,10 @@ function newScanId(): number {
   return nextFontScanId;
 }
 
-/** Compute how many required font families are matched by the user-supplied map. */
+/** Compute how many required font families are currently resolved from local sources. */
 function computeCoverage(
   usages: FontUsage[],
-  userFontMap: Map<string, LocalFontEntry>,
+  localCoveredKeys: Set<string>,
   hasSubtitle: boolean
 ): { covered: number; total: number; missing: string[] } {
   if (!hasSubtitle || usages.length === 0) {
@@ -69,7 +68,7 @@ function computeCoverage(
   const missing: string[] = [];
   for (const u of usages) {
     const k = userFontKey(u.key.family, u.key.bold, u.key.italic);
-    if (userFontMap.has(k)) {
+    if (localCoveredKeys.has(k)) {
       covered += 1;
     } else {
       missing.push(fontKeyLabel(u.key));
@@ -79,15 +78,22 @@ function computeCoverage(
 }
 
 export default function FontSourceModal(props: Props) {
-  const { open, onClose, sources, usages, userFontMap, hasSubtitle, onAddSource, onRemoveSource } =
-    props;
+  const {
+    open,
+    onClose,
+    sources,
+    usages,
+    localCoveredKeys,
+    hasSubtitle,
+    onAddSource,
+    onRemoveSource,
+  } = props;
   const { t } = useI18n();
 
   const [scanning, setScanning] = useState(false);
   // Live count for the "Scanned N fonts so far…" progress row. Rust can
   // deliver many Channel batches in a burst, so state updates are throttled
-  // to one per animation frame; the accumulator in tauri-api.ts still grows
-  // synchronously for correctness.
+  // to one per animation frame; the heavy font-source index stays in Rust.
   const [scanProgress, setScanProgress] = useState(0);
   const scanProgressLatestRef = useRef(0);
   const scanProgressFrameRef = useRef<number | null>(null);
@@ -219,29 +225,34 @@ export default function FontSourceModal(props: Props) {
     const dir = await pickFontDirectory();
     if (!dir) return;
     const scanId = newScanId();
+    const sourceId = newId();
     activeScanIdRef.current = scanId;
     resetScanProgress();
     setScanning(true);
     try {
-      const scan = await scanFontDirectory(dir, scanId, (_, total) => scheduleScanProgress(total));
-      const entries = scan.entries;
-      if (entries.length === 0) {
+      const scan = await scanFontDirectory(dir, sourceId, scanId, (total) =>
+        scheduleScanProgress(total)
+      );
+      if (scan.added === 0) {
         // Cancellation before any face was parsed — distinguish from
         // "folder genuinely has no fonts" so the user knows their click
         // was honored rather than the folder being empty.
         if (scan.cancelled) {
           setInfo(t("font_scan_cancelled", 0));
+        } else if (scan.duplicated > 0) {
+          setError(t("font_sources_all_duplicate"));
         } else {
           setError(t("font_sources_no_fonts_in_folder", basename(dir)));
         }
         return;
       }
-      const result = onAddSource({
-        id: newId(),
+      onAddSource({
+        id: sourceId,
         kind: "dir",
         label: basename(dir),
-        entries,
+        count: scan.added,
       });
+      const result = { added: scan.added, duplicated: scan.duplicated };
       reportSourceAdded(result, scan.cancelled);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -259,26 +270,31 @@ export default function FontSourceModal(props: Props) {
     const paths = await pickFontFiles();
     if (!paths || paths.length === 0) return;
     const scanId = newScanId();
+    const sourceId = newId();
     activeScanIdRef.current = scanId;
     resetScanProgress();
     setScanning(true);
     try {
-      const scan = await scanFontFiles(paths, scanId, (_, total) => scheduleScanProgress(total));
-      const entries = scan.entries;
-      if (entries.length === 0) {
+      const scan = await scanFontFiles(paths, sourceId, scanId, (total) =>
+        scheduleScanProgress(total)
+      );
+      if (scan.added === 0) {
         if (scan.cancelled) {
           setInfo(t("font_scan_cancelled", 0));
+        } else if (scan.duplicated > 0) {
+          setError(t("font_sources_all_duplicate"));
         } else {
           setError(t("font_sources_no_fonts_in_files", paths.length));
         }
         return;
       }
-      const result = onAddSource({
-        id: newId(),
+      onAddSource({
+        id: sourceId,
         kind: "files",
-        label: t("font_sources_files_entry", paths.length, entries.length),
-        entries,
+        label: t("font_sources_files_entry", paths.length, scan.added),
+        count: scan.added,
       });
+      const result = { added: scan.added, duplicated: scan.duplicated };
       reportSourceAdded(result, scan.cancelled);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -290,12 +306,11 @@ export default function FontSourceModal(props: Props) {
     }
   }, [onAddSource, t, reportSourceAdded, resetScanProgress, scheduleScanProgress]);
 
-  // Coverage: how many required families are matched by ANY source
-  // (local map OR — informationally — any other means). In this modal we
-  // only consider the local map, so the count reflects the user's question:
+  // Coverage: how many required families are matched by loaded local sources.
+  // In this modal we only consider local matches, so the count reflects the user's question:
   // "does the folder I picked cover every font the ASS needs?" System-
   // installed matches are shown as secondary info in the main font list.
-  const { covered, total, missing } = computeCoverage(usages, userFontMap, hasSubtitle);
+  const { covered, total, missing } = computeCoverage(usages, localCoveredKeys, hasSubtitle);
 
   if (!open) return null;
 
@@ -366,7 +381,7 @@ export default function FontSourceModal(props: Props) {
               {sources.map((src) => {
                 const label =
                   src.kind === "dir"
-                    ? t("font_sources_folder_entry", src.label, src.entries.length)
+                    ? t("font_sources_folder_entry", src.label, src.count)
                     : src.label;
                 return (
                   <li

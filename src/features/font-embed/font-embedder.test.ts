@@ -13,6 +13,7 @@ const findSystemFontMock = vi.fn();
 vi.mock("../../lib/tauri-api", () => ({
   findSystemFont: (family: string, bold: boolean, italic: boolean) =>
     findSystemFontMock(family, bold, italic),
+  resolveUserFont: vi.fn(),
   subsetFont: vi.fn(),
 }));
 
