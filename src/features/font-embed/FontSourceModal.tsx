@@ -50,6 +50,12 @@ function newId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+let nextFontScanId = Date.now();
+function newScanId(): number {
+  nextFontScanId += 1;
+  return nextFontScanId;
+}
+
 /** Compute how many required font families are matched by the user-supplied map. */
 function computeCoverage(
   usages: FontUsage[],
@@ -78,14 +84,16 @@ export default function FontSourceModal(props: Props) {
   const { t } = useI18n();
 
   const [scanning, setScanning] = useState(false);
-  // Live count for the "Scanned N fonts so far…" progress row. Updated on
-  // every Channel batch from Rust during a scan; reset to 0 when a new one
-  // begins. Held in state (not a ref) because the row reads it for display.
+  // Live count for the "Scanned N fonts so far…" progress row. Rust can
+  // deliver many Channel batches in a burst, so state updates are throttled
+  // to one per animation frame; the accumulator in tauri-api.ts still grows
+  // synchronously for correctness.
   const [scanProgress, setScanProgress] = useState(0);
-  // Tracks whether the user clicked Cancel during the current scan, so the
-  // post-scan info message can distinguish "you cancelled, here are your
-  // partial results" from a normal completion. Reset at scan entry.
-  const cancelledRef = useRef(false);
+  const scanProgressLatestRef = useRef(0);
+  const scanProgressFrameRef = useRef<number | null>(null);
+  // Rust cancellation is targeted by scan id, so late cancel commands from a
+  // previous run cannot affect the next scan.
+  const activeScanIdRef = useRef<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   // info is non-error feedback ("added N fonts") shown in a neutral tone.
   const [info, setInfo] = useState<string | null>(null);
@@ -126,6 +134,37 @@ export default function FontSourceModal(props: Props) {
     }
   }, [open]);
 
+  const flushScanProgress = useCallback(() => {
+    scanProgressFrameRef.current = null;
+    setScanProgress(scanProgressLatestRef.current);
+  }, []);
+
+  const scheduleScanProgress = useCallback(
+    (total: number) => {
+      scanProgressLatestRef.current = total;
+      if (scanProgressFrameRef.current !== null) return;
+      scanProgressFrameRef.current = requestAnimationFrame(flushScanProgress);
+    },
+    [flushScanProgress]
+  );
+
+  const resetScanProgress = useCallback(() => {
+    scanProgressLatestRef.current = 0;
+    if (scanProgressFrameRef.current !== null) {
+      cancelAnimationFrame(scanProgressFrameRef.current);
+      scanProgressFrameRef.current = null;
+    }
+    setScanProgress(0);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (scanProgressFrameRef.current !== null) {
+        cancelAnimationFrame(scanProgressFrameRef.current);
+      }
+    };
+  }, []);
+
   // Apply the dedup result consistently across folder and file picks.
   const applyAddResult = useCallback(
     (result: AddSourceResult) => {
@@ -148,8 +187,8 @@ export default function FontSourceModal(props: Props) {
   // (font_scan_cancelled_with_dupes) instead of letting the cancellation
   // notice clobber the dedup notice.
   const reportSourceAdded = useCallback(
-    (result: AddSourceResult) => {
-      if (cancelledRef.current) {
+    (result: AddSourceResult, cancelled: boolean) => {
+      if (cancelled) {
         setError(null);
         if (result.duplicated > 0) {
           setInfo(t("font_scan_cancelled_with_dupes", result.added, result.duplicated));
@@ -164,8 +203,9 @@ export default function FontSourceModal(props: Props) {
   );
 
   const handleCancelScan = useCallback(() => {
-    cancelledRef.current = true;
-    void cancelFontScan();
+    const scanId = activeScanIdRef.current;
+    if (scanId === null) return;
+    void cancelFontScan(scanId);
   }, []);
 
   const handleAddFolder = useCallback(async () => {
@@ -173,16 +213,18 @@ export default function FontSourceModal(props: Props) {
     setInfo(null);
     const dir = await pickFontDirectory();
     if (!dir) return;
-    cancelledRef.current = false;
-    setScanProgress(0);
+    const scanId = newScanId();
+    activeScanIdRef.current = scanId;
+    resetScanProgress();
     setScanning(true);
     try {
-      const entries = await scanFontDirectory(dir, (_, total) => setScanProgress(total));
+      const scan = await scanFontDirectory(dir, scanId, (_, total) => scheduleScanProgress(total));
+      const entries = scan.entries;
       if (entries.length === 0) {
         // Cancellation before any face was parsed — distinguish from
         // "folder genuinely has no fonts" so the user knows their click
         // was honored rather than the folder being empty.
-        if (cancelledRef.current) {
+        if (scan.cancelled) {
           setInfo(t("font_scan_cancelled", 0));
         } else {
           setError(t("font_sources_no_fonts_in_folder", basename(dir)));
@@ -195,26 +237,31 @@ export default function FontSourceModal(props: Props) {
         label: basename(dir),
         entries,
       });
-      reportSourceAdded(result);
+      reportSourceAdded(result, scan.cancelled);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
+      if (activeScanIdRef.current === scanId) {
+        activeScanIdRef.current = null;
+      }
       setScanning(false);
     }
-  }, [onAddSource, t, reportSourceAdded]);
+  }, [onAddSource, t, reportSourceAdded, resetScanProgress, scheduleScanProgress]);
 
   const handleAddFiles = useCallback(async () => {
     setError(null);
     setInfo(null);
     const paths = await pickFontFiles();
     if (!paths || paths.length === 0) return;
-    cancelledRef.current = false;
-    setScanProgress(0);
+    const scanId = newScanId();
+    activeScanIdRef.current = scanId;
+    resetScanProgress();
     setScanning(true);
     try {
-      const entries = await scanFontFiles(paths, (_, total) => setScanProgress(total));
+      const scan = await scanFontFiles(paths, scanId, (_, total) => scheduleScanProgress(total));
+      const entries = scan.entries;
       if (entries.length === 0) {
-        if (cancelledRef.current) {
+        if (scan.cancelled) {
           setInfo(t("font_scan_cancelled", 0));
         } else {
           setError(t("font_sources_no_fonts_in_files", paths.length));
@@ -227,13 +274,16 @@ export default function FontSourceModal(props: Props) {
         label: t("font_sources_files_entry", paths.length, entries.length),
         entries,
       });
-      reportSourceAdded(result);
+      reportSourceAdded(result, scan.cancelled);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
+      if (activeScanIdRef.current === scanId) {
+        activeScanIdRef.current = null;
+      }
       setScanning(false);
     }
-  }, [onAddSource, t, reportSourceAdded]);
+  }, [onAddSource, t, reportSourceAdded, resetScanProgress, scheduleScanProgress]);
 
   // Coverage: how many required families are matched by ANY source
   // (local map OR — informationally — any other means). In this modal we

@@ -262,59 +262,68 @@ export interface LocalFontEntry {
  *  for any scan whose batches exceed 8 KB. The Channel layer guarantees
  *  in-order delivery, so `Done` only fires after every preceding batch
  *  has been processed. See A-bug-1 in v1.3.1 design doc. */
-type RawScanProgress = { kind: "batch"; entries: RawLocalFontEntry[] } | { kind: "done" };
+type RawScanProgress =
+  | { kind: "batch"; entries: RawLocalFontEntry[] }
+  | { kind: "done"; cancelled: boolean };
 
 /** Optional callback for streaming font scan results. Called once per
  *  Rust-side batch (cadence determined by `SCAN_BATCH_SIZE` and
- *  `SCAN_BATCH_INTERVAL` in `src-tauri/src/fonts.rs` — currently 20 faces
+ *  `SCAN_BATCH_INTERVAL` in `src-tauri/src/fonts.rs` — currently 40 faces
  *  or 100 ms, whichever fires first). The accumulated list remains
  *  available in the resolved return value too — `onBatch` only exists so
  *  the UI can update progressively. */
 export type ScanProgressCallback = (delta: LocalFontEntry[], total: number) => void;
 
+export interface FontScanResult {
+  entries: LocalFontEntry[];
+  cancelled: boolean;
+}
+
 /**
  * Scan a user-picked directory (one level deep) for font files. Streams
- * results back via `onBatch`; the resolved value is the same complete list
- * for callers that just want the final result. TTC files produce multiple
+ * results back via `onBatch`; the resolved value contains the complete list
+ * plus whether Rust actually honoured cancellation. TTC files produce multiple
  * entries sharing the same path. Each returned path is registered on the
  * Rust side so subset_font will accept it.
  *
  * Cancellation: call {@link cancelFontScan} from a button handler. The
- * Rust scan returns early; the resolved value contains the partial set
+ * Rust scan returns early; the resolved result contains the partial set
  * accumulated up to that point (no rejection — partial preservation is
  * the contract).
  */
 export async function scanFontDirectory(
   dir: string,
+  scanId: number,
   onBatch?: ScanProgressCallback
-): Promise<LocalFontEntry[]> {
-  return runStreamingScan("scan_font_directory", { dir }, onBatch);
+): Promise<FontScanResult> {
+  return runStreamingScan("scan_font_directory", { dir, scanId }, onBatch);
 }
 
 /** Scan a user-supplied list of individual font file paths. Same streaming
  *  contract as {@link scanFontDirectory}. */
 export async function scanFontFiles(
   paths: string[],
+  scanId: number,
   onBatch?: ScanProgressCallback
-): Promise<LocalFontEntry[]> {
-  return runStreamingScan("scan_font_files", { paths }, onBatch);
+): Promise<FontScanResult> {
+  return runStreamingScan("scan_font_files", { paths, scanId }, onBatch);
 }
 
 /** Request the current font scan be cancelled. Idempotent — safe to call
  *  even when no scan is active. The running scan returns its partial list
  *  via the same Promise the caller is awaiting. */
-export async function cancelFontScan(): Promise<void> {
-  await invoke("cancel_font_scan");
+export async function cancelFontScan(scanId: number): Promise<void> {
+  await invoke("cancel_font_scan", { scanId });
 }
 
 /** Shared streaming-invoke wrapper for both scan commands. Constructs a
  *  Channel<ScanProgress>, accumulates batches in-order, and resolves with
- *  the full list once the Rust side returns. */
+ *  the full list and cancellation outcome once the Rust side returns. */
 async function runStreamingScan(
   command: "scan_font_directory" | "scan_font_files",
   args: Record<string, unknown>,
   onBatch?: ScanProgressCallback
-): Promise<LocalFontEntry[]> {
+): Promise<FontScanResult> {
   const accumulated: LocalFontEntry[] = [];
   const channel = new Channel<RawScanProgress>();
   // Resolved by the `Done` handler. Awaited after invoke so the function
@@ -323,12 +332,14 @@ async function runStreamingScan(
   const donePromise = new Promise<void>((resolve) => {
     resolveDone = resolve;
   });
+  let cancelled = false;
   channel.onmessage = (msg) => {
     if (msg.kind === "batch") {
       const converted = msg.entries.map(fromRawLocalFontEntry);
       accumulated.push(...converted);
       onBatch?.(converted, accumulated.length);
     } else if (msg.kind === "done") {
+      cancelled = msg.cancelled;
       resolveDone?.();
     }
   };
@@ -337,7 +348,7 @@ async function runStreamingScan(
   // delivery of Batch+Done, so awaiting Done forces every async-fetched
   // batch to be processed before we read `accumulated`.
   await donePromise;
-  return accumulated;
+  return { entries: accumulated, cancelled };
 }
 
 /**

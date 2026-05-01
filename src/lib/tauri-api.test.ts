@@ -70,29 +70,34 @@ describe("runStreamingScan — sync delivery (batches arrive during invoke)", ()
       const channel = channelInstances[0];
       channel.onmessage?.({ kind: "batch", entries: [makeRawEntry("A"), makeRawEntry("B")] });
       channel.onmessage?.({ kind: "batch", entries: [makeRawEntry("C")] });
-      channel.onmessage?.({ kind: "done" });
+      channel.onmessage?.({ kind: "done", cancelled: false });
     });
 
     const seenTotals: number[] = [];
     const seenDeltaSizes: number[] = [];
-    const result = await scanFontDirectory("/fake/dir", (delta, total) => {
+    const result = await scanFontDirectory("/fake/dir", 101, (delta, total) => {
       seenDeltaSizes.push(delta.length);
       seenTotals.push(total);
     });
 
-    expect(result.length).toBe(3);
-    expect(result.map((e) => e.families[0])).toEqual(["A", "B", "C"]);
+    expect(result.cancelled).toBe(false);
+    expect(result.entries.length).toBe(3);
+    expect(result.entries.map((e) => e.families[0])).toEqual(["A", "B", "C"]);
     expect(seenDeltaSizes).toEqual([2, 1]);
     expect(seenTotals).toEqual([2, 3]);
+    expect(invokeMock).toHaveBeenCalledWith(
+      "scan_font_directory",
+      expect.objectContaining({ dir: "/fake/dir", scanId: 101 })
+    );
   });
 
   it("returns an empty array when no batches arrive (Done only)", async () => {
     invokeMock.mockImplementation(async () => {
-      channelInstances[0].onmessage?.({ kind: "done" });
+      channelInstances[0].onmessage?.({ kind: "done", cancelled: false });
     });
 
-    const result = await scanFontDirectory("/empty/dir");
-    expect(result).toEqual([]);
+    const result = await scanFontDirectory("/empty/dir", 102);
+    expect(result).toEqual({ entries: [], cancelled: false });
   });
 });
 
@@ -113,14 +118,30 @@ describe("runStreamingScan — async-after-resolve (A-bug-1 regression)", () => 
         channelInstances[0].onmessage?.({ kind: "batch", entries: [makeRawEntry("Z")] });
       });
       queueMicrotask(() => {
-        channelInstances[0].onmessage?.({ kind: "done" });
+        channelInstances[0].onmessage?.({ kind: "done", cancelled: false });
       });
     });
 
-    const result = await scanFontDirectory("/large/dir");
+    const result = await scanFontDirectory("/large/dir", 103);
     // If runStreamingScan returned at `await invoke`, this would be 0.
     // The Done sentinel + donePromise guarantee we wait for the full set.
-    expect(result.length).toBe(3);
-    expect(result.map((e) => e.families[0])).toEqual(["X", "Y", "Z"]);
+    expect(result.entries.length).toBe(3);
+    expect(result.entries.map((e) => e.families[0])).toEqual(["X", "Y", "Z"]);
+    expect(result.cancelled).toBe(false);
+  });
+
+  it("returns the Rust-reported cancellation outcome after async Done", async () => {
+    invokeMock.mockImplementation(async () => {
+      queueMicrotask(() => {
+        channelInstances[0].onmessage?.({ kind: "batch", entries: [makeRawEntry("Partial")] });
+      });
+      queueMicrotask(() => {
+        channelInstances[0].onmessage?.({ kind: "done", cancelled: true });
+      });
+    });
+
+    const result = await scanFontDirectory("/cancelled/dir", 104);
+    expect(result.cancelled).toBe(true);
+    expect(result.entries.map((e) => e.families[0])).toEqual(["Partial"]);
   });
 });

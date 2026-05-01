@@ -231,8 +231,9 @@ export default function HdrConvert() {
     // click from a previous batch can still be sitting in the React event
     // queue when the user starts a new one; if we reset it later (after
     // pre-flight or after setProcessing), the stale `true` would short-
-    // circuit the new batch's first iteration. Mirrors the Rust side's
-    // SCAN_CANCEL_FLAG.store(false) at scan_font_directory entry.
+    // circuit the new batch's first iteration. The font scanner solves the
+    // same race with per-scan ids, but this in-memory HDR flow still uses a
+    // component-local boolean.
     cancelRef.current = false;
 
     // Validate brightness
