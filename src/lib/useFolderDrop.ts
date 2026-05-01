@@ -15,7 +15,7 @@
  * `expand_dropped_paths`. Consumers receive a flat list of file paths
  * regardless of whether the user dropped files, folders, or a mix.
  */
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type { RefObject } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { expandDroppedPaths } from "./tauri-api";
@@ -41,6 +41,18 @@ export function useFolderDrop({
   onActiveChange,
   disabled,
 }: UseFolderDropOptions): void {
+  // Stabilize the consumer callbacks so the listener-attaching effect
+  // doesn't re-subscribe on every parent render (consumers pass inline
+  // arrows in JSX). Each re-subscribe costs an `await onDragDropEvent`
+  // round-trip and opens a brief race window where drops can be missed.
+  // Same pattern as useClickOutside.
+  const onPathsRef = useRef(onPaths);
+  const onActiveChangeRef = useRef(onActiveChange);
+  useEffect(() => {
+    onPathsRef.current = onPaths;
+    onActiveChangeRef.current = onActiveChange;
+  });
+
   useEffect(() => {
     if (disabled) return;
 
@@ -77,19 +89,19 @@ export function useFolderDrop({
         switch (event.payload.type) {
           case "enter":
           case "over":
-            onActiveChange?.(inRect(event.payload.position));
+            onActiveChangeRef.current?.(inRect(event.payload.position));
             break;
           case "leave":
-            onActiveChange?.(false);
+            onActiveChangeRef.current?.(false);
             break;
           case "drop": {
             const inside = inRect(event.payload.position);
-            onActiveChange?.(false);
+            onActiveChangeRef.current?.(false);
             if (!inside) return;
             try {
               const expanded = await expandDroppedPaths(event.payload.paths);
               if (mounted && expanded.length > 0) {
-                onPaths(expanded);
+                onPathsRef.current(expanded);
               }
             } catch (e) {
               // Swallow — the consumer's Status flow is the right place
@@ -117,5 +129,5 @@ export function useFolderDrop({
       mounted = false;
       unlisten?.();
     };
-  }, [ref, onPaths, onActiveChange, disabled]);
+  }, [ref, disabled]);
 }

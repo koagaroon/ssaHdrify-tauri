@@ -253,16 +253,23 @@ export interface LocalFontEntry {
   sizeBytes: number;
 }
 
-/** Streaming progress payload from the Rust scan commands. Frontend
- *  appends `Batch` events to its accumulator until the invoke promise
- *  resolves (success), rejects (error), or the user cancels (resolves
- *  with whatever was accumulated so far). */
-type RawScanProgress = { kind: "batch"; entries: RawLocalFontEntry[] };
+/** Streaming progress payload from the Rust scan commands. `Batch` carries
+ *  newly-parsed faces; `Done` is the end-of-stream sentinel that signals
+ *  every batch has drained. The sentinel exists because Tauri's Channel
+ *  splits delivery between sync `webview.eval()` (payloads < 8 KB) and
+ *  async fetch (payloads ≥ 8 KB). The invoke promise resolves before the
+ *  async batches arrive — without `Done` the accumulator would be empty
+ *  for any scan whose batches exceed 8 KB. The Channel layer guarantees
+ *  in-order delivery, so `Done` only fires after every preceding batch
+ *  has been processed. See A-bug-1 in v1.3.1 design doc. */
+type RawScanProgress = { kind: "batch"; entries: RawLocalFontEntry[] } | { kind: "done" };
 
 /** Optional callback for streaming font scan results. Called once per
- *  Rust-side batch (every ~50 faces or ~100ms). The accumulated list
- *  remains available in the resolved return value too — `onBatch` only
- *  exists so the UI can update progressively. */
+ *  Rust-side batch (cadence determined by `SCAN_BATCH_SIZE` and
+ *  `SCAN_BATCH_INTERVAL` in `src-tauri/src/fonts.rs` — currently 20 faces
+ *  or 100 ms, whichever fires first). The accumulated list remains
+ *  available in the resolved return value too — `onBatch` only exists so
+ *  the UI can update progressively. */
 export type ScanProgressCallback = (delta: LocalFontEntry[], total: number) => void;
 
 /**
@@ -310,13 +317,26 @@ async function runStreamingScan(
 ): Promise<LocalFontEntry[]> {
   const accumulated: LocalFontEntry[] = [];
   const channel = new Channel<RawScanProgress>();
+  // Resolved by the `Done` handler. Awaited after invoke so the function
+  // returns only once every preceding `Batch` (sync OR async) has fired.
+  let resolveDone: (() => void) | null = null;
+  const donePromise = new Promise<void>((resolve) => {
+    resolveDone = resolve;
+  });
   channel.onmessage = (msg) => {
-    if (msg.kind !== "batch") return;
-    const converted = msg.entries.map(fromRawLocalFontEntry);
-    accumulated.push(...converted);
-    onBatch?.(converted, accumulated.length);
+    if (msg.kind === "batch") {
+      const converted = msg.entries.map(fromRawLocalFontEntry);
+      accumulated.push(...converted);
+      onBatch?.(converted, accumulated.length);
+    } else if (msg.kind === "done") {
+      resolveDone?.();
+    }
   };
   await invoke(command, { ...args, progress: channel });
+  // Rust always emits Done on the Ok path. Channel guarantees in-order
+  // delivery of Batch+Done, so awaiting Done forces every async-fetched
+  // batch to be processed before we read `accumulated`.
+  await donePromise;
   return accumulated;
 }
 
