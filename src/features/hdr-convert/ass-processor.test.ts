@@ -167,9 +167,11 @@ describe("processAssContent — inline color tags", () => {
   it("preserves black (passthrough) in inline tags", () => {
     const input = makeAss("{\\1c&H000000&}Dark");
     const output = processAssContent(input, 203, "PQ");
-    // Black maps to black — the value should stay 000000
-    expect(output).toContain("000000");
-    expect(output).toContain("Dark");
+    // Anchor to the inline tag specifically. The makeAss default style
+    // colors already contain &H00000000 four times, so a bare
+    // .toContain("000000") would pass even if the inline transformer
+    // broke and rewrote {\1c&H000000&} to non-black.
+    expect(output).toMatch(/\{\\1c&H(?:00)?000000&\}Dark/);
   });
 });
 
@@ -187,7 +189,12 @@ describe("processAssContent — style lines", () => {
   it("preserves black style colors (passthrough)", () => {
     const input = makeAss("Hello", "&H00000000,&H00000000,&H00000000,&H00000000");
     const output = processAssContent(input, 203, "PQ");
-    // All black — should remain &H00000000
-    expect(output).toContain("&H00000000");
+    // Anchor to the full Style line so a regression that rewrote any of
+    // the four colors but left the others black would still fail. The
+    // bare .toContain("&H00000000") would pass on three-out-of-four
+    // breakage.
+    expect(output).toMatch(
+      /Style:\s*Default,[^,]+,\d+,&H00000000,&H00000000,&H00000000,&H00000000,/
+    );
   });
 });

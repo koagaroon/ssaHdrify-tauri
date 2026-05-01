@@ -20,8 +20,10 @@ import {
 describe("preprocessSrtColors", () => {
   it("converts <font color> to ASS inline override", () => {
     const result = preprocessSrtColors('<font color="#FF0000">Red text</font>');
-    // Should contain ASS color tag (\1c&H or \c&H)
-    expect(result).toMatch(/\\1?c&H/);
+    // Pin the actual BGR-converted value: SRT color is RGB hex
+    // (#FF0000 = red), ASS \1c is BGR hex (&H0000FF). A bare match on
+    // /\\1?c&H/ would pass even if the converter emitted &H000000.
+    expect(result).toMatch(/\{\\1c&H0000FF&?\}/);
     expect(result).toContain("Red text");
     // HTML tag should be gone
     expect(result).not.toContain("<font");
@@ -29,13 +31,16 @@ describe("preprocessSrtColors", () => {
 
   it("inserts color reset after </font>", () => {
     const result = preprocessSrtColors('<font color="#FF0000">Red</font> normal');
-    // After the colored section, a reset tag should appear
-    expect(result).toContain("normal");
+    // The reset must actually appear between the colored span and the
+    // following text — without it, "normal" would inherit red. Bare
+    // .toContain("normal") would pass even if no reset were emitted.
+    expect(result).toMatch(/Red(?:\{\\r\}|\{\\1c&H[0-9A-F]{6}&?\}) normal/);
   });
 
   it("handles multiple attributes on <font> tag", () => {
     const result = preprocessSrtColors('<font face="Arial" color="#00FF00">Green</font>');
-    expect(result).toMatch(/\\1?c&H/);
+    // RGB #00FF00 → BGR &H00FF00 (mirror of the red case above).
+    expect(result).toMatch(/\{\\1c&H00FF00&?\}/);
     expect(result).toContain("Green");
   });
 

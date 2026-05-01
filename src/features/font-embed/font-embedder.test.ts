@@ -87,14 +87,25 @@ describe("analyzeFonts — match priority", () => {
   });
 
   it("falls back to system font when the family is not in the user map", async () => {
-    findSystemFontMock.mockResolvedValue({ path: "C:/Windows/Fonts/arialbd.ttf", index: 0 });
+    // Per-family resolution rather than a single mockResolvedValue so the
+    // mock can distinguish which font each invocation is for. The single-
+    // value form would pass even if FZLanTingHei resolved through Arial's
+    // path (or vice versa).
+    findSystemFontMock.mockImplementation(async (family: string, bold: boolean) => {
+      if (family === "FZLanTingHei") return { path: "C:/Windows/Fonts/simsun.ttc", index: 0 };
+      if (family === "Arial" && bold) return { path: "C:/Windows/Fonts/arialbd.ttf", index: 0 };
+      throw new Error(`unexpected lookup: ${family} bold=${bold}`);
+    });
     const userFontMap = new Map<string, LocalFontEntry>();
 
     const { infos } = await analyzeFonts(MINIMAL_ASS, userFontMap);
     const arial = infos.find((i) => i.key.family === "Arial" && i.key.bold);
+    const fz = infos.find((i) => i.key.family === "FZLanTingHei");
 
     expect(arial?.source).toBe("system");
     expect(arial?.filePath).toBe("C:/Windows/Fonts/arialbd.ttf");
+    expect(fz?.source).toBe("system");
+    expect(fz?.filePath).toBe("C:/Windows/Fonts/simsun.ttc");
   });
 
   it("marks unresolved fonts with source=null", async () => {
