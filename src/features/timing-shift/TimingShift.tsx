@@ -236,6 +236,10 @@ export default function TimingShift() {
   const handleSaveAll = useCallback(async () => {
     if (fileCount === 0 || thresholdInvalid) return;
 
+    // Reset cancel signal at the very entry, BEFORE any awaits — see the
+    // matching comment in HdrConvert.tsx::handleConvert for rationale.
+    cancelRef.current = false;
+
     const paths = filePaths;
 
     // Pre-flight overwrite check — same project-wide pattern as HDR
@@ -258,7 +262,6 @@ export default function TimingShift() {
 
     setBusy(true);
     setProgress({ processed: 0, total: paths.length });
-    cancelRef.current = false;
 
     try {
       addLog(t("msg_timing_start", paths.length, effectiveOffsetMs));

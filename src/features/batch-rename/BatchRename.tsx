@@ -18,7 +18,6 @@
  *   restores the engine's seed.
  */
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
-import type { JSX } from "react";
 import {
   pickRenameInputs,
   pickOutputDirectory,
@@ -134,7 +133,7 @@ function categorizePaths(paths: string[]): Categorized {
 function renderSourceBadge(
   source: PairingSource,
   t: (key: string, ...args: (string | number)[]) => string
-): JSX.Element {
+) {
   const map: Record<PairingSource, { labelKey: string; color: string; bg: string }> = {
     regex: {
       labelKey: "rename_source_regex",
@@ -461,6 +460,10 @@ export default function BatchRename() {
   const handleRunRename = useCallback(async () => {
     if (busy || actionableCount === 0) return;
 
+    // Reset cancel signal at the very entry, BEFORE any awaits — see the
+    // matching comment in HdrConvert.tsx::handleConvert for rationale.
+    cancelRef.current = false;
+
     if (outputMode === "copy_to_chosen" && !chosenDir) {
       addLog(t("msg_rename_no_chosen_dir"), "error");
       return;
@@ -558,7 +561,6 @@ export default function BatchRename() {
 
     setBusy(true);
     setProgress({ processed: 0, total: targets.length });
-    cancelRef.current = false;
 
     try {
       // Switch on the literal OutputMode union so adding a new value forces

@@ -227,6 +227,14 @@ export default function HdrConvert() {
   const handleConvert = useCallback(async () => {
     if (!hdrFiles) return;
 
+    // Reset cancel signal at the very entry, BEFORE any awaits. A late
+    // click from a previous batch can still be sitting in the React event
+    // queue when the user starts a new one; if we reset it later (after
+    // pre-flight or after setProcessing), the stale `true` would short-
+    // circuit the new batch's first iteration. Mirrors the Rust side's
+    // SCAN_CANCEL_FLAG.store(false) at scan_font_directory entry.
+    cancelRef.current = false;
+
     // Validate brightness
     if (brightness < MIN_BRIGHTNESS || brightness > MAX_BRIGHTNESS) {
       addLog(t("msg_invalid_brightness", MIN_BRIGHTNESS, MAX_BRIGHTNESS), "error");
@@ -267,7 +275,6 @@ export default function HdrConvert() {
 
     setProcessing(true);
     setProgress({ processed: 0, total: paths.length });
-    cancelRef.current = false;
 
     try {
       addLog(t("msg_start_conversion", paths.length, eotf, brightness));

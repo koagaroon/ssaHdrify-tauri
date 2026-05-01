@@ -343,6 +343,10 @@ export default function FontEmbed() {
   const handleEmbed = useCallback(async () => {
     if (fileCount === 0) return;
 
+    // Reset cancel signal at the very entry, BEFORE any awaits — see the
+    // matching comment in HdrConvert.tsx::handleConvert for rationale.
+    cancelRef.current = false;
+
     // Pre-flight overwrite check — same project-wide pattern.
     const projectedOutputs = filePaths.map((p) => deriveEmbeddedPath(p));
     const existingCount = await countExistingFiles(projectedOutputs);
@@ -360,7 +364,6 @@ export default function FontEmbed() {
 
     setEmbedding(true);
     setBatchProgress({ processed: 0, total: filePaths.length });
-    cancelRef.current = false;
 
     try {
       addLog(t("msg_fonts_start", filePaths.length));
