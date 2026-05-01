@@ -19,14 +19,40 @@ const ALLOWED_FONT_EXTENSIONS: &[&str] = &["ttf", "otf", "ttc", "otc"];
 /// otherwise pin the JS heap (each LocalFontEntry serializes to ~500 bytes,
 /// so 100k entries ≈ 50 MB end-to-end). Above this the channel-streaming
 /// architecture is the wrong tool — partial results are preserved and the
-/// scan stops.
+/// scan stops. The check fires when `total > MAX_FONTS_PER_SCAN`, so the
+/// permitted-then-rejected entry is the (MAX + 1)th — cosmetic off-by-one
+/// kept as-is so the buffer flush emits everything that was parseable.
 const MAX_FONTS_PER_SCAN: usize = 100_000;
 
-/// Number of faces accumulated before flushing a `ScanProgress::Batch` to
-/// the frontend. Small enough that a 10k-font folder produces visible UI
-/// progress (~200 batches), large enough that IPC overhead stays below the
-/// per-face parse cost.
-const SCAN_BATCH_SIZE: usize = 50;
+/// Cap on the path-list length accepted by `scan_font_files`. Mirrors
+/// `dropzone::MAX_INPUT_PATHS` — the OS file picker can't realistically
+/// deliver more than a handful of thousand files in one selection, so 1000
+/// is generous for the user-facing flow while bounding worst-case CPU/IO
+/// if a future code path or compromised frontend supplies a huge vector.
+/// The per-entry MAX_FONTS_PER_SCAN ceiling still applies inside the loop.
+const MAX_INPUT_PATHS: usize = 1000;
+
+/// Number of faces accumulated before flushing a `ScanProgress::Batch`.
+///
+/// This value is a UX choice, NOT a correctness gate. Correctness lives in
+/// the `ScanProgress::Done` sentinel — the frontend awaits Done before
+/// reading its accumulator, so any batch that happens to slip onto Tauri's
+/// async `plugin:__TAURI_CHANNEL__|fetch` path (8192-byte threshold) is
+/// still delivered in order before Done fires. Do NOT remove the Done
+/// sentinel as "redundant" because batches are sized small here — that
+/// would reintroduce a silent zero-result for any oversize batch.
+///
+/// What this size DOES buy: keeping typical batches under the 8 KB
+/// threshold makes them travel via Tauri's synchronous direct-eval path,
+/// so they fire the JS callback during the scan rather than in a single
+/// burst at the end. Concretely: progress UI climbs visibly, cancel clicks
+/// land on a responsive JS thread, and React renders the count
+/// incrementally. With typical entry sizes (~150–220 bytes JSON, varies
+/// with path length and family-variant count), 20 faces yields roughly
+/// 3–5 KB per batch. Pathological entries (32 family variants × 256-cp
+/// CJK names × 32K UNC path) can blow this past 8 KB — that's fine,
+/// correctness still holds via Done.
+const SCAN_BATCH_SIZE: usize = 20;
 
 /// Maximum wall-clock interval between progress emits during a slow scan.
 /// Forces a flush even when the per-batch threshold hasn't been hit yet,
@@ -90,15 +116,31 @@ static ALLOWED_USER_FONT_PATHS: Lazy<Mutex<HashSet<String>>> =
 static SCAN_CANCEL_FLAG: AtomicBool = AtomicBool::new(false);
 
 /// Streaming progress event for the font scan commands. The `Batch` variant
-/// carries newly-parsed faces in chunks; the command's `Result<(), String>`
-/// return signals overall completion. The frontend treats early termination
-/// (cancel or error) as "keep what's already been streamed."
+/// carries newly-parsed faces in chunks; `Done` is the end-of-stream
+/// sentinel the frontend awaits before returning the accumulator.
+///
+/// **Why Done is required**: Tauri's `Channel` uses two delivery paths
+/// internally. Payloads under 8 KB go via direct `webview.eval()` and fire
+/// the JS callback synchronously *during* the command execution. Payloads
+/// ≥ 8 KB use an async `plugin:__TAURI_CHANNEL__|fetch` round-trip — those
+/// callbacks fire *after* the command's invoke promise has already
+/// resolved. Without a sentinel the frontend would `return accumulated`
+/// while large batches were still in flight, producing an empty list.
+/// `Done` is small (under the threshold), travels via direct eval, but the
+/// Channel layer enforces in-order delivery — so the frontend's `Done`
+/// handler only fires *after* every preceding `Batch` has been processed.
+/// See A-bug-1 in the v1.3.1 design doc for the diagnostic data.
 #[derive(serde::Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ScanProgress {
     /// One chunk of newly-parsed faces. Multiple `Batch` events are emitted
     /// per scan; the frontend appends them to its accumulator.
     Batch { entries: Vec<LocalFontEntry> },
+    /// End-of-stream sentinel. Always emitted on the `Ok` path (success or
+    /// cancel). NOT emitted on the `Err` path — the invoke rejection
+    /// already signals failure and the frontend must not block waiting for
+    /// a `Done` that will never arrive.
+    Done,
 }
 
 /// Result of font lookup — includes path and face index for TTC files.
@@ -431,17 +473,27 @@ fn scan_directory_inner<F: FnMut(Vec<LocalFontEntry>)>(
 
     for entry in read {
         if SCAN_CANCEL_FLAG.load(Ordering::Relaxed) {
-            // Flush any in-flight batch before returning so the frontend
-            // sees every face we managed to parse before cancellation.
-            if !buffer.is_empty() {
-                emit_batch(std::mem::take(&mut buffer));
+            // Stale-signal guard: if cancel fires before we've parsed any
+            // face, treat it as a leftover from a previous scan whose
+            // cancel command was still in Tauri's dispatch pool when this
+            // scan reset the flag at entry. Clear and continue rather
+            // than aborting an empty-result scan, which would surface to
+            // the user as a misleading "no fonts found" error.
+            if total == 0 {
+                SCAN_CANCEL_FLAG.store(false, Ordering::Relaxed);
+            } else {
+                // Flush any in-flight batch before returning so the
+                // frontend sees every face we parsed before cancellation.
+                if !buffer.is_empty() {
+                    emit_batch(std::mem::take(&mut buffer));
+                }
+                log::info!(
+                    "font scan cancelled in directory '{}' after {} faces",
+                    canonical_dir.display(),
+                    total
+                );
+                return Ok(total);
             }
-            log::info!(
-                "font scan cancelled in directory '{}' after {} faces",
-                canonical_dir.display(),
-                total
-            );
-            return Ok(total);
         }
 
         let entry = match entry {
@@ -523,11 +575,19 @@ pub fn scan_font_directory(
     SCAN_CANCEL_FLAG.store(false, Ordering::Relaxed);
 
     let total = scan_directory_inner(&canonical_dir, |batch| {
-        // Channel send fails only when the frontend has dropped the
-        // channel (modal closed mid-scan). Treat as soft cancel — keep
-        // parsing but stop emitting.
+        // Channel send fails when the frontend has dropped the channel
+        // (e.g., modal closed mid-scan). Subsequent sends are harmless
+        // no-ops on the same dropped channel — we keep parsing because
+        // the caller may still consume the final Ok return, and the
+        // wasted CPU is bounded by MAX_FONTS_PER_SCAN.
         let _ = progress.send(ScanProgress::Batch { entries: batch });
     })?;
+
+    // End-of-stream sentinel; see ScanProgress::Done. MUST be the last
+    // send on the Ok path so the frontend's accumulator is full when
+    // its Done handler fires. Skipped on the Err path above (the `?`
+    // short-circuits before reaching here).
+    let _ = progress.send(ScanProgress::Done);
 
     log::info!(
         "Scanned font directory '{}': {} faces total",
@@ -550,11 +610,16 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>)>(
 
     for p in paths {
         if SCAN_CANCEL_FLAG.load(Ordering::Relaxed) {
-            if !buffer.is_empty() {
-                emit_batch(std::mem::take(&mut buffer));
+            // See scan_directory_inner for the stale-signal rationale.
+            if total == 0 {
+                SCAN_CANCEL_FLAG.store(false, Ordering::Relaxed);
+            } else {
+                if !buffer.is_empty() {
+                    emit_batch(std::mem::take(&mut buffer));
+                }
+                log::info!("font scan cancelled in file list after {} faces", total);
+                return Ok(total);
             }
-            log::info!("font scan cancelled in file list after {} faces", total);
-            return Ok(total);
         }
 
         if p.is_empty() || p.len() > 4096 {
@@ -606,11 +671,21 @@ pub fn scan_font_files(
     paths: Vec<String>,
     progress: tauri::ipc::Channel<ScanProgress>,
 ) -> Result<(), String> {
+    if paths.len() > MAX_INPUT_PATHS {
+        return Err(format!(
+            "Too many file paths ({}, max {MAX_INPUT_PATHS})",
+            paths.len()
+        ));
+    }
+
     SCAN_CANCEL_FLAG.store(false, Ordering::Relaxed);
 
     let total = scan_files_inner(paths, |batch| {
         let _ = progress.send(ScanProgress::Batch { entries: batch });
     })?;
+
+    // See scan_font_directory for why Done is mandatory on the Ok path.
+    let _ = progress.send(ScanProgress::Done);
 
     log::info!("Scanned local font files: {} faces total", total);
     Ok(())
