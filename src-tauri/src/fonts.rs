@@ -20,10 +20,13 @@ const ALLOWED_FONT_EXTENSIONS: &[&str] = &["ttf", "otf", "ttc", "otc"];
 /// limit — real font-collection users with thousands of files should never
 /// hit this. Caps malicious/runaway directories whose IPC and SQLite work
 /// would otherwise grow without bound. Above this, partial results are
-/// preserved and the scan stops. The check fires when
-/// `total > MAX_FONTS_PER_SCAN`, so the permitted-then-rejected entry is the
-/// (MAX + 1)th — cosmetic off-by-one kept as-is so the buffer flush emits
-/// everything that was parseable.
+/// preserved and the scan stops.
+///
+/// Off-by-one note: the check `if total > MAX_FONTS_PER_SCAN` runs AFTER
+/// the entry has already been pushed and `total` incremented, so the cap
+/// is a soft ceiling — up to `MAX + 1` entries can land in the buffer
+/// before the early-return fires. Kept this way deliberately so the final
+/// flush emits everything that was already parseable.
 const MAX_FONTS_PER_SCAN: usize = 100_000;
 
 /// Cap on the path-list length accepted by `scan_font_files`. Mirrors
@@ -42,11 +45,14 @@ const MAX_INPUT_PATHS: usize = 1000;
 /// "redundant" because it is still the end-of-stream marker for Channel
 /// delivery and Rust-side source registration.
 ///
-/// What this size DOES buy: it controls how often the scan worker moves
-/// parsed faces into the Rust source buffer and emits a tiny count-only
-/// progress event. Keeping this modest makes progress visible and gives the
-/// cancel path regular chances to land without sending thousands of large
-/// font-entry objects through WebView2.
+/// Channel-budget context: since the SQLite migration, `ScanProgress::Batch`
+/// payload is constant-tiny (one `usize` count). The 8 KB direct-eval
+/// threshold (Budget 1 in `reference_tauri_channel_perf.md`) no longer
+/// applies — every batch goes via the synchronous direct-eval path. The
+/// only budget this size needs to respect is event rate (Budget 2): too
+/// many events too fast saturate the WebView2 main thread. Aim for ≤ ~10
+/// emits per second visible to the UI; combined with `SCAN_BATCH_INTERVAL`
+/// below, batch=40 sits well inside that envelope.
 ///
 /// The flush check lives inside the per-file face loop, so actual emitted
 /// batches are capped at this face count even when one TTC/OTC file expands
@@ -194,6 +200,16 @@ pub fn init_user_font_db(app_data_dir: &Path) -> Result<(), String> {
             );
             return Err("Cannot reset user font index".to_string());
         }
+    }
+    // Best-effort cleanup of SQLite sidecars from a prior run that may have
+    // crashed mid-transaction. SQLite recovers correctly when the main file
+    // is reborn, so functional impact of leftover sidecars is nil — but
+    // they accumulate over time and complicate forensics. Suffixes per
+    // SQLite docs: -journal (rollback), -wal / -shm (write-ahead log).
+    for suffix in ["-journal", "-wal", "-shm"] {
+        let mut sidecar = db_path.clone().into_os_string();
+        sidecar.push(suffix);
+        let _ = fs::remove_file(PathBuf::from(sidecar));
     }
     {
         let mut path_slot = USER_FONT_DB_PATH
@@ -896,7 +912,11 @@ fn scan_directory_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
                 if !buffer.is_empty() {
                     emit_batch(std::mem::take(&mut buffer))?;
                 }
-                log::warn!(
+                // info, not warn — release builds (level WARN+) would
+                // otherwise emit user paths into log files. Most other
+                // path-bearing logs in this module already use info for
+                // the same reason; this one was the odd one out.
+                log::info!(
                     "font scan {} hit the {MAX_FONTS_PER_SCAN}-face ceiling in directory '{}'",
                     scan_id,
                     canonical_dir.display()
@@ -1008,6 +1028,12 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
     let mut buffer: Vec<LocalFontEntry> = Vec::new();
     let mut total: usize = 0;
     let mut last_emit = Instant::now();
+    // Mirror the dedup `preflight_files_inner` already applies — a list
+    // with duplicate canonical paths would otherwise re-parse each
+    // duplicate, then rely on the SQLite `UNIQUE(path, face_index)`
+    // constraint to discard them as `duplicated`. Wastes IO/parse time
+    // and inflates the cancel-poll budget.
+    let mut seen: HashSet<String> = HashSet::new();
 
     for p in paths {
         if font_scan_cancelled(scan_id) {
@@ -1036,6 +1062,9 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
         if !canonical.is_file() {
             continue;
         }
+        if !seen.insert(normalize_canonical_path(&canonical.to_string_lossy())) {
+            continue;
+        }
 
         for font_entry in parse_local_font_file(&canonical) {
             buffer.push(font_entry);
@@ -1044,7 +1073,7 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
                 if !buffer.is_empty() {
                     emit_batch(std::mem::take(&mut buffer))?;
                 }
-                log::warn!(
+                log::info!(
                     "font scan {} hit the {MAX_FONTS_PER_SCAN}-face ceiling in file list",
                     scan_id
                 );
@@ -1147,6 +1176,12 @@ pub fn cancel_font_scan(scan_id: u64) {
     if scan_id == NO_SCAN_ID {
         return;
     }
+    // `fetch_max` ensures a stale cancel for an OLDER (smaller-id) scan
+    // arriving after a newer cancel cannot regress CANCEL_SCAN_ID. The
+    // returned prior max is intentionally discarded — caller has no
+    // useful action either way. Relaxed is sufficient: the scan worker
+    // re-loads CANCEL_SCAN_ID inside its poll loop and any ordering
+    // we'd want is provided by the SeqCst on ACTIVE_SCAN_ID elsewhere.
     CANCEL_SCAN_ID.fetch_max(scan_id, Ordering::Relaxed);
 }
 
@@ -1482,8 +1517,10 @@ pub fn subset_font(
     // Attempt subsetting; fall back to full font if it fails
     let subset_result = if font_index == 0 {
         // Common path: single font or first face in TTC
+        // Display, not Debug — Debug repr leaks internal struct fields,
+        // table tags, and byte offsets into a frontend-visible error.
         fontcull::subset_font_data_unicode(&font_data, &all_codepoints, &[])
-            .map_err(|e| format!("{e:?}"))
+            .map_err(|e| format!("{e}"))
     } else {
         // TTC with face index > 0: use internal crates with from_index
         subset_with_index(&font_data, font_index, &all_codepoints)
@@ -1557,7 +1594,8 @@ fn subset_with_index(font_data: &[u8], index: u32, codepoints: &[u32]) -> Result
         &empty_langs,
     );
 
-    subset_font(&font, &plan).map_err(|e| format!("Subset failed for face {index}: {e:?}"))
+    // Display, not Debug — same reasoning as the unicode-subset path.
+    subset_font(&font, &plan).map_err(|e| format!("Subset failed for face {index}: {e}"))
 }
 
 #[cfg(test)]
