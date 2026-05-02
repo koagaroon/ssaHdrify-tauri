@@ -105,6 +105,14 @@ export default function FontEmbed() {
   // ── Local font sources (persist for the tab session) ─────
   const [fontSources, setFontSources] = useState<FontSource[]>([]);
   const [sourceModalOpen, setSourceModalOpen] = useState(false);
+  // Transient busy flag during clear/remove font-source flows. Each
+  // handler does an IPC call followed by reanalyzeWithSources(); without
+  // a busy lock the UI shows the cleared state while the per-file
+  // analysis cache is still rebuilding, and a fast double-click could
+  // launch overlapping rebuilds. The lock disables the affected buttons
+  // for the duration so the visual state matches what the IPC layer is
+  // actually doing.
+  const [sourceBusy, setSourceBusy] = useState(false);
 
   const fontSourceEntryCount = useMemo(
     () => fontSources.reduce((sum, src) => sum + src.count, 0),
@@ -287,12 +295,15 @@ export default function FontEmbed() {
   // without diving into the modal.
   const handleClearFontSources = useCallback(() => {
     void (async () => {
+      setSourceBusy(true);
       try {
         await clearFontSources();
         setFontSources([]);
         await reanalyzeWithSources();
       } catch (e) {
         addLog(t("error_prefix", e instanceof Error ? e.message : String(e)), "error");
+      } finally {
+        setSourceBusy(false);
       }
     })();
   }, [reanalyzeWithSources, addLog, t]);
@@ -309,6 +320,7 @@ export default function FontEmbed() {
   const handleRemoveFontSource = useCallback(
     (id: string) => {
       void (async () => {
+        setSourceBusy(true);
         try {
           await removeFontSource(id);
           const nextSources = fontSources.filter((s) => s.id !== id);
@@ -316,6 +328,8 @@ export default function FontEmbed() {
           await reanalyzeWithSources();
         } catch (e) {
           addLog(t("error_prefix", e instanceof Error ? e.message : String(e)), "error");
+        } finally {
+          setSourceBusy(false);
         }
       })();
     },
@@ -720,11 +734,11 @@ export default function FontEmbed() {
         {fontSources.length > 0 && (
           <button
             onClick={handleClearFontSources}
-            disabled={embedding}
+            disabled={embedding || sourceBusy}
             className="flex-none px-3 rounded-lg text-lg font-bold transition-colors"
             style={{
-              background: embedding ? "var(--bg-input)" : "var(--cancel-bg)",
-              color: embedding ? "var(--text-muted)" : "var(--cancel-text)",
+              background: embedding || sourceBusy ? "var(--bg-input)" : "var(--cancel-bg)",
+              color: embedding || sourceBusy ? "var(--text-muted)" : "var(--cancel-text)",
               height: "38px",
             }}
             title={t("btn_clear_font_sources")}
