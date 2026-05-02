@@ -156,6 +156,22 @@ fn open_user_font_db() -> Result<Connection, String> {
     // up-front so the database stays well-behaved across that refactor.
     conn.pragma_update(None, "journal_mode", "WAL")
         .map_err(|e| db_error("journal_mode setup failed", e))?;
+    // SQLite silently keeps the previous mode (or falls back to
+    // "memory") on filesystems that can't host WAL files (read-only FS,
+    // some network mounts, certain tmpfs). pragma_update returns Ok in
+    // both success AND silent-degrade cases — verify the actual mode
+    // after the fact and warn if WAL didn't take. Not fatal: the busy_
+    // timeout below still applies, and the modal-scrim UX prevents the
+    // contention this hardening was meant for in the first place.
+    let actual_mode: String = conn
+        .pragma_query_value(None, "journal_mode", |row| row.get(0))
+        .map_err(|e| db_error("journal_mode verify failed", e))?;
+    if !actual_mode.eq_ignore_ascii_case("wal") {
+        log::warn!(
+            "user font index journal_mode is '{actual_mode}', not WAL — \
+             SQLITE_BUSY hardening may not apply on this filesystem"
+        );
+    }
     conn.pragma_update(None, "busy_timeout", 5000)
         .map_err(|e| db_error("busy_timeout setup failed", e))?;
     Ok(conn)
@@ -845,12 +861,15 @@ fn preflight_directory_inner(canonical_dir: &Path) -> Result<FontScanPreflight, 
     };
     let mut visited: usize = 0;
     for entry in read {
-        visited += 1;
-        if visited > MAX_PREFLIGHT_ENTRIES {
+        // Cap fires BEFORE we touch the entry (canonicalize / metadata),
+        // so the worst-case CPU cost is bounded at MAX_PREFLIGHT_ENTRIES
+        // canonicalize calls — not MAX+1.
+        if visited >= MAX_PREFLIGHT_ENTRIES {
             return Err(format!(
                 "Directory has too many entries to preview (>{MAX_PREFLIGHT_ENTRIES})"
             ));
         }
+        visited += 1;
         let Ok(entry) = entry else {
             continue;
         };
@@ -1284,12 +1303,25 @@ pub fn cancel_font_scan(scan_id: u64) {
     if scan_id == NO_SCAN_ID {
         return;
     }
+    // Range-check against the currently-active scan id. Without this, a
+    // misbehaving frontend calling `cancel_font_scan(u64::MAX)` once
+    // would permanently set CANCEL_SCAN_ID to MAX and silently disable
+    // cancellation for the rest of the session — every legitimate
+    // future scan id would compare unequal in `font_scan_cancelled` and
+    // the cancel button would stop working with no log signal. Project
+    // is trust-the-frontend, so this is defense-in-depth that matches
+    // the IPC-validation discipline in `validate_font_source_id` and
+    // `validate_ipc_path`.
+    let active = ACTIVE_SCAN_ID.load(Ordering::SeqCst);
+    if active == NO_SCAN_ID || scan_id > active {
+        return;
+    }
     // `fetch_max` ensures a stale cancel for an OLDER (smaller-id) scan
     // arriving after a newer cancel cannot regress CANCEL_SCAN_ID. The
     // returned prior max is intentionally discarded — caller has no
     // useful action either way. Relaxed is sufficient: the scan worker
     // re-loads CANCEL_SCAN_ID inside its poll loop and any ordering
-    // we'd want is provided by the SeqCst on ACTIVE_SCAN_ID elsewhere.
+    // we'd want is provided by the SeqCst on ACTIVE_SCAN_ID above.
     CANCEL_SCAN_ID.fetch_max(scan_id, Ordering::Relaxed);
 }
 
@@ -1332,6 +1364,7 @@ pub fn resolve_user_font(
 #[tauri::command]
 pub fn remove_font_source(source_id: String) -> Result<(), String> {
     validate_font_source_id(&source_id)?;
+    reject_during_active_scan("Cannot remove font source while a scan is running")?;
     let conn = open_user_font_db()?;
     conn.execute(
         "DELETE FROM font_sources WHERE source_id = ?1",
@@ -1343,9 +1376,25 @@ pub fn remove_font_source(source_id: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn clear_font_sources() -> Result<(), String> {
+    reject_during_active_scan("Cannot clear font sources while a scan is running")?;
     let conn = open_user_font_db()?;
     conn.execute("DELETE FROM font_sources", [])
         .map_err(|e| db_error("source clear failed", e))?;
+    Ok(())
+}
+
+/// Refuse a mutation when a font scan is mid-flight. WAL + busy_timeout
+/// keeps the SQLite layer correctness-safe under contention, but a
+/// `DELETE FROM font_sources` issued mid-scan would block until the
+/// scan's transaction commits and then immediately delete everything
+/// just inserted — surprising the user who probably wanted "clear
+/// before the scan starts" or "after it completes". Surface the
+/// situation as an error instead so the UI can disable the button or
+/// show a meaningful message.
+fn reject_during_active_scan(message: &str) -> Result<(), String> {
+    if ACTIVE_SCAN_ID.load(Ordering::SeqCst) != NO_SCAN_ID {
+        return Err(message.to_string());
+    }
     Ok(())
 }
 
@@ -1884,13 +1933,30 @@ mod tests {
     }
 
     /// `cancel_font_scan` records the requested id and stale lower ids do not
-    /// overwrite a newer cancel request.
+    /// overwrite a newer cancel request. Requires an active scan guard so
+    /// the new range check (must target the currently-active id) lets the
+    /// cancel through.
     #[test]
     fn cancel_command_records_scan_id_monotonically() {
         let scan_id = CANCEL_SCAN_ID.load(Ordering::Relaxed).saturating_add(10);
+        let _guard = begin_font_scan(scan_id).expect("begin scan");
         cancel_font_scan(scan_id);
         assert_eq!(CANCEL_SCAN_ID.load(Ordering::Relaxed), scan_id);
+        // A stale lower id arriving while active==scan_id passes the
+        // range check (scan_id-1 < active), but fetch_max is a no-op
+        // because CANCEL_SCAN_ID is already at scan_id (the higher value).
         cancel_font_scan(scan_id - 1);
         assert_eq!(CANCEL_SCAN_ID.load(Ordering::Relaxed), scan_id);
+    }
+
+    /// `cancel_font_scan` rejects ids that don't belong to a current or
+    /// past active scan — defense-in-depth against a misbehaving frontend
+    /// that could otherwise permanently disable cancellation by calling
+    /// with a u64::MAX id.
+    #[test]
+    fn cancel_command_rejects_future_id_when_no_active_scan() {
+        let baseline = CANCEL_SCAN_ID.load(Ordering::Relaxed);
+        cancel_font_scan(u64::MAX);
+        assert_eq!(CANCEL_SCAN_ID.load(Ordering::Relaxed), baseline);
     }
 }
