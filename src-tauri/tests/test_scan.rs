@@ -37,8 +37,11 @@ fn next_test_scan_id() -> u64 {
     NEXT_TEST_SCAN_ID.fetch_add(1, Ordering::Relaxed)
 }
 
-/// A `Channel<ScanProgress>` that drops every event. Used for path-validation
-/// tests where the scan errors out before any batch is emitted.
+/// A `Channel<ScanProgress>` that drops every event. Tests using this
+/// MUST early-error before any progress event fires (i.e., the scan
+/// command rejects the request before spawning the worker). For
+/// anything else, use `collecting_channel` so batch + done events are
+/// observable.
 fn discard_channel() -> Channel<ScanProgress> {
     Channel::new(|_: InvokeResponseBody| Ok(()))
 }
@@ -261,6 +264,11 @@ fn scans_user_picked_file_list_streams_progress_and_registers_source() {
 
     let paths = os_font_file_sample(20);
     if paths.len() < 2 {
+        // Portability tradeoff: stripped-down CI containers may not have
+        // a populated OS font directory. We accept the silent skip
+        // rather than a hard fail because a real dev workstation always
+        // has fonts; CI without them is intentional minimalism, not a
+        // bug. If this ever needs to gate releases, swap to assert!.
         println!(
             "Skipping scan_font_files test: only {} fonts available in OS dir",
             paths.len()
@@ -305,10 +313,42 @@ fn scan_font_files_rejects_oversize_path_list() {
         next_test_scan_id(),
         "scan-test-files-oversize".to_string(),
     ));
+    let err = result.expect_err("scan_font_files should reject path lists exceeding MAX_INPUT_PATHS");
+    // Anchor on the contract-bearing prefix so unrelated future
+    // failures (e.g., DB open) don't masquerade as the cap firing.
     assert!(
-        result.is_err(),
-        "scan_font_files should reject path lists exceeding MAX_INPUT_PATHS"
+        err.starts_with("Too many file paths"),
+        "expected MAX_INPUT_PATHS error, got: {err}"
     );
+}
+
+#[test]
+fn scan_font_files_accepts_max_input_paths_boundary() {
+    let _guard = SCAN_TEST_LOCK.lock().unwrap();
+    init_scan_test_db("files-boundary");
+    clear_font_sources().unwrap();
+
+    // Boundary partner of `scan_font_files_rejects_oversize_path_list`.
+    // Exactly MAX_INPUT_PATHS (1000) paths must pass length validation
+    // and reach the worker — even though every path is a non-existent
+    // dummy that fails canonicalize and contributes zero faces, the
+    // command must NOT reject before spawning the worker. Catches a
+    // future `> ↔ >=` flip in the validation.
+    let boundary: Vec<String> = (0..1000).map(|i| format!("dummy-{i}.ttf")).collect();
+    let (channel, _totals, done) = collecting_channel();
+    let result = tauri::async_runtime::block_on(scan_font_files(
+        boundary,
+        channel,
+        next_test_scan_id(),
+        "scan-test-files-boundary".to_string(),
+    ));
+    assert!(
+        result.is_ok(),
+        "scan_font_files should accept exactly MAX_INPUT_PATHS paths"
+    );
+    let done = take_done(&done);
+    assert_eq!(done.added, 0);
+    assert!(!done.cancelled);
 }
 
 #[test]
