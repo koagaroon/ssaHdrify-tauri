@@ -182,7 +182,7 @@ export const strings: Record<string, StringEntry> = {
   dialog_filter_video_files: { en: "Video Files", zh: "视频文件" },
   dialog_filter_subtitle_files: { en: "Subtitle Files", zh: "字幕文件" },
   dialog_pick_subtitle_files_title: { en: "Select subtitle files", zh: "选择字幕文件" },
-  dialog_pick_ass_files_title: { en: "Select .ass files", zh: "选择 .ass 文件" },
+  dialog_pick_ass_files_title: { en: "Select ASS/SSA files", zh: "选择 ASS/SSA 文件" },
   dialog_pick_rename_inputs_title: {
     en: "Select videos and subtitles",
     zh: "选择视频和字幕",

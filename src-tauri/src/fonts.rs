@@ -16,13 +16,12 @@ const ALLOWED_FONT_EXTENSIONS: &[&str] = &["ttf", "otf", "ttc", "otc"];
 
 /// Defense-in-depth ceiling on faces emitted from a single scan. Not a UX
 /// limit — real font-collection users with thousands of files should never
-/// hit this. Caps malicious/runaway directories whose IPC payload would
-/// otherwise pin the Rust source index and scan worker heap. Above this the
-/// in-memory source-index architecture is the wrong tool — partial results
-/// are preserved and the scan stops. The check fires when
-/// `total > MAX_FONTS_PER_SCAN`, so the
-/// permitted-then-rejected entry is the (MAX + 1)th — cosmetic off-by-one
-/// kept as-is so the buffer flush emits everything that was parseable.
+/// hit this. Caps malicious/runaway directories whose IPC and SQLite work
+/// would otherwise grow without bound. Above this, partial results are
+/// preserved and the scan stops. The check fires when
+/// `total > MAX_FONTS_PER_SCAN`, so the permitted-then-rejected entry is the
+/// (MAX + 1)th — cosmetic off-by-one kept as-is so the buffer flush emits
+/// everything that was parseable.
 const MAX_FONTS_PER_SCAN: usize = 100_000;
 
 /// Cap on the path-list length accepted by `scan_font_files`. Mirrors
@@ -161,6 +160,8 @@ fn init_user_font_schema(conn: &Connection) -> Result<(), String> {
         );
         CREATE INDEX IF NOT EXISTS idx_font_family_lookup
             ON font_family_keys(key, source_order DESC, face_id DESC);
+        CREATE INDEX IF NOT EXISTS idx_font_family_face
+            ON font_family_keys(face_id);
         CREATE INDEX IF NOT EXISTS idx_font_faces_source
             ON font_faces(source_id);
         CREATE INDEX IF NOT EXISTS idx_font_faces_path_index
@@ -240,8 +241,8 @@ pub enum ScanProgress {
     /// events are emitted per scan; the frontend only needs the cumulative
     /// count because the heavy source index stays in Rust.
     Batch { total: usize },
-    /// End-of-stream sentinel. Always emitted on the `Ok` path (success or
-    /// cancel). NOT emitted on the `Err` path — the invoke rejection
+    /// End-of-stream sentinel. Always emitted on the `Ok` path (success,
+    /// cancel, or defense-in-depth cap stop). NOT emitted on the `Err` path — the invoke rejection
     /// already signals failure and the frontend must not block waiting for
     /// a `Done` that will never arrive.
     Done {
@@ -254,6 +255,9 @@ pub enum ScanProgress {
 #[derive(Debug, Clone, Copy)]
 struct ScanOutcome {
     total: usize,
+    /// True when the scan stopped early but should keep already-imported
+    /// partial results. This includes user cancellation and the defensive
+    /// MAX_FONTS_PER_SCAN ceiling.
     cancelled: bool,
 }
 
@@ -900,11 +904,15 @@ fn scan_directory_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
                 if !buffer.is_empty() {
                     emit_batch(std::mem::take(&mut buffer))?;
                 }
-                return Err(format!(
-                    "Too many fonts in directory (> {MAX_FONTS_PER_SCAN}). \
-                     The defense-in-depth ceiling was exceeded — split the \
-                     folder into smaller batches."
-                ));
+                log::warn!(
+                    "font scan {} hit the {MAX_FONTS_PER_SCAN}-face ceiling in directory '{}'",
+                    scan_id,
+                    canonical_dir.display()
+                );
+                return Ok(ScanOutcome {
+                    total,
+                    cancelled: true,
+                });
             }
 
             if buffer.len() >= SCAN_BATCH_SIZE || last_emit.elapsed() >= SCAN_BATCH_INTERVAL {
@@ -1047,9 +1055,14 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
                 if !buffer.is_empty() {
                     emit_batch(std::mem::take(&mut buffer))?;
                 }
-                return Err(format!(
-                    "Too many font faces across files (> {MAX_FONTS_PER_SCAN})"
-                ));
+                log::warn!(
+                    "font scan {} hit the {MAX_FONTS_PER_SCAN}-face ceiling in file list",
+                    scan_id
+                );
+                return Ok(ScanOutcome {
+                    total,
+                    cancelled: true,
+                });
             }
 
             if buffer.len() >= SCAN_BATCH_SIZE || last_emit.elapsed() >= SCAN_BATCH_INTERVAL {
@@ -1596,6 +1609,21 @@ mod tests {
             .expect("empty source cleanup should work");
         tx.commit().expect("transaction should commit");
         outcome
+    }
+
+    #[test]
+    fn db_schema_indexes_family_keys_for_cascade_delete() {
+        let _guard = DB_TEST_LOCK.lock().unwrap();
+        init_test_user_font_db("schema-index");
+        let conn = open_user_font_db().expect("test DB should open");
+        let index_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_font_family_face'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("schema index query should work");
+        assert_eq!(index_count, 1);
     }
 
     #[test]

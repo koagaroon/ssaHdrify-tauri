@@ -48,6 +48,7 @@ vi.mock("@tauri-apps/plugin-fs", () => ({
 
 // Import AFTER vi.mock so the mocked Channel is picked up.
 import {
+  pickAssFiles,
   pickFontFiles,
   pickRenameInputs,
   preflightFontDirectory,
@@ -124,10 +125,12 @@ describe("localized native file dialogs", () => {
   const zh = (key: string): string =>
     ({
       dialog_filter_all_files: "所有文件",
+      dialog_filter_ass_ssa_subtitles: "ASS/SSA 字幕",
       dialog_filter_font_files: "字体文件",
       dialog_filter_subtitle_files: "字幕文件",
       dialog_filter_video_files: "视频文件",
       dialog_filter_video_subtitle_files: "视频和字幕文件",
+      dialog_pick_ass_files_title: "选择 ASS/SSA 文件",
       dialog_pick_font_files_title: "选择字体文件",
       dialog_pick_rename_inputs_title: "选择视频和字幕",
     })[key] ?? key;
@@ -142,6 +145,34 @@ describe("localized native file dialogs", () => {
       filters: [
         { name: "字体文件", extensions: ["ttf", "otf", "ttc", "otc"] },
         { name: "所有文件", extensions: ["*"] },
+      ],
+    });
+  });
+
+  it("uses ASS/SSA wording for ASS picker title and filter", async () => {
+    openMock.mockResolvedValue(["D:/Subs/A.ass"]);
+    await pickAssFiles(zh);
+
+    expect(openMock).toHaveBeenCalledWith({
+      multiple: true,
+      title: "选择 ASS/SSA 文件",
+      filters: [
+        { name: "ASS/SSA 字幕", extensions: ["ass", "ssa"] },
+        { name: "所有文件", extensions: ["*"] },
+      ],
+    });
+  });
+
+  it("keeps ASS/SSA wording in fallback picker labels", async () => {
+    openMock.mockResolvedValue(["D:/Subs/A.ssa"]);
+    await pickAssFiles();
+
+    expect(openMock).toHaveBeenCalledWith({
+      multiple: true,
+      title: "Select ASS/SSA files",
+      filters: [
+        { name: "ASS/SSA Subtitles", extensions: ["ass", "ssa"] },
+        { name: "All Files", extensions: ["*"] },
       ],
     });
   });

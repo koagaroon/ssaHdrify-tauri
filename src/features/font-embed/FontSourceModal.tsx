@@ -95,6 +95,8 @@ export default function FontSourceModal(props: Props) {
   } = props;
   const { t } = useI18n();
 
+  const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
   const [scanning, setScanning] = useState(false);
   // Live count for the "Scanned N fonts so far…" progress row. Rust can
   // deliver many Channel batches in a burst, so state updates are throttled
@@ -120,9 +122,9 @@ export default function FontSourceModal(props: Props) {
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
 
   const requestClose = useCallback(() => {
-    if (scanning) return;
+    if (busyRef.current) return;
     onClose();
-  }, [scanning, onClose]);
+  }, [onClose]);
 
   // Close on Escape.
   useEffect(() => {
@@ -223,6 +225,18 @@ export default function FontSourceModal(props: Props) {
     void cancelFontScan(scanId);
   }, []);
 
+  const claimScanFlow = useCallback(() => {
+    if (busyRef.current) return false;
+    busyRef.current = true;
+    setBusy(true);
+    return true;
+  }, []);
+
+  const releaseScanFlow = useCallback(() => {
+    busyRef.current = false;
+    setBusy(false);
+  }, []);
+
   const confirmLargeFontScan = useCallback(
     async (preflight: FontScanPreflight): Promise<boolean> => {
       if (!shouldWarnLargeFontScan(preflight)) return true;
@@ -239,24 +253,21 @@ export default function FontSourceModal(props: Props) {
   );
 
   const handleAddFolder = useCallback(async () => {
+    if (!claimScanFlow()) return;
     setError(null);
     setInfo(null);
-    const dir = await pickFontDirectory(t);
-    if (!dir) return;
+    let scanId: number | null = null;
     try {
+      const dir = await pickFontDirectory(t);
+      if (!dir) return;
       const preflight = await preflightFontDirectory(dir);
       const confirmed = await confirmLargeFontScan(preflight);
       if (!confirmed) return;
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-      return;
-    }
-    const scanId = newScanId();
-    const sourceId = newId();
-    activeScanIdRef.current = scanId;
-    resetScanProgress();
-    setScanning(true);
-    try {
+      scanId = newScanId();
+      const sourceId = newId();
+      activeScanIdRef.current = scanId;
+      resetScanProgress();
+      setScanning(true);
       const scan = await scanFontDirectory(dir, sourceId, scanId, (total) =>
         scheduleScanProgress(total)
       );
@@ -284,39 +295,39 @@ export default function FontSourceModal(props: Props) {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      if (activeScanIdRef.current === scanId) {
+      if (scanId !== null && activeScanIdRef.current === scanId) {
         activeScanIdRef.current = null;
       }
       setScanning(false);
+      releaseScanFlow();
     }
   }, [
     onAddSource,
     t,
+    claimScanFlow,
     confirmLargeFontScan,
+    releaseScanFlow,
     reportSourceAdded,
     resetScanProgress,
     scheduleScanProgress,
   ]);
 
   const handleAddFiles = useCallback(async () => {
+    if (!claimScanFlow()) return;
     setError(null);
     setInfo(null);
-    const paths = await pickFontFiles(t);
-    if (!paths || paths.length === 0) return;
+    let scanId: number | null = null;
     try {
+      const paths = await pickFontFiles(t);
+      if (!paths || paths.length === 0) return;
       const preflight = await preflightFontFiles(paths);
       const confirmed = await confirmLargeFontScan(preflight);
       if (!confirmed) return;
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-      return;
-    }
-    const scanId = newScanId();
-    const sourceId = newId();
-    activeScanIdRef.current = scanId;
-    resetScanProgress();
-    setScanning(true);
-    try {
+      scanId = newScanId();
+      const sourceId = newId();
+      activeScanIdRef.current = scanId;
+      resetScanProgress();
+      setScanning(true);
       const scan = await scanFontFiles(paths, sourceId, scanId, (total) =>
         scheduleScanProgress(total)
       );
@@ -341,15 +352,18 @@ export default function FontSourceModal(props: Props) {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      if (activeScanIdRef.current === scanId) {
+      if (scanId !== null && activeScanIdRef.current === scanId) {
         activeScanIdRef.current = null;
       }
       setScanning(false);
+      releaseScanFlow();
     }
   }, [
     onAddSource,
     t,
+    claimScanFlow,
     confirmLargeFontScan,
+    releaseScanFlow,
     reportSourceAdded,
     resetScanProgress,
     scheduleScanProgress,
@@ -394,9 +408,9 @@ export default function FontSourceModal(props: Props) {
             ref={closeButtonRef}
             type="button"
             onClick={requestClose}
-            disabled={scanning}
+            disabled={busy}
             className="modal-close"
-            title={scanning ? t("font_sources_scanning") : t("font_sources_close")}
+            title={busy ? t("font_sources_scanning") : t("font_sources_close")}
             aria-label={t("font_sources_close")}
           >
             <svg
@@ -444,13 +458,17 @@ export default function FontSourceModal(props: Props) {
                   >
                     <span className="truncate mr-3">{label}</span>
                     <button
+                      type="button"
                       onClick={() => onRemoveSource(src.id)}
+                      disabled={busy}
                       className="px-2 py-0.5 rounded text-xs"
                       style={{
                         background: "var(--cancel-bg)",
                         color: "var(--cancel-text)",
+                        opacity: busy ? 0.5 : 1,
+                        cursor: busy ? "not-allowed" : "pointer",
                       }}
-                      title={t("font_sources_remove")}
+                      title={busy ? t("font_sources_scanning") : t("font_sources_remove")}
                     >
                       ✕
                     </button>
@@ -461,7 +479,7 @@ export default function FontSourceModal(props: Props) {
           )}
 
           {/* Option cards — two picker entry points */}
-          <button type="button" onClick={handleAddFolder} disabled={scanning} className="modal-opt">
+          <button type="button" onClick={handleAddFolder} disabled={busy} className="modal-opt">
             <span className="modal-opt-icon" aria-hidden="true">
               <svg
                 width="20"
@@ -478,12 +496,12 @@ export default function FontSourceModal(props: Props) {
             </span>
             <div className="modal-opt-text">
               <div className="modal-opt-title">
-                {scanning ? t("font_sources_scanning") : t("font_sources_add_folder")}
+                {busy ? t("font_sources_scanning") : t("font_sources_add_folder")}
               </div>
               <div className="modal-opt-sub">{t("font_sources_add_folder_sub")}</div>
             </div>
           </button>
-          <button type="button" onClick={handleAddFiles} disabled={scanning} className="modal-opt">
+          <button type="button" onClick={handleAddFiles} disabled={busy} className="modal-opt">
             <span className="modal-opt-icon" aria-hidden="true">
               <svg
                 width="20"
@@ -500,7 +518,9 @@ export default function FontSourceModal(props: Props) {
               </svg>
             </span>
             <div className="modal-opt-text">
-              <div className="modal-opt-title">{t("font_sources_add_files")}</div>
+              <div className="modal-opt-title">
+                {busy ? t("font_sources_scanning") : t("font_sources_add_files")}
+              </div>
               <div className="modal-opt-sub">{t("font_sources_add_files_sub")}</div>
             </div>
           </button>

@@ -27,7 +27,7 @@ const dialogFallbacks: Record<string, string> = {
   dialog_filter_video_files: "Video Files",
   dialog_filter_subtitle_files: "Subtitle Files",
   dialog_pick_subtitle_files_title: "Select subtitle files",
-  dialog_pick_ass_files_title: "Select .ass files",
+  dialog_pick_ass_files_title: "Select ASS/SSA files",
   dialog_pick_rename_inputs_title: "Select videos and subtitles",
   dialog_pick_output_directory_title: "Choose output directory",
   dialog_pick_font_directory_title: "Select font folder",
