@@ -11,6 +11,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use crate::util::validate_ipc_path;
+
 /// Allowed font file extensions (lowercase).
 const ALLOWED_FONT_EXTENSIONS: &[&str] = &["ttf", "otf", "ttc", "otc"];
 
@@ -723,16 +725,6 @@ pub struct FontScanPreflight {
     total_bytes: u64,
 }
 
-fn validate_input_path(path: &str, label: &str) -> Result<(), String> {
-    if path.is_empty() || path.len() > 4096 {
-        return Err(format!("{label} path must be 1-4096 characters"));
-    }
-    if path.chars().any(|c| c.is_control()) {
-        return Err(format!("{label} path contains invalid characters"));
-    }
-    Ok(())
-}
-
 fn add_preflight_file(path: &Path, out: &mut FontScanPreflight) {
     if !has_allowed_font_extension(path) {
         return;
@@ -785,7 +777,7 @@ fn preflight_files_inner(paths: Vec<String>) -> FontScanPreflight {
     };
     let mut seen = HashSet::new();
     for p in paths {
-        if validate_input_path(&p, "File").is_err() {
+        if validate_ipc_path(&p, "File").is_err() {
             continue;
         }
         let Ok(canonical) = Path::new(&p).canonicalize() else {
@@ -803,7 +795,7 @@ fn preflight_files_inner(paths: Vec<String>) -> FontScanPreflight {
 
 #[tauri::command]
 pub async fn preflight_font_directory(dir: String) -> Result<FontScanPreflight, String> {
-    validate_input_path(&dir, "Directory")?;
+    validate_ipc_path(&dir, "Directory")?;
     tauri::async_runtime::spawn_blocking(move || {
         let canonical_dir = Path::new(&dir).canonicalize().map_err(|e| {
             log::warn!("preflight canonicalize directory failed: {e}");
@@ -942,7 +934,7 @@ pub async fn scan_font_directory(
     scan_id: u64,
     source_id: String,
 ) -> Result<(), String> {
-    validate_input_path(&dir, "Directory")?;
+    validate_ipc_path(&dir, "Directory")?;
     validate_font_source_id(&source_id)?;
 
     let active_scan = begin_font_scan(scan_id)?;
@@ -1033,10 +1025,7 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
             });
         }
 
-        if p.is_empty() || p.len() > 4096 {
-            continue;
-        }
-        if p.chars().any(|c| c.is_control()) {
+        if validate_ipc_path(&p, "File").is_err() {
             continue;
         }
 

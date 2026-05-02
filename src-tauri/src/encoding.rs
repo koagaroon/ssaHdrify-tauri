@@ -107,15 +107,7 @@ pub fn read_text_detect_encoding(path: String) -> Result<ReadTextResult, String>
     // the access target at the null byte; `..` segments, while mostly
     // defanged by canonicalize later, are rejected here as an early
     // signal that the caller is not the native file picker.
-    if path.is_empty() || path.len() > 4096 {
-        return Err("Path must be 1-4096 characters".to_string());
-    }
-    if path
-        .chars()
-        .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}' | '\u{0085}'))
-    {
-        return Err("Path contains invalid characters".to_string());
-    }
+    crate::util::validate_ipc_path(&path, "Subtitle")?;
 
     // Extension validation: only allow subtitle/text file types
     let path_ref = Path::new(&path);

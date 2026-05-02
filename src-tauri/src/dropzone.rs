@@ -34,15 +34,11 @@ pub fn expand_dropped_paths(paths: Vec<String>) -> Result<Vec<String>, String> {
 
     let mut result: Vec<String> = Vec::new();
     for raw in &paths {
-        if raw.is_empty() || raw.len() > 4096 {
-            continue;
-        }
-        // Reject control chars; native drag-drop shouldn't produce them
-        // but the IPC boundary trusts no caller.
-        if raw
-            .chars()
-            .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}' | '\u{0085}'))
-        {
+        // Skip silently rather than fail — native drag-drop shouldn't
+        // produce empty / oversize / control-char paths, but the IPC
+        // boundary trusts no caller, and dropping ONE bad path should
+        // not abort the whole batch the user just dropped.
+        if crate::util::validate_ipc_path(raw, "Dropped").is_err() {
             continue;
         }
         let p = Path::new(raw);
