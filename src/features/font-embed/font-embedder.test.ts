@@ -67,6 +67,11 @@ function makeMultiFamilyEntry(
 describe("analyzeFonts — match priority", () => {
   beforeEach(() => {
     findSystemFontMock.mockReset();
+    // Reset both mocks even though tests in this block pass userFontMap
+    // (truthy), short-circuiting before resolveUserFont fires. Defensive
+    // — keeps state symmetric so a future test added here that flips
+    // useRustUserFonts=true doesn't inherit stale mock state.
+    resolveUserFontMock.mockReset();
   });
 
   it("skips findSystemFont when a local font matches (and reports source=local)", async () => {
@@ -146,6 +151,11 @@ describe("analyzeFonts — match priority", () => {
 describe("analyzeFonts — real-world anime-release scenario", () => {
   beforeEach(() => {
     findSystemFontMock.mockReset();
+    // Reset both mocks even though tests in this block pass userFontMap
+    // (truthy), short-circuiting before resolveUserFont fires. Defensive
+    // — keeps state symmetric so a future test added here that flips
+    // useRustUserFonts=true doesn't inherit stale mock state.
+    resolveUserFontMock.mockReset();
   });
 
   // Simulates a real-world raw-pack scan output — ONE entry per face, with
@@ -294,7 +304,12 @@ describe("analyzeFonts — useRustUserFonts production path", () => {
     expect(infos.find((i) => i.key.family === "FZLanTingHei")?.source).toBe("system");
     expect(infos.find((i) => i.key.family === "Arial" && i.key.bold)?.source).toBe("system");
     // resolveUserFont was consulted for every distinct (family, bold, italic).
+    // Pin BOTH the count AND which arguments — a regression that called
+    // FZLanTingHei twice and Arial zero times would still satisfy a
+    // count-only assertion.
     expect(resolveUserFontMock.mock.calls.length).toBe(2);
+    expect(resolveUserFontMock).toHaveBeenCalledWith("FZLanTingHei", false, false);
+    expect(resolveUserFontMock).toHaveBeenCalledWith("Arial", true, false);
   });
 });
 

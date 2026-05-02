@@ -45,13 +45,22 @@ describe("parseSubtitle", () => {
   });
 
   it("parses MicroDVD SUB frame ranges and reports format=sub", () => {
-    // Frame numbers at 23.976 fps default. {24}{48} ≈ 1.001 s → 2.002 s.
+    // Frame numbers at 23.976 fps default. {24}{48} ≈ 1001 ms → 2002 ms;
+    // {72}{96} ≈ 3003 ms → 4004 ms. The defining behavior of the SUB
+    // parser is the frame-to-ms conversion, so anchor on the timing math
+    // (not just the verbatim text slice).
     const content = "{24}{48}First frame block\n{72}{96}Second frame block\n";
     const result = parseSubtitle(content);
     expect(result.format).toBe("sub");
     expect(result.captions).toHaveLength(2);
     expect(result.captions[0].text).toBe("First frame block");
     expect(result.captions[1].text).toBe("Second frame block");
+    // toBeCloseTo with -1 precision tolerates the 23.976 fps rounding
+    // (~0.5 ms drift either side of the integer ms).
+    expect(result.captions[0].start).toBeCloseTo(1001, -1);
+    expect(result.captions[0].end).toBeCloseTo(2002, -1);
+    expect(result.captions[1].start).toBeCloseTo(3003, -1);
+    expect(result.captions[1].end).toBeCloseTo(4004, -1);
   });
 
   it("throws when the content has no recognized header or timing", () => {
