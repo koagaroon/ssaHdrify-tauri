@@ -91,6 +91,14 @@ const MAX_PROVENANCE_CACHE_SIZE: usize = 100_000;
 /// app startup; persistence across restarts is intentionally deferred.
 const USER_FONT_DB_FILENAME: &str = "user-font-sources.session.sqlite3";
 
+/// Cap on directory entries the preflight pass will canonicalize before
+/// bailing out. Real font folders top out around 20–30k entries even in
+/// the XL bucket; a directory exceeding this is either a misclick onto
+/// a system root or a hostile fixture, and either way the user wants
+/// "directory too large to preview" feedback rather than a frozen UI
+/// while millions of canonicalize calls run.
+const MAX_PREFLIGHT_ENTRIES: usize = 200_000;
+
 /// Strip the Win32 extended-length UNC prefix (`\\?\`) that `canonicalize()`
 /// adds on Windows, so paths compare consistently across insert and lookup.
 fn normalize_canonical_path(canonical_str: &str) -> String {
@@ -597,7 +605,13 @@ const MAX_FAMILY_VARIANTS_PER_FACE: usize = 32;
 /// `canonical` must already be canonicalized by the caller. User provenance
 /// is registered later when the emitted batch is committed to the session
 /// SQLite index.
-fn parse_local_font_file(canonical: &Path) -> Vec<LocalFontEntry> {
+///
+/// `scan_id` lets the per-face inner loop poll cancellation BETWEEN faces.
+/// Without this, a single TTC with up to `MAX_TTC_FACES` slow-to-parse
+/// faces could stall the cancel-acknowledge loop for several seconds (the
+/// outer scan only polls between FILES). Pass `NO_SCAN_ID` from contexts
+/// without an active scan (e.g., direct unit tests).
+fn parse_local_font_file(canonical: &Path, scan_id: u64) -> Vec<LocalFontEntry> {
     use fontcull_skrifa::string::StringId;
     use fontcull_skrifa::{FontRef, MetadataProvider};
 
@@ -649,6 +663,14 @@ fn parse_local_font_file(canonical: &Path) -> Vec<LocalFontEntry> {
     const MAX_CONSECUTIVE_FAILURES: u32 = 1;
     let mut consecutive_failures: u32 = 0;
     for i in 0..max_faces {
+        // Per-face cancel poll. The outer scan_*_inner loops only check
+        // between files; a 16-face TTC where each face triggers expensive
+        // skrifa name-table walks can otherwise eat several seconds of
+        // unresponsive Cancel button. NO_SCAN_ID is the "no active scan"
+        // sentinel and must never trigger cancellation.
+        if font_scan_cancelled(scan_id) {
+            break;
+        }
         // font-kit for weight/style — its enum API is simpler than reading
         // OS/2 directly through skrifa.
         let fk_font = match font_kit::font::Font::from_bytes(arc_data.clone(), i) {
@@ -779,7 +801,14 @@ fn preflight_directory_inner(canonical_dir: &Path) -> Result<FontScanPreflight, 
         font_files: 0,
         total_bytes: 0,
     };
+    let mut visited: usize = 0;
     for entry in read {
+        visited += 1;
+        if visited > MAX_PREFLIGHT_ENTRIES {
+            return Err(format!(
+                "Directory has too many entries to preview (>{MAX_PREFLIGHT_ENTRIES})"
+            ));
+        }
         let Ok(entry) = entry else {
             continue;
         };
@@ -917,7 +946,7 @@ fn scan_directory_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
             continue;
         }
 
-        for font_entry in parse_local_font_file(&canonical) {
+        for font_entry in parse_local_font_file(&canonical, scan_id) {
             buffer.push(font_entry);
             total += 1;
             if total > MAX_FONTS_PER_SCAN {
@@ -1078,7 +1107,7 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
             continue;
         }
 
-        for font_entry in parse_local_font_file(&canonical) {
+        for font_entry in parse_local_font_file(&canonical, scan_id) {
             buffer.push(font_entry);
             total += 1;
             if total > MAX_FONTS_PER_SCAN {
