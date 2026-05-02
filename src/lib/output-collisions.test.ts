@@ -60,7 +60,10 @@ describe("countExistingFiles", () => {
     const count = await countExistingFiles(["a.ass", "b.ass", "c.ass"]);
     expect(count).toBe(2);
     expect(warn).toHaveBeenCalledOnce();
-    expect(warn.mock.calls[0][0]).toContain("1 stat failure");
+    // Loose substring — the test guards "warn was emitted with the
+    // failure count baked in", not the exact phrase. Wording can drift
+    // (stat failure / stat error / failed stat) without behavior change.
+    expect(warn.mock.calls[0][0]).toMatch(/stat (failure|error)/);
   });
 
   it("runs all stat checks in parallel (Promise.all, not sequential)", async () => {

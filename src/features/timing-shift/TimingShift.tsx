@@ -276,9 +276,7 @@ export default function TimingShift() {
       let processedCount = 0;
       const seenOutputs = new Set<string>();
 
-      for (let i = 0; i < paths.length; i++) {
-        const filePath = paths[i];
-
+      for (const filePath of paths) {
         if (cancelRef.current) {
           addLog(t("msg_timing_cancelled"), "info");
           break;

@@ -471,8 +471,13 @@ export default function BatchRename() {
 
     // Derive output paths up front so all confirmation dialogs see
     // the final names. Catch derive errors per-row — a bad row gets
-    // logged + skipped, the rest of the batch proceeds.
+    // logged + skipped, the rest of the batch proceeds. Track the
+    // skipped count so subsequent confirm dialogs can surface it
+    // (otherwise the dialog says "Rename N files" using the post-skip
+    // count, hiding the skips during the moment the user can't see
+    // the log).
     const derivedTargets: { row: PairingRow; outputPath: string }[] = [];
+    let skippedDeriveCount = 0;
     for (const row of actionableRows) {
       try {
         const outputPath = deriveRenameOutputPath(
@@ -485,6 +490,7 @@ export default function BatchRename() {
       } catch (e) {
         const reason = e instanceof Error ? e.message : String(e);
         addLog(t("msg_rename_skipped", row.subtitle!.name, reason), "error");
+        skippedDeriveCount += 1;
       }
     }
     if (derivedTargets.length === 0) {
@@ -530,8 +536,14 @@ export default function BatchRename() {
         .join("\n");
       const moreCount = targets.length - 3;
       const moreSuffix = moreCount > 0 ? "\n" + t("msg_rename_inplace_more", moreCount) : "";
+      const skippedSuffix =
+        skippedDeriveCount > 0 ? "\n\n" + t("msg_rename_skipped_count", skippedDeriveCount) : "";
       const confirmed = await ask(
-        t("msg_rename_inplace_confirm", targets.length) + "\n\n" + samples + moreSuffix,
+        t("msg_rename_inplace_confirm", targets.length) +
+          "\n\n" +
+          samples +
+          moreSuffix +
+          skippedSuffix,
         { title: t("dialog_rename_inplace_title"), kind: "warning" }
       );
       if (!confirmed) {
@@ -587,8 +599,12 @@ export default function BatchRename() {
           modeLabel = t("rename_mode_copy_to_chosen_short");
           break;
         default: {
+          // Compile-time exhaustive check; the throw is runtime
+          // defense-in-depth in case a type-cast bypass slips an
+          // unknown value through (would otherwise be passed to t()
+          // verbatim and surface as the missing-key fallback).
           const _exhaustive: never = outputMode;
-          modeLabel = _exhaustive;
+          throw new Error(`unhandled output mode: ${String(_exhaustive)}`);
         }
       }
       addLog(t("msg_rename_start", targets.length, modeLabel));
@@ -597,13 +613,12 @@ export default function BatchRename() {
       let processedCount = 0;
       const seenOutputs = new Set<string>();
 
-      for (let i = 0; i < targets.length; i++) {
+      for (const { row, outputPath } of targets) {
         if (cancelRef.current) {
           addLog(t("msg_rename_cancelled"), "info");
           break;
         }
 
-        const { row, outputPath } = targets[i];
         const subName = row.subtitle!.name;
         const outName = fileNameFromPath(outputPath);
         addLog(t("msg_processing", subName));

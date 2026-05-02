@@ -315,6 +315,10 @@ export function buildPairings(videos: ParsedFile[], subtitles: ParsedFile[]): Pa
       // Index-pair videos to subs in the ambiguous case so the user
       // sees a defensible default pre-pick. In the common one-video
       // case, the first sub is always the chosen one.
+      // Determinism: matchedVideos / matchedSubs are JS Maps which
+      // preserve input insertion order, so vs[i] / ss[i] reflect the
+      // user's pick order. A future migration to Object.entries-based
+      // bucketing would silently break this — tests assert it.
       const sub = ambiguous ? (ss[i] ?? null) : (ss[0] ?? null);
       rows.push({
         id: newId(v, sub),

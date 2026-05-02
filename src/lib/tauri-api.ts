@@ -318,6 +318,14 @@ export interface LocalFontEntry {
  *  before every progress callback drained. The Channel layer guarantees
  *  in-order delivery, so `Done` only fires after every preceding batch
  *  has been processed. See A-bug-1 in v1.3.1 design doc. */
+// Wire-format mirror of Rust's `ScanProgress` enum in
+// `src-tauri/src/fonts.rs`, serialized via
+// `#[serde(tag = "kind", rename_all = "camelCase")]`. The two type
+// definitions are NOT generated from each other; renaming a Rust enum
+// variant or adding a field on one side without the other will
+// silently break the channel callback (the `if msg.kind === "batch"`
+// branch wouldn't match and the frontend hangs awaiting Done). When
+// editing one side, edit the other in the same commit.
 type RawScanProgress =
   | { kind: "batch"; total: number }
   | { kind: "done"; cancelled: boolean; added: number; duplicated: number };

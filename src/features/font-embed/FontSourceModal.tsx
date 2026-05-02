@@ -51,7 +51,14 @@ function basename(path: string): string {
 }
 
 function newId(): string {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  // crypto.randomUUID is broadly available in modern WebView2 (and the
+  // jsdom polyfill picks it up too). Source ids are private opaque
+  // tokens used as SQLite primary keys, so format doesn't matter — but
+  // a plain Date.now()-plus-6-base36-chars combo could in theory
+  // collide on the (~1/2.18e9 chance) primary-key constraint and
+  // surface as a confusing "Font source id already exists" error. UUID
+  // sidesteps that entirely.
+  return crypto.randomUUID();
 }
 
 let nextFontScanId = Date.now();
@@ -222,7 +229,13 @@ export default function FontSourceModal(props: Props) {
   const handleCancelScan = useCallback(() => {
     const scanId = activeScanIdRef.current;
     if (scanId === null) return;
-    void cancelFontScan(scanId);
+    // .catch — visible state stays correct because the running scan
+    // checks font_scan_cancelled independently, but a real bug in the
+    // cancel pathway (command not registered, arg shape drift) would
+    // otherwise be invisible. Dev-visibility only; no user-facing error.
+    cancelFontScan(scanId).catch((e: unknown) => {
+      console.warn("cancelFontScan failed:", e);
+    });
   }, []);
 
   const claimScanFlow = useCallback(() => {

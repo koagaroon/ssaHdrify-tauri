@@ -48,6 +48,9 @@ export function useFolderDrop({
   // Same pattern as useClickOutside.
   const onPathsRef = useRef(onPaths);
   const onActiveChangeRef = useRef(onActiveChange);
+  // No deps array — refresh refs every render so the listener-attaching
+  // effect below can keep its closures stable while still reading the
+  // latest callbacks. Not a missing-dep bug.
   useEffect(() => {
     onPathsRef.current = onPaths;
     onActiveChangeRef.current = onActiveChange;

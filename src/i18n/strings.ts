@@ -354,12 +354,12 @@ export const strings: Record<string, StringEntry> = {
   },
   font_scan_cancel: { en: "Cancel", zh: "取消" },
   font_scan_cancelled: {
-    en: "Scan stopped — kept {0} font(s).",
-    zh: "扫描已停止，保留 {0} 个字体。",
+    en: "Scan cancelled — kept {0} font(s).",
+    zh: "已取消扫描，保留 {0} 个字体。",
   },
   font_scan_cancelled_with_dupes: {
-    en: "Scan stopped — kept {0} new font(s); {1} were already loaded.",
-    zh: "扫描已停止，保留 {0} 个新字体；{1} 个为已加载的重复项。",
+    en: "Scan cancelled — kept {0} new font(s); {1} were already loaded.",
+    zh: "已取消扫描，保留 {0} 个新字体；{1} 个为已加载的重复项。",
   },
   font_scan_large_warning_title: { en: "Large Font Source", zh: "大型字体来源" },
   font_scan_large_warning: {
@@ -531,6 +531,10 @@ export const strings: Record<string, StringEntry> = {
   msg_rename_skipped: {
     en: "Skipped {0}: {1}",
     zh: "已跳过 {0}：{1}",
+  },
+  msg_rename_skipped_count: {
+    en: "Note: {0} file(s) were skipped earlier due to errors (see log).",
+    zh: "注意：另有 {0} 个文件因错误已跳过（见日志）。",
   },
   msg_rename_nothing_to_do: {
     en: "Nothing to do — all selected rows produced invalid output paths.",

@@ -129,9 +129,18 @@ describe("extractEpisode — should NOT match", () => {
     // load-bearing guarantee is that "1080" is never reported as the
     // episode number, regardless of whether the engine returns null
     // or some other (legitimate) episode picked from the input.
+    //
+    // The previous form (`expect(ep?.episode).not.toBe(1080)`) passed
+    // vacuously when extractEpisode returned null. The stronger form
+    // below asserts BOTH branches of "valid output": either we
+    // returned null (no match), or we returned a number that isn't
+    // 1080.
     const name = "[Group][Show][1080P][.ass";
     const ep = extractEpisode(name, bracketCleanup(name));
-    expect(ep?.episode).not.toBe(1080);
+    if (ep !== null) {
+      expect(typeof ep.episode).toBe("number");
+      expect(ep.episode).not.toBe(1080);
+    }
   });
 });
 

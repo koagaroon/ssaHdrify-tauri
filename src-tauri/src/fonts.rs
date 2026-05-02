@@ -272,6 +272,12 @@ static CANCEL_SCAN_ID: AtomicU64 = AtomicU64::new(NO_SCAN_ID);
 /// Channel layer enforces in-order delivery — so the frontend's `Done`
 /// handler only fires *after* every preceding `Batch` has been processed.
 /// See A-bug-1 in the v1.3.1 design doc for the diagnostic data.
+///
+/// Wire-format mirror lives in `src/lib/tauri-api.ts` as
+/// `RawScanProgress`. The two definitions are NOT generated from each
+/// other — renaming a variant or adding a field on this side without
+/// updating the TS union will silently break the frontend's channel
+/// callback. Keep both sides in lockstep within one commit.
 #[derive(serde::Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ScanProgress {
