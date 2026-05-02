@@ -162,9 +162,10 @@ fn open_user_font_db() -> Result<Connection, String> {
 }
 
 fn init_user_font_schema(conn: &Connection) -> Result<(), String> {
+    // foreign_keys is set per-connection in `open_user_font_db`; no need
+    // to repeat it here. Schema-only batch.
     conn.execute_batch(
         "
-        PRAGMA foreign_keys = ON;
         CREATE TABLE IF NOT EXISTS font_sources (
             source_id TEXT PRIMARY KEY,
             source_order INTEGER NOT NULL UNIQUE
@@ -226,10 +227,22 @@ pub fn init_user_font_db(app_data_dir: &Path) -> Result<(), String> {
     // is reborn, so functional impact of leftover sidecars is nil — but
     // they accumulate over time and complicate forensics. Suffixes per
     // SQLite docs: -journal (rollback), -wal / -shm (write-ahead log).
+    // Mirror the main-file pattern: NotFound is silent, other errors get
+    // a forensic warn but never block init.
     for suffix in ["-journal", "-wal", "-shm"] {
         let mut sidecar = db_path.clone().into_os_string();
         sidecar.push(suffix);
-        let _ = fs::remove_file(PathBuf::from(sidecar));
+        let sidecar = PathBuf::from(sidecar);
+        match fs::remove_file(&sidecar) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                log::warn!(
+                    "remove stale sqlite sidecar '{}' failed: {e}",
+                    sidecar.display()
+                );
+            }
+        }
     }
     {
         let mut path_slot = USER_FONT_DB_PATH
@@ -615,8 +628,13 @@ const MAX_FAMILY_VARIANTS_PER_FACE: usize = 32;
 /// `scan_id` lets the per-face inner loop poll cancellation BETWEEN faces.
 /// Without this, a single TTC with up to `MAX_TTC_FACES` slow-to-parse
 /// faces could stall the cancel-acknowledge loop for several seconds (the
-/// outer scan only polls between FILES). Pass `NO_SCAN_ID` from contexts
-/// without an active scan (e.g., direct unit tests).
+/// outer scan only polls between FILES). Also bounds the work a crafted
+/// TTC can demand by giving cancellation a chance to land between face
+/// parses.
+///
+/// `NO_SCAN_ID` is the no-cancellation sentinel; today every caller is a
+/// scan worker with a real id, but the parameter keeps the contract
+/// explicit for any future caller that doesn't participate in cancel.
 fn parse_local_font_file(canonical: &Path, scan_id: u64) -> Vec<LocalFontEntry> {
     use fontcull_skrifa::string::StringId;
     use fontcull_skrifa::{FontRef, MetadataProvider};
@@ -674,6 +692,11 @@ fn parse_local_font_file(canonical: &Path, scan_id: u64) -> Vec<LocalFontEntry> 
         // skrifa name-table walks can otherwise eat several seconds of
         // unresponsive Cancel button. NO_SCAN_ID is the "no active scan"
         // sentinel and must never trigger cancellation.
+        //
+        // Returning early with the already-parsed faces is safe — the
+        // outer scan's cancel branch flushes the buffer (which now
+        // includes our partial faces) before the cancelled outcome is
+        // returned, so no parsed work is lost.
         if font_scan_cancelled(scan_id) {
             break;
         }
@@ -909,6 +932,13 @@ fn scan_directory_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
     let mut buffer: Vec<LocalFontEntry> = Vec::new();
     let mut total: usize = 0;
     let mut last_emit = Instant::now();
+    // Mirror the dedup `scan_files_inner` and `preflight_files_inner`
+    // apply: a directory containing two siblings that resolve to the
+    // same canonical path (e.g., `Foo.ttf` plus a same-directory
+    // symlink `Bar.ttf` → `Foo.ttf`) would otherwise re-parse the
+    // bytes twice and rely on SQLite's `UNIQUE(path, face_index)` to
+    // surface them as `duplicated`. Wastes IO/parse cost.
+    let mut seen: HashSet<String> = HashSet::new();
 
     for entry in read {
         if font_scan_cancelled(scan_id) {
@@ -944,11 +974,21 @@ fn scan_directory_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
         // verify the resolved file is still under the picked directory.
         // This is what blocks a symlink inside the chosen Fonts/ folder
         // from pointing at /etc/shadow or similar.
+        //
+        // N-7 note: an in-directory junction whose target also lies under
+        // the same picked directory passes `starts_with` and is parsed.
+        // Acceptable — the target is still inside user-trusted space.
+        // Adding an `is_reparse_point` early-skip here would also drop
+        // legitimate symlink-organized font folders (some packagers
+        // distribute fonts as symlinks to a shared store).
         let canonical = match path.canonicalize() {
             Ok(c) => c,
             Err(_) => continue,
         };
         if !canonical.starts_with(canonical_dir) {
+            continue;
+        }
+        if !seen.insert(normalize_canonical_path(&canonical.to_string_lossy())) {
             continue;
         }
 
