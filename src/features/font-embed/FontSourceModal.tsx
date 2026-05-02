@@ -50,17 +50,24 @@ function basename(path: string): string {
   return path.replace(/\\/g, "/").split("/").filter(Boolean).pop() ?? path;
 }
 
-function newId(): string {
-  // crypto.randomUUID is broadly available in modern WebView2 (and the
-  // jsdom polyfill picks it up too). Source ids are private opaque
-  // tokens used as SQLite primary keys, so format doesn't matter — but
-  // a plain Date.now()-plus-6-base36-chars combo could in theory
-  // collide on the (~1/2.18e9 chance) primary-key constraint and
-  // surface as a confusing "Font source id already exists" error. UUID
-  // sidesteps that entirely.
-  return crypto.randomUUID();
+function newSourceId(): string {
+  // Source ids are private opaque tokens used as the SQLite
+  // `font_sources.source_id` primary key. The previous `Date.now()`
+  // + random6 scheme was already collision-safe in practice; UUID is
+  // cleaner / standard / lets the primary key get a single canonical
+  // opaque format.
+  //
+  // crypto.randomUUID requires a secure context (Tauri's app:// scheme
+  // qualifies; http:// would not). Defensive `?.` + fallback covers a
+  // hypothetical future packaging change that ever served the bundle
+  // over plain http; today it's belt-and-braces.
+  return crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+// Seeded with Date.now() so a process restart won't collide with an
+// in-flight cancel from a previous instance addressed at a stale id.
+// The only invariant the seed must satisfy is "above NO_SCAN_ID = 0";
+// monotonic increment from there is what `font_scan_cancelled` keys on.
 let nextFontScanId = Date.now();
 function newScanId(): number {
   nextFontScanId += 1;
@@ -285,7 +292,7 @@ export default function FontSourceModal(props: Props) {
       const confirmed = await confirmLargeFontScan(preflight);
       if (!confirmed) return;
       scanId = newScanId();
-      const sourceId = newId();
+      const sourceId = newSourceId();
       activeScanIdRef.current = scanId;
       resetScanProgress();
       setScanning(true);
@@ -347,7 +354,7 @@ export default function FontSourceModal(props: Props) {
       const confirmed = await confirmLargeFontScan(preflight);
       if (!confirmed) return;
       scanId = newScanId();
-      const sourceId = newId();
+      const sourceId = newSourceId();
       activeScanIdRef.current = scanId;
       resetScanProgress();
       setScanning(true);

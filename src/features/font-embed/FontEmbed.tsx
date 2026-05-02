@@ -741,7 +741,11 @@ export default function FontEmbed() {
               color: embedding || sourceBusy ? "var(--text-muted)" : "var(--cancel-text)",
               height: "38px",
             }}
-            title={t("btn_clear_font_sources")}
+            // Mirror the Modal's per-row remove tooltip pattern: when
+            // disabled-by-busy, the tooltip should match the disabled
+            // state instead of the action label that's not currently
+            // available.
+            title={sourceBusy ? t("font_sources_scanning") : t("btn_clear_font_sources")}
           >
             ✕
           </button>

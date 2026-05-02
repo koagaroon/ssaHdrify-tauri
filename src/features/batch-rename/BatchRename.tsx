@@ -529,6 +529,11 @@ export default function BatchRename() {
     // In-place rename is destructive (source disappears). Show a
     // confirmation dialog with the first 3 sample names so the user
     // sees exactly what will happen before committing.
+    //
+    // Filename injection isn't a concern here: ask() from
+    // @tauri-apps/plugin-dialog renders the body as plain text via
+    // OS-native dialogs (Windows TaskDialog / macOS NSAlert), not HTML.
+    // Names with embedded HTML / markup render as literal characters.
     if (outputMode === "rename") {
       const samples = targets
         .slice(0, 3)
