@@ -138,6 +138,18 @@ fn open_user_font_db() -> Result<Connection, String> {
     let conn = Connection::open(path).map_err(|e| db_error("open failed", e))?;
     conn.pragma_update(None, "foreign_keys", "ON")
         .map_err(|e| db_error("foreign_keys setup failed", e))?;
+    // WAL + 5 s busy_timeout: today the modal-scrim UX prevents two
+    // commands from contending on the DB, but `is_user_font_path_registered`
+    // (called from `subset_font`), `resolve_user_font` (called from
+    // `analyzeFonts`), and `remove_font_source` are all reachable
+    // independently of the modal. A future refactor that decouples scan
+    // from the modal would surface intermittent SQLITE_BUSY as silent
+    // miss/fail under default DELETE journal + busy_timeout=0. Set both
+    // up-front so the database stays well-behaved across that refactor.
+    conn.pragma_update(None, "journal_mode", "WAL")
+        .map_err(|e| db_error("journal_mode setup failed", e))?;
+    conn.pragma_update(None, "busy_timeout", 5000)
+        .map_err(|e| db_error("busy_timeout setup failed", e))?;
     Ok(conn)
 }
 
