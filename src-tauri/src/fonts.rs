@@ -1,6 +1,6 @@
 use font_kit::family_name::FamilyName;
 use font_kit::handle::Handle;
-use font_kit::properties::{Properties, Style, Weight};
+use font_kit::properties::{Properties, Style as FontKitStyle, Weight as FontKitWeight};
 use font_kit::source::SystemSource;
 use once_cell::sync::Lazy;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
@@ -74,7 +74,7 @@ const SCAN_BATCH_INTERVAL: Duration = Duration::from_millis(100);
 /// per-file parse cost linearly).
 ///
 /// `u32` (not `usize`) because the loop uses it as the face index passed
-/// to `font_kit::font::Font::from_bytes(_, u32)` — matching font-kit's
+/// to `fontcull_skrifa::FontRef::from_index(_, u32)` — matching the parser
 /// API avoids casts in the hot loop.
 const MAX_TTC_FACES: u32 = 16;
 
@@ -677,10 +677,10 @@ pub fn find_system_font(
 
     let mut props = Properties::new();
     if bold {
-        props.weight = Weight::BOLD;
+        props.weight = FontKitWeight::BOLD;
     }
     if italic {
-        props.style = Style::Italic;
+        props.style = FontKitStyle::Italic;
     }
 
     let handle = source
@@ -728,16 +728,31 @@ pub fn find_system_font(
 /// pathological name table.
 const MAX_FAMILY_VARIANTS_PER_FACE: usize = 32;
 
+fn bounded_font_family_name(chars: impl Iterator<Item = char>) -> Option<String> {
+    // Take chars lazily with a short ceiling so a malformed font with a
+    // huge name-table entry can't OOM the process before the length guard
+    // fires. 257 chars is enough to detect ">256 chars" overflow below.
+    let name: String = chars.take(257).collect();
+    let trimmed = name.trim();
+    // Guard counts CODEPOINTS, not bytes — a 100-char CJK family name
+    // (300+ UTF-8 bytes) is perfectly legitimate.
+    let char_count = trimmed.chars().count();
+    if !trimmed.is_empty() && char_count <= 256 {
+        Some(trimmed.to_string())
+    } else {
+        None
+    }
+}
+
 /// Parse one font file (TTF/OTF/TTC/OTC) and return a `LocalFontEntry` per
 /// face **and per distinct localized family name** in the face's name table.
 ///
 /// A single TTF can declare its family under multiple languages (common with
 /// CJK fonts that ship both an English and a Chinese name). We emit one entry
 /// per variant so the frontend matcher finds the font no matter which name the
-/// ASS script happens to reference. This was the root cause of the "font not
-/// recognized" symptom: font-kit's `family_name()` returns only the
-/// locale-preferred name, which on zh-CN Windows silently shadowed English
-/// family names that subtitle scripts typically use.
+/// ASS script happens to reference. Earlier single-name lookup shadowed
+/// English family names on zh-CN Windows when the OS preferred a localized
+/// name, which caused "font not recognized" reports for valid local sources.
 ///
 /// `canonical` must already be canonicalized by the caller. User provenance
 /// is registered later when the emitted batch is committed to the session
@@ -787,21 +802,21 @@ fn parse_local_font_file(canonical: &Path, scan_id: u64) -> Vec<LocalFontEntry> 
 
     let canonical_string = normalize_canonical_path(&canonical.to_string_lossy());
 
-    // Read the file once; share the bytes between font-kit (weight/style
-    // detection) via Arc and skrifa (name-table enumeration) via a slice.
+    // Read the file once and parse it with fontcull/skrifa only. Avoid
+    // font-kit here: on Windows its in-memory loader routes through
+    // DirectWrite and can retain/copy whole font blobs across huge scans.
     let data = match fs::read(canonical) {
         Ok(d) => d,
         Err(_) => return Vec::new(),
     };
-    let arc_data = std::sync::Arc::new(data);
 
     let mut entries = Vec::new();
     // Permit a single consecutive parse failure before giving up. In practice
-    // font_kit returns an error once `i` exceeds the real face count, so one
-    // tolerance catches that natural end-of-collection while keeping the
-    // per-file parse cost bounded at 2 × face_count rather than 3 ×. Crafted
-    // TTCs cannot force us to parse all 64 slots just by salting every other
-    // face with bad data.
+    // FontRef::from_index returns an error once `i` exceeds the real face
+    // count, so one tolerance catches that natural end-of-collection while
+    // keeping the per-file parse cost bounded at 2 × face_count rather than
+    // 3 ×. Crafted TTCs cannot force us to parse all 64 slots just by salting
+    // every other face with bad data.
     //
     // Single-face files (TTF/OTF) effectively use this as a one-shot:
     // `max_faces = 1`, the loop runs once, and the constant doesn't
@@ -822,27 +837,7 @@ fn parse_local_font_file(canonical: &Path, scan_id: u64) -> Vec<LocalFontEntry> 
         if font_scan_cancelled(scan_id) {
             break;
         }
-        // font-kit for weight/style — its enum API is simpler than reading
-        // OS/2 directly through skrifa.
-        let fk_font = match font_kit::font::Font::from_bytes(arc_data.clone(), i) {
-            Ok(f) => {
-                consecutive_failures = 0;
-                f
-            }
-            Err(_) => {
-                consecutive_failures += 1;
-                if consecutive_failures > MAX_CONSECUTIVE_FAILURES {
-                    break;
-                }
-                continue;
-            }
-        };
-        let props = fk_font.properties();
-        let bold = props.weight.0 >= 600.0;
-        let italic = !matches!(props.style, Style::Normal);
-
-        // skrifa for ALL localized family names — this is the key fix.
-        let font_ref = match FontRef::from_index(&arc_data, i) {
+        let font_ref = match FontRef::from_index(&data, i) {
             Ok(f) => f,
             Err(_) => {
                 consecutive_failures += 1;
@@ -852,23 +847,25 @@ fn parse_local_font_file(canonical: &Path, scan_id: u64) -> Vec<LocalFontEntry> 
                 continue;
             }
         };
+        consecutive_failures = 0;
+
+        let attrs = font_ref.attributes();
+        let bold = attrs.weight.value() >= 600.0;
+        let italic = !matches!(attrs.style, fontcull_skrifa::attribute::Style::Normal);
 
         let mut family_variants: HashSet<String> = HashSet::new();
+        let mut primary_hint: Option<String> = None;
         for id in [StringId::FAMILY_NAME, StringId::TYPOGRAPHIC_FAMILY_NAME] {
+            if primary_hint.is_none() {
+                primary_hint = font_ref
+                    .localized_strings(id)
+                    .english_or_first()
+                    .and_then(|localized| bounded_font_family_name(localized.chars()));
+            }
+
             for localized in font_ref.localized_strings(id) {
-                // Take chars lazily with a short ceiling so a malformed
-                // font with a 2GB name-table entry can't OOM the process
-                // before the length guard fires. 257 chars is enough to
-                // detect ">256 chars" overflow in the guard below.
-                let name: String = localized.chars().take(257).collect();
-                let trimmed = name.trim();
-                // Guard counts CODEPOINTS, not bytes — a 100-char CJK
-                // family name (300+ UTF-8 bytes) is perfectly legitimate,
-                // and the previous byte-length gate silently dropped such
-                // names on non-Latin fonts.
-                let char_count = trimmed.chars().count();
-                if !trimmed.is_empty() && char_count <= 256 {
-                    family_variants.insert(trimmed.to_string());
+                if let Some(name) = bounded_font_family_name(localized.chars()) {
+                    family_variants.insert(name);
                     if family_variants.len() >= MAX_FAMILY_VARIANTS_PER_FACE {
                         break;
                     }
@@ -879,30 +876,36 @@ fn parse_local_font_file(canonical: &Path, scan_id: u64) -> Vec<LocalFontEntry> 
             }
         }
 
-        // Cache the font-kit family_name once per face — it's used twice
-        // (fallback when the name table is empty AND the primary-name
-        // stabilizer below) and font-kit re-parses on each call.
-        let fk_family_name = fk_font.family_name();
-
-        // Fallback: if the name table produced nothing, emit one entry using
-        // font-kit's single-name API so the font isn't silently dropped.
-        if family_variants.is_empty() && !fk_family_name.trim().is_empty() {
-            family_variants.insert(fk_family_name.clone());
+        // Last-resort fallback: malformed fonts may have no family IDs but
+        // still have a full name. Indexing that is better than silently
+        // dropping the face, and it avoids re-entering font-kit/DirectWrite.
+        if family_variants.is_empty() {
+            for id in [StringId::FULL_NAME, StringId::POSTSCRIPT_NAME] {
+                if let Some(name) = font_ref
+                    .localized_strings(id)
+                    .english_or_first()
+                    .and_then(|localized| bounded_font_family_name(localized.chars()))
+                {
+                    primary_hint = Some(name.clone());
+                    family_variants.insert(name);
+                    break;
+                }
+            }
         }
 
         if family_variants.is_empty() {
             continue;
         }
 
-        // Stabilize the primary-name pick: prefer font-kit's family_name if
-        // it's among the variants, else fall back to a sorted order so UI
-        // listings stay deterministic across runs (HashSet iteration order
-        // is not guaranteed). family_variants is a HashSet, so no duplicates
-        // can leak into the sorted list.
-        let primary = fk_family_name;
+        // Stabilize the primary-name pick: prefer the best available English
+        // family name if it is among the variants, else fall back to sorted
+        // order so UI listings stay deterministic across runs.
         let mut families: Vec<String> = family_variants.into_iter().collect();
         families.sort();
-        if let Some(pos) = families.iter().position(|v| v == &primary) {
+        if let Some(pos) = primary_hint
+            .as_ref()
+            .and_then(|primary| families.iter().position(|v| v == primary))
+        {
             // rotate_right(1) moves families[pos] to index 0 while keeping
             // the elements before it in alphabetical order — swap(0, pos)
             // would displace the element at 0 to pos, breaking sort order.
@@ -1988,6 +1991,20 @@ mod tests {
             italic: false,
             size_bytes: 123,
         }
+    }
+
+    #[test]
+    fn bounded_font_family_name_trims_and_rejects_overlong_values() {
+        assert_eq!(
+            bounded_font_family_name("  Demo Sans  ".chars()),
+            Some("Demo Sans".to_string())
+        );
+        assert_eq!(
+            bounded_font_family_name("x".repeat(256).chars()),
+            Some("x".repeat(256))
+        );
+        assert!(bounded_font_family_name("x".repeat(257).chars()).is_none());
+        assert!(bounded_font_family_name("   ".chars()).is_none());
     }
 
     fn commit_entries(source_id: &str, entries: Vec<LocalFontEntry>) -> ImportOutcome {
