@@ -537,8 +537,12 @@ export const strings: Record<string, StringEntry> = {
     zh: "已跳过 {0}：{1}",
   },
   msg_rename_skipped_count: {
-    en: "Note: {0} file(s) were skipped earlier due to errors (see log).",
-    zh: "注意：另有 {0} 个文件因错误已跳过（见日志）。",
+    // Pinpointed to derive-time pairing failures specifically — not
+    // covering noopTargets (already-correctly-named subs), within-batch
+    // dedup skips, or loop-time copy/rename errors. Those happen before
+    // or after this dialog is shown.
+    en: "Note: {0} pairing(s) failed earlier and won't run (see log).",
+    zh: "注意：另有 {0} 对配对早前失败、不会执行（见日志）。",
   },
   msg_rename_nothing_to_do: {
     en: "Nothing to do — all selected rows produced invalid output paths.",

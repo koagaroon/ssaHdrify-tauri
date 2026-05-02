@@ -562,14 +562,24 @@ export default function BatchRename() {
     // other batch tabs. ANY existing target → single ask() with the
     // count; cancel preserves prior state, confirm proceeds. No-op
     // targets were filtered above so they don't inflate the count.
+    //
+    // Surface the derive-skip count here too (not just in the in-place
+    // confirm above): copy modes go straight to the overwrite dialog,
+    // and the user has no other way to learn that some pairings failed
+    // before the dialog moment.
     const projectedOutputs = targets.map((t2) => t2.outputPath);
+    const skippedSuffix =
+      skippedDeriveCount > 0 ? "\n\n" + t("msg_rename_skipped_count", skippedDeriveCount) : "";
     try {
       const existingCount = await countExistingFiles(projectedOutputs);
       if (existingCount > 0) {
-        const confirmed = await ask(t("msg_overwrite_confirm", existingCount, targets.length), {
-          title: t("dialog_overwrite_title"),
-          kind: "warning",
-        });
+        const confirmed = await ask(
+          t("msg_overwrite_confirm", existingCount, targets.length) + skippedSuffix,
+          {
+            title: t("dialog_overwrite_title"),
+            kind: "warning",
+          }
+        );
         if (!confirmed) {
           addLog(t("msg_rename_cancelled"), "info");
           setLastActionResult("cancelled");
@@ -667,6 +677,16 @@ export default function BatchRename() {
       } else {
         setLastActionResult(successCount > 0 ? "success" : "error");
       }
+    } catch (e) {
+      // The default-branch throw inside the switch above (and any other
+      // unexpected error from the rename loop) lands here. Without this
+      // catch the throw bubbles past the finally to React's boundary as
+      // an unhandled rejection — the Run button's spinner ends with no
+      // log line, no toast, no banner. Surface it through the same log
+      // path the per-row errors use.
+      const reason = e instanceof Error ? e.message : String(e);
+      addLog(t("error_prefix", reason), "error");
+      setLastActionResult("error");
     } finally {
       setBusy(false);
       setProgress(null);
