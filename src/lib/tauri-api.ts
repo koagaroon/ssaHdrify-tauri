@@ -13,24 +13,58 @@ export interface FileFilter {
   extensions: string[];
 }
 
-const SUBTITLE_FILTERS: FileFilter[] = [
-  { name: "ASS/SSA Subtitles", extensions: ["ass", "ssa"] },
-  { name: "SRT Subtitles", extensions: ["srt"] },
-  { name: "SUB (MicroDVD)", extensions: ["sub"] },
-  { name: "WebVTT", extensions: ["vtt"] },
-  { name: "All Subtitle Formats", extensions: ["ass", "ssa", "srt", "sub", "vtt", "sbv", "lrc"] },
-  { name: "All Files", extensions: ["*"] },
-];
+export type DialogTranslator = (key: string, ...args: (string | number)[]) => string;
 
-const ASS_FILTERS: FileFilter[] = [
-  { name: "ASS/SSA Subtitles", extensions: ["ass", "ssa"] },
-  { name: "All Files", extensions: ["*"] },
-];
+const dialogFallbacks: Record<string, string> = {
+  dialog_filter_ass_ssa_subtitles: "ASS/SSA Subtitles",
+  dialog_filter_srt_subtitles: "SRT Subtitles",
+  dialog_filter_sub_subtitles: "SUB (MicroDVD)",
+  dialog_filter_webvtt: "WebVTT",
+  dialog_filter_all_subtitle_formats: "All Subtitle Formats",
+  dialog_filter_all_files: "All Files",
+  dialog_filter_font_files: "Font Files",
+  dialog_filter_video_subtitle_files: "Video & Subtitle Files",
+  dialog_filter_video_files: "Video Files",
+  dialog_filter_subtitle_files: "Subtitle Files",
+  dialog_pick_subtitle_files_title: "Select subtitle files",
+  dialog_pick_ass_files_title: "Select .ass files",
+  dialog_pick_rename_inputs_title: "Select videos and subtitles",
+  dialog_pick_output_directory_title: "Choose output directory",
+  dialog_pick_font_directory_title: "Select font folder",
+  dialog_pick_font_files_title: "Select font files",
+};
 
-const FONT_FILTERS: FileFilter[] = [
-  { name: "Font Files", extensions: ["ttf", "otf", "ttc", "otc"] },
-  { name: "All Files", extensions: ["*"] },
-];
+function dt(t: DialogTranslator | undefined, key: string): string {
+  return t ? t(key) : (dialogFallbacks[key] ?? key);
+}
+
+function subtitleFilters(t?: DialogTranslator): FileFilter[] {
+  return [
+    { name: dt(t, "dialog_filter_ass_ssa_subtitles"), extensions: ["ass", "ssa"] },
+    { name: dt(t, "dialog_filter_srt_subtitles"), extensions: ["srt"] },
+    { name: dt(t, "dialog_filter_sub_subtitles"), extensions: ["sub"] },
+    { name: dt(t, "dialog_filter_webvtt"), extensions: ["vtt"] },
+    {
+      name: dt(t, "dialog_filter_all_subtitle_formats"),
+      extensions: ["ass", "ssa", "srt", "sub", "vtt", "sbv", "lrc"],
+    },
+    { name: dt(t, "dialog_filter_all_files"), extensions: ["*"] },
+  ];
+}
+
+function assFilters(t?: DialogTranslator): FileFilter[] {
+  return [
+    { name: dt(t, "dialog_filter_ass_ssa_subtitles"), extensions: ["ass", "ssa"] },
+    { name: dt(t, "dialog_filter_all_files"), extensions: ["*"] },
+  ];
+}
+
+function fontFilters(t?: DialogTranslator): FileFilter[] {
+  return [
+    { name: dt(t, "dialog_filter_font_files"), extensions: ["ttf", "otf", "ttc", "otc"] },
+    { name: dt(t, "dialog_filter_all_files"), extensions: ["*"] },
+  ];
+}
 
 // open() returns string | string[] | null. These helpers normalize each shape.
 function toSinglePath(result: string | string[] | null): string | null {
@@ -44,101 +78,123 @@ function toMultiplePaths(result: string | string[] | null): string[] | null {
 }
 
 /** Open a multi-file picker for subtitle files. Returns file paths or null if cancelled. */
-export async function pickSubtitleFiles(): Promise<string[] | null> {
+export async function pickSubtitleFiles(t?: DialogTranslator): Promise<string[] | null> {
   return toMultiplePaths(
-    await open({ multiple: true, filters: SUBTITLE_FILTERS, title: "Select subtitle files" })
+    await open({
+      multiple: true,
+      filters: subtitleFilters(t),
+      title: dt(t, "dialog_pick_subtitle_files_title"),
+    })
   );
 }
 
 /** Open a multi-file picker for ASS files. Used by Font Embed batch flow,
  *  which only applies to ASS/SSA inputs (other subtitle formats don't
  *  carry font references). */
-export async function pickAssFiles(): Promise<string[] | null> {
-  return toMultiplePaths(
-    await open({ multiple: true, filters: ASS_FILTERS, title: "Select .ass files" })
-  );
-}
-
-const VIDEO_AND_SUBTITLE_FILTERS: FileFilter[] = [
-  {
-    name: "Video & Subtitle Files",
-    extensions: [
-      "mp4",
-      "mkv",
-      "avi",
-      "mov",
-      "ts",
-      "m2ts",
-      "webm",
-      "flv",
-      "wmv",
-      "mpg",
-      "mpeg",
-      "m4v",
-      "ass",
-      "ssa",
-      "srt",
-      "sub",
-      "vtt",
-      "sbv",
-      "lrc",
-    ],
-  },
-  {
-    name: "Video Files",
-    extensions: [
-      "mp4",
-      "mkv",
-      "avi",
-      "mov",
-      "ts",
-      "m2ts",
-      "webm",
-      "flv",
-      "wmv",
-      "mpg",
-      "mpeg",
-      "m4v",
-    ],
-  },
-  {
-    name: "Subtitle Files",
-    extensions: ["ass", "ssa", "srt", "sub", "vtt", "sbv", "lrc"],
-  },
-  { name: "All Files", extensions: ["*"] },
-];
-
-/** Open a multi-file picker accepting both videos and subtitles. Used by
- *  the Batch Rename tab, which auto-categorizes by extension after pick. */
-export async function pickRenameInputs(): Promise<string[] | null> {
+export async function pickAssFiles(t?: DialogTranslator): Promise<string[] | null> {
   return toMultiplePaths(
     await open({
       multiple: true,
-      filters: VIDEO_AND_SUBTITLE_FILTERS,
-      title: "Select videos and subtitles",
+      filters: assFilters(t),
+      title: dt(t, "dialog_pick_ass_files_title"),
+    })
+  );
+}
+
+function videoAndSubtitleFilters(t?: DialogTranslator): FileFilter[] {
+  return [
+    {
+      name: dt(t, "dialog_filter_video_subtitle_files"),
+      extensions: [
+        "mp4",
+        "mkv",
+        "avi",
+        "mov",
+        "ts",
+        "m2ts",
+        "webm",
+        "flv",
+        "wmv",
+        "mpg",
+        "mpeg",
+        "m4v",
+        "ass",
+        "ssa",
+        "srt",
+        "sub",
+        "vtt",
+        "sbv",
+        "lrc",
+      ],
+    },
+    {
+      name: dt(t, "dialog_filter_video_files"),
+      extensions: [
+        "mp4",
+        "mkv",
+        "avi",
+        "mov",
+        "ts",
+        "m2ts",
+        "webm",
+        "flv",
+        "wmv",
+        "mpg",
+        "mpeg",
+        "m4v",
+      ],
+    },
+    {
+      name: dt(t, "dialog_filter_subtitle_files"),
+      extensions: ["ass", "ssa", "srt", "sub", "vtt", "sbv", "lrc"],
+    },
+    { name: dt(t, "dialog_filter_all_files"), extensions: ["*"] },
+  ];
+}
+
+/** Open a multi-file picker accepting both videos and subtitles. Used by
+ *  the Batch Rename tab, which auto-categorizes by extension after pick. */
+export async function pickRenameInputs(t?: DialogTranslator): Promise<string[] | null> {
+  return toMultiplePaths(
+    await open({
+      multiple: true,
+      filters: videoAndSubtitleFilters(t),
+      title: dt(t, "dialog_pick_rename_inputs_title"),
     })
   );
 }
 
 /** Open a directory picker for the Batch Rename "copy to chosen
  *  directory" output mode. Returns absolute path or null on cancel. */
-export async function pickOutputDirectory(): Promise<string | null> {
+export async function pickOutputDirectory(t?: DialogTranslator): Promise<string | null> {
   return toSinglePath(
-    await open({ directory: true, multiple: false, title: "Choose output directory" })
+    await open({
+      directory: true,
+      multiple: false,
+      title: dt(t, "dialog_pick_output_directory_title"),
+    })
   );
 }
 
 /** Open a directory picker for a local font folder. Returns path or null. */
-export async function pickFontDirectory(): Promise<string | null> {
+export async function pickFontDirectory(t?: DialogTranslator): Promise<string | null> {
   return toSinglePath(
-    await open({ directory: true, multiple: false, title: "Select font folder" })
+    await open({
+      directory: true,
+      multiple: false,
+      title: dt(t, "dialog_pick_font_directory_title"),
+    })
   );
 }
 
 /** Open a multi-file picker for individual font files. Returns paths or null. */
-export async function pickFontFiles(): Promise<string[] | null> {
+export async function pickFontFiles(t?: DialogTranslator): Promise<string[] | null> {
   return toMultiplePaths(
-    await open({ multiple: true, filters: FONT_FILTERS, title: "Select font files" })
+    await open({
+      multiple: true,
+      filters: fontFilters(t),
+      title: dt(t, "dialog_pick_font_files_title"),
+    })
   );
 }
 
@@ -277,6 +333,19 @@ export interface FontScanResult {
   added: number;
   duplicated: number;
   cancelled: boolean;
+}
+
+export interface FontScanPreflight {
+  fontFiles: number;
+  totalBytes: number;
+}
+
+export async function preflightFontDirectory(dir: string): Promise<FontScanPreflight> {
+  return invoke<FontScanPreflight>("preflight_font_directory", { dir });
+}
+
+export async function preflightFontFiles(paths: string[]): Promise<FontScanPreflight> {
+  return invoke<FontScanPreflight>("preflight_font_files", { paths });
 }
 
 /**

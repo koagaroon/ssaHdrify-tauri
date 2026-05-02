@@ -10,7 +10,9 @@
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use app_lib::fonts::{cancel_font_scan, clear_font_sources, scan_font_directory, ScanProgress};
+use app_lib::fonts::{
+    cancel_font_scan, clear_font_sources, init_user_font_db, scan_font_directory, ScanProgress,
+};
 use tauri::ipc::{Channel, InvokeResponseBody};
 
 static SCAN_TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -153,9 +155,19 @@ fn take_done(done: &Arc<Mutex<Option<DoneStats>>>) -> DoneStats {
         .expect("scan should emit Done on the Ok path")
 }
 
+fn init_scan_test_db(name: &str) {
+    let dir = std::env::temp_dir().join(format!(
+        "ssahdrify-scan-test-db-{}-{name}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    init_user_font_db(&dir).expect("scan test DB should initialize");
+}
+
 #[test]
 fn scans_os_font_directory_streams_progress_and_registers_source() {
     let _guard = SCAN_TEST_LOCK.lock().unwrap();
+    init_scan_test_db("stream");
     clear_font_sources().unwrap();
     let dir = os_font_dir();
     let (channel, totals, done) = collecting_channel();
@@ -230,6 +242,7 @@ fn rejects_invalid_directory_inputs() {
 #[test]
 fn stale_cancel_id_does_not_abort_fresh_scan() {
     let _guard = SCAN_TEST_LOCK.lock().unwrap();
+    init_scan_test_db("stale");
     clear_font_sources().unwrap();
     let old_scan_id = next_test_scan_id();
     let fresh_scan_id = next_test_scan_id();
@@ -255,6 +268,7 @@ fn stale_cancel_id_does_not_abort_fresh_scan() {
 #[test]
 fn mid_scan_cancel_keeps_partial_results_when_directory_is_large_enough() {
     let _guard = SCAN_TEST_LOCK.lock().unwrap();
+    init_scan_test_db("cancel");
     clear_font_sources().unwrap();
     let dir = os_font_dir();
 

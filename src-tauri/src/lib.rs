@@ -3,6 +3,8 @@ pub mod encoding;
 pub mod fonts;
 pub mod util;
 
+use tauri::Manager;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -13,6 +15,8 @@ pub fn run() {
             // user action can run. Defense-in-depth against post-launch
             // env-var manipulation; see fonts::init_system_dirs.
             fonts::init_system_dirs();
+            let app_data_dir = app.path().app_data_dir()?;
+            fonts::init_user_font_db(&app_data_dir).map_err(std::io::Error::other)?;
 
             // Dev: INFO-level for full visibility while iterating.
             // Release: WARN/ERROR only — keeps crash-diagnostic signals in
@@ -39,6 +43,8 @@ pub fn run() {
             encoding::read_text_detect_encoding,
             fonts::find_system_font,
             fonts::subset_font,
+            fonts::preflight_font_directory,
+            fonts::preflight_font_files,
             fonts::scan_font_directory,
             fonts::scan_font_files,
             fonts::cancel_font_scan,

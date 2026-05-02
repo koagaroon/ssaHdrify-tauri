@@ -25,6 +25,7 @@ interface MockChannel {
 
 const channelInstances: MockChannel[] = [];
 const invokeMock = vi.fn();
+const openMock = vi.fn();
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
@@ -38,7 +39,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 // These two only need stub objects — runStreamingScan doesn't call them
 // in this test, but tauri-api.ts imports them at top level.
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: (...args: unknown[]) => openMock(...args) }));
 vi.mock("@tauri-apps/plugin-fs", () => ({
   writeTextFile: vi.fn(),
   rename: vi.fn(),
@@ -46,11 +47,18 @@ vi.mock("@tauri-apps/plugin-fs", () => ({
 }));
 
 // Import AFTER vi.mock so the mocked Channel is picked up.
-import { scanFontDirectory } from "./tauri-api";
+import {
+  pickFontFiles,
+  pickRenameInputs,
+  preflightFontDirectory,
+  preflightFontFiles,
+  scanFontDirectory,
+} from "./tauri-api";
 
 beforeEach(() => {
   channelInstances.length = 0;
   invokeMock.mockReset();
+  openMock.mockReset();
 });
 
 describe("runStreamingScan — sync delivery (batches arrive during invoke)", () => {
@@ -87,6 +95,73 @@ describe("runStreamingScan — sync delivery (batches arrive during invoke)", ()
 
     const result = await scanFontDirectory("/empty/dir", "source-empty", 102);
     expect(result).toEqual({ added: 0, duplicated: 0, cancelled: false });
+  });
+});
+
+describe("font scan preflight wrappers", () => {
+  it("invokes the directory and file-list preflight commands with stable args", async () => {
+    invokeMock.mockResolvedValueOnce({ fontFiles: 12, totalBytes: 34 });
+    await expect(preflightFontDirectory("D:/Fonts")).resolves.toEqual({
+      fontFiles: 12,
+      totalBytes: 34,
+    });
+    expect(invokeMock).toHaveBeenLastCalledWith("preflight_font_directory", {
+      dir: "D:/Fonts",
+    });
+
+    invokeMock.mockResolvedValueOnce({ fontFiles: 2, totalBytes: 56 });
+    await expect(preflightFontFiles(["D:/A.ttf", "D:/B.otf"])).resolves.toEqual({
+      fontFiles: 2,
+      totalBytes: 56,
+    });
+    expect(invokeMock).toHaveBeenLastCalledWith("preflight_font_files", {
+      paths: ["D:/A.ttf", "D:/B.otf"],
+    });
+  });
+});
+
+describe("localized native file dialogs", () => {
+  const zh = (key: string): string =>
+    ({
+      dialog_filter_all_files: "所有文件",
+      dialog_filter_font_files: "字体文件",
+      dialog_filter_subtitle_files: "字幕文件",
+      dialog_filter_video_files: "视频文件",
+      dialog_filter_video_subtitle_files: "视频和字幕文件",
+      dialog_pick_font_files_title: "选择字体文件",
+      dialog_pick_rename_inputs_title: "选择视频和字幕",
+    })[key] ?? key;
+
+  it("uses translated titles and filters for font files", async () => {
+    openMock.mockResolvedValue(["D:/Fonts/A.ttf"]);
+    await pickFontFiles(zh);
+
+    expect(openMock).toHaveBeenCalledWith({
+      multiple: true,
+      title: "选择字体文件",
+      filters: [
+        { name: "字体文件", extensions: ["ttf", "otf", "ttc", "otc"] },
+        { name: "所有文件", extensions: ["*"] },
+      ],
+    });
+  });
+
+  it("uses translated titles and filters for mixed rename inputs", async () => {
+    openMock.mockResolvedValue(["D:/Show.mkv", "D:/Show.ass"]);
+    await pickRenameInputs(zh);
+
+    expect(openMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        multiple: true,
+        title: "选择视频和字幕",
+        filters: expect.arrayContaining([
+          expect.objectContaining({ name: "视频和字幕文件" }),
+          expect.objectContaining({ name: "视频文件" }),
+          expect.objectContaining({ name: "字幕文件" }),
+          expect.objectContaining({ name: "所有文件" }),
+        ]),
+      })
+    );
   });
 });
 

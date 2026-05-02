@@ -424,11 +424,11 @@ export default function BatchRename() {
 
   const handlePickFiles = useCallback(async () => {
     const gen = (pickGenRef.current = pickGenRef.current + 1);
-    const paths = await pickRenameInputs();
+    const paths = await pickRenameInputs(t);
     if (gen !== pickGenRef.current) return;
     if (!paths || paths.length === 0) return;
     ingestPaths(paths, gen);
-  }, [ingestPaths]);
+  }, [ingestPaths, t]);
 
   const handleDroppedPaths = useCallback(
     (paths: string[]) => {
@@ -453,9 +453,9 @@ export default function BatchRename() {
   }, [clearFile]);
 
   const handlePickChosenDir = useCallback(async () => {
-    const dir = await pickOutputDirectory();
+    const dir = await pickOutputDirectory(t);
     if (dir) setChosenDir(dir);
-  }, []);
+  }, [t]);
 
   const handleRunRename = useCallback(async () => {
     if (busy || actionableCount === 0) return;

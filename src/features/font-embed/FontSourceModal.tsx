@@ -3,13 +3,18 @@ import {
   cancelFontScan,
   pickFontDirectory,
   pickFontFiles,
+  preflightFontDirectory,
+  preflightFontFiles,
   scanFontDirectory,
   scanFontFiles,
+  type FontScanPreflight,
 } from "../../lib/tauri-api";
+import { ask } from "@tauri-apps/plugin-dialog";
 import { useI18n } from "../../i18n/useI18n";
 import type { FontUsage } from "./font-collector";
 import { fontKeyLabel } from "./font-collector";
 import { userFontKey } from "./font-embedder";
+import { formatFontScanBytes, shouldWarnLargeFontScan } from "./font-source-warning";
 
 export interface FontSource {
   /** Stable id used as a React key and for removal. */
@@ -218,11 +223,34 @@ export default function FontSourceModal(props: Props) {
     void cancelFontScan(scanId);
   }, []);
 
+  const confirmLargeFontScan = useCallback(
+    async (preflight: FontScanPreflight): Promise<boolean> => {
+      if (!shouldWarnLargeFontScan(preflight)) return true;
+      return ask(
+        t(
+          "font_scan_large_warning",
+          preflight.fontFiles,
+          formatFontScanBytes(preflight.totalBytes)
+        ),
+        { title: t("font_scan_large_warning_title"), kind: "warning" }
+      );
+    },
+    [t]
+  );
+
   const handleAddFolder = useCallback(async () => {
     setError(null);
     setInfo(null);
-    const dir = await pickFontDirectory();
+    const dir = await pickFontDirectory(t);
     if (!dir) return;
+    try {
+      const preflight = await preflightFontDirectory(dir);
+      const confirmed = await confirmLargeFontScan(preflight);
+      if (!confirmed) return;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      return;
+    }
     const scanId = newScanId();
     const sourceId = newId();
     activeScanIdRef.current = scanId;
@@ -261,13 +289,28 @@ export default function FontSourceModal(props: Props) {
       }
       setScanning(false);
     }
-  }, [onAddSource, t, reportSourceAdded, resetScanProgress, scheduleScanProgress]);
+  }, [
+    onAddSource,
+    t,
+    confirmLargeFontScan,
+    reportSourceAdded,
+    resetScanProgress,
+    scheduleScanProgress,
+  ]);
 
   const handleAddFiles = useCallback(async () => {
     setError(null);
     setInfo(null);
-    const paths = await pickFontFiles();
+    const paths = await pickFontFiles(t);
     if (!paths || paths.length === 0) return;
+    try {
+      const preflight = await preflightFontFiles(paths);
+      const confirmed = await confirmLargeFontScan(preflight);
+      if (!confirmed) return;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      return;
+    }
     const scanId = newScanId();
     const sourceId = newId();
     activeScanIdRef.current = scanId;
@@ -303,7 +346,14 @@ export default function FontSourceModal(props: Props) {
       }
       setScanning(false);
     }
-  }, [onAddSource, t, reportSourceAdded, resetScanProgress, scheduleScanProgress]);
+  }, [
+    onAddSource,
+    t,
+    confirmLargeFontScan,
+    reportSourceAdded,
+    resetScanProgress,
+    scheduleScanProgress,
+  ]);
 
   // Coverage: how many required families are matched by loaded local sources.
   // In this modal we only consider local matches, so the count reflects the user's question:

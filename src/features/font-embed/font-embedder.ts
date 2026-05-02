@@ -373,7 +373,7 @@ export async function embedFonts(
     const fontName = buildFontFileName(info.key);
     const label = fontKeyLabel(info.key);
     onProgress?.({
-      stage: t?.("msg_subsetting", label) ?? `Subsetting ${label}...`,
+      stage: t?.("msg_subsetting", label) ?? `Subsetting ${label}…`,
       current: i + 1,
       total,
     });

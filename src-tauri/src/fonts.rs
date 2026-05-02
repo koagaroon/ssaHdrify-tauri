@@ -3,9 +3,10 @@ use font_kit::handle::Handle;
 use font_kit::properties::{Properties, Style, Weight};
 use font_kit::source::SystemSource;
 use once_cell::sync::Lazy;
-use std::collections::{HashMap, HashSet};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use std::collections::HashSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -73,13 +74,15 @@ const MAX_FONT_DATA_SIZE: u64 = 50 * 1024 * 1024;
 /// IPC → JS heap → ASS string.
 const MAX_FONT_FALLBACK_SIZE: usize = 10 * 1024 * 1024;
 
-/// Overall cap on the size of each provenance cache, as a defense against a
-/// pathological long-running session that accumulates tens of thousands of
-/// scanned directories. A typical desktop has < 1000 installed fonts; 100k
-/// leaves plenty of headroom for power users who scan many folders while
-/// still bounding worst-case memory (each entry averages ≤200 bytes, so the
-/// cap is ~20 MB per cache).
+/// Cap on the system-font provenance cache, as a defense against a
+/// pathological long-running session. User-picked font provenance is stored
+/// in the session SQLite index instead of an in-memory set, so XL source
+/// folders do not pin tens of gigabytes of path/name metadata.
 const MAX_PROVENANCE_CACHE_SIZE: usize = 100_000;
+
+/// AppData filename for the session-only user font index. It is cleared at
+/// app startup; persistence across restarts is intentionally deferred.
+const USER_FONT_DB_FILENAME: &str = "user-font-sources.session.sqlite3";
 
 /// Strip the Win32 extended-length UNC prefix (`\\?\`) that `canonicalize()`
 /// adds on Windows, so paths compare consistently across insert and lookup.
@@ -98,59 +101,105 @@ fn normalize_canonical_path(canonical_str: &str) -> String {
 /// (typically < 1000), and eviction would introduce TOCTOU windows.
 static ALLOWED_FONT_PATHS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
-/// Sibling provenance cache for paths that came from a user-picked directory
-/// or file list (via `scan_font_directory` / `scan_font_files`). Paths here
-/// skip the system-fonts-directory whitelist in `subset_font`, but still must
-/// be registered first — arbitrary IPC-supplied paths are still rejected.
-static ALLOWED_USER_FONT_PATHS: Lazy<Mutex<HashSet<String>>> =
-    Lazy::new(|| Mutex::new(HashSet::new()));
+/// Session SQLite path for user-picked font sources. Commands open short-lived
+/// connections to this path instead of sharing a global Connection, which keeps
+/// the static state simple and avoids holding SQLite page caches for longer
+/// than one operation.
+static USER_FONT_DB_PATH: Lazy<Mutex<Option<PathBuf>>> = Lazy::new(|| Mutex::new(None));
 
-#[derive(Clone, Copy)]
-struct IndexedFaceRef {
-    source_index: usize,
-    entry_index: usize,
-}
-
-struct UserFontSource {
-    entries: Vec<LocalFontEntry>,
-}
-
-#[derive(Default)]
-struct UserFontSources {
-    order: Vec<String>,
-    sources: HashMap<String, UserFontSource>,
-    index: HashMap<String, IndexedFaceRef>,
-}
-
-impl UserFontSources {
-    fn rebuild_index(&mut self) {
-        self.index.clear();
-        for (source_index, source_id) in self.order.iter().enumerate() {
-            let Some(source) = self.sources.get(source_id) else {
-                continue;
-            };
-            for (entry_index, entry) in source.entries.iter().enumerate() {
-                for family in &entry.families {
-                    self.index.insert(
-                        user_font_key(family, entry.bold, entry.italic),
-                        IndexedFaceRef {
-                            source_index,
-                            entry_index,
-                        },
-                    );
-                }
-            }
-        }
-    }
-}
-
-static USER_FONT_SOURCES: Lazy<Mutex<UserFontSources>> =
-    Lazy::new(|| Mutex::new(UserFontSources::default()));
-
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 struct ImportOutcome {
     added: usize,
     duplicated: usize,
+}
+
+fn db_error(context: &str, error: rusqlite::Error) -> String {
+    log::warn!("user font index {context}: {error}");
+    format!("Internal error: user font index {context}")
+}
+
+fn user_font_db_path() -> Result<PathBuf, String> {
+    USER_FONT_DB_PATH
+        .lock()
+        .map_err(|_| "Internal error: user font index path corrupted".to_string())?
+        .clone()
+        .ok_or_else(|| "User font index is not initialized".to_string())
+}
+
+fn open_user_font_db() -> Result<Connection, String> {
+    let path = user_font_db_path()?;
+    let conn = Connection::open(path).map_err(|e| db_error("open failed", e))?;
+    conn.pragma_update(None, "foreign_keys", "ON")
+        .map_err(|e| db_error("foreign_keys setup failed", e))?;
+    Ok(conn)
+}
+
+fn init_user_font_schema(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "
+        PRAGMA foreign_keys = ON;
+        CREATE TABLE IF NOT EXISTS font_sources (
+            source_id TEXT PRIMARY KEY,
+            source_order INTEGER NOT NULL UNIQUE
+        );
+        CREATE TABLE IF NOT EXISTS font_faces (
+            face_id INTEGER PRIMARY KEY,
+            source_id TEXT NOT NULL,
+            path TEXT NOT NULL,
+            face_index INTEGER NOT NULL,
+            bold INTEGER NOT NULL,
+            italic INTEGER NOT NULL,
+            size_bytes INTEGER NOT NULL,
+            FOREIGN KEY(source_id) REFERENCES font_sources(source_id) ON DELETE CASCADE,
+            UNIQUE(path, face_index)
+        );
+        CREATE TABLE IF NOT EXISTS font_family_keys (
+            key TEXT NOT NULL,
+            face_id INTEGER NOT NULL,
+            source_order INTEGER NOT NULL,
+            FOREIGN KEY(face_id) REFERENCES font_faces(face_id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_font_family_lookup
+            ON font_family_keys(key, source_order DESC, face_id DESC);
+        CREATE INDEX IF NOT EXISTS idx_font_faces_source
+            ON font_faces(source_id);
+        CREATE INDEX IF NOT EXISTS idx_font_faces_path_index
+            ON font_faces(path, face_index);
+        ",
+    )
+    .map_err(|e| db_error("schema setup failed", e))
+}
+
+/// Initialize the session-only user font index under Tauri AppData. Called
+/// from app setup before any IPC command can scan or resolve user fonts.
+pub fn init_user_font_db(app_data_dir: &Path) -> Result<(), String> {
+    fs::create_dir_all(app_data_dir).map_err(|e| {
+        log::warn!(
+            "create user font index directory '{}' failed: {e}",
+            app_data_dir.display()
+        );
+        "Cannot create user font index directory".to_string()
+    })?;
+    let db_path = app_data_dir.join(USER_FONT_DB_FILENAME);
+    match fs::remove_file(&db_path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            log::warn!(
+                "remove stale user font index '{}' failed: {e}",
+                db_path.display()
+            );
+            return Err("Cannot reset user font index".to_string());
+        }
+    }
+    {
+        let mut path_slot = USER_FONT_DB_PATH
+            .lock()
+            .map_err(|_| "Internal error: user font index path corrupted".to_string())?;
+        *path_slot = Some(db_path);
+    }
+    let conn = open_user_font_db()?;
+    init_user_font_schema(&conn)
 }
 
 /// No frontend-created scan may use this id. Keeping zero reserved lets the
@@ -300,53 +349,132 @@ fn validate_font_source_id(source_id: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn face_key(entry: &LocalFontEntry) -> String {
-    format!("{}|{}", entry.path, entry.index)
+fn has_allowed_font_extension(path: &Path) -> bool {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    ALLOWED_FONT_EXTENSIONS.contains(&ext.as_str())
 }
 
-fn import_user_font_source(
-    source_id: String,
+fn create_user_font_source_tx(tx: &Transaction<'_>, source_id: &str) -> Result<i64, String> {
+    validate_font_source_id(source_id)?;
+    let source_order: i64 = tx
+        .query_row(
+            "SELECT COALESCE(MAX(source_order), 0) + 1 FROM font_sources",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| db_error("source order query failed", e))?;
+    tx.execute(
+        "INSERT INTO font_sources(source_id, source_order) VALUES (?1, ?2)",
+        params![source_id, source_order],
+    )
+    .map_err(|e| {
+        if matches!(
+            e,
+            rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error {
+                    code: rusqlite::ErrorCode::ConstraintViolation,
+                    ..
+                },
+                _
+            )
+        ) {
+            "Font source id already exists".to_string()
+        } else {
+            db_error("source insert failed", e)
+        }
+    })?;
+    Ok(source_order)
+}
+
+fn import_user_font_batch_tx(
+    tx: &Transaction<'_>,
+    source_id: &str,
+    source_order: i64,
     entries: Vec<LocalFontEntry>,
 ) -> Result<ImportOutcome, String> {
-    validate_font_source_id(&source_id)?;
-
-    let mut state = USER_FONT_SOURCES
-        .lock()
-        .map_err(|_| "Internal error: user font source index corrupted".to_string())?;
-    if state.sources.contains_key(&source_id) {
-        return Err("Font source id already exists".to_string());
-    }
-
-    let mut registered = HashSet::new();
-    for source in state.sources.values() {
-        for entry in &source.entries {
-            registered.insert(face_key(entry));
-        }
-    }
-
-    let mut added_entries = Vec::new();
+    let mut added = 0;
     let mut duplicated = 0;
-    for entry in entries {
-        if registered.insert(face_key(&entry)) {
-            added_entries.push(entry);
-        } else {
-            duplicated += 1;
-        }
-    }
+    let mut insert_face = tx
+        .prepare(
+            "
+            INSERT OR IGNORE INTO font_faces(
+                source_id, path, face_index, bold, italic, size_bytes
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            ",
+        )
+        .map_err(|e| db_error("face insert prepare failed", e))?;
+    let mut insert_key = tx
+        .prepare(
+            "
+            INSERT INTO font_family_keys(key, face_id, source_order)
+            VALUES (?1, ?2, ?3)
+            ",
+        )
+        .map_err(|e| db_error("family-key insert prepare failed", e))?;
 
-    let added = added_entries.len();
-    if added > 0 {
-        state.order.push(source_id.clone());
-        state.sources.insert(
-            source_id,
-            UserFontSource {
-                entries: added_entries,
-            },
-        );
-        state.rebuild_index();
+    for entry in entries {
+        let size_bytes = i64::try_from(entry.size_bytes)
+            .map_err(|_| "Font file size is too large for the source index".to_string())?;
+        let changed = insert_face
+            .execute(params![
+                source_id,
+                entry.path,
+                entry.index,
+                if entry.bold { 1 } else { 0 },
+                if entry.italic { 1 } else { 0 },
+                size_bytes
+            ])
+            .map_err(|e| db_error("face insert failed", e))?;
+        if changed == 0 {
+            duplicated += 1;
+            continue;
+        }
+        added += 1;
+        let face_id = tx.last_insert_rowid();
+        for family in entry.families {
+            insert_key
+                .execute(params![
+                    user_font_key(&family, entry.bold, entry.italic),
+                    face_id,
+                    source_order
+                ])
+                .map_err(|e| db_error("family-key insert failed", e))?;
+        }
     }
 
     Ok(ImportOutcome { added, duplicated })
+}
+
+fn remove_empty_user_font_source_tx(
+    tx: &Transaction<'_>,
+    source_id: &str,
+    added: usize,
+) -> Result<(), String> {
+    if added > 0 {
+        return Ok(());
+    }
+    tx.execute(
+        "DELETE FROM font_sources WHERE source_id = ?1",
+        params![source_id],
+    )
+    .map_err(|e| db_error("empty source cleanup failed", e))?;
+    Ok(())
+}
+
+fn is_user_font_path_registered(canonical_path: &str) -> Result<bool, String> {
+    let conn = open_user_font_db()?;
+    conn.query_row(
+        "SELECT 1 FROM font_faces WHERE path = ?1 LIMIT 1",
+        params![canonical_path],
+        |_| Ok(()),
+    )
+    .optional()
+    .map(|v| v.is_some())
+    .map_err(|e| db_error("path lookup failed", e))
 }
 
 /// Find a system font file path by family name, bold, and italic flags.
@@ -432,8 +560,9 @@ const MAX_FAMILY_VARIANTS_PER_FACE: usize = 32;
 /// locale-preferred name, which on zh-CN Windows silently shadowed English
 /// family names that subtitle scripts typically use.
 ///
-/// `canonical` must already be canonicalized by the caller — this function
-/// registers the resolved path in `ALLOWED_USER_FONT_PATHS`.
+/// `canonical` must already be canonicalized by the caller. User provenance
+/// is registered later when the emitted batch is committed to the session
+/// SQLite index.
 fn parse_local_font_file(canonical: &Path) -> Vec<LocalFontEntry> {
     use fontcull_skrifa::string::StringId;
     use fontcull_skrifa::{FontRef, MetadataProvider};
@@ -446,7 +575,7 @@ fn parse_local_font_file(canonical: &Path) -> Vec<LocalFontEntry> {
         .and_then(|e| e.to_str())
         .map(|e| e.to_ascii_lowercase())
         .unwrap_or_default();
-    if !ALLOWED_FONT_EXTENSIONS.contains(&ext.as_str()) {
+    if !has_allowed_font_extension(canonical) {
         return Vec::new();
     }
 
@@ -556,34 +685,6 @@ fn parse_local_font_file(canonical: &Path) -> Vec<LocalFontEntry> {
             continue;
         }
 
-        // Register the path once per face — the allow-set is a HashSet so
-        // repeated inserts are cheap no-ops. Honor MAX_PROVENANCE_CACHE_SIZE
-        // (mirrors the system-side `register_font_path` enforcement): drop
-        // the whole face when the cache is full rather than registering a
-        // path that subset_font would later reject. `continue` takes us to
-        // the next face index, leaving partial results intact.
-        {
-            let cache_full = match ALLOWED_USER_FONT_PATHS.lock() {
-                Ok(mut cache) => {
-                    if !cache.contains(&canonical_string)
-                        && cache.len() >= MAX_PROVENANCE_CACHE_SIZE
-                    {
-                        true
-                    } else {
-                        cache.insert(canonical_string.clone());
-                        false
-                    }
-                }
-                Err(_) => true,
-            };
-            if cache_full {
-                log::warn!(
-                    "user font provenance cache full ({MAX_PROVENANCE_CACHE_SIZE}); dropping face"
-                );
-                continue;
-            }
-        }
-
         // Stabilize the primary-name pick: prefer font-kit's family_name if
         // it's among the variants, else fall back to a sorted order so UI
         // listings stay deterministic across runs (HashSet iteration order
@@ -611,6 +712,121 @@ fn parse_local_font_file(canonical: &Path) -> Vec<LocalFontEntry> {
     entries
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FontScanPreflight {
+    font_files: usize,
+    total_bytes: u64,
+}
+
+fn validate_input_path(path: &str, label: &str) -> Result<(), String> {
+    if path.is_empty() || path.len() > 4096 {
+        return Err(format!("{label} path must be 1-4096 characters"));
+    }
+    if path.chars().any(|c| c.is_control()) {
+        return Err(format!("{label} path contains invalid characters"));
+    }
+    Ok(())
+}
+
+fn add_preflight_file(path: &Path, out: &mut FontScanPreflight) {
+    if !has_allowed_font_extension(path) {
+        return;
+    }
+    let Ok(metadata) = fs::metadata(path) else {
+        return;
+    };
+    if !metadata.is_file() {
+        return;
+    }
+    out.font_files += 1;
+    out.total_bytes = out.total_bytes.saturating_add(metadata.len());
+}
+
+fn preflight_directory_inner(canonical_dir: &Path) -> Result<FontScanPreflight, String> {
+    let read = fs::read_dir(canonical_dir).map_err(|e| {
+        log::warn!(
+            "preflight read_dir failed for '{}': {e}",
+            canonical_dir.display()
+        );
+        "Cannot read directory".to_string()
+    })?;
+    let mut out = FontScanPreflight {
+        font_files: 0,
+        total_bytes: 0,
+    };
+    for entry in read {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Ok(canonical) = path.canonicalize() else {
+            continue;
+        };
+        if !canonical.starts_with(canonical_dir) {
+            continue;
+        }
+        add_preflight_file(&canonical, &mut out);
+    }
+    Ok(out)
+}
+
+fn preflight_files_inner(paths: Vec<String>) -> FontScanPreflight {
+    let mut out = FontScanPreflight {
+        font_files: 0,
+        total_bytes: 0,
+    };
+    let mut seen = HashSet::new();
+    for p in paths {
+        if validate_input_path(&p, "File").is_err() {
+            continue;
+        }
+        let Ok(canonical) = Path::new(&p).canonicalize() else {
+            continue;
+        };
+        if !canonical.is_file()
+            || !seen.insert(normalize_canonical_path(&canonical.to_string_lossy()))
+        {
+            continue;
+        }
+        add_preflight_file(&canonical, &mut out);
+    }
+    out
+}
+
+#[tauri::command]
+pub async fn preflight_font_directory(dir: String) -> Result<FontScanPreflight, String> {
+    validate_input_path(&dir, "Directory")?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let canonical_dir = Path::new(&dir).canonicalize().map_err(|e| {
+            log::warn!("preflight canonicalize directory failed: {e}");
+            "Cannot resolve directory path".to_string()
+        })?;
+        if !canonical_dir.is_dir() {
+            return Err("Not a directory".to_string());
+        }
+        preflight_directory_inner(&canonical_dir)
+    })
+    .await
+    .map_err(|e| format!("Font preflight worker failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn preflight_font_files(paths: Vec<String>) -> Result<FontScanPreflight, String> {
+    if paths.len() > MAX_INPUT_PATHS {
+        return Err(format!(
+            "Too many file paths ({}, max {MAX_INPUT_PATHS})",
+            paths.len()
+        ));
+    }
+    tauri::async_runtime::spawn_blocking(move || Ok(preflight_files_inner(paths)))
+        .await
+        .map_err(|e| format!("Font preflight worker failed: {e}"))?
+}
+
 /// Streaming scan of a user-picked directory (one level deep). Faces are
 /// emitted to `emit_batch` in chunks of up to `SCAN_BATCH_SIZE` (or every
 /// `SCAN_BATCH_INTERVAL` when parsing is slower than batching). Returns the
@@ -621,7 +837,7 @@ fn parse_local_font_file(canonical: &Path) -> Vec<LocalFontEntry> {
 /// Does NOT recurse — the `Fonts/` convention is flat by tradition, and
 /// limiting recursion keeps the "only files under the picked directory"
 /// security reasoning straightforward.
-fn scan_directory_inner<F: FnMut(Vec<LocalFontEntry>)>(
+fn scan_directory_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
     canonical_dir: &Path,
     scan_id: u64,
     mut emit_batch: F,
@@ -642,7 +858,7 @@ fn scan_directory_inner<F: FnMut(Vec<LocalFontEntry>)>(
             // polled between files; a single large font parse must finish
             // before this branch can run.
             if !buffer.is_empty() {
-                emit_batch(std::mem::take(&mut buffer));
+                emit_batch(std::mem::take(&mut buffer))?;
             }
             log::info!(
                 "font scan {} cancelled in directory '{}' after {} faces",
@@ -682,7 +898,7 @@ fn scan_directory_inner<F: FnMut(Vec<LocalFontEntry>)>(
             total += 1;
             if total > MAX_FONTS_PER_SCAN {
                 if !buffer.is_empty() {
-                    emit_batch(std::mem::take(&mut buffer));
+                    emit_batch(std::mem::take(&mut buffer))?;
                 }
                 return Err(format!(
                     "Too many fonts in directory (> {MAX_FONTS_PER_SCAN}). \
@@ -692,14 +908,14 @@ fn scan_directory_inner<F: FnMut(Vec<LocalFontEntry>)>(
             }
 
             if buffer.len() >= SCAN_BATCH_SIZE || last_emit.elapsed() >= SCAN_BATCH_INTERVAL {
-                emit_batch(std::mem::take(&mut buffer));
+                emit_batch(std::mem::take(&mut buffer))?;
                 last_emit = Instant::now();
             }
         }
     }
 
     if !buffer.is_empty() {
-        emit_batch(buffer);
+        emit_batch(buffer)?;
     }
 
     Ok(ScanOutcome {
@@ -718,12 +934,7 @@ pub async fn scan_font_directory(
     scan_id: u64,
     source_id: String,
 ) -> Result<(), String> {
-    if dir.is_empty() || dir.len() > 4096 {
-        return Err("Directory path must be 1-4096 characters".to_string());
-    }
-    if dir.chars().any(|c| c.is_control()) {
-        return Err("Directory path contains invalid characters".to_string());
-    }
+    validate_input_path(&dir, "Directory")?;
     validate_font_source_id(&source_id)?;
 
     let active_scan = begin_font_scan(scan_id)?;
@@ -737,14 +948,26 @@ pub async fn scan_font_directory(
             return Err("Not a directory".to_string());
         }
 
-        let mut entries: Vec<LocalFontEntry> = Vec::new();
+        let mut conn = open_user_font_db()?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| db_error("transaction start failed", e))?;
+        let source_order = create_user_font_source_tx(&tx, &source_id)?;
+        let mut import = ImportOutcome::default();
+        let mut progress_total = 0usize;
         let outcome = scan_directory_inner(&canonical_dir, scan_id, |batch| {
-            entries.extend(batch);
+            progress_total += batch.len();
+            let batch_import = import_user_font_batch_tx(&tx, &source_id, source_order, batch)?;
+            import.added += batch_import.added;
+            import.duplicated += batch_import.duplicated;
             let _ = progress.send(ScanProgress::Batch {
-                total: entries.len(),
+                total: progress_total,
             });
+            Ok(())
         })?;
-        let import = import_user_font_source(source_id, entries)?;
+        remove_empty_user_font_source_tx(&tx, &source_id, import.added)?;
+        tx.commit()
+            .map_err(|e| db_error("transaction commit failed", e))?;
 
         // End-of-stream sentinel; see ScanProgress::Done. MUST be the last
         // send on the Ok path so every progress event has drained before
@@ -777,7 +1000,7 @@ pub async fn scan_font_directory(
 /// Streaming scan of a user-picked file list. Mirrors
 /// `scan_directory_inner`, with cancel checks between files and the same
 /// per-face batching cadence.
-fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>)>(
+fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
     paths: Vec<String>,
     scan_id: u64,
     mut emit_batch: F,
@@ -789,7 +1012,7 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>)>(
     for p in paths {
         if font_scan_cancelled(scan_id) {
             if !buffer.is_empty() {
-                emit_batch(std::mem::take(&mut buffer));
+                emit_batch(std::mem::take(&mut buffer))?;
             }
             log::info!(
                 "font scan {} cancelled in file list after {} faces",
@@ -822,7 +1045,7 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>)>(
             total += 1;
             if total > MAX_FONTS_PER_SCAN {
                 if !buffer.is_empty() {
-                    emit_batch(std::mem::take(&mut buffer));
+                    emit_batch(std::mem::take(&mut buffer))?;
                 }
                 return Err(format!(
                     "Too many font faces across files (> {MAX_FONTS_PER_SCAN})"
@@ -830,14 +1053,14 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>)>(
             }
 
             if buffer.len() >= SCAN_BATCH_SIZE || last_emit.elapsed() >= SCAN_BATCH_INTERVAL {
-                emit_batch(std::mem::take(&mut buffer));
+                emit_batch(std::mem::take(&mut buffer))?;
                 last_emit = Instant::now();
             }
         }
     }
 
     if !buffer.is_empty() {
-        emit_batch(buffer);
+        emit_batch(buffer)?;
     }
 
     Ok(ScanOutcome {
@@ -867,14 +1090,26 @@ pub async fn scan_font_files(
     let active_scan = begin_font_scan(scan_id)?;
     tauri::async_runtime::spawn_blocking(move || {
         let _active_scan = active_scan;
-        let mut entries: Vec<LocalFontEntry> = Vec::new();
+        let mut conn = open_user_font_db()?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| db_error("transaction start failed", e))?;
+        let source_order = create_user_font_source_tx(&tx, &source_id)?;
+        let mut import = ImportOutcome::default();
+        let mut progress_total = 0usize;
         let outcome = scan_files_inner(paths, scan_id, |batch| {
-            entries.extend(batch);
+            progress_total += batch.len();
+            let batch_import = import_user_font_batch_tx(&tx, &source_id, source_order, batch)?;
+            import.added += batch_import.added;
+            import.duplicated += batch_import.duplicated;
             let _ = progress.send(ScanProgress::Batch {
-                total: entries.len(),
+                total: progress_total,
             });
+            Ok(())
         })?;
-        let import = import_user_font_source(source_id, entries)?;
+        remove_empty_user_font_source_tx(&tx, &source_id, import.added)?;
+        tx.commit()
+            .map_err(|e| db_error("transaction commit failed", e))?;
 
         // See scan_font_directory for why Done is mandatory on the Ok path.
         let _ = progress.send(ScanProgress::Done {
@@ -926,49 +1161,46 @@ pub fn resolve_user_font(
         return Err("Font family name contains invalid characters".to_string());
     }
 
-    let state = USER_FONT_SOURCES
-        .lock()
-        .map_err(|_| "Internal error: user font source index corrupted".to_string())?;
     let key = user_font_key(&family, bold, italic);
-    let Some(index_ref) = state.index.get(&key) else {
-        return Ok(None);
-    };
-    let Some(source_id) = state.order.get(index_ref.source_index) else {
-        return Ok(None);
-    };
-    let Some(source) = state.sources.get(source_id) else {
-        return Ok(None);
-    };
-    let Some(entry) = source.entries.get(index_ref.entry_index) else {
-        return Ok(None);
-    };
-
-    Ok(Some(FontLookupResult {
-        path: entry.path.clone(),
-        index: entry.index,
-    }))
+    let conn = open_user_font_db()?;
+    conn.query_row(
+        "
+        SELECT f.path, f.face_index
+        FROM font_family_keys k
+        JOIN font_faces f ON f.face_id = k.face_id
+        WHERE k.key = ?1
+        ORDER BY k.source_order DESC, k.face_id DESC
+        LIMIT 1
+        ",
+        params![key],
+        |row| {
+            Ok(FontLookupResult {
+                path: row.get(0)?,
+                index: row.get(1)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(|e| db_error("lookup failed", e))
 }
 
 #[tauri::command]
 pub fn remove_font_source(source_id: String) -> Result<(), String> {
     validate_font_source_id(&source_id)?;
-    let mut state = USER_FONT_SOURCES
-        .lock()
-        .map_err(|_| "Internal error: user font source index corrupted".to_string())?;
-    state.sources.remove(&source_id);
-    state.order.retain(|id| id != &source_id);
-    state.rebuild_index();
+    let conn = open_user_font_db()?;
+    conn.execute(
+        "DELETE FROM font_sources WHERE source_id = ?1",
+        params![source_id],
+    )
+    .map_err(|e| db_error("source delete failed", e))?;
     Ok(())
 }
 
 #[tauri::command]
 pub fn clear_font_sources() -> Result<(), String> {
-    let mut state = USER_FONT_SOURCES
-        .lock()
-        .map_err(|_| "Internal error: user font source index corrupted".to_string())?;
-    state.sources.clear();
-    state.order.clear();
-    state.index.clear();
+    let conn = open_user_font_db()?;
+    conn.execute("DELETE FROM font_sources", [])
+        .map_err(|e| db_error("source clear failed", e))?;
     Ok(())
 }
 
@@ -1183,16 +1415,19 @@ pub fn subset_font(
 
     // Primary guard: the path must have been discovered by one of the scan
     // commands (find_system_font OR scan_font_directory / scan_font_files).
-    // Arbitrary IPC-supplied paths are rejected.
+    // System paths use the small in-memory provenance set; user-picked paths
+    // are checked against the session SQLite source index so XL folders do
+    // not pin a huge path HashSet in RAM.
     let canonical_string = normalize_canonical_path(&canonical.to_string_lossy());
     let is_system = ALLOWED_FONT_PATHS
         .lock()
         .map_err(|_| "Internal error: font path cache corrupted".to_string())?
         .contains(&canonical_string);
-    let is_user = ALLOWED_USER_FONT_PATHS
-        .lock()
-        .map_err(|_| "Internal error: user font path cache corrupted".to_string())?
-        .contains(&canonical_string);
+    let is_user = if is_system {
+        false
+    } else {
+        is_user_font_path_registered(&canonical_string)?
+    };
     if !is_system && !is_user {
         return Err("Font path was not discovered by a scan command".to_string());
     }
@@ -1200,8 +1435,8 @@ pub fn subset_font(
     // Defense-in-depth: system-discovered paths must live under a known
     // system fonts directory. User-picked paths skip this check by design
     // — the whole point is to accept a user-chosen directory — but they
-    // still had to pass the provenance cache above, so random file reads
-    // via IPC are still blocked.
+    // still had to pass the DB-backed provenance check above, so random
+    // file reads via IPC are still blocked.
     if is_system && !is_in_system_fonts_dir(&canonical) {
         return Err("System font path is not in a system fonts directory".to_string());
     }
@@ -1327,13 +1562,119 @@ fn subset_with_index(font_data: &[u8], index: u32, codepoints: &[u32]) -> Result
 mod tests {
     use super::*;
 
+    static DB_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn init_test_user_font_db(name: &str) {
+        let dir = std::env::temp_dir().join(format!(
+            "ssahdrify-user-font-db-test-{}-{name}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        init_user_font_db(&dir).expect("test DB should initialize");
+        clear_font_sources().expect("test DB should clear");
+    }
+
+    fn sample_entry(path: &str, family: &str, index: u32) -> LocalFontEntry {
+        LocalFontEntry {
+            path: path.to_string(),
+            index,
+            families: vec![family.to_string()],
+            bold: false,
+            italic: false,
+            size_bytes: 123,
+        }
+    }
+
+    fn commit_entries(source_id: &str, entries: Vec<LocalFontEntry>) -> ImportOutcome {
+        let mut conn = open_user_font_db().expect("test DB should open");
+        let tx = conn.transaction().expect("transaction should start");
+        let source_order =
+            create_user_font_source_tx(&tx, source_id).expect("source should insert");
+        let outcome = import_user_font_batch_tx(&tx, source_id, source_order, entries)
+            .expect("batch should import");
+        remove_empty_user_font_source_tx(&tx, source_id, outcome.added)
+            .expect("empty source cleanup should work");
+        tx.commit().expect("transaction should commit");
+        outcome
+    }
+
+    #[test]
+    fn db_import_dedupes_faces_and_resolves_family() {
+        let _guard = DB_TEST_LOCK.lock().unwrap();
+        init_test_user_font_db("dedupe");
+        let outcome = commit_entries(
+            "source-a",
+            vec![
+                sample_entry("C:\\Fonts\\A.ttf", "Demo Sans", 0),
+                sample_entry("C:\\Fonts\\A.ttf", "Demo Sans Duplicate", 0),
+            ],
+        );
+
+        assert_eq!(outcome.added, 1);
+        assert_eq!(outcome.duplicated, 1);
+        let resolved = resolve_user_font("Demo Sans".to_string(), false, false)
+            .unwrap()
+            .expect("family should resolve");
+        assert_eq!(resolved.path, "C:\\Fonts\\A.ttf");
+        assert!(is_user_font_path_registered("C:\\Fonts\\A.ttf").unwrap());
+    }
+
+    #[test]
+    fn db_lookup_prefers_newer_source_for_same_family_key() {
+        let _guard = DB_TEST_LOCK.lock().unwrap();
+        init_test_user_font_db("source-order");
+        commit_entries(
+            "source-a",
+            vec![sample_entry("C:\\Fonts\\Old.ttf", "Demo Sans", 0)],
+        );
+        commit_entries(
+            "source-b",
+            vec![sample_entry("C:\\Fonts\\New.ttf", "Demo Sans", 0)],
+        );
+
+        let resolved = resolve_user_font("Demo Sans".to_string(), false, false)
+            .unwrap()
+            .expect("family should resolve");
+        assert_eq!(resolved.path, "C:\\Fonts\\New.ttf");
+    }
+
+    #[test]
+    fn db_remove_and_clear_update_lookup_and_provenance() {
+        let _guard = DB_TEST_LOCK.lock().unwrap();
+        init_test_user_font_db("remove-clear");
+        commit_entries(
+            "source-a",
+            vec![sample_entry("C:\\Fonts\\A.ttf", "Demo Sans", 0)],
+        );
+        commit_entries(
+            "source-b",
+            vec![sample_entry("C:\\Fonts\\B.ttf", "Demo Sans", 0)],
+        );
+
+        remove_font_source("source-b".to_string()).unwrap();
+        let resolved = resolve_user_font("Demo Sans".to_string(), false, false)
+            .unwrap()
+            .expect("older source should become visible again");
+        assert_eq!(resolved.path, "C:\\Fonts\\A.ttf");
+        assert!(!is_user_font_path_registered("C:\\Fonts\\B.ttf").unwrap());
+
+        clear_font_sources().unwrap();
+        assert!(resolve_user_font("Demo Sans".to_string(), false, false)
+            .unwrap()
+            .is_none());
+        assert!(!is_user_font_path_registered("C:\\Fonts\\A.ttf").unwrap());
+    }
+
     /// `scan_directory_inner` on a non-existent path surfaces the read_dir
     /// error as the user-facing string. The closure is never called.
     #[test]
     fn directory_inner_rejects_missing_dir() {
         let mut emitted: Vec<Vec<LocalFontEntry>> = Vec::new();
         let bogus = Path::new("Z:\\absolutely-not-a-real-directory\\for-testing");
-        let result = scan_directory_inner(bogus, 1, |batch| emitted.push(batch));
+        let result = scan_directory_inner(bogus, 1, |batch| {
+            emitted.push(batch);
+            Ok(())
+        });
         assert!(result.is_err());
         assert!(emitted.is_empty());
     }
@@ -1351,8 +1692,11 @@ mod tests {
             "has\u{0000}control".to_string(), // control char
             "Z:\\does-not-exist.ttf".to_string(),
         ];
-        let outcome = scan_files_inner(bad_paths, 2, |batch| emitted.push(batch))
-            .expect("invalid paths should be skipped, not error");
+        let outcome = scan_files_inner(bad_paths, 2, |batch| {
+            emitted.push(batch);
+            Ok(())
+        })
+        .expect("invalid paths should be skipped, not error");
         assert_eq!(outcome.total, 0);
         assert!(!outcome.cancelled);
         assert!(emitted.is_empty());
@@ -1367,7 +1711,8 @@ mod tests {
         CANCEL_SCAN_ID.fetch_max(scan_id, Ordering::Relaxed);
         let mut emitted: Vec<Vec<LocalFontEntry>> = Vec::new();
         let outcome = scan_files_inner(vec!["irrelevant.ttf".to_string()], scan_id, |batch| {
-            emitted.push(batch)
+            emitted.push(batch);
+            Ok(())
         })
         .expect("cancel returns Ok with partial results");
         assert_eq!(outcome.total, 0);

@@ -198,11 +198,11 @@ export default function TimingShift() {
 
   const handlePickFiles = useCallback(async () => {
     const gen = (pickGenRef.current = pickGenRef.current + 1);
-    const paths = await pickSubtitleFiles();
+    const paths = await pickSubtitleFiles(t);
     if (gen !== pickGenRef.current) return;
     if (!paths || paths.length === 0) return;
     await ingestPaths(paths, gen);
-  }, [ingestPaths]);
+  }, [ingestPaths, t]);
 
   const handleDroppedPaths = useCallback(
     async (paths: string[]) => {

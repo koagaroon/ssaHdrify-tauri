@@ -170,7 +170,7 @@ export default function HdrConvert() {
   // Strict cross-tab dedup contract: any conflict rejects the WHOLE
   // selection — see buildConflictMessage / FileContext for rationale.
   const handleSelectFiles = useCallback(async () => {
-    const paths = await pickSubtitleFiles();
+    const paths = await pickSubtitleFiles(t);
     if (!paths || paths.length === 0) return;
 
     const conflictMsg = buildConflictMessage(paths, "hdr", isFileInUse, t);
@@ -748,7 +748,7 @@ export default function HdrConvert() {
                   type="text"
                   value={style.fontName}
                   onChange={(e) => setStyle({ ...style, fontName: e.target.value })}
-                  placeholder="Font family name"
+                  placeholder={t("style_font_placeholder")}
                   disabled={processing}
                   className="w-full mt-1.5 px-2 py-1.5 rounded text-sm"
                   style={{
