@@ -328,7 +328,13 @@ export interface LocalFontEntry {
 // editing one side, edit the other in the same commit.
 type RawScanProgress =
   | { kind: "batch"; total: number }
-  | { kind: "done"; cancelled: boolean; added: number; duplicated: number };
+  | {
+      kind: "done";
+      cancelled: boolean;
+      ceilingHit: boolean;
+      added: number;
+      duplicated: number;
+    };
 
 /** Optional callback for streaming font scan results. Called once per
  *  Rust-side batch (cadence determined by `SCAN_BATCH_SIZE` and
@@ -341,6 +347,7 @@ export interface FontScanResult {
   added: number;
   duplicated: number;
   cancelled: boolean;
+  ceilingHit: boolean;
 }
 
 export interface FontScanPreflight {
@@ -425,15 +432,27 @@ async function runStreamingScan(
   const donePromise = new Promise<void>((resolve) => {
     resolveDone = resolve;
   });
-  const result: FontScanResult = { added: 0, duplicated: 0, cancelled: false };
+  const result: FontScanResult = {
+    added: 0,
+    duplicated: 0,
+    cancelled: false,
+    ceilingHit: false,
+  };
   channel.onmessage = (msg) => {
     if (msg.kind === "batch") {
       onBatch?.(msg.total);
     } else if (msg.kind === "done") {
       result.cancelled = msg.cancelled;
+      result.ceilingHit = msg.ceilingHit;
       result.added = msg.added;
       result.duplicated = msg.duplicated;
       resolveDone?.();
+    } else {
+      // Defense-in-depth: TypeScript narrows the union exhaustively at
+      // compile time, but a Rust enum variant rename without updating
+      // RawScanProgress would silently fall through here. Surface in
+      // dev so future drift is visible.
+      console.warn("unknown ScanProgress kind:", (msg as { kind: string }).kind);
     }
   };
   await invoke(command, { ...args, progress: channel });

@@ -46,6 +46,7 @@ fn discard_channel() -> Channel<ScanProgress> {
 #[derive(Debug, Default)]
 struct DoneStats {
     cancelled: bool,
+    ceiling_hit: bool,
     added: usize,
     duplicated: usize,
 }
@@ -78,6 +79,10 @@ fn collecting_channel() -> CollectingChannel {
                 *done_sink.lock().unwrap() = Some(DoneStats {
                     cancelled: event
                         .get("cancelled")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                    ceiling_hit: event
+                        .get("ceilingHit")
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false),
                     added: event.get("added").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
@@ -120,6 +125,10 @@ fn cancelling_channel(scan_id: u64) -> CancellingChannel {
                 *done_sink.lock().unwrap() = Some(DoneStats {
                     cancelled: event
                         .get("cancelled")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                    ceiling_hit: event
+                        .get("ceilingHit")
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false),
                     added: event.get("added").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
@@ -400,6 +409,10 @@ fn mid_scan_cancel_keeps_partial_results_when_directory_is_large_enough() {
         "mid-scan cancel should preserve the first emitted batch"
     );
     assert!(cancel_done.cancelled);
+    // User cancel must NOT set ceiling_hit — that flag is reserved for
+    // MAX_FONTS_PER_SCAN early stops so the frontend can show the right
+    // explanation message.
+    assert!(!cancel_done.ceiling_hit);
     assert!(
         cancel_done.added < full_done.added,
         "cancel should stop before the full directory is loaded: partial={}, full={}",

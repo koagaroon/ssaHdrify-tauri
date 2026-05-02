@@ -361,6 +361,10 @@ export const strings: Record<string, StringEntry> = {
     en: "Scan cancelled — kept {0} new font(s); {1} were already loaded.",
     zh: "已取消扫描，保留 {0} 个新字体；{1} 个为已加载的重复项。",
   },
+  font_scan_ceiling_hit: {
+    en: "Source too large — kept the first {0} font(s).",
+    zh: "字体来源过大，仅保留前 {0} 个字体。",
+  },
   font_scan_large_warning_title: { en: "Large Font Source", zh: "大型字体来源" },
   font_scan_large_warning: {
     en: "This selection contains about {0} font file(s) ({1}). Scanning may take time. SSA HDRify will store the source index on disk to reduce memory use. Continue?",

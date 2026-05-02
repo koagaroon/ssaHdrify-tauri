@@ -299,11 +299,18 @@ pub enum ScanProgress {
     /// count because the heavy source index stays in Rust.
     Batch { total: usize },
     /// End-of-stream sentinel. Always emitted on the `Ok` path (success,
-    /// cancel, or defense-in-depth cap stop). NOT emitted on the `Err` path — the invoke rejection
-    /// already signals failure and the frontend must not block waiting for
-    /// a `Done` that will never arrive.
+    /// cancel, or defense-in-depth cap stop). NOT emitted on the `Err`
+    /// path — the invoke rejection already signals failure and the
+    /// frontend must not block waiting for a `Done` that will never arrive.
+    ///
+    /// `cancelled` and `ceiling_hit` are independent flags so the frontend
+    /// can distinguish user-initiated cancel ("Scan cancelled — kept N
+    /// fonts") from defense-ceiling stop ("Source too large — kept first
+    /// N fonts"). Only ceiling stops set both true; user cancels set only
+    /// `cancelled`.
     Done {
         cancelled: bool,
+        ceiling_hit: bool,
         added: usize,
         duplicated: usize,
     },
@@ -313,9 +320,15 @@ pub enum ScanProgress {
 struct ScanOutcome {
     total: usize,
     /// True when the scan stopped early but should keep already-imported
-    /// partial results. This includes user cancellation and the defensive
-    /// MAX_FONTS_PER_SCAN ceiling.
+    /// partial results. Set for both user cancellation AND the defensive
+    /// MAX_FONTS_PER_SCAN ceiling so callers don't double-emit Batch
+    /// after the early-return.
     cancelled: bool,
+    /// True only when the early stop was the MAX_FONTS_PER_SCAN ceiling
+    /// (not a user cancel). Frontend reads this to surface "source too
+    /// large" instead of "cancelled" — symmetric concern to F-7 in the
+    /// punchlist (cancel-message after natural completion).
+    ceiling_hit: bool,
 }
 
 struct ActiveScanGuard {
@@ -958,6 +971,7 @@ fn scan_directory_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
             return Ok(ScanOutcome {
                 total,
                 cancelled: true,
+                ceiling_hit: false,
             });
         }
 
@@ -1011,6 +1025,7 @@ fn scan_directory_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
                 return Ok(ScanOutcome {
                     total,
                     cancelled: true,
+                    ceiling_hit: true,
                 });
             }
 
@@ -1028,6 +1043,7 @@ fn scan_directory_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
     Ok(ScanOutcome {
         total,
         cancelled: false,
+        ceiling_hit: false,
     })
 }
 
@@ -1081,6 +1097,7 @@ pub async fn scan_font_directory(
         // the frontend reports the registered source count.
         let _ = progress.send(ScanProgress::Done {
             cancelled: outcome.cancelled,
+            ceiling_hit: outcome.ceiling_hit,
             added: import.added,
             duplicated: import.duplicated,
         });
@@ -1135,6 +1152,7 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
             return Ok(ScanOutcome {
                 total,
                 cancelled: true,
+                ceiling_hit: false,
             });
         }
 
@@ -1167,6 +1185,7 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
                 return Ok(ScanOutcome {
                     total,
                     cancelled: true,
+                    ceiling_hit: true,
                 });
             }
 
@@ -1184,6 +1203,7 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
     Ok(ScanOutcome {
         total,
         cancelled: false,
+        ceiling_hit: false,
     })
 }
 
@@ -1232,6 +1252,7 @@ pub async fn scan_font_files(
         // See scan_font_directory for why Done is mandatory on the Ok path.
         let _ = progress.send(ScanProgress::Done {
             cancelled: outcome.cancelled,
+            ceiling_hit: outcome.ceiling_hit,
             added: import.added,
             duplicated: import.duplicated,
         });

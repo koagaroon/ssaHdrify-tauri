@@ -210,8 +210,16 @@ export default function FontSourceModal(props: Props) {
   // Compose the post-scan info message. When Rust reports an early stop AND
   // some entries were duplicates, fold both facts into a single message
   // instead of letting the stop notice clobber the dedup notice.
+  // ceilingHit takes precedence over plain cancelled — both flags are true
+  // when MAX_FONTS_PER_SCAN fires, but the user-facing distinction is
+  // "you cancelled" vs "the source was too large".
   const reportSourceAdded = useCallback(
-    (result: AddSourceResult, cancelled: boolean) => {
+    (result: AddSourceResult, cancelled: boolean, ceilingHit: boolean) => {
+      if (ceilingHit) {
+        setError(null);
+        setInfo(t("font_scan_ceiling_hit", result.added));
+        return;
+      }
       if (cancelled) {
         setError(null);
         if (result.duplicated > 0) {
@@ -285,10 +293,12 @@ export default function FontSourceModal(props: Props) {
         scheduleScanProgress(total)
       );
       if (scan.added === 0) {
-        // Cancellation before any face was parsed — distinguish from
-        // "folder genuinely has no fonts" so the user knows their click
-        // was honored rather than the folder being empty.
-        if (scan.cancelled) {
+        // Early stop before any face was parsed — distinguish ceiling hit
+        // (source too large), user cancel, all-duplicate, and "folder
+        // genuinely has no fonts" so the user knows what happened.
+        if (scan.ceilingHit) {
+          setInfo(t("font_scan_ceiling_hit", 0));
+        } else if (scan.cancelled) {
           setInfo(t("font_scan_cancelled", 0));
         } else if (scan.duplicated > 0) {
           setError(t("font_sources_all_duplicate"));
@@ -304,7 +314,7 @@ export default function FontSourceModal(props: Props) {
         count: scan.added,
       });
       const result = { added: scan.added, duplicated: scan.duplicated };
-      reportSourceAdded(result, scan.cancelled);
+      reportSourceAdded(result, scan.cancelled, scan.ceilingHit);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -345,7 +355,9 @@ export default function FontSourceModal(props: Props) {
         scheduleScanProgress(total)
       );
       if (scan.added === 0) {
-        if (scan.cancelled) {
+        if (scan.ceilingHit) {
+          setInfo(t("font_scan_ceiling_hit", 0));
+        } else if (scan.cancelled) {
           setInfo(t("font_scan_cancelled", 0));
         } else if (scan.duplicated > 0) {
           setError(t("font_sources_all_duplicate"));
@@ -361,7 +373,7 @@ export default function FontSourceModal(props: Props) {
         count: scan.added,
       });
       const result = { added: scan.added, duplicated: scan.duplicated };
-      reportSourceAdded(result, scan.cancelled);
+      reportSourceAdded(result, scan.cancelled, scan.ceilingHit);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
