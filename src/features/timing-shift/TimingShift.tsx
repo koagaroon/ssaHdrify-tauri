@@ -247,17 +247,23 @@ export default function TimingShift() {
     // a previous run otherwise; one ask() before the batch is the
     // single safety net.
     const projectedOutputs = paths.map((p) => deriveShiftedPath(p));
-    const existingCount = await countExistingFiles(projectedOutputs);
-    if (existingCount > 0) {
-      const confirmed = await ask(t("msg_overwrite_confirm", existingCount, paths.length), {
-        title: t("dialog_overwrite_title"),
-        kind: "warning",
-      });
-      if (!confirmed) {
-        addLog(t("msg_timing_cancelled"), "info");
-        setLastActionResult("cancelled");
-        return;
+    try {
+      const existingCount = await countExistingFiles(projectedOutputs);
+      if (existingCount > 0) {
+        const confirmed = await ask(t("msg_overwrite_confirm", existingCount, paths.length), {
+          title: t("dialog_overwrite_title"),
+          kind: "warning",
+        });
+        if (!confirmed) {
+          addLog(t("msg_timing_cancelled"), "info");
+          setLastActionResult("cancelled");
+          return;
+        }
       }
+    } catch (e) {
+      addLog(t("error_prefix", e instanceof Error ? e.message : String(e)), "error");
+      setLastActionResult("error");
+      return;
     }
 
     setBusy(true);

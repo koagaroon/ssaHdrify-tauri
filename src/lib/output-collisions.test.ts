@@ -19,6 +19,7 @@ import { countExistingFiles } from "./output-collisions";
 
 beforeEach(() => {
   existsMock.mockReset();
+  vi.restoreAllMocks();
 });
 
 describe("countExistingFiles", () => {
@@ -49,6 +50,7 @@ describe("countExistingFiles", () => {
   });
 
   it("treats a stat error as non-existent (never blocks the save flow)", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     // First exists() throws, the rest report true. The throwing path must
     // not propagate — a transient stat failure should not flip the count.
     existsMock.mockImplementationOnce(async () => {
@@ -57,6 +59,8 @@ describe("countExistingFiles", () => {
     existsMock.mockResolvedValue(true);
     const count = await countExistingFiles(["a.ass", "b.ass", "c.ass"]);
     expect(count).toBe(2);
+    expect(warn).toHaveBeenCalledOnce();
+    expect(warn.mock.calls[0][0]).toContain("1 stat failure");
   });
 
   it("runs all stat checks in parallel (Promise.all, not sequential)", async () => {

@@ -539,8 +539,10 @@
 }
 
 .rename-row-picker:disabled {
-  opacity: 0.5;
   cursor: not-allowed;
+  border-color: var(--border-light);
+  color: var(--text-muted);
+  filter: grayscale(1);
 }
 
 /* Reset-pairings button surfacing in the grid title strip when the
@@ -566,8 +568,10 @@
 }
 
 .rename-reset-button:disabled {
-  opacity: 0.5;
   cursor: not-allowed;
+  border-color: var(--border-light);
+  color: var(--text-muted);
+  filter: grayscale(1);
 }
 
 /* ─────────────────────────────────────────────────────────────
@@ -614,7 +618,15 @@
 }
 
 .num-spin:disabled {
-  opacity: 0.3;
+  color: var(--text-muted);
+  background: var(--bg-input);
+  cursor: not-allowed;
+}
+
+.num-input.is-disabled {
+  filter: grayscale(1);
+  pointer-events: none;
+  cursor: not-allowed;
 }
 
 /* ─────────────────────────────────────────────────────────────
@@ -821,7 +833,9 @@
 
 .nit-preset:disabled {
   cursor: not-allowed;
-  opacity: 0.5;
+  border-color: var(--border-light);
+  color: var(--text-muted);
+  filter: grayscale(1);
 }
 
 /* Active state — color-coding via border + background only.
@@ -1052,7 +1066,7 @@
 }
 
 .timeline-row.unchanged {
-  opacity: 0.55;
+  background: color-mix(in srgb, var(--bg-input) 36%, transparent);
 }
 
 .timeline-row .idx {
@@ -1085,6 +1099,10 @@
 .timeline-row.unchanged .t-new {
   color: var(--text-muted);
   font-weight: 400;
+}
+
+.timeline-row.unchanged .txt {
+  color: var(--text-muted);
 }
 
 .timeline-row .txt {
@@ -1127,12 +1145,17 @@
 }
 
 .font-row.missing {
-  opacity: 0.6;
   cursor: not-allowed;
+  background: color-mix(in srgb, var(--bg-input) 32%, transparent);
 }
 
 .font-row.missing:hover {
-  background: transparent;
+  background: color-mix(in srgb, var(--bg-input) 32%, transparent);
+}
+
+.font-row.missing .font-name,
+.font-row.missing .font-stat {
+  color: var(--text-muted);
 }
 
 .font-name {
@@ -1308,7 +1331,8 @@
 
 .modal-close:disabled {
   cursor: not-allowed;
-  opacity: 0.45;
+  color: var(--text-muted);
+  filter: grayscale(1);
 }
 
 /* Inline cancel pill — used by the font-scan progress row. The base
@@ -1371,7 +1395,9 @@
 
 .modal-opt:disabled {
   cursor: not-allowed;
-  opacity: 0.5;
+  border-color: var(--border-light);
+  color: var(--text-muted);
+  filter: grayscale(1);
 }
 
 .modal-opt-icon {

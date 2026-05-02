@@ -9,7 +9,13 @@ import type { Lang } from "./strings";
 const STORAGE_KEY = "ssahdrify-lang";
 
 function loadLang(): Lang {
-  const stored = localStorage.getItem(STORAGE_KEY);
+  const stored = (() => {
+    try {
+      return localStorage.getItem(STORAGE_KEY);
+    } catch {
+      return null;
+    }
+  })();
   if (stored === "en" || stored === "zh") return stored;
   // First launch defaults to Chinese by project choice: the primary user
   // base for fan-sub workflows runs Chinese-language subtitles, and most
@@ -27,7 +33,12 @@ export default function I18nProvider({ children }: { children: ReactNode }) {
 
   const setLang = (next: Lang) => {
     setLangState(next);
-    localStorage.setItem(STORAGE_KEY, next);
+    try {
+      localStorage.setItem(STORAGE_KEY, next);
+    } catch {
+      // Storage can be disabled in hardened/sandboxed WebView profiles.
+      // The in-memory state above still applies for this session.
+    }
   };
 
   // Reflect the active locale onto <html lang="…"> so CSS `:lang()`

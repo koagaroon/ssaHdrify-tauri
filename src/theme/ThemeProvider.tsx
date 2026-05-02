@@ -10,13 +10,23 @@ import { ThemeContext, type ThemeMode, type ThemeAppearance } from "./useTheme";
 const STORAGE_KEY = "ssahdrify-theme";
 
 function loadMode(): ThemeMode {
-  const stored = localStorage.getItem(STORAGE_KEY);
+  const stored = (() => {
+    try {
+      return localStorage.getItem(STORAGE_KEY);
+    } catch {
+      return null;
+    }
+  })();
   if (stored === "auto" || stored === "light" || stored === "dark") return stored;
   return "light"; // default
 }
 
 function getSystemPreference(): ThemeAppearance {
-  if (window.matchMedia?.("(prefers-color-scheme: dark)").matches) return "dark";
+  try {
+    if (window.matchMedia?.("(prefers-color-scheme: dark)").matches) return "dark";
+  } catch {
+    // Non-browser or hardened WebView hosts can reject media queries.
+  }
   return "light";
 }
 
@@ -26,11 +36,16 @@ export default function ThemeProvider({ children }: { children: ReactNode }) {
 
   const setMode = (next: ThemeMode) => {
     setModeState(next);
-    localStorage.setItem(STORAGE_KEY, next);
+    try {
+      localStorage.setItem(STORAGE_KEY, next);
+    } catch {
+      // Keep the live mode even when persistence is unavailable.
+    }
   };
 
   // Listen for system preference changes (for auto mode)
   useEffect(() => {
+    if (!window.matchMedia) return;
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     const handler = (e: MediaQueryListEvent) => {
       setSystemPref(e.matches ? "dark" : "light");

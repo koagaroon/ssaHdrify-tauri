@@ -1,4 +1,4 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { useI18n } from "../../i18n/useI18n";
 import { MIN_BRIGHTNESS, MAX_BRIGHTNESS } from "./color-engine";
 
@@ -48,6 +48,7 @@ function pctToNits(pct: number): number {
 export default function NitViz({ value, onChange, disabled = false }: NitVizProps) {
   const { t } = useI18n();
   const trackRef = useRef<HTMLDivElement>(null);
+  const dragCleanupRef = useRef<(() => void) | null>(null);
   const markerPct = nitsToPct(value);
 
   const setFromClientX = useCallback(
@@ -70,29 +71,48 @@ export default function NitViz({ value, onChange, disabled = false }: NitVizProp
     e.preventDefault();
     const el = trackRef.current;
     if (!el) return;
-    // setPointerCapture routes subsequent pointermove / pointerup to the
-    // same element even if the pointer leaves the window, so we get a
-    // guaranteed pointerup and don't leak listeners if the user releases
-    // outside the viewport.
+    dragCleanupRef.current?.();
+    const pointerId = e.pointerId;
+    // setPointerCapture is still useful when WebView2 supports it, but the
+    // load-bearing listeners live on window below. That fallback keeps drag
+    // working if capture fails and lets us filter by the initiating pointer.
+    let captured = false;
     try {
-      el.setPointerCapture(e.pointerId);
+      el.setPointerCapture(pointerId);
+      captured = true;
     } catch {
-      // not supported (very old webview) — fall through, listeners still fire
+      // not supported (very old webview) — window listeners below still fire
     }
     setFromClientX(e.clientX);
-    const onMove = (ev: PointerEvent) => setFromClientX(ev.clientX);
-    const onUp = () => {
-      el.removeEventListener("pointermove", onMove);
-      el.removeEventListener("pointerup", onUp);
+    const onMove = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointerId) return;
+      setFromClientX(ev.clientX);
+    };
+    let cleanup = () => {};
+    const onUp = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointerId) return;
+      cleanup();
+    };
+    cleanup = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
       try {
-        el.releasePointerCapture(e.pointerId);
+        if (captured) el.releasePointerCapture(pointerId);
       } catch {
         // ignore — capture may have already been released
       }
+      if (dragCleanupRef.current === cleanup) dragCleanupRef.current = null;
     };
-    el.addEventListener("pointermove", onMove);
-    el.addEventListener("pointerup", onUp);
+    dragCleanupRef.current = cleanup;
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
   };
+
+  useEffect(() => {
+    return () => dragCleanupRef.current?.();
+  }, []);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (disabled) return;

@@ -23,14 +23,21 @@ import { exists } from "@tauri-apps/plugin-fs";
  */
 export async function countExistingFiles(paths: string[]): Promise<number> {
   if (paths.length === 0) return 0;
+  let errorCount = 0;
   const checks = await Promise.all(
     paths.map(async (p) => {
       try {
         return await exists(p);
       } catch {
+        errorCount += 1;
         return false;
       }
     })
   );
+  if (errorCount > 0) {
+    console.warn(
+      `[ssaHdrify] countExistingFiles ignored ${errorCount} stat failure(s); treating them as non-existent.`
+    );
+  }
   return checks.filter(Boolean).length;
 }

@@ -193,10 +193,9 @@ export default function FontSourceModal(props: Props) {
     [t]
   );
 
-  // Compose the post-scan info message. When the scan was cancelled AND
+  // Compose the post-scan info message. When Rust reports an early stop AND
   // some entries were duplicates, fold both facts into a single message
-  // (font_scan_cancelled_with_dupes) instead of letting the cancellation
-  // notice clobber the dedup notice.
+  // instead of letting the stop notice clobber the dedup notice.
   const reportSourceAdded = useCallback(
     (result: AddSourceResult, cancelled: boolean) => {
       if (cancelled) {

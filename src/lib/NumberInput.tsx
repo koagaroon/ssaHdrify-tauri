@@ -25,6 +25,9 @@ export default function NumberInput({
   id,
 }: NumberInputProps) {
   const numStep = typeof step === "string" ? parseFloat(step) : step;
+  const inputClass = `num-input w-full pl-3 pr-7 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]${
+    disabled ? " is-disabled" : ""
+  }`;
 
   const adjust = (delta: number) => {
     const current = typeof value === "string" ? parseFloat(value) : value;
@@ -47,10 +50,10 @@ export default function NumberInput({
         max={max}
         step={step}
         disabled={disabled}
-        className="w-full pl-3 pr-7 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)] disabled:opacity-50"
+        className={inputClass}
         style={{
           background: "var(--bg-input)",
-          border: "1px solid var(--border)",
+          border: `1px solid ${disabled ? "var(--border-light)" : "var(--border)"}`,
           color: "var(--text-primary)",
         }}
       />

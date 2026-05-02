@@ -546,17 +546,23 @@ export default function BatchRename() {
     // count; cancel preserves prior state, confirm proceeds. No-op
     // targets were filtered above so they don't inflate the count.
     const projectedOutputs = targets.map((t2) => t2.outputPath);
-    const existingCount = await countExistingFiles(projectedOutputs);
-    if (existingCount > 0) {
-      const confirmed = await ask(t("msg_overwrite_confirm", existingCount, targets.length), {
-        title: t("dialog_overwrite_title"),
-        kind: "warning",
-      });
-      if (!confirmed) {
-        addLog(t("msg_rename_cancelled"), "info");
-        setLastActionResult("cancelled");
-        return;
+    try {
+      const existingCount = await countExistingFiles(projectedOutputs);
+      if (existingCount > 0) {
+        const confirmed = await ask(t("msg_overwrite_confirm", existingCount, targets.length), {
+          title: t("dialog_overwrite_title"),
+          kind: "warning",
+        });
+        if (!confirmed) {
+          addLog(t("msg_rename_cancelled"), "info");
+          setLastActionResult("cancelled");
+          return;
+        }
       }
+    } catch (e) {
+      addLog(t("error_prefix", e instanceof Error ? e.message : String(e)), "error");
+      setLastActionResult("error");
+      return;
     }
 
     setBusy(true);
@@ -569,12 +575,22 @@ export default function BatchRename() {
       // would have rendered the bare key string as fallback). Every other
       // call site in the codebase passes literal i18n keys; keep this one
       // consistent.
-      const modeLabel =
-        outputMode === "rename"
-          ? t("rename_mode_rename_short")
-          : outputMode === "copy_to_video"
-            ? t("rename_mode_copy_to_video_short")
-            : t("rename_mode_copy_to_chosen_short");
+      let modeLabel: string;
+      switch (outputMode) {
+        case "rename":
+          modeLabel = t("rename_mode_rename_short");
+          break;
+        case "copy_to_video":
+          modeLabel = t("rename_mode_copy_to_video_short");
+          break;
+        case "copy_to_chosen":
+          modeLabel = t("rename_mode_copy_to_chosen_short");
+          break;
+        default: {
+          const _exhaustive: never = outputMode;
+          modeLabel = _exhaustive;
+        }
+      }
       addLog(t("msg_rename_start", targets.length, modeLabel));
 
       let successCount = 0;

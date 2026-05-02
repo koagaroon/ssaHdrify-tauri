@@ -7,7 +7,7 @@ import BatchRename from "./features/batch-rename/BatchRename";
 import { useI18n } from "./i18n/useI18n";
 import { useTheme } from "./theme/useTheme";
 import type { ThemeMode } from "./theme/useTheme";
-import { useStatus, type StatusTab, DEFAULT_STATUS } from "./lib/StatusContext";
+import { useStatus, type StatusTab } from "./lib/StatusContext";
 import { useClickOutside } from "./lib/useClickOutside";
 import "./shell.css";
 
@@ -41,7 +41,7 @@ function App() {
   const { t, lang, setLang } = useI18n();
   const { mode, appearance, setMode } = useTheme();
   const { statuses } = useStatus();
-  const currentStatus = statuses[activeTab] ?? DEFAULT_STATUS;
+  const currentStatus = statuses[activeTab];
   // Resolve the Tauri window handle once — doing this at module scope would
   // crash a non-Tauri host (e.g. a vitest env that accidentally imports
   // App.tsx), even though only main.tsx imports it today. Wrapped in

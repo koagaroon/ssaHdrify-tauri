@@ -73,7 +73,9 @@ const EPISODE_PATTERNS: EpisodePattern[] = [
   // Pattern A — ` - NN [` or ` - NN.ext` — runs on raw because the
   // trailing bracket / extension boundary is the right anchor. Most
   // common format across the documented sample set, including bilingual
-  // CJK titles and joint-release naming styles.
+  // CJK titles and joint-release naming styles. The `0*` is intentional:
+  // specials / OVA files may be labelled ` - 0` or ` - 00`, and those
+  // should parse as episode 0 rather than falling through.
   {
     regex: /\s-\s*0*(\d+)\s*(?:\[|\.[a-z0-9]+$)/i,
     useRaw: true,
@@ -170,7 +172,7 @@ export function extractSeason(rawName: string, cleanedName: string): number {
     const m = rawName.match(regex) ?? cleanedName.match(regex);
     if (m) {
       const n = build(m);
-      if (n > 0) return n;
+      if (n >= 0) return n;
     }
   }
   return 1;

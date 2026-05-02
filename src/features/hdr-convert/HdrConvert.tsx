@@ -261,17 +261,23 @@ export default function HdrConvert() {
         // invalid path.
       }
     }
-    const existingCount = await countExistingFiles(projectedOutputs);
-    if (existingCount > 0) {
-      const confirmed = await ask(t("msg_overwrite_confirm", existingCount, paths.length), {
-        title: t("dialog_overwrite_title"),
-        kind: "warning",
-      });
-      if (!confirmed) {
-        addLog(t("msg_cancelled"), "info");
-        setLastActionResult("cancelled");
-        return;
+    try {
+      const existingCount = await countExistingFiles(projectedOutputs);
+      if (existingCount > 0) {
+        const confirmed = await ask(t("msg_overwrite_confirm", existingCount, paths.length), {
+          title: t("dialog_overwrite_title"),
+          kind: "warning",
+        });
+        if (!confirmed) {
+          addLog(t("msg_cancelled"), "info");
+          setLastActionResult("cancelled");
+          return;
+        }
       }
+    } catch (e) {
+      addLog(t("error_prefix", e instanceof Error ? e.message : String(e)), "error");
+      setLastActionResult("error");
+      return;
     }
 
     setProcessing(true);
@@ -379,11 +385,10 @@ export default function HdrConvert() {
           );
         } finally {
           // Bump the N-of-M counter once per iteration regardless of
-          // outcome (success / skip / error). Cancel-mid-flight files
-          // increment too — the few extras between the cancel signal and
-          // the next loop check are cosmetically counted, then the outer
-          // finally clears `progress` to null so the chip vanishes; the
-          // user sees the cancel message in the log either way.
+          // outcome (success / skip / error). If cancel is seen at the
+          // top of the next loop, this block does not run for that next
+          // file; if cancel lands mid-file, the current file is counted
+          // as processed before the outer finally clears the progress chip.
           processedCount++;
           setProgress({ processed: processedCount, total: paths.length });
         }

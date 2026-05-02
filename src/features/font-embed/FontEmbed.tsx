@@ -352,17 +352,23 @@ export default function FontEmbed() {
 
     // Pre-flight overwrite check — same project-wide pattern.
     const projectedOutputs = filePaths.map((p) => deriveEmbeddedPath(p));
-    const existingCount = await countExistingFiles(projectedOutputs);
-    if (existingCount > 0) {
-      const confirmed = await ask(t("msg_overwrite_confirm", existingCount, filePaths.length), {
-        title: t("dialog_overwrite_title"),
-        kind: "warning",
-      });
-      if (!confirmed) {
-        addLog(t("msg_fonts_cancelled"), "info");
-        setLastActionResult("cancelled");
-        return;
+    try {
+      const existingCount = await countExistingFiles(projectedOutputs);
+      if (existingCount > 0) {
+        const confirmed = await ask(t("msg_overwrite_confirm", existingCount, filePaths.length), {
+          title: t("dialog_overwrite_title"),
+          kind: "warning",
+        });
+        if (!confirmed) {
+          addLog(t("msg_fonts_cancelled"), "info");
+          setLastActionResult("cancelled");
+          return;
+        }
       }
+    } catch (e) {
+      addLog(t("error_prefix", e instanceof Error ? e.message : String(e)), "error");
+      setLastActionResult("error");
+      return;
     }
 
     setEmbedding(true);

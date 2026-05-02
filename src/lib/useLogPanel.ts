@@ -3,9 +3,9 @@
  * batch tab (HDR Convert / Time Shift / Font Embed / Batch Rename).
  *
  * Each tab originally carried an identical `logs` state, `logIdRef`
- * counter, 200-entry cap, and `setTimeout(scrollTop = scrollHeight, 50)`
- * follow-the-tail effect. Only the entry types and the call sites
- * differed — the wiring was duplicated four times.
+ * counter, 200-entry cap, and follow-the-tail effect. Only the entry
+ * types and the call sites differed — the wiring was duplicated four
+ * times.
  *
  * Why scrollTop directly instead of `scrollIntoView`: the latter walks
  * up the ancestor chain and scrolls every scrollable container. In
@@ -15,7 +15,7 @@
  * user-driven block. Setting scrollTop on the inner container only is
  * the safe fix.
  */
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export type LogType = "info" | "error" | "success";
 
@@ -37,27 +37,59 @@ export interface UseLogPanelResult {
 /** Maximum entries kept in the log buffer. Older entries are trimmed
  *  off the head so the array stays bounded during long batch runs. */
 const MAX_LOG_ENTRIES = 200;
+const TAIL_THRESHOLD_PX = 16;
+const SCROLL_DELAY_MS = 50;
 
 export function useLogPanel(): UseLogPanelResult {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const logIdRef = useRef(0);
   const logScrollRef = useRef<HTMLDivElement | null>(null);
+  const pendingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const addLog = useCallback((text: string, type: LogType = "info") => {
-    const id = logIdRef.current++;
-    setLogs((prev) => {
-      const next = [...prev, { id, text, type }];
-      return next.length > MAX_LOG_ENTRIES ? next.slice(-MAX_LOG_ENTRIES) : next;
-    });
-    // Defer the scroll past the React commit so the new row is in the
-    // DOM before we read scrollHeight. 50ms matches the original sites.
-    setTimeout(() => {
-      const el = logScrollRef.current;
-      if (el) el.scrollTop = el.scrollHeight;
-    }, 50);
+  const isNearTail = useCallback((): boolean => {
+    const el = logScrollRef.current;
+    if (!el) return true;
+    return el.scrollHeight - el.scrollTop - el.clientHeight < TAIL_THRESHOLD_PX;
   }, []);
 
+  const scheduleTailScroll = useCallback(() => {
+    if (pendingTimerRef.current !== null) {
+      clearTimeout(pendingTimerRef.current);
+    }
+    pendingTimerRef.current = setTimeout(() => {
+      pendingTimerRef.current = null;
+      const el = logScrollRef.current;
+      if (!el) return;
+      el.scrollTop = el.scrollHeight;
+    }, SCROLL_DELAY_MS);
+  }, []);
+
+  const addLog = useCallback(
+    (text: string, type: LogType = "info") => {
+      const id = logIdRef.current++;
+      const shouldFollowTail = isNearTail();
+      setLogs((prev) => {
+        const next = [...prev, { id, text, type }];
+        return next.length > MAX_LOG_ENTRIES ? next.slice(-MAX_LOG_ENTRIES) : next;
+      });
+      // Defer the scroll past the React commit so the new row is in the DOM
+      // before we read scrollHeight. Only follow when the user was already
+      // near the tail; if they scrolled up to inspect earlier logs, leave
+      // their viewport alone.
+      if (shouldFollowTail) scheduleTailScroll();
+    },
+    [isNearTail, scheduleTailScroll]
+  );
+
   const clearLogs = useCallback(() => setLogs([]), []);
+
+  useEffect(() => {
+    return () => {
+      if (pendingTimerRef.current !== null) {
+        clearTimeout(pendingTimerRef.current);
+      }
+    };
+  }, []);
 
   return { logs, addLog, clearLogs, logScrollRef };
 }

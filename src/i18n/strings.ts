@@ -334,12 +334,12 @@ export const strings: Record<string, StringEntry> = {
   },
   font_scan_cancel: { en: "Cancel", zh: "取消" },
   font_scan_cancelled: {
-    en: "Scan cancelled — kept {0} fonts.",
-    zh: "已取消扫描，保留 {0} 个字体。",
+    en: "Scan ended — kept {0} fonts.",
+    zh: "扫描结束，保留 {0} 个字体。",
   },
   font_scan_cancelled_with_dupes: {
-    en: "Scan cancelled — kept {0} new font(s); {1} were already loaded.",
-    zh: "已取消扫描，保留 {0} 个新字体；{1} 个为已加载的重复项。",
+    en: "Scan ended — kept {0} new font(s); {1} were already loaded.",
+    zh: "扫描结束，保留 {0} 个新字体；{1} 个为已加载的重复项。",
   },
   font_coverage: { en: "Local coverage: {0} / {1}", zh: "本地覆盖：{0} / {1}" },
   font_coverage_complete: {

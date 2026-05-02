@@ -101,6 +101,13 @@ describe("extractEpisode — Western fallbacks", () => {
     expect(ep?.seasonFromMatch).toBe(1);
   });
 
+  it("S0E05 preserves season 0 for specials", () => {
+    const name = "Show.S0E05.Special.mkv";
+    const ep = extractEpisode(name, bracketCleanup(name));
+    expect(ep?.episode).toBe(5);
+    expect(ep?.seasonFromMatch).toBe(0);
+  });
+
   it("EP01 / E01 catches Western-ish naming", () => {
     expect(extractEpisode("Show.EP07.mkv", bracketCleanup("Show.EP07.mkv"))?.episode).toBe(7);
     expect(extractEpisode("Show.E12.mkv", bracketCleanup("Show.E12.mkv"))?.episode).toBe(12);
@@ -152,6 +159,16 @@ describe("extractSeason", () => {
   it("standalone S2 → 2", () => {
     const name = "Show S2 - 24.mkv";
     expect(extractSeason(name, bracketCleanup(name))).toBe(2);
+  });
+
+  it("standalone S0 → 0 for specials", () => {
+    const name = "Show S0 - 05.mkv";
+    expect(extractSeason(name, bracketCleanup(name))).toBe(0);
+  });
+
+  it("'第0季' → 0 for specials", () => {
+    const name = "节目 第0季 - 05.mkv";
+    expect(extractSeason(name, bracketCleanup(name))).toBe(0);
   });
 
   it("S01E01 does NOT contribute to standalone season scan", () => {
@@ -211,6 +228,12 @@ describe("parseFilename — end-to-end (season, episode)", () => {
     const p = parse("Show.S01E05.1080p.WEB-DL.mkv");
     expect(p.episode).toBe(5);
     expect(p.season).toBe(1);
+  });
+
+  it("S0E05 — season 0 survives end-to-end", () => {
+    const p = parse("Show.S0E05.Special.mkv");
+    expect(p.episode).toBe(5);
+    expect(p.season).toBe(0);
   });
 });
 

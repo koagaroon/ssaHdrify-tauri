@@ -43,16 +43,14 @@ export interface StatusContextValue {
 // of silently corrupting every tab's default via the shared object alias.
 export const DEFAULT_STATUS: Status = Object.freeze({ kind: "idle", message: "" }) as Status;
 
-// Per-tab literals — not shared references — so each tab's default is
-// independent if anyone ever reads them as mutable. The values are the
-// same today, but aliasing a single object across three slots is a footgun
-// that costs nothing to remove.
-export const DEFAULT_STATUSES: Record<StatusTab, Status> = {
-  hdr: { ...DEFAULT_STATUS },
-  timing: { ...DEFAULT_STATUS },
-  fonts: { ...DEFAULT_STATUS },
-  rename: { ...DEFAULT_STATUS },
-};
+// Per-tab literals — frozen individually so in-place mutation of any slot
+// fails loudly in dev instead of silently drifting that tab's default.
+export const DEFAULT_STATUSES: Record<StatusTab, Status> = Object.freeze({
+  hdr: Object.freeze({ ...DEFAULT_STATUS }),
+  timing: Object.freeze({ ...DEFAULT_STATUS }),
+  fonts: Object.freeze({ ...DEFAULT_STATUS }),
+  rename: Object.freeze({ ...DEFAULT_STATUS }),
+}) as Record<StatusTab, Status>;
 
 export const StatusContext = createContext<StatusContextValue>({
   statuses: DEFAULT_STATUSES,

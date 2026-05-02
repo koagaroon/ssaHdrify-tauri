@@ -72,47 +72,56 @@ export function useFolderDrop({
         return;
       }
 
-      const handler = await webview.onDragDropEvent(async (event) => {
-        if (!mounted || !ref.current) return;
-        const rect = ref.current.getBoundingClientRect();
-        const dpr = window.devicePixelRatio || 1;
+      let handler: () => void;
+      try {
+        handler = await webview.onDragDropEvent(async (event) => {
+          if (!mounted || !ref.current) return;
+          const rect = ref.current.getBoundingClientRect();
+          const dpr = window.devicePixelRatio || 1;
 
-        // Tauri reports the cursor position in physical pixels relative
-        // to the webview's top-left. getBoundingClientRect is in CSS
-        // (logical) pixels, so divide by DPR before comparing.
-        const inRect = (pos: { x: number; y: number }): boolean => {
-          const x = pos.x / dpr;
-          const y = pos.y / dpr;
-          return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
-        };
+          // Tauri reports the cursor position in physical pixels relative
+          // to the webview's top-left. getBoundingClientRect is in CSS
+          // (logical) pixels, so divide by DPR before comparing.
+          const inRect = (pos: { x: number; y: number }): boolean => {
+            const x = pos.x / dpr;
+            const y = pos.y / dpr;
+            return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+          };
 
-        switch (event.payload.type) {
-          case "enter":
-          case "over":
-            onActiveChangeRef.current?.(inRect(event.payload.position));
-            break;
-          case "leave":
-            onActiveChangeRef.current?.(false);
-            break;
-          case "drop": {
-            const inside = inRect(event.payload.position);
-            onActiveChangeRef.current?.(false);
-            if (!inside) return;
-            try {
-              const expanded = await expandDroppedPaths(event.payload.paths);
-              if (mounted && expanded.length > 0) {
-                onPathsRef.current(expanded);
+          switch (event.payload.type) {
+            case "enter":
+            case "over":
+              onActiveChangeRef.current?.(inRect(event.payload.position));
+              break;
+            case "leave":
+              onActiveChangeRef.current?.(false);
+              break;
+            case "drop": {
+              const inside = inRect(event.payload.position);
+              onActiveChangeRef.current?.(false);
+              if (!inside) return;
+              try {
+                const expanded = await expandDroppedPaths(event.payload.paths);
+                if (mounted && expanded.length > 0) {
+                  onPathsRef.current(expanded);
+                }
+              } catch (e) {
+                // Swallow — the consumer's Status flow is the right place
+                // to surface user-facing failure; a drop with zero usable
+                // paths is more annoying than informative.
+                console.error("expandDroppedPaths failed:", e);
               }
-            } catch (e) {
-              // Swallow — the consumer's Status flow is the right place
-              // to surface user-facing failure; a drop with zero usable
-              // paths is more annoying than informative.
-              console.error("expandDroppedPaths failed:", e);
+              break;
             }
-            break;
           }
+        });
+      } catch (e) {
+        if (mounted) {
+          console.error("onDragDropEvent subscription failed:", e);
+          onActiveChangeRef.current?.(false);
         }
-      });
+        return;
+      }
 
       // Race window: the component may have unmounted while we awaited
       // `onDragDropEvent`. Tear down the listener immediately if so.

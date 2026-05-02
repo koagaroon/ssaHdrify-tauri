@@ -38,6 +38,16 @@ const SRT_TIMING = /\d+:\d{2}:\d{2},\d{3}\s*-->\s*\d+:\d{2}:\d{2},\d{3}/;
 const ASS_HEADER = /^\[Script Info\]/im;
 const SUB_LINE = /^\{\d+\}\{\d+\}/m;
 
+function normalizeLineEndings(content: string): string {
+  return content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+}
+
+function splitCueBlocks(content: string): string[] {
+  return normalizeLineEndings(content)
+    .split(/\n[ \t]*\n/)
+    .filter((b) => b.trim());
+}
+
 export function detectFormat(content: string): SubtitleFormat {
   const head = content.slice(0, 2000); // Check first 2KB
   if (ASS_HEADER.test(head)) return "ass";
@@ -145,8 +155,8 @@ export function parseDisplayTime(ts: string): number | null {
 
 function parseSrt(content: string): Caption[] {
   const captions: Caption[] = [];
-  // Split on double-newline (handles both \n\n and \r\n\r\n)
-  const blocks = content.split(/\n\n|\r\n\r\n/).filter((b) => b.trim());
+  // Normalize first so mixed CRLF/LF files still split into cue blocks.
+  const blocks = splitCueBlocks(content);
   if (blocks.length > 100000) {
     throw new Error(`Too many subtitle blocks: ${blocks.length} (max 100,000)`);
   }
@@ -156,7 +166,7 @@ function parseSrt(content: string): Caption[] {
   const timingRe = /^(\d+:\d{2}:\d{2},\d{3})\s*-->\s*(\d+:\d{2}:\d{2},\d{3})/;
 
   for (const block of blocks) {
-    const lines = block.replace(/^\r?\n/, "").split(/\r?\n/);
+    const lines = block.replace(/^\n/, "").split("\n");
     // Find the timing line (skip the numeric index line)
     let timingIdx = -1;
     for (let i = 0; i < lines.length; i++) {
@@ -196,9 +206,9 @@ function buildSrt(captions: Caption[]): string {
 
 function parseVtt(content: string): Caption[] {
   const captions: Caption[] = [];
-  const body = content.replace(/^WEBVTT[^\r\n]*\r?\n/, "");
-  // Split on double-newline (handles both \n\n and \r\n\r\n)
-  const blocks = body.split(/\n\n|\r\n\r\n/).filter((b) => b.trim());
+  const body = normalizeLineEndings(content).replace(/^WEBVTT[^\n]*\n/, "");
+  // Normalize first so mixed CRLF/LF files still split into cue blocks.
+  const blocks = splitCueBlocks(body);
   if (blocks.length > 100000) {
     throw new Error(`Too many subtitle blocks: ${blocks.length} (max 100,000)`);
   }
@@ -207,7 +217,7 @@ function parseVtt(content: string): Caption[] {
     /^(\d{2,}:\d{2}:\d{2}\.\d{3}|\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{2,}:\d{2}:\d{2}\.\d{3}|\d{2}:\d{2}\.\d{3})/;
 
   for (const block of blocks) {
-    const lines = block.replace(/^\r?\n/, "").split(/\r?\n/);
+    const lines = block.replace(/^\n/, "").split("\n");
     // Find the timing line — a cue ID is any line that does NOT contain "-->"
     let timingIdx = -1;
     for (let i = 0; i < lines.length; i++) {

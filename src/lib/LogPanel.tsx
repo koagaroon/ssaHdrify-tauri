@@ -45,7 +45,12 @@ export function LogPanel({ logs, onClear, scrollRef }: LogPanelProps) {
         <span className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>
           {t("log_title")}
         </span>
-        <button onClick={onClear} className="text-xs" style={{ color: "var(--text-muted)" }}>
+        <button
+          type="button"
+          onClick={onClear}
+          className="text-xs"
+          style={{ color: "var(--text-muted)" }}
+        >
           {t("log_clear")}
         </button>
       </div>
