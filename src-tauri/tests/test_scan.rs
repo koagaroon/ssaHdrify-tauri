@@ -11,9 +11,24 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use app_lib::fonts::{
-    cancel_font_scan, clear_font_sources, init_user_font_db, scan_font_directory, ScanProgress,
+    cancel_font_scan, clear_font_sources, init_user_font_db, scan_font_directory, scan_font_files,
+    ScanProgress,
 };
 use tauri::ipc::{Channel, InvokeResponseBody};
+
+// Type aliases for the test channel return shapes — keep clippy happy and
+// give the test bodies a more meaningful name than the raw tuple.
+type CollectingChannel = (
+    Channel<ScanProgress>,
+    Arc<Mutex<Vec<usize>>>,
+    Arc<Mutex<Option<DoneStats>>>,
+);
+type CancellingChannel = (
+    Channel<ScanProgress>,
+    Arc<Mutex<Vec<usize>>>,
+    Arc<Mutex<Option<DoneStats>>>,
+    Arc<AtomicUsize>,
+);
 
 static SCAN_TEST_LOCK: Mutex<()> = Mutex::new(());
 static NEXT_TEST_SCAN_ID: AtomicU64 = AtomicU64::new(1_000);
@@ -41,11 +56,7 @@ struct DoneStats {
 ///
 /// The public scan command guards against overlapping scans, so integration
 /// tests that call it directly take SCAN_TEST_LOCK before invoking it.
-fn collecting_channel() -> (
-    Channel<ScanProgress>,
-    Arc<Mutex<Vec<usize>>>,
-    Arc<Mutex<Option<DoneStats>>>,
-) {
+fn collecting_channel() -> CollectingChannel {
     let totals: Arc<Mutex<Vec<usize>>> = Arc::new(Mutex::new(Vec::new()));
     let done: Arc<Mutex<Option<DoneStats>>> = Arc::new(Mutex::new(None));
     let total_sink = totals.clone();
@@ -83,14 +94,7 @@ fn collecting_channel() -> (
     (channel, totals, done)
 }
 
-fn cancelling_channel(
-    scan_id: u64,
-) -> (
-    Channel<ScanProgress>,
-    Arc<Mutex<Vec<usize>>>,
-    Arc<Mutex<Option<DoneStats>>>,
-    Arc<AtomicUsize>,
-) {
+fn cancelling_channel(scan_id: u64) -> CancellingChannel {
     let totals: Arc<Mutex<Vec<usize>>> = Arc::new(Mutex::new(Vec::new()));
     let done: Arc<Mutex<Option<DoneStats>>> = Arc::new(Mutex::new(None));
     let batches = Arc::new(AtomicUsize::new(0));
@@ -208,6 +212,93 @@ fn scans_os_font_directory_streams_progress_and_registers_source() {
         dir,
         done.added,
         totals.len(),
+    );
+}
+
+/// Pick a small set of real font files from the OS font directory so the
+/// `scan_font_files` integration test exercises the file-list path with
+/// actual parseable fonts. Returns up to `max` entries; skips the test
+/// when fewer than 2 are available.
+fn os_font_file_sample(max: usize) -> Vec<String> {
+    let dir = os_font_dir();
+    let mut paths: Vec<String> = Vec::new();
+    let Ok(read) = std::fs::read_dir(&dir) else {
+        return paths;
+    };
+    for entry in read.flatten() {
+        let p = entry.path();
+        let Some(ext) = p
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+        else {
+            continue;
+        };
+        if matches!(ext.as_str(), "ttf" | "otf" | "ttc" | "otc") && p.is_file() {
+            paths.push(p.to_string_lossy().into_owned());
+            if paths.len() >= max {
+                break;
+            }
+        }
+    }
+    paths
+}
+
+#[test]
+fn scans_user_picked_file_list_streams_progress_and_registers_source() {
+    let _guard = SCAN_TEST_LOCK.lock().unwrap();
+    init_scan_test_db("files");
+    clear_font_sources().unwrap();
+
+    let paths = os_font_file_sample(20);
+    if paths.len() < 2 {
+        println!(
+            "Skipping scan_font_files test: only {} fonts available in OS dir",
+            paths.len()
+        );
+        return;
+    }
+
+    let (channel, totals, done) = collecting_channel();
+    if let Err(e) = tauri::async_runtime::block_on(scan_font_files(
+        paths.clone(),
+        channel,
+        next_test_scan_id(),
+        "scan-test-files".to_string(),
+    )) {
+        panic!("scan_font_files failed: {e}");
+    }
+    let totals = std::mem::take(&mut *totals.lock().unwrap());
+    let done = take_done(&done);
+
+    assert!(done.added > 0, "expected at least one face from {paths:?}");
+    assert!(!done.cancelled);
+    // Final batch total must equal added when the scan reports no
+    // duplicates — both numbers come from the same source-of-truth
+    // (the SQLite import outcome).
+    if done.duplicated == 0 {
+        assert_eq!(totals.last().copied(), Some(done.added));
+    }
+}
+
+#[test]
+fn scan_font_files_rejects_oversize_path_list() {
+    let _guard = SCAN_TEST_LOCK.lock().unwrap();
+    init_scan_test_db("files-oversize");
+    clear_font_sources().unwrap();
+
+    // MAX_INPUT_PATHS is 1000 in fonts.rs — supply 1001 paths so the
+    // command rejects the call before any worker thread spins up.
+    let oversize: Vec<String> = (0..1001).map(|i| format!("dummy-{i}.ttf")).collect();
+    let result = tauri::async_runtime::block_on(scan_font_files(
+        oversize,
+        discard_channel(),
+        next_test_scan_id(),
+        "scan-test-files-oversize".to_string(),
+    ));
+    assert!(
+        result.is_err(),
+        "scan_font_files should reject path lists exceeding MAX_INPUT_PATHS"
     );
 }
 

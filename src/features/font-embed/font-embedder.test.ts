@@ -7,13 +7,16 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { LocalFontEntry } from "../../lib/tauri-api";
 
-// Mock the Tauri IPC surface so the test runs in pure Node. We only need
-// findSystemFont for the fallback branch; subsetFont is unused here.
+// Mock the Tauri IPC surface so the test runs in pure Node. findSystemFont
+// covers the system-fallback branch; resolveUserFont covers the
+// useRustUserFonts production path; subsetFont is unused here.
 const findSystemFontMock = vi.fn();
+const resolveUserFontMock = vi.fn();
 vi.mock("../../lib/tauri-api", () => ({
   findSystemFont: (family: string, bold: boolean, italic: boolean) =>
     findSystemFontMock(family, bold, italic),
-  resolveUserFont: vi.fn(),
+  resolveUserFont: (family: string, bold: boolean, italic: boolean) =>
+    resolveUserFontMock(family, bold, italic),
   subsetFont: vi.fn(),
 }));
 
@@ -239,6 +242,59 @@ Dialogue: 0,0:00:05.00,0:00:10.00,Default,{\\fn青鸟华光简粗黑}horizontal
       "青鸟华光简粗黑.TTF"
     );
     expect(map.get(userFontKey("JCUH", false, false))?.path).toContain("青鸟华光简粗黑.TTF");
+  });
+});
+
+describe("analyzeFonts — useRustUserFonts production path", () => {
+  beforeEach(() => {
+    findSystemFontMock.mockReset();
+    resolveUserFontMock.mockReset();
+  });
+
+  // Covers the production code path that ships in FontEmbed batch mode:
+  // userFontMap is null and analyzeFonts asks Rust's session-local index
+  // via resolveUserFont. The legacy in-memory userFontMap branch is
+  // covered by the suites above; this suite asserts the IPC contract
+  // doesn't drift (e.g., field rename on either side).
+
+  it("uses resolveUserFont as the local-source check when userFontMap is null", async () => {
+    resolveUserFontMock.mockImplementation(async (family: string) => {
+      if (family === "FZLanTingHei") return { path: "C:/u/FZ.ttf", index: 0 };
+      return null;
+    });
+    findSystemFontMock.mockImplementation(async (family: string, bold: boolean) => {
+      if (family === "Arial" && bold) return { path: "C:/Windows/Fonts/arialbd.ttf", index: 0 };
+      throw new Error("Font not found");
+    });
+
+    const { infos } = await analyzeFonts(MINIMAL_ASS, null, undefined, true);
+    const fz = infos.find((i) => i.key.family === "FZLanTingHei");
+    const arial = infos.find((i) => i.key.family === "Arial" && i.key.bold);
+
+    // Local hit via Rust IPC short-circuits the system call.
+    expect(fz?.source).toBe("local");
+    expect(fz?.filePath).toBe("C:/u/FZ.ttf");
+    const fzSystemCalls = findSystemFontMock.mock.calls.filter((c) => c[0] === "FZLanTingHei");
+    expect(fzSystemCalls.length).toBe(0);
+
+    // Miss falls through to system.
+    expect(arial?.source).toBe("system");
+    expect(arial?.filePath).toBe("C:/Windows/Fonts/arialbd.ttf");
+  });
+
+  it("falls through to system when resolveUserFont returns null for every family", async () => {
+    resolveUserFontMock.mockResolvedValue(null);
+    findSystemFontMock.mockImplementation(async (family: string, bold: boolean) => {
+      if (family === "FZLanTingHei") return { path: "C:/Windows/Fonts/simsun.ttc", index: 0 };
+      if (family === "Arial" && bold) return { path: "C:/Windows/Fonts/arialbd.ttf", index: 0 };
+      throw new Error("Font not found");
+    });
+
+    const { infos } = await analyzeFonts(MINIMAL_ASS, null, undefined, true);
+    expect(infos.find((i) => i.key.family === "FZLanTingHei")?.source).toBe("system");
+    expect(infos.find((i) => i.key.family === "Arial" && i.key.bold)?.source).toBe("system");
+    // resolveUserFont was consulted for every distinct (family, bold, italic).
+    expect(resolveUserFontMock.mock.calls.length).toBe(2);
   });
 });
 

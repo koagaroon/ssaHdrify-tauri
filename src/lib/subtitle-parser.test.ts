@@ -23,4 +23,57 @@ describe("parseSubtitle", () => {
     expect(result.captions.map((c) => c.cueId)).toEqual(["cue-a", "cue-b"]);
     expect(result.captions.map((c) => c.text)).toEqual(["First line", "Second line"]);
   });
+
+  it("parses ASS Dialogue lines and reports format=ass", () => {
+    const content =
+      "[Script Info]\nScriptType: v4.00+\n\n" +
+      "[V4+ Styles]\nFormat: Name, Fontname\nStyle: Default,Arial\n\n" +
+      "[Events]\nFormat: Layer, Start, End, Style, Text\n" +
+      "Dialogue: 0,0:00:01.00,0:00:02.50,Default,Hello\n" +
+      "Dialogue: 0,0:00:03.00,0:00:04.50,Default,World\n";
+    const result = parseSubtitle(content);
+    expect(result.format).toBe("ass");
+    expect(result.captions).toHaveLength(2);
+    // ASS timing only — the parseAss `text` field is the post-comma
+    // remainder which still includes the Style field; the timing
+    // operations don't care about text content. Anchor on the
+    // load-bearing fields.
+    expect(result.captions[0].start).toBe(1000);
+    expect(result.captions[0].end).toBe(2500);
+    expect(result.captions[1].start).toBe(3000);
+    expect(result.captions[1].end).toBe(4500);
+  });
+
+  it("parses MicroDVD SUB frame ranges and reports format=sub", () => {
+    // Frame numbers at 23.976 fps default. {24}{48} ≈ 1.001 s → 2.002 s.
+    const content = "{24}{48}First frame block\n{72}{96}Second frame block\n";
+    const result = parseSubtitle(content);
+    expect(result.format).toBe("sub");
+    expect(result.captions).toHaveLength(2);
+    expect(result.captions[0].text).toBe("First frame block");
+    expect(result.captions[1].text).toBe("Second frame block");
+  });
+
+  it("throws when the content has no recognized header or timing", () => {
+    // detectFormat returns "unknown"; parseSubtitle treats that as a
+    // hard error so callers don't silently process zero-caption results.
+    expect(() => parseSubtitle("just some prose\nwith no timing markers\nat all\n")).toThrow(
+      /Could not detect/i
+    );
+  });
+
+  it("rejects ASS with more than 100,000 dialogue blocks", () => {
+    // Defense-in-depth cap inside parseAss — guards against pathological
+    // files (or runaway generators) that would otherwise fan out to millions
+    // of caption objects in JS heap.
+    const header =
+      "[Script Info]\nScriptType: v4.00+\n\n" +
+      "[V4+ Styles]\nFormat: Name, Fontname\nStyle: Default,Arial\n\n" +
+      "[Events]\nFormat: Layer, Start, End, Style, Text\n";
+    const dialogues = Array.from(
+      { length: 100_001 },
+      (_, i) => `Dialogue: 0,0:00:00.00,0:00:00.10,Default,line ${i}`
+    ).join("\n");
+    expect(() => parseSubtitle(header + dialogues + "\n")).toThrow(/Too many/i);
+  });
 });
