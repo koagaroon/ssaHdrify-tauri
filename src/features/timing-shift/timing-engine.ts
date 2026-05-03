@@ -116,6 +116,17 @@ export function shiftSubtitles(content: string, options: ShiftOptions): ShiftRes
  * gate via `countExistingFiles` before the batch begins.
  */
 export function deriveShiftedPath(inputPath: string): string {
+  // Tauri's pickSubtitleFiles + drag-drop ingest always produce
+  // absolute paths; this guard only fires if a future internal
+  // caller threads a relative path through. resolveOutputPath in
+  // hdr-convert applies the same precondition — keep them aligned.
+  // We only reject empty / clearly-relative-like inputs (no leading
+  // `/`, no `\`, no drive letter); deeper validation is the OS's job.
+  const looksAbsolute =
+    inputPath.startsWith("/") || inputPath.startsWith("\\") || /^[A-Za-z]:[\\/]/.test(inputPath);
+  if (!inputPath || !looksAbsolute) {
+    throw new Error("Input path must be absolute");
+  }
   // Same separator-preservation heuristic as deriveEmbeddedPath: if
   // the input has ANY backslash, output with backslashes, regardless
   // of whether it also contains a forward slash. The previous "all

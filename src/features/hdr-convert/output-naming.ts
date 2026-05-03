@@ -190,6 +190,15 @@ export function resolveOutputPath(
   // Safety: reject characters that are illegal in filenames on Windows, plus
   // all control chars / DEL (tab / newline would pass the ordinary check and
   // only fail when the OS rejects the write, producing an unhelpful error).
+  //
+  // Cross-platform note: `:` is technically valid in macOS/Linux filenames
+  // (HFS+ traditionally rejected it for legacy compatibility, but APFS and
+  // ext4 allow it). Rejecting it unconditionally is intentionally
+  // Windows-conservative — this app's primary platform is Windows and the
+  // output gets shipped between machines, so the strictest filesystem's
+  // rules win. Mac users who explicitly want `:` in subtitle filenames
+  // are not the target user and would have other Windows-portability
+  // problems already.
   // eslint-disable-next-line no-control-regex -- intentional: reject control chars in filenames
   const ILLEGAL_CHARS = /[\x00-\x1f\x7f<>:"|?*\\/]/;
   if (ILLEGAL_CHARS.test(resolved)) {
