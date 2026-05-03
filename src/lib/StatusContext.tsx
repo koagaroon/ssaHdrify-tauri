@@ -41,7 +41,10 @@ export interface StatusContextValue {
 
 // Frozen so an accidental in-place mutation anywhere fails loudly instead
 // of silently corrupting every tab's default via the shared object alias.
-export const DEFAULT_STATUS: Status = Object.freeze({ kind: "idle", message: "" }) as Status;
+// Internal-only: DEFAULT_STATUSES is the public surface; this is just the
+// shared shape consumed by the per-tab `Object.freeze({...DEFAULT_STATUS})`
+// spreads below.
+const DEFAULT_STATUS: Status = Object.freeze({ kind: "idle", message: "" }) as Status;
 
 // Per-tab literals — frozen individually so in-place mutation of any slot
 // fails loudly in dev instead of silently drifting that tab's default.

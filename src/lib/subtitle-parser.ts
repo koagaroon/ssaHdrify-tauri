@@ -153,12 +153,21 @@ export function parseDisplayTime(ts: string): number | null {
 
 // ── SRT Parser ────────────────────────────────────────────
 
+// Per-format upper bound on parsed entries. Calibrated to be generous
+// for real workflows (a 50 MB SRT runs roughly 350k blocks at ~150B
+// each — common for transcription dumps and concatenated archives)
+// while still bounding worst-case JS heap from a runaway file.
+// Original ASS-side cap was 100k which silently rejected legitimate
+// long-form transcripts; 500k matches the per-file face cap on the
+// Rust side as a unified "defensive ceiling."
+const MAX_PARSED_ENTRIES = 500_000;
+
 function parseSrt(content: string): Caption[] {
   const captions: Caption[] = [];
   // Normalize first so mixed CRLF/LF files still split into cue blocks.
   const blocks = splitCueBlocks(content);
-  if (blocks.length > 100000) {
-    throw new Error(`Too many subtitle blocks: ${blocks.length} (max 100,000)`);
+  if (blocks.length > MAX_PARSED_ENTRIES) {
+    throw new Error(`Too many subtitle blocks: ${blocks.length} (max ${MAX_PARSED_ENTRIES})`);
   }
   // Regex defined inside function — no shared lastIndex state.
   // Hours use `\d+` to accept the single-digit form some tools emit
@@ -209,8 +218,8 @@ function parseVtt(content: string): Caption[] {
   const body = normalizeLineEndings(content).replace(/^WEBVTT[^\n]*\n/, "");
   // Normalize first so mixed CRLF/LF files still split into cue blocks.
   const blocks = splitCueBlocks(body);
-  if (blocks.length > 100000) {
-    throw new Error(`Too many subtitle blocks: ${blocks.length} (max 100,000)`);
+  if (blocks.length > MAX_PARSED_ENTRIES) {
+    throw new Error(`Too many subtitle blocks: ${blocks.length} (max ${MAX_PARSED_ENTRIES})`);
   }
   // VTT timing: supports both HH:MM:SS.mmm and MM:SS.mmm
   const timingRe =
@@ -281,8 +290,13 @@ function parseAss(content: string): Caption[] {
   const dialogueRe = createDialogueRe();
   let match;
   while ((match = dialogueRe.exec(content)) !== null) {
-    if (captions.length >= 100000) {
-      throw new Error(`Too many subtitle entries: > 100,000`);
+    if (captions.length >= MAX_PARSED_ENTRIES) {
+      // Match the SRT/SUB sibling errors which include the actual
+      // count for diagnosis. Strict `>=` here means "we just refused
+      // to add the next one"; report N+ to make the boundary clear
+      // (we can't get the exact dialogue count without one more
+      // iteration, and that's the bound we just refused to cross).
+      throw new Error(`Too many subtitle entries: ${captions.length}+ (max ${MAX_PARSED_ENTRIES})`);
     }
     captions.push({
       raw: match[0],
@@ -333,8 +347,8 @@ function parseSub(content: string, fps: number = DEFAULT_FPS): Caption[] {
   let count = 0;
   while ((match = subLineRe.exec(content)) !== null) {
     count += 1;
-    if (count > 100000) {
-      throw new Error(`Too many subtitle entries: ${count} (max 100,000)`);
+    if (count > MAX_PARSED_ENTRIES) {
+      throw new Error(`Too many subtitle entries: ${count} (max ${MAX_PARSED_ENTRIES})`);
     }
     captions.push({
       raw: match[0],
