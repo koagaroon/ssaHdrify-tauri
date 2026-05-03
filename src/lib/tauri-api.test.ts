@@ -68,7 +68,13 @@ describe("runStreamingScan — sync delivery (batches arrive during invoke)", ()
       const channel = channelInstances[0];
       channel.onmessage?.({ kind: "batch", total: 2 });
       channel.onmessage?.({ kind: "batch", total: 3 });
-      channel.onmessage?.({ kind: "done", cancelled: false, added: 3, duplicated: 1 });
+      channel.onmessage?.({
+        kind: "done",
+        cancelled: false,
+        ceilingHit: false,
+        added: 3,
+        duplicated: 1,
+      });
     });
 
     const seenTotals: number[] = [];
@@ -76,7 +82,11 @@ describe("runStreamingScan — sync delivery (batches arrive during invoke)", ()
       seenTotals.push(total);
     });
 
-    expect(result).toEqual({ added: 3, duplicated: 1, cancelled: false });
+    // Pin every field of FontScanResult — including ceilingHit. toEqual
+    // accepts missing keys silently, so omitting ceilingHit from either
+    // the mocked Done OR this assertion would let a regression where
+    // runStreamingScan dropped the field assignment slip past.
+    expect(result).toEqual({ added: 3, duplicated: 1, cancelled: false, ceilingHit: false });
     expect(seenTotals).toEqual([2, 3]);
     expect(invokeMock).toHaveBeenCalledWith(
       "scan_font_directory",
@@ -89,13 +99,40 @@ describe("runStreamingScan — sync delivery (batches arrive during invoke)", ()
       channelInstances[0].onmessage?.({
         kind: "done",
         cancelled: false,
+        ceilingHit: false,
         added: 0,
         duplicated: 0,
       });
     });
 
     const result = await scanFontDirectory("/empty/dir", "source-empty", 102);
-    expect(result).toEqual({ added: 0, duplicated: 0, cancelled: false });
+    expect(result).toEqual({ added: 0, duplicated: 0, cancelled: false, ceilingHit: false });
+  });
+
+  it("propagates ceilingHit alongside cancelled on MAX_FONTS_PER_SCAN stop", async () => {
+    // Documented Rust contract: ceiling stops set BOTH cancelled=true
+    // AND ceilingHit=true (so the existing cancelled-aware UX paths
+    // still trigger "kept partial results"), with ceilingHit serving
+    // as the tie-breaker the frontend uses to swap "you cancelled" for
+    // "source was too large" messaging. Pin the wire shape here so a
+    // future refactor that stops co-setting cancelled would surface.
+    invokeMock.mockImplementation(async () => {
+      channelInstances[0].onmessage?.({
+        kind: "done",
+        cancelled: true,
+        ceilingHit: true,
+        added: 100_000,
+        duplicated: 0,
+      });
+    });
+
+    const result = await scanFontDirectory("/huge/dir", "source-huge", 105);
+    expect(result).toEqual({
+      added: 100_000,
+      duplicated: 0,
+      cancelled: true,
+      ceilingHit: true,
+    });
   });
 });
 
@@ -213,6 +250,7 @@ describe("runStreamingScan — async-after-resolve (A-bug-1 regression)", () => 
         channelInstances[0].onmessage?.({
           kind: "done",
           cancelled: false,
+          ceilingHit: false,
           added: 3,
           duplicated: 0,
         });
@@ -224,6 +262,7 @@ describe("runStreamingScan — async-after-resolve (A-bug-1 regression)", () => 
     // The Done sentinel + donePromise guarantee we wait for the full set.
     expect(result.added).toBe(3);
     expect(result.cancelled).toBe(false);
+    expect(result.ceilingHit).toBe(false);
   });
 
   it("returns the Rust-reported cancellation outcome after async Done", async () => {
@@ -235,6 +274,7 @@ describe("runStreamingScan — async-after-resolve (A-bug-1 regression)", () => 
         channelInstances[0].onmessage?.({
           kind: "done",
           cancelled: true,
+          ceilingHit: false,
           added: 40,
           duplicated: 0,
         });
@@ -242,6 +282,8 @@ describe("runStreamingScan — async-after-resolve (A-bug-1 regression)", () => 
     });
 
     const result = await scanFontDirectory("/cancelled/dir", "source-cancelled", 104);
-    expect(result).toEqual({ added: 40, duplicated: 0, cancelled: true });
+    // User-cancel branch: cancelled=true, ceilingHit MUST be false
+    // (only MAX_FONTS_PER_SCAN co-sets both).
+    expect(result).toEqual({ added: 40, duplicated: 0, cancelled: true, ceilingHit: false });
   });
 });

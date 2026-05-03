@@ -40,18 +40,32 @@ describe("resolveOutputPath — template resolution", () => {
 });
 
 describe("resolveOutputPath — security", () => {
+  // Anchor each rejection on the actual branch that fires. output-naming.ts
+  // throws 12+ distinct messages, and a regression that broke the intended
+  // safety branch but happened to fall into "Output filename must end with
+  // .ass" or "empty filename" would otherwise pass a bare toThrow().
+  //
+  // Note on the traversal branches: with the current dot-collapse + illegal-
+  // char gates upstream, the explicit `traversal:` and `escapes input
+  // directory:` branches are unreachable by any caller-supplied template
+  // (illegal-chars catches `/` first; the `\.{2,}` collapse erases `..`).
+  // The tests anchor on the union /illegal|traversal|escapes/i so they
+  // continue to verify "user-supplied `../...` templates are rejected
+  // somewhere" without forcing assumptions about which branch.
   it("rejects path traversal with ../", () => {
-    expect(() => resolveOutputPath(`${BASE}/sub/file.srt`, "../escape/{name}.ass", "PQ")).toThrow();
+    expect(() => resolveOutputPath(`${BASE}/sub/file.srt`, "../escape/{name}.ass", "PQ")).toThrow(
+      /illegal|traversal|escapes/i
+    );
   });
 
   it("rejects path traversal via prefix collision", () => {
     expect(() =>
       resolveOutputPath(`${BASE}/sub/file.srt`, "../subtitles/{name}.ass", "PQ")
-    ).toThrow();
+    ).toThrow(/illegal|traversal|escapes/i);
   });
 
   it("rejects empty template", () => {
-    expect(() => resolveOutputPath(`${BASE}/subtitle.srt`, "", "PQ")).toThrow();
+    expect(() => resolveOutputPath(`${BASE}/subtitle.srt`, "", "PQ")).toThrow(/empty/i);
   });
 
   it("rejects Windows reserved name CON", () => {
