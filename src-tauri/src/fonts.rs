@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+use unicode_normalization::UnicodeNormalization;
 
 use crate::util::{validate_ipc_path, MAX_INPUT_PATHS};
 
@@ -497,9 +498,17 @@ pub struct LocalFontEntry {
 }
 
 fn user_font_key(family: &str, bold: bool, italic: bool) -> String {
+    // NFC-normalize before lowercase so HFS+ NFD-form filenames and NFC-form
+    // font internal names key identically; otherwise precomposed `é` (U+00E9)
+    // and decomposed `e + ´` (U+0065 U+0301) produce different keys for the
+    // same visual family. Mirrors the TS userFontKey flow.
+    let normalized: String = family.nfc().collect::<String>().to_lowercase();
+    // U+001F (Unit Separator) is a control character; real font family names
+    // never contain it (would be a malformed font). Matches the TS
+    // USER_FONT_KEY_SEP so future cross-layer audits land on the same byte.
     format!(
-        "{}|{}|{}",
-        family.to_lowercase(),
+        "{}\u{001F}{}\u{001F}{}",
+        normalized,
         if bold { "1" } else { "0" },
         if italic { "1" } else { "0" }
     )
@@ -1991,6 +2000,38 @@ mod tests {
             italic: false,
             size_bytes: 123,
         }
+    }
+
+    #[test]
+    fn user_font_key_lowercases_nfc_normalizes_and_separates_with_us() {
+        // Case-insensitive — mirrors TS userFontKey case-fold contract.
+        assert_eq!(
+            user_font_key("Arial", false, false),
+            user_font_key("ARIAL", false, false)
+        );
+        // NFC normalization — precomposed `é` and decomposed `e + ´` key
+        // identically. Without NFC, a font name table storing `café` would
+        // miss an ASS \fn `café` lookup (and vice versa).
+        let precomposed = user_font_key("caf\u{00e9}", false, false);
+        let decomposed = user_font_key("cafe\u{0301}", false, false);
+        assert_eq!(precomposed, decomposed);
+        // Bold and italic flags carry distinctly.
+        let plain = user_font_key("Arial", false, false);
+        let bold = user_font_key("Arial", true, false);
+        let italic = user_font_key("Arial", false, true);
+        let both = user_font_key("Arial", true, true);
+        assert_eq!(
+            [&plain, &bold, &italic, &both]
+                .iter()
+                .copied()
+                .collect::<HashSet<_>>()
+                .len(),
+            4
+        );
+        // Separator is U+001F (Unit Separator); pin the exact byte shape so
+        // future cross-layer audits land on the same encoding the TS layer
+        // produces.
+        assert_eq!(plain, "arial\u{001F}0\u{001F}0");
     }
 
     #[test]
