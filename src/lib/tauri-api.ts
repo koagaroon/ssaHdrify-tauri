@@ -430,7 +430,16 @@ export async function clearFontSources(): Promise<void> {
 
 /** Shared streaming-invoke wrapper for both scan commands. Constructs a
  *  Channel<ScanProgress>, waits for Done, and resolves with the Rust-side
- *  registration counts and cancellation outcome. */
+ *  registration counts and cancellation outcome.
+ *
+ *  No JS-side timeout by design. The Rust scan worker is bounded by
+ *  MAX_FONTS_PER_SCAN (defense-in-depth ceiling) and the user always
+ *  has the inline Cancel button (cancelFontScan) to abort. Adding a
+ *  timeout here would race legitimate slow scans (XL font collection
+ *  on a slow disk can take 30+ seconds) and produce false-cancel
+ *  signals the Rust side never sent. If a future stuck-IPC failure
+ *  mode emerges, a watchdog should live in the Tauri command layer
+ *  (Rust-side timeout on spawn_blocking), not here. */
 async function runStreamingScan(
   command: "scan_font_directory" | "scan_font_files",
   args: Record<string, unknown>,

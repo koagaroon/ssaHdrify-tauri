@@ -179,6 +179,14 @@ export default function FontSourceModal(props: Props) {
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
 
   const requestClose = useCallback(() => {
+    // Invariant: onClose must NOT be called while busyRef is set
+    // (other than via the cancel-then-close path below). Other busy
+    // paths (e.g., the `applyAddResult` handlers in claim/release
+    // flow) bracket their work with claimScanFlow/releaseScanFlow,
+    // so by the time the user can click ✕ / scrim / Esc, busyRef
+    // is either false (safe to close) or true with an active scan
+    // (route to cancel).
+    //
     // If a scan is in flight, route Esc / scrim click / ✕ button to a
     // cancel attempt instead of silently doing nothing. The user gets
     // an obvious dismiss path that doesn't require finding the inline

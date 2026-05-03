@@ -91,6 +91,13 @@ export default function FontEmbed() {
   const [dropError, setDropError] = useState<string | null>(null);
 
   const cancelRef = useRef(false);
+  // Generation counter for ingest flows. Each handlePickFiles /
+  // handleDroppedPaths / handleClearFiles bumps the counter, and the
+  // async work captured the value at entry — when it later checks
+  // `gen !== pickGenRef.current`, a stale generation means the user
+  // has since picked another batch (or cleared) and we abandon the
+  // outdated work without writing state. Standard "discard stale
+  // async results" idiom — see the same shape in BatchRename.
   const pickGenRef = useRef(0);
   // Per-file analysis cache: <path → {content, infos, usages}>. Holds
   // all batch contents in memory so the unified detection grid + the
