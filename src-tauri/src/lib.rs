@@ -16,7 +16,23 @@ pub fn run() {
             // env-var manipulation; see fonts::init_system_dirs.
             fonts::init_system_dirs();
             let app_data_dir = app.path().app_data_dir()?;
-            fonts::init_user_font_db(&app_data_dir).map_err(std::io::Error::other)?;
+            if let Err(e) = fonts::init_user_font_db(&app_data_dir) {
+                // Windows GUI subsystem has no visible stderr — without
+                // a native dialog the app would exit silently and the
+                // user would have no way to know why. Block on a
+                // MessageBox so the failure is unmissable. rfd uses the
+                // OS-native chrome (Win32 MessageBox / NSAlert / GTK
+                // dialog) and works before the WebView2 window exists.
+                rfd::MessageDialog::new()
+                    .set_level(rfd::MessageLevel::Error)
+                    .set_title("SSA HDRify — startup failure")
+                    .set_description(format!(
+                        "Failed to initialize the user-font index at\n{}\n\n{e}\n\nThe app cannot start.",
+                        app_data_dir.display()
+                    ))
+                    .show();
+                return Err(std::io::Error::other(e).into());
+            }
 
             // Dev: INFO-level for full visibility while iterating.
             // Release: WARN/ERROR only — keeps crash-diagnostic signals in
