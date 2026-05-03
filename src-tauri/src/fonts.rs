@@ -429,9 +429,11 @@ impl Drop for ActiveScanGuard {
 /// so cancel_font_scan's range check can never see a stale NO_SCAN_ID
 /// while a fresh scan has already won the slot.
 fn begin_font_scan(scan_id: u64) -> Result<ActiveScanGuard, String> {
-    if scan_id == NO_SCAN_ID {
-        return Err("Scan id must be non-zero".to_string());
-    }
+    // Public IPC commands now validate scan_id != NO_SCAN_ID at the
+    // boundary; debug_assert catches any future internal caller that
+    // bypasses that gate. Release builds skip the check entirely so
+    // we don't pay for it on the spawn path of every legitimate scan.
+    debug_assert!(scan_id != NO_SCAN_ID, "begin_font_scan called with NO_SCAN_ID");
 
     ACTIVE_SCAN_ID
         .compare_exchange(NO_SCAN_ID, scan_id, Ordering::SeqCst, Ordering::SeqCst)
@@ -814,13 +816,17 @@ fn parse_local_font_file(canonical: &Path, scan_id: u64) -> Vec<LocalFontEntry> 
 
     // Extension check is intentionally case-insensitive (.TTF vs .ttf are the
     // same file format). The ASCII-lowercase conversion is correct here — all
-    // ALLOWED_FONT_EXTENSIONS entries are ASCII.
+    // ALLOWED_FONT_EXTENSIONS entries are ASCII. Done inline (instead of the
+    // `has_allowed_font_extension` helper) so `is_collection` below can reuse
+    // the already-computed lowercase extension without a second extension
+    // lookup; helper would lower-case once for the bool, then `is_collection`
+    // would lower-case again for the TTC/OTC check.
     let ext = canonical
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_ascii_lowercase())
         .unwrap_or_default();
-    if !has_allowed_font_extension(canonical) {
+    if !ALLOWED_FONT_EXTENSIONS.contains(&ext.as_str()) {
         return Vec::new();
     }
 
@@ -1010,18 +1016,23 @@ fn preflight_directory_inner(canonical_dir: &Path) -> Result<FontScanPreflight, 
             continue;
         };
         let path = entry.path();
-        if !path.is_file() {
+        // Skip reparse points (symlinks / Windows junctions / OneDrive
+        // placeholders) BEFORE any metadata or canonicalize call. The
+        // earlier ordering called `path.is_file()` first, which goes
+        // through `std::fs::metadata` and follows symlinks — for a
+        // symlink pointing to a regular file, the kernel resolved the
+        // reparse point and opened the target as a side effect even
+        // though we then skipped the entry. The starts_with guard at
+        // the bottom kept the result correct, but the design intent
+        // ("preview never chases symlinks") was not actually upheld in
+        // the trace. `scan_directory_inner` intentionally takes a
+        // different policy on in-directory symlinks; preview's job is
+        // strictly size estimation, so refusing to touch them at all
+        // is the right invariant.
+        if crate::util::is_reparse_point(&path) {
             continue;
         }
-        // Skip reparse points (symlinks / Windows junctions / OneDrive
-        // placeholders) BEFORE canonicalize. On Windows, canonicalize
-        // on a hostile junction or `\\.\PIPE\evil` device path opens a
-        // file handle as a side effect — pure overhead for a "tell me
-        // the size of this folder" preview that intentionally doesn't
-        // chase symlinks. The actual scan uses the same starts_with
-        // safety check after canonicalize, so the preview's job is
-        // strictly to estimate size.
-        if crate::util::is_reparse_point(&path) {
+        if !path.is_file() {
             continue;
         }
         let Ok(canonical) = path.canonicalize() else {
@@ -1308,6 +1319,9 @@ pub async fn scan_font_directory(
     scan_id: u64,
     source_id: String,
 ) -> Result<(), String> {
+    if scan_id == NO_SCAN_ID {
+        return Err("Scan id must be non-zero".to_string());
+    }
     validate_ipc_path(&dir, "Directory")?;
     validate_font_source_id(&source_id)?;
 
@@ -1440,6 +1454,9 @@ pub async fn scan_font_files(
     scan_id: u64,
     source_id: String,
 ) -> Result<(), String> {
+    if scan_id == NO_SCAN_ID {
+        return Err("Scan id must be non-zero".to_string());
+    }
     if paths.len() > MAX_INPUT_PATHS {
         return Err(format!(
             "Too many file paths ({}, max {MAX_INPUT_PATHS})",

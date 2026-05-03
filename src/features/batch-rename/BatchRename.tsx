@@ -36,7 +36,11 @@ import { countExistingFiles } from "../../lib/output-collisions";
 import { useLogPanel } from "../../lib/useLogPanel";
 import { LogPanel } from "../../lib/LogPanel";
 import { DropErrorBanner } from "../../lib/DropErrorBanner";
-import { buildConflictMessage, normalizeOutputKey } from "../../lib/dedup-helpers";
+import {
+  buildConflictMessage,
+  normalizeOutputKey,
+  sanitizeForDialog,
+} from "../../lib/dedup-helpers";
 import {
   buildPairings,
   parseFilename,
@@ -552,9 +556,18 @@ export default function BatchRename() {
       skippedDeriveCount > 0 ? "\n\n" + t("msg_rename_skipped_count", skippedDeriveCount) : "";
 
     if (outputMode === "rename") {
+      // Strip BiDi overrides from filenames before rendering them in the
+      // OS-native dialog body. A subtitle file named with U+202E mid-
+      // string can visually reverse the arrow + target name in the
+      // confirmation, tricking the user into approving an unintended
+      // rename (CVE-2021-42574 class). Counts and other non-filename
+      // strings are unaffected.
       const samples = targets
         .slice(0, 3)
-        .map((t2) => `${t2.row.subtitle!.name} → ${fileNameFromPath(t2.outputPath)}`)
+        .map(
+          (t2) =>
+            `${sanitizeForDialog(t2.row.subtitle!.name)} → ${sanitizeForDialog(fileNameFromPath(t2.outputPath))}`
+        )
         .join("\n");
       const moreCount = targets.length - 3;
       const moreSuffix = moreCount > 0 ? "\n" + t("msg_rename_inplace_more", moreCount) : "";

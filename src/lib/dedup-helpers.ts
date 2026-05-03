@@ -73,3 +73,25 @@ export function buildConflictMessage(
 export function normalizeOutputKey(path: string): string {
   return path.normalize("NFC").replace(/\\/g, "/").toLowerCase();
 }
+
+/** Bidirectional controls whose visual reordering effect is the
+ *  Trojan-Source attack class (CVE-2021-42574). Listed individually so
+ *  the intent is grep-able:
+ *  - U+202A..U+202E — LRE / RLE / PDF / LRO / RLO embeddings + overrides
+ *  - U+2066..U+2069 — LRI / RLI / FSI / PDI isolates
+ *  - U+200E / U+200F — LRM / RLM marks (not strictly needed for the
+ *    Trojan Source vector, but combined with the others they produce
+ *    visual deception in plain-text renderers).
+ */
+const DIALOG_BIDI_CONTROLS_RE = /[‪-‮⁦-⁩‎‏]/g;
+
+/** Strip bidirectional control characters before rendering a filename
+ *  inside an `ask()` dialog body. Without this, a malicious subtitle
+ *  filename containing U+202E (RIGHT-TO-LEFT OVERRIDE) can visually
+ *  reverse the rename arrow + filename in the OS-native dialog and
+ *  trick the user into confirming an unintended rename. Apply at any
+ *  callsite that interpolates an untrusted filename into an `ask()`
+ *  body — counts and other non-name strings are unaffected. */
+export function sanitizeForDialog(name: string): string {
+  return name.replace(DIALOG_BIDI_CONTROLS_RE, "");
+}
