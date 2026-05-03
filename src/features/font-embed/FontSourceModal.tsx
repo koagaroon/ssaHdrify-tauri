@@ -598,7 +598,7 @@ export default function FontSourceModal(props: Props) {
                       style={{
                         background: "var(--cancel-bg)",
                         color: "var(--cancel-text)",
-                        opacity: busy ? 0.5 : 1,
+                        filter: busy ? "grayscale(1)" : "none",
                         cursor: busy ? "not-allowed" : "pointer",
                       }}
                       title={busy ? t("font_sources_scanning") : t("font_sources_remove")}
@@ -675,7 +675,7 @@ export default function FontSourceModal(props: Props) {
                 onClick={handleCancelScan}
                 disabled={cancelRequested}
                 className="btn-cancel-pill px-2 py-0.5 rounded text-xs"
-                style={{ opacity: cancelRequested ? 0.6 : 1 }}
+                style={{ filter: cancelRequested ? "grayscale(1)" : "none" }}
               >
                 {cancelRequested ? t("font_scan_cancelling") : t("font_scan_cancel")}
               </button>
