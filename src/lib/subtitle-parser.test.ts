@@ -55,12 +55,15 @@ describe("parseSubtitle", () => {
     expect(result.captions).toHaveLength(2);
     expect(result.captions[0].text).toBe("First frame block");
     expect(result.captions[1].text).toBe("Second frame block");
-    // toBeCloseTo with -1 precision tolerates the 23.976 fps rounding
-    // (~0.5 ms drift either side of the integer ms).
-    expect(result.captions[0].start).toBeCloseTo(1001, -1);
-    expect(result.captions[0].end).toBeCloseTo(2002, -1);
-    expect(result.captions[1].start).toBeCloseTo(3003, -1);
-    expect(result.captions[1].end).toBeCloseTo(4004, -1);
+    // Exact integer assertions — parseSub does Math.round so the
+    // output is always an integer ms. The previous toBeCloseTo(N, -1)
+    // form was a 5 ms tolerance window (Vitest interprets numDigits as
+    // 0.5 × 10^-N, so -1 gives ±5), which would let a Math.round →
+    // Math.floor regression slip past silently.
+    expect(result.captions[0].start).toBe(1001);
+    expect(result.captions[0].end).toBe(2002);
+    expect(result.captions[1].start).toBe(3003);
+    expect(result.captions[1].end).toBe(4004);
   });
 
   it("throws when the content has no recognized header or timing", () => {

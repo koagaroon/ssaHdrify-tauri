@@ -71,9 +71,16 @@ pub fn decode_bytes(bytes: &[u8]) -> ReadTextResult {
         // Record the attempted encoding in the label so callers can see what
         // was tried — plain "UTF-8 (lossy)" masked whether the file was
         // actually UTF-8 or some other guess that failed.
-        let text = String::from_utf8_lossy(bytes).into_owned();
+        //
+        // Use `cow` (the chardetng-decoded text with U+FFFD on bad bytes
+        // in the chosen encoding) — NOT a fresh UTF-8-lossy decode of the
+        // original bytes. For e.g. a GBK file with a few bad bytes, the
+        // UTF-8-lossy fallback would label "GBK (lossy)" but actually
+        // return UTF-8-lossy mojibake of GBK bytes — content and label
+        // disagree, and the content is much worse than `cow` already
+        // contained.
         return ReadTextResult {
-            text,
+            text: cow.into_owned(),
             encoding: format!("{} (lossy)", encoding.name()),
         };
     }

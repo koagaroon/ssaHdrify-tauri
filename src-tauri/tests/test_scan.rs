@@ -313,7 +313,8 @@ fn scan_font_files_rejects_oversize_path_list() {
         next_test_scan_id(),
         "scan-test-files-oversize".to_string(),
     ));
-    let err = result.expect_err("scan_font_files should reject path lists exceeding MAX_INPUT_PATHS");
+    let err =
+        result.expect_err("scan_font_files should reject path lists exceeding MAX_INPUT_PATHS");
     // Anchor on the contract-bearing prefix so unrelated future
     // failures (e.g., DB open) don't masquerade as the cap firing.
     assert!(

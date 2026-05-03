@@ -576,8 +576,13 @@ pub fn find_system_font(
     bold: bool,
     italic: bool,
 ) -> Result<FontLookupResult, String> {
-    // Input validation: reject empty, oversized, or control-char-containing names
-    if family.is_empty() || family.len() > 256 {
+    // Input validation: reject empty, oversized, or control-char-containing
+    // names. Use char count (codepoints), NOT byte length — a 100-char CJK
+    // family name is 300+ UTF-8 bytes and is perfectly legitimate.
+    // `parse_local_font_file` already counts codepoints when ingesting
+    // names; the lookup gate must agree, otherwise a font that scans into
+    // the index successfully gets rejected at lookup time.
+    if family.is_empty() || family.chars().count() > 256 {
         return Err("Font family name must be 1-256 characters".to_string());
     }
     if family.chars().any(|c| c.is_control() || c == '\x7f') {
@@ -859,8 +864,7 @@ fn preflight_directory_inner(canonical_dir: &Path) -> Result<FontScanPreflight, 
         font_files: 0,
         total_bytes: 0,
     };
-    let mut visited: usize = 0;
-    for entry in read {
+    for (visited, entry) in read.enumerate() {
         // Cap fires BEFORE we touch the entry (canonicalize / metadata),
         // so the worst-case CPU cost is bounded at MAX_PREFLIGHT_ENTRIES
         // canonicalize calls — not MAX+1.
@@ -869,7 +873,6 @@ fn preflight_directory_inner(canonical_dir: &Path) -> Result<FontScanPreflight, 
                 "Directory has too many entries to preview (>{MAX_PREFLIGHT_ENTRIES})"
             ));
         }
-        visited += 1;
         let Ok(entry) = entry else {
             continue;
         };
@@ -1331,7 +1334,11 @@ pub fn resolve_user_font(
     bold: bool,
     italic: bool,
 ) -> Result<Option<FontLookupResult>, String> {
-    if family.is_empty() || family.len() > 256 {
+    // Codepoint-count gate, mirrors `find_system_font` and
+    // `parse_local_font_file`. Byte-length gating would silently reject
+    // valid CJK family names (3 bytes/char) that fit the 256-codepoint
+    // intent.
+    if family.is_empty() || family.chars().count() > 256 {
         return Err("Font family name must be 1-256 characters".to_string());
     }
     if family.chars().any(|c| c.is_control() || c == '\x7f') {
