@@ -75,6 +75,16 @@ pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
 /// `FILE_ATTRIBUTE_REPARSE_POINT` bit on Windows; on non-Windows
 /// platforms it falls back to the standard `is_symlink()` check, which
 /// is sufficient there.
+///
+/// Callers: `dropzone::expand_dropped_paths` (skip top-level dropped
+/// reparse points), `dropzone::walk_one_level` (skip reparse points
+/// inside walked folders), `encoding::read_text_detect_encoding`
+/// (refuse to read text from a reparse point), `fonts::scan_directory_inner`
+/// (skip reparse-point siblings during font scan), and
+/// `fonts::preflight_directory_inner` (skip reparse points when
+/// previewing folder size). All callers want the same "is this a
+/// symlink-like thing the OS would chase" answer; keep this helper as
+/// the single source of truth.
 #[cfg(windows)]
 pub fn is_reparse_point(path: &Path) -> bool {
     use std::os::windows::fs::MetadataExt;

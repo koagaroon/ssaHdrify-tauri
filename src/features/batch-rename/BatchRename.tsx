@@ -535,6 +535,14 @@ export default function BatchRename() {
     // @tauri-apps/plugin-dialog renders the body as plain text via
     // OS-native dialogs (Windows TaskDialog / macOS NSAlert), not HTML.
     // Names with embedded HTML / markup render as literal characters.
+    //
+    // Multi-line filename rendering: filenames containing literal "\n"
+    // bytes (rare but possible on macOS / Linux where they're allowed)
+    // get rendered as actual newlines inside the dialog. On Windows
+    // TaskDialog this can produce unevenly-tall sample rows; on macOS
+    // NSAlert the line wraps cleanly. We accept the cosmetic
+    // unevenness rather than escaping `\n` in samples — escaping
+    // would mis-represent the literal name the user is about to act on.
     // Track whether the user has already seen the skipped-derive count.
     // The in-place rename confirm + the overwrite-existing confirm can
     // both fire in the same run (rename mode + outputs already exist),

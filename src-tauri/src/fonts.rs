@@ -1468,6 +1468,19 @@ pub fn cancel_font_scan(scan_id: u64) {
     CANCEL_SCAN_ID.fetch_max(scan_id, Ordering::Relaxed);
 }
 
+/// Look up a font face in the user's local source index by family
+/// + bold + italic. Returns `None` if no match — callers fall back
+/// to system fonts.
+///
+/// Stale-path note: a path returned here is one that was on disk at
+/// the time of the most-recent scan that produced this row. If the
+/// file was deleted or moved between then and now, the caller's
+/// downstream `subset_font` will fail at the actual fs::read step
+/// and surface a normal IO error. Acceptable by design — the
+/// alternative (stat-validating every row at lookup) would multiply
+/// embed-pass IO without changing the outcome (subset_font would
+/// fail the same way half a second later). The scan-then-resolve
+/// model assumes the user doesn't shuffle font files mid-embed.
 #[tauri::command]
 pub fn resolve_user_font(
     family: String,

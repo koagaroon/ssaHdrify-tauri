@@ -66,6 +66,11 @@ pub(crate) fn decode_bytes(bytes: &[u8]) -> ReadTextResult {
     //     a permissible guess result).
     let mut detector = EncodingDetector::new(chardetng::Iso2022JpDetection::Allow);
     detector.feed(bytes, true);
+    // First arg = top-level domain hint (None = no hint). chardetng can
+    // bias detection toward the script associated with a given TLD
+    // (e.g., `.cn` → CJK preference); we have no domain context for a
+    // local file path, so pass None and let the byte-distribution
+    // heuristic stand on its own.
     let encoding = detector.guess(None, chardetng::Utf8Detection::Allow);
 
     let (cow, _, had_errors) = encoding.decode(bytes);
@@ -179,7 +184,18 @@ pub fn read_text_detect_encoding(path: String) -> Result<ReadTextResult, String>
         }
     };
 
-    // Size check
+    // Size check.
+    //
+    // TOCTOU note: there's a small window between this stat and the
+    // `std::fs::read` below where the file could be swapped for a
+    // larger one, defeating the size cap. We accept the race because
+    // (a) the threat model is "user picked the file, no concurrent
+    // attacker on this local machine," (b) `std::fs::read` itself
+    // would still cap at the OS's per-syscall read limits, and (c)
+    // Rust's `Vec::reserve` plus the read loop would surface OOM as
+    // a normal Err instead of a crash. The post-read `is_file()`
+    // check guards against the race-replaced target being a directory
+    // / pipe / device.
     let metadata = std::fs::metadata(&read_path).map_err(|e| sanitize_io_error(&e, "stat"))?;
     // Must be a regular file — directories, FIFOs, device files, and
     // Windows device namespaces (`\\.\PhysicalDrive0` et al.) would
