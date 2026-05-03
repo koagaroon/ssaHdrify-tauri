@@ -391,6 +391,17 @@ fn begin_font_scan(scan_id: u64) -> Result<ActiveScanGuard, String> {
         .compare_exchange(NO_SCAN_ID, scan_id, Ordering::SeqCst, Ordering::SeqCst)
         .map_err(|_| "Another font scan is already running".to_string())?;
 
+    // Reset the cancel slot AFTER successful CAS so a fresh scan never
+    // inherits a stale cancel from a prior scan that happened to share
+    // the same id. Frontend mints scan_id from a Date.now()-seeded
+    // counter, so collisions across same-process scans require manual
+    // clock manipulation between runs — vanishingly unlikely, but the
+    // failure mode is "the scan is born already-cancelled" with no log
+    // signal, which is exactly the class CANCEL_SCAN_ID's per-scan-id
+    // design was meant to eliminate. Cheap defensive reset closes the
+    // last edge case.
+    CANCEL_SCAN_ID.store(NO_SCAN_ID, Ordering::SeqCst);
+
     Ok(ActiveScanGuard { scan_id })
 }
 
@@ -898,6 +909,17 @@ fn preflight_directory_inner(canonical_dir: &Path) -> Result<FontScanPreflight, 
         };
         let path = entry.path();
         if !path.is_file() {
+            continue;
+        }
+        // Skip reparse points (symlinks / Windows junctions / OneDrive
+        // placeholders) BEFORE canonicalize. On Windows, canonicalize
+        // on a hostile junction or `\\.\PIPE\evil` device path opens a
+        // file handle as a side effect — pure overhead for a "tell me
+        // the size of this folder" preview that intentionally doesn't
+        // chase symlinks. The actual scan uses the same starts_with
+        // safety check after canonicalize, so the preview's job is
+        // strictly to estimate size.
+        if crate::util::is_reparse_point(&path) {
             continue;
         }
         let Ok(canonical) = path.canonicalize() else {
@@ -1745,8 +1767,11 @@ fn subset_with_index(font_data: &[u8], index: u32, codepoints: &[u32]) -> Result
     use fontcull_skrifa::{FontRef, GlyphId, Tag};
     use fontcull_write_fonts::types::NameId;
 
+    // Display, not Debug — same anti-pattern as the unicode-subset path
+    // (Debug repr leaks internal struct fields, table tags, byte offsets
+    // into a frontend-visible error). Round 2's pass missed this site.
     let font = FontRef::from_index(font_data, index)
-        .map_err(|e| format!("Cannot parse font face {index}: {e:?}"))?;
+        .map_err(|e| format!("Cannot parse font face {index}: {e}"))?;
 
     let mut unicode_set: IntSet<u32> = IntSet::empty();
     for &cp in codepoints {

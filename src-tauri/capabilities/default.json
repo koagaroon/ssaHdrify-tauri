@@ -67,7 +67,9 @@
         { "path": "$LOCALDATA/Packages/**" },
         { "path": "$APPDATA/Code/User/**" },
         { "path": "$APPDATA/npm/**" },
-        { "path": "$APPDATA/yarn/**" }
+        { "path": "$APPDATA/yarn/**" },
+        { "path": "$APPDATA/com.koagaroon.ssahdrify/**" },
+        { "path": "$LOCALDATA/com.koagaroon.ssahdrify/**" }
       ]
     }
   ]
