@@ -7,7 +7,7 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use unicode_normalization::UnicodeNormalization;
@@ -87,6 +87,16 @@ const MAX_FONT_DATA_SIZE: u64 = 50 * 1024 * 1024;
 /// than `MAX_FONT_DATA_SIZE` because the fallback sends the full font through
 /// IPC → JS heap → ASS string.
 const MAX_FONT_FALLBACK_SIZE: usize = 10 * 1024 * 1024;
+
+/// Cumulative cap across all fallback emissions in a single app session.
+/// Bounds the total bytes flowing through the subset-failure path so a
+/// subtitle referencing many corrupt fonts cannot stack-feed the JS heap
+/// with N × MAX_FONT_FALLBACK_SIZE worth of full fonts. Per-file 10 MB ×
+/// 5 = 50 MB is a generous ceiling for any legitimate workflow; a single-
+/// user desktop session that hits this almost certainly has a corrupt
+/// font source and should restart + investigate.
+const MAX_CUMULATIVE_FALLBACK_BYTES: usize = 50 * 1024 * 1024;
+static CUMULATIVE_FALLBACK_BYTES: AtomicUsize = AtomicUsize::new(0);
 
 /// Cap on the system-font provenance cache, as a defense against a
 /// pathological long-running session. User-picked font provenance is stored
@@ -1960,14 +1970,9 @@ pub fn subset_font(
             Ok(subsetted)
         }
         Err(e) => {
-            log::warn!(
-                "Subsetting failed for '{}' (face {}): {}, falling back to full font",
-                filename,
-                font_index,
-                e
-            );
-            // Cap fallback size — the full font goes through IPC → JS heap → ASS string,
-            // so a large font would cause excessive memory use in the frontend.
+            // Cap per-file fallback size first — full font goes through IPC →
+            // JS heap → ASS string, so a single 50 MB font would already pin
+            // ~70 MB after UUEncode expansion.
             if font_data.len() > MAX_FONT_FALLBACK_SIZE {
                 return Err(format!(
                     "Subsetting failed and full font too large ({:.1} MB, max {} MB for fallback)",
@@ -1975,6 +1980,28 @@ pub fn subset_font(
                     MAX_FONT_FALLBACK_SIZE / 1024 / 1024
                 ));
             }
+            // Cumulative session cap — a subtitle referencing N corrupt fonts
+            // could otherwise stack-feed the JS heap N × per-file. fetch_add
+            // first, then roll back if we overshot, so racing fallback
+            // emissions can't push the counter above the budget. Counter
+            // only resets on app restart; a single-user session that
+            // accumulates 50 MB of fallback has corrupt font sources and
+            // should restart anyway.
+            let prior = CUMULATIVE_FALLBACK_BYTES.fetch_add(font_data.len(), Ordering::Relaxed);
+            if prior + font_data.len() > MAX_CUMULATIVE_FALLBACK_BYTES {
+                CUMULATIVE_FALLBACK_BYTES.fetch_sub(font_data.len(), Ordering::Relaxed);
+                return Err(format!(
+                    "Cumulative font fallback exceeded {} MB this session — restart the app and check your font sources",
+                    MAX_CUMULATIVE_FALLBACK_BYTES / 1024 / 1024
+                ));
+            }
+            log::warn!(
+                "Subsetting failed for '{}' (face {}): {}, falling back to full font ({:.1} MB cumulative)",
+                filename,
+                font_index,
+                e,
+                (prior + font_data.len()) as f64 / (1024.0 * 1024.0),
+            );
             Ok(font_data)
         }
     }
