@@ -320,37 +320,51 @@ pub enum ScanProgress {
     /// events are emitted per scan; the frontend only needs the cumulative
     /// count because the heavy source index stays in Rust.
     Batch { total: usize },
-    /// End-of-stream sentinel. Always emitted on the `Ok` path (success,
-    /// cancel, or defense-in-depth cap stop). NOT emitted on the `Err`
-    /// path — the invoke rejection already signals failure and the
-    /// frontend must not block waiting for a `Done` that will never arrive.
+    /// End-of-stream sentinel. Always emitted on the `Ok` path (natural
+    /// completion, user cancel, or defense-in-depth cap stop). NOT
+    /// emitted on the `Err` path — the invoke rejection already signals
+    /// failure and the frontend must not block waiting for a `Done` that
+    /// will never arrive.
     ///
-    /// `cancelled` and `ceiling_hit` are independent flags so the frontend
-    /// can distinguish user-initiated cancel ("Scan cancelled — kept N
-    /// fonts") from defense-ceiling stop ("Source too large — kept first
-    /// N fonts"). Only ceiling stops set both true; user cancels set only
-    /// `cancelled`.
+    /// `reason` carries WHY the scan stopped — see `ScanStopReason`.
+    /// Replaces the prior `(cancelled, ceiling_hit)` two-boolean shape,
+    /// which encoded only three legitimate states across four flag
+    /// combinations.
     Done {
-        cancelled: bool,
-        ceiling_hit: bool,
+        reason: ScanStopReason,
         added: usize,
         duplicated: usize,
     },
 }
 
+/// Why a font scan stopped. Three legitimate states; the prior
+/// `(cancelled: bool, ceiling_hit: bool)` pair allowed a fourth
+/// `(false, true)` combination by construction that the runtime never
+/// actually emitted, which the reviewer flagged. Single-variant enum
+/// eliminates the impossible state and lets frontend / test code
+/// pattern-match exhaustively.
+///
+/// Wire format: serializes as a bare lowercased camelCase string
+/// (`"natural"`, `"userCancel"`, `"ceilingHit"`) because the variants
+/// have no payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ScanStopReason {
+    /// Scan walked the entire input and finished naturally.
+    Natural,
+    /// User pressed Cancel during the scan.
+    UserCancel,
+    /// MAX_FONTS_PER_SCAN defense-in-depth ceiling fired. Partial
+    /// results are preserved on the way out.
+    CeilingHit,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct ScanOutcome {
     total: usize,
-    /// True when the scan stopped early but should keep already-imported
-    /// partial results. Set for both user cancellation AND the defensive
-    /// MAX_FONTS_PER_SCAN ceiling so callers don't double-emit Batch
-    /// after the early-return.
-    cancelled: bool,
-    /// True only when the early stop was the MAX_FONTS_PER_SCAN ceiling
-    /// (not a user cancel). Frontend reads this to surface "source too
-    /// large" instead of "cancelled" — symmetric concern to F-7 in the
-    /// punchlist (cancel-message after natural completion).
-    ceiling_hit: bool,
+    /// Why this scan stopped. Forwarded into `ScanProgress::Done.reason`
+    /// after the SQLite import completes.
+    reason: ScanStopReason,
 }
 
 struct ActiveScanGuard {
@@ -998,8 +1012,7 @@ fn scan_directory_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
             );
             return Ok(ScanOutcome {
                 total,
-                cancelled: true,
-                ceiling_hit: false,
+                reason: ScanStopReason::UserCancel,
             });
         }
 
@@ -1052,8 +1065,7 @@ fn scan_directory_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
                 );
                 return Ok(ScanOutcome {
                     total,
-                    cancelled: true,
-                    ceiling_hit: true,
+                    reason: ScanStopReason::CeilingHit,
                 });
             }
 
@@ -1070,8 +1082,7 @@ fn scan_directory_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
 
     Ok(ScanOutcome {
         total,
-        cancelled: false,
-        ceiling_hit: false,
+        reason: ScanStopReason::Natural,
     })
 }
 
@@ -1124,8 +1135,7 @@ pub async fn scan_font_directory(
         // send on the Ok path so every progress event has drained before
         // the frontend reports the registered source count.
         let _ = progress.send(ScanProgress::Done {
-            cancelled: outcome.cancelled,
-            ceiling_hit: outcome.ceiling_hit,
+            reason: outcome.reason,
             added: import.added,
             duplicated: import.duplicated,
         });
@@ -1137,10 +1147,10 @@ pub async fn scan_font_directory(
             outcome.total,
             import.added,
             import.duplicated,
-            if outcome.cancelled {
-                " (cancelled)"
-            } else {
-                ""
+            match outcome.reason {
+                ScanStopReason::Natural => "",
+                ScanStopReason::UserCancel => " (cancelled)",
+                ScanStopReason::CeilingHit => " (ceiling hit)",
             }
         );
         Ok(())
@@ -1179,8 +1189,7 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
             );
             return Ok(ScanOutcome {
                 total,
-                cancelled: true,
-                ceiling_hit: false,
+                reason: ScanStopReason::UserCancel,
             });
         }
 
@@ -1212,8 +1221,7 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
                 );
                 return Ok(ScanOutcome {
                     total,
-                    cancelled: true,
-                    ceiling_hit: true,
+                    reason: ScanStopReason::CeilingHit,
                 });
             }
 
@@ -1230,8 +1238,7 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
 
     Ok(ScanOutcome {
         total,
-        cancelled: false,
-        ceiling_hit: false,
+        reason: ScanStopReason::Natural,
     })
 }
 
@@ -1279,8 +1286,7 @@ pub async fn scan_font_files(
 
         // See scan_font_directory for why Done is mandatory on the Ok path.
         let _ = progress.send(ScanProgress::Done {
-            cancelled: outcome.cancelled,
-            ceiling_hit: outcome.ceiling_hit,
+            reason: outcome.reason,
             added: import.added,
             duplicated: import.duplicated,
         });
@@ -1291,10 +1297,10 @@ pub async fn scan_font_files(
             outcome.total,
             import.added,
             import.duplicated,
-            if outcome.cancelled {
-                " (cancelled)"
-            } else {
-                ""
+            match outcome.reason {
+                ScanStopReason::Natural => "",
+                ScanStopReason::UserCancel => " (cancelled)",
+                ScanStopReason::CeilingHit => " (ceiling hit)",
             }
         );
         Ok(())
@@ -1929,7 +1935,7 @@ mod tests {
         })
         .expect("invalid paths should be skipped, not error");
         assert_eq!(outcome.total, 0);
-        assert!(!outcome.cancelled);
+        assert_eq!(outcome.reason, ScanStopReason::Natural);
         assert!(emitted.is_empty());
     }
 
@@ -1948,7 +1954,7 @@ mod tests {
         })
         .expect("cancel returns Ok with partial results");
         assert_eq!(outcome.total, 0);
-        assert!(outcome.cancelled);
+        assert_eq!(outcome.reason, ScanStopReason::UserCancel);
         assert!(emitted.is_empty());
     }
 

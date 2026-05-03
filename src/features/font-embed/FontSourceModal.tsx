@@ -8,6 +8,7 @@ import {
   scanFontDirectory,
   scanFontFiles,
   type FontScanPreflight,
+  type FontScanReason,
 } from "../../lib/tauri-api";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { useI18n } from "../../i18n/useI18n";
@@ -235,27 +236,28 @@ export default function FontSourceModal(props: Props) {
 
   // Compose the post-scan info message. When Rust reports an early stop AND
   // some entries were duplicates, fold both facts into a single message
-  // instead of letting the stop notice clobber the dedup notice.
-  // ceilingHit takes precedence over plain cancelled — both flags are true
-  // when MAX_FONTS_PER_SCAN fires, but the user-facing distinction is
-  // "you cancelled" vs "the source was too large".
+  // instead of letting the stop notice clobber the dedup notice. The
+  // three-way switch on `reason` replaces the prior (cancelled, ceilingHit)
+  // boolean pair — see fonts::ScanStopReason for the wire contract.
   const reportSourceAdded = useCallback(
-    (result: AddSourceResult, cancelled: boolean, ceilingHit: boolean) => {
-      if (ceilingHit) {
-        setError(null);
-        setInfo(t("font_scan_ceiling_hit", result.added));
-        return;
+    (result: AddSourceResult, reason: FontScanReason) => {
+      switch (reason) {
+        case "ceilingHit":
+          setError(null);
+          setInfo(t("font_scan_ceiling_hit", result.added));
+          return;
+        case "userCancel":
+          setError(null);
+          if (result.duplicated > 0) {
+            setInfo(t("font_scan_cancelled_with_dupes", result.added, result.duplicated));
+          } else {
+            setInfo(t("font_scan_cancelled", result.added));
+          }
+          return;
+        case "natural":
+          applyAddResult(result);
+          return;
       }
-      if (cancelled) {
-        setError(null);
-        if (result.duplicated > 0) {
-          setInfo(t("font_scan_cancelled_with_dupes", result.added, result.duplicated));
-        } else {
-          setInfo(t("font_scan_cancelled", result.added));
-        }
-        return;
-      }
-      applyAddResult(result);
     },
     [t, applyAddResult]
   );
@@ -322,9 +324,9 @@ export default function FontSourceModal(props: Props) {
         // Early stop before any face was parsed — distinguish ceiling hit
         // (source too large), user cancel, all-duplicate, and "folder
         // genuinely has no fonts" so the user knows what happened.
-        if (scan.ceilingHit) {
+        if (scan.reason === "ceilingHit") {
           setInfo(t("font_scan_ceiling_hit", 0));
-        } else if (scan.cancelled) {
+        } else if (scan.reason === "userCancel") {
           setInfo(t("font_scan_cancelled", 0));
         } else if (scan.duplicated > 0) {
           setError(t("font_sources_all_duplicate"));
@@ -340,7 +342,7 @@ export default function FontSourceModal(props: Props) {
         count: scan.added,
       });
       const result = { added: scan.added, duplicated: scan.duplicated };
-      reportSourceAdded(result, scan.cancelled, scan.ceilingHit);
+      reportSourceAdded(result, scan.reason);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -382,9 +384,9 @@ export default function FontSourceModal(props: Props) {
         scheduleScanProgress(total)
       );
       if (scan.added === 0) {
-        if (scan.ceilingHit) {
+        if (scan.reason === "ceilingHit") {
           setInfo(t("font_scan_ceiling_hit", 0));
-        } else if (scan.cancelled) {
+        } else if (scan.reason === "userCancel") {
           setInfo(t("font_scan_cancelled", 0));
         } else if (scan.duplicated > 0) {
           setError(t("font_sources_all_duplicate"));
@@ -400,7 +402,7 @@ export default function FontSourceModal(props: Props) {
         count: scan.added,
       });
       const result = { added: scan.added, duplicated: scan.duplicated };
-      reportSourceAdded(result, scan.cancelled, scan.ceilingHit);
+      reportSourceAdded(result, scan.reason);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {

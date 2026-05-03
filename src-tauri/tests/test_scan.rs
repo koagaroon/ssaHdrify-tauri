@@ -46,10 +46,23 @@ fn discard_channel() -> Channel<ScanProgress> {
     Channel::new(|_: InvokeResponseBody| Ok(()))
 }
 
+/// Wire-format reason values mirroring `fonts::ScanStopReason`. Tests
+/// could pull the enum directly via `app_lib::fonts::ScanStopReason`,
+/// but parsing string-from-JSON keeps the test surface decoupled from
+/// internal type changes — only the wire format matters. `REASON_CEILING_HIT`
+/// has no integration test today (would require a 100k-face fixture);
+/// `#[allow(dead_code)]` keeps the constant alongside its siblings as
+/// documentation of the wire contract.
+const REASON_NATURAL: &str = "natural";
+const REASON_USER_CANCEL: &str = "userCancel";
+#[allow(dead_code)]
+const REASON_CEILING_HIT: &str = "ceilingHit";
+
 #[derive(Debug, Default)]
 struct DoneStats {
-    cancelled: bool,
-    ceiling_hit: bool,
+    /// Wire-format string from `ScanProgress::Done.reason`. Compare
+    /// against the `REASON_*` constants above.
+    reason: String,
     added: usize,
     duplicated: usize,
 }
@@ -80,14 +93,11 @@ fn collecting_channel() -> CollectingChannel {
             }
             Some("done") => {
                 *done_sink.lock().unwrap() = Some(DoneStats {
-                    cancelled: event
-                        .get("cancelled")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false),
-                    ceiling_hit: event
-                        .get("ceilingHit")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false),
+                    reason: event
+                        .get("reason")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
                     added: event.get("added").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
                     duplicated: event
                         .get("duplicated")
@@ -126,14 +136,11 @@ fn cancelling_channel(scan_id: u64) -> CancellingChannel {
             }
             Some("done") => {
                 *done_sink.lock().unwrap() = Some(DoneStats {
-                    cancelled: event
-                        .get("cancelled")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false),
-                    ceiling_hit: event
-                        .get("ceilingHit")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false),
+                    reason: event
+                        .get("reason")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
                     added: event.get("added").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
                     duplicated: event
                         .get("duplicated")
@@ -202,7 +209,7 @@ fn scans_os_font_directory_streams_progress_and_registers_source() {
         done.added > 0,
         "expected at least one font in {dir}, got zero"
     );
-    assert!(!done.cancelled);
+    assert_eq!(done.reason, REASON_NATURAL);
     assert_eq!(done.duplicated, 0);
     assert_eq!(totals.last().copied(), Some(done.added));
 
@@ -289,7 +296,7 @@ fn scans_user_picked_file_list_streams_progress_and_registers_source() {
     let done = take_done(&done);
 
     assert!(done.added > 0, "expected at least one face from {paths:?}");
-    assert!(!done.cancelled);
+    assert_eq!(done.reason, REASON_NATURAL);
     // Final batch total must equal added when the scan reports no
     // duplicates — both numbers come from the same source-of-truth
     // (the SQLite import outcome).
@@ -349,7 +356,7 @@ fn scan_font_files_accepts_max_input_paths_boundary() {
     );
     let done = take_done(&done);
     assert_eq!(done.added, 0);
-    assert!(!done.cancelled);
+    assert_eq!(done.reason, REASON_NATURAL);
 }
 
 #[test]
@@ -403,7 +410,7 @@ fn stale_cancel_id_does_not_abort_fresh_scan() {
         done.added > 0,
         "stale cancel id should not affect a fresh scan"
     );
-    assert!(!done.cancelled);
+    assert_eq!(done.reason, REASON_NATURAL);
 }
 
 #[test]
@@ -449,11 +456,9 @@ fn mid_scan_cancel_keeps_partial_results_when_directory_is_large_enough() {
         cancel_done.added > 0,
         "mid-scan cancel should preserve the first emitted batch"
     );
-    assert!(cancel_done.cancelled);
-    // User cancel must NOT set ceiling_hit — that flag is reserved for
-    // MAX_FONTS_PER_SCAN early stops so the frontend can show the right
-    // explanation message.
-    assert!(!cancel_done.ceiling_hit);
+    // User cancel — single-variant assertion replaces the previous
+    // (cancelled, ceiling_hit) flag pair.
+    assert_eq!(cancel_done.reason, REASON_USER_CANCEL);
     assert!(
         cancel_done.added < full_done.added,
         "cancel should stop before the full directory is loaded: partial={}, full={}",

@@ -70,8 +70,7 @@ describe("runStreamingScan — sync delivery (batches arrive during invoke)", ()
       channel.onmessage?.({ kind: "batch", total: 3 });
       channel.onmessage?.({
         kind: "done",
-        cancelled: false,
-        ceilingHit: false,
+        reason: "natural",
         added: 3,
         duplicated: 1,
       });
@@ -82,11 +81,11 @@ describe("runStreamingScan — sync delivery (batches arrive during invoke)", ()
       seenTotals.push(total);
     });
 
-    // Pin every field of FontScanResult — including ceilingHit. toEqual
-    // accepts missing keys silently, so omitting ceilingHit from either
+    // Pin every field of FontScanResult — including `reason`. toEqual
+    // accepts missing keys silently, so omitting reason from either
     // the mocked Done OR this assertion would let a regression where
     // runStreamingScan dropped the field assignment slip past.
-    expect(result).toEqual({ added: 3, duplicated: 1, cancelled: false, ceilingHit: false });
+    expect(result).toEqual({ added: 3, duplicated: 1, reason: "natural" });
     expect(seenTotals).toEqual([2, 3]);
     expect(invokeMock).toHaveBeenCalledWith(
       "scan_font_directory",
@@ -98,29 +97,25 @@ describe("runStreamingScan — sync delivery (batches arrive during invoke)", ()
     invokeMock.mockImplementation(async () => {
       channelInstances[0].onmessage?.({
         kind: "done",
-        cancelled: false,
-        ceilingHit: false,
+        reason: "natural",
         added: 0,
         duplicated: 0,
       });
     });
 
     const result = await scanFontDirectory("/empty/dir", "source-empty", 102);
-    expect(result).toEqual({ added: 0, duplicated: 0, cancelled: false, ceilingHit: false });
+    expect(result).toEqual({ added: 0, duplicated: 0, reason: "natural" });
   });
 
-  it("propagates ceilingHit alongside cancelled on MAX_FONTS_PER_SCAN stop", async () => {
-    // Documented Rust contract: ceiling stops set BOTH cancelled=true
-    // AND ceilingHit=true (so the existing cancelled-aware UX paths
-    // still trigger "kept partial results"), with ceilingHit serving
-    // as the tie-breaker the frontend uses to swap "you cancelled" for
-    // "source was too large" messaging. Pin the wire shape here so a
-    // future refactor that stops co-setting cancelled would surface.
+  it("propagates reason='ceilingHit' on MAX_FONTS_PER_SCAN stop", async () => {
+    // Documented Rust wire contract: a defense-ceiling stop produces
+    // `reason: "ceilingHit"` (single state, no flag-pair impossible-
+    // combination foot-gun). Pin this so a future Rust-side rename of
+    // the variant or a runStreamingScan field-drop is caught.
     invokeMock.mockImplementation(async () => {
       channelInstances[0].onmessage?.({
         kind: "done",
-        cancelled: true,
-        ceilingHit: true,
+        reason: "ceilingHit",
         added: 100_000,
         duplicated: 0,
       });
@@ -130,8 +125,7 @@ describe("runStreamingScan — sync delivery (batches arrive during invoke)", ()
     expect(result).toEqual({
       added: 100_000,
       duplicated: 0,
-      cancelled: true,
-      ceilingHit: true,
+      reason: "ceilingHit",
     });
   });
 });
@@ -249,8 +243,7 @@ describe("runStreamingScan — async-after-resolve (A-bug-1 regression)", () => 
       queueMicrotask(() => {
         channelInstances[0].onmessage?.({
           kind: "done",
-          cancelled: false,
-          ceilingHit: false,
+          reason: "natural",
           added: 3,
           duplicated: 0,
         });
@@ -261,8 +254,7 @@ describe("runStreamingScan — async-after-resolve (A-bug-1 regression)", () => 
     // If runStreamingScan returned at `await invoke`, this would still be 0.
     // The Done sentinel + donePromise guarantee we wait for the full set.
     expect(result.added).toBe(3);
-    expect(result.cancelled).toBe(false);
-    expect(result.ceilingHit).toBe(false);
+    expect(result.reason).toBe("natural");
   });
 
   it("returns the Rust-reported cancellation outcome after async Done", async () => {
@@ -273,8 +265,7 @@ describe("runStreamingScan — async-after-resolve (A-bug-1 regression)", () => 
       queueMicrotask(() => {
         channelInstances[0].onmessage?.({
           kind: "done",
-          cancelled: true,
-          ceilingHit: false,
+          reason: "userCancel",
           added: 40,
           duplicated: 0,
         });
@@ -282,8 +273,6 @@ describe("runStreamingScan — async-after-resolve (A-bug-1 regression)", () => 
     });
 
     const result = await scanFontDirectory("/cancelled/dir", "source-cancelled", 104);
-    // User-cancel branch: cancelled=true, ceilingHit MUST be false
-    // (only MAX_FONTS_PER_SCAN co-sets both).
-    expect(result).toEqual({ added: 40, duplicated: 0, cancelled: true, ceilingHit: false });
+    expect(result).toEqual({ added: 40, duplicated: 0, reason: "userCancel" });
   });
 });

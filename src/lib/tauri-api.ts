@@ -326,12 +326,21 @@ export interface LocalFontEntry {
 // silently break the channel callback (the `if msg.kind === "batch"`
 // branch wouldn't match and the frontend hangs awaiting Done). When
 // editing one side, edit the other in the same commit.
+/** Wire-format mirror of `fonts::ScanStopReason`. Bare lowercased
+ *  camelCase strings — units enums in serde serialize this way. Three
+ *  legitimate states; see the Rust enum for full semantics.
+ *
+ *  - `natural`: scan finished walking the entire input.
+ *  - `userCancel`: user pressed Cancel mid-scan.
+ *  - `ceilingHit`: MAX_FONTS_PER_SCAN defense-in-depth fired (frontend
+ *    surfaces "source too large" rather than "cancelled"). */
+export type FontScanReason = "natural" | "userCancel" | "ceilingHit";
+
 type RawScanProgress =
   | { kind: "batch"; total: number }
   | {
       kind: "done";
-      cancelled: boolean;
-      ceilingHit: boolean;
+      reason: FontScanReason;
       added: number;
       duplicated: number;
     };
@@ -346,8 +355,10 @@ export type ScanProgressCallback = (total: number) => void;
 export interface FontScanResult {
   added: number;
   duplicated: number;
-  cancelled: boolean;
-  ceilingHit: boolean;
+  /** Why the scan stopped — see `FontScanReason`. Replaces the prior
+   *  `(cancelled, ceilingHit)` boolean pair which encoded only three
+   *  legitimate states across four flag combinations. */
+  reason: FontScanReason;
 }
 
 export interface FontScanPreflight {
@@ -435,15 +446,13 @@ async function runStreamingScan(
   const result: FontScanResult = {
     added: 0,
     duplicated: 0,
-    cancelled: false,
-    ceilingHit: false,
+    reason: "natural",
   };
   channel.onmessage = (msg) => {
     if (msg.kind === "batch") {
       onBatch?.(msg.total);
     } else if (msg.kind === "done") {
-      result.cancelled = msg.cancelled;
-      result.ceilingHit = msg.ceilingHit;
+      result.reason = msg.reason;
       result.added = msg.added;
       result.duplicated = msg.duplicated;
       resolveDone?.();
