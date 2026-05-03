@@ -37,13 +37,18 @@ fn next_test_scan_id() -> u64 {
     NEXT_TEST_SCAN_ID.fetch_add(1, Ordering::Relaxed)
 }
 
-/// A `Channel<ScanProgress>` that drops every event. Tests using this
-/// MUST early-error before any progress event fires (i.e., the scan
-/// command rejects the request before spawning the worker). For
-/// anything else, use `collecting_channel` so batch + done events are
-/// observable.
-fn discard_channel() -> Channel<ScanProgress> {
-    Channel::new(|_: InvokeResponseBody| Ok(()))
+/// A `Channel<ScanProgress>` that panics if any event is delivered.
+/// Tests using this MUST early-error before the scan worker emits any
+/// progress event (i.e., the scan command rejects the request before
+/// spawning the worker). The panic enforces that contract — a future
+/// code path that starts emitting on a previously-rejected branch will
+/// surface here instead of silently passing because dropped events
+/// produce no assertion failures. For any test that expects events,
+/// use `collecting_channel`.
+fn early_error_channel() -> Channel<ScanProgress> {
+    Channel::new(|_: InvokeResponseBody| {
+        panic!("early_error_channel received an event — caller must reject before emitting")
+    })
 }
 
 /// Wire-format reason values mirroring `fonts::ScanStopReason`. Tests
@@ -327,7 +332,7 @@ fn scan_font_files_rejects_oversize_path_list() {
         .collect();
     let result = tauri::async_runtime::block_on(scan_font_files(
         oversize,
-        discard_channel(),
+        early_error_channel(),
         next_test_scan_id(),
         "scan-test-files-oversize".to_string(),
     ));
@@ -384,31 +389,36 @@ fn rejects_invalid_directory_inputs() {
     let _guard = SCAN_TEST_LOCK.lock().unwrap();
     assert!(tauri::async_runtime::block_on(scan_font_directory(
         String::new(),
-        discard_channel(),
+        early_error_channel(),
         next_test_scan_id(),
         "invalid-empty".to_string()
     ))
     .is_err());
     assert!(tauri::async_runtime::block_on(scan_font_directory(
         "\0path\0with\0nulls".to_string(),
-        discard_channel(),
+        early_error_channel(),
         next_test_scan_id(),
         "invalid-control".to_string()
     ))
     .is_err());
     assert!(tauri::async_runtime::block_on(scan_font_directory(
         "Z:\\definitely\\does\\not\\exist".to_string(),
-        discard_channel(),
+        early_error_channel(),
         next_test_scan_id(),
         "invalid-missing".to_string()
     ))
     .is_err());
 }
 
-/// Public-API stale cancel exercise: a cancel for an old scan id must not
-/// abort a fresh scan using a different id.
+/// Pre-arm cancel for an inactive scan id must not affect a subsequent
+/// fresh scan. Exercises the no-active-scan branch in `cancel_font_scan`
+/// (active == NO_SCAN_ID short-circuits without writing CANCEL_SCAN_ID),
+/// not the stale-cancel-during-live-scan race — that race is structurally
+/// closed by `begin_font_scan`'s post-CAS equality check on
+/// CANCEL_SCAN_ID, separately covered by
+/// `cancel_command_records_scan_id_monotonically` at the unit-test layer.
 #[test]
-fn stale_cancel_id_does_not_abort_fresh_scan() {
+fn prerun_cancel_for_old_id_does_not_affect_subsequent_scan() {
     let _guard = SCAN_TEST_LOCK.lock().unwrap();
     init_scan_test_db("stale");
     clear_font_sources().unwrap();

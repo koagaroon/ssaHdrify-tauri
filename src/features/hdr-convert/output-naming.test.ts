@@ -149,10 +149,11 @@ describe("resolveOutputPath — {video_name} and {lang} tokens", () => {
     expect(result).toBe(`${BASE}/Show.ass`);
   });
 
-  it("treats {video_name} as empty when option omitted, collapsing dots", () => {
+  it("treats {video_name} as empty when option omitted, preserving leading dot", () => {
     const result = resolveOutputPath(`${BASE}/EP01.srt`, "{video_name}.{name}.ass", "PQ");
-    // videoStem="" + "." + "EP01" + ".ass" → ".EP01.ass" → no collapse needed
-    // (the leading dot is preserved as a hidden-file marker)
+    // videoStem="" + "." + "EP01" + ".ass" → ".EP01.ass". The leading dot
+    // is preserved deliberately as a hidden-file marker — see the guard
+    // at output-naming.ts:147 that explicitly avoids stripping it.
     expect(result).toBe(`${BASE}/.EP01.ass`);
   });
 

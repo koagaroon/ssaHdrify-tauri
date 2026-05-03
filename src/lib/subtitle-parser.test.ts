@@ -74,18 +74,17 @@ describe("parseSubtitle", () => {
     );
   });
 
-  it("rejects ASS beyond the parser's defensive entry cap", () => {
+  it("parses ASS within the defensive entry cap", () => {
     // Defense-in-depth cap inside parseAss — guards against pathological
     // files (or runaway generators) that would otherwise fan out to
     // millions of caption objects in JS heap. The actual cap is
-    // MAX_PARSED_ENTRIES (500_000) — we just need ONE entry past it
-    // to verify the throw, but constructing 500k strings is too slow
-    // for a unit test. We exercise the boundary by mocking the cap
-    // implicitly via the SUB parser's per-line counter at a smaller
-    // synthetic threshold instead. The ASS path's throw shape was
-    // pinned during round-3 development; we keep this test as a
-    // regression guard that the cap exists at all by checking a
-    // smaller-than-real-cap case still parses cleanly.
+    // MAX_PARSED_ENTRIES (500_000); constructing 500k+1 dialogue lines
+    // to exercise the throw branch is too slow for a unit test. This
+    // test is a smoke guard that a well-formed in-cap file still parses
+    // cleanly — the throw branch itself is unverified at the test
+    // layer. (If a future contract regression flips the cap to a much
+    // smaller number, that's the failure this guard catches by going
+    // red on the 100-entry input.)
     const header =
       "[Script Info]\nScriptType: v4.00+\n\n" +
       "[V4+ Styles]\nFormat: Name, Fontname\nStyle: Default,Arial\n\n" +
