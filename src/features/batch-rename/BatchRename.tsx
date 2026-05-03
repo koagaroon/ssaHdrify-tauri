@@ -442,6 +442,7 @@ export default function BatchRename() {
     ref: dropZoneRef,
     onPaths: handleDroppedPaths,
     onActiveChange: setDropActive,
+    onError: (e) => setDropError(e instanceof Error ? e.message : String(e)),
     disabled: busy,
   });
 
@@ -534,6 +535,14 @@ export default function BatchRename() {
     // @tauri-apps/plugin-dialog renders the body as plain text via
     // OS-native dialogs (Windows TaskDialog / macOS NSAlert), not HTML.
     // Names with embedded HTML / markup render as literal characters.
+    // Track whether the user has already seen the skipped-derive count.
+    // The in-place rename confirm + the overwrite-existing confirm can
+    // both fire in the same run (rename mode + outputs already exist),
+    // so dedupe the suffix to surface "(N skipped)" exactly once.
+    let skippedSuffixShown = false;
+    const skippedSuffix =
+      skippedDeriveCount > 0 ? "\n\n" + t("msg_rename_skipped_count", skippedDeriveCount) : "";
+
     if (outputMode === "rename") {
       const samples = targets
         .slice(0, 3)
@@ -541,8 +550,6 @@ export default function BatchRename() {
         .join("\n");
       const moreCount = targets.length - 3;
       const moreSuffix = moreCount > 0 ? "\n" + t("msg_rename_inplace_more", moreCount) : "";
-      const skippedSuffix =
-        skippedDeriveCount > 0 ? "\n\n" + t("msg_rename_skipped_count", skippedDeriveCount) : "";
       const confirmed = await ask(
         t("msg_rename_inplace_confirm", targets.length) +
           "\n\n" +
@@ -551,6 +558,7 @@ export default function BatchRename() {
           skippedSuffix,
         { title: t("dialog_rename_inplace_title"), kind: "warning" }
       );
+      if (skippedSuffix.length > 0) skippedSuffixShown = true;
       if (!confirmed) {
         addLog(t("msg_rename_cancelled"), "info");
         setLastActionResult("cancelled");
@@ -568,13 +576,12 @@ export default function BatchRename() {
     // and the user has no other way to learn that some pairings failed
     // before the dialog moment.
     const projectedOutputs = targets.map((t2) => t2.outputPath);
-    const skippedSuffix =
-      skippedDeriveCount > 0 ? "\n\n" + t("msg_rename_skipped_count", skippedDeriveCount) : "";
     try {
       const existingCount = await countExistingFiles(projectedOutputs);
       if (existingCount > 0) {
+        const overwriteSuffix = skippedSuffixShown ? "" : skippedSuffix;
         const confirmed = await ask(
-          t("msg_overwrite_confirm", existingCount, targets.length) + skippedSuffix,
+          t("msg_overwrite_confirm", existingCount, targets.length) + overwriteSuffix,
           {
             title: t("dialog_overwrite_title"),
             kind: "warning",
@@ -821,23 +828,40 @@ export default function BatchRename() {
             {t("btn_cancel")}
           </button>
         )}
-        <button
-          onClick={handleRunRename}
-          disabled={busy || actionableCount === 0}
-          className="flex-none px-6 rounded-lg font-medium text-sm transition-colors"
-          style={
-            busy || actionableCount === 0
-              ? {
-                  background: "var(--accent-disabled-bg)",
-                  color: "var(--accent-disabled-text)",
-                  height: "38px",
-                  minWidth: "140px",
-                }
-              : { background: "var(--accent)", color: "#fff", height: "38px", minWidth: "140px" }
-          }
-        >
-          {busy ? t("btn_renaming") : t("btn_rename_run", actionableCount)}
-        </button>
+        {(() => {
+          // copy_to_chosen requires a chosen output directory; without
+          // one the click handler logs an error and returns. Make that
+          // visible in the button state instead — disable + tooltip
+          // explains why, mirroring the gate other tabs use for
+          // similar prerequisite-state rules.
+          const missingChosenDir = outputMode === "copy_to_chosen" && !chosenDir;
+          const disabled = busy || actionableCount === 0 || missingChosenDir;
+          return (
+            <button
+              onClick={handleRunRename}
+              disabled={disabled}
+              title={missingChosenDir ? t("msg_rename_no_chosen_dir") : undefined}
+              className="flex-none px-6 rounded-lg font-medium text-sm transition-colors"
+              style={
+                disabled
+                  ? {
+                      background: "var(--accent-disabled-bg)",
+                      color: "var(--accent-disabled-text)",
+                      height: "38px",
+                      minWidth: "140px",
+                    }
+                  : {
+                      background: "var(--accent)",
+                      color: "#fff",
+                      height: "38px",
+                      minWidth: "140px",
+                    }
+              }
+            >
+              {busy ? t("btn_renaming") : t("btn_rename_run", actionableCount)}
+            </button>
+          );
+        })()}
       </div>
 
       <DropErrorBanner message={dropError} onDismiss={() => setDropError(null)} />

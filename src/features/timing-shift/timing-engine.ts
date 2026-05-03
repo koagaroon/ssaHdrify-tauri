@@ -122,8 +122,15 @@ export function deriveShiftedPath(inputPath: string): string {
   const dir = lastSlash >= 0 ? normalized.slice(0, lastSlash) : "";
   const fullName = lastSlash >= 0 ? normalized.slice(lastSlash + 1) : normalized;
   const lastDot = fullName.lastIndexOf(".");
-  const baseName = lastDot > 0 ? fullName.slice(0, lastDot) : fullName;
+  let baseName = lastDot > 0 ? fullName.slice(0, lastDot) : fullName;
   const ext = lastDot > 0 ? fullName.slice(lastDot) : "";
+  // Strip any prior `.shifted` infix so re-shifting `EP01.shifted.ass`
+  // yields `EP01.shifted.ass` (idempotent) rather than the cumulative
+  // `EP01.shifted.shifted.ass`. Mirrors the strip-and-re-apply pattern
+  // resolveOutputPath uses for the HDR `.hdr` infix.
+  if (baseName.toLowerCase().endsWith(".shifted")) {
+    baseName = baseName.slice(0, -".shifted".length);
+  }
   const outputName = `${baseName}.shifted${ext}`;
   const outputPath = dir ? `${dir}/${outputName}` : outputName;
   return usedBackslash ? outputPath.replace(/\//g, "\\") : outputPath;

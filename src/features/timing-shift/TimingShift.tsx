@@ -221,6 +221,7 @@ export default function TimingShift() {
     ref: dropZoneRef,
     onPaths: handleDroppedPaths,
     onActiveChange: setDropActive,
+    onError: (e) => setDropError(e instanceof Error ? e.message : String(e)),
     disabled: busy,
   });
 

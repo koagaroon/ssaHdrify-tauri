@@ -313,7 +313,18 @@ fn scan_font_files_rejects_oversize_path_list() {
 
     // MAX_INPUT_PATHS is 1000 in fonts.rs — supply 1001 paths so the
     // command rejects the call before any worker thread spins up.
-    let oversize: Vec<String> = (0..1001).map(|i| format!("dummy-{i}.ttf")).collect();
+    // Absolute paths anchored at the OS temp dir — relative `dummy-N.ttf`
+    // would resolve against cargo's working directory, which is
+    // non-hermetic across `cargo test` invocation modes.
+    let temp_root = std::env::temp_dir();
+    let oversize: Vec<String> = (0..1001)
+        .map(|i| {
+            temp_root
+                .join(format!("ssahdrify-nonexistent-{i}.ttf"))
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
     let result = tauri::async_runtime::block_on(scan_font_files(
         oversize,
         discard_channel(),
@@ -342,7 +353,16 @@ fn scan_font_files_accepts_max_input_paths_boundary() {
     // dummy that fails canonicalize and contributes zero faces, the
     // command must NOT reject before spawning the worker. Catches a
     // future `> ↔ >=` flip in the validation.
-    let boundary: Vec<String> = (0..1000).map(|i| format!("dummy-{i}.ttf")).collect();
+    // Absolute paths anchored at the OS temp dir; see oversize test.
+    let temp_root = std::env::temp_dir();
+    let boundary: Vec<String> = (0..1000)
+        .map(|i| {
+            temp_root
+                .join(format!("ssahdrify-boundary-{i}.ttf"))
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
     let (channel, _totals, done) = collecting_channel();
     let result = tauri::async_runtime::block_on(scan_font_files(
         boundary,

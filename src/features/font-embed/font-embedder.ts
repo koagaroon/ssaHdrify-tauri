@@ -453,7 +453,17 @@ export async function embedFonts(
  */
 function insertFontsSection(content: string, fontsSection: string): string {
   const lineEnding = content.includes("\r\n") ? "\r\n" : "\n";
-  const lines = content.split(/\r?\n/);
+  // Normalize Unicode line separators (U+2028 LINE SEPARATOR,
+  // U+2029 PARAGRAPH SEPARATOR) to ASCII newlines BEFORE the split.
+  // Without this, an ASS using U+2028 between sections collapses to
+  // one giant line under `split(/\r?\n/)` — the column-0 [Fonts]
+  // header regex can't match (header is now mid-line) and the new
+  // section gets appended at end-of-file even though one already
+  // exists. srt-converter does the same strip upstream; doing it
+  // here keeps the section-rewrite path safe for direct callers
+  // that bypass that converter.
+  const normalized = content.replace(/[\u2028\u2029]/g, "\n");
+  const lines = normalized.split(/\r?\n/);
 
   // Adapt fontsSection to match the file's line ending
   const adaptedFontsSection = fontsSection.replace(/\n/g, lineEnding);

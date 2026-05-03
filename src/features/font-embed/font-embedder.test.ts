@@ -126,6 +126,11 @@ describe("analyzeFonts — match priority", () => {
       expect(info.filePath).toBeNull();
       expect(info.error).toContain("Font not found");
     }
+    // useRustUserFonts defaults to false in this call; verify the Rust
+    // resolver was NOT consulted on the no-userFontMap path. Catches a
+    // regression that flipped the default to true (which would change
+    // production behavior for callers passing only positional args).
+    expect(resolveUserFontMock).not.toHaveBeenCalled();
   });
 
   it("distinguishes bold and non-bold variants of the same family", async () => {

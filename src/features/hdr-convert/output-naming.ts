@@ -218,7 +218,11 @@ export function resolveOutputPath(
   // is enabled; relax the cap ONLY for that case. UNC long paths
   // (`\\?\UNC\server\share\...` → `//?/UNC/...`) may exceed OS limits on
   // the server side, so we keep the 260 cap for those.
-  const isLongLocalPath = outputPath.startsWith("//?/") && !outputPath.startsWith("//?/UNC/");
+  // Case-insensitive UNC prefix check: a lowercased `//?/unc/...`
+  // (slashes already normalized from `\\?\unc\...`) should still be
+  // classified as UNC, not as "long local path with relaxed cap".
+  const lowerPath = outputPath.toLowerCase();
+  const isLongLocalPath = lowerPath.startsWith("//?/") && !lowerPath.startsWith("//?/unc/");
   const maxPathLen = isLongLocalPath ? 32767 : 260;
   if (outputPath.length > maxPathLen) {
     throw new Error(`Output path too long (${outputPath.length} chars, max ${maxPathLen})`);

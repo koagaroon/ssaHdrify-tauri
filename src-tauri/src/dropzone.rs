@@ -228,7 +228,11 @@ mod tests {
             standalone.to_str().unwrap().to_string(),
         ])
         .unwrap();
-        assert_eq!(result.len(), 3, "expected 2 from folder + 1 standalone, got {result:?}");
+        assert_eq!(
+            result.len(),
+            3,
+            "expected 2 from folder + 1 standalone, got {result:?}"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 

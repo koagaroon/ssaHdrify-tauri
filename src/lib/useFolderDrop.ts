@@ -29,6 +29,11 @@ export interface UseFolderDropOptions {
   /** Optional visibility-state callback for hover styling. Receives `true`
    *  while a drag is over the zone, `false` on leave / drop / drop-outside. */
   onActiveChange?: (active: boolean) => void;
+  /** Optional notifier for when `expandDroppedPaths` rejects (Rust IPC
+   *  error). Without this, a drop that hits e.g. the `MAX_INPUT_PATHS`
+   *  cap silently console.errors and the user sees a drag that "did
+   *  nothing." Consumers pass a banner / log writer here. */
+  onError?: (error: unknown) => void;
   /** When true, the hook skips subscribing — useful while the consumer is
    *  busy processing a previous drop and wants to ignore further drops. */
   disabled?: boolean;
@@ -39,6 +44,7 @@ export function useFolderDrop({
   ref,
   onPaths,
   onActiveChange,
+  onError,
   disabled,
 }: UseFolderDropOptions): void {
   // Stabilize the consumer callbacks so the listener-attaching effect
@@ -48,12 +54,14 @@ export function useFolderDrop({
   // Same pattern as useClickOutside.
   const onPathsRef = useRef(onPaths);
   const onActiveChangeRef = useRef(onActiveChange);
+  const onErrorRef = useRef(onError);
   // No deps array — refresh refs every render so the listener-attaching
   // effect below can keep its closures stable while still reading the
   // latest callbacks. Not a missing-dep bug.
   useEffect(() => {
     onPathsRef.current = onPaths;
     onActiveChangeRef.current = onActiveChange;
+    onErrorRef.current = onError;
   });
 
   useEffect(() => {
@@ -109,10 +117,13 @@ export function useFolderDrop({
                   onPathsRef.current(expanded);
                 }
               } catch (e) {
-                // Swallow — the consumer's Status flow is the right place
-                // to surface user-facing failure; a drop with zero usable
-                // paths is more annoying than informative.
                 console.error("expandDroppedPaths failed:", e);
+                // Notify the consumer so it can surface the failure
+                // (banner / log line). Without this, a drop that
+                // tripped MAX_INPUT_PATHS or any other Rust-side
+                // rejection produces a silent no-op from the user's
+                // perspective.
+                if (mounted) onErrorRef.current?.(e);
               }
               break;
             }

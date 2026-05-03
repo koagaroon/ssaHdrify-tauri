@@ -34,4 +34,15 @@ describe("large font source warning helpers", () => {
     expect(formatFontScanBytes(128 * 1024 * 1024)).toBe("128.0 MiB");
     expect(formatFontScanBytes(4096)).toBe("4.0 KiB");
   });
+
+  it("handles bytes-only and unit-boundary cases", () => {
+    // Bare-byte branch (< 1 KiB).
+    expect(formatFontScanBytes(0)).toBe("0 B");
+    expect(formatFontScanBytes(512)).toBe("512 B");
+    expect(formatFontScanBytes(1023)).toBe("1023 B");
+    // Unit boundaries — each lower edge promotes to the next-larger unit.
+    expect(formatFontScanBytes(1024)).toBe("1.0 KiB");
+    expect(formatFontScanBytes(1024 * 1024)).toBe("1.0 MiB");
+    expect(formatFontScanBytes(1024 * 1024 * 1024)).toBe("1.0 GiB");
+  });
 });

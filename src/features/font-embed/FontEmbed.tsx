@@ -250,6 +250,7 @@ export default function FontEmbed() {
     ref: dropZoneRef,
     onPaths: handleDroppedPaths,
     onActiveChange: setDropActive,
+    onError: (e) => setDropError(e instanceof Error ? e.message : String(e)),
     // Match the Pick-Files / Pick-Folder button gates which already
     // include `analyzing`. Drops accepted during analyze waste the
     // first analysis pass (gen counter saves correctness but the work

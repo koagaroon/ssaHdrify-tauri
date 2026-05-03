@@ -68,7 +68,7 @@ describe("countExistingFiles", () => {
     expect(warn.mock.calls[0][0]).toMatch(/\b1 stat (failure|error)/);
   });
 
-  it("runs all stat checks in parallel (Promise.all, not sequential)", async () => {
+  it("runs stat checks in parallel up to MAX_CONCURRENT_STAT", async () => {
     let inFlight = 0;
     let peakInFlight = 0;
     existsMock.mockImplementation(async () => {
@@ -78,7 +78,29 @@ describe("countExistingFiles", () => {
       inFlight--;
       return true;
     });
+    // 5 paths < MAX_CONCURRENT_STAT (32), so all 5 should run concurrently
+    // in one wave. Anchor on equality, not >1 — a 2-wide chunked
+    // regression would otherwise still pass the loose check.
     await countExistingFiles(["a", "b", "c", "d", "e"]);
+    expect(peakInFlight).toBe(5);
+  });
+
+  it("caps concurrent stat checks at MAX_CONCURRENT_STAT for large input", async () => {
+    let inFlight = 0;
+    let peakInFlight = 0;
+    existsMock.mockImplementation(async () => {
+      inFlight++;
+      peakInFlight = Math.max(peakInFlight, inFlight);
+      await new Promise((r) => setTimeout(r, 1));
+      inFlight--;
+      return true;
+    });
+    // 100 paths > 32 cap. The new worker-pool pattern must cap
+    // concurrency even though Promise.all in the original design
+    // would have fired all 100 at once.
+    const paths = Array.from({ length: 100 }, (_, i) => `p${i}`);
+    await countExistingFiles(paths);
+    expect(peakInFlight).toBeLessThanOrEqual(32);
     expect(peakInFlight).toBeGreaterThan(1);
   });
 });
