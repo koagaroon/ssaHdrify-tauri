@@ -128,6 +128,12 @@ export default function FontEmbed() {
     () => fontSources.reduce((sum, src) => sum + src.count, 0),
     [fontSources]
   );
+  // Identity-not-content memo by design: setFonts always rebuilds the
+  // array (analyzeFonts returns a fresh `infos`), so React's referential
+  // === check is sufficient — no need to hash the contents to avoid
+  // spurious recomputes. If a future change ever mutates `fonts` in
+  // place (it shouldn't), this would over-cache; but in-place mutation
+  // would break far more than this memo.
   const localCoveredKeys = useMemo(() => {
     const out = new Set<string>();
     for (const info of fonts) {

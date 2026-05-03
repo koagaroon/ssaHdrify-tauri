@@ -116,7 +116,12 @@ export function shiftSubtitles(content: string, options: ShiftOptions): ShiftRes
  * gate via `countExistingFiles` before the batch begins.
  */
 export function deriveShiftedPath(inputPath: string): string {
-  const usedBackslash = inputPath.includes("\\") && !inputPath.includes("/");
+  // Same separator-preservation heuristic as deriveEmbeddedPath: if
+  // the input has ANY backslash, output with backslashes, regardless
+  // of whether it also contains a forward slash. The previous "all
+  // backslash, no forward slash" form mis-classified mixed-separator
+  // Windows paths as POSIX-style.
+  const usedBackslash = inputPath.includes("\\");
   const normalized = inputPath.replace(/\\/g, "/");
   const lastSlash = normalized.lastIndexOf("/");
   const dir = lastSlash >= 0 ? normalized.slice(0, lastSlash) : "";

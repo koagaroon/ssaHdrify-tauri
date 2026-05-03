@@ -346,7 +346,14 @@ export function aggregateFonts(perFile: Map<string, FileAnalysis>): {
  * batch begins.
  */
 export function deriveEmbeddedPath(inputPath: string): string {
-  const usedBackslash = inputPath.includes("\\") && !inputPath.includes("/");
+  // Prefer backslash on output if the input has ANY backslash (Windows
+  // path), regardless of whether it also contains a forward slash.
+  // Mixed-separator inputs (e.g., a Windows path that picked up a `/`
+  // from JS-side normalization upstream) used to bias to forward slash
+  // because the heuristic only checked for "all backslash, no forward
+  // slash" — which produced surprising `/`-formatted paths on Windows
+  // when the rest of the system spoke `\`.
+  const usedBackslash = inputPath.includes("\\");
   const normalized = inputPath.replace(/\\/g, "/");
   const lastSlash = normalized.lastIndexOf("/");
   const dir = lastSlash >= 0 ? normalized.slice(0, lastSlash) : "";
@@ -390,6 +397,14 @@ export async function embedFonts(
   }
 
   for (let i = 0; i < selectedFonts.length; i++) {
+    // Cancel between fonts — `break` here lets the post-loop
+    // `if (isCancelled) return null` decide the final outcome,
+    // matching the in-subset cancel below which DOES `return null`
+    // directly (subset state is fully discarded mid-call). The
+    // asymmetry is deliberate: between-font cancel preserves the
+    // partial fontEntries built so far for inspection in the
+    // post-loop fall-through (today they're discarded too, but
+    // future "save what you have" flows would key on this shape).
     if (isCancelled?.()) break;
 
     const info = selectedFonts[i];
