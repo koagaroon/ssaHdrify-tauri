@@ -54,7 +54,15 @@ export interface PreviewTableProps<T> {
   /** Per-row HTML attributes — drag/drop handlers, ARIA, dataset etc.
    *  Returned object is spread onto the row's container div. The
    *  `key`, `className`, and `style` slots are owned by PreviewTable
-   *  and will not be overridden. */
+   *  and will not be overridden.
+   *
+   *  Allocation note: callers typically return a fresh `{}` per row,
+   *  which triggers a new spread on every render. Acceptable here
+   *  because the cost is one shallow-spread per row (≪ React's own
+   *  reconcile work) and callers that need stable identity can
+   *  memoize the function with useCallback + a stable lookup map.
+   *  Don't try to deep-compare here — caller-provided objects can
+   *  carry handler closures that legitimately change identity. */
   rowProps?: (row: T, rowIndex: number) => HTMLAttributes<HTMLDivElement>;
 }
 

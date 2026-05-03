@@ -323,6 +323,18 @@ function buildAss(content: string, captions: Caption[]): string {
   // (or the two sides drifted): the output would carry wrong timestamps.
   // Hard-fail rather than warn; silent timing drift is the worst kind.
   if (idx !== captions.length) {
+    // This branch should be unreachable: parseAss + buildAss share
+    // the same dialogueRe and walk identical positions. If we get
+    // here, it means the regex consumed the input differently
+    // between the two passes — typically a sign of stateful regex
+    // contamination or a future behavior-changing edit to one but
+    // not the other. The error string is intentionally diagnostic-
+    // grade rather than user-facing because it's a developer
+    // invariant: it surfaces to the user only as the prefix
+    // before the colon ("buildAss/parseAss drift:"), which the
+    // shift-flow's addLog wraps with msg_timing_error and the
+    // file name. If users start reporting it, that's the signal
+    // to investigate parser/regex divergence in this file.
     const firstUnconsumed = captions[idx]?.raw ?? "(no raw line captured)";
     const excerpt =
       firstUnconsumed.length > 120 ? `${firstUnconsumed.slice(0, 120)}…` : firstUnconsumed;
