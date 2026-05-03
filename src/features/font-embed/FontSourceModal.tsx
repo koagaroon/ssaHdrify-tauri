@@ -347,6 +347,15 @@ export default function FontSourceModal(props: Props) {
   }, []);
 
   const releaseScanFlow = useCallback(() => {
+    // Ordering note: clearing busyRef synchronously while setBusy(false)
+    // flushes async creates a sub-render-cycle window where busyRef is
+    // false and activeScanIdRef is null while the spinner is still
+    // visible. An Esc / scrim click that lands inside this window goes
+    // through requestClose's `if (busyRef.current) return;` guard and
+    // calls onClose() — the modal closes mid-paint. Single-user UI
+    // timing makes the window genuinely unhittable by hand, so we
+    // accept the race. Documented here so a future reader doesn't
+    // assume it's a defect.
     busyRef.current = false;
     setBusy(false);
   }, []);
@@ -541,9 +550,8 @@ export default function FontSourceModal(props: Props) {
             ref={closeButtonRef}
             type="button"
             onClick={requestClose}
-            disabled={busy}
             className="modal-close"
-            title={busy ? t("font_sources_scanning") : t("font_sources_close")}
+            title={busy ? t("font_scan_cancel") : t("font_sources_close")}
             aria-label={t("font_sources_close")}
           >
             <svg

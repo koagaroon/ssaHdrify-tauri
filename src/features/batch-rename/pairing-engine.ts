@@ -77,7 +77,11 @@ const EPISODE_PATTERNS: EpisodePattern[] = [
   // specials / OVA files may be labelled ` - 0` or ` - 00`, and those
   // should parse as episode 0 rather than falling through.
   {
-    regex: /\s-\s*0*(\d+)\s*(?:\[|\.[a-z0-9]+$)/i,
+    // `\.[a-z0-9]{1,10}$` — bounded extension to keep the regex out of
+    // catastrophic-backtracking territory per Principle #3. No real
+    // subtitle/video extension exceeds ~5 chars; cap at 10 leaves headroom
+    // for any future codec naming weirdness.
+    regex: /\s-\s*0*(\d+)\s*(?:\[|\.[a-z0-9]{1,10}$)/i,
     useRaw: true,
     build: (m) => ({ episode: parseInt(m[1], 10) }),
   },
@@ -412,8 +416,12 @@ export function deriveRenameOutputPath(
     targetDir = chosenDir;
   }
 
-  // Preserve native path separator from the subtitle path
-  const usedBackslash = subtitlePath.includes("\\") && !subtitlePath.includes("/");
+  // Preserve native path separator from the subtitle path. Use the
+  // "any backslash → use backslash" form (matches deriveShiftedPath /
+  // deriveEmbeddedPath); the older "all backslash, no forward slash"
+  // form misclassifies mixed-separator Windows paths and emits forward
+  // slashes for them.
+  const usedBackslash = subtitlePath.includes("\\");
   const normTargetDir = targetDir.replace(/\\/g, "/").replace(/\/$/, "");
   const outputPath = normTargetDir ? `${normTargetDir}/${outName}` : outName;
   return usedBackslash ? outputPath.replace(/\//g, "\\") : outputPath;
@@ -504,7 +512,9 @@ function dirname(path: string): string {
   const norm = path.replace(/\\/g, "/");
   const lastSlash = norm.lastIndexOf("/");
   if (lastSlash < 0) return "";
-  const usedBackslash = path.includes("\\") && !path.includes("/");
+  // "any backslash → use backslash" — see deriveRenameOutputPath above
+  // for why mixed-separator paths must take the backslash branch.
+  const usedBackslash = path.includes("\\");
   const dir = norm.slice(0, lastSlash);
   return usedBackslash ? dir.replace(/\//g, "\\") : dir;
 }

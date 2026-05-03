@@ -735,11 +735,11 @@ export default function FontEmbed() {
         {fileCount > 0 && (
           <button
             onClick={handleClearFiles}
-            disabled={embedding}
+            disabled={analyzing || embedding}
             className="flex-none px-3 rounded-lg text-lg font-bold transition-colors"
             style={{
-              background: embedding ? "var(--bg-input)" : "var(--cancel-bg)",
-              color: embedding ? "var(--text-muted)" : "var(--cancel-text)",
+              background: analyzing || embedding ? "var(--bg-input)" : "var(--cancel-bg)",
+              color: analyzing || embedding ? "var(--text-muted)" : "var(--cancel-text)",
               height: "38px",
             }}
             title={t("btn_clear_file")}
