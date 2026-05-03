@@ -683,7 +683,19 @@ export default function TimingShift() {
         )}
       </div>
       {useThreshold && (
-        <p className="text-xs" style={{ color: "var(--text-muted)", marginTop: "-0.5rem" }}>
+        <p
+          className="text-xs"
+          style={{
+            color: "var(--text-muted)",
+            marginTop: "-0.5rem",
+            // ZH version of this hint is ~3x the English byte length and
+            // can overflow narrow viewports; allow wrapping (rather than
+            // splitting the i18n key or shortening the ZH copy) so the
+            // English layout stays compact while the ZH wraps gracefully.
+            whiteSpace: "normal",
+            overflowWrap: "anywhere",
+          }}
+        >
           {t("threshold_format_hint")}
         </p>
       )}
