@@ -432,6 +432,15 @@ export async function clearFontSources(): Promise<void> {
  *  Channel<ScanProgress>, waits for Done, and resolves with the Rust-side
  *  registration counts and cancellation outcome.
  *
+ *  `onBatch` callbacks are PROVISIONAL — they reflect what the Rust scan
+ *  worker has emitted so far, NOT what has been committed to the SQLite
+ *  user-font index. If the import transaction rolls back (SQLite BUSY,
+ *  schema constraint violation), zero fonts are registered and the
+ *  invoke() call rejects. Callers that surface batch counts in the UI
+ *  must clear them on rejection so the display doesn't claim partial
+ *  registration when none happened — this wrapper does that via the
+ *  catch path below.
+ *
  *  No JS-side timeout by design. The Rust scan worker is bounded by
  *  MAX_FONTS_PER_SCAN (defense-in-depth ceiling) and the user always
  *  has the inline Cancel button (cancelFontScan) to abort. Adding a
@@ -461,10 +470,20 @@ async function runStreamingScan(
     duplicated: 0,
     reason: "natural",
   };
+  // Guard against a duplicate `Done` event silently overwriting the
+  // first one's counts. The Rust contract emits exactly one Done on the
+  // Ok path; a future encoder bug or refactor that violates that would
+  // otherwise corrupt `result` last-wins style with no signal.
+  let doneReceived = false;
   channel.onmessage = (msg) => {
     if (msg.kind === "batch") {
       onBatch?.(msg.total);
     } else if (msg.kind === "done") {
+      if (doneReceived) {
+        console.warn("ScanProgress::Done received twice; ignoring duplicate");
+        return;
+      }
+      doneReceived = true;
       result.reason = msg.reason;
       result.added = msg.added;
       result.duplicated = msg.duplicated;
@@ -483,7 +502,25 @@ async function runStreamingScan(
       console.warn("unknown ScanProgress payload:", tag);
     }
   };
-  await invoke(command, { ...args, progress: channel });
+  try {
+    await invoke(command, { ...args, progress: channel });
+  } catch (err) {
+    // Rust returned Err — no Done was emitted, so `donePromise` is still
+    // unresolved. Reset the provisional batch count so any caller showing
+    // "Scanned N fonts" doesn't sit alongside the error message implying
+    // partial registration; the import transaction has rolled back and
+    // zero fonts were committed. Then re-throw so callers see the same
+    // rejection they would have seen without the catch.
+    //
+    // Intentional: do NOT resolve `donePromise` here. The rejection
+    // propagates out of this function before the `await donePromise`
+    // line below, which is correct. A future refactor wrapping this
+    // invoke in retry logic without explicitly rejecting/resolving
+    // donePromise on the no-retry-left branch would cause a permanent
+    // hang.
+    onBatch?.(0);
+    throw err;
+  }
   // Rust always emits Done on the Ok path. Channel guarantees in-order
   // delivery of Batch+Done, so awaiting Done forces every async-fetched
   // progress event to drain before we report the final counts.
