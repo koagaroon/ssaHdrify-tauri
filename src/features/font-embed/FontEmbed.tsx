@@ -113,6 +113,16 @@ export default function FontEmbed() {
   // for the duration so the visual state matches what the IPC layer is
   // actually doing.
   const [sourceBusy, setSourceBusy] = useState(false);
+  // The modal lifts its scanning state up here so the parent ✕ Clear
+  // button can join the same lock. Without this, a user with the modal
+  // mid-scan could click the parent ✕ Clear and trip Rust's
+  // `reject_during_active_scan` guard, surfacing as a generic IPC
+  // error log rather than a disabled button.
+  const [modalScanning, setModalScanning] = useState(false);
+  // Effective lock for any UI element that mutates font sources from
+  // outside the modal: own clear/remove/add operations OR the modal's
+  // active scan.
+  const sourceLocked = sourceBusy || modalScanning;
 
   const fontSourceEntryCount = useMemo(
     () => fontSources.reduce((sum, src) => sum + src.count, 0),
@@ -240,7 +250,12 @@ export default function FontEmbed() {
     ref: dropZoneRef,
     onPaths: handleDroppedPaths,
     onActiveChange: setDropActive,
-    disabled: embedding,
+    // Match the Pick-Files / Pick-Folder button gates which already
+    // include `analyzing`. Drops accepted during analyze waste the
+    // first analysis pass (gen counter saves correctness but the work
+    // is thrown away) and produce a confusing "pick disabled, drop
+    // accepted" UX.
+    disabled: embedding || analyzing,
   });
 
   // ── Font source management ──────────────────────────────────────
@@ -312,7 +327,21 @@ export default function FontEmbed() {
     (source: FontSource) => {
       const nextSources = [...fontSources, source];
       setFontSources(nextSources);
-      void reanalyzeWithSources();
+      // Wrap the reanalyze in the same sourceBusy envelope as
+      // clear/remove. Without this, a user adding a source then
+      // immediately clicking the parent ✕ Clear before the reanalyze
+      // settles can fire a clear IPC concurrent with an in-flight
+      // analyzeFonts pass against stale source state — visible Local
+      // badges in the detection grid then disagree with the actually-
+      // empty source list.
+      void (async () => {
+        setSourceBusy(true);
+        try {
+          await reanalyzeWithSources();
+        } finally {
+          setSourceBusy(false);
+        }
+      })();
     },
     [fontSources, reanalyzeWithSources]
   );
@@ -551,7 +580,12 @@ export default function FontEmbed() {
   // Now that the batch grid carries per-font checkboxes too, the
   // disabled rule is uniform: 0 selected = nothing to embed, single
   // or batch.
-  const isEmbedDisabled = embedding || selected.size === 0 || fileCount === 0;
+  // Include `analyzing` for symmetry with the Select-Files / Pick-Folder
+  // gates below. Today the race window is closed by ingest sequencing
+  // (selected only flips after analyze completes), but a future change
+  // that publishes per-file would otherwise quietly let Embed fire on a
+  // partially-analyzed batch.
+  const isEmbedDisabled = embedding || analyzing || selected.size === 0 || fileCount === 0;
 
   function embedButtonLabel(): string {
     if (embedding) return t("btn_embedding");
@@ -734,18 +768,18 @@ export default function FontEmbed() {
         {fontSources.length > 0 && (
           <button
             onClick={handleClearFontSources}
-            disabled={embedding || sourceBusy}
+            disabled={embedding || sourceLocked}
             className="flex-none px-3 rounded-lg text-lg font-bold transition-colors"
             style={{
-              background: embedding || sourceBusy ? "var(--bg-input)" : "var(--cancel-bg)",
-              color: embedding || sourceBusy ? "var(--text-muted)" : "var(--cancel-text)",
+              background: embedding || sourceLocked ? "var(--bg-input)" : "var(--cancel-bg)",
+              color: embedding || sourceLocked ? "var(--text-muted)" : "var(--cancel-text)",
               height: "38px",
             }}
             // Mirror the Modal's per-row remove tooltip pattern: when
             // disabled-by-busy, the tooltip should match the disabled
             // state instead of the action label that's not currently
             // available.
-            title={sourceBusy ? t("font_sources_scanning") : t("btn_clear_font_sources")}
+            title={sourceLocked ? t("font_sources_scanning") : t("btn_clear_font_sources")}
           >
             ✕
           </button>
@@ -913,6 +947,7 @@ export default function FontEmbed() {
         hasSubtitle={fileCount > 0}
         onAddSource={handleAddFontSource}
         onRemoveSource={handleRemoveFontSource}
+        onScanStateChange={setModalScanning}
       />
     </div>
   );

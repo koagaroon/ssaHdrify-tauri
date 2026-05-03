@@ -44,6 +44,14 @@ interface Props {
   hasSubtitle: boolean;
   onAddSource: (source: FontSource) => void;
   onRemoveSource: (id: string) => void;
+  /**
+   * Lift the modal's scanning state to the parent so the parent ✕ Clear
+   * button (and any future source-mutating control outside this modal)
+   * can join the same lock. Without this, the parent doesn't know a scan
+   * is mid-flight and would let the user click Clear → Rust rejects via
+   * `reject_during_active_scan` → user sees a generic error log.
+   */
+  onScanStateChange?: (scanning: boolean) => void;
 }
 
 function basename(path: string): string {
@@ -106,12 +114,23 @@ export default function FontSourceModal(props: Props) {
     hasSubtitle,
     onAddSource,
     onRemoveSource,
+    onScanStateChange,
   } = props;
   const { t } = useI18n();
 
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const [scanning, setScanning] = useState(false);
+  // Wrap setScanning to also notify the parent. Single source of truth
+  // for "is the modal scanning" — every setter now goes through here so
+  // the parent lock can never drift out of sync.
+  const setScanningWithParent = useCallback(
+    (next: boolean) => {
+      setScanning(next);
+      onScanStateChange?.(next);
+    },
+    [onScanStateChange]
+  );
   // Live count for the "Scanned N fonts so far…" progress row. Rust can
   // deliver many Channel batches in a burst, so state updates are throttled
   // to one per animation frame; the heavy font-source index stays in Rust.
@@ -295,7 +314,7 @@ export default function FontSourceModal(props: Props) {
       const sourceId = newSourceId();
       activeScanIdRef.current = scanId;
       resetScanProgress();
-      setScanning(true);
+      setScanningWithParent(true);
       const scan = await scanFontDirectory(dir, sourceId, scanId, (total) =>
         scheduleScanProgress(total)
       );
@@ -328,7 +347,7 @@ export default function FontSourceModal(props: Props) {
       if (scanId !== null && activeScanIdRef.current === scanId) {
         activeScanIdRef.current = null;
       }
-      setScanning(false);
+      setScanningWithParent(false);
       releaseScanFlow();
     }
   }, [
@@ -340,6 +359,7 @@ export default function FontSourceModal(props: Props) {
     reportSourceAdded,
     resetScanProgress,
     scheduleScanProgress,
+    setScanningWithParent,
   ]);
 
   const handleAddFiles = useCallback(async () => {
@@ -357,7 +377,7 @@ export default function FontSourceModal(props: Props) {
       const sourceId = newSourceId();
       activeScanIdRef.current = scanId;
       resetScanProgress();
-      setScanning(true);
+      setScanningWithParent(true);
       const scan = await scanFontFiles(paths, sourceId, scanId, (total) =>
         scheduleScanProgress(total)
       );
@@ -387,7 +407,7 @@ export default function FontSourceModal(props: Props) {
       if (scanId !== null && activeScanIdRef.current === scanId) {
         activeScanIdRef.current = null;
       }
-      setScanning(false);
+      setScanningWithParent(false);
       releaseScanFlow();
     }
   }, [
@@ -399,6 +419,7 @@ export default function FontSourceModal(props: Props) {
     reportSourceAdded,
     resetScanProgress,
     scheduleScanProgress,
+    setScanningWithParent,
   ]);
 
   // Coverage: how many required families are matched by loaded local sources.
