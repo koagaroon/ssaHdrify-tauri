@@ -215,7 +215,7 @@ export default function BatchRename() {
   const [editedRows, setEditedRows] = useState<PairingRow[]>([]);
 
   const pickGenRef = useRef(0);
-  const cancelRef = useRef(false);
+  const abortRef = useRef<AbortController | null>(null);
   const dropZoneRef = useRef<HTMLDivElement>(null);
 
   const videoPaths = useMemo(() => renameFiles?.videoPaths ?? [], [renameFiles]);
@@ -467,7 +467,7 @@ export default function BatchRename() {
 
     // Reset cancel signal at the very entry, BEFORE any awaits — see the
     // matching comment in HdrConvert.tsx::handleConvert for rationale.
-    cancelRef.current = false;
+    abortRef.current = new AbortController();
 
     if (outputMode === "copy_to_chosen" && !chosenDir) {
       addLog(t("msg_rename_no_chosen_dir"), "error");
@@ -657,7 +657,7 @@ export default function BatchRename() {
       const seenOutputs = new Set<string>();
 
       for (const { row, outputPath } of targets) {
-        if (cancelRef.current) {
+        if (abortRef.current?.signal.aborted) {
           addLog(t("msg_rename_cancelled"), "info");
           break;
         }
@@ -678,7 +678,7 @@ export default function BatchRename() {
           }
           seenOutputs.add(normalizedOut);
 
-          if (cancelRef.current) break;
+          if (abortRef.current?.signal.aborted) break;
 
           if (outputMode === "rename") {
             await renamePath(row.subtitle!.path, outputPath);
@@ -696,11 +696,11 @@ export default function BatchRename() {
         }
       }
 
-      if (!cancelRef.current) {
+      if (!abortRef.current?.signal.aborted) {
         addLog(t("msg_rename_complete", successCount, targets.length), "success");
       }
 
-      if (cancelRef.current) {
+      if (abortRef.current?.signal.aborted) {
         setLastActionResult("cancelled");
       } else {
         setLastActionResult(successCount > 0 ? "success" : "error");
@@ -837,7 +837,7 @@ export default function BatchRename() {
         {busy && (
           <button
             onClick={() => {
-              cancelRef.current = true;
+              abortRef.current?.abort();
             }}
             className="flex-none px-4 rounded-lg text-sm transition-colors"
             style={{

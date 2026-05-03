@@ -67,7 +67,7 @@ export default function TimingShift() {
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const pickGenRef = useRef(0);
-  const cancelRef = useRef(false);
+  const abortRef = useRef<AbortController | null>(null);
   const dropZoneRef = useRef<HTMLDivElement>(null);
   const fileContainerRef = useRef<HTMLDivElement>(null);
 
@@ -239,7 +239,7 @@ export default function TimingShift() {
 
     // Reset cancel signal at the very entry, BEFORE any awaits — see the
     // matching comment in HdrConvert.tsx::handleConvert for rationale.
-    cancelRef.current = false;
+    abortRef.current = new AbortController();
 
     const paths = filePaths;
 
@@ -278,7 +278,7 @@ export default function TimingShift() {
       const seenOutputs = new Set<string>();
 
       for (const filePath of paths) {
-        if (cancelRef.current) {
+        if (abortRef.current?.signal.aborted) {
           addLog(t("msg_timing_cancelled"), "info");
           break;
         }
@@ -312,14 +312,14 @@ export default function TimingShift() {
             continue;
           }
 
-          if (cancelRef.current) break;
+          if (abortRef.current?.signal.aborted) break;
 
           const result = shiftSubtitles(content, {
             offsetMs: effectiveOffsetMs,
             thresholdMs: thresholdMs ?? undefined,
           });
 
-          if (cancelRef.current) break;
+          if (abortRef.current?.signal.aborted) break;
 
           await writeText(outputPath, result.content);
           const outName = fileNameFromPath(outputPath);
@@ -336,13 +336,13 @@ export default function TimingShift() {
         }
       }
 
-      if (!cancelRef.current) {
+      if (!abortRef.current?.signal.aborted) {
         addLog(t("msg_timing_complete", successCount, paths.length), "success");
       }
 
       // Cancel takes precedence over success/error — surfacing
       // "complete" when the user cancelled mid-batch would lie.
-      if (cancelRef.current) {
+      if (abortRef.current?.signal.aborted) {
         setLastActionResult("cancelled");
       } else {
         setLastActionResult(successCount > 0 ? "success" : "error");
@@ -513,7 +513,7 @@ export default function TimingShift() {
         {busy && (
           <button
             onClick={() => {
-              cancelRef.current = true;
+              abortRef.current?.abort();
             }}
             className="flex-none px-4 rounded-lg text-sm transition-colors"
             style={{

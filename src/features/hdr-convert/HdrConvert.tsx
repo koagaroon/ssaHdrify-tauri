@@ -106,7 +106,7 @@ export default function HdrConvert() {
   // the entire drop, no state change, banner persists until the next
   // selection attempt or until the user clicks Clear.
   const [dropError, setDropError] = useState<string | null>(null);
-  const cancelRef = useRef(false);
+  const abortRef = useRef<AbortController | null>(null);
   const fileContainerRef = useRef<HTMLDivElement>(null);
   const dropZoneRef = useRef<HTMLDivElement>(null);
 
@@ -235,7 +235,7 @@ export default function HdrConvert() {
     // circuit the new batch's first iteration. The font scanner solves the
     // same race with per-scan ids, but this in-memory HDR flow still uses a
     // component-local boolean.
-    cancelRef.current = false;
+    abortRef.current = new AbortController();
 
     // Validate brightness
     if (brightness < MIN_BRIGHTNESS || brightness > MAX_BRIGHTNESS) {
@@ -292,7 +292,7 @@ export default function HdrConvert() {
       let processedCount = 0;
 
       for (const filePath of paths) {
-        if (cancelRef.current) {
+        if (abortRef.current?.signal.aborted) {
           addLog(t("msg_cancelled"), "info");
           break;
         }
@@ -339,7 +339,7 @@ export default function HdrConvert() {
           }
 
           // Check cancel after I/O
-          if (cancelRef.current) break;
+          if (abortRef.current?.signal.aborted) break;
 
           let assContent: string;
 
@@ -372,7 +372,7 @@ export default function HdrConvert() {
           }
 
           // Check cancel before writing
-          if (cancelRef.current) break;
+          if (abortRef.current?.signal.aborted) break;
 
           // Write output
           await writeText(outputPath, assContent);
@@ -395,7 +395,7 @@ export default function HdrConvert() {
         }
       }
 
-      if (!cancelRef.current) {
+      if (!abortRef.current?.signal.aborted) {
         addLog(t("msg_complete", successCount, paths.length), "success");
       }
       // Record outcome for the footer status. Order matters: a cancel
@@ -403,7 +403,7 @@ export default function HdrConvert() {
       // user explicitly stepped back — surfacing "Conversion complete"
       // when they cancelled mid-batch would be a lie. Only treat the
       // outcome as success/error when the loop ran to completion.
-      if (cancelRef.current) {
+      if (abortRef.current?.signal.aborted) {
         setLastActionResult("cancelled");
       } else {
         setLastActionResult(successCount > 0 ? "success" : "error");
@@ -552,7 +552,7 @@ export default function HdrConvert() {
         {processing && (
           <button
             onClick={() => {
-              cancelRef.current = true;
+              abortRef.current?.abort();
             }}
             className="flex-none px-4 rounded-lg text-sm transition-colors"
             style={{

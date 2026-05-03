@@ -90,7 +90,7 @@ export default function FontEmbed() {
   const [dropActive, setDropActive] = useState(false);
   const [dropError, setDropError] = useState<string | null>(null);
 
-  const cancelRef = useRef(false);
+  const abortRef = useRef<AbortController | null>(null);
   // Generation counter for ingest flows. Each handlePickFiles /
   // handleDroppedPaths / handleClearFiles bumps the counter, and the
   // async work captured the value at entry — when it later checks
@@ -410,7 +410,7 @@ export default function FontEmbed() {
 
     // Reset cancel signal at the very entry, BEFORE any awaits — see the
     // matching comment in HdrConvert.tsx::handleConvert for rationale.
-    cancelRef.current = false;
+    abortRef.current = new AbortController();
 
     // Pre-flight overwrite check — same project-wide pattern.
     const projectedOutputs = filePaths.map((p) => deriveEmbeddedPath(p));
@@ -446,7 +446,7 @@ export default function FontEmbed() {
       for (let i = 0; i < filePaths.length; i++) {
         const filePath = filePaths[i];
 
-        if (cancelRef.current) {
+        if (abortRef.current?.signal.aborted) {
           addLog(t("msg_fonts_cancelled"), "info");
           break;
         }
@@ -481,11 +481,11 @@ export default function FontEmbed() {
               );
               continue;
             }
-            if (cancelRef.current) break;
+            if (abortRef.current?.signal.aborted) break;
             const analyzed = await analyzeFonts(content, null, undefined, true);
             cached = { content, infos: analyzed.infos, usages: analyzed.usages };
           }
-          if (cancelRef.current) break;
+          if (abortRef.current?.signal.aborted) break;
 
           // Filter to fonts THIS FILE references AND the user kept
           // checked in the global aggregate grid AND that resolved to
@@ -518,7 +518,7 @@ export default function FontEmbed() {
             selectedFonts,
             cached.usages,
             onProgress,
-            () => cancelRef.current,
+            () => abortRef.current?.signal.aborted ?? false,
             t
           );
 
@@ -526,7 +526,7 @@ export default function FontEmbed() {
             // Cancelled mid-embed for this file — break out of batch.
             break;
           }
-          if (cancelRef.current) break;
+          if (abortRef.current?.signal.aborted) break;
 
           const outName = fileNameFromPath(outputPath);
           if (result.embeddedCount === 0) {
@@ -552,12 +552,12 @@ export default function FontEmbed() {
         }
       }
 
-      if (!cancelRef.current) {
+      if (!abortRef.current?.signal.aborted) {
         addLog(t("msg_fonts_complete", successCount, filePaths.length), "success");
       }
 
       // Cancel takes precedence over success/error.
-      if (cancelRef.current) {
+      if (abortRef.current?.signal.aborted) {
         setLastActionResult("cancelled");
       } else {
         setLastActionResult(successCount > 0 ? "success" : "error");
@@ -829,7 +829,7 @@ export default function FontEmbed() {
         {embedding && (
           <button
             onClick={() => {
-              cancelRef.current = true;
+              abortRef.current?.abort();
             }}
             className="px-4 rounded-lg text-sm transition-colors"
             style={{
