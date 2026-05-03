@@ -527,10 +527,22 @@ fn user_font_key(family: &str, bold: bool, italic: bool) -> String {
 }
 
 fn validate_font_source_id(source_id: &str) -> Result<(), String> {
+    // `len()` is byte count (O(1)). UUID v4 source ids minted by the
+    // frontend are pure ASCII, so today byte count equals char count.
+    // The message says "bytes" so a future caller passing non-ASCII
+    // ids isn't surprised when a 60-char string overflows the cap.
     if source_id.is_empty() || source_id.len() > 128 {
-        return Err("Font source id must be 1-128 characters".to_string());
+        return Err("Font source id must be 1-128 bytes".to_string());
     }
-    if source_id.chars().any(|c| c.is_control() || c == '\x7f') {
+    // Mirror `validate_ipc_path`'s control-char + line/paragraph-separator
+    // gate so a future code path deriving source ids from user-supplied
+    // text can't smuggle in characters that confuse log scrapers or path
+    // libraries. `is_control()` covers Cc (U+0000..=U+001F AND U+007F..=
+    // U+009F), so an explicit `\x7f` check would be redundant.
+    if source_id
+        .chars()
+        .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+    {
         return Err("Font source id contains invalid characters".to_string());
     }
     Ok(())
