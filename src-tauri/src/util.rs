@@ -30,14 +30,18 @@ pub const MAX_INPUT_PATHS: usize = 1000;
 /// while still catching obviously hostile inputs early.
 pub const MAX_IPC_PATH_LEN: usize = 4096;
 
-/// Validate a path string just received from the IPC boundary. Rejects
-/// empty, oversize, and any path containing characters known to break
-/// downstream parsers: ASCII / Unicode control characters (covered by
-/// `char::is_control()`, which spans Cc — U+0000..=U+001F, U+007F..=
-/// U+009F, including U+0085 NEXT LINE) plus U+2028 LINE SEPARATOR and
-/// U+2029 PARAGRAPH SEPARATOR. The Zl/Zp pair is added explicitly
-/// because Rust's `is_control()` does NOT include them — several path
-/// libraries treat them ambiguously across platforms.
+/// Validate a path string just received from the IPC boundary. Rejects:
+///
+/// 1. Empty, or longer than `MAX_IPC_PATH_LEN` bytes.
+/// 2. Any character matched by `char::is_control()` — Unicode general
+///    category Cc, which spans U+0000..=U+001F (C0 controls including
+///    NUL/CR/LF/HT) and U+007F..=U+009F (C1 controls including NEL
+///    U+0085).
+/// 3. U+2028 LINE SEPARATOR (Zl) and U+2029 PARAGRAPH SEPARATOR (Zp).
+///    These are NOT in Cc, so `is_control()` doesn't catch them — added
+///    explicitly because several Rust path libraries treat them
+///    ambiguously across platforms (some normalize as line terminators,
+///    others pass through verbatim).
 ///
 /// Unicode noncharacters (U+FFFE, U+FFFF, U+FDD0..=U+FDEF) are
 /// intentionally not rejected — Windows file APIs already error with

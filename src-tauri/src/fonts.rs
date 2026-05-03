@@ -354,6 +354,14 @@ pub enum ScanProgress {
     /// Replaces the prior `(cancelled, ceiling_hit)` two-boolean shape,
     /// which encoded only three legitimate states across four flag
     /// combinations.
+    ///
+    /// Payload-size invariant: this variant serializes to roughly
+    /// 80 bytes JSON (a short tag string + three small ints), well
+    /// under the 8 KB Tauri Channel direct-eval threshold. As long as
+    /// `reason` stays a single discriminant and the count fields stay
+    /// `usize`, Done always travels via the synchronous direct-eval
+    /// path; future fields with payload should be sized against the
+    /// same budget (see `reference_tauri_channel_perf.md`).
     Done {
         reason: ScanStopReason,
         added: usize,
@@ -964,6 +972,15 @@ fn preflight_directory_inner(canonical_dir: &Path) -> Result<FontScanPreflight, 
 }
 
 fn preflight_files_inner(paths: Vec<String>) -> FontScanPreflight {
+    // The public command enforces MAX_INPUT_PATHS, but the inner
+    // helper has no caller-side check. Debug-mode assertion catches
+    // any future internal caller that bypasses the public command.
+    debug_assert!(
+        paths.len() <= MAX_INPUT_PATHS,
+        "preflight_files_inner: paths.len()={} exceeds MAX_INPUT_PATHS={}",
+        paths.len(),
+        MAX_INPUT_PATHS
+    );
     let mut out = FontScanPreflight {
         font_files: 0,
         total_bytes: 0,
@@ -1172,8 +1189,14 @@ where
     let mut import = ImportOutcome::default();
     let mut progress_total = 0usize;
     let outcome = scan_body(scan_id, &mut |batch| {
-        progress_total += batch.len();
+        let batch_size = batch.len();
+        // Run the SQLite import FIRST so progress_total only advances on
+        // committed work. If the import errors, the closure short-
+        // circuits via `?` and the next outer `?` rolls the whole scan
+        // back without leaving the user staring at a count that
+        // overshoots the registered source.
         let batch_import = import_user_font_batch_tx(&tx, source_id, source_order, batch)?;
+        progress_total += batch_size;
         import.added += batch_import.added;
         import.duplicated += batch_import.duplicated;
         let _ = progress.send(ScanProgress::Batch {
@@ -1260,6 +1283,14 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
     scan_id: u64,
     mut emit_batch: F,
 ) -> Result<ScanOutcome, String> {
+    // Public command enforces MAX_INPUT_PATHS; debug-assert catches any
+    // future internal caller that bypasses that check.
+    debug_assert!(
+        paths.len() <= MAX_INPUT_PATHS,
+        "scan_files_inner: paths.len()={} exceeds MAX_INPUT_PATHS={}",
+        paths.len(),
+        MAX_INPUT_PATHS
+    );
     let mut buffer: Vec<LocalFontEntry> = Vec::new();
     let mut total: usize = 0;
     let mut last_emit = Instant::now();
@@ -1486,8 +1517,15 @@ pub fn clear_font_sources() -> Result<(), String> {
 /// before the scan starts" or "after it completes". Surface the
 /// situation as an error instead so the UI can disable the button or
 /// show a meaningful message.
+///
+/// `Acquire` ordering: this is a UX-policy gate, not a correctness
+/// barrier — the SQLite layer handles the actual mutation safety via
+/// WAL + busy_timeout. We only need a happens-before relationship
+/// with the `Release` write inside `begin_font_scan`'s CAS so the
+/// load can never see a stale NO_SCAN_ID. SeqCst would over-pay for
+/// what's needed; Acquire is the right semantic match.
 fn reject_during_active_scan(message: &str) -> Result<(), String> {
-    if ACTIVE_SCAN_ID.load(Ordering::SeqCst) != NO_SCAN_ID {
+    if ACTIVE_SCAN_ID.load(Ordering::Acquire) != NO_SCAN_ID {
         return Err(message.to_string());
     }
     Ok(())
