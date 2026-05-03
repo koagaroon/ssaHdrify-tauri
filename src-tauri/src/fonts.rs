@@ -1086,6 +1086,79 @@ fn scan_directory_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
     })
 }
 
+/// Shared scan-command body: opens the SQLite transaction, drives the
+/// inner scan loop with an emit closure that imports each batch into
+/// the source index AND streams a count-only progress event, then sends
+/// the Done sentinel on the Ok path.
+///
+/// Lifted out of `scan_font_directory` and `scan_font_files` once the
+/// duplication crossed the "real" threshold (round-3 review N1-13).
+/// The two commands now differ only in their pre-validation +
+/// canonicalize stages and the inner scan they invoke through `scan_body`.
+///
+/// `log_label` is the human-readable scan target (directory path, or
+/// "local font files" for the file-list command) — folded into the
+/// completion log line.
+fn run_streaming_scan_command<S>(
+    scan_id: u64,
+    source_id: &str,
+    progress: tauri::ipc::Channel<ScanProgress>,
+    log_label: &str,
+    scan_body: S,
+) -> Result<(), String>
+where
+    S: FnOnce(
+        u64,
+        &mut dyn FnMut(Vec<LocalFontEntry>) -> Result<(), String>,
+    ) -> Result<ScanOutcome, String>,
+{
+    let mut conn = open_user_font_db()?;
+    let tx = conn
+        .transaction()
+        .map_err(|e| db_error("transaction start failed", e))?;
+    let source_order = create_user_font_source_tx(&tx, source_id)?;
+    let mut import = ImportOutcome::default();
+    let mut progress_total = 0usize;
+    let outcome = scan_body(scan_id, &mut |batch| {
+        progress_total += batch.len();
+        let batch_import = import_user_font_batch_tx(&tx, source_id, source_order, batch)?;
+        import.added += batch_import.added;
+        import.duplicated += batch_import.duplicated;
+        let _ = progress.send(ScanProgress::Batch {
+            total: progress_total,
+        });
+        Ok(())
+    })?;
+    remove_empty_user_font_source_tx(&tx, source_id, import.added)?;
+    tx.commit()
+        .map_err(|e| db_error("transaction commit failed", e))?;
+
+    // End-of-stream sentinel; see ScanProgress::Done. MUST be the last
+    // send on the Ok path so every progress event has drained before
+    // the frontend reports the registered source count. NOT emitted on
+    // the Err path — the IPC rejection handles that signal, and
+    // runStreamingScan never reaches the donePromise await when invoke
+    // rejects.
+    let _ = progress.send(ScanProgress::Done {
+        reason: outcome.reason,
+        added: import.added,
+        duplicated: import.duplicated,
+    });
+
+    log::info!(
+        "{log_label} with scan {scan_id}: {} faces total, {} added, {} duplicate{}",
+        outcome.total,
+        import.added,
+        import.duplicated,
+        match outcome.reason {
+            ScanStopReason::Natural => "",
+            ScanStopReason::UserCancel => " (cancelled)",
+            ScanStopReason::CeilingHit => " (ceiling hit)",
+        }
+    );
+    Ok(())
+}
+
 /// Tauri command wrapping `scan_directory_inner` with a typed progress
 /// channel. Frontend creates a `Channel<ScanProgress>`, passes it as
 /// `progress`, and receives `Batch` events as faces are parsed.
@@ -1109,51 +1182,14 @@ pub async fn scan_font_directory(
         if !canonical_dir.is_dir() {
             return Err("Not a directory".to_string());
         }
-
-        let mut conn = open_user_font_db()?;
-        let tx = conn
-            .transaction()
-            .map_err(|e| db_error("transaction start failed", e))?;
-        let source_order = create_user_font_source_tx(&tx, &source_id)?;
-        let mut import = ImportOutcome::default();
-        let mut progress_total = 0usize;
-        let outcome = scan_directory_inner(&canonical_dir, scan_id, |batch| {
-            progress_total += batch.len();
-            let batch_import = import_user_font_batch_tx(&tx, &source_id, source_order, batch)?;
-            import.added += batch_import.added;
-            import.duplicated += batch_import.duplicated;
-            let _ = progress.send(ScanProgress::Batch {
-                total: progress_total,
-            });
-            Ok(())
-        })?;
-        remove_empty_user_font_source_tx(&tx, &source_id, import.added)?;
-        tx.commit()
-            .map_err(|e| db_error("transaction commit failed", e))?;
-
-        // End-of-stream sentinel; see ScanProgress::Done. MUST be the last
-        // send on the Ok path so every progress event has drained before
-        // the frontend reports the registered source count.
-        let _ = progress.send(ScanProgress::Done {
-            reason: outcome.reason,
-            added: import.added,
-            duplicated: import.duplicated,
-        });
-
-        log::info!(
-            "Scanned font directory '{}' with scan {}: {} faces total, {} added, {} duplicate{}",
-            canonical_dir.display(),
+        let log_label = format!("Scanned font directory '{}'", canonical_dir.display());
+        run_streaming_scan_command(
             scan_id,
-            outcome.total,
-            import.added,
-            import.duplicated,
-            match outcome.reason {
-                ScanStopReason::Natural => "",
-                ScanStopReason::UserCancel => " (cancelled)",
-                ScanStopReason::CeilingHit => " (ceiling hit)",
-            }
-        );
-        Ok(())
+            &source_id,
+            progress,
+            &log_label,
+            |scan_id, emit_batch| scan_directory_inner(&canonical_dir, scan_id, emit_batch),
+        )
     })
     .await
     .map_err(|e| format!("Font scan worker failed: {e}"))?
@@ -1263,47 +1299,13 @@ pub async fn scan_font_files(
     let active_scan = begin_font_scan(scan_id)?;
     tauri::async_runtime::spawn_blocking(move || {
         let _active_scan = active_scan;
-        let mut conn = open_user_font_db()?;
-        let tx = conn
-            .transaction()
-            .map_err(|e| db_error("transaction start failed", e))?;
-        let source_order = create_user_font_source_tx(&tx, &source_id)?;
-        let mut import = ImportOutcome::default();
-        let mut progress_total = 0usize;
-        let outcome = scan_files_inner(paths, scan_id, |batch| {
-            progress_total += batch.len();
-            let batch_import = import_user_font_batch_tx(&tx, &source_id, source_order, batch)?;
-            import.added += batch_import.added;
-            import.duplicated += batch_import.duplicated;
-            let _ = progress.send(ScanProgress::Batch {
-                total: progress_total,
-            });
-            Ok(())
-        })?;
-        remove_empty_user_font_source_tx(&tx, &source_id, import.added)?;
-        tx.commit()
-            .map_err(|e| db_error("transaction commit failed", e))?;
-
-        // See scan_font_directory for why Done is mandatory on the Ok path.
-        let _ = progress.send(ScanProgress::Done {
-            reason: outcome.reason,
-            added: import.added,
-            duplicated: import.duplicated,
-        });
-
-        log::info!(
-            "Scanned local font files with scan {}: {} faces total, {} added, {} duplicate{}",
+        run_streaming_scan_command(
             scan_id,
-            outcome.total,
-            import.added,
-            import.duplicated,
-            match outcome.reason {
-                ScanStopReason::Natural => "",
-                ScanStopReason::UserCancel => " (cancelled)",
-                ScanStopReason::CeilingHit => " (ceiling hit)",
-            }
-        );
-        Ok(())
+            &source_id,
+            progress,
+            "Scanned local font files",
+            |scan_id, emit_batch| scan_files_inner(paths, scan_id, emit_batch),
+        )
     })
     .await
     .map_err(|e| format!("Font scan worker failed: {e}"))?
