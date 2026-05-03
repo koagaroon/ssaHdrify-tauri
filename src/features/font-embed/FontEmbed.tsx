@@ -491,6 +491,14 @@ export default function FontEmbed() {
           // checked in the global aggregate grid AND that resolved to
           // a real font file. The aggregate keys are the same shape
           // as per-file keys, so set membership is direct.
+          //
+          // `selected` is the Set captured when the user clicked Embed
+          // (handleEmbed is a useCallback closing over the state value,
+          // not a ref). Mid-run checkbox toggles do NOT affect what the
+          // running batch embeds — that's intentional, so flipping a
+          // box mid-loop can't inject or omit a font part-way through
+          // the sequence and produce inconsistent outputs across files.
+          // Switching this to a ref would change that contract.
           const selectedFonts = cached.infos.filter(
             (info) => selected.has(fontSelectionKey(info)) && info.filePath
           );

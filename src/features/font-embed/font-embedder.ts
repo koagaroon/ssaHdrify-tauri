@@ -243,6 +243,14 @@ function familyFnvHash(family: string): string {
 /**
  * Build the font name for the [Fonts] section entry.
  * Convention: family_bold_italic.ttf (all lowercase)
+ *
+ * The `.ttf` suffix is unconditional even for OTF/TTC/OTC sources. The
+ * extension inside the [Fonts] header is cosmetic — ASS renderers
+ * (libass, VSFilter) identify embedded faces by the `fontname:` header,
+ * not the filename extension, and accept TTF/OTF/CFF face data
+ * regardless of the suffix. Keeping a single suffix avoids per-source
+ * branching and a future maintainer "fixing" the literal to track the
+ * source extension would produce noise for zero behavior change.
  */
 function buildFontFileName(key: FontKey): string {
   let name = key.family

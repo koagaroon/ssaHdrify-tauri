@@ -629,6 +629,13 @@ fn import_user_font_batch_tx(
             ])
             .map_err(|e| db_error("face insert failed", e))?;
         if changed == 0 {
+            // Face already indexed under an earlier source — dedup on
+            // canonical (path, face_index). Skipping the family-key inserts
+            // below intentionally leaves the original `source_order`
+            // authoritative; re-adding the same path under a new source_id
+            // does NOT promote the face to a newer lookup priority. Any
+            // future change that "promotes on re-add" must also reconcile
+            // with `db_lookup_prefers_newer_source_for_same_family_key`.
             duplicated += 1;
             continue;
         }
@@ -2236,9 +2243,12 @@ mod tests {
         let _guard = begin_font_scan(scan_id).expect("begin scan");
         cancel_font_scan(scan_id);
         assert_eq!(CANCEL_SCAN_ID.load(Ordering::Relaxed), scan_id);
-        // A stale lower id arriving while active==scan_id passes the
-        // range check (scan_id-1 < active), but fetch_max is a no-op
-        // because CANCEL_SCAN_ID is already at scan_id (the higher value).
+        // A stale lower id (scan_id - 1 < active) is NOT rejected by the
+        // range check — it satisfies `scan_id <= active`, so it reaches
+        // `fetch_max`. But `fetch_max` is a no-op because CANCEL_SCAN_ID
+        // is already at the higher value (scan_id), so the lower id can't
+        // regress the field. Net effect: stale lower-id cancels are
+        // accepted-but-harmless.
         cancel_font_scan(scan_id - 1);
         assert_eq!(CANCEL_SCAN_ID.load(Ordering::Relaxed), scan_id);
     }
