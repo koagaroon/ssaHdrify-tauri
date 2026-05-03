@@ -14,7 +14,10 @@ fn ext_is_allowed(path: &Path) -> bool {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
+        // ASCII-only — every entry in ALLOWED_TEXT_EXTENSIONS is ASCII,
+        // so to_ascii_lowercase is correct AND avoids the locale-aware
+        // allocations to_lowercase performs.
+        .map(|e| e.to_ascii_lowercase())
         .unwrap_or_default();
     ALLOWED_TEXT_EXTENSIONS.contains(&ext.as_str())
 }
@@ -45,7 +48,7 @@ fn sanitize_io_error(e: &std::io::Error, action: &str) -> String {
 
 /// Detect encoding and decode bytes to UTF-8. Shared logic for both the
 /// Tauri command and unit tests (which can't call Tauri commands directly).
-pub fn decode_bytes(bytes: &[u8]) -> ReadTextResult {
+pub(crate) fn decode_bytes(bytes: &[u8]) -> ReadTextResult {
     // 1. BOM detection
     if let Some(result) = detect_bom(bytes) {
         return result;
@@ -122,9 +125,17 @@ pub fn read_text_detect_encoding(path: String) -> Result<ReadTextResult, String>
         let ext = path_ref
             .extension()
             .and_then(|e| e.to_str())
-            .map(|e| e.to_lowercase())
+            .map(|e| e.to_ascii_lowercase())
             .unwrap_or_default();
-        return Err(format!("Unsupported file type: .{ext}"));
+        // Phrase the error so an empty extension reads naturally
+        // ("Unsupported file type: (no extension)") rather than the
+        // bare ". " trailing-dot artifact.
+        let label = if ext.is_empty() {
+            "(no extension)".to_string()
+        } else {
+            format!(".{ext}")
+        };
+        return Err(format!("Unsupported file type: {label}"));
     }
 
     // Resolve symlinks / reparse points. Two attack surfaces drive the

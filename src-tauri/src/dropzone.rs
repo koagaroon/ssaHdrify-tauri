@@ -13,11 +13,10 @@
 //! fonts.rs) enforce their own extension/provenance allowlists, so even
 //! a path leak here can't be turned into an arbitrary read.
 
-use crate::util::is_reparse_point;
+use crate::util::{is_reparse_point, MAX_INPUT_PATHS};
 use std::path::Path;
 
 const MAX_RESULT_FILES: usize = 5000;
-const MAX_INPUT_PATHS: usize = 1000;
 
 /// Expand dropped paths into a flat list of file paths.
 #[tauri::command]
@@ -61,7 +60,12 @@ pub fn expand_dropped_paths(paths: Vec<String>) -> Result<Vec<String>, String> {
             walk_one_level(p, &mut result);
         }
         if result.len() >= MAX_RESULT_FILES {
-            log::warn!("dropzone: result cap {MAX_RESULT_FILES} reached, truncating");
+            // "Truncating" is loose — we actually stop adding more, the
+            // already-added entries pass through unchanged. The user-
+            // visible effect is "the rest of your drop got dropped on
+            // the floor"; consumers can compare drop count vs result
+            // count if they want to detect this.
+            log::warn!("dropzone: result cap {MAX_RESULT_FILES} reached, dropping remainder");
             break;
         }
     }
@@ -78,10 +82,20 @@ fn walk_one_level(dir: &Path, out: &mut Vec<String>) {
             return;
         }
     };
-    for entry in entries.flatten() {
+    // Use match-on-Result so per-entry I/O errors are at least logged
+    // (`entries.flatten()` would silently swallow them, hiding broken
+    // permissions or stale-NFS-handle situations).
+    for entry_result in entries {
         if out.len() >= MAX_RESULT_FILES {
             break;
         }
+        let entry = match entry_result {
+            Ok(e) => e,
+            Err(e) => {
+                log::warn!("dropzone: read_dir entry failed in {dir:?}: {e}");
+                continue;
+            }
+        };
         let entry_path = entry.path();
         if let Some(name) = entry_path.file_name().and_then(|n| n.to_str()) {
             if name.starts_with('.') {
@@ -100,7 +114,7 @@ fn walk_one_level(dir: &Path, out: &mut Vec<String>) {
                 out.push(s.to_string());
             }
         }
-        // No recursion — one level only.
+        // Single-level walk by design — see module doc.
     }
 }
 
@@ -191,5 +205,52 @@ mod tests {
     fn empty_input_returns_empty() {
         let result = expand_dropped_paths(Vec::new()).unwrap();
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn mixed_file_and_folder_input_combines_both() {
+        let dir = make_tempdir("mixed");
+        let folder = dir.join("folder");
+        fs::create_dir(&folder).unwrap();
+        for n in ["x.ass", "y.srt"] {
+            fs::File::create(folder.join(n))
+                .unwrap()
+                .write_all(b"x")
+                .unwrap();
+        }
+        let standalone = dir.join("standalone.mkv");
+        fs::File::create(&standalone)
+            .unwrap()
+            .write_all(b"x")
+            .unwrap();
+        let result = expand_dropped_paths(vec![
+            folder.to_str().unwrap().to_string(),
+            standalone.to_str().unwrap().to_string(),
+        ])
+        .unwrap();
+        assert_eq!(result.len(), 3, "expected 2 from folder + 1 standalone, got {result:?}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn caps_result_at_max_result_files() {
+        let dir = make_tempdir("cap");
+        // Create MAX_RESULT_FILES + 100 files in one folder; expanding the
+        // folder must stop at the cap, not silently overflow.
+        let count = MAX_RESULT_FILES + 100;
+        for i in 0..count {
+            fs::File::create(dir.join(format!("f{i}.ass")))
+                .unwrap()
+                .write_all(b"x")
+                .unwrap();
+        }
+        let result = expand_dropped_paths(vec![dir.to_str().unwrap().to_string()]).unwrap();
+        assert_eq!(
+            result.len(),
+            MAX_RESULT_FILES,
+            "expected cap at MAX_RESULT_FILES, got {}",
+            result.len()
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 }

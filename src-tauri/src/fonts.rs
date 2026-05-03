@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use crate::util::validate_ipc_path;
+use crate::util::{validate_ipc_path, MAX_INPUT_PATHS};
 
 /// Allowed font file extensions (lowercase).
 const ALLOWED_FONT_EXTENSIONS: &[&str] = &["ttf", "otf", "ttc", "otc"];
@@ -29,21 +29,23 @@ const ALLOWED_FONT_EXTENSIONS: &[&str] = &["ttf", "otf", "ttc", "otc"];
 /// flush emits everything that was already parseable.
 const MAX_FONTS_PER_SCAN: usize = 100_000;
 
-/// Cap on the path-list length accepted by `scan_font_files`. Mirrors
-/// `dropzone::MAX_INPUT_PATHS` — the OS file picker can't realistically
-/// deliver more than a handful of thousand files in one selection, so 1000
-/// is generous for the user-facing flow while bounding worst-case CPU/IO
-/// if a future code path or compromised frontend supplies a huge vector.
-/// The per-entry MAX_FONTS_PER_SCAN ceiling still applies inside the loop.
-const MAX_INPUT_PATHS: usize = 1000;
+// MAX_INPUT_PATHS lives in `util` so dropzone and fonts share a single
+// definition. `MAX_FONTS_PER_SCAN` (the per-entry face cap) still
+// applies independently inside the scan loop.
 
 /// Number of faces accumulated before flushing a `ScanProgress::Batch`.
 ///
 /// This value is a UX choice, NOT a correctness gate. Correctness lives in
 /// the `ScanProgress::Done` sentinel — the frontend awaits Done before
 /// reporting final registration counts. Do NOT remove the Done sentinel as
-/// "redundant" because it is still the end-of-stream marker for Channel
-/// delivery and Rust-side source registration.
+/// "redundant" — it carries the load-bearing `reason` + `added` +
+/// `duplicated` payload AND signals end-of-stream so the frontend's
+/// donePromise resolves; Channel delivery in-order also lets the frontend
+/// safely report registered counts only after every preceding Batch has
+/// drained. (Pre-SQLite, Done was additionally needed to dodge Tauri
+/// Channel's 8 KB sync/async split when batches contained full font
+/// entries; post-SQLite the payload is constant-tiny so that motivation
+/// is gone, but the four reasons above remain.)
 ///
 /// Channel-budget context: since the SQLite migration, `ScanProgress::Batch`
 /// payload is constant-tiny (one `usize` count). The 8 KB direct-eval
@@ -70,6 +72,10 @@ const SCAN_BATCH_INTERVAL: Duration = Duration::from_millis(100);
 /// work a crafted TTC can force us to do (e.g., a malicious file declaring
 /// 256 faces with every other one malformed would otherwise drive the
 /// per-file parse cost linearly).
+///
+/// `u32` (not `usize`) because the loop uses it as the face index passed
+/// to `font_kit::font::Font::from_bytes(_, u32)` — matching font-kit's
+/// API avoids casts in the hot loop.
 const MAX_TTC_FACES: u32 = 16;
 
 /// Cap on raw font data read for subsetting — prevents OOM with large CJK
@@ -99,10 +105,17 @@ const USER_FONT_DB_FILENAME: &str = "user-font-sources.session.sqlite3";
 /// while millions of canonicalize calls run.
 const MAX_PREFLIGHT_ENTRIES: usize = 200_000;
 
-/// Strip the Win32 extended-length UNC prefix (`\\?\`) that `canonicalize()`
-/// adds on Windows, so paths compare consistently across insert and lookup.
+/// Strip the Win32 extended-length prefix (`\\?\` / `\\?\UNC\`) that
+/// `canonicalize()` adds on Windows, so paths compare consistently
+/// across insert and lookup. UNC form `\\?\UNC\server\share\…` rewrites
+/// to `\\server\share\…` (the standard UNC representation); the local
+/// form `\\?\C:\…` rewrites to `C:\…`. Without the UNC branch, network-
+/// share fonts would land in the dedup HashSet under a different prefix
+/// than their non-prefixed equivalents and fail equivalence dedup.
 fn normalize_canonical_path(canonical_str: &str) -> String {
-    if let Some(stripped) = canonical_str.strip_prefix("\\\\?\\") {
+    if let Some(unc) = canonical_str.strip_prefix("\\\\?\\UNC\\") {
+        format!("\\\\{unc}")
+    } else if let Some(stripped) = canonical_str.strip_prefix("\\\\?\\") {
         stripped.to_string()
     } else {
         canonical_str.to_string()
@@ -265,15 +278,26 @@ pub fn init_user_font_db(app_data_dir: &Path) -> Result<(), String> {
             }
         }
     }
+    // Open a connection BEFORE publishing the path slot so a schema
+    // failure doesn't leave the static state half-initialized (slot
+    // pointing at a real file but no usable DB behind it). On the Ok
+    // path we then publish the slot; on Err the slot stays None and
+    // a subsequent open call will surface "User font index is not
+    // initialized" instead of a more confusing schema-shape error.
+    let conn = Connection::open(&db_path).map_err(|e| db_error("open failed", e))?;
+    conn.pragma_update(None, "foreign_keys", "ON")
+        .map_err(|e| db_error("foreign_keys setup failed", e))?;
+    conn.pragma_update(None, "busy_timeout", 5000)
+        .map_err(|e| db_error("busy_timeout setup failed", e))?;
+    init_user_font_schema(&conn)?;
+    set_user_font_db_journal_mode_once(&conn)?;
     {
         let mut path_slot = USER_FONT_DB_PATH
             .lock()
             .map_err(|_| "Internal error: user font index path corrupted".to_string())?;
         *path_slot = Some(db_path);
     }
-    let conn = open_user_font_db()?;
-    init_user_font_schema(&conn)?;
-    set_user_font_db_journal_mode_once(&conn)
+    Ok(())
 }
 
 /// No frontend-created scan may use this id. Keeping zero reserved lets the
@@ -749,6 +773,10 @@ fn parse_local_font_file(canonical: &Path, scan_id: u64) -> Vec<LocalFontEntry> 
     // per-file parse cost bounded at 2 × face_count rather than 3 ×. Crafted
     // TTCs cannot force us to parse all 64 slots just by salting every other
     // face with bad data.
+    //
+    // Single-face files (TTF/OTF) effectively use this as a one-shot:
+    // `max_faces = 1`, the loop runs once, and the constant doesn't
+    // matter. Only TTC/OTC iteration depends on it.
     const MAX_CONSECUTIVE_FAILURES: u32 = 1;
     let mut consecutive_failures: u32 = 0;
     for i in 0..max_faces {
@@ -822,13 +850,15 @@ fn parse_local_font_file(canonical: &Path, scan_id: u64) -> Vec<LocalFontEntry> 
             }
         }
 
+        // Cache the font-kit family_name once per face — it's used twice
+        // (fallback when the name table is empty AND the primary-name
+        // stabilizer below) and font-kit re-parses on each call.
+        let fk_family_name = fk_font.family_name();
+
         // Fallback: if the name table produced nothing, emit one entry using
         // font-kit's single-name API so the font isn't silently dropped.
-        if family_variants.is_empty() {
-            let fallback = fk_font.family_name();
-            if !fallback.trim().is_empty() {
-                family_variants.insert(fallback);
-            }
+        if family_variants.is_empty() && !fk_family_name.trim().is_empty() {
+            family_variants.insert(fk_family_name.clone());
         }
 
         if family_variants.is_empty() {
@@ -840,7 +870,7 @@ fn parse_local_font_file(canonical: &Path, scan_id: u64) -> Vec<LocalFontEntry> 
         // listings stay deterministic across runs (HashSet iteration order
         // is not guaranteed). family_variants is a HashSet, so no duplicates
         // can leak into the sorted list.
-        let primary = fk_font.family_name();
+        let primary = fk_family_name;
         let mut families: Vec<String> = family_variants.into_iter().collect();
         families.sort();
         if let Some(pos) = families.iter().position(|v| v == &primary) {
@@ -1196,6 +1226,11 @@ pub async fn scan_font_directory(
 
     let active_scan = begin_font_scan(scan_id)?;
     tauri::async_runtime::spawn_blocking(move || {
+        // The guard's only job is to clear ACTIVE_SCAN_ID on Drop when
+        // the worker thread exits — Ok or Err. Bind it into the
+        // closure's scope (the move at the spawn_blocking boundary
+        // already transferred ownership; this just keeps it alive
+        // through every return path inside).
         let _active_scan = active_scan;
         let canonical_dir = Path::new(&dir).canonicalize().map_err(|e| {
             log::warn!("canonicalize directory failed: {e}");
@@ -1320,7 +1355,7 @@ pub async fn scan_font_files(
 
     let active_scan = begin_font_scan(scan_id)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let _active_scan = active_scan;
+        let _active_scan = active_scan; // see scan_font_directory for the WHY
         run_streaming_scan_command(
             scan_id,
             &source_id,
@@ -1351,16 +1386,33 @@ pub fn cancel_font_scan(scan_id: u64) {
     // is trust-the-frontend, so this is defense-in-depth that matches
     // the IPC-validation discipline in `validate_font_source_id` and
     // `validate_ipc_path`.
+    //
+    // active == NO_SCAN_ID: no scan is running, the cancel has nothing
+    // to target. Treat as a benign no-op (don't touch CANCEL_SCAN_ID
+    // even with fetch_max — that would persist a stale value into
+    // future scans, which `begin_font_scan` already explicitly resets,
+    // but the simpler invariant "we only write CANCEL_SCAN_ID when an
+    // active scan exists" is easier to reason about).
     let active = ACTIVE_SCAN_ID.load(Ordering::SeqCst);
     if active == NO_SCAN_ID || scan_id > active {
         return;
     }
+    // Mixed-ordering note: the load above is SeqCst because it reads
+    // the same atomic that `begin_font_scan` writes via SeqCst CAS —
+    // we want a consistent total order across all ACTIVE_SCAN_ID
+    // operations. The fetch_max below is Relaxed because the scan
+    // worker re-loads CANCEL_SCAN_ID inside its poll loop on every
+    // file iteration; visibility is bounded by the next poll, and any
+    // happens-before we'd care about is already established by the
+    // ACTIVE_SCAN_ID load. ARM/Apple-Silicon ordering doesn't change
+    // this story: the per-scan-id equality check in
+    // `font_scan_cancelled` is the actual correctness gate, not the
+    // ordering of CANCEL_SCAN_ID writes.
+    //
     // `fetch_max` ensures a stale cancel for an OLDER (smaller-id) scan
     // arriving after a newer cancel cannot regress CANCEL_SCAN_ID. The
     // returned prior max is intentionally discarded — caller has no
-    // useful action either way. Relaxed is sufficient: the scan worker
-    // re-loads CANCEL_SCAN_ID inside its poll loop and any ordering
-    // we'd want is provided by the SeqCst on ACTIVE_SCAN_ID above.
+    // useful action either way.
     CANCEL_SCAN_ID.fetch_max(scan_id, Ordering::Relaxed);
 }
 
@@ -1451,16 +1503,20 @@ fn register_font_path(path: &Path, font_index: u32) -> Result<FontLookupResult, 
     let mut cache = ALLOWED_FONT_PATHS
         .lock()
         .map_err(|_| "Internal error: font path cache corrupted".to_string())?;
-    // Reject only when the cache is full AND we'd be adding a new entry;
-    // re-registering an existing path is always cheap. An explicit error
-    // beats silently succeeding here then failing later in subset_font.
-    if !cache.contains(&canonical_string) && cache.len() >= MAX_PROVENANCE_CACHE_SIZE {
+    // Single HashSet hit via `insert` (returns true if newly added).
+    // Was previously `contains` + `insert` — two lookups for the
+    // common case. `insert` returning true means the slot was free
+    // before; cache.len() now reflects the post-insert count, so the
+    // cap check uses `>` (strictly above the pre-insert size limit).
+    let newly_added = cache.insert(canonical_string.clone());
+    if newly_added && cache.len() > MAX_PROVENANCE_CACHE_SIZE {
+        // Roll back the speculative insert so the cap is firm.
+        cache.remove(&canonical_string);
         return Err(format!(
             "Too many registered font paths (> {MAX_PROVENANCE_CACHE_SIZE}). \
              Restart the app to clear the cache."
         ));
     }
-    cache.insert(canonical_string.clone());
 
     Ok(FontLookupResult {
         path: canonical_string,

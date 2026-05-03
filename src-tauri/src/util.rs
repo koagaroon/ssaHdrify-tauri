@@ -10,6 +10,17 @@
 
 use std::path::Path;
 
+/// Cap on the path-list length any IPC command will accept in a single
+/// call. Two callers today: `dropzone::expand_dropped_paths` and
+/// `fonts::scan_font_files` / `fonts::preflight_font_files`. The OS file
+/// picker can't realistically deliver more than a handful of thousand
+/// files in one selection, so 1000 is generous for the user-facing flow
+/// while bounding worst-case CPU/IO if a future code path or
+/// compromised frontend supplies a huge vector. Lifted here once a
+/// second module needed the same number — keeping a single definition
+/// avoids the two callers drifting independently.
+pub const MAX_INPUT_PATHS: usize = 1000;
+
 /// Maximum length for any path string accepted from the IPC boundary,
 /// counted as UTF-8 BYTES not chars (`str::len()` is O(1) byte length).
 /// Windows path APIs are bounded by `MAX_PATH` (260) for legacy callers
