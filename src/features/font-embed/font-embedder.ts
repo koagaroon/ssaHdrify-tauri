@@ -63,7 +63,13 @@ export type SystemFontResolution = Pick<FontInfo, "filePath" | "fontIndex" | "er
  */
 const USER_FONT_KEY_SEP = "";
 export function userFontKey(family: string, bold: boolean, italic: boolean): string {
-  return `${family.toLowerCase()}${USER_FONT_KEY_SEP}${bold ? "1" : "0"}${USER_FONT_KEY_SEP}${italic ? "1" : "0"}`;
+  // NFC-normalize before lowercase so macOS HFS+ NFD-form filenames
+  // and NFC-form font internal names key identically. Without this,
+  // precomposed `é` (U+00E9) vs decomposed `e + ´` (U+0065+U+0301)
+  // produce different keys for the same visual family — embedFonts
+  // then silently mismatches its usage record at lookup time.
+  const normalized = family.normalize("NFC").toLowerCase();
+  return `${normalized}${USER_FONT_KEY_SEP}${bold ? "1" : "0"}${USER_FONT_KEY_SEP}${italic ? "1" : "0"}`;
 }
 
 export interface EmbedProgress {

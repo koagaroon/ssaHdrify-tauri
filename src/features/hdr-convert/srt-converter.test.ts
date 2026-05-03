@@ -31,10 +31,12 @@ describe("preprocessSrtColors", () => {
 
   it("inserts color reset after </font>", () => {
     const result = preprocessSrtColors('<font color="#FF0000">Red</font> normal');
-    // The reset must actually appear between the colored span and the
-    // following text — without it, "normal" would inherit red. Bare
-    // .toContain("normal") would pass even if no reset were emitted.
-    expect(result).toMatch(/Red(?:\{\\r\}|\{\\1c&H[0-9A-F]{6}&?\}) normal/);
+    // Pin the reset shape — the loose alternation `\{\\1c&H[0-9A-F]{6}\}`
+    // would still pass for an emitted `&HDEADBE` (any 6 hex). The reset
+    // contract is "either ASS reset tag {\r}, OR explicit BGR black
+    // (000000)." Anchor on those two specific shapes so a regression
+    // emitting a stray non-zero color still fails.
+    expect(result).toMatch(/Red(?:\{\\r\}|\{\\1c&H0+&?\}) normal/);
   });
 
   it("handles multiple attributes on <font> tag", () => {
@@ -52,8 +54,37 @@ describe("preprocessSrtColors", () => {
   it("handles text with no color attribute on font tag", () => {
     const input = '<font face="Arial">Styled</font>';
     const result = preprocessSrtColors(input);
-    // No color attribute → font tag should be stripped but no color override
+    // Layer-of-responsibility note: preprocessSrtColors only handles
+    // color-bearing <font> tags here. The opener without color is
+    // intentionally left in — it's stripped downstream by
+    // buildAssDocument's HTML-tag removal pass (see srt-converter.ts
+    // line 64 comment). The </font> closer DOES become {\\r} regardless,
+    // because that path is a uniform style-reset emitter.
     expect(result).toContain("Styled");
+    // Closer always becomes {\r}, including when the opener carried no color.
+    expect(result).not.toContain("</font>");
+    expect(result).toContain("{\\r}");
+  });
+
+  it("processes a 100KB pathological near-match payload in linear time", () => {
+    // ReDoS regression. SRT_COLOR_OPEN_RE has two `[^>]{0,512}` windows
+    // anchored on `>`. JS regex engines are linear on `>`-anchored
+    // character-class repetitions, so the worst case should be O(N).
+    // Build a 100KB payload with crafted near-matches that would
+    // exercise the worst alt-path: many "<font" prefixes that almost
+    // satisfy the color-attribute branch but fail at the closing
+    // delimiter, forcing backtrack-style behavior in a vulnerable
+    // engine. If this hangs the test runner (default 5s vitest
+    // timeout), we have a real ReDoS.
+    const chunk = '<font face="Arial" data-extra="x"'.repeat(40); // ~1300 bytes
+    const payload = chunk.repeat(80) + ">Styled</font>"; // ~100KB
+    const start = Date.now();
+    const result = preprocessSrtColors(payload);
+    const elapsed = Date.now() - start;
+    // Generous budget — a working linear-time regex finishes in <100ms;
+    // a quadratic backtracker would blow past 5s on this payload.
+    expect(elapsed).toBeLessThan(2000);
+    expect(typeof result).toBe("string");
   });
 });
 

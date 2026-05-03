@@ -618,6 +618,14 @@ fn remove_empty_user_font_source_tx(
     Ok(())
 }
 
+// Perf note: this is invoked once per font during subset_font, so an
+// ASS with 30 fonts produces 30 fresh connections. Each `Connection::open`
+// is tens of microseconds + the per-conn PRAGMAs (`foreign_keys`,
+// `busy_timeout`) — measured-cheap on local disk, but if a future
+// benchmark shows measurable embed-pass overhead, switch to a
+// `Lazy<Mutex<Connection>>` shared cache. Note that `journal_mode = WAL`
+// no longer runs per-connection (hoisted to init), which already
+// removed the bulk of the per-call cost.
 fn is_user_font_path_registered(canonical_path: &str) -> Result<bool, String> {
     let conn = open_user_font_db()?;
     conn.query_row(
@@ -1490,22 +1498,41 @@ pub fn resolve_user_font(
 #[tauri::command]
 pub fn remove_font_source(source_id: String) -> Result<(), String> {
     validate_font_source_id(&source_id)?;
+    let mut conn = open_user_font_db()?;
+    let tx = conn
+        .transaction()
+        .map_err(|e| db_error("transaction start failed", e))?;
+    // Guard inside the transaction: a check-before-open-transaction
+    // race could let a scan start between the guard and the DELETE,
+    // causing the DELETE to block on the scan's tx then immediately
+    // remove rows the scan just inserted. Inside the transaction the
+    // ACTIVE_SCAN_ID load happens-after BEGIN, so any concurrent
+    // begin_font_scan either ran-before-us (guard catches it) or
+    // ran-after-our-BEGIN (its inserts wait on us via WAL +
+    // busy_timeout, then commit after our DELETE finishes).
     reject_during_active_scan("Cannot remove font source while a scan is running")?;
-    let conn = open_user_font_db()?;
-    conn.execute(
+    tx.execute(
         "DELETE FROM font_sources WHERE source_id = ?1",
         params![source_id],
     )
     .map_err(|e| db_error("source delete failed", e))?;
+    tx.commit()
+        .map_err(|e| db_error("source delete commit failed", e))?;
     Ok(())
 }
 
 #[tauri::command]
 pub fn clear_font_sources() -> Result<(), String> {
+    let mut conn = open_user_font_db()?;
+    let tx = conn
+        .transaction()
+        .map_err(|e| db_error("transaction start failed", e))?;
+    // Same in-transaction guard as remove_font_source — see WHY there.
     reject_during_active_scan("Cannot clear font sources while a scan is running")?;
-    let conn = open_user_font_db()?;
-    conn.execute("DELETE FROM font_sources", [])
+    tx.execute("DELETE FROM font_sources", [])
         .map_err(|e| db_error("source clear failed", e))?;
+    tx.commit()
+        .map_err(|e| db_error("source clear commit failed", e))?;
     Ok(())
 }
 
@@ -1694,6 +1721,15 @@ fn is_in_system_fonts_dir(canonical: &Path) -> bool {
 /// to select the correct face. Always includes ASCII printable (0x0020–0x007E)
 /// and CJK fullwidth forms (0xFF01–0xFF5E) as safety padding.
 /// Falls back to full font on error.
+///
+/// Perf characteristic of `Vec<u8>` return: serde-serializes to JSON
+/// `number[]` (~10× expansion). For a typical 200 KB CJK subset that's
+/// a 2 MB JSON string + frontend `Uint8Array.from` conversion — fine
+/// for normal embed flows. The 10 MB fallback path on a degenerate-
+/// codepoint-set scenario hits ~100 MB serialized + main-thread parse,
+/// brief but observable. Switching to a custom binary IPC protocol
+/// would dodge the expansion; not done yet because the current cost
+/// is acceptable and the fallback path is rare.
 #[tauri::command]
 pub fn subset_font(
     font_path: String,
