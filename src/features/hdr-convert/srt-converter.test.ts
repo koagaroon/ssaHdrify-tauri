@@ -219,11 +219,17 @@ describe("isConvertible", () => {
   });
 });
 
-// ── SRT pipeline integration — guards against the Round 3 regression
-// where buildAssDocument re-escaped preprocessSrtColors' injected tags,
-// silently breaking HDR color conversion.
+// ── SRT pipeline integration — three category-separated suites ──────
+// Split into regression / security / composed so a future failure
+// vitest line points directly at which property broke (the previous
+// single-describe layout meant the failing test name carried the
+// category in its own title; with 3 describes the file outline shows
+// the three properties as siblings).
 
-describe("SRT pipeline integration", () => {
+// Regression: buildAssDocument must NOT re-escape preprocessSrtColors'
+// injected color tags. Round 3 caught a silent break of SRT→HDR color
+// conversion when the escape pass touched our trusted overrides.
+describe("SRT pipeline integration — color-tag preservation regression", () => {
   it("preserves preprocessSrtColors' injected color tags through buildAssDocument", () => {
     const srt = '<font color="#FF0000">Red text</font>';
     const escaped = escapeSrtUserText(srt);
@@ -237,7 +243,13 @@ describe("SRT pipeline integration", () => {
     // `{` must NOT appear escaped in the Dialogue line emitted for our tag
     expect(doc).not.toMatch(/\\\{\\\\1c/);
   });
+});
 
+// Security: a crafted SRT carrying literal `{...}` must NOT be able to
+// smuggle ASS overrides into the rendered output. escapeSrtUserText
+// neutralizes user braces; the integration here verifies the escaped
+// form survives buildAssDocument as literal text.
+describe("SRT pipeline integration — override-injection security", () => {
   it("escapes user braces so a crafted SRT cannot smuggle ASS overrides", () => {
     const srt = "{\\an8}hello"; // user-supplied literal
     const escaped = escapeSrtUserText(srt);
@@ -246,7 +258,11 @@ describe("SRT pipeline integration", () => {
     // literal `{\an8}hello`, NOT as a repositioning override.
     expect(doc).toContain("\\{\\\\an8\\}hello");
   });
+});
 
+// Composed: both properties hold simultaneously when user braces and
+// our injected color tags are present in the same input.
+describe("SRT pipeline integration — composed (braces + color tags)", () => {
   it("handles a composed SRT with both user braces and color tags correctly", () => {
     const srt = '{literal}<font color="#00FF00">green</font>{more}';
     const escaped = escapeSrtUserText(srt);
