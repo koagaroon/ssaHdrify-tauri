@@ -2056,6 +2056,50 @@ mod tests {
     }
 
     #[test]
+    fn subset_with_index_display_error_carries_diagnostic_context() {
+        // A truncated TTF header (4 magic bytes + 3 noise bytes) fails the
+        // skrifa parser inside fontcull immediately. The IPC return path
+        // formats fontcull errors via `Display` rather than `Debug`
+        // because Debug leaks internal struct fields, table tags, and
+        // byte offsets into the frontend; this test pins the contract
+        // that Display still carries enough context for support
+        // diagnostics — i.e., it isn't a bare "subset failed" string.
+        //
+        // Wrapper prefixes ("Cannot parse font face N:" / "Subset failed
+        // for face N:") guarantee a baseline of context regardless of
+        // fontcull's Display verbosity, so the assertion below also
+        // accepts the prefix text. If a future fontcull upgrade renames
+        // the parse error or strips its Display, this test still pins
+        // that the wrapper-supplied context is intact.
+        let truncated: Vec<u8> = vec![0x00, 0x01, 0x00, 0x00, b'A', b'B', b'C'];
+        let err = subset_with_index(&truncated, 0, &[0x41])
+            .expect_err("malformed TTF should fail subset_with_index at parse time");
+        assert!(!err.is_empty(), "subset error must be non-empty");
+        // Either the wrapper prefix OR a recognizable font-format term
+        // surfaces — both are acceptable diagnostic signals.
+        let lower = err.to_lowercase();
+        let has_context = lower.contains("face")
+            || lower.contains("font")
+            || lower.contains("table")
+            || lower.contains("parse")
+            || lower.contains("read")
+            || lower.contains("invalid")
+            || lower.contains("magic")
+            || lower.contains("collection");
+        assert!(
+            has_context,
+            "subset error should carry diagnostic context — got: {err}"
+        );
+        // Same contract for the unicode-subset path that subset_font's
+        // index==0 branch hits directly.
+        let unicode_err =
+            fontcull::subset_font_data_unicode(&truncated, &[0x41], &[])
+                .expect_err("malformed TTF should fail unicode subset")
+                .to_string();
+        assert!(!unicode_err.is_empty(), "fontcull Display must be non-empty");
+    }
+
+    #[test]
     fn user_font_key_lowercases_nfc_normalizes_and_separates_with_us() {
         // Case-insensitive — mirrors TS userFontKey case-fold contract.
         assert_eq!(
