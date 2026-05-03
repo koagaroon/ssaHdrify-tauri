@@ -2119,11 +2119,13 @@ mod tests {
         );
         // Same contract for the unicode-subset path that subset_font's
         // index==0 branch hits directly.
-        let unicode_err =
-            fontcull::subset_font_data_unicode(&truncated, &[0x41], &[])
-                .expect_err("malformed TTF should fail unicode subset")
-                .to_string();
-        assert!(!unicode_err.is_empty(), "fontcull Display must be non-empty");
+        let unicode_err = fontcull::subset_font_data_unicode(&truncated, &[0x41], &[])
+            .expect_err("malformed TTF should fail unicode subset")
+            .to_string();
+        assert!(
+            !unicode_err.is_empty(),
+            "fontcull Display must be non-empty"
+        );
     }
 
     #[test]
