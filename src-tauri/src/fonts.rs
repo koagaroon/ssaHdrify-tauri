@@ -414,6 +414,19 @@ impl Drop for ActiveScanGuard {
     }
 }
 
+/// Reserve `scan_id` as the active scan, returning a Drop-guarded handle
+/// that releases it on exit. Called BEFORE `spawn_blocking` so that:
+/// (a) the IPC command can fail synchronously with "Another font scan is
+/// already running" instead of spawning a thread that immediately exits,
+/// and (b) the guard's Drop (clearing ACTIVE_SCAN_ID via
+/// `compare_exchange(scan_id, NO_SCAN_ID)`) runs on whichever thread
+/// owns the guard at exit time, regardless of whether the closure in
+/// `spawn_blocking` returned Ok or Err.
+///
+/// SeqCst on the CAS pairs with the SeqCst load in `cancel_font_scan`
+/// to give a total order across all ACTIVE_SCAN_ID accesses — needed
+/// so cancel_font_scan's range check can never see a stale NO_SCAN_ID
+/// while a fresh scan has already won the slot.
 fn begin_font_scan(scan_id: u64) -> Result<ActiveScanGuard, String> {
     if scan_id == NO_SCAN_ID {
         return Err("Scan id must be non-zero".to_string());

@@ -213,7 +213,13 @@ pub fn read_text_detect_encoding(path: String) -> Result<ReadTextResult, String>
 /// so the frontend can distinguish clean decodes from ones with U+FFFD
 /// replacements.
 fn detect_bom(bytes: &[u8]) -> Option<ReadTextResult> {
-    // UTF-8 BOM (EF BB BF) — strip BOM, decode as UTF-8
+    // UTF-8 BOM (EF BB BF) — strip BOM, decode as UTF-8.
+    // The is_err()-then-from_utf8_lossy pair walks the bytes twice: once
+    // to validate, once to lossy-decode. Acceptable cost for the typical
+    // path (small subtitle files, success branch is single-walk via
+    // from_utf8_lossy's own validity check). If from_utf8_lossy ever
+    // grew an "encountered errors" return signal, we could collapse to
+    // a single walk.
     if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
         let payload = &bytes[3..];
         let lossy = std::str::from_utf8(payload).is_err();
@@ -275,8 +281,37 @@ mod tests {
     fn utf8_no_bom() {
         let result = decode_fixture("utf8.ass");
         assert_eq!(result.encoding, "UTF-8");
+        // Pin that the encoding label does NOT mention BOM — the no-BOM
+        // fixture must not be mis-classified as `UTF-8 (BOM)`. Bare
+        // eq=="UTF-8" technically catches that already, but an explicit
+        // not-contains is harder to break by accident if the label
+        // string ever grows variants like "UTF-8 (UTF-8 BOM stripped)".
+        assert!(!result.encoding.contains("BOM"));
         assert!(result.text.contains("中文字幕测试"));
         assert!(result.text.contains("[Script Info]"));
+    }
+
+    #[test]
+    fn empty_after_bom_strip() {
+        // A file containing ONLY a UTF-8 BOM and nothing else should
+        // decode cleanly to an empty string with the BOM-stripped
+        // label — not panic, not mis-detect as another encoding.
+        let result = decode_bytes(&[0xEF, 0xBB, 0xBF]);
+        assert_eq!(result.encoding, "UTF-8 (BOM)");
+        assert_eq!(result.text, "");
+    }
+
+    #[test]
+    fn utf16be_with_bom() {
+        // FE FF BOM + a few BE-encoded characters. Tests the UTF-16BE
+        // branch which has no fixture file; the inline byte sequence
+        // covers it without needing a new test asset.
+        let mut bytes = vec![0xFE, 0xFF];
+        // "AB" in UTF-16BE: 0x00 0x41, 0x00 0x42
+        bytes.extend_from_slice(&[0x00, 0x41, 0x00, 0x42]);
+        let result = decode_bytes(&bytes);
+        assert_eq!(result.encoding, "UTF-16BE");
+        assert_eq!(result.text, "AB");
     }
 
     #[test]
