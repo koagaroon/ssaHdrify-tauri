@@ -69,10 +69,33 @@ function newSourceId(): string {
   // crypto.randomUUID requires a secure context (Tauri's app:// scheme
   // qualifies; http:// would not). Defensive `?.` + fallback covers a
   // hypothetical future packaging change that ever served the bundle
-  // over plain http; today it's belt-and-braces.
-  return crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  // over plain http; today it's belt-and-braces. The fallback uses
+  // the canonical UUIDv4 hex/dash shape (8-4-4-4-12) so any consumer
+  // logging the id sees a uniform format regardless of which path
+  // produced it.
+  return crypto.randomUUID?.() ?? fallbackUuidV4();
 }
 
+function fallbackUuidV4(): string {
+  // Manual UUIDv4 from Math.random — only used when crypto.randomUUID
+  // isn't available. Not cryptographically strong (collision-safe is
+  // enough for an opaque session-scoped primary key).
+  const hex = (n: number) =>
+    Math.floor(Math.random() * 16 ** n)
+      .toString(16)
+      .padStart(n, "0");
+  // Set the version (4) and variant (10xx) bits per RFC 4122.
+  const version = (8 + Math.floor(Math.random() * 4)).toString(16); // 8/9/a/b
+  return `${hex(8)}-${hex(4)}-4${hex(3)}-${version}${hex(3)}-${hex(12)}`;
+}
+
+// Module-level singleton by design — the modal only ever mounts once
+// in this app, AND a single monotonic counter across StrictMode
+// double-mounts / future remounts is correctness-preserving (Rust
+// rejects same-id cancel races and ACTIVE_SCAN_ID's CAS guards
+// against concurrent scans). Switching to `useRef` per instance would
+// risk reusing low ids on remount, so the singleton stays.
+//
 // Seeded with Date.now() so a process restart won't collide with an
 // in-flight cancel from a previous instance addressed at a stale id.
 // The only invariant the seed must satisfy is "above NO_SCAN_ID = 0";
@@ -172,11 +195,18 @@ export default function FontSourceModal(props: Props) {
     onClose();
   }, [onClose]);
 
-  // Close on Escape.
+  // Close on Escape. stopPropagation prevents the same Esc from also
+  // dismissing any background dropdown / outer-scope listener that
+  // captures Escape (e.g., a future picker overlay or future
+  // command-palette key handler) — the modal is the topmost surface
+  // when open and should consume the key exclusively.
   useEffect(() => {
     if (!open) return;
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") requestClose();
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        requestClose();
+      }
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
@@ -274,9 +304,23 @@ export default function FontSourceModal(props: Props) {
     [t, applyAddResult]
   );
 
+  // Tracks whether the user has clicked Cancel during the current
+  // scan, so the inline cancel button can show a transitional
+  // "Cancelling…" state until the scan worker actually settles
+  // (drives release of the busy lock via setScanningWithParent(false)
+  // in handleAddFolder/Files's finally). Without this the user
+  // wonders if the click registered.
+  const [cancelRequested, setCancelRequested] = useState(false);
+  // Reset cancellation request whenever a new scan starts (scanning
+  // flips false→true) so the next scan starts with a clean cancel UI.
+  useEffect(() => {
+    if (scanning) setCancelRequested(false);
+  }, [scanning]);
+
   const handleCancelScan = useCallback(() => {
     const scanId = activeScanIdRef.current;
     if (scanId === null) return;
+    setCancelRequested(true);
     // .catch — visible state stays correct because the running scan
     // checks font_scan_cancelled independently, but a real bug in the
     // cancel pathway (command not registered, arg shape drift) would
@@ -620,9 +664,11 @@ export default function FontSourceModal(props: Props) {
               <button
                 type="button"
                 onClick={handleCancelScan}
+                disabled={cancelRequested}
                 className="btn-cancel-pill px-2 py-0.5 rounded text-xs"
+                style={{ opacity: cancelRequested ? 0.6 : 1 }}
               >
-                {t("font_scan_cancel")}
+                {cancelRequested ? t("font_scan_cancelling") : t("font_scan_cancel")}
               </button>
             </div>
           )}

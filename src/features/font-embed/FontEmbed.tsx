@@ -186,7 +186,12 @@ export default function FontEmbed() {
             continue;
           }
           if (gen !== pickGenRef.current) return;
-          const analyzed = await analyzeFonts(content, null, sysCache, true);
+          // Production path: ask Rust's session-local source index
+          // for matches before falling back to system fonts. The
+          // legacy in-memory userFontMap is null here because the
+          // heavy index lives in Rust now.
+          const useRustUserFonts = true;
+          const analyzed = await analyzeFonts(content, null, sysCache, useRustUserFonts);
           if (gen !== pickGenRef.current) return;
           cache.set(path, { content, infos: analyzed.infos, usages: analyzed.usages });
         }

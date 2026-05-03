@@ -439,7 +439,11 @@ async function runStreamingScan(
   const channel = new Channel<RawScanProgress>();
   // Resolved by the `Done` handler. Awaited after invoke so the function
   // returns only once every preceding `Batch` (sync OR async) has fired.
-  let resolveDone: (() => void) | null = null;
+  // Definite-assignment assertion: the Promise constructor calls its
+  // executor synchronously, so `resolveDone` is set before any consumer
+  // (channel.onmessage / await donePromise) could possibly read it.
+  // No `?.` needed at the call site.
+  let resolveDone!: () => void;
   const donePromise = new Promise<void>((resolve) => {
     resolveDone = resolve;
   });
@@ -455,7 +459,7 @@ async function runStreamingScan(
       result.reason = msg.reason;
       result.added = msg.added;
       result.duplicated = msg.duplicated;
-      resolveDone?.();
+      resolveDone();
     } else {
       // Defense-in-depth: TypeScript narrows the union exhaustively at
       // compile time, but a Rust enum variant rename without updating

@@ -343,6 +343,7 @@ export const strings: Record<string, StringEntry> = {
     zh: "已扫描 {0} 个字体…",
   },
   font_scan_cancel: { en: "Cancel", zh: "取消" },
+  font_scan_cancelling: { en: "Cancelling…", zh: "正在取消…" },
   font_scan_cancelled: {
     en: "Scan cancelled — kept {0} font(s).",
     zh: "已取消扫描，保留 {0} 个字体。",
