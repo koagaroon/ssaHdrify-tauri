@@ -90,8 +90,8 @@ fn collecting_channel() -> CollectingChannel {
             // would indicate an unrelated message and can be ignored.
             InvokeResponseBody::Raw(_) => return Ok(()),
         };
-        let event: serde_json::Value = serde_json::from_str(&json)
-            .expect("ScanProgress channel event must be valid JSON");
+        let event: serde_json::Value =
+            serde_json::from_str(&json).expect("ScanProgress channel event must be valid JSON");
         match event.get("kind").and_then(|v| v.as_str()) {
             Some("batch") => {
                 let total = event.get("total").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
@@ -130,8 +130,8 @@ fn cancelling_channel(scan_id: u64) -> CancellingChannel {
             InvokeResponseBody::Json(s) => s,
             InvokeResponseBody::Raw(_) => return Ok(()),
         };
-        let event: serde_json::Value = serde_json::from_str(&json)
-            .expect("ScanProgress channel event must be valid JSON");
+        let event: serde_json::Value =
+            serde_json::from_str(&json).expect("ScanProgress channel event must be valid JSON");
         match event.get("kind").and_then(|v| v.as_str()) {
             Some("batch") => {
                 let total = event.get("total").and_then(|v| v.as_u64()).unwrap_or(0) as usize;

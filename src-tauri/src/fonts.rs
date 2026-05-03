@@ -433,7 +433,10 @@ fn begin_font_scan(scan_id: u64) -> Result<ActiveScanGuard, String> {
     // boundary; debug_assert catches any future internal caller that
     // bypasses that gate. Release builds skip the check entirely so
     // we don't pay for it on the spawn path of every legitimate scan.
-    debug_assert!(scan_id != NO_SCAN_ID, "begin_font_scan called with NO_SCAN_ID");
+    debug_assert!(
+        scan_id != NO_SCAN_ID,
+        "begin_font_scan called with NO_SCAN_ID"
+    );
 
     ACTIVE_SCAN_ID
         .compare_exchange(NO_SCAN_ID, scan_id, Ordering::SeqCst, Ordering::SeqCst)

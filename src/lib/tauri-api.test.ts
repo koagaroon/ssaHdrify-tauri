@@ -145,11 +145,8 @@ describe("runStreamingScan via scanFontFiles", () => {
     });
 
     const seen: number[] = [];
-    const result = await scanFontFiles(
-      ["D:/A.ttf", "D:/B.otf"],
-      "source-files",
-      201,
-      (total) => seen.push(total)
+    const result = await scanFontFiles(["D:/A.ttf", "D:/B.otf"], "source-files", 201, (total) =>
+      seen.push(total)
     );
 
     expect(result).toEqual({ added: 2, duplicated: 0, reason: "natural" });
