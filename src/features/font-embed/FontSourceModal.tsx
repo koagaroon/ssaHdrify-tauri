@@ -196,13 +196,18 @@ export default function FontSourceModal(props: Props) {
     const activeScanId = activeScanIdRef.current;
     if (activeScanId !== null) {
       cancelFontScan(activeScanId).catch((e: unknown) => {
+        // Surface the IPC failure inside the modal so the user understands
+        // why the dismiss didn't take effect; without this they're stuck
+        // with no feedback. Console line stays for dev diagnostics.
+        const message = e instanceof Error ? e.message : String(e);
         console.warn("cancelFontScan failed:", e);
+        setError(t("font_scan_cancel_failed", message));
       });
       return;
     }
     if (busyRef.current) return;
     onClose();
-  }, [onClose]);
+  }, [onClose, t]);
 
   // Close on Escape. stopPropagation prevents the same Esc from also
   // dismissing any background dropdown / outer-scope listener that
@@ -333,11 +338,14 @@ export default function FontSourceModal(props: Props) {
     // .catch — visible state stays correct because the running scan
     // checks font_scan_cancelled independently, but a real bug in the
     // cancel pathway (command not registered, arg shape drift) would
-    // otherwise be invisible. Dev-visibility only; no user-facing error.
+    // otherwise be invisible to the user (UI keeps spinning). Surface
+    // through the modal's error banner so they see the IPC failed.
     cancelFontScan(scanId).catch((e: unknown) => {
+      const message = e instanceof Error ? e.message : String(e);
       console.warn("cancelFontScan failed:", e);
+      setError(t("font_scan_cancel_failed", message));
     });
-  }, []);
+  }, [t]);
 
   const claimScanFlow = useCallback(() => {
     if (busyRef.current) return false;
