@@ -156,6 +156,18 @@ export default function FontSourceModal(props: Props) {
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
 
   const requestClose = useCallback(() => {
+    // If a scan is in flight, route Esc / scrim click / ✕ button to a
+    // cancel attempt instead of silently doing nothing. The user gets
+    // an obvious dismiss path that doesn't require finding the inline
+    // Cancel button. After the cancel settles, busyRef clears and a
+    // second dismiss closes the modal normally.
+    const activeScanId = activeScanIdRef.current;
+    if (activeScanId !== null) {
+      cancelFontScan(activeScanId).catch((e: unknown) => {
+        console.warn("cancelFontScan failed:", e);
+      });
+      return;
+    }
     if (busyRef.current) return;
     onClose();
   }, [onClose]);
@@ -327,7 +339,17 @@ export default function FontSourceModal(props: Props) {
         if (scan.reason === "ceilingHit") {
           setInfo(t("font_scan_ceiling_hit", 0));
         } else if (scan.reason === "userCancel") {
-          setInfo(t("font_scan_cancelled", 0));
+          // Cancel-before-any-face. If the user happened to point at a
+          // folder where every entry was a duplicate of an already-
+          // loaded source, fold that fact into the cancel notice so
+          // they don't lose the dedup signal — the non-zero-added
+          // branch in reportSourceAdded does the same combination via
+          // font_scan_cancelled_with_dupes.
+          if (scan.duplicated > 0) {
+            setInfo(t("font_scan_cancelled_with_dupes", 0, scan.duplicated));
+          } else {
+            setInfo(t("font_scan_cancelled", 0));
+          }
         } else if (scan.duplicated > 0) {
           setError(t("font_sources_all_duplicate"));
         } else {
@@ -387,7 +409,12 @@ export default function FontSourceModal(props: Props) {
         if (scan.reason === "ceilingHit") {
           setInfo(t("font_scan_ceiling_hit", 0));
         } else if (scan.reason === "userCancel") {
-          setInfo(t("font_scan_cancelled", 0));
+          // Same dedup-aware cancel branch as the directory flow above.
+          if (scan.duplicated > 0) {
+            setInfo(t("font_scan_cancelled_with_dupes", 0, scan.duplicated));
+          } else {
+            setInfo(t("font_scan_cancelled", 0));
+          }
         } else if (scan.duplicated > 0) {
           setError(t("font_sources_all_duplicate"));
         } else {

@@ -48,12 +48,22 @@ export interface FontInfo {
 export type SystemFontResolution = Pick<FontInfo, "filePath" | "fontIndex" | "error" | "source">;
 
 /**
- * Map key for the user font map: "family|bold|italic" with family lowercased.
- * Kept as a plain string so React state can memo-compare equality cheaply and
- * so the same key derivation is trivially reproducible in the UI layer.
+ * Map key for the user font map: family + bold + italic joined by U+001F
+ * (Unit Separator). Family is lowercased.
+ *
+ * The separator is a control character that real font family names never
+ * contain (would be a malformed font / ASS file). The earlier `|`
+ * separator could collide if a hostile or malformed family name itself
+ * contained `|` — low severity, but switching to U+001F sidesteps the
+ * question entirely. Pure string format change; no caller introspects
+ * the key shape, so the swap is opaque to consumers.
+ *
+ * Plain string so React state can memo-compare equality cheaply and the
+ * same derivation is trivially reproducible in the UI layer.
  */
+const USER_FONT_KEY_SEP = "";
 export function userFontKey(family: string, bold: boolean, italic: boolean): string {
-  return `${family.toLowerCase()}|${bold ? "1" : "0"}|${italic ? "1" : "0"}`;
+  return `${family.toLowerCase()}${USER_FONT_KEY_SEP}${bold ? "1" : "0"}${USER_FONT_KEY_SEP}${italic ? "1" : "0"}`;
 }
 
 export interface EmbedProgress {
@@ -364,6 +374,15 @@ export async function embedFonts(
   const total = selectedFonts.length;
   const fontEntries: string[] = [];
 
+  // Index fontUsages by lookup key once (O(N)) instead of linear-scanning
+  // for each selected font (O(N²)). For a 40-font subtitle the scan cost
+  // is negligible, but the index also makes the lookup intent explicit
+  // and matches how analyzeFonts builds its own keyed maps.
+  const usageByKey = new Map<string, FontUsage>();
+  for (const u of fontUsages) {
+    usageByKey.set(userFontKey(u.key.family, u.key.bold, u.key.italic), u);
+  }
+
   for (let i = 0; i < selectedFonts.length; i++) {
     if (isCancelled?.()) break;
 
@@ -378,13 +397,7 @@ export async function embedFonts(
       total,
     });
 
-    // Find the matching usage to get codepoints
-    const usage = fontUsages.find(
-      (u) =>
-        u.key.family === info.key.family &&
-        u.key.bold === info.key.bold &&
-        u.key.italic === info.key.italic
-    );
+    const usage = usageByKey.get(userFontKey(info.key.family, info.key.bold, info.key.italic));
     if (!usage) {
       // Selected FontInfo has no matching FontUsage — means analyzeFonts and
       // the current fontUsages array disagree, which should be impossible if

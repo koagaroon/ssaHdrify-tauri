@@ -14,30 +14,48 @@
  */
 import { exists } from "@tauri-apps/plugin-fs";
 
+/** Maximum concurrent fs::stat probes. Real-world batch sizes top out
+ *  around 26 (typical anime episode count), so 32 covers the common
+ *  case in one wave while bounding worst-case fan-out from a hostile-
+ *  or-buggy-state caller supplying thousands of paths. Without this
+ *  cap, Promise.all over 5000 paths would queue 5000 simultaneous IPC
+ *  calls into Tauri's command pump and briefly hang the runtime. */
+const MAX_CONCURRENT_STAT = 32;
+
 /**
- * Count how many of the given paths already exist on disk. Each check
- * runs as a single fs::stat in parallel, so batch latency is roughly
- * one round-trip regardless of the path count. Errors on individual
- * checks are treated as non-existent rather than propagated — a path
- * we can't stat is one we can't claim is colliding.
+ * Count how many of the given paths already exist on disk. Stat checks
+ * run in parallel (capped at `MAX_CONCURRENT_STAT`) so batch latency is
+ * a small number of round-trips regardless of path count. Errors on
+ * individual checks are treated as non-existent rather than propagated
+ * — a path we can't stat is one we can't claim is colliding.
  */
 export async function countExistingFiles(paths: string[]): Promise<number> {
   if (paths.length === 0) return 0;
   let errorCount = 0;
-  const checks = await Promise.all(
-    paths.map(async (p) => {
+  let existingCount = 0;
+  // Worker-pool pattern: keep up to MAX_CONCURRENT_STAT probes in flight;
+  // each worker pulls the next index off a shared cursor. Order doesn't
+  // matter for the count, so no result reassembly needed.
+  let cursor = 0;
+  const worker = async () => {
+    while (true) {
+      const idx = cursor++;
+      if (idx >= paths.length) return;
       try {
-        return await exists(p);
+        if (await exists(paths[idx])) {
+          existingCount += 1;
+        }
       } catch {
         errorCount += 1;
-        return false;
       }
-    })
-  );
+    }
+  };
+  const workerCount = Math.min(MAX_CONCURRENT_STAT, paths.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
   if (errorCount > 0) {
     console.warn(
       `[ssaHdrify] countExistingFiles ignored ${errorCount} stat failure(s); treating them as non-existent.`
     );
   }
-  return checks.filter(Boolean).length;
+  return existingCount;
 }

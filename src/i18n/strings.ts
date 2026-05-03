@@ -41,10 +41,6 @@ export const strings: Record<string, StringEntry> = {
   status_fonts_done: { en: "Fonts embedded", zh: "字体已嵌入" },
   status_fonts_error: { en: "Embed failed", zh: "嵌入失败" },
   status_fonts_cancelled: { en: "Embed cancelled", zh: "已取消嵌入" },
-  status_fonts_batch_ready: {
-    en: "Ready to embed · {0} file(s)",
-    zh: "可嵌入 · {0} 个文件",
-  },
   status_fonts_batch_pending: {
     en: "Ready to embed · {0} font(s) across {1} file(s)",
     zh: "可嵌入 · 跨 {1} 个文件的 {0} 个字体",
@@ -260,7 +256,6 @@ export const strings: Record<string, StringEntry> = {
   fonts_missing: { en: "Missing", zh: "缺失" },
   btn_embed: { en: "Embed Selected Fonts ({0})", zh: "嵌入已选字体（{0}）" },
   btn_embed_default: { en: "Embed Fonts", zh: "嵌入字体" },
-  btn_embed_all: { en: "Embed All ({0})", zh: "全部嵌入（{0}）" },
   msg_fonts_start: {
     en: "Starting embed: {0} file(s)",
     zh: "开始嵌入：{0} 个文件",
@@ -275,14 +270,6 @@ export const strings: Record<string, StringEntry> = {
     en: "Tip: drag .ass / .ssa files or a folder onto the file strip above (other files in the folder are skipped automatically)",
     zh: "提示：可将 .ass / .ssa 文件或文件夹拖到上方文件栏（文件夹内其他类型文件会自动忽略）",
   },
-  fonts_batch_placeholder_title: {
-    en: "Batch mode — {0} files queued",
-    zh: "批量模式 — {0} 个文件已就绪",
-  },
-  fonts_batch_placeholder_body: {
-    en: "Each file is analyzed individually at embed time. Detected fonts that match a local source or system install are embedded automatically.",
-    zh: "嵌入时每个文件单独分析。检测到的字体若能匹配本地来源或系统字体，将自动嵌入。",
-  },
   btn_embedding: { en: "Embedding…", zh: "嵌入中…" },
   msg_subsetting: { en: "Subsetting {0}…", zh: "子集化 {0}…" },
   msg_font_skipped: { en: "Skipped {0}: {1}", zh: "跳过 {0}：{1}" },
@@ -291,11 +278,14 @@ export const strings: Record<string, StringEntry> = {
     en: "Saved: {0} ({1} font(s) embedded)",
     zh: "已保存：{0}（已嵌入 {1} 个字体）",
   },
+  msg_embed_no_change: {
+    en: "Skipped {0} — no fonts were embedded (output would equal input)",
+    zh: "跳过 {0} — 未嵌入任何字体（输出与输入相同，未写文件）",
+  },
   fonts_full_embed_warning: {
     en: "Fonts are subset to only the glyphs used in this subtitle. Safety padding (ASCII + CJK fullwidth) is included automatically.",
     zh: "字体已子集化为仅包含本字幕使用的字形，并自动包含安全填充（ASCII + CJK 全角字符）",
   },
-  btn_select_subtitle_file: { en: "Select Subtitle File", zh: "选择字幕文件" },
   btn_select_font_files: {
     en: "Select Font Files / Folder",
     zh: "选择字体文件 / 文件夹",

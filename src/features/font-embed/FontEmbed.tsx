@@ -501,8 +501,17 @@ export default function FontEmbed() {
           }
           if (cancelRef.current) break;
 
-          await writeText(outputPath, result.content);
           const outName = fileNameFromPath(outputPath);
+          if (result.embeddedCount === 0) {
+            // Nothing was actually embedded — skip the write so we
+            // don't produce a `.embedded.ass` that's identical to the
+            // input and log "saved" for a no-op. Surface as a warning
+            // so the user knows the file was processed but the output
+            // would have been a copy of the source.
+            addLog(t("msg_embed_no_change", outName), "info");
+            continue;
+          }
+          await writeText(outputPath, result.content);
           addLog(t("msg_embed_saved", outName, result.embeddedCount), "success");
           successCount++;
         } catch (e) {
@@ -575,6 +584,11 @@ export default function FontEmbed() {
     setProgress(null);
     setDropError(null);
     perFileAnalysisRef.current = new Map();
+    // Explicit reset — previously relied on a downstream useEffect on
+    // fontsFiles change to clear lastActionResult, which works today
+    // but couples this clear to that effect's dep tracking. Reset here
+    // so the status pill goes neutral the moment the user hits Clear.
+    setLastActionResult(null);
   }, [clearFile]);
 
   // Now that the batch grid carries per-font checkboxes too, the

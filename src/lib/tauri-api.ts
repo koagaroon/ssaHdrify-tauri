@@ -460,8 +460,14 @@ async function runStreamingScan(
       // Defense-in-depth: TypeScript narrows the union exhaustively at
       // compile time, but a Rust enum variant rename without updating
       // RawScanProgress would silently fall through here. Surface in
-      // dev so future drift is visible.
-      console.warn("unknown ScanProgress kind:", (msg as { kind: string }).kind);
+      // dev so future drift is visible. Guard the cast — a future
+      // Rust-side serde change to a non-object payload (untagged enum,
+      // bare value) would otherwise throw on `.kind` access here.
+      const tag =
+        typeof msg === "object" && msg !== null && "kind" in msg
+          ? (msg as { kind: unknown }).kind
+          : msg;
+      console.warn("unknown ScanProgress payload:", tag);
     }
   };
   await invoke(command, { ...args, progress: channel });
