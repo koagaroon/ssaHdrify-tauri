@@ -144,24 +144,31 @@ fn user_font_db_path() -> Result<PathBuf, String> {
 fn open_user_font_db() -> Result<Connection, String> {
     let path = user_font_db_path()?;
     let conn = Connection::open(path).map_err(|e| db_error("open failed", e))?;
+    // foreign_keys and busy_timeout are per-CONNECTION SQLite settings —
+    // each freshly-opened connection needs them. Cheap (microseconds).
+    // journal_mode (WAL) is per-FILE and persists once set, so it's
+    // configured once at init by `set_user_font_db_journal_mode_once`.
     conn.pragma_update(None, "foreign_keys", "ON")
         .map_err(|e| db_error("foreign_keys setup failed", e))?;
-    // WAL + 5 s busy_timeout: today the modal-scrim UX prevents two
-    // commands from contending on the DB, but `is_user_font_path_registered`
-    // (called from `subset_font`), `resolve_user_font` (called from
-    // `analyzeFonts`), and `remove_font_source` are all reachable
-    // independently of the modal. A future refactor that decouples scan
-    // from the modal would surface intermittent SQLITE_BUSY as silent
-    // miss/fail under default DELETE journal + busy_timeout=0. Set both
-    // up-front so the database stays well-behaved across that refactor.
+    conn.pragma_update(None, "busy_timeout", 5000)
+        .map_err(|e| db_error("busy_timeout setup failed", e))?;
+    Ok(conn)
+}
+
+/// Switch the user font index to WAL mode. Called once from
+/// `init_user_font_db`; subsequent connections inherit the file-level
+/// mode for free. Hoisted out of `open_user_font_db` so a degraded
+/// filesystem (read-only FS, network mount, tmpfs) doesn't trigger the
+/// "WAL didn't take" warn once per `is_user_font_path_registered` call
+/// — that ran 20+ times per embed pass when the parent did.
+fn set_user_font_db_journal_mode_once(conn: &Connection) -> Result<(), String> {
     conn.pragma_update(None, "journal_mode", "WAL")
         .map_err(|e| db_error("journal_mode setup failed", e))?;
     // SQLite silently keeps the previous mode (or falls back to
-    // "memory") on filesystems that can't host WAL files (read-only FS,
-    // some network mounts, certain tmpfs). pragma_update returns Ok in
-    // both success AND silent-degrade cases — verify the actual mode
-    // after the fact and warn if WAL didn't take. Not fatal: the busy_
-    // timeout below still applies, and the modal-scrim UX prevents the
+    // "memory") on filesystems that can't host WAL files. pragma_update
+    // returns Ok in both success AND silent-degrade cases — verify the
+    // actual mode and warn if WAL didn't take. Not fatal: the per-conn
+    // busy_timeout still applies, and the modal-scrim UX prevents the
     // contention this hardening was meant for in the first place.
     let actual_mode: String = conn
         .pragma_query_value(None, "journal_mode", |row| row.get(0))
@@ -172,9 +179,7 @@ fn open_user_font_db() -> Result<Connection, String> {
              SQLITE_BUSY hardening may not apply on this filesystem"
         );
     }
-    conn.pragma_update(None, "busy_timeout", 5000)
-        .map_err(|e| db_error("busy_timeout setup failed", e))?;
-    Ok(conn)
+    Ok(())
 }
 
 fn init_user_font_schema(conn: &Connection) -> Result<(), String> {
@@ -267,7 +272,8 @@ pub fn init_user_font_db(app_data_dir: &Path) -> Result<(), String> {
         *path_slot = Some(db_path);
     }
     let conn = open_user_font_db()?;
-    init_user_font_schema(&conn)
+    init_user_font_schema(&conn)?;
+    set_user_font_db_journal_mode_once(&conn)
 }
 
 /// No frontend-created scan may use this id. Keeping zero reserved lets the
@@ -1766,7 +1772,13 @@ fn subset_with_index(font_data: &[u8], index: u32, codepoints: &[u32]) -> Result
 mod tests {
     use super::*;
 
-    static DB_TEST_LOCK: Mutex<()> = Mutex::new(());
+    /// Serializes any unit test that reads or mutates DB state, the
+    /// `ACTIVE_SCAN_ID` / `CANCEL_SCAN_ID` atomics, or both. cargo test
+    /// runs in parallel by default — without serialization, two tests
+    /// can race on `compare_exchange` / `fetch_max` and silently flake.
+    /// Renamed from `DB_TEST_LOCK` once the cancel tests revealed it
+    /// wasn't DB-only.
+    static SCAN_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     fn init_test_user_font_db(name: &str) {
         let dir = std::env::temp_dir().join(format!(
@@ -1804,7 +1816,7 @@ mod tests {
 
     #[test]
     fn db_schema_indexes_family_keys_for_cascade_delete() {
-        let _guard = DB_TEST_LOCK.lock().unwrap();
+        let _guard = SCAN_TEST_LOCK.lock().unwrap();
         init_test_user_font_db("schema-index");
         let conn = open_user_font_db().expect("test DB should open");
         let index_count: i64 = conn
@@ -1819,7 +1831,7 @@ mod tests {
 
     #[test]
     fn db_import_dedupes_faces_and_resolves_family() {
-        let _guard = DB_TEST_LOCK.lock().unwrap();
+        let _guard = SCAN_TEST_LOCK.lock().unwrap();
         init_test_user_font_db("dedupe");
         let outcome = commit_entries(
             "source-a",
@@ -1840,7 +1852,7 @@ mod tests {
 
     #[test]
     fn db_lookup_prefers_newer_source_for_same_family_key() {
-        let _guard = DB_TEST_LOCK.lock().unwrap();
+        let _guard = SCAN_TEST_LOCK.lock().unwrap();
         init_test_user_font_db("source-order");
         commit_entries(
             "source-a",
@@ -1859,7 +1871,7 @@ mod tests {
 
     #[test]
     fn db_remove_and_clear_update_lookup_and_provenance() {
-        let _guard = DB_TEST_LOCK.lock().unwrap();
+        let _guard = SCAN_TEST_LOCK.lock().unwrap();
         init_test_user_font_db("remove-clear");
         commit_entries(
             "source-a",
@@ -1926,6 +1938,7 @@ mod tests {
     /// on real font files. Buffer is empty so no batch is emitted.
     #[test]
     fn files_inner_honors_targeted_cancel_before_first_file() {
+        let _guard = SCAN_TEST_LOCK.lock().unwrap();
         let scan_id = CANCEL_SCAN_ID.load(Ordering::Relaxed).saturating_add(1);
         CANCEL_SCAN_ID.fetch_max(scan_id, Ordering::Relaxed);
         let mut emitted: Vec<Vec<LocalFontEntry>> = Vec::new();
@@ -1945,6 +1958,7 @@ mod tests {
     /// cancel through.
     #[test]
     fn cancel_command_records_scan_id_monotonically() {
+        let _lock = SCAN_TEST_LOCK.lock().unwrap();
         let scan_id = CANCEL_SCAN_ID.load(Ordering::Relaxed).saturating_add(10);
         let _guard = begin_font_scan(scan_id).expect("begin scan");
         cancel_font_scan(scan_id);
@@ -1962,6 +1976,7 @@ mod tests {
     /// with a u64::MAX id.
     #[test]
     fn cancel_command_rejects_future_id_when_no_active_scan() {
+        let _guard = SCAN_TEST_LOCK.lock().unwrap();
         let baseline = CANCEL_SCAN_ID.load(Ordering::Relaxed);
         cancel_font_scan(u64::MAX);
         assert_eq!(CANCEL_SCAN_ID.load(Ordering::Relaxed), baseline);
