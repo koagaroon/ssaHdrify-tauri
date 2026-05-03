@@ -36,17 +36,33 @@ export function buildConflictMessage(
   isFileInUse: IsFileInUse,
   t: Translator
 ): string | null {
-  let conflictCount = 0;
-  let conflictTab: TabId | null = null;
+  // Track conflicts grouped by tab so a multi-tab collision (e.g.,
+  // two paths in HDR + one in Time Shift) lists every blocking tab,
+  // not just the first one we hit. Previous "first conflict only"
+  // behavior misled users who saw "blocked by HDR Convert" while a
+  // file was actually also in Time Shift.
+  const conflictsByTab = new Map<TabId, number>();
   for (const p of paths) {
     const usedIn = isFileInUse(p, currentTab);
     if (usedIn) {
-      if (conflictTab === null) conflictTab = usedIn;
-      conflictCount++;
+      conflictsByTab.set(usedIn, (conflictsByTab.get(usedIn) ?? 0) + 1);
     }
   }
-  if (conflictTab === null) return null;
-  return t("msg_dedup_blocked", conflictCount, t(TAB_LABEL_KEYS[conflictTab]));
+  if (conflictsByTab.size === 0) return null;
+  // Single-tab path keeps the existing message exactly so callers /
+  // tests anchored on it stay green.
+  if (conflictsByTab.size === 1) {
+    const [tab, count] = conflictsByTab.entries().next().value!;
+    return t("msg_dedup_blocked", count, t(TAB_LABEL_KEYS[tab]));
+  }
+  // Multi-tab: list each "{count} in {tab}" segment, joined by "/".
+  // Total count is the sum so the leading "{N} blocked" claim still
+  // matches the user's actual selection size.
+  const totalCount = Array.from(conflictsByTab.values()).reduce((a, b) => a + b, 0);
+  const tabs = Array.from(conflictsByTab.entries())
+    .map(([tab, count]) => `${count} ${t(TAB_LABEL_KEYS[tab])}`)
+    .join(" / ");
+  return t("msg_dedup_blocked", totalCount, tabs);
 }
 
 /**

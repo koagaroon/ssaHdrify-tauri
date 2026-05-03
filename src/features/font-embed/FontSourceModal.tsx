@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   cancelFontScan,
   pickFontDirectory,
@@ -313,149 +313,147 @@ export default function FontSourceModal(props: Props) {
     [t]
   );
 
-  const handleAddFolder = useCallback(async () => {
-    if (!claimScanFlow()) return;
-    setError(null);
-    setInfo(null);
-    let scanId: number | null = null;
-    try {
-      const dir = await pickFontDirectory(t);
-      if (!dir) return;
-      const preflight = await preflightFontDirectory(dir);
-      const confirmed = await confirmLargeFontScan(preflight);
-      if (!confirmed) return;
-      scanId = newScanId();
-      const sourceId = newSourceId();
-      activeScanIdRef.current = scanId;
-      resetScanProgress();
-      setScanningWithParent(true);
-      const scan = await scanFontDirectory(dir, sourceId, scanId, (total) =>
-        scheduleScanProgress(total)
-      );
-      if (scan.added === 0) {
-        // Early stop before any face was parsed — distinguish ceiling hit
-        // (source too large), user cancel, all-duplicate, and "folder
-        // genuinely has no fonts" so the user knows what happened.
-        if (scan.reason === "ceilingHit") {
-          setInfo(t("font_scan_ceiling_hit", 0));
-        } else if (scan.reason === "userCancel") {
-          // Cancel-before-any-face. If the user happened to point at a
-          // folder where every entry was a duplicate of an already-
-          // loaded source, fold that fact into the cancel notice so
-          // they don't lose the dedup signal — the non-zero-added
-          // branch in reportSourceAdded does the same combination via
-          // font_scan_cancelled_with_dupes.
-          if (scan.duplicated > 0) {
-            setInfo(t("font_scan_cancelled_with_dupes", 0, scan.duplicated));
+  // Shared scan flow: pick → preflight → confirm large → scan → branch
+  // on outcome. Folder and file-list flows previously inlined this same
+  // 60-line skeleton with only the picker / preflight / scan / source-
+  // builder / empty-error differing — easy to drift between the two.
+  // The closure below captures all the scoped state (refs, setters,
+  // setScanningWithParent) so the per-flow callsite stays a tiny
+  // descriptor.
+  const runScanFlow = useCallback(
+    async function <T>(opts: {
+      pickInput: () => Promise<T | null>;
+      preflight: (input: T) => Promise<FontScanPreflight>;
+      scan: (
+        input: T,
+        sourceId: string,
+        scanId: number,
+        onProgress: (total: number) => void
+      ) => Promise<FontScanResult>;
+      buildSource: (input: T, sourceId: string, addedCount: number) => FontSource;
+      emptyError: (input: T) => string;
+    }): Promise<void> {
+      if (!claimScanFlow()) return;
+      setError(null);
+      setInfo(null);
+      let scanId: number | null = null;
+      try {
+        const input = await opts.pickInput();
+        if (input === null) return;
+        const preflight = await opts.preflight(input);
+        const confirmed = await confirmLargeFontScan(preflight);
+        if (!confirmed) return;
+        scanId = newScanId();
+        const sourceId = newSourceId();
+        activeScanIdRef.current = scanId;
+        resetScanProgress();
+        setScanningWithParent(true);
+        const scan = await opts.scan(input, sourceId, scanId, (total) =>
+          scheduleScanProgress(total)
+        );
+        if (scan.added === 0) {
+          // Early stop before any face was parsed — distinguish ceiling
+          // hit (source too large), user cancel, all-duplicate, and the
+          // genuinely-empty case so the user knows what happened.
+          if (scan.reason === "ceilingHit") {
+            setInfo(t("font_scan_ceiling_hit", 0));
+          } else if (scan.reason === "userCancel") {
+            // Cancel-before-any-face. If everything in the picked input
+            // was a duplicate of an already-loaded source, fold that
+            // signal into the cancel notice so it isn't lost — same
+            // combination reportSourceAdded uses on the non-zero-added
+            // path via font_scan_cancelled_with_dupes.
+            if (scan.duplicated > 0) {
+              setInfo(t("font_scan_cancelled_with_dupes", 0, scan.duplicated));
+            } else {
+              setInfo(t("font_scan_cancelled", 0));
+            }
+          } else if (scan.duplicated > 0) {
+            setError(t("font_sources_all_duplicate"));
           } else {
-            setInfo(t("font_scan_cancelled", 0));
+            setError(opts.emptyError(input));
           }
-        } else if (scan.duplicated > 0) {
-          setError(t("font_sources_all_duplicate"));
-        } else {
-          setError(t("font_sources_no_fonts_in_folder", basename(dir)));
+          return;
         }
-        return;
+        onAddSource(opts.buildSource(input, sourceId, scan.added));
+        const result = { added: scan.added, duplicated: scan.duplicated };
+        reportSourceAdded(result, scan.reason);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        if (scanId !== null && activeScanIdRef.current === scanId) {
+          activeScanIdRef.current = null;
+        }
+        setScanningWithParent(false);
+        releaseScanFlow();
       }
-      onAddSource({
-        id: sourceId,
-        kind: "dir",
-        label: basename(dir),
-        count: scan.added,
-      });
-      const result = { added: scan.added, duplicated: scan.duplicated };
-      reportSourceAdded(result, scan.reason);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      if (scanId !== null && activeScanIdRef.current === scanId) {
-        activeScanIdRef.current = null;
-      }
-      setScanningWithParent(false);
-      releaseScanFlow();
-    }
-  }, [
-    onAddSource,
-    t,
-    claimScanFlow,
-    confirmLargeFontScan,
-    releaseScanFlow,
-    reportSourceAdded,
-    resetScanProgress,
-    scheduleScanProgress,
-    setScanningWithParent,
-  ]);
+    },
+    [
+      onAddSource,
+      t,
+      claimScanFlow,
+      confirmLargeFontScan,
+      releaseScanFlow,
+      reportSourceAdded,
+      resetScanProgress,
+      scheduleScanProgress,
+      setScanningWithParent,
+    ]
+  );
 
-  const handleAddFiles = useCallback(async () => {
-    if (!claimScanFlow()) return;
-    setError(null);
-    setInfo(null);
-    let scanId: number | null = null;
-    try {
-      const paths = await pickFontFiles(t);
-      if (!paths || paths.length === 0) return;
-      const preflight = await preflightFontFiles(paths);
-      const confirmed = await confirmLargeFontScan(preflight);
-      if (!confirmed) return;
-      scanId = newScanId();
-      const sourceId = newSourceId();
-      activeScanIdRef.current = scanId;
-      resetScanProgress();
-      setScanningWithParent(true);
-      const scan = await scanFontFiles(paths, sourceId, scanId, (total) =>
-        scheduleScanProgress(total)
-      );
-      if (scan.added === 0) {
-        if (scan.reason === "ceilingHit") {
-          setInfo(t("font_scan_ceiling_hit", 0));
-        } else if (scan.reason === "userCancel") {
-          // Same dedup-aware cancel branch as the directory flow above.
-          if (scan.duplicated > 0) {
-            setInfo(t("font_scan_cancelled_with_dupes", 0, scan.duplicated));
-          } else {
-            setInfo(t("font_scan_cancelled", 0));
-          }
-        } else if (scan.duplicated > 0) {
-          setError(t("font_sources_all_duplicate"));
-        } else {
-          setError(t("font_sources_no_fonts_in_files", paths.length));
-        }
-        return;
-      }
-      onAddSource({
-        id: sourceId,
-        kind: "files",
-        label: t("font_sources_files_entry", paths.length, scan.added),
-        count: scan.added,
-      });
-      const result = { added: scan.added, duplicated: scan.duplicated };
-      reportSourceAdded(result, scan.reason);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      if (scanId !== null && activeScanIdRef.current === scanId) {
-        activeScanIdRef.current = null;
-      }
-      setScanningWithParent(false);
-      releaseScanFlow();
-    }
-  }, [
-    onAddSource,
-    t,
-    claimScanFlow,
-    confirmLargeFontScan,
-    releaseScanFlow,
-    reportSourceAdded,
-    resetScanProgress,
-    scheduleScanProgress,
-    setScanningWithParent,
-  ]);
+  const handleAddFolder = useCallback(
+    () =>
+      runScanFlow<string>({
+        pickInput: () => pickFontDirectory(t),
+        preflight: (dir) => preflightFontDirectory(dir),
+        scan: (dir, sourceId, scanId, onProgress) =>
+          scanFontDirectory(dir, sourceId, scanId, onProgress),
+        buildSource: (dir, sourceId, count) => ({
+          id: sourceId,
+          kind: "dir",
+          label: basename(dir),
+          count,
+        }),
+        emptyError: (dir) => t("font_sources_no_fonts_in_folder", basename(dir)),
+      }),
+    [runScanFlow, t]
+  );
+
+  const handleAddFiles = useCallback(
+    () =>
+      runScanFlow<string[]>({
+        pickInput: async () => {
+          const paths = await pickFontFiles(t);
+          // Treat "0 picked" the same as "cancelled picker" — the
+          // shared flow uses null to mean "no input, exit silently."
+          return paths && paths.length > 0 ? paths : null;
+        },
+        preflight: (paths) => preflightFontFiles(paths),
+        scan: (paths, sourceId, scanId, onProgress) =>
+          scanFontFiles(paths, sourceId, scanId, onProgress),
+        buildSource: (paths, sourceId, count) => ({
+          id: sourceId,
+          kind: "files",
+          label: t("font_sources_files_entry", paths.length, count),
+          count,
+        }),
+        emptyError: (paths) => t("font_sources_no_fonts_in_files", paths.length),
+      }),
+    [runScanFlow, t]
+  );
 
   // Coverage: how many required families are matched by loaded local sources.
   // In this modal we only consider local matches, so the count reflects the user's question:
   // "does the folder I picked cover every font the ASS needs?" System-
   // installed matches are shown as secondary info in the main font list.
-  const { covered, total, missing } = computeCoverage(usages, localCoveredKeys, hasSubtitle);
+  // Memoize so re-renders triggered by transient state (info / error
+  // strings, scan progress) don't redo the full usages × localCoveredKeys
+  // walk. Only the inputs to computeCoverage actually invalidate the
+  // result.
+  const { covered, total, missing } = useMemo(
+    () => computeCoverage(usages, localCoveredKeys, hasSubtitle),
+    [usages, localCoveredKeys, hasSubtitle]
+  );
 
   if (!open) return null;
 
