@@ -437,18 +437,30 @@ fn begin_font_scan(scan_id: u64) -> Result<ActiveScanGuard, String> {
         .compare_exchange(NO_SCAN_ID, scan_id, Ordering::SeqCst, Ordering::SeqCst)
         .map_err(|_| "Another font scan is already running".to_string())?;
 
-    // Reset the cancel slot AFTER successful CAS so a fresh scan never
-    // inherits a stale cancel from a prior scan that happened to share
-    // the same id. Frontend mints scan_id from a Date.now()-seeded
-    // counter, so collisions across same-process scans require manual
-    // clock manipulation between runs — vanishingly unlikely, but the
-    // failure mode is "the scan is born already-cancelled" with no log
-    // signal, which is exactly the class CANCEL_SCAN_ID's per-scan-id
-    // design was meant to eliminate. Cheap defensive reset closes the
-    // last edge case.
-    CANCEL_SCAN_ID.store(NO_SCAN_ID, Ordering::SeqCst);
+    let guard = ActiveScanGuard { scan_id };
 
-    Ok(ActiveScanGuard { scan_id })
+    // After winning the slot, treat any equal-valued cancel signal as a
+    // cancel of THIS scan and bail. Two paths land in this state:
+    //   (1) a concurrent `cancel_font_scan(scan_id)` raced past our CAS
+    //       and wrote `CANCEL_SCAN_ID = scan_id` between the CAS above
+    //       and this load;
+    //   (2) the frontend pre-armed cancel for the same id (rare;
+    //       requires clock manipulation since scan_id is Date.now()-
+    //       seeded and monotonic via fetch_max).
+    //
+    // The previous design unconditionally cleared CANCEL_SCAN_ID here,
+    // which closed (2) but silently overwrote (1) — a real cancel click
+    // arriving in the race window would be lost. Check-and-bail closes
+    // both at once. Stale lower CANCEL_SCAN_ID values from prior scans
+    // are harmless because `font_scan_cancelled` checks equality with
+    // `scan_id`, not >=. Drop the guard explicitly so ACTIVE_SCAN_ID is
+    // released before the caller sees the error.
+    if CANCEL_SCAN_ID.load(Ordering::SeqCst) == scan_id {
+        drop(guard);
+        return Err("Font scan was cancelled".to_string());
+    }
+
+    Ok(guard)
 }
 
 fn font_scan_cancelled(scan_id: u64) -> bool {
@@ -1586,9 +1598,11 @@ pub fn clear_font_sources() -> Result<(), String> {
 /// `Acquire` ordering: this is a UX-policy gate, not a correctness
 /// barrier — the SQLite layer handles the actual mutation safety via
 /// WAL + busy_timeout. We only need a happens-before relationship
-/// with the `Release` write inside `begin_font_scan`'s CAS so the
-/// load can never see a stale NO_SCAN_ID. SeqCst would over-pay for
-/// what's needed; Acquire is the right semantic match.
+/// with the SeqCst CAS inside `begin_font_scan` so the load can never
+/// see a stale NO_SCAN_ID. SeqCst there is stronger than Release-Acquire,
+/// so the pairing holds. Do NOT downgrade `begin_font_scan`'s CAS to
+/// Release: `cancel_font_scan`'s SeqCst load on ACTIVE_SCAN_ID requires
+/// a total order across all accesses to that atomic.
 fn reject_during_active_scan(message: &str) -> Result<(), String> {
     if ACTIVE_SCAN_ID.load(Ordering::Acquire) != NO_SCAN_ID {
         return Err(message.to_string());
