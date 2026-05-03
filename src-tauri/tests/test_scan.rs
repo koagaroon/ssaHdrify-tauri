@@ -90,7 +90,8 @@ fn collecting_channel() -> CollectingChannel {
             // would indicate an unrelated message and can be ignored.
             InvokeResponseBody::Raw(_) => return Ok(()),
         };
-        let event: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let event: serde_json::Value = serde_json::from_str(&json)
+            .expect("ScanProgress channel event must be valid JSON");
         match event.get("kind").and_then(|v| v.as_str()) {
             Some("batch") => {
                 let total = event.get("total").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
@@ -129,7 +130,8 @@ fn cancelling_channel(scan_id: u64) -> CancellingChannel {
             InvokeResponseBody::Json(s) => s,
             InvokeResponseBody::Raw(_) => return Ok(()),
         };
-        let event: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let event: serde_json::Value = serde_json::from_str(&json)
+            .expect("ScanProgress channel event must be valid JSON");
         match event.get("kind").and_then(|v| v.as_str()) {
             Some("batch") => {
                 let total = event.get("total").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
@@ -387,6 +389,13 @@ fn scan_font_files_accepts_max_input_paths_boundary() {
 #[test]
 fn rejects_invalid_directory_inputs() {
     let _guard = SCAN_TEST_LOCK.lock().unwrap();
+    // Init the user-font DB even though all three calls below are
+    // expected to reject before the DB is touched. Future code that
+    // adds a DB access before the path validation would otherwise fail
+    // this test with a cryptic "User font index is not initialized"
+    // error masking the directory-validation failure we actually want
+    // to assert on. Every other test holding SCAN_TEST_LOCK does this.
+    init_scan_test_db("invalid-dir-inputs");
     assert!(tauri::async_runtime::block_on(scan_font_directory(
         String::new(),
         early_error_channel(),

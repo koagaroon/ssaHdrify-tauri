@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { strings, type Lang } from "./strings";
+import { translate } from "./useI18n";
 
 const LANGS: Lang[] = ["en", "zh"];
 const PLACEHOLDER_RE = /\{(\d+)\}/g;
@@ -17,5 +18,33 @@ describe("i18n strings", () => {
       }
       expect(placeholders(entry.zh), `${key} placeholders`).toEqual(placeholders(entry.en));
     }
+  });
+});
+
+describe("translate runtime substitution", () => {
+  it("substitutes {N} placeholders with stringified args", () => {
+    const out = translate("en", "msg_overwrite_confirm", 2, 5);
+    expect(out).toContain("2");
+    expect(out).toContain("5");
+    expect(out).not.toContain("{0}");
+    expect(out).not.toContain("{1}");
+  });
+
+  it("returns the bare key for unknown ids and leaves placeholders untouched when no args", () => {
+    expect(translate("en", "definitely_not_a_real_key")).toBe("definitely_not_a_real_key");
+    // Sanity: with zero args, placeholders stay literal so the caller
+    // sees them and can route in args. The substitution engine must not
+    // silently drop them.
+    const literal = translate("en", "msg_overwrite_confirm");
+    expect(literal).toMatch(/\{0\}/);
+  });
+
+  it("does NOT expand $1 / $& backreferences in arg values", () => {
+    // Regression guard for the `String.replace` injection class — the
+    // function-form replacer is meant to keep `$1` literal in args. A
+    // path like "C:\\$RECYCLE.BIN" must not get any portion expanded.
+    const out = translate("en", "msg_overwrite_confirm", "C:\\$RECYCLE.BIN", "$&-glob");
+    expect(out).toContain("C:\\$RECYCLE.BIN");
+    expect(out).toContain("$&-glob");
   });
 });

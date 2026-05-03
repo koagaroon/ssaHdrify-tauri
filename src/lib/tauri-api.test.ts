@@ -54,6 +54,7 @@ import {
   preflightFontDirectory,
   preflightFontFiles,
   scanFontDirectory,
+  scanFontFiles,
 } from "./tauri-api";
 
 beforeEach(() => {
@@ -127,6 +128,77 @@ describe("runStreamingScan — sync delivery (batches arrive during invoke)", ()
       duplicated: 0,
       reason: "ceilingHit",
     });
+  });
+});
+
+describe("runStreamingScan via scanFontFiles", () => {
+  it("forwards the path list and resolves with batched counts", async () => {
+    invokeMock.mockImplementation(async () => {
+      channelInstances[0].onmessage?.({ kind: "batch", total: 1 });
+      channelInstances[0].onmessage?.({ kind: "batch", total: 2 });
+      channelInstances[0].onmessage?.({
+        kind: "done",
+        reason: "natural",
+        added: 2,
+        duplicated: 0,
+      });
+    });
+
+    const seen: number[] = [];
+    const result = await scanFontFiles(
+      ["D:/A.ttf", "D:/B.otf"],
+      "source-files",
+      201,
+      (total) => seen.push(total)
+    );
+
+    expect(result).toEqual({ added: 2, duplicated: 0, reason: "natural" });
+    expect(seen).toEqual([1, 2]);
+    // Pin the exact arg shape so a future runStreamingScan refactor
+    // that drops or renames a field is caught (matches the dual cap
+    // boundary covered on the Rust side in test_scan).
+    expect(invokeMock).toHaveBeenCalledWith("scan_font_files", {
+      paths: ["D:/A.ttf", "D:/B.otf"],
+      sourceId: "source-files",
+      scanId: 201,
+      progress: channelInstances[0],
+    });
+  });
+
+  it("forwards a 1000-element path list at the boundary", async () => {
+    const paths = Array.from({ length: 1000 }, (_, i) => `D:/dummy-${i}.ttf`);
+    invokeMock.mockImplementation(async () => {
+      channelInstances[0].onmessage?.({
+        kind: "done",
+        reason: "natural",
+        added: 0,
+        duplicated: 0,
+      });
+    });
+    const result = await scanFontFiles(paths, "source-boundary", 202);
+    expect(result.added).toBe(0);
+    // The frontend passes the slice through unchanged; the MAX_INPUT_PATHS
+    // gate lives on the Rust side. Pin that we don't truncate or re-sort.
+    expect(invokeMock).toHaveBeenCalledWith(
+      "scan_font_files",
+      expect.objectContaining({ paths, sourceId: "source-boundary", scanId: 202 })
+    );
+  });
+
+  it("clears the batch count when invoke rejects", async () => {
+    invokeMock.mockImplementation(async () => {
+      channelInstances[0].onmessage?.({ kind: "batch", total: 5 });
+      throw new Error("SQLite BUSY: database is locked");
+    });
+
+    const seen: number[] = [];
+    await expect(
+      scanFontFiles(["D:/A.ttf"], "source-rollback", 203, (total) => seen.push(total))
+    ).rejects.toThrow(/SQLite BUSY/);
+    // Provisional 5 first, then reset to 0 in the catch path. The reset
+    // is what keeps "Scanned 5 fonts" out of a UI panel that's about to
+    // surface the rollback error.
+    expect(seen).toEqual([5, 0]);
   });
 });
 

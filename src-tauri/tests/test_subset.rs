@@ -41,7 +41,7 @@ fn subset_real_cjk_font() {
 
     let ratio = (subset_size as f64 / original_size as f64) * 100.0;
     println!("\n=== Font Subsetting Test ===");
-    println!("Font:     MYoyo PRC Medium.ttf");
+    println!("Font:     {font_path}");
     println!(
         "Original: {} bytes ({:.1} MB)",
         original_size,

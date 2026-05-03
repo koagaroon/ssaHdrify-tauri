@@ -27,7 +27,10 @@ export const I18nContext = createContext<I18nContextValue>({
 // Pre-compiled — shared across every translate() call, no per-call allocation.
 const PLACEHOLDER_RE = /\{(\d+)\}/g;
 
-function translate(lang: Lang, key: string, ...args: (string | number)[]): string {
+// Exported so the substitution engine can be unit-tested directly,
+// without spinning up the React hook plumbing. The hook below is the
+// React-friendly wrapper; production callers use the hook.
+export function translate(lang: Lang, key: string, ...args: (string | number)[]): string {
   const entry = strings[key];
   if (!entry) return key; // fallback: show key name
 
