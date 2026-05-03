@@ -9,6 +9,7 @@ import {
   scanFontFiles,
   type FontScanPreflight,
   type FontScanReason,
+  type FontScanResult,
 } from "../../lib/tauri-api";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { useI18n } from "../../i18n/useI18n";
