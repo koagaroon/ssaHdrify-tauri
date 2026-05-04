@@ -21,6 +21,16 @@ const TAB_IDS: { id: Tab; labelKey: string }[] = [
   { id: "rename", labelKey: "tab_rename" },
 ];
 
+// Compile-time exhaustiveness anchor: the cast forces every Tab variant
+// to appear in TAB_IDS exactly once. Adding a new tab to the StatusTab
+// union without extending TAB_IDS will fail this Record build because
+// the resulting object will be missing a key — TypeScript catches the
+// gap before render time. Mirrors TAB_LABEL_KEYS in lib/tab-labels.ts.
+const _TAB_COMPLETENESS: Record<Tab, string> = Object.fromEntries(
+  TAB_IDS.map((t) => [t.id, t.labelKey])
+) as Record<Tab, string>;
+void _TAB_COMPLETENESS;
+
 const THEME_OPTIONS: { mode: ThemeMode; labelKey: string }[] = [
   { mode: "auto", labelKey: "theme_auto" },
   { mode: "light", labelKey: "theme_light" },

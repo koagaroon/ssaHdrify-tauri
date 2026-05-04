@@ -20,6 +20,10 @@
  * Callers MUST run this BEFORE `preprocessSrtColors` and must NOT re-escape
  * after; re-escaping would turn our trusted `{\1c&H…}` injections into
  * literal `\{\\1c&H…\}` text and silently break HDR color conversion.
+ *
+ * @internal — production callers must use `processSrtUserText` (composed
+ * single entry point). Exported only so unit tests can exercise each
+ * stage in isolation.
  */
 export function escapeSrtUserText(text: string): string {
   return text.replace(/\\/g, "\\\\").replace(/\{/g, "\\{").replace(/\}/g, "\\}");
@@ -39,6 +43,8 @@ export function escapeSrtUserText(text: string): string {
  * Production callers should prefer `processSrtUserText`, which composes
  * the two steps in the correct order. Direct exports remain for unit
  * tests that need to exercise each step in isolation.
+ *
+ * @internal — production callers must use `processSrtUserText`.
  */
 export function preprocessSrtColors(text: string): string {
   // Regex defined inside function — no shared lastIndex state.

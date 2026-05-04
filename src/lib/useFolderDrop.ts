@@ -47,25 +47,28 @@ export function useFolderDrop({
   onError,
   disabled,
 }: UseFolderDropOptions): void {
-  // Stabilize the consumer callbacks so the listener-attaching effect
-  // doesn't re-subscribe on every parent render (consumers pass inline
-  // arrows in JSX). Each re-subscribe costs an `await onDragDropEvent`
-  // round-trip and opens a brief race window where drops can be missed.
-  // Same pattern as useClickOutside.
+  // Stabilize the consumer callbacks AND the disabled flag so the
+  // listener-attaching effect doesn't re-subscribe on every parent
+  // render (consumers pass inline arrows in JSX) NOR on every batch
+  // boundary (every batch flips disabled false → true → false, and
+  // each subscribe costs an `await onDragDropEvent` round-trip plus a
+  // brief race window where drops can be missed). Same pattern as
+  // useClickOutside.
   const onPathsRef = useRef(onPaths);
   const onActiveChangeRef = useRef(onActiveChange);
   const onErrorRef = useRef(onError);
+  const disabledRef = useRef(disabled);
   // No deps array — refresh refs every render so the listener-attaching
   // effect below can keep its closures stable while still reading the
-  // latest callbacks. Not a missing-dep bug.
+  // latest values. Not a missing-dep bug.
   useEffect(() => {
     onPathsRef.current = onPaths;
     onActiveChangeRef.current = onActiveChange;
     onErrorRef.current = onError;
+    disabledRef.current = disabled;
   });
 
   useEffect(() => {
-    if (disabled) return;
 
     let unlisten: (() => void) | null = null;
     let mounted = true;
@@ -87,6 +90,11 @@ export function useFolderDrop({
       try {
         handler = await webview.onDragDropEvent(async (event) => {
           if (!mounted || !ref.current) return;
+          // Read disabled via the ref — toggled at every batch boundary,
+          // and we don't want each toggle to tear down + re-subscribe
+          // the underlying webview listener (which has an async setup
+          // cost and a race window).
+          if (disabledRef.current) return;
           const rect = ref.current.getBoundingClientRect();
           const dpr = window.devicePixelRatio || 1;
 
@@ -152,5 +160,10 @@ export function useFolderDrop({
       mounted = false;
       unlisten?.();
     };
-  }, [ref, disabled]);
+    // `ref` is a stable RefObject across renders (React guarantees);
+    // `disabled` is read via disabledRef inside the listener so it
+    // doesn't belong here either. Empty deps would also work but keep
+    // ref listed so a future pivot to a new ref triggers a clean
+    // re-subscribe.
+  }, [ref]);
 }

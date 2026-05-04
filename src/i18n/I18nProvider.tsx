@@ -2,7 +2,7 @@
  * I18n context provider — detects system language on first launch,
  * persists user choice to localStorage.
  */
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { I18nContext } from "./useI18n";
 import type { Lang } from "./strings";
 
@@ -31,7 +31,12 @@ function loadLang(): Lang {
 export default function I18nProvider({ children }: { children: ReactNode }) {
   const [lang, setLangState] = useState<Lang>(loadLang);
 
-  const setLang = (next: Lang) => {
+  // Stabilize setLang so it doesn't churn the context value identity on
+  // every parent render — a fresh function each render plus a fresh
+  // context value would force every useI18n consumer to re-render even
+  // when `lang` didn't change. Mirror StatusProvider's memoization
+  // shape.
+  const setLang = useCallback((next: Lang) => {
     setLangState(next);
     try {
       localStorage.setItem(STORAGE_KEY, next);
@@ -39,7 +44,7 @@ export default function I18nProvider({ children }: { children: ReactNode }) {
       // Storage can be disabled in hardened/sandboxed WebView profiles.
       // The in-memory state above still applies for this session.
     }
-  };
+  }, []);
 
   // Reflect the active locale onto <html lang="…"> so CSS `:lang()`
   // selectors (font stack switching in index.css) and screen readers
@@ -48,5 +53,10 @@ export default function I18nProvider({ children }: { children: ReactNode }) {
     document.documentElement.setAttribute("lang", lang);
   }, [lang]);
 
-  return <I18nContext.Provider value={{ lang, setLang }}>{children}</I18nContext.Provider>;
+  // Stable context value — re-created only when `lang` actually
+  // changes. Without this, every parent render would hand consumers a
+  // fresh object identity even if `lang` was unchanged.
+  const value = useMemo(() => ({ lang, setLang }), [lang, setLang]);
+
+  return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
 }

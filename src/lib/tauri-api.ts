@@ -480,7 +480,7 @@ async function runStreamingScan(
       onBatch?.(msg.total);
     } else if (msg.kind === "done") {
       if (doneReceived) {
-        console.warn("ScanProgress::Done received twice; ignoring duplicate");
+        console.warn("Duplicate scan Done event received; ignoring");
         return;
       }
       doneReceived = true;
@@ -506,11 +506,16 @@ async function runStreamingScan(
     await invoke(command, { ...args, progress: channel });
   } catch (err) {
     // Rust returned Err — no Done was emitted, so `donePromise` is still
-    // unresolved. Reset the provisional batch count so any caller showing
-    // "Scanned N fonts" doesn't sit alongside the error message implying
-    // partial registration; the import transaction has rolled back and
-    // zero fonts were committed. Then re-throw so callers see the same
-    // rejection they would have seen without the catch.
+    // unresolved. Reset the provisional batch count UNCONDITIONALLY so
+    // any caller showing "Scanned N fonts" doesn't sit alongside the
+    // error message implying partial registration; the import
+    // transaction has rolled back and zero fonts were committed. Callers
+    // must treat onBatch(0) as a "reset signal" not just a count update.
+    // Then detach the listener — Tauri drops the channel sender on Err
+    // return today, but a late event slipping through (lifecycle bug,
+    // async-fetch path quirk) would otherwise call onBatch after the
+    // catch already resolved the UI to the error state, producing a
+    // confusing 5, 7, 0, 12 sequence.
     //
     // Intentional: do NOT resolve `donePromise` here. The rejection
     // propagates out of this function before the `await donePromise`
@@ -519,6 +524,7 @@ async function runStreamingScan(
     // donePromise on the no-retry-left branch would cause a permanent
     // hang.
     onBatch?.(0);
+    channel.onmessage = () => {};
     throw err;
   }
   // Rust always emits Done on the Ok path. Channel guarantees in-order

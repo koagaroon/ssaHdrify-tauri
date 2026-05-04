@@ -274,12 +274,15 @@ export default function FontSourceModal(props: Props) {
   }, []);
 
   // Apply the dedup result consistently across folder and file picks.
+  // Callers guarantee `result.added > 0`: the all-duplicate case
+  // (added === 0 && duplicated > 0) is short-circuited earlier in
+  // `runScanFlow` (see line ~448 where `scan.reason === "natural"` AND
+  // `scan.added === 0` lands on `font_sources_all_duplicate` directly),
+  // so this helper only needs to render the success / partial-dupe
+  // shapes.
   const applyAddResult = useCallback(
     (result: AddSourceResult) => {
-      if (result.added === 0 && result.duplicated > 0) {
-        setError(t("font_sources_all_duplicate"));
-        setInfo(null);
-      } else if (result.duplicated > 0) {
+      if (result.duplicated > 0) {
         setError(null);
         setInfo(t("font_sources_partial_duplicate", result.added, result.duplicated));
       } else {

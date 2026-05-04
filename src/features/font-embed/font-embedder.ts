@@ -405,15 +405,13 @@ export async function embedFonts(
   }
 
   for (let i = 0; i < selectedFonts.length; i++) {
-    // Cancel between fonts — `break` here lets the post-loop
-    // `if (isCancelled) return null` decide the final outcome,
-    // matching the in-subset cancel below which DOES `return null`
-    // directly (subset state is fully discarded mid-call). The
-    // asymmetry is deliberate: between-font cancel preserves the
-    // partial fontEntries built so far for inspection in the
-    // post-loop fall-through (today they're discarded too, but
-    // future "save what you have" flows would key on this shape).
-    if (isCancelled?.()) break;
+    // Cancel between fonts — `return null` matches the in-subset cancel
+    // path below. Both shapes are equivalent at the caller (the post-
+    // loop check already returns null when isCancelled fires), but
+    // unifying the two cancel sites avoids the "loop preserves partial
+    // entries / next line discards them" mismatch that an earlier
+    // comment promised but never actually wired up.
+    if (isCancelled?.()) return null;
 
     const info = selectedFonts[i];
     if (!info.filePath) continue;
