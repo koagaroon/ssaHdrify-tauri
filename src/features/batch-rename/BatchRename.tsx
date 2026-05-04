@@ -175,7 +175,10 @@ function renderSourceBadge(
         fontSize: "10px",
         fontWeight: 600,
         letterSpacing: "0.04em",
+        // color / bg from the local `map` literal above; never user input.
+        // eslint-disable-next-line no-restricted-syntax
         color,
+        // eslint-disable-next-line no-restricted-syntax
         background: bg,
       }}
     >

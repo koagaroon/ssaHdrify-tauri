@@ -60,20 +60,13 @@ pub const MAX_IPC_PATH_LEN: usize = 4096;
 /// copy and they drifted.
 pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
     if path.is_empty() || path.len() > MAX_IPC_PATH_LEN {
-        return Err(format!(
-            "{label} path must be 1-{MAX_IPC_PATH_LEN} bytes"
-        ));
+        return Err(format!("{label} path must be 1-{MAX_IPC_PATH_LEN} bytes"));
     }
     if path.chars().any(|c| {
         c.is_control()
             || matches!(
                 c,
-                '\u{2028}'
-                    | '\u{2029}'
-                    | '\u{200B}'
-                    | '\u{200C}'
-                    | '\u{200D}'
-                    | '\u{FEFF}'
+                '\u{2028}' | '\u{2029}' | '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{FEFF}'
             )
     }) {
         return Err(format!("{label} path contains invalid characters"));

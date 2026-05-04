@@ -976,6 +976,8 @@ export default function FontEmbed() {
               className="h-full transition-all"
               style={{
                 background: "var(--progress-fill)",
+                // numeric ratio of internal counts; safe by inspection.
+                // eslint-disable-next-line no-restricted-syntax
                 width: `${(progress.current / progress.total) * 100}%`,
               }}
             />

@@ -91,8 +91,7 @@ export function normalizeOutputKey(path: string): string {
 // TypeScript regex parser, which would close the regex literal
 // mid-pattern if it appeared in the source verbatim. \u escapes
 // keep the parser happy and the intent grep-able.
-const DIALOG_BIDI_CONTROLS_RE =
-  /[\u061C\u200E\u200F\u202A-\u202E\u2028\u2029\u2066-\u2069]/g;
+const DIALOG_BIDI_CONTROLS_RE = /[\u061C\u200E\u200F\u202A-\u202E\u2028\u2029\u2066-\u2069]/g;
 
 /** Strip bidirectional control characters and stray line separators
  *  before rendering an untrusted string inside a native `ask()` dialog

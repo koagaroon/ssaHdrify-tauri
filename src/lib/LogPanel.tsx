@@ -56,6 +56,9 @@ export function LogPanel({ logs, onClear, scrollRef }: LogPanelProps) {
       </div>
       <div ref={scrollRef} className="max-h-48 overflow-y-auto p-3 font-mono text-xs space-y-0.5">
         {logs.map((log) => (
+          // LOG_COLOR is a const map keyed by the closed log-type union;
+          // values are var(--token) literals, never user input.
+          // eslint-disable-next-line no-restricted-syntax
           <div key={log.id} style={{ color: LOG_COLOR[log.type] }}>
             {log.text}
           </div>

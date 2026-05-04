@@ -69,7 +69,6 @@ export function useFolderDrop({
   });
 
   useEffect(() => {
-
     let unlisten: (() => void) | null = null;
     let mounted = true;
 

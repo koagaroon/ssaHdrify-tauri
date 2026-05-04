@@ -161,7 +161,10 @@ export default function NitViz({ value, onChange, disabled = false }: NitVizProp
             <span key={i} />
           ))}
         </div>
+        {/* markerPct is a numeric percentage clamped from internal slider state — safe by inspection. */}
+        {/* eslint-disable-next-line no-restricted-syntax */}
         <div className="nit-fill" style={{ width: `${markerPct}%` }} />
+        {/* eslint-disable-next-line no-restricted-syntax */}
         <div className="nit-marker" style={{ left: `calc(${markerPct}% - 8px)` }}>
           <div className="nit-marker-dot" />
         </div>

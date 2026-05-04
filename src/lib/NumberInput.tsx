@@ -53,6 +53,9 @@ export default function NumberInput({
         className={inputClass}
         style={{
           background: "var(--bg-input)",
+          // template wraps a literal-branched ternary; both branches are
+          // static var(--token) strings — safe by inspection.
+          // eslint-disable-next-line no-restricted-syntax
           border: `1px solid ${disabled ? "var(--border-light)" : "var(--border)"}`,
           color: "var(--text-primary)",
         }}

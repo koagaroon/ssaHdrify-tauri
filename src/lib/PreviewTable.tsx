@@ -87,6 +87,8 @@ export function PreviewTable<T>({
   return (
     <div className={rootClass}>
       {title && <div className="preview-table-title">{title}</div>}
+      {/* gridTemplate is built from columns[].width props from call-site components, never user input. */}
+      {/* eslint-disable-next-line no-restricted-syntax */}
       <div className="preview-table-head" style={{ gridTemplateColumns: gridTemplate }}>
         {columns.map((col) => {
           const cellClass = ["preview-table-cell", col.className].filter(Boolean).join(" ");
@@ -101,6 +103,8 @@ export function PreviewTable<T>({
           );
         })}
       </div>
+      {/* maxHeight is a CSS-shape prop (string/number) controlled by the call-site, never user input. */}
+      {/* eslint-disable-next-line no-restricted-syntax */}
       <div className="preview-table-body" style={{ maxHeight }}>
         {rows.length === 0 ? (
           <div className="preview-table-empty">{emptyMessage}</div>
@@ -114,7 +118,13 @@ export function PreviewTable<T>({
                 {...extraProps}
                 key={rowKey(row, rowIndex)}
                 className={rowClass}
-                style={{ gridTemplateColumns: gridTemplate }}
+                style={{
+                  // gridTemplate is column-config-derived from the
+                  // call-site columns prop, never user input — same
+                  // shape as the head row above.
+                  // eslint-disable-next-line no-restricted-syntax
+                  gridTemplateColumns: gridTemplate,
+                }}
               >
                 {columns.map((col) => {
                   const cellClass = ["preview-table-cell", col.className].filter(Boolean).join(" ");

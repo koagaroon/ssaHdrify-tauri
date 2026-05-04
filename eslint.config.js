@@ -43,6 +43,54 @@ export default defineConfig([
       // lists. Any new match should be reviewed for a `key`-based remount
       // alternative before being accepted.
       "react-hooks/set-state-in-effect": "off",
+
+      // CSP guardrail: production CSP is `style-src 'self' 'unsafe-inline'`,
+      // which React 19 needs because it serializes `style={{...}}` to inline
+      // `style="..."` strings. Today no callsite passes user-controlled
+      // text into `style={{ color: ..., background: ..., border: ... }}` —
+      // grep confirms only `var(--token)` literals, hex colors, and pixel
+      // values from controlled state. Future change passing
+      // `style={{ color: someUserString }}` would re-introduce a CSS-
+      // injection surface even with `connect-src 'none'` blocking fetch
+      // (URL-parse side channels remain).
+      //
+      // This rule flags `style={{ key: <Identifier|MemberExpression|
+      // CallExpression|TemplateLiteral> }}` — the four shapes that can
+      // carry user text. ConditionalExpression and Literal are NOT
+      // flagged: ternaries on internal state with literal branches
+      // (`busy ? "var(--bg-input)" : "var(--accent)"`) are the dominant
+      // pattern in this codebase and are safe by inspection. If a
+      // future call-site needs a non-literal value and the value is
+      // demonstrably not user-controlled, suppress the rule for that
+      // line with `// eslint-disable-next-line no-restricted-syntax`
+      // and add a WHY comment.
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector:
+            "JSXAttribute[name.name='style'] > JSXExpressionContainer > ObjectExpression > Property > Identifier.value",
+          message:
+            "style={{ ... }} value is an Identifier — possible user-controlled CSS injection. Use a literal or a ConditionalExpression with literal branches; if the identifier is provably static, suppress with an eslint-disable-next-line + WHY comment.",
+        },
+        {
+          selector:
+            "JSXAttribute[name.name='style'] > JSXExpressionContainer > ObjectExpression > Property > MemberExpression.value",
+          message:
+            "style={{ ... }} value is a MemberExpression — possible user-controlled CSS injection. Same opt-out as Identifier above.",
+        },
+        {
+          selector:
+            "JSXAttribute[name.name='style'] > JSXExpressionContainer > ObjectExpression > Property > CallExpression.value",
+          message:
+            "style={{ ... }} value is a CallExpression — possible user-controlled CSS injection. Same opt-out as Identifier above.",
+        },
+        {
+          selector:
+            "JSXAttribute[name.name='style'] > JSXExpressionContainer > ObjectExpression > Property > TemplateLiteral.value",
+          message:
+            "style={{ ... }} value is a TemplateLiteral — possible user-controlled CSS injection. Use a Literal or a ConditionalExpression with literal branches.",
+        },
+      ],
     },
   },
 ]);
