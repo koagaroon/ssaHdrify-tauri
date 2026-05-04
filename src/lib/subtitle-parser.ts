@@ -32,8 +32,10 @@ export type SubtitleFormat = "srt" | "vtt" | "ass" | "sub" | "unknown";
 
 const VTT_HEADER = /^WEBVTT/m;
 // SRT hours use variable digit width in practice — many tools emit
-// `0:00:01,234` or `1:02:03,456`. Detection must accept any non-empty digit
-// run for the hour field; the caller's `parseSrtTime` already uses `\d+`.
+// `0:00:01,234` or `1:02:03,456`. This detection regex shape-matches only
+// (no parseInt), so an unbounded hour run is harmless here. Numeric
+// extraction goes through `parseSrtTime`, which caps hours at `\d{1,12}`
+// to keep parseInt from saturating to Infinity on hostile input.
 const SRT_TIMING = /\d+:\d{2}:\d{2},\d{3}\s*-->\s*\d+:\d{2}:\d{2},\d{3}/;
 const ASS_HEADER = /^\[Script Info\]/im;
 const SUB_LINE = /^\{\d+\}\{\d+\}/m;

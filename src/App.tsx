@@ -14,22 +14,22 @@ import "./shell.css";
 // Tab ids also serve as StatusTab keys — single source of truth.
 type Tab = StatusTab;
 
-const TAB_IDS: { id: Tab; labelKey: string }[] = [
-  { id: "hdr", labelKey: "tab_hdr" },
-  { id: "timing", labelKey: "tab_timing" },
-  { id: "fonts", labelKey: "tab_fonts" },
-  { id: "rename", labelKey: "tab_rename" },
-];
+// Source of truth for tab labels — the Record<Tab, ...> type forces
+// every Tab variant to have an entry, so adding a new tab to the
+// StatusTab union without adding a label here fails at compile time.
+// Visual tab-strip order is the declaration order below (JS guarantees
+// insertion-order iteration for string keys). Mirrors THEME_LABEL_KEYS
+// below and TAB_LABEL_KEYS in lib/tab-labels.ts.
+const TAB_LABEL_KEYS: Record<Tab, string> = {
+  hdr: "tab_hdr",
+  timing: "tab_timing",
+  fonts: "tab_fonts",
+  rename: "tab_rename",
+};
 
-// Compile-time exhaustiveness anchor: the cast forces every Tab variant
-// to appear in TAB_IDS exactly once. Adding a new tab to the StatusTab
-// union without extending TAB_IDS will fail this Record build because
-// the resulting object will be missing a key — TypeScript catches the
-// gap before render time. Mirrors TAB_LABEL_KEYS in lib/tab-labels.ts.
-const _TAB_COMPLETENESS: Record<Tab, string> = Object.fromEntries(
-  TAB_IDS.map((t) => [t.id, t.labelKey])
-) as Record<Tab, string>;
-void _TAB_COMPLETENESS;
+const TAB_IDS: { id: Tab; labelKey: string }[] = (Object.keys(TAB_LABEL_KEYS) as Tab[]).map(
+  (id) => ({ id, labelKey: TAB_LABEL_KEYS[id] })
+);
 
 const THEME_OPTIONS: { mode: ThemeMode; labelKey: string }[] = [
   { mode: "auto", labelKey: "theme_auto" },
