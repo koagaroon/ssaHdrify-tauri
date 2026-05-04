@@ -68,6 +68,10 @@ export default function TimingShift() {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const pickGenRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
+  // Synchronous double-click guard — `busy` state lags setBusy(true) by
+  // one render. busyRef is written synchronously at handler entry and
+  // released in the outer finally so every exit path clears it.
+  const busyRef = useRef(false);
   const dropZoneRef = useRef<HTMLDivElement>(null);
   const fileContainerRef = useRef<HTMLDivElement>(null);
 
@@ -236,120 +240,126 @@ export default function TimingShift() {
 
   const handleSaveAll = useCallback(async () => {
     if (fileCount === 0 || thresholdInvalid) return;
-
-    // Reset cancel signal at the very entry, BEFORE any awaits — see the
-    // matching comment in HdrConvert.tsx::handleConvert for rationale.
-    abortRef.current = new AbortController();
-
-    const paths = filePaths;
-
-    // Pre-flight overwrite check — same project-wide pattern as HDR
-    // Convert. Template-derived output paths would silently overwrite
-    // a previous run otherwise; one ask() before the batch is the
-    // single safety net.
-    const projectedOutputs = paths.map((p) => deriveShiftedPath(p));
+    // Synchronous double-click gate — see HdrConvert::handleConvert
+    // for the same idiom. Released in the outer finally below.
+    if (busyRef.current) return;
+    busyRef.current = true;
     try {
-      const existingCount = await countExistingFiles(projectedOutputs);
-      if (existingCount > 0) {
-        const confirmed = await ask(t("msg_overwrite_confirm", existingCount, paths.length), {
-          title: t("dialog_overwrite_title"),
-          kind: "warning",
-        });
-        if (!confirmed) {
-          addLog(t("msg_timing_cancelled"), "info");
-          setLastActionResult("cancelled");
-          return;
-        }
-      }
-    } catch (e) {
-      addLog(t("error_prefix", e instanceof Error ? e.message : String(e)), "error");
-      setLastActionResult("error");
-      return;
-    }
+      const paths = filePaths;
 
-    setBusy(true);
-    setProgress({ processed: 0, total: paths.length });
-
-    try {
-      addLog(t("msg_timing_start", paths.length, effectiveOffsetMs));
-
-      let successCount = 0;
-      let processedCount = 0;
-      const seenOutputs = new Set<string>();
-
-      for (const filePath of paths) {
-        if (abortRef.current?.signal.aborted) {
-          addLog(t("msg_timing_cancelled"), "info");
-          break;
-        }
-
-        const fileName = fileNameFromPath(filePath);
-        addLog(t("msg_processing", fileName));
-
-        try {
-          const outputPath = deriveShiftedPath(filePath);
-
-          // Within-batch dedup. Two inputs that resolve to the same
-          // output path (different paths on disk pointing at the same
-          // file via symlink, junction, etc.) would otherwise overwrite
-          // each other. See normalizeOutputKey for the NFC + forward
-          // slash + lowercase semantics.
-          const normalizedOut = normalizeOutputKey(outputPath);
-          if (seenOutputs.has(normalizedOut)) {
-            addLog(t("msg_skipped_duplicate", fileName), "error");
-            continue;
+      // Pre-flight overwrite check — same project-wide pattern as HDR
+      // Convert. Template-derived output paths would silently overwrite
+      // a previous run otherwise; one ask() before the batch is the
+      // single safety net.
+      const projectedOutputs = paths.map((p) => deriveShiftedPath(p));
+      try {
+        const existingCount = await countExistingFiles(projectedOutputs);
+        if (existingCount > 0) {
+          const confirmed = await ask(t("msg_overwrite_confirm", existingCount, paths.length), {
+            title: t("dialog_overwrite_title"),
+            kind: "warning",
+          });
+          if (!confirmed) {
+            addLog(t("msg_timing_cancelled"), "info");
+            setLastActionResult("cancelled");
+            return;
           }
-          seenOutputs.add(normalizedOut);
+        }
+      } catch (e) {
+        addLog(t("error_prefix", e instanceof Error ? e.message : String(e)), "error");
+        setLastActionResult("error");
+        return;
+      }
 
-          let content: string;
+      // Construct AbortController at the boundary into busy state — see
+      // HdrConvert::handleConvert for rationale.
+      abortRef.current = new AbortController();
+      setBusy(true);
+      setProgress({ processed: 0, total: paths.length });
+
+      try {
+        addLog(t("msg_timing_start", paths.length, effectiveOffsetMs));
+
+        let successCount = 0;
+        let processedCount = 0;
+        const seenOutputs = new Set<string>();
+
+        for (const filePath of paths) {
+          if (abortRef.current?.signal.aborted) {
+            addLog(t("msg_timing_cancelled"), "info");
+            break;
+          }
+
+          const fileName = fileNameFromPath(filePath);
+          addLog(t("msg_processing", fileName));
+
           try {
-            content = await readText(filePath);
+            const outputPath = deriveShiftedPath(filePath);
+
+            // Within-batch dedup. Two inputs that resolve to the same
+            // output path (different paths on disk pointing at the same
+            // file via symlink, junction, etc.) would otherwise overwrite
+            // each other. See normalizeOutputKey for the NFC + forward
+            // slash + lowercase semantics.
+            const normalizedOut = normalizeOutputKey(outputPath);
+            if (seenOutputs.has(normalizedOut)) {
+              addLog(t("msg_skipped_duplicate", fileName), "error");
+              continue;
+            }
+            seenOutputs.add(normalizedOut);
+
+            let content: string;
+            try {
+              content = await readText(filePath);
+            } catch (e) {
+              addLog(
+                t("msg_read_error", fileName, e instanceof Error ? e.message : String(e)),
+                "error"
+              );
+              continue;
+            }
+
+            if (abortRef.current?.signal.aborted) break;
+
+            const result = shiftSubtitles(content, {
+              offsetMs: effectiveOffsetMs,
+              thresholdMs: thresholdMs ?? undefined,
+            });
+
+            if (abortRef.current?.signal.aborted) break;
+
+            await writeText(outputPath, result.content);
+            const outName = fileNameFromPath(outputPath);
+            addLog(t("msg_saved", outName, result.captionCount), "success");
+            successCount++;
           } catch (e) {
             addLog(
-              t("msg_read_error", fileName, e instanceof Error ? e.message : String(e)),
+              t("msg_timing_error", fileName, e instanceof Error ? e.message : String(e)),
               "error"
             );
-            continue;
+          } finally {
+            processedCount++;
+            setProgress({ processed: processedCount, total: paths.length });
           }
-
-          if (abortRef.current?.signal.aborted) break;
-
-          const result = shiftSubtitles(content, {
-            offsetMs: effectiveOffsetMs,
-            thresholdMs: thresholdMs ?? undefined,
-          });
-
-          if (abortRef.current?.signal.aborted) break;
-
-          await writeText(outputPath, result.content);
-          const outName = fileNameFromPath(outputPath);
-          addLog(t("msg_saved", outName, result.captionCount), "success");
-          successCount++;
-        } catch (e) {
-          addLog(
-            t("msg_timing_error", fileName, e instanceof Error ? e.message : String(e)),
-            "error"
-          );
-        } finally {
-          processedCount++;
-          setProgress({ processed: processedCount, total: paths.length });
         }
-      }
 
-      if (!abortRef.current?.signal.aborted) {
-        addLog(t("msg_timing_complete", successCount, paths.length), "success");
-      }
+        if (!abortRef.current?.signal.aborted) {
+          addLog(t("msg_timing_complete", successCount, paths.length), "success");
+        }
 
-      // Cancel takes precedence over success/error — surfacing
-      // "complete" when the user cancelled mid-batch would lie.
-      if (abortRef.current?.signal.aborted) {
-        setLastActionResult("cancelled");
-      } else {
-        setLastActionResult(successCount > 0 ? "success" : "error");
+        // Cancel takes precedence over success/error — surfacing
+        // "complete" when the user cancelled mid-batch would lie.
+        if (abortRef.current?.signal.aborted) {
+          setLastActionResult("cancelled");
+        } else {
+          setLastActionResult(successCount > 0 ? "success" : "error");
+        }
+      } finally {
+        setBusy(false);
+        setProgress(null);
       }
     } finally {
-      setBusy(false);
-      setProgress(null);
+      busyRef.current = false;
     }
   }, [fileCount, filePaths, effectiveOffsetMs, thresholdMs, thresholdInvalid, addLog, t]);
 

@@ -107,6 +107,17 @@ export default function HdrConvert() {
   // selection attempt or until the user clicks Clear.
   const [dropError, setDropError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // Synchronous double-click guard — `processing` state lags behind the
+  // setProcessing(true) call by one render, so a fast second click on
+  // Convert can pass the disabled gate before React paints the busy
+  // state. busyRef is written synchronously at handler entry and read
+  // by the next click before any state machinery sees it.
+  const busyRef = useRef(false);
+  // Generation counter for stale-pick guards on async file pickers.
+  // Mirrors the pattern in TimingShift / FontEmbed / BatchRename:
+  // bump on each handle*Files entry, then the handler discards results
+  // whose generation no longer matches.
+  const pickGenRef = useRef(0);
   const fileContainerRef = useRef<HTMLDivElement>(null);
   const dropZoneRef = useRef<HTMLDivElement>(null);
 
@@ -170,7 +181,14 @@ export default function HdrConvert() {
   // Strict cross-tab dedup contract: any conflict rejects the WHOLE
   // selection — see buildConflictMessage / FileContext for rationale.
   const handleSelectFiles = useCallback(async () => {
+    // Stale-pick guard: if the user clicks Select again before the OS
+    // dialog returns (or clears the prior selection in another way),
+    // each open() call has its own `gen` snapshot. Once the dialog
+    // resolves, only the most recent `gen` is allowed to commit. Mirrors
+    // the pattern in TimingShift / FontEmbed / BatchRename.
+    const gen = (pickGenRef.current = pickGenRef.current + 1);
     const paths = await pickSubtitleFiles(t);
+    if (gen !== pickGenRef.current) return;
     if (!paths || paths.length === 0) return;
 
     const conflictMsg = buildConflictMessage(paths, "hdr", isFileInUse, t);
@@ -227,190 +245,200 @@ export default function HdrConvert() {
   // ── Conversion (uses already-selected files) ───────────
   const handleConvert = useCallback(async () => {
     if (!hdrFiles) return;
-
-    // Reset cancel signal at the very entry, BEFORE any awaits. A late
-    // click from a previous batch can still be sitting in the React event
-    // queue when the user starts a new one; if we reset it later (after
-    // pre-flight or after setProcessing), the stale `true` would short-
-    // circuit the new batch's first iteration. The font scanner solves the
-    // same race with per-scan ids, but this in-memory HDR flow still uses a
-    // component-local boolean.
-    abortRef.current = new AbortController();
-
-    // Validate brightness
-    if (brightness < MIN_BRIGHTNESS || brightness > MAX_BRIGHTNESS) {
-      addLog(t("msg_invalid_brightness", MIN_BRIGHTNESS, MAX_BRIGHTNESS), "error");
-      return;
-    }
-
-    const paths = hdrFiles.filePaths;
-
-    // Pre-flight overwrite check. Template-derived output paths are
-    // deterministic — re-clicking Convert (e.g., the user came back to
-    // the window after minimizing and forgot the run already finished)
-    // would silently overwrite previous outputs. Stat each projected
-    // path; if any already exist, surface a single ask() dialog before
-    // entering the busy state. Failed-to-resolve paths skip pre-flight
-    // (the main loop will log per-file errors as before).
-    const projectedOutputs: string[] = [];
-    for (const filePath of paths) {
-      try {
-        projectedOutputs.push(resolveOutputPath(filePath, activeTemplate, eotf));
-      } catch {
-        // Resolution failure logged in the main loop with file context;
-        // pre-flight just skips so the existence check doesn't see an
-        // invalid path.
-      }
-    }
+    // Synchronous double-click gate — `processing` state lags
+    // setProcessing(true) by one render, so a fast second click can
+    // pass the disabled gate before React paints. busyRef is written
+    // synchronously here and released in the outer finally below so
+    // every exit path (validation fail / pre-flight cancel / loop done
+    // / loop throw) clears it.
+    if (busyRef.current) return;
+    busyRef.current = true;
     try {
-      const existingCount = await countExistingFiles(projectedOutputs);
-      if (existingCount > 0) {
-        const confirmed = await ask(t("msg_overwrite_confirm", existingCount, paths.length), {
-          title: t("dialog_overwrite_title"),
-          kind: "warning",
-        });
-        if (!confirmed) {
-          addLog(t("msg_cancelled"), "info");
-          setLastActionResult("cancelled");
-          return;
-        }
+      // Validate brightness
+      if (brightness < MIN_BRIGHTNESS || brightness > MAX_BRIGHTNESS) {
+        addLog(t("msg_invalid_brightness", MIN_BRIGHTNESS, MAX_BRIGHTNESS), "error");
+        return;
       }
-    } catch (e) {
-      addLog(t("error_prefix", e instanceof Error ? e.message : String(e)), "error");
-      setLastActionResult("error");
-      return;
-    }
 
-    setProcessing(true);
-    setProgress({ processed: 0, total: paths.length });
+      const paths = hdrFiles.filePaths;
 
-    try {
-      addLog(t("msg_start_conversion", paths.length, eotf, brightness));
-
-      const outputPaths = new Set<string>();
-      let successCount = 0;
-      let processedCount = 0;
-
+      // Pre-flight overwrite check. Template-derived output paths are
+      // deterministic — re-clicking Convert (e.g., the user came back to
+      // the window after minimizing and forgot the run already finished)
+      // would silently overwrite previous outputs. Stat each projected
+      // path; if any already exist, surface a single ask() dialog before
+      // entering the busy state. Failed-to-resolve paths skip pre-flight
+      // (the main loop will log per-file errors as before).
+      const projectedOutputs: string[] = [];
       for (const filePath of paths) {
-        if (abortRef.current?.signal.aborted) {
-          addLog(t("msg_cancelled"), "info");
-          break;
-        }
-
-        const fileName = fileNameFromPath(filePath);
-        addLog(t("msg_processing", fileName));
-
         try {
-          // Check file extension FIRST — cheap test, avoids wasted work in
-          // resolveOutputPath / readText for obviously-unsupported files.
-          if (!isNativeAss(fileName) && !isConvertible(fileName)) {
-            addLog(t("msg_unsupported", fileName), "error");
-            continue;
+          projectedOutputs.push(resolveOutputPath(filePath, activeTemplate, eotf));
+        } catch {
+          // Resolution failure logged in the main loop with file context;
+          // pre-flight just skips so the existence check doesn't see an
+          // invalid path.
+        }
+      }
+      try {
+        const existingCount = await countExistingFiles(projectedOutputs);
+        if (existingCount > 0) {
+          const confirmed = await ask(t("msg_overwrite_confirm", existingCount, paths.length), {
+            title: t("dialog_overwrite_title"),
+            kind: "warning",
+          });
+          if (!confirmed) {
+            addLog(t("msg_cancelled"), "info");
+            setLastActionResult("cancelled");
+            return;
+          }
+        }
+      } catch (e) {
+        addLog(t("error_prefix", e instanceof Error ? e.message : String(e)), "error");
+        setLastActionResult("error");
+        return;
+      }
+
+      // Construct the AbortController at the boundary into busy state —
+      // pre-flight bail-out paths must not leak unaborted controllers.
+      // busyRef above is the synchronous gate for double clicks; the
+      // controller is only allocated once we're committed to a run.
+      abortRef.current = new AbortController();
+      setProcessing(true);
+      setProgress({ processed: 0, total: paths.length });
+
+      try {
+        addLog(t("msg_start_conversion", paths.length, eotf, brightness));
+
+        const outputPaths = new Set<string>();
+        let successCount = 0;
+        let processedCount = 0;
+
+        for (const filePath of paths) {
+          if (abortRef.current?.signal.aborted) {
+            addLog(t("msg_cancelled"), "info");
+            break;
           }
 
-          // Resolve output path
-          let outputPath: string;
+          const fileName = fileNameFromPath(filePath);
+          addLog(t("msg_processing", fileName));
+
           try {
-            outputPath = resolveOutputPath(filePath, activeTemplate, eotf);
-          } catch (e) {
-            addLog(t("msg_skipped", fileName, e instanceof Error ? e.message : String(e)), "error");
-            continue;
-          }
+            // Check file extension FIRST — cheap test, avoids wasted work in
+            // resolveOutputPath / readText for obviously-unsupported files.
+            if (!isNativeAss(fileName) && !isConvertible(fileName)) {
+              addLog(t("msg_unsupported", fileName), "error");
+              continue;
+            }
 
-          // Within-batch output dedup — see normalizeOutputKey for the
-          // NFC + forward-slash + lowercase semantics.
-          const normalizedOut = normalizeOutputKey(outputPath);
-          if (outputPaths.has(normalizedOut)) {
-            addLog(t("msg_skipped_duplicate", fileName), "error");
-            continue;
-          }
-          outputPaths.add(normalizedOut);
+            // Resolve output path
+            let outputPath: string;
+            try {
+              outputPath = resolveOutputPath(filePath, activeTemplate, eotf);
+            } catch (e) {
+              addLog(
+                t("msg_skipped", fileName, e instanceof Error ? e.message : String(e)),
+                "error"
+              );
+              continue;
+            }
 
-          // Read input file
-          let content: string;
-          try {
-            content = await readText(filePath);
+            // Within-batch output dedup — see normalizeOutputKey for the
+            // NFC + forward-slash + lowercase semantics.
+            const normalizedOut = normalizeOutputKey(outputPath);
+            if (outputPaths.has(normalizedOut)) {
+              addLog(t("msg_skipped_duplicate", fileName), "error");
+              continue;
+            }
+            outputPaths.add(normalizedOut);
+
+            // Read input file
+            let content: string;
+            try {
+              content = await readText(filePath);
+            } catch (e) {
+              addLog(
+                t("msg_read_error", fileName, e instanceof Error ? e.message : String(e)),
+                "error"
+              );
+              continue;
+            }
+
+            // Check cancel after I/O
+            if (abortRef.current?.signal.aborted) break;
+
+            let assContent: string;
+
+            if (isNativeAss(fileName)) {
+              // Direct ASS processing
+              assContent = processAssContent(content, brightness, eotf);
+            } else if (isConvertible(fileName)) {
+              // SRT/SUB → ASS conversion path. processSrtUserText composes
+              // the two-step user-text pipeline (escape user braces, then
+              // inject our trusted color tags) so the order can't be swapped
+              // or one step skipped by a future caller.
+              const preprocessed = processSrtUserText(content);
+
+              // Parse with our browser-compatible parser
+              const { captions } = parseSubtitle(preprocessed, style.fps);
+
+              // Build ASS document from parsed captions
+              const entries = captions.map((c) => ({
+                start: c.start,
+                end: c.end,
+                text: c.text,
+              }));
+              const rawAss = buildAssDocument(entries, style);
+
+              // Now transform the ASS colors to HDR
+              assContent = processAssContent(rawAss, brightness, eotf);
+            } else {
+              // Unreachable — extension was validated above, but satisfies TypeScript
+              continue;
+            }
+
+            // Check cancel before writing
+            if (abortRef.current?.signal.aborted) break;
+
+            // Write output
+            await writeText(outputPath, assContent);
+            const outName = fileNameFromPath(outputPath);
+            addLog(t("msg_done", outName), "success");
+            successCount++;
           } catch (e) {
             addLog(
-              t("msg_read_error", fileName, e instanceof Error ? e.message : String(e)),
+              t("msg_convert_error", fileName, e instanceof Error ? e.message : String(e)),
               "error"
             );
-            continue;
+          } finally {
+            // Bump the N-of-M counter once per iteration regardless of
+            // outcome (success / skip / error). If cancel is seen at the
+            // top of the next loop, this block does not run for that next
+            // file; if cancel lands mid-file, the current file is counted
+            // as processed before the outer finally clears the progress chip.
+            processedCount++;
+            setProgress({ processed: processedCount, total: paths.length });
           }
-
-          // Check cancel after I/O
-          if (abortRef.current?.signal.aborted) break;
-
-          let assContent: string;
-
-          if (isNativeAss(fileName)) {
-            // Direct ASS processing
-            assContent = processAssContent(content, brightness, eotf);
-          } else if (isConvertible(fileName)) {
-            // SRT/SUB → ASS conversion path. processSrtUserText composes
-            // the two-step user-text pipeline (escape user braces, then
-            // inject our trusted color tags) so the order can't be swapped
-            // or one step skipped by a future caller.
-            const preprocessed = processSrtUserText(content);
-
-            // Parse with our browser-compatible parser
-            const { captions } = parseSubtitle(preprocessed, style.fps);
-
-            // Build ASS document from parsed captions
-            const entries = captions.map((c) => ({
-              start: c.start,
-              end: c.end,
-              text: c.text,
-            }));
-            const rawAss = buildAssDocument(entries, style);
-
-            // Now transform the ASS colors to HDR
-            assContent = processAssContent(rawAss, brightness, eotf);
-          } else {
-            // Unreachable — extension was validated above, but satisfies TypeScript
-            continue;
-          }
-
-          // Check cancel before writing
-          if (abortRef.current?.signal.aborted) break;
-
-          // Write output
-          await writeText(outputPath, assContent);
-          const outName = fileNameFromPath(outputPath);
-          addLog(t("msg_done", outName), "success");
-          successCount++;
-        } catch (e) {
-          addLog(
-            t("msg_convert_error", fileName, e instanceof Error ? e.message : String(e)),
-            "error"
-          );
-        } finally {
-          // Bump the N-of-M counter once per iteration regardless of
-          // outcome (success / skip / error). If cancel is seen at the
-          // top of the next loop, this block does not run for that next
-          // file; if cancel lands mid-file, the current file is counted
-          // as processed before the outer finally clears the progress chip.
-          processedCount++;
-          setProgress({ processed: processedCount, total: paths.length });
         }
-      }
 
-      if (!abortRef.current?.signal.aborted) {
-        addLog(t("msg_complete", successCount, paths.length), "success");
-      }
-      // Record outcome for the footer status. Order matters: a cancel
-      // takes precedence over partial success/error counts, because the
-      // user explicitly stepped back — surfacing "Conversion complete"
-      // when they cancelled mid-batch would be a lie. Only treat the
-      // outcome as success/error when the loop ran to completion.
-      if (abortRef.current?.signal.aborted) {
-        setLastActionResult("cancelled");
-      } else {
-        setLastActionResult(successCount > 0 ? "success" : "error");
+        if (!abortRef.current?.signal.aborted) {
+          addLog(t("msg_complete", successCount, paths.length), "success");
+        }
+        // Record outcome for the footer status. Order matters: a cancel
+        // takes precedence over partial success/error counts, because the
+        // user explicitly stepped back — surfacing "Conversion complete"
+        // when they cancelled mid-batch would be a lie. Only treat the
+        // outcome as success/error when the loop ran to completion.
+        if (abortRef.current?.signal.aborted) {
+          setLastActionResult("cancelled");
+        } else {
+          setLastActionResult(successCount > 0 ? "success" : "error");
+        }
+      } finally {
+        setProcessing(false);
+        setProgress(null);
       }
     } finally {
-      setProcessing(false);
-      setProgress(null);
+      busyRef.current = false;
     }
   }, [hdrFiles, brightness, eotf, activeTemplate, style, addLog, t]);
 

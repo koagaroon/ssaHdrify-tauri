@@ -91,6 +91,11 @@ export default function FontEmbed() {
   const [dropError, setDropError] = useState<string | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
+  // Synchronous double-click guard — `embedding` state lags
+  // setEmbedding(true) by one render. busyRef is written synchronously
+  // at handler entry and released in the outer finally so every exit
+  // path clears it.
+  const busyRef = useRef(false);
   // Generation counter for ingest flows. Each handlePickFiles /
   // handleDroppedPaths / handleClearFiles bumps the counter, and the
   // async work captured the value at entry — when it later checks
@@ -407,165 +412,170 @@ export default function FontEmbed() {
   // ── Embed handler — handles both single-file and batch modes ─────
   const handleEmbed = useCallback(async () => {
     if (fileCount === 0) return;
-
-    // Reset cancel signal at the very entry, BEFORE any awaits — see the
-    // matching comment in HdrConvert.tsx::handleConvert for rationale.
-    abortRef.current = new AbortController();
-
-    // Pre-flight overwrite check — same project-wide pattern.
-    const projectedOutputs = filePaths.map((p) => deriveEmbeddedPath(p));
+    // Synchronous double-click gate — see HdrConvert::handleConvert.
+    if (busyRef.current) return;
+    busyRef.current = true;
     try {
-      const existingCount = await countExistingFiles(projectedOutputs);
-      if (existingCount > 0) {
-        const confirmed = await ask(t("msg_overwrite_confirm", existingCount, filePaths.length), {
-          title: t("dialog_overwrite_title"),
-          kind: "warning",
-        });
-        if (!confirmed) {
-          addLog(t("msg_fonts_cancelled"), "info");
-          setLastActionResult("cancelled");
-          return;
+      // Pre-flight overwrite check — same project-wide pattern.
+      const projectedOutputs = filePaths.map((p) => deriveEmbeddedPath(p));
+      try {
+        const existingCount = await countExistingFiles(projectedOutputs);
+        if (existingCount > 0) {
+          const confirmed = await ask(t("msg_overwrite_confirm", existingCount, filePaths.length), {
+            title: t("dialog_overwrite_title"),
+            kind: "warning",
+          });
+          if (!confirmed) {
+            addLog(t("msg_fonts_cancelled"), "info");
+            setLastActionResult("cancelled");
+            return;
+          }
         }
+      } catch (e) {
+        addLog(t("error_prefix", e instanceof Error ? e.message : String(e)), "error");
+        setLastActionResult("error");
+        return;
       }
-    } catch (e) {
-      addLog(t("error_prefix", e instanceof Error ? e.message : String(e)), "error");
-      setLastActionResult("error");
-      return;
-    }
 
-    setEmbedding(true);
-    setBatchProgress({ processed: 0, total: filePaths.length });
+      // Construct AbortController at the boundary into busy state — see
+      // HdrConvert::handleConvert for rationale.
+      abortRef.current = new AbortController();
+      setEmbedding(true);
+      setBatchProgress({ processed: 0, total: filePaths.length });
 
-    try {
-      addLog(t("msg_fonts_start", filePaths.length));
+      try {
+        addLog(t("msg_fonts_start", filePaths.length));
 
-      let successCount = 0;
-      let processedCount = 0;
-      const seenOutputs = new Set<string>();
+        let successCount = 0;
+        let processedCount = 0;
+        const seenOutputs = new Set<string>();
 
-      for (let i = 0; i < filePaths.length; i++) {
-        const filePath = filePaths[i];
+        for (let i = 0; i < filePaths.length; i++) {
+          const filePath = filePaths[i];
 
-        if (abortRef.current?.signal.aborted) {
-          addLog(t("msg_fonts_cancelled"), "info");
-          break;
-        }
-
-        const fileName = fileNameFromPath(filePath);
-        addLog(t("msg_processing", fileName));
-
-        try {
-          const outputPath = deriveEmbeddedPath(filePath);
-          const normalizedOut = normalizeOutputKey(outputPath);
-          if (seenOutputs.has(normalizedOut)) {
-            addLog(t("msg_skipped_duplicate", fileName), "error");
-            continue;
-          }
-          seenOutputs.add(normalizedOut);
-
-          // Pull from the per-file analysis cache populated at ingest.
-          // The cache holds content, infos, and usages so the embed
-          // loop avoids any disk re-read or re-analysis. Fall back to
-          // a fresh read + analyze if cache somehow missed this path
-          // (shouldn't happen — we ingest every file before showing
-          // the grid — but defensive).
-          let cached = perFileAnalysisRef.current.get(filePath);
-          if (!cached) {
-            let content: string;
-            try {
-              content = await readText(filePath);
-            } catch (e) {
-              addLog(
-                t("msg_read_error", fileName, e instanceof Error ? e.message : String(e)),
-                "error"
-              );
-              continue;
-            }
-            if (abortRef.current?.signal.aborted) break;
-            const analyzed = await analyzeFonts(content, null, undefined, true);
-            cached = { content, infos: analyzed.infos, usages: analyzed.usages };
-          }
-          if (abortRef.current?.signal.aborted) break;
-
-          // Filter to fonts THIS FILE references AND the user kept
-          // checked in the global aggregate grid AND that resolved to
-          // a real font file. The aggregate keys are the same shape
-          // as per-file keys, so set membership is direct.
-          //
-          // `selected` is the Set captured when the user clicked Embed
-          // (handleEmbed is a useCallback closing over the state value,
-          // not a ref). Mid-run checkbox toggles do NOT affect what the
-          // running batch embeds — that's intentional, so flipping a
-          // box mid-loop can't inject or omit a font part-way through
-          // the sequence and produce inconsistent outputs across files.
-          // Switching this to a ref would change that contract.
-          const selectedFonts = cached.infos.filter(
-            (info) => selected.has(fontSelectionKey(info)) && info.filePath
-          );
-
-          if (selectedFonts.length === 0) {
-            addLog(t("msg_no_fonts_selected"), "error");
-            continue;
-          }
-
-          // Per-font subsetting progress — only in single-file. In
-          // batch we suppress to avoid a noisy progress bar that resets
-          // per file; the footer N-of-M chip is the file-level signal.
-          const onProgress = isSingleFile ? (p: EmbedProgress) => setProgress(p) : undefined;
-
-          const result = await embedFonts(
-            cached.content,
-            selectedFonts,
-            cached.usages,
-            onProgress,
-            () => abortRef.current?.signal.aborted ?? false,
-            t
-          );
-
-          if (result === null) {
-            // Cancelled mid-embed for this file — break out of batch.
+          if (abortRef.current?.signal.aborted) {
+            addLog(t("msg_fonts_cancelled"), "info");
             break;
           }
-          if (abortRef.current?.signal.aborted) break;
 
-          const outName = fileNameFromPath(outputPath);
-          if (result.embeddedCount === 0) {
-            // Nothing was actually embedded — skip the write so we
-            // don't produce a `.embedded.ass` that's identical to the
-            // input and log "saved" for a no-op. Surface as a warning
-            // so the user knows the file was processed but the output
-            // would have been a copy of the source.
-            addLog(t("msg_embed_no_change", outName), "info");
-            continue;
+          const fileName = fileNameFromPath(filePath);
+          addLog(t("msg_processing", fileName));
+
+          try {
+            const outputPath = deriveEmbeddedPath(filePath);
+            const normalizedOut = normalizeOutputKey(outputPath);
+            if (seenOutputs.has(normalizedOut)) {
+              addLog(t("msg_skipped_duplicate", fileName), "error");
+              continue;
+            }
+            seenOutputs.add(normalizedOut);
+
+            // Pull from the per-file analysis cache populated at ingest.
+            // The cache holds content, infos, and usages so the embed
+            // loop avoids any disk re-read or re-analysis. Fall back to
+            // a fresh read + analyze if cache somehow missed this path
+            // (shouldn't happen — we ingest every file before showing
+            // the grid — but defensive).
+            let cached = perFileAnalysisRef.current.get(filePath);
+            if (!cached) {
+              let content: string;
+              try {
+                content = await readText(filePath);
+              } catch (e) {
+                addLog(
+                  t("msg_read_error", fileName, e instanceof Error ? e.message : String(e)),
+                  "error"
+                );
+                continue;
+              }
+              if (abortRef.current?.signal.aborted) break;
+              const analyzed = await analyzeFonts(content, null, undefined, true);
+              cached = { content, infos: analyzed.infos, usages: analyzed.usages };
+            }
+            if (abortRef.current?.signal.aborted) break;
+
+            // Filter to fonts THIS FILE references AND the user kept
+            // checked in the global aggregate grid AND that resolved to
+            // a real font file. The aggregate keys are the same shape
+            // as per-file keys, so set membership is direct.
+            //
+            // `selected` is the Set captured when the user clicked Embed
+            // (handleEmbed is a useCallback closing over the state value,
+            // not a ref). Mid-run checkbox toggles do NOT affect what the
+            // running batch embeds — that's intentional, so flipping a
+            // box mid-loop can't inject or omit a font part-way through
+            // the sequence and produce inconsistent outputs across files.
+            // Switching this to a ref would change that contract.
+            const selectedFonts = cached.infos.filter(
+              (info) => selected.has(fontSelectionKey(info)) && info.filePath
+            );
+
+            if (selectedFonts.length === 0) {
+              addLog(t("msg_no_fonts_selected"), "error");
+              continue;
+            }
+
+            // Per-font subsetting progress — only in single-file. In
+            // batch we suppress to avoid a noisy progress bar that resets
+            // per file; the footer N-of-M chip is the file-level signal.
+            const onProgress = isSingleFile ? (p: EmbedProgress) => setProgress(p) : undefined;
+
+            const result = await embedFonts(
+              cached.content,
+              selectedFonts,
+              cached.usages,
+              onProgress,
+              () => abortRef.current?.signal.aborted ?? false,
+              t
+            );
+
+            if (result === null) {
+              // Cancelled mid-embed for this file — break out of batch.
+              break;
+            }
+            if (abortRef.current?.signal.aborted) break;
+
+            const outName = fileNameFromPath(outputPath);
+            if (result.embeddedCount === 0) {
+              // Nothing was actually embedded — skip the write so we
+              // don't produce a `.embedded.ass` that's identical to the
+              // input and log "saved" for a no-op. Surface as a warning
+              // so the user knows the file was processed but the output
+              // would have been a copy of the source.
+              addLog(t("msg_embed_no_change", outName), "info");
+              continue;
+            }
+            await writeText(outputPath, result.content);
+            addLog(t("msg_embed_saved", outName, result.embeddedCount), "success");
+            successCount++;
+          } catch (e) {
+            addLog(
+              t("msg_fonts_error", fileName, e instanceof Error ? e.message : String(e)),
+              "error"
+            );
+          } finally {
+            processedCount++;
+            setBatchProgress({ processed: processedCount, total: filePaths.length });
           }
-          await writeText(outputPath, result.content);
-          addLog(t("msg_embed_saved", outName, result.embeddedCount), "success");
-          successCount++;
-        } catch (e) {
-          addLog(
-            t("msg_fonts_error", fileName, e instanceof Error ? e.message : String(e)),
-            "error"
-          );
-        } finally {
-          processedCount++;
-          setBatchProgress({ processed: processedCount, total: filePaths.length });
         }
-      }
 
-      if (!abortRef.current?.signal.aborted) {
-        addLog(t("msg_fonts_complete", successCount, filePaths.length), "success");
-      }
+        if (!abortRef.current?.signal.aborted) {
+          addLog(t("msg_fonts_complete", successCount, filePaths.length), "success");
+        }
 
-      // Cancel takes precedence over success/error.
-      if (abortRef.current?.signal.aborted) {
-        setLastActionResult("cancelled");
-      } else {
-        setLastActionResult(successCount > 0 ? "success" : "error");
+        // Cancel takes precedence over success/error.
+        if (abortRef.current?.signal.aborted) {
+          setLastActionResult("cancelled");
+        } else {
+          setLastActionResult(successCount > 0 ? "success" : "error");
+        }
+      } finally {
+        setEmbedding(false);
+        setBatchProgress(null);
+        setProgress(null);
       }
     } finally {
-      setEmbedding(false);
-      setBatchProgress(null);
-      setProgress(null);
+      busyRef.current = false;
     }
   }, [fileCount, filePaths, isSingleFile, selected, addLog, t]);
 

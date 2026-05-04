@@ -86,8 +86,13 @@ export function normalizeOutputKey(path: string): string {
  *    sample row across multiple visible lines)
  *  - U+2066..U+2069 — LRI / RLI / FSI / PDI isolates
  */
+// Use \u escapes for every entry rather than literal characters:
+// U+2028 LINE SEPARATOR is treated as a line terminator by the
+// TypeScript regex parser, which would close the regex literal
+// mid-pattern if it appeared in the source verbatim. \u escapes
+// keep the parser happy and the intent grep-able.
 const DIALOG_BIDI_CONTROLS_RE =
-  /[؜‎‏‪-‮  ⁦-⁩]/g;
+  /[\u061C\u200E\u200F\u202A-\u202E\u2028\u2029\u2066-\u2069]/g;
 
 /** Strip bidirectional control characters and stray line separators
  *  before rendering an untrusted string inside a native `ask()` dialog

@@ -216,6 +216,10 @@ export default function BatchRename() {
 
   const pickGenRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
+  // Synchronous double-click guard — `busy` state lags setBusy(true) by
+  // one render. busyRef is written synchronously at handler entry and
+  // released in the outer finally so every exit path clears it.
+  const busyRef = useRef(false);
   const dropZoneRef = useRef<HTMLDivElement>(null);
 
   const videoPaths = useMemo(() => renameFiles?.videoPaths ?? [], [renameFiles]);
@@ -464,260 +468,265 @@ export default function BatchRename() {
 
   const handleRunRename = useCallback(async () => {
     if (busy || actionableCount === 0) return;
-
-    // Reset cancel signal at the very entry, BEFORE any awaits — see the
-    // matching comment in HdrConvert.tsx::handleConvert for rationale.
-    abortRef.current = new AbortController();
-
-    if (outputMode === "copy_to_chosen" && !chosenDir) {
-      addLog(t("msg_rename_no_chosen_dir"), "error");
-      return;
-    }
-
-    // Derive output paths up front so all confirmation dialogs see
-    // the final names. Catch derive errors per-row — a bad row gets
-    // logged + skipped, the rest of the batch proceeds. Track the
-    // skipped count so subsequent confirm dialogs can surface it
-    // (otherwise the dialog says "Rename N files" using the post-skip
-    // count, hiding the skips during the moment the user can't see
-    // the log).
-    const derivedTargets: { row: PairingRow; outputPath: string }[] = [];
-    let skippedDeriveCount = 0;
-    for (const row of actionableRows) {
-      try {
-        const outputPath = deriveRenameOutputPath(
-          row.video!.path,
-          row.subtitle!.path,
-          outputMode,
-          chosenDir
-        );
-        derivedTargets.push({ row, outputPath });
-      } catch (e) {
-        const reason = e instanceof Error ? e.message : String(e);
-        addLog(t("msg_rename_skipped", row.subtitle!.name, reason), "error");
-        skippedDeriveCount += 1;
-      }
-    }
-    if (derivedTargets.length === 0) {
-      addLog(t("msg_rename_nothing_to_do"), "error");
-      return;
-    }
-
-    // No-op pre-flight. When a sub is already correctly named for its
-    // paired video (e.g. raw-pack external-sub releases that ship subs
-    // matching `<videoBase>.<lang>.ass`), the derived output equals the
-    // source path. Filtering these out BEFORE the overwrite dialog
-    // avoids a spurious "N files already exist, overwrite?" prompt
-    // followed by copyFile(src, src) failures. The remaining work goes
-    // through the regular flow.
-    const noopTargets: { row: PairingRow; outputPath: string }[] = [];
-    const targets: { row: PairingRow; outputPath: string }[] = [];
-    for (const tgt of derivedTargets) {
-      if (isNoOpRename(tgt.row.subtitle!.path, tgt.outputPath)) {
-        noopTargets.push(tgt);
-      } else {
-        targets.push(tgt);
-      }
-    }
-    for (const tgt of noopTargets) {
-      addLog(t("msg_rename_already_named", tgt.row.subtitle!.name), "info");
-    }
-    if (targets.length === 0) {
-      // Nothing was actually written. Logging this as success + green
-      // footer would suggest the rename worked; route through "noop"
-      // (amber pending) so the user sees that the run made no changes.
-      addLog(t("msg_rename_all_already_named", noopTargets.length), "info");
-      setLastActionResult("noop");
-      return;
-    }
-
-    // In-place rename is destructive (source disappears). Show a
-    // confirmation dialog with the first 3 sample names so the user
-    // sees exactly what will happen before committing.
-    //
-    // Filename injection isn't a concern here: ask() from
-    // @tauri-apps/plugin-dialog renders the body as plain text via
-    // OS-native dialogs (Windows TaskDialog / macOS NSAlert), not HTML.
-    // Names with embedded HTML / markup render as literal characters.
-    //
-    // Multi-line filename rendering: filenames containing literal "\n"
-    // bytes (rare but possible on macOS / Linux where they're allowed)
-    // get rendered as actual newlines inside the dialog. On Windows
-    // TaskDialog this can produce unevenly-tall sample rows; on macOS
-    // NSAlert the line wraps cleanly. We accept the cosmetic
-    // unevenness rather than escaping `\n` in samples — escaping
-    // would mis-represent the literal name the user is about to act on.
-    // Track whether the user has already seen the skipped-derive count.
-    // The in-place rename confirm + the overwrite-existing confirm can
-    // both fire in the same run (rename mode + outputs already exist),
-    // so dedupe the suffix to surface "(N skipped)" exactly once.
-    let skippedSuffixShown = false;
-    const skippedSuffix =
-      skippedDeriveCount > 0 ? "\n\n" + t("msg_rename_skipped_count", skippedDeriveCount) : "";
-
-    if (outputMode === "rename") {
-      // Strip BiDi overrides from filenames before rendering them in the
-      // OS-native dialog body. A subtitle file named with U+202E mid-
-      // string can visually reverse the arrow + target name in the
-      // confirmation, tricking the user into approving an unintended
-      // rename (CVE-2021-42574 class). Counts and other non-filename
-      // strings are unaffected.
-      const samples = targets
-        .slice(0, 3)
-        .map(
-          (t2) =>
-            `${sanitizeForDialog(t2.row.subtitle!.name)} → ${sanitizeForDialog(fileNameFromPath(t2.outputPath))}`
-        )
-        .join("\n");
-      const moreCount = targets.length - 3;
-      const moreSuffix = moreCount > 0 ? "\n" + t("msg_rename_inplace_more", moreCount) : "";
-      const confirmed = await ask(
-        t("msg_rename_inplace_confirm", targets.length) +
-          "\n\n" +
-          samples +
-          moreSuffix +
-          skippedSuffix,
-        { title: t("dialog_rename_inplace_title"), kind: "warning" }
-      );
-      if (skippedSuffix.length > 0) skippedSuffixShown = true;
-      if (!confirmed) {
-        addLog(t("msg_rename_cancelled"), "info");
-        setLastActionResult("cancelled");
+    // Synchronous double-click gate — see HdrConvert::handleConvert.
+    if (busyRef.current) return;
+    busyRef.current = true;
+    try {
+      if (outputMode === "copy_to_chosen" && !chosenDir) {
+        addLog(t("msg_rename_no_chosen_dir"), "error");
         return;
       }
-    }
 
-    // Pre-flight overwrite check — same project-wide pattern as the
-    // other batch tabs. ANY existing target → single ask() with the
-    // count; cancel preserves prior state, confirm proceeds. No-op
-    // targets were filtered above so they don't inflate the count.
-    //
-    // Surface the derive-skip count here too (not just in the in-place
-    // confirm above): copy modes go straight to the overwrite dialog,
-    // and the user has no other way to learn that some pairings failed
-    // before the dialog moment.
-    const projectedOutputs = targets.map((t2) => t2.outputPath);
-    try {
-      const existingCount = await countExistingFiles(projectedOutputs);
-      if (existingCount > 0) {
-        const overwriteSuffix = skippedSuffixShown ? "" : skippedSuffix;
+      // Derive output paths up front so all confirmation dialogs see
+      // the final names. Catch derive errors per-row — a bad row gets
+      // logged + skipped, the rest of the batch proceeds. Track the
+      // skipped count so subsequent confirm dialogs can surface it
+      // (otherwise the dialog says "Rename N files" using the post-skip
+      // count, hiding the skips during the moment the user can't see
+      // the log).
+      const derivedTargets: { row: PairingRow; outputPath: string }[] = [];
+      let skippedDeriveCount = 0;
+      for (const row of actionableRows) {
+        try {
+          const outputPath = deriveRenameOutputPath(
+            row.video!.path,
+            row.subtitle!.path,
+            outputMode,
+            chosenDir
+          );
+          derivedTargets.push({ row, outputPath });
+        } catch (e) {
+          const reason = e instanceof Error ? e.message : String(e);
+          addLog(t("msg_rename_skipped", row.subtitle!.name, reason), "error");
+          skippedDeriveCount += 1;
+        }
+      }
+      if (derivedTargets.length === 0) {
+        addLog(t("msg_rename_nothing_to_do"), "error");
+        return;
+      }
+
+      // No-op pre-flight. When a sub is already correctly named for its
+      // paired video (e.g. raw-pack external-sub releases that ship subs
+      // matching `<videoBase>.<lang>.ass`), the derived output equals the
+      // source path. Filtering these out BEFORE the overwrite dialog
+      // avoids a spurious "N files already exist, overwrite?" prompt
+      // followed by copyFile(src, src) failures. The remaining work goes
+      // through the regular flow.
+      const noopTargets: { row: PairingRow; outputPath: string }[] = [];
+      const targets: { row: PairingRow; outputPath: string }[] = [];
+      for (const tgt of derivedTargets) {
+        if (isNoOpRename(tgt.row.subtitle!.path, tgt.outputPath)) {
+          noopTargets.push(tgt);
+        } else {
+          targets.push(tgt);
+        }
+      }
+      for (const tgt of noopTargets) {
+        addLog(t("msg_rename_already_named", tgt.row.subtitle!.name), "info");
+      }
+      if (targets.length === 0) {
+        // Nothing was actually written. Logging this as success + green
+        // footer would suggest the rename worked; route through "noop"
+        // (amber pending) so the user sees that the run made no changes.
+        addLog(t("msg_rename_all_already_named", noopTargets.length), "info");
+        setLastActionResult("noop");
+        return;
+      }
+
+      // In-place rename is destructive (source disappears). Show a
+      // confirmation dialog with the first 3 sample names so the user
+      // sees exactly what will happen before committing.
+      //
+      // Filename injection isn't a concern here: ask() from
+      // @tauri-apps/plugin-dialog renders the body as plain text via
+      // OS-native dialogs (Windows TaskDialog / macOS NSAlert), not HTML.
+      // Names with embedded HTML / markup render as literal characters.
+      //
+      // Multi-line filename rendering: filenames containing literal "\n"
+      // bytes (rare but possible on macOS / Linux where they're allowed)
+      // get rendered as actual newlines inside the dialog. On Windows
+      // TaskDialog this can produce unevenly-tall sample rows; on macOS
+      // NSAlert the line wraps cleanly. We accept the cosmetic
+      // unevenness rather than escaping `\n` in samples — escaping
+      // would mis-represent the literal name the user is about to act on.
+      // Track whether the user has already seen the skipped-derive count.
+      // The in-place rename confirm + the overwrite-existing confirm can
+      // both fire in the same run (rename mode + outputs already exist),
+      // so dedupe the suffix to surface "(N skipped)" exactly once.
+      let skippedSuffixShown = false;
+      const skippedSuffix =
+        skippedDeriveCount > 0 ? "\n\n" + t("msg_rename_skipped_count", skippedDeriveCount) : "";
+
+      if (outputMode === "rename") {
+        // Strip BiDi overrides from filenames before rendering them in the
+        // OS-native dialog body. A subtitle file named with U+202E mid-
+        // string can visually reverse the arrow + target name in the
+        // confirmation, tricking the user into approving an unintended
+        // rename (CVE-2021-42574 class). Counts and other non-filename
+        // strings are unaffected.
+        const samples = targets
+          .slice(0, 3)
+          .map(
+            (t2) =>
+              `${sanitizeForDialog(t2.row.subtitle!.name)} → ${sanitizeForDialog(fileNameFromPath(t2.outputPath))}`
+          )
+          .join("\n");
+        const moreCount = targets.length - 3;
+        const moreSuffix = moreCount > 0 ? "\n" + t("msg_rename_inplace_more", moreCount) : "";
         const confirmed = await ask(
-          t("msg_overwrite_confirm", existingCount, targets.length) + overwriteSuffix,
-          {
-            title: t("dialog_overwrite_title"),
-            kind: "warning",
-          }
+          t("msg_rename_inplace_confirm", targets.length) +
+            "\n\n" +
+            samples +
+            moreSuffix +
+            skippedSuffix,
+          { title: t("dialog_rename_inplace_title"), kind: "warning" }
         );
+        if (skippedSuffix.length > 0) skippedSuffixShown = true;
         if (!confirmed) {
           addLog(t("msg_rename_cancelled"), "info");
           setLastActionResult("cancelled");
           return;
         }
       }
-    } catch (e) {
-      addLog(t("error_prefix", e instanceof Error ? e.message : String(e)), "error");
-      setLastActionResult("error");
-      return;
-    }
 
-    setBusy(true);
-    setProgress({ processed: 0, total: targets.length });
-
-    try {
-      // Switch on the literal OutputMode union so adding a new value forces
-      // a TypeScript exhaustiveness error here, instead of silently emitting
-      // an i18n key that doesn't exist (the previous template-literal form
-      // would have rendered the bare key string as fallback). Every other
-      // call site in the codebase passes literal i18n keys; keep this one
-      // consistent.
-      let modeLabel: string;
-      switch (outputMode) {
-        case "rename":
-          modeLabel = t("rename_mode_rename_short");
-          break;
-        case "copy_to_video":
-          modeLabel = t("rename_mode_copy_to_video_short");
-          break;
-        case "copy_to_chosen":
-          modeLabel = t("rename_mode_copy_to_chosen_short");
-          break;
-        default: {
-          // Compile-time exhaustive check; the throw is runtime
-          // defense-in-depth in case a type-cast bypass slips an
-          // unknown value through (would otherwise be passed to t()
-          // verbatim and surface as the missing-key fallback).
-          const _exhaustive: never = outputMode;
-          throw new Error(`unhandled output mode: ${String(_exhaustive)}`);
+      // Pre-flight overwrite check — same project-wide pattern as the
+      // other batch tabs. ANY existing target → single ask() with the
+      // count; cancel preserves prior state, confirm proceeds. No-op
+      // targets were filtered above so they don't inflate the count.
+      //
+      // Surface the derive-skip count here too (not just in the in-place
+      // confirm above): copy modes go straight to the overwrite dialog,
+      // and the user has no other way to learn that some pairings failed
+      // before the dialog moment.
+      const projectedOutputs = targets.map((t2) => t2.outputPath);
+      try {
+        const existingCount = await countExistingFiles(projectedOutputs);
+        if (existingCount > 0) {
+          const overwriteSuffix = skippedSuffixShown ? "" : skippedSuffix;
+          const confirmed = await ask(
+            t("msg_overwrite_confirm", existingCount, targets.length) + overwriteSuffix,
+            {
+              title: t("dialog_overwrite_title"),
+              kind: "warning",
+            }
+          );
+          if (!confirmed) {
+            addLog(t("msg_rename_cancelled"), "info");
+            setLastActionResult("cancelled");
+            return;
+          }
         }
+      } catch (e) {
+        addLog(t("error_prefix", e instanceof Error ? e.message : String(e)), "error");
+        setLastActionResult("error");
+        return;
       }
-      addLog(t("msg_rename_start", targets.length, modeLabel));
 
-      let successCount = 0;
-      let processedCount = 0;
-      const seenOutputs = new Set<string>();
+      // Construct AbortController at the boundary into busy state —
+      // see HdrConvert::handleConvert for rationale.
+      abortRef.current = new AbortController();
+      setBusy(true);
+      setProgress({ processed: 0, total: targets.length });
 
-      for (const { row, outputPath } of targets) {
+      try {
+        // Switch on the literal OutputMode union so adding a new value forces
+        // a TypeScript exhaustiveness error here, instead of silently emitting
+        // an i18n key that doesn't exist (the previous template-literal form
+        // would have rendered the bare key string as fallback). Every other
+        // call site in the codebase passes literal i18n keys; keep this one
+        // consistent.
+        let modeLabel: string;
+        switch (outputMode) {
+          case "rename":
+            modeLabel = t("rename_mode_rename_short");
+            break;
+          case "copy_to_video":
+            modeLabel = t("rename_mode_copy_to_video_short");
+            break;
+          case "copy_to_chosen":
+            modeLabel = t("rename_mode_copy_to_chosen_short");
+            break;
+          default: {
+            // Compile-time exhaustive check; the throw is runtime
+            // defense-in-depth in case a type-cast bypass slips an
+            // unknown value through (would otherwise be passed to t()
+            // verbatim and surface as the missing-key fallback).
+            const _exhaustive: never = outputMode;
+            throw new Error(`unhandled output mode: ${String(_exhaustive)}`);
+          }
+        }
+        addLog(t("msg_rename_start", targets.length, modeLabel));
+
+        let successCount = 0;
+        let processedCount = 0;
+        const seenOutputs = new Set<string>();
+
+        for (const { row, outputPath } of targets) {
+          if (abortRef.current?.signal.aborted) {
+            addLog(t("msg_rename_cancelled"), "info");
+            break;
+          }
+
+          const subName = row.subtitle!.name;
+          const outName = fileNameFromPath(outputPath);
+          addLog(t("msg_processing", subName));
+
+          try {
+            // Within-batch dedup. Two rows producing the same output
+            // path (e.g., user pre-edited filenames in a way that
+            // collides) would otherwise overwrite each other. No-op
+            // rows (target == source) were filtered pre-flight.
+            const normalizedOut = normalizeOutputKey(outputPath);
+            if (seenOutputs.has(normalizedOut)) {
+              addLog(t("msg_skipped_duplicate", subName), "error");
+              continue;
+            }
+            seenOutputs.add(normalizedOut);
+
+            if (abortRef.current?.signal.aborted) break;
+
+            if (outputMode === "rename") {
+              await renamePath(row.subtitle!.path, outputPath);
+            } else {
+              await copyPath(row.subtitle!.path, outputPath);
+            }
+            addLog(t("msg_rename_done", subName, outName), "success");
+            successCount++;
+          } catch (e) {
+            const reason = e instanceof Error ? e.message : String(e);
+            addLog(t("msg_rename_error", subName, reason), "error");
+          } finally {
+            processedCount++;
+            setProgress({ processed: processedCount, total: targets.length });
+          }
+        }
+
+        if (!abortRef.current?.signal.aborted) {
+          addLog(t("msg_rename_complete", successCount, targets.length), "success");
+        }
+
         if (abortRef.current?.signal.aborted) {
-          addLog(t("msg_rename_cancelled"), "info");
-          break;
+          setLastActionResult("cancelled");
+        } else {
+          setLastActionResult(successCount > 0 ? "success" : "error");
         }
-
-        const subName = row.subtitle!.name;
-        const outName = fileNameFromPath(outputPath);
-        addLog(t("msg_processing", subName));
-
-        try {
-          // Within-batch dedup. Two rows producing the same output
-          // path (e.g., user pre-edited filenames in a way that
-          // collides) would otherwise overwrite each other. No-op
-          // rows (target == source) were filtered pre-flight.
-          const normalizedOut = normalizeOutputKey(outputPath);
-          if (seenOutputs.has(normalizedOut)) {
-            addLog(t("msg_skipped_duplicate", subName), "error");
-            continue;
-          }
-          seenOutputs.add(normalizedOut);
-
-          if (abortRef.current?.signal.aborted) break;
-
-          if (outputMode === "rename") {
-            await renamePath(row.subtitle!.path, outputPath);
-          } else {
-            await copyPath(row.subtitle!.path, outputPath);
-          }
-          addLog(t("msg_rename_done", subName, outName), "success");
-          successCount++;
-        } catch (e) {
-          const reason = e instanceof Error ? e.message : String(e);
-          addLog(t("msg_rename_error", subName, reason), "error");
-        } finally {
-          processedCount++;
-          setProgress({ processed: processedCount, total: targets.length });
-        }
+      } catch (e) {
+        // The default-branch throw inside the switch above (and any other
+        // unexpected error from the rename loop) lands here. Without this
+        // catch the throw bubbles past the finally to React's boundary as
+        // an unhandled rejection — the Run button's spinner ends with no
+        // log line, no toast, no banner. Surface it through the same log
+        // path the per-row errors use.
+        const reason = e instanceof Error ? e.message : String(e);
+        addLog(t("error_prefix", reason), "error");
+        setLastActionResult("error");
+      } finally {
+        setBusy(false);
+        setProgress(null);
       }
-
-      if (!abortRef.current?.signal.aborted) {
-        addLog(t("msg_rename_complete", successCount, targets.length), "success");
-      }
-
-      if (abortRef.current?.signal.aborted) {
-        setLastActionResult("cancelled");
-      } else {
-        setLastActionResult(successCount > 0 ? "success" : "error");
-      }
-    } catch (e) {
-      // The default-branch throw inside the switch above (and any other
-      // unexpected error from the rename loop) lands here. Without this
-      // catch the throw bubbles past the finally to React's boundary as
-      // an unhandled rejection — the Run button's spinner ends with no
-      // log line, no toast, no banner. Surface it through the same log
-      // path the per-row errors use.
-      const reason = e instanceof Error ? e.message : String(e);
-      addLog(t("error_prefix", reason), "error");
-      setLastActionResult("error");
     } finally {
-      setBusy(false);
-      setProgress(null);
+      busyRef.current = false;
     }
   }, [busy, actionableCount, actionableRows, outputMode, chosenDir, addLog, t]);
 
