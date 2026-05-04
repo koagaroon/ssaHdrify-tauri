@@ -99,10 +99,11 @@ Download the latest portable exe from [Releases](https://github.com/koagaroon/ss
 
 1. 点击「选择字幕文件 / Select Subtitle File」选择 ASS 字幕文件 / Click **Select Subtitle File** to pick an ASS file
 2. 工具自动检测字幕中使用的字体，从系统字体库匹配 / Tool auto-detects fonts used in the subtitle and matches against the system font list
-3. （可选）点击「选择字体文件 / Select Font Files」指定本地字体文件夹或多个字体文件，无需系统安装即可匹配 / (Optional) Click **Select Font Files** to point at a local font folder or hand-pick individual files — no system-wide installation needed
-4. 模态框内实时显示覆盖进度（覆盖 N / M）和尚未匹配的字体 / The modal shows live coverage (Coverage: N / M) and lists any still-missing families
-5. 每条字体标注来源（本地 / 系统）和匹配状态（已找到 / 缺失）/ Each detected font is tagged with its source (Local / System) and match status (Found / Missing)
-6. 点击「嵌入已选字体」，字体数据（子集化后）写入 ASS 文件 / Click **Embed Selected Fonts** to write the subset font data into the ASS file
+3. （可选）点击「字体来源 / Font Sources」打开本地来源管理面板，里面用「添加文件夹 / Add Folder」扫描整个字体目录或「添加文件 / Add Files」逐个挑选；无需系统安装即可匹配 / (Optional) Click **Font Sources** to open the local-source panel; use **Add Folder** to scan an entire directory or **Add Files** to hand-pick individual files — no system-wide installation needed
+4. 文件夹任意大小都可扫描，过程中实时显示已读字体数和取消按钮，可随时中止；选中超大目录（5000+ 文件或 > 1 GB）前会弹出确认对话框 / Folders of any size can be scanned; the scan shows live font count + cancel button and can be aborted at any moment. Very large selections (5000+ files or > 1 GB) prompt for confirmation first
+5. 主面板实时显示本地来源覆盖（覆盖 N / M）和尚未匹配的字体 / The main panel shows live local-source coverage (Coverage: N / M) and lists any still-missing families
+6. 每条字体标注来源（本地 / 系统）和匹配状态（已找到 / 缺失）/ Each detected font is tagged with its source (Local / System) and match status (Found / Missing)
+7. 点击「嵌入已选字体」，字体数据（子集化后）写入 ASS 文件 / Click **Embed Selected Fonts** to write the subset font data into the ASS file
 
 > **字体名称匹配 / Font Name Matching**
 >
