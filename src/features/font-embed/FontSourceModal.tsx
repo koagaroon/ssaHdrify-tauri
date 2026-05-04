@@ -358,11 +358,11 @@ export default function FontSourceModal(props: Props) {
     // Ordering note: clearing busyRef synchronously while setBusy(false)
     // flushes async creates a sub-render-cycle window where busyRef is
     // false and activeScanIdRef is null while the spinner is still
-    // visible. An Esc / scrim click that lands inside this window goes
-    // through requestClose's `if (busyRef.current) return;` guard and
-    // calls onClose() — the modal closes mid-paint. Single-user UI
-    // timing makes the window genuinely unhittable by hand, so we
-    // accept the race. Documented here so a future reader doesn't
+    // visible. Worst case if the race fires: modal closes one paint
+    // earlier than ideal — no data loss, no scan-state corruption
+    // (busyRef is read by the next claim attempt, not by the close
+    // itself). Single-user UI timing makes the window genuinely
+    // unhittable by hand. Documented here so a future reader doesn't
     // assume it's a defect.
     busyRef.current = false;
     setBusy(false);
@@ -371,6 +371,13 @@ export default function FontSourceModal(props: Props) {
   const confirmLargeFontScan = useCallback(
     async (preflight: FontScanPreflight): Promise<boolean> => {
       if (!shouldWarnLargeFontScan(preflight)) return true;
+      // tauri-plugin-dialog 2.x returns false for close-via-X on
+      // Windows, matching "user declined" — that's what we want here.
+      // Behavior is plugin-version-dependent; a future plugin upgrade
+      // that switches close-via-X to throw / return undefined would
+      // change "user closed window without confirming" from "abort
+      // safely" to "treat as approval", so re-test this path after any
+      // tauri-plugin-dialog bump.
       return ask(
         t(
           "font_scan_large_warning",

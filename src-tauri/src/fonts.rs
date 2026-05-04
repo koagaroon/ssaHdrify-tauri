@@ -23,11 +23,15 @@ const ALLOWED_FONT_EXTENSIONS: &[&str] = &["ttf", "otf", "ttc", "otc"];
 /// would otherwise grow without bound. Above this, partial results are
 /// preserved and the scan stops.
 ///
-/// Off-by-one note: the check `if total > MAX_FONTS_PER_SCAN` runs AFTER
-/// the entry has already been pushed and `total` incremented, so the cap
-/// is a soft ceiling — up to `MAX + 1` entries can land in the buffer
-/// before the early-return fires. Kept this way deliberately so the final
-/// flush emits everything that was already parseable.
+/// Off-by-one note: the check `if total > MAX_FONTS_PER_SCAN` runs INSIDE
+/// the per-face inner loop, AFTER the entry was pushed and `total`
+/// incremented. A TTC iteration that begins right at `total ==
+/// MAX_FONTS_PER_SCAN` may emit up to `MAX_TTC_FACES - 1` more faces
+/// before the next post-push check fires, so the actual buffer ceiling
+/// is `MAX_FONTS_PER_SCAN + MAX_TTC_FACES - 1`. Kept this way
+/// deliberately so the final flush emits everything that was already
+/// parseable; the soft excess is bounded by `MAX_TTC_FACES = 16`, well
+/// inside the IPC/SQLite envelopes.
 const MAX_FONTS_PER_SCAN: usize = 100_000;
 
 // MAX_INPUT_PATHS lives in `util` so dropzone and fonts share a single
@@ -371,8 +375,11 @@ pub enum ScanProgress {
     /// under the 8 KB Tauri Channel direct-eval threshold. As long as
     /// `reason` stays a single discriminant and the count fields stay
     /// `usize`, Done always travels via the synchronous direct-eval
-    /// path; future fields with payload should be sized against the
-    /// same budget (see `reference_tauri_channel_perf.md`).
+    /// path. Future fields must keep the serialized size strictly
+    /// under 8 KB (Tauri Channel's direct-eval threshold) — string
+    /// fields are the risk. Bound them at the API boundary OR
+    /// aggregate into counts; never let a Vec<String> or unbounded
+    /// String slip in. See `reference_tauri_channel_perf.md`.
     Done {
         reason: ScanStopReason,
         added: usize,
@@ -454,22 +461,19 @@ fn begin_font_scan(scan_id: u64) -> Result<ActiveScanGuard, String> {
 
     let guard = ActiveScanGuard { scan_id };
 
-    // After winning the slot, treat any equal-valued cancel signal as a
-    // cancel of THIS scan and bail. Two paths land in this state:
-    //   (1) a concurrent `cancel_font_scan(scan_id)` raced past our CAS
-    //       and wrote `CANCEL_SCAN_ID = scan_id` between the CAS above
-    //       and this load;
-    //   (2) the frontend pre-armed cancel for the same id (rare;
-    //       requires clock manipulation since scan_id is Date.now()-
-    //       seeded and monotonic via fetch_max).
+    // After winning the slot, the only legitimate way `CANCEL_SCAN_ID
+    // == scan_id` is that this scan's owner already issued a cancel for
+    // it — either pre-armed (frontend wrote CANCEL_SCAN_ID before
+    // begin_font_scan ran) or post-CAS-pre-load (cancel_font_scan
+    // raced past our CAS, observed ACTIVE_SCAN_ID == scan_id, and
+    // wrote CANCEL_SCAN_ID = scan_id before this load fired). Both
+    // shapes mean "user wants this scan cancelled"; bail.
     //
     // The previous design unconditionally cleared CANCEL_SCAN_ID here,
-    // which closed (2) but silently overwrote (1) — a real cancel click
-    // arriving in the race window would be lost. Check-and-bail closes
-    // both at once. Stale lower CANCEL_SCAN_ID values from prior scans
-    // are harmless because `font_scan_cancelled` checks equality with
-    // `scan_id`, not >=. Drop the guard explicitly so ACTIVE_SCAN_ID is
-    // released before the caller sees the error.
+    // which closed the pre-arm case but silently overwrote the post-
+    // CAS race — a real cancel click arriving in that window was lost.
+    // Check-and-bail closes both at once. Drop the guard explicitly so
+    // ACTIVE_SCAN_ID is released before the caller sees the error.
     if CANCEL_SCAN_ID.load(Ordering::SeqCst) == scan_id {
         drop(guard);
         return Err("Font scan was cancelled".to_string());
@@ -1502,22 +1506,33 @@ pub fn cancel_font_scan(scan_id: u64) {
     if scan_id == NO_SCAN_ID {
         return;
     }
-    // Range-check against the currently-active scan id. Without this, a
-    // misbehaving frontend calling `cancel_font_scan(u64::MAX)` once
-    // would permanently set CANCEL_SCAN_ID to MAX and silently disable
-    // cancellation for the rest of the session — every legitimate
-    // future scan id would compare unequal in `font_scan_cancelled` and
-    // the cancel button would stop working with no log signal. Project
-    // is trust-the-frontend, so this is defense-in-depth that matches
-    // the IPC-validation discipline in `validate_font_source_id` and
-    // `validate_ipc_path`.
+    // Range-check against the currently-active scan id. Three cases:
     //
-    // active == NO_SCAN_ID: no scan is running, the cancel has nothing
-    // to target. Treat as a benign no-op (don't touch CANCEL_SCAN_ID
-    // even with fetch_max — that would persist a stale value into
-    // future scans, which `begin_font_scan` already explicitly resets,
-    // but the simpler invariant "we only write CANCEL_SCAN_ID when an
-    // active scan exists" is easier to reason about).
+    //   - `scan_id < active` (stale-low): a cancel arriving for an old
+    //     scan id while a newer one runs. fetch_max below is a no-op
+    //     because CANCEL_SCAN_ID has already been bumped past it (or
+    //     stays at its current value). Accepted-but-harmless.
+    //   - `scan_id == active` (legitimate): cancel the currently-
+    //     running scan. fetch_max writes CANCEL_SCAN_ID = scan_id; the
+    //     scan worker's `font_scan_cancelled` poll observes equality
+    //     and bails. This is the normal cancel path.
+    //   - `scan_id > active` (out-of-band): rejected. Without this
+    //     guard, a misbehaving frontend calling `cancel_font_scan(
+    //     u64::MAX)` once would permanently set CANCEL_SCAN_ID to MAX
+    //     and silently disable cancellation for the rest of the
+    //     session — every legitimate future scan id would compare
+    //     unequal in `font_scan_cancelled` and the cancel button would
+    //     stop working with no log signal.
+    //
+    // `active == NO_SCAN_ID` collapses with the out-of-band case (any
+    // scan_id > 0 is "future" relative to no scan) — same rejection
+    // path. Don't touch CANCEL_SCAN_ID even with fetch_max in that
+    // case; the invariant "we only write CANCEL_SCAN_ID while an
+    // active scan exists" is easier to reason about.
+    //
+    // Project is trust-the-frontend, so this guard is defense-in-depth
+    // matching the IPC-validation discipline in `validate_font_source_id`
+    // and `validate_ipc_path`.
     let active = ACTIVE_SCAN_ID.load(Ordering::SeqCst);
     if active == NO_SCAN_ID || scan_id > active {
         return;
@@ -1635,23 +1650,27 @@ pub fn clear_font_sources() -> Result<(), String> {
     Ok(())
 }
 
-/// Refuse a mutation when a font scan is mid-flight. WAL + busy_timeout
-/// keeps the SQLite layer correctness-safe under contention, but a
-/// `DELETE FROM font_sources` issued mid-scan would block until the
-/// scan's transaction commits and then immediately delete everything
-/// just inserted — surprising the user who probably wanted "clear
-/// before the scan starts" or "after it completes". Surface the
-/// situation as an error instead so the UI can disable the button or
-/// show a meaningful message.
+/// Refuse a mutation when a font scan is mid-flight. The PRIMARY guard
+/// is the modal scrim UX — `clear_font_sources` and friends only fire
+/// when the FontSourceModal is open, and the modal disables those
+/// buttons during scan. This server-side check is defense-in-depth
+/// against a misbehaving frontend AND against the degraded-WAL
+/// scenario flagged in `set_user_font_db_journal_mode_once` (network /
+/// tmpfs / read-only mounts where SQLite silently keeps DELETE
+/// journaling — busy_timeout still applies but contention windows are
+/// wider).
 ///
-/// `Acquire` ordering: this is a UX-policy gate, not a correctness
-/// barrier — the SQLite layer handles the actual mutation safety via
-/// WAL + busy_timeout. We only need a happens-before relationship
-/// with the SeqCst CAS inside `begin_font_scan` so the load can never
-/// see a stale NO_SCAN_ID. SeqCst there is stronger than Release-Acquire,
-/// so the pairing holds. Do NOT downgrade `begin_font_scan`'s CAS to
-/// Release: `cancel_font_scan`'s SeqCst load on ACTIVE_SCAN_ID requires
-/// a total order across all accesses to that atomic.
+/// Functional rationale: a `DELETE FROM font_sources` issued mid-scan
+/// would block until the scan's transaction commits and then
+/// immediately delete everything just inserted — surprising the user
+/// who probably wanted "clear before the scan starts" or "after it
+/// completes".
+///
+/// `Acquire` ordering pairs with the SeqCst CAS inside `begin_font_
+/// scan`. SeqCst there is stronger than Release-Acquire, so the
+/// pairing holds. Do NOT downgrade `begin_font_scan`'s CAS to Release:
+/// `cancel_font_scan`'s SeqCst load on ACTIVE_SCAN_ID requires a total
+/// order across all accesses to that atomic.
 fn reject_during_active_scan(message: &str) -> Result<(), String> {
     if ACTIVE_SCAN_ID.load(Ordering::Acquire) != NO_SCAN_ID {
         return Err(message.to_string());
