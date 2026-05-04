@@ -23,11 +23,21 @@ pub fn run() {
                 // MessageBox so the failure is unmissable. rfd uses the
                 // OS-native chrome (Win32 MessageBox / NSAlert / GTK
                 // dialog) and works before the WebView2 window exists.
+                //
+                // Collapse \r and \n in the underlying error string
+                // before injection: rfd's `set_description` honors them
+                // as real line breaks, and a long Windows extended-
+                // length path combined with a multi-line error chain
+                // could push the dialog body off-screen. Plain dash
+                // separator keeps the error readable on a single block.
+                // No other escape — rfd renders text plainly, no markup
+                // to bypass.
+                let error_one_line = e.replace(['\r', '\n'], " — ");
                 rfd::MessageDialog::new()
                     .set_level(rfd::MessageLevel::Error)
                     .set_title("SSA HDRify — startup failure")
                     .set_description(format!(
-                        "Failed to initialize the user-font index at\n{}\n\n{e}\n\nThe app cannot start.",
+                        "Failed to initialize the user-font index at\n{}\n\n{error_one_line}\n\nThe app cannot start.",
                         app_data_dir.display()
                     ))
                     .show();

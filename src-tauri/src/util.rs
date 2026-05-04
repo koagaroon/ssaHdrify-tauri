@@ -42,6 +42,12 @@ pub const MAX_IPC_PATH_LEN: usize = 4096;
 ///    explicitly because several Rust path libraries treat them
 ///    ambiguously across platforms (some normalize as line terminators,
 ///    others pass through verbatim).
+/// 4. Zero-width formatting characters U+200B / U+200C / U+200D /
+///    U+FEFF. Windows file APIs accept them, so two visually-identical
+///    filenames `foo.ass` and `foo\u{200B}.ass` resolve to different
+///    paths on disk and bypass `normalizeOutputKey`'s within-batch
+///    dedup (it does NFC + slash + lowercase but not zero-width strip).
+///    Reject at this boundary so they never reach IPC consumers.
 ///
 /// Unicode noncharacters (U+FFFE, U+FFFF, U+FDD0..=U+FDEF) are
 /// intentionally not rejected — Windows file APIs already error with
@@ -49,19 +55,27 @@ pub const MAX_IPC_PATH_LEN: usize = 4096;
 /// surrogates can't appear in a Rust `String` by construction.
 ///
 /// `label` is used in the returned error string so callers can identify
-/// which input was bad ("Directory path must be 1-4096 characters",
-/// etc.). Keep this the SINGLE definition; each module previously had
-/// its own copy and they drifted.
+/// which input was bad ("Directory path must be 1-4096 bytes", etc.).
+/// Keep this the SINGLE definition; each module previously had its own
+/// copy and they drifted.
 pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
     if path.is_empty() || path.len() > MAX_IPC_PATH_LEN {
         return Err(format!(
-            "{label} path must be 1-{MAX_IPC_PATH_LEN} characters"
+            "{label} path must be 1-{MAX_IPC_PATH_LEN} bytes"
         ));
     }
-    if path
-        .chars()
-        .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
-    {
+    if path.chars().any(|c| {
+        c.is_control()
+            || matches!(
+                c,
+                '\u{2028}'
+                    | '\u{2029}'
+                    | '\u{200B}'
+                    | '\u{200C}'
+                    | '\u{200D}'
+                    | '\u{FEFF}'
+            )
+    }) {
         return Err(format!("{label} path contains invalid characters"));
     }
     Ok(())

@@ -74,24 +74,37 @@ export function normalizeOutputKey(path: string): string {
   return path.normalize("NFC").replace(/\\/g, "/").toLowerCase();
 }
 
-/** Bidirectional controls whose visual reordering effect is the
- *  Trojan-Source attack class (CVE-2021-42574). Listed individually so
- *  the intent is grep-able:
+/** Bidirectional controls + line/paragraph separators whose visual
+ *  effect bypasses the "OS-native dialog renders text plainly"
+ *  assumption. Listed individually so the intent is grep-able:
+ *  - U+061C — Arabic Letter Mark (Trojan-Source vector per Unicode TR9)
+ *  - U+200E / U+200F — LRM / RLM marks
  *  - U+202A..U+202E — LRE / RLE / PDF / LRO / RLO embeddings + overrides
+ *    (CVE-2021-42574 core vector)
+ *  - U+2028 / U+2029 — LINE SEPARATOR / PARAGRAPH SEPARATOR (honored as
+ *    real line breaks by macOS NSAlert, which would split a single
+ *    sample row across multiple visible lines)
  *  - U+2066..U+2069 — LRI / RLI / FSI / PDI isolates
- *  - U+200E / U+200F — LRM / RLM marks (not strictly needed for the
- *    Trojan Source vector, but combined with the others they produce
- *    visual deception in plain-text renderers).
  */
-const DIALOG_BIDI_CONTROLS_RE = /[‪-‮⁦-⁩‎‏]/g;
+const DIALOG_BIDI_CONTROLS_RE =
+  /[؜‎‏‪-‮  ⁦-⁩]/g;
 
-/** Strip bidirectional control characters before rendering a filename
- *  inside an `ask()` dialog body. Without this, a malicious subtitle
- *  filename containing U+202E (RIGHT-TO-LEFT OVERRIDE) can visually
- *  reverse the rename arrow + filename in the OS-native dialog and
- *  trick the user into confirming an unintended rename. Apply at any
- *  callsite that interpolates an untrusted filename into an `ask()`
- *  body — counts and other non-name strings are unaffected. */
+/** Strip bidirectional control characters and stray line separators
+ *  before rendering an untrusted string inside a native `ask()` dialog
+ *  body. Without this, a malicious filename containing U+202E
+ *  (RIGHT-TO-LEFT OVERRIDE) can visually reverse the rename arrow +
+ *  filename in the OS-native dialog and trick the user into confirming
+ *  an unintended rename (CVE-2021-42574 class). Apply at any callsite
+ *  that interpolates an untrusted name / path / error into an `ask()`
+ *  body.
+ *
+ *  Audit (2026-05-04): the only `ask()` callsite in the codebase that
+ *  interpolates untrusted text is the BatchRename in-place-rename
+ *  sample row (BatchRename.tsx); every other site renders only counts
+ *  / pre-formatted byte sizes / fully-translated literals. If a future
+ *  callsite adds a filename, path, or backend error string into an
+ *  `ask()` body, sanitize it here. Counts and other non-name strings
+ *  are unaffected. */
 export function sanitizeForDialog(name: string): string {
   return name.replace(DIALOG_BIDI_CONTROLS_RE, "");
 }
