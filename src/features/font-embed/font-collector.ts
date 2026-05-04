@@ -193,11 +193,24 @@ export function collectFonts(assContent: string): FontUsage[] {
  * ASS override blocks: { ... } contain tags like \fnArial, \b1, \i1
  * Everything outside braces is rendered text.
  */
+// Per-text length cap. ass-compiler returns the parsed dialogues; an
+// upstream parser bug surfacing a giant text in a small input would
+// drive O(n²) behavior on brace-light strings (the `text.indexOf("{",
+// i)` scans + the per-char step compound). Rust caps total file size at
+// 50 MB, so the cumulative budget is bounded — but a single dialogue
+// near that ceiling is still pathological. 1 MB per dialogue is
+// generous (typical line is 50-500 chars; even concatenated styled
+// karaoke songs rarely cross a few KB).
+const MAX_DIALOGUE_TEXT_LEN = 1_000_000;
+
 function processDialogueText(
   text: string,
   initialFont: FontKey,
   recordChars: (key: FontKey, text: string) => void
 ) {
+  if (text.length > MAX_DIALOGUE_TEXT_LEN) {
+    text = text.slice(0, MAX_DIALOGUE_TEXT_LEN);
+  }
   let current = { ...initialFont };
   let isDrawing = false;
   let i = 0;

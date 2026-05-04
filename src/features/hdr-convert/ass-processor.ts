@@ -134,10 +134,20 @@ function transformStyleLine(
   const afterColon = line.slice(colonIdx + 1);
   const fields = afterColon.split(",");
 
-  // Only trim the specific color fields being transformed, leave everything else untouched
+  // Only transform fields that actually look like ASS colors. A
+  // crafted Format line with empty middle fields would shift the index
+  // we computed from the Format header against this Style line; if the
+  // shifted slot lands on something that isn't a color, transformColorString
+  // would produce garbage and we'd silently corrupt the output. Validate
+  // the &Hxxxxxx{6,8} shape before transforming — anything else falls
+  // through untouched. Mirrors the strictness of COLOR_TAG_RE.
+  const COLOR_FIELD_RE = /^&H[0-9A-Fa-f]{2,8}$/;
   for (const idx of styleColorIndices) {
     if (idx < fields.length && fields[idx]) {
-      fields[idx] = transformColorString(fields[idx].trim(), targetBrightness, eotf);
+      const trimmed = fields[idx].trim();
+      if (COLOR_FIELD_RE.test(trimmed)) {
+        fields[idx] = transformColorString(trimmed, targetBrightness, eotf);
+      }
     }
   }
 

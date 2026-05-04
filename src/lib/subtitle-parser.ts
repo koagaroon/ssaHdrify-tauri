@@ -61,7 +61,10 @@ export function detectFormat(content: string): SubtitleFormat {
 
 /** Parse "HH:MM:SS,mmm" (SRT) or "HH:MM:SS.mmm" to ms */
 function parseSrtTime(ts: string): number {
-  const m = ts.match(/(\d+):(\d{2}):(\d{2})[,.](\d{3})/);
+  // Hours capped at 12 digits — far past any legitimate timestamp,
+  // bounded so a 400-digit `\d+` saturating parseInt to Infinity is
+  // structurally impossible.
+  const m = ts.match(/(\d{1,12}):(\d{2}):(\d{2})[,.](\d{3})/);
   if (!m) return 0;
   return (
     parseInt(m[1], 10) * 3600000 +
@@ -76,7 +79,7 @@ function parseVttTime(ts: string): number {
   // HH:MM:SS.mmm (or H:MM:SS.mmm) — WebVTT spec mandates ≥2 hour digits but
   // subsrt and other parsers are lenient. Match any non-empty digit run to
   // stay consistent with parseSrtTime / parseAssTime.
-  const full = ts.match(/^(\d+):(\d{2}):(\d{2})\.(\d{3})$/);
+  const full = ts.match(/^(\d{1,12}):(\d{2}):(\d{2})\.(\d{3})$/);
   if (full) {
     return (
       parseInt(full[1], 10) * 3600000 +
@@ -95,7 +98,7 @@ function parseVttTime(ts: string): number {
 
 /** Parse "H:MM:SS.cc" (ASS centiseconds) to ms */
 function parseAssTime(ts: string): number {
-  const m = ts.match(/(\d+):(\d{2}):(\d{2})\.(\d{2})/);
+  const m = ts.match(/(\d{1,12}):(\d{2}):(\d{2})\.(\d{2})/);
   if (!m) return 0;
   return (
     parseInt(m[1], 10) * 3600000 +
@@ -141,7 +144,7 @@ export function formatDisplayTime(ms: number): string {
 
 /** Parse "HH:MM:SS.mmm" display format back to ms */
 export function parseDisplayTime(ts: string): number | null {
-  const m = ts.match(/^(\d+):(\d{2}):(\d{2})\.(\d{1,3})$/);
+  const m = ts.match(/^(\d{1,12}):(\d{2}):(\d{2})\.(\d{1,3})$/);
   if (!m) return null;
   return (
     parseInt(m[1], 10) * 3600000 +
@@ -170,9 +173,11 @@ function parseSrt(content: string): Caption[] {
     throw new Error(`Too many subtitle blocks: ${blocks.length} (max ${MAX_PARSED_ENTRIES})`);
   }
   // Regex defined inside function — no shared lastIndex state.
-  // Hours use `\d+` to accept the single-digit form some tools emit
-  // (`0:00:01,000`), matching detectFormat's SRT_TIMING.
-  const timingRe = /^(\d+:\d{2}:\d{2},\d{3})\s*-->\s*(\d+:\d{2}:\d{2},\d{3})/;
+  // Hours bounded to 12 digits — accepts the single-digit form some
+  // tools emit (`0:00:01,000`), matching detectFormat's SRT_TIMING,
+  // while rejecting pathological 100+ digit strings that would saturate
+  // parseInt to Infinity.
+  const timingRe = /^(\d{1,12}:\d{2}:\d{2},\d{3})\s*-->\s*(\d{1,12}:\d{2}:\d{2},\d{3})/;
 
   for (const block of blocks) {
     const lines = block.replace(/^\n/, "").split("\n");
@@ -351,10 +356,17 @@ function buildAss(content: string, captions: Caption[]): string {
 const DEFAULT_FPS = 23.976;
 
 function parseSub(content: string, fps: number = DEFAULT_FPS): Caption[] {
-  if (!Number.isFinite(fps) || fps <= 0) fps = DEFAULT_FPS;
+  // Reject pathological fps values from MicroDVD `{1}{1}<fps>` lines.
+  // Real-world fps is 23.976 / 24 / 25 / 29.97 / 30 / 50 / 60, occasionally
+  // up to 120 for variable-frame content. Anything outside [1, 1000] is
+  // either parser noise or hostile input — fall back to the default.
+  if (!Number.isFinite(fps) || fps < 1 || fps > 1000) fps = DEFAULT_FPS;
   const captions: Caption[] = [];
-  // Regex defined inside function — no shared lastIndex state
-  const subLineRe = /^\{(\d+)\}\{(\d+)\}(.*)$/gm;
+  // Frame numbers are bounded to 12 digits — 12 ASCII chars fits ~31000
+  // years of milliseconds at 60 fps, far past anything legitimate, and
+  // rejects pathological `{99...9}` inputs that would otherwise saturate
+  // parseInt to Infinity. Matches the time-regex bound below.
+  const subLineRe = /^\{(\d{1,12})\}\{(\d{1,12})\}(.*)$/gm;
   let match;
   let count = 0;
   while ((match = subLineRe.exec(content)) !== null) {
