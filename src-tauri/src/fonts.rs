@@ -1981,26 +1981,36 @@ pub fn subset_font(
                 ));
             }
             // Cumulative session cap — a subtitle referencing N corrupt fonts
-            // could otherwise stack-feed the JS heap N × per-file. fetch_add
-            // first, then roll back if we overshot, so racing fallback
-            // emissions can't push the counter above the budget. Counter
-            // only resets on app restart; a single-user session that
-            // accumulates 50 MB of fallback has corrupt font sources and
-            // should restart anyway.
-            let prior = CUMULATIVE_FALLBACK_BYTES.fetch_add(font_data.len(), Ordering::Relaxed);
-            if prior + font_data.len() > MAX_CUMULATIVE_FALLBACK_BYTES {
-                CUMULATIVE_FALLBACK_BYTES.fetch_sub(font_data.len(), Ordering::Relaxed);
-                return Err(format!(
-                    "Cumulative font fallback exceeded {} MB this session — restart the app and check your font sources",
-                    MAX_CUMULATIVE_FALLBACK_BYTES / 1024 / 1024
-                ));
-            }
+            // could otherwise stack-feed the JS heap with N × per-file
+            // fallbacks. CAS loop (not fetch_add + rollback) so concurrent
+            // fallback emissions can't each observe a stale `prior` and
+            // collectively overshoot the budget — fetch_update succeeds only
+            // when the CAS sees the live value, so the cap is firm at every
+            // moment, not just eventually. Counter only resets on app
+            // restart; a session that accumulates 50 MB of fallback has
+            // corrupt font sources and should restart anyway.
+            let total_after = CUMULATIVE_FALLBACK_BYTES
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |cur| {
+                    let next = cur.checked_add(font_data.len())?;
+                    if next > MAX_CUMULATIVE_FALLBACK_BYTES {
+                        None
+                    } else {
+                        Some(next)
+                    }
+                })
+                .map_err(|_| {
+                    format!(
+                        "Cumulative font fallback exceeded {} MB this session — restart the app and check your font sources",
+                        MAX_CUMULATIVE_FALLBACK_BYTES / 1024 / 1024
+                    )
+                })?
+                + font_data.len();
             log::warn!(
                 "Subsetting failed for '{}' (face {}): {}, falling back to full font ({:.1} MB cumulative)",
                 filename,
                 font_index,
                 e,
-                (prior + font_data.len()) as f64 / (1024.0 * 1024.0),
+                total_after as f64 / (1024.0 * 1024.0),
             );
             Ok(font_data)
         }
