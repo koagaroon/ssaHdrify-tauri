@@ -180,7 +180,7 @@ export function collectFonts(assContent: string): FontUsage[] {
         italic: false,
       };
       const rawText: string = dialogue.Text?.raw ?? "";
-      processDialogueText(rawText, baseStyle, recordChars);
+      processDialogueText(rawText, baseStyle, styleMap, recordChars);
     }
   }
 
@@ -206,6 +206,7 @@ const MAX_DIALOGUE_TEXT_LEN = 1_000_000;
 function processDialogueText(
   text: string,
   initialFont: FontKey,
+  styleMap: Map<string, FontKey>,
   recordChars: (key: FontKey, text: string) => void
 ) {
   if (text.length > MAX_DIALOGUE_TEXT_LEN) {
@@ -235,7 +236,7 @@ function processDialogueText(
       }
 
       const block = text.slice(i + 1, closeIdx);
-      current = applyOverrideTags(block, current, initialFont);
+      current = applyOverrideTags(block, current, initialFont, styleMap);
       // Reset drawing on \p0 or \r — checked independently from \p[1-9]
       // so that {\r\p1} correctly resets then re-enables drawing mode.
       // The \r anchor is `\r(?=\\|}|$|[A-Za-z])` so both `\rStyleName` and
@@ -270,18 +271,38 @@ function processDialogueText(
 /**
  * Apply override tags from a single { ... } block to the current font state.
  */
-function applyOverrideTags(block: string, current: FontKey, initialFont: FontKey): FontKey {
+function applyOverrideTags(
+  block: string,
+  current: FontKey,
+  initialFont: FontKey,
+  styleMap: Map<string, FontKey>
+): FontKey {
   let result = { ...current };
 
-  // \r[StyleName] — reset to base style (but don't return early;
-  // subsequent tags like \fn in the same block must still be applied).
-  // Lookahead accepts `[A-Za-z]` so both `\rBoldStyle` and the
-  // lowercase-named `\rdefault` match, matching the sibling check in
-  // `processDialogueText` above. The anchor avoids matching made-up
-  // tokens like the literal byte sequence `\r` + tailing text that
-  // doesn't form a style reset.
-  if (/\\r(?=\\|}|$|[A-Za-z])/.test(block)) {
-    result = { ...initialFont };
+  // \r[StyleName] — ASS spec: bare `\r` resets to the dialogue's initial
+  // style; `\r<Name>` resets to the NAMED style (looked up by Style Name
+  // in [V4+ Styles]). Earlier code reset to `initialFont` regardless of
+  // whether a name was captured, which under-counted codepoints for the
+  // named style's font and produced "font not found" rendering when the
+  // user's audience didn't have the named style's font installed.
+  //
+  // Capture group is anchored on `[A-Za-z]` so `\r` followed by
+  // non-letter (`\rfn...`, `\r\b1`) does NOT match a name — those are
+  // bare `\r` resets. Style names containing only ASCII letters / digits
+  // / underscore / dash cover every name VSFilter / libass accept.
+  // `\rdefault` is the canonical "reset to dialogue initial" form and
+  // explicitly takes the initialFont path (the literal "default" name
+  // in [V4+ Styles] would shadow the dialogue's initial style — by
+  // convention `\rdefault` means "the dialogue's initial style", not
+  // "the style literally named 'default'").
+  const rMatch = block.match(/\\r([A-Za-z][A-Za-z0-9_-]*)?/);
+  if (rMatch) {
+    const styleName = rMatch[1];
+    if (styleName && styleName.toLowerCase() !== "default" && styleMap.has(styleName)) {
+      result = { ...styleMap.get(styleName)! };
+    } else {
+      result = { ...initialFont };
+    }
   }
 
   // \fn<FontName> — change font family (empty \fn resets to style default).

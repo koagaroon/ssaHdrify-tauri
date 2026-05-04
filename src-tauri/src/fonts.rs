@@ -1992,17 +1992,46 @@ pub fn subset_font(
     all_codepoints.sort();
     all_codepoints.dedup();
 
-    // Attempt subsetting; fall back to full font if it fails
-    let subset_result = if font_index == 0 {
-        // Common path: single font or first face in TTC
-        // Display, not Debug — Debug repr leaks internal struct fields,
-        // table tags, and byte offsets into a frontend-visible error.
-        fontcull::subset_font_data_unicode(&font_data, &all_codepoints, &[])
-            .map_err(|e| format!("{e}"))
-    } else {
-        // TTC with face index > 0: use internal crates with from_index
-        subset_with_index(&font_data, font_index, &all_codepoints)
-    };
+    // Attempt subsetting; fall back to full font if it fails.
+    //
+    // catch_unwind around the fontcull call: the klippa engine is in
+    // active development and has had documented panics on malformed
+    // input (corrupted CFF, bad TTC face counts). User-picked path
+    // means a malformed user font crashing fontcull would otherwise
+    // panic the IPC command and surface to the frontend as a generic
+    // "command failed" with no actionable text. AssertUnwindSafe is
+    // sound here: `font_data` is owned (Vec<u8>) and not mutated by
+    // the closure (fontcull takes a slice), so unwinding can't leave
+    // it in a torn state. Convert any panic into a structured error
+    // string the frontend's existing IPC error path can render.
+    let subset_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if font_index == 0 {
+            // Common path: single font or first face in TTC.
+            // Display, not Debug — Debug repr leaks internal struct fields,
+            // table tags, and byte offsets into a frontend-visible error.
+            fontcull::subset_font_data_unicode(&font_data, &all_codepoints, &[])
+                .map_err(|e| format!("{e}"))
+        } else {
+            // TTC with face index > 0: use internal crates with from_index
+            subset_with_index(&font_data, font_index, &all_codepoints)
+        }
+    }))
+    .unwrap_or_else(|panic_payload| {
+        // Convert panic payload (Box<dyn Any>) into a string for the log
+        // and IPC return. Try the common payload shapes (&str / String)
+        // before falling back to a generic message.
+        let panic_msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = panic_payload.downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "fontcull panicked with unknown payload".to_string()
+        };
+        log::warn!(
+            "fontcull panicked while subsetting '{filename}' (face {font_index}): {panic_msg}"
+        );
+        Err(format!("Subset panic: {panic_msg}"))
+    });
 
     match subset_result {
         Ok(subsetted) => {
