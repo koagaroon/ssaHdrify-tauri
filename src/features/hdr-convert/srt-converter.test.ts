@@ -51,6 +51,22 @@ describe("preprocessSrtColors", () => {
     expect(preprocessSrtColors(input)).toBe(input);
   });
 
+  it("passes through near-match patterns that should NOT trigger the regex", () => {
+    // Adversarial inputs that look font-tag-shaped but aren't —
+    // catches a future regex tweak that started consuming `<font` greedily
+    // beyond the open-tag boundary, or that matched closing-tag-only text.
+    // Each case must round-trip unchanged because preprocessSrtColors
+    // only operates on `<font color="...">...</font>` openers.
+    const cases = [
+      "<font_size>oversized</font_size>", // dotted variant — `<font` followed by non-space
+      "x < 10 && y > 20", // bare angle brackets in inequality
+      "<fontFamily=Arial>Plain</fontFamily>", // misnamed tag, no color attr
+    ];
+    for (const c of cases) {
+      expect(preprocessSrtColors(c)).toBe(c);
+    }
+  });
+
   it("handles text with no color attribute on font tag", () => {
     const input = '<font face="Arial">Styled</font>';
     const result = preprocessSrtColors(input);

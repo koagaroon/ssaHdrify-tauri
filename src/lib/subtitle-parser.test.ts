@@ -74,7 +74,7 @@ describe("parseSubtitle", () => {
     );
   });
 
-  it("parses ASS within the defensive entry cap", () => {
+  it("smoke-tests a 100-entry ASS parse stays well within MAX_PARSED_ENTRIES", () => {
     // Defense-in-depth cap inside parseAss — guards against pathological
     // files (or runaway generators) that would otherwise fan out to
     // millions of caption objects in JS heap. The actual cap is
@@ -82,9 +82,8 @@ describe("parseSubtitle", () => {
     // to exercise the throw branch is too slow for a unit test. This
     // test is a smoke guard that a well-formed in-cap file still parses
     // cleanly — the throw branch itself is unverified at the test
-    // layer. (If a future contract regression flips the cap to a much
-    // smaller number, that's the failure this guard catches by going
-    // red on the 100-entry input.)
+    // layer. If a future contract regression flips the cap to a much
+    // smaller number (say, 50), that's the failure this guard catches.
     const header =
       "[Script Info]\nScriptType: v4.00+\n\n" +
       "[V4+ Styles]\nFormat: Name, Fontname\nStyle: Default,Arial\n\n" +
@@ -95,6 +94,34 @@ describe("parseSubtitle", () => {
     ).join("\n");
     const result = parseSubtitle(header + smallBatch + "\n");
     expect(result.format).toBe("ass");
+    expect(result.captions).toHaveLength(100);
+  });
+
+  it("smoke-tests a 100-entry SRT parse stays well within MAX_PARSED_ENTRIES", () => {
+    // SRT shares the same cap as ASS via a per-format check inside
+    // parseSrt. A 100-entry block exercises the parser path without
+    // approaching the cap; same regression-on-cap-shrink guard. SRT
+    // canonical form uses a comma between seconds and milliseconds.
+    const pad = (n: number) => n.toString().padStart(2, "0");
+    const blocks = Array.from({ length: 100 }, (_, i) => {
+      const start = `00:${pad(Math.floor(i / 60))}:${pad(i % 60)},000`;
+      const end = `00:${pad(Math.floor((i + 1) / 60))}:${pad((i + 1) % 60)},000`;
+      return `${i + 1}\n${start} --> ${end}\nline ${i}\n`;
+    }).join("\n");
+    const result = parseSubtitle(blocks);
+    expect(result.format).toBe("srt");
+    expect(result.captions).toHaveLength(100);
+  });
+
+  it("smoke-tests a 100-entry SUB parse stays well within MAX_PARSED_ENTRIES", () => {
+    // MicroDVD SUB shares the same cap via parseSub. Frame numbers stay
+    // small + bounded; same regression-on-cap-shrink guard.
+    const lines = Array.from(
+      { length: 100 },
+      (_, i) => `{${i * 24}}{${(i + 1) * 24}}line ${i}`
+    ).join("\n");
+    const result = parseSubtitle(lines);
+    expect(result.format).toBe("sub");
     expect(result.captions).toHaveLength(100);
   });
 });

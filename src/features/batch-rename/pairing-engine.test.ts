@@ -286,6 +286,10 @@ describe("buildPairings — common shapes", () => {
     const v1 = parse("[G][Show][01][1080p].mkv");
     const v2 = parse("[G][Show][02][1080p].mkv");
     const rows = buildPairings([v3, v1, v2], []);
+    // Anchor row count first so a regression that drops a row surfaces
+    // as "expected 3, got 2" rather than "expected /v01.mkv, got
+    // undefined" against an out-of-bounds rows[2].
+    expect(rows.length).toBe(3);
     expect(rows[0].video?.path).toBe(v1.path);
     expect(rows[1].video?.path).toBe(v2.path);
     expect(rows[2].video?.path).toBe(v3.path);

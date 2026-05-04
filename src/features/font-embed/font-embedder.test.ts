@@ -316,6 +316,34 @@ describe("analyzeFonts — useRustUserFonts production path", () => {
     expect(resolveUserFontMock).toHaveBeenCalledWith("FZLanTingHei", false, false);
     expect(resolveUserFontMock).toHaveBeenCalledWith("Arial", true, false);
   });
+
+  it("userFontMap wins over useRustUserFonts when both are provided", async () => {
+    // Production currently never calls analyzeFonts with both arguments
+    // truthy; this test pins the priority order anyway so a future
+    // caller that does pass both knows userFontMap takes precedence.
+    // Without the anchor, a future refactor that flipped the
+    // short-circuit order would silently change the priority.
+    findSystemFontMock.mockResolvedValue({ path: "C:/Windows/Fonts/sys.ttf", index: 0 });
+    resolveUserFontMock.mockResolvedValue({
+      path: "C:/rust-side/FZ.ttf",
+      index: 0,
+    });
+    const userFontMap = new Map<string, LocalFontEntry>();
+    userFontMap.set(
+      userFontKey("FZLanTingHei", false, false),
+      makeEntry("FZLanTingHei", false, false, "C:/user-map/FZ.ttf")
+    );
+
+    const { infos } = await analyzeFonts(MINIMAL_ASS, userFontMap, undefined, true);
+    const fz = infos.find((i) => i.key.family === "FZLanTingHei");
+
+    expect(fz?.source).toBe("local");
+    expect(fz?.filePath).toBe("C:/user-map/FZ.ttf");
+    // resolveUserFont must NOT have been consulted for FZ — userFontMap
+    // already short-circuited the lookup.
+    const fzRustCalls = resolveUserFontMock.mock.calls.filter((c) => c[0] === "FZLanTingHei");
+    expect(fzRustCalls.length).toBe(0);
+  });
 });
 
 describe("userFontKey", () => {
