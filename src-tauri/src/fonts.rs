@@ -483,7 +483,15 @@ fn begin_font_scan(scan_id: u64) -> Result<ActiveScanGuard, String> {
 }
 
 fn font_scan_cancelled(scan_id: u64) -> bool {
-    scan_id != NO_SCAN_ID && CANCEL_SCAN_ID.load(Ordering::Relaxed) == scan_id
+    // Acquire load pairs with the Release fetch_max in `cancel_font_scan`.
+    // On weakly-ordered ISAs (ARM64 / Apple Silicon) Relaxed gives no
+    // formal cross-thread visibility guarantee; the Acquire here + Release
+    // there bounds visibility to the next file iteration's poll. On x86
+    // both orderings compile to plain mov / lock cmpxchg, so the upgrade
+    // is free for the platform we ship on. Cost on ARM64: one barrier per
+    // file iteration in the scan worker — negligible against the actual
+    // font-parse cost.
+    scan_id != NO_SCAN_ID && CANCEL_SCAN_ID.load(Ordering::Acquire) == scan_id
 }
 
 /// Result of font lookup — includes path and face index for TTC files.
@@ -546,21 +554,23 @@ fn user_font_key(family: &str, bold: bool, italic: bool) -> String {
 }
 
 fn validate_font_source_id(source_id: &str) -> Result<(), String> {
-    // `len()` is byte count (O(1)). UUID v4 source ids minted by the
-    // frontend are pure ASCII, so today byte count equals char count.
-    // The message says "bytes" so a future caller passing non-ASCII
-    // ids isn't surprised when a 60-char string overflows the cap.
+    // `len()` is byte count (O(1)). The frontend always mints source
+    // ids as UUID v4 strings (32 hex digits + 4 dashes = 36 ASCII bytes).
+    // Length cap is 128 to leave headroom for a future format change
+    // without IPC contract churn.
     if source_id.is_empty() || source_id.len() > 128 {
         return Err("Font source id must be 1-128 bytes".to_string());
     }
-    // Mirror `validate_ipc_path`'s control-char + line/paragraph-separator
-    // gate so a future code path deriving source ids from user-supplied
-    // text can't smuggle in characters that confuse log scrapers or path
-    // libraries. `is_control()` covers Cc (U+0000..=U+001F AND U+007F..=
-    // U+009F), so an explicit `\x7f` check would be redundant.
+    // ASCII allowlist matching the UUID shape (alphanumerics, dash,
+    // underscore). Defense-in-depth: SQL injection is structurally
+    // blocked by parameterized queries, but rejecting unexpected bytes
+    // at the IPC boundary stops a misbehaving frontend from smuggling
+    // file-system separators / log-line breaks / Unicode controls into
+    // the id, even though SQL itself wouldn't care. Subsumes the
+    // earlier control-char + U+2028/U+2029 check.
     if source_id
-        .chars()
-        .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+        .bytes()
+        .any(|b| !matches!(b, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_'))
     {
         return Err("Font source id contains invalid characters".to_string());
     }
@@ -1154,6 +1164,12 @@ fn scan_directory_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
     // symlink `Bar.ttf` → `Foo.ttf`) would otherwise re-parse the
     // bytes twice and rely on SQLite's `UNIQUE(path, face_index)` to
     // surface them as `duplicated`. Wastes IO/parse cost.
+    //
+    // Bound on the dedup set: a directory of 1M empty / non-font
+    // entries would otherwise inflate `seen` to ~100 MB before
+    // `MAX_FONTS_PER_SCAN` (which counts faces) fires. Cap at
+    // `MAX_PREFLIGHT_ENTRIES` so the directory scan can't outrun the
+    // preflight ceiling on memory pressure.
     let mut seen: HashSet<String> = HashSet::new();
 
     for entry in read {
@@ -1203,6 +1219,15 @@ fn scan_directory_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
         };
         if !canonical.starts_with(canonical_dir) {
             continue;
+        }
+        if seen.len() >= MAX_PREFLIGHT_ENTRIES {
+            log::warn!(
+                "font scan {} dedup set hit {MAX_PREFLIGHT_ENTRIES} entries in '{}'; \
+                 stopping early to bound memory",
+                scan_id,
+                canonical_dir.display()
+            );
+            break;
         }
         if !seen.insert(normalize_canonical_path(&canonical.to_string_lossy())) {
             continue;
@@ -1553,7 +1578,10 @@ pub fn cancel_font_scan(scan_id: u64) {
     // arriving after a newer cancel cannot regress CANCEL_SCAN_ID. The
     // returned prior max is intentionally discarded — caller has no
     // useful action either way.
-    CANCEL_SCAN_ID.fetch_max(scan_id, Ordering::Relaxed);
+    // Release pairs with the Acquire load in `font_scan_cancelled` so
+    // the worker's poll on weakly-ordered ISAs sees this write within
+    // the next iteration. See font_scan_cancelled for cost analysis.
+    CANCEL_SCAN_ID.fetch_max(scan_id, Ordering::Release);
 }
 
 /// Look up a font face in the user's local source index by family

@@ -32,12 +32,14 @@ pub fn expand_dropped_paths(paths: Vec<String>) -> Result<Vec<String>, String> {
     }
 
     let mut result: Vec<String> = Vec::new();
+    let mut rejected = 0usize;
     for raw in &paths {
         // Skip silently rather than fail — native drag-drop shouldn't
         // produce empty / oversize / control-char paths, but the IPC
         // boundary trusts no caller, and dropping ONE bad path should
         // not abort the whole batch the user just dropped.
         if crate::util::validate_ipc_path(raw, "Dropped").is_err() {
+            rejected += 1;
             continue;
         }
         let p = Path::new(raw);
@@ -45,6 +47,7 @@ pub fn expand_dropped_paths(paths: Vec<String>) -> Result<Vec<String>, String> {
             Ok(m) => m,
             Err(e) => {
                 log::warn!("dropzone: stat failed for {raw}: {e}");
+                rejected += 1;
                 continue;
             }
         };
@@ -52,6 +55,7 @@ pub fn expand_dropped_paths(paths: Vec<String>) -> Result<Vec<String>, String> {
         // can't expand into a protected location.
         if is_reparse_point(p) {
             log::warn!("dropzone: skipping reparse point at {raw}");
+            rejected += 1;
             continue;
         }
         if meta.file_type().is_file() {
@@ -68,6 +72,16 @@ pub fn expand_dropped_paths(paths: Vec<String>) -> Result<Vec<String>, String> {
             log::warn!("dropzone: result cap {MAX_RESULT_FILES} reached, dropping remainder");
             break;
         }
+    }
+    // Surface the per-path rejection count once at the end. Per-failure
+    // log lines were already emitted at warn level; this aggregate
+    // informs anyone reading the log that the result count differs from
+    // the drop count for legitimate reasons (validation / stat / reparse).
+    if rejected > 0 {
+        log::info!(
+            "dropzone: dropped {rejected} of {} input path(s) — see warnings above",
+            paths.len()
+        );
     }
     Ok(result)
 }
