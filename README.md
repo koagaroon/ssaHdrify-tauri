@@ -58,13 +58,13 @@ Download the latest portable exe from [Releases](https://github.com/koagaroon/ss
 
 | 标签页 / Tab                            | 功能 / Function                                                                                                                                                                                                                       |
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **HDR 色彩转换 / HDR Color Conversion** | 字幕颜色从 sRGB 转换到 BT.2100 PQ 或 HLG 色彩空间 / Convert subtitle colors from sRGB to BT.2100 PQ or HLG color space                                                                                                                |
+| **HDR 色彩转换 / HDR Color Conversion** | 将字幕颜色从 sRGB 色域转换到 BT.2100 PQ 或 HLG 色域 / Convert subtitle colors from sRGB to BT.2100 PQ or HLG color space                                                                                                              |
 | **时间轴偏移 / Timing Shift**           | 批量偏移字幕时间戳，支持阈值过滤和实时预览 / Batch-offset subtitle timestamps with threshold filter and live preview                                                                                                                  |
-| **字体嵌入 / Font Embedding**           | 自动检测字幕所用字体，从系统字体或本地文件夹匹配并以子集化形式嵌入 ASS 文件 / Auto-detect fonts referenced by the subtitle, match against system fonts or a local folder, and embed them (subset) into the ASS                        |
-| **批量重命名 / Batch Rename**           | 字幕↔视频文件配对，按视频文件名重命名字幕；多语言字幕共享同一视频；网格内可手动微调配对 / Pair subtitle ↔ video files and rename subs to match the video filename; multi-language subs share one video; manual re-pairing in the grid |
+| **字体嵌入 / Font Embedding**           | 自动检测字幕所用字体，从系统字体库或本地文件夹匹配并以子集化形式嵌入 ASS 文件 / Auto-detect fonts referenced by the subtitle, match against system fonts or a local folder, and embed them (subset) into the ASS                      |
+| **批量重命名 / Batch Rename**           | 自动匹配视频文件和字幕文件，按视频文件名重命名字幕；多语言字幕共享同一视频；匹配表内可手动调整配对 / Auto-match video and subtitle files and rename subs to match the video filename; multi-language subs share one video; manual re-pairing in the table |
 
 > [!TIP]
-> **中文路径完全支持** — 文件路径中包含中文或其他非 ASCII 字符不会导致任何问题。Tauri 和 Rust 底层使用 Unicode API，不受传统 ANSI 编码限制。
+> **中文路径完全支持** — 包含中文或其他非 ASCII 字符的文件路径不会导致任何问题。Tauri 和 Rust 底层使用 Unicode API，不受传统 ANSI 编码限制。
 >
 > **Non-ASCII paths fully supported** — File paths containing Chinese, Japanese, or other non-ASCII characters work correctly. Tauri and Rust use native Unicode APIs under the hood.
 
@@ -78,7 +78,7 @@ Download the latest portable exe from [Releases](https://github.com/koagaroon/ss
 2. 设置字幕目标亮度（默认 203 nits）/ Set target subtitle brightness (default: 203 nits)
 3. 选择字幕文件（支持多选）/ Select subtitle files (multi-select supported)
 4. 点击转换 / Click convert
-5. 输出文件扩展名为 `.hdr.ass` / Output files have the `.hdr.ass` extension
+5. 默认输出文件扩展名为 `.hdr.ass`（可修改）/ Default output extension is `.hdr.ass` (customizable)
 
 > **参数说明 | Parameter Guide**
 >
@@ -90,7 +90,7 @@ Download the latest portable exe from [Releases](https://github.com/koagaroon/ss
 ### 时间轴偏移 / Timing Shift
 
 1. 选择字幕文件 / Select a subtitle file
-2. 输入偏移量（毫秒），选择方向「提前」或「延后」/ Enter offset amount (ms), then pick direction: Faster or Slower
+2. 输入偏移量（毫秒），选择方向：「提前」或「延后」/ Enter offset amount (ms), then pick direction: Faster or Slower
 3. 可选：启用阈值过滤，仅偏移特定时间点后的字幕 / Optional: enable threshold to shift only captions after a specific timestamp
 4. 实时预览调整效果 / Preview changes in real time
 5. 导出 / Export
@@ -98,8 +98,8 @@ Download the latest portable exe from [Releases](https://github.com/koagaroon/ss
 ### 字体嵌入 / Font Embedding
 
 1. 点击「选择字幕文件 / Select Subtitle File」选择 ASS 字幕文件 / Click **Select Subtitle File** to pick an ASS file
-2. 工具自动检测字幕中使用的字体，从系统字体库匹配 / Tool auto-detects fonts used in the subtitle and matches against the system font list
-3. （可选）点击「字体来源 / Font Sources」打开本地来源管理面板，里面用「添加文件夹 / Add Folder」扫描整个字体目录或「添加文件 / Add Files」逐个挑选；无需系统安装即可匹配 / (Optional) Click **Font Sources** to open the local-source panel; use **Add Folder** to scan an entire directory or **Add Files** to hand-pick individual files — no system-wide installation needed
+2. 工具自动检测字幕所用字体，先尝试从系统字体库匹配 / Tool auto-detects fonts used in the subtitle and first tries to match them against the system font library
+3. 字幕组排版常用的字体多数没装在系统里——点击「字体来源 / Font Sources」打开本地来源管理面板，「添加文件夹 / Add Folder」扫描下载的字体目录，或「添加文件 / Add Files」单独添加文件；无需安装到系统即可参与匹配 / Fan-sub typesetting fonts are typically not system-installed — click **Font Sources** to open the local-source panel; use **Add Folder** to scan a downloaded font folder or **Add Files** to pick individual files — no system-wide installation needed
 4. 文件夹任意大小都可扫描，过程中实时显示已读字体数和取消按钮，可随时中止；选中超大目录（5000+ 文件或 > 1 GB）前会弹出确认对话框 / Folders of any size can be scanned; the scan shows live font count + cancel button and can be aborted at any moment. Very large selections (5000+ files or > 1 GB) prompt for confirmation first
 5. 主面板实时显示本地来源覆盖（覆盖 N / M）和尚未匹配的字体 / The main panel shows live local-source coverage (Coverage: N / M) and lists any still-missing families
 6. 每条字体标注来源（本地 / 系统）和匹配状态（已找到 / 缺失）/ Each detected font is tagged with its source (Local / System) and match status (Found / Missing)
@@ -113,17 +113,17 @@ Download the latest portable exe from [Releases](https://github.com/koagaroon/ss
 
 ### 批量重命名 / Batch Rename
 
-1. 拖入一个包含视频和字幕的文件夹（或点击「选择文件 / Select Files」分别挑选）；扩展名自动归类 / Drop a folder containing both videos and subtitles (or click **Select Files** to pick them separately); extensions are auto-categorized
-2. 引擎按 fan-sub 命名习惯做剧集号正则配对，预填配对网格 / The engine pre-pairs by fan-sub episode regex and fills the pairing grid
-3. 若引擎错配或漏配，从该行下拉框直接换字幕；选中即纳入批次（无需再点勾选框）/ If a row is mispaired or unpaired, swap subtitles via the row's dropdown — picking auto-includes the row (no second click needed)
-4. 选择输出策略：原地改名 / 复制到视频目录 / 复制到自选目录 / Pick the output strategy: rename in place, copy to video directory, or copy to a chosen directory
-5. 点击运行；若目标路径已存在文件，会先弹覆盖确认对话框 / Click Run; if any target path already exists, an overwrite-confirm dialog runs first
+1. 拖入一个包含视频和字幕的文件夹（或点击「选择文件 / Select Files」手动选择）；程序将按照文件格式自动归类 / Drop a folder containing both videos and subtitles (or click **Select Files** to pick manually); the app categorizes files by format automatically
+2. 系统按字幕组命名习惯做剧集号正则配对，预填配对表 / The app pre-pairs using fan-sub episode regex and fills the pairing table
+3. 若应用错配或漏配，从该行下拉框直接手动选取字幕，选中后自动勾选进入重命名队列 / If the app mispairs or misses a row, swap subtitles via the row's dropdown; the row is auto-checked into the rename queue once selected
+4. 选择输出策略：原文件直接改名 / 复制到当前目录 / 复制到自定义目录 / Pick the output strategy: rename in place, copy to the video's directory, or copy to a custom directory
+5. 点击运行；若目标路径已存在采用相同规则重命名的同名文件，会弹出确认覆盖对话框 / Click Run; if a target path already has a file with the same name produced by the rename rule, an overwrite-confirm dialog appears first
 
 > **配对算法 | Pairing Algorithm**
 >
-> 流水线：括号清理 → 优先级化的剧集号正则集（`S\d+E\d+`、`][NN][`、`- NN`、`第N话`、`EP\d+`）→ 季度并行扫描 → `(season, episode)` 配对键 → LCS 回退 → 手动网格作为最终安全网。模式覆盖在多组真实 fan-sub 命名样本（中日双语、外挂多语字幕、季度后缀变体等）上验证过。
+> 流水线：括号清理 → 优先级化的剧集号正则集（`S\d+E\d+`、`][NN][`、`- NN`、`第N话`、`EP\d+`）→ 季度并行扫描 → `(season, episode)` 配对键 → LCS 回退 → 手动选择作为最终安全网。模式覆盖在多组真实的字幕组命名样本（中日双语、外挂多语字幕、季度后缀变体等）上验证过。
 >
-> Pipeline: bracket cleanup → priority-ordered episode regex (`S\d+E\d+`, `][NN][`, `- NN`, `第N话`, `EP\d+`) → parallel season scan → `(season, episode)` pairing key → LCS fallback → manual grid as the final safety net. Pattern coverage was validated against representative real-world fan-sub naming variants (bilingual CJK titles, externally-shipped multi-language subs, season-suffix variants, and so on).
+> Pipeline: bracket cleanup → priority-ordered episode regex (`S\d+E\d+`, `][NN][`, `- NN`, `第N话`, `EP\d+`) → parallel season scan → `(season, episode)` pairing key → LCS fallback → manual selection as the final safety net. Pattern coverage was validated against representative real-world fan-sub naming variants (bilingual CJK titles, externally-shipped multi-language subs, season-suffix variants, and so on).
 
 ---
 
@@ -139,9 +139,9 @@ When playing HDR video, the display enters HDR mode. However, SSA/ASS subtitles 
 
 _相关讨论 / Related discussion: [libass/libass#297](https://github.com/libass/libass/issues/297)_
 
-相关工具 / Related tool: 字幕↔视频重命名工作流的另一个选项是 [arition/SubRenamer](https://github.com/arition/SubRenamer)（按字母序+下标配对）。本项目的批量重命名（Tab 4）走基于 fan-sub 命名习惯的正则配对路径，独立实现。
+相关工具 / Related tool: 视频与字幕的重命名工作流的另一个选项是 [arition/SubRenamer](https://github.com/arition/SubRenamer)（按字母序+下标配对）。本项目的批量重命名（Tab 4）走基于字幕组命名习惯的正则配对路径，独立实现。
 
-For the subtitle ↔ video rename workflow, [arition/SubRenamer](https://github.com/arition/SubRenamer) is another option (alphabetical-index pairing). This project's Batch Rename (Tab 4) uses a fan-sub-aware regex pairing approach, independently implemented.
+For the subtitle-and-video rename workflow, [arition/SubRenamer](https://github.com/arition/SubRenamer) is another option (alphabetical-index pairing). This project's Batch Rename (Tab 4) uses a fan-sub-aware regex pairing approach, independently implemented.
 
 ---
 
