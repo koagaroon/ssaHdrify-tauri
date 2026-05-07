@@ -1,14 +1,19 @@
 use std::collections::HashSet;
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::Serialize;
+use unicode_normalization::UnicodeNormalization;
 
 mod engine;
 
 const MAX_SHIFT_OFFSET_MS: i64 = 365 * 24 * 60 * 60 * 1000;
+const CLI_FONT_DB_DIR_PREFIX: &str = "ssahdrify-cli-font-db";
+const CLI_FONT_DB_FILENAME: &str = "user-font-sources.session.sqlite3";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -238,7 +243,10 @@ struct TempFontDbDir(PathBuf);
 
 impl Drop for TempFontDbDir {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
+        for suffix in ["", "-journal", "-wal", "-shm"] {
+            let _ = fs::remove_file(self.0.join(format!("{CLI_FONT_DB_FILENAME}{suffix}")));
+        }
+        let _ = fs::remove_dir(&self.0);
     }
 }
 
@@ -590,8 +598,7 @@ fn init_cli_font_sources(
     globals: &GlobalOptions,
     args: &EmbedArgs,
 ) -> Result<TempFontDbDir, String> {
-    let db_dir = std::env::temp_dir().join(format!("ssahdrify-cli-font-db-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&db_dir);
+    let db_dir = create_cli_font_db_dir()?;
     app_lib::fonts::init_user_font_db(&db_dir)?;
 
     for (index, dir) in args.font_dirs.iter().enumerate() {
@@ -617,6 +624,30 @@ fn init_cli_font_sources(
     }
 
     Ok(TempFontDbDir(db_dir))
+}
+
+fn create_cli_font_db_dir() -> Result<PathBuf, String> {
+    let base = std::env::temp_dir();
+    let pid = std::process::id();
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+
+    for attempt in 0..1000u16 {
+        let candidate = base.join(format!("{CLI_FONT_DB_DIR_PREFIX}-{pid}-{stamp}-{attempt}"));
+        match fs::create_dir(&candidate) {
+            Ok(()) => return Ok(candidate),
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(format!(
+                    "failed to create temporary font database directory: {error}"
+                ));
+            }
+        }
+    }
+
+    Err("failed to allocate a unique temporary font database directory".to_string())
 }
 
 fn emit_font_source_summary(
@@ -1190,7 +1221,16 @@ fn display_path(path: &Path) -> String {
 }
 
 fn normalize_output_key(path: &Path) -> String {
-    display_path(path).replace('/', "\\").to_lowercase()
+    let normalized = path
+        .to_string_lossy()
+        .replace('\\', "/")
+        .nfc()
+        .collect::<String>();
+    if cfg!(windows) {
+        normalized.to_lowercase()
+    } else {
+        normalized
+    }
 }
 
 fn localize(globals: &GlobalOptions, en: String, zh: String) -> String {
@@ -1323,7 +1363,11 @@ fn parse_timestamp_part(part: &str, label: &str) -> Result<i64, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{duplicate_rename_output_keys, engine, parse_duration_ms, parse_timestamp_ms};
+    use super::{
+        create_cli_font_db_dir, duplicate_rename_output_keys, engine, parse_duration_ms,
+        parse_timestamp_ms, TempFontDbDir, CLI_FONT_DB_FILENAME,
+    };
+    use std::fs;
 
     #[test]
     fn parses_signed_duration_examples() {
@@ -1380,6 +1424,28 @@ mod tests {
 
         let duplicates = duplicate_rename_output_keys(&rows);
         assert_eq!(duplicates.len(), 1);
-        assert!(duplicates.contains("c:\\subs\\episode.ass"));
+        let expected_key = if cfg!(windows) {
+            "c:/subs/episode.ass"
+        } else {
+            "C:/Subs/Episode.ass"
+        };
+        assert!(duplicates.contains(expected_key));
+    }
+
+    #[test]
+    fn cli_font_db_temp_dir_is_create_only_and_cleanup_is_narrow() {
+        let dir = create_cli_font_db_dir().unwrap();
+        assert!(dir.is_dir());
+        assert!(dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with(super::CLI_FONT_DB_DIR_PREFIX)));
+
+        fs::write(dir.join(CLI_FONT_DB_FILENAME), b"db").unwrap();
+        fs::write(dir.join(format!("{CLI_FONT_DB_FILENAME}-wal")), b"wal").unwrap();
+        let guard = TempFontDbDir(dir.clone());
+        drop(guard);
+
+        assert!(!dir.exists());
     }
 }
