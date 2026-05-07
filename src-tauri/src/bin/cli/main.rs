@@ -239,6 +239,12 @@ struct ResolvedEmbedFont {
     codepoints: Vec<u32>,
 }
 
+struct ShiftProcessContext<'a> {
+    offset_ms: i64,
+    threshold_ms: Option<i64>,
+    output_dir: Option<&'a Path>,
+}
+
 struct TempFontDbDir(PathBuf);
 
 impl Drop for TempFontDbDir {
@@ -315,9 +321,17 @@ fn run_hdr(globals: &GlobalOptions, args: HdrArgs) -> Result<ExitCode, String> {
         .map(absolute_path)
         .transpose()?;
     let mut report = CommandReport::new("hdr");
+    let mut seen_outputs = HashSet::new();
 
     for file in &args.files {
-        let result = process_hdr_file(globals, &args, output_dir.as_deref(), &mut engine, file);
+        let result = process_hdr_file(
+            globals,
+            &args,
+            output_dir.as_deref(),
+            &mut engine,
+            file,
+            &mut seen_outputs,
+        );
         emit_file_report(globals, &result);
         report.push(result);
     }
@@ -350,6 +364,7 @@ fn process_hdr_file(
     output_dir: Option<&Path>,
     engine: &mut engine::CliEngine,
     file: &Path,
+    seen_outputs: &mut HashSet<String>,
 ) -> FileReport {
     let input_path = match absolute_path(file) {
         Ok(path) => path,
@@ -386,6 +401,15 @@ fn process_hdr_file(
         }
     };
     let output = display_path(&output_path);
+
+    if !seen_outputs.insert(normalize_output_key(&output_path)) {
+        return failed_report(
+            &input_path,
+            Some(output),
+            Some(read_result.encoding),
+            "duplicate output path in planned batch".to_string(),
+        );
+    }
 
     if output_path_exists(&output_path) && !globals.overwrite {
         return FileReport {
@@ -436,16 +460,20 @@ fn run_shift(globals: &GlobalOptions, args: ShiftArgs) -> Result<ExitCode, Strin
         .map(absolute_path)
         .transpose()?;
     let mut report = CommandReport::new("shift");
+    let mut seen_outputs = HashSet::new();
 
     for file in &args.files {
         let result = process_shift_file(
             globals,
             &args,
-            offset_ms,
-            threshold_ms,
-            output_dir.as_deref(),
+            &ShiftProcessContext {
+                offset_ms,
+                threshold_ms,
+                output_dir: output_dir.as_deref(),
+            },
             &mut engine,
             file,
+            &mut seen_outputs,
         );
         emit_file_report(globals, &result);
         report.push(result);
@@ -476,11 +504,10 @@ fn run_shift(globals: &GlobalOptions, args: ShiftArgs) -> Result<ExitCode, Strin
 fn process_shift_file(
     globals: &GlobalOptions,
     args: &ShiftArgs,
-    offset_ms: i64,
-    threshold_ms: Option<i64>,
-    output_dir: Option<&Path>,
+    context: &ShiftProcessContext<'_>,
     engine: &mut engine::CliEngine,
     file: &Path,
+    seen_outputs: &mut HashSet<String>,
 ) -> FileReport {
     let input_path = match absolute_path(file) {
         Ok(path) => path,
@@ -498,8 +525,8 @@ fn process_shift_file(
     let request = engine::ShiftConversionRequest {
         input_path: input.clone(),
         content: read_result.text,
-        offset_ms,
-        threshold_ms,
+        offset_ms: context.offset_ms,
+        threshold_ms: context.threshold_ms,
         output_template: args.output_template.clone(),
     };
 
@@ -510,13 +537,22 @@ fn process_shift_file(
         }
     };
 
-    let output_path = match relocate_output_path(&conversion.output_path, output_dir) {
+    let output_path = match relocate_output_path(&conversion.output_path, context.output_dir) {
         Ok(path) => path,
         Err(error) => {
             return failed_report(&input_path, None, Some(read_result.encoding), error);
         }
     };
     let output = display_path(&output_path);
+
+    if !seen_outputs.insert(normalize_output_key(&output_path)) {
+        return failed_report(
+            &input_path,
+            Some(output),
+            Some(read_result.encoding),
+            "duplicate output path in planned batch".to_string(),
+        );
+    }
 
     if output_path_exists(&output_path) && !globals.overwrite {
         return FileReport {
@@ -576,6 +612,7 @@ fn run_embed(globals: &GlobalOptions, args: EmbedArgs) -> Result<ExitCode, Strin
         .map(absolute_path)
         .transpose()?;
     let mut report = CommandReport::new("embed");
+    let mut seen_outputs = HashSet::new();
 
     for file in &args.files {
         let result = process_embed_file(
@@ -585,6 +622,7 @@ fn run_embed(globals: &GlobalOptions, args: EmbedArgs) -> Result<ExitCode, Strin
             output_dir.as_deref(),
             &mut engine,
             file,
+            &mut seen_outputs,
         );
         emit_file_report(globals, &result);
         report.push(result);
@@ -681,6 +719,7 @@ fn process_embed_file(
     output_dir: Option<&Path>,
     engine: &mut engine::CliEngine,
     file: &Path,
+    seen_outputs: &mut HashSet<String>,
 ) -> FileReport {
     let input_path = match absolute_path(file) {
         Ok(path) => path,
@@ -721,6 +760,15 @@ fn process_embed_file(
         }
     };
     let output = display_path(&output_path);
+
+    if !seen_outputs.insert(normalize_output_key(&output_path)) {
+        return failed_report(
+            &input_path,
+            Some(output),
+            Some(read_result.encoding),
+            "duplicate output path in planned batch".to_string(),
+        );
+    }
 
     if output_path_exists(&output_path) && !globals.overwrite {
         return FileReport {
@@ -1364,10 +1412,11 @@ fn parse_timestamp_part(part: &str, label: &str) -> Result<i64, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        create_cli_font_db_dir, duplicate_rename_output_keys, engine, parse_duration_ms,
-        parse_timestamp_ms, TempFontDbDir, CLI_FONT_DB_FILENAME,
+        create_cli_font_db_dir, duplicate_rename_output_keys, engine, normalize_output_key,
+        parse_duration_ms, parse_timestamp_ms, TempFontDbDir, CLI_FONT_DB_FILENAME,
     };
     use std::fs;
+    use std::path::Path;
 
     #[test]
     fn parses_signed_duration_examples() {
@@ -1430,6 +1479,17 @@ mod tests {
             "C:/Subs/Episode.ass"
         };
         assert!(duplicates.contains(expected_key));
+    }
+
+    #[test]
+    fn output_keys_fold_slashes_and_unicode_normalization() {
+        let decomposed = normalize_output_key(Path::new("C:\\Subs\\Cafe\u{301}.ass"));
+        let precomposed = normalize_output_key(Path::new("C:/Subs/Caf\u{00e9}.ass"));
+        assert_eq!(decomposed, precomposed);
+
+        if cfg!(windows) {
+            assert_eq!(precomposed, "c:/subs/caf\u{00e9}.ass");
+        }
     }
 
     #[test]
