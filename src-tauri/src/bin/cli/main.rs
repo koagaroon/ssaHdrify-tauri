@@ -3,6 +3,7 @@ use std::fs;
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -56,7 +57,7 @@ struct GlobalOptions {
     #[arg(long, global = true)]
     json: bool,
 
-    /// Output language. Defaults to OS/terminal locale detection.
+    /// Output language. Defaults to OS locale (zh* → zh, otherwise en).
     #[arg(long, global = true, value_enum, value_name = "LANG")]
     lang: Option<OutputLang>,
 }
@@ -1306,9 +1307,41 @@ fn normalize_output_key(path: &Path) -> String {
 }
 
 fn localize(globals: &GlobalOptions, en: String, zh: String) -> String {
-    match globals.lang.unwrap_or(OutputLang::En) {
+    match globals.lang.unwrap_or_else(detect_os_locale) {
         OutputLang::En => en,
         OutputLang::Zh => zh,
+    }
+}
+
+// Detect OS UI locale once per process and cache it. sys-locale reads env
+// vars (LC_ALL / LC_MESSAGES / LANG) on Unix and calls
+// GetUserDefaultLocaleName on Windows — the same surface every other CLI
+// tool uses. Empty / malformed locales fall through to En, matching the
+// behavior users got before this detection landed.
+fn detect_os_locale() -> OutputLang {
+    static CACHED: OnceLock<OutputLang> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        sys_locale::get_locale()
+            .map(|raw| classify_locale(&raw))
+            .unwrap_or(OutputLang::En)
+    })
+}
+
+// Classify a BCP-47 / POSIX locale tag by its primary subtag. We treat
+// any tag whose primary is `zh` (zh, zh-CN, zh_TW.UTF-8, zh-Hans, ...)
+// as Chinese; everything else, including empty strings, falls back to
+// English. Split point chars cover `-`, `_`, `.` (POSIX charset suffix),
+// and `@` (POSIX modifier).
+fn classify_locale(raw: &str) -> OutputLang {
+    let primary = raw
+        .split(|c: char| c == '-' || c == '_' || c == '.' || c == '@')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if primary == "zh" {
+        OutputLang::Zh
+    } else {
+        OutputLang::En
     }
 }
 
@@ -1436,12 +1469,34 @@ fn parse_timestamp_part(part: &str, label: &str) -> Result<i64, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        copy_file_output, create_cli_font_db_dir, duplicate_rename_output_keys, engine,
-        normalize_output_key, parse_duration_ms, parse_timestamp_ms, write_output, TempFontDbDir,
-        CLI_FONT_DB_FILENAME,
+        classify_locale, copy_file_output, create_cli_font_db_dir, duplicate_rename_output_keys,
+        engine, normalize_output_key, parse_duration_ms, parse_timestamp_ms, write_output,
+        OutputLang, TempFontDbDir, CLI_FONT_DB_FILENAME,
     };
     use std::fs;
     use std::path::Path;
+
+    #[test]
+    fn classify_locale_picks_zh_for_chinese_tags() {
+        for tag in [
+            "zh",
+            "zh-CN",
+            "zh_CN",
+            "zh_TW.UTF-8",
+            "zh-Hans-CN",
+            "ZH",
+            "zh@pinyin",
+        ] {
+            assert_eq!(classify_locale(tag), OutputLang::Zh, "tag = {tag}");
+        }
+    }
+
+    #[test]
+    fn classify_locale_falls_back_to_en_for_others_and_garbage() {
+        for tag in ["", "en", "en-US", "en_US.UTF-8", "C", "POSIX", "ja-JP", "-zh", "."] {
+            assert_eq!(classify_locale(tag), OutputLang::En, "tag = {tag}");
+        }
+    }
 
     #[test]
     fn parses_signed_duration_examples() {
