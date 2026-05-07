@@ -13,6 +13,8 @@
 
 export const LANG_TAGS: ReadonlySet<string> = new Set([
   "zh",
+  "zh-cn",
+  "zh-tw",
   "en",
   "ja",
   "jp",
