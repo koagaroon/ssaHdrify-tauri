@@ -1,7 +1,7 @@
 use deno_core::{serde_v8, v8, JsRuntime, RuntimeOptions};
 use serde::{Deserialize, Serialize};
 
-const ENGINE_SOURCE: &str = include_str!("../../../../dist-engine/engine.js");
+const ENGINE_SOURCE: &str = include_str!(concat!(env!("OUT_DIR"), "/cli-engine.js"));
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
