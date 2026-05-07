@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::fs;
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -431,7 +431,7 @@ fn process_hdr_file(
         };
     }
 
-    if let Err(error) = write_output(&output_path, &conversion.content) {
+    if let Err(error) = write_output(&output_path, &conversion.content, globals.overwrite) {
         return failed_report(&input_path, Some(output), Some(read_result.encoding), error);
     }
 
@@ -583,7 +583,7 @@ fn process_shift_file(
         };
     }
 
-    if let Err(error) = write_output(&output_path, &conversion.content) {
+    if let Err(error) = write_output(&output_path, &conversion.content, globals.overwrite) {
         return failed_report(&input_path, Some(output), Some(read_result.encoding), error);
     }
 
@@ -829,7 +829,7 @@ fn process_embed_file(
         println!("embed: {} fonts embedded", applied.embedded_count);
     }
 
-    if let Err(error) = write_output(&output_path, &applied.content) {
+    if let Err(error) = write_output(&output_path, &applied.content, globals.overwrite) {
         return failed_report(&input_path, Some(output), Some(read_result.encoding), error);
     }
 
@@ -1227,13 +1227,24 @@ fn output_path_exists(path: &Path) -> bool {
     }
 }
 
-fn write_output(path: &Path, content: &str) -> Result<(), String> {
+fn write_output(path: &Path, content: &str, overwrite: bool) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| "output path has no parent directory".to_string())?;
     fs::create_dir_all(parent)
         .map_err(|err| format!("failed to create output directory: {err}"))?;
-    fs::write(path, content.as_bytes()).map_err(|err| format!("failed to write output: {err}"))
+    if overwrite && output_path_exists(path) {
+        fs::remove_file(path)
+            .map_err(|err| format!("failed to remove existing output before write: {err}"))?;
+    }
+
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|err| format!("failed to create output: {err}"))?;
+    file.write_all(content.as_bytes())
+        .map_err(|err| format!("failed to write output: {err}"))
 }
 
 fn copy_file_output(input: &Path, output: &Path) -> Result<(), String> {
@@ -1413,7 +1424,7 @@ fn parse_timestamp_part(part: &str, label: &str) -> Result<i64, String> {
 mod tests {
     use super::{
         create_cli_font_db_dir, duplicate_rename_output_keys, engine, normalize_output_key,
-        parse_duration_ms, parse_timestamp_ms, TempFontDbDir, CLI_FONT_DB_FILENAME,
+        parse_duration_ms, parse_timestamp_ms, write_output, TempFontDbDir, CLI_FONT_DB_FILENAME,
     };
     use std::fs;
     use std::path::Path;
@@ -1490,6 +1501,22 @@ mod tests {
         if cfg!(windows) {
             assert_eq!(precomposed, "c:/subs/caf\u{00e9}.ass");
         }
+    }
+
+    #[test]
+    fn write_output_uses_create_new_and_explicit_overwrite() {
+        let dir = create_cli_font_db_dir().unwrap();
+        let output = dir.join("out.ass");
+
+        fs::write(&output, b"old").unwrap();
+        assert!(write_output(&output, "new", false).is_err());
+        assert_eq!(fs::read_to_string(&output).unwrap(), "old");
+
+        write_output(&output, "new", true).unwrap();
+        assert_eq!(fs::read_to_string(&output).unwrap(), "new");
+
+        let _ = fs::remove_file(&output);
+        let _ = fs::remove_dir(&dir);
     }
 
     #[test]
