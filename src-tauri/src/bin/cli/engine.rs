@@ -69,6 +69,54 @@ pub struct RenamePlanRow {
     pub no_op: bool,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FontEmbedPlanRequest {
+    pub input_path: String,
+    pub content: String,
+    pub output_template: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FontEmbedPlanResult {
+    pub output_path: String,
+    pub fonts: Vec<FontEmbedUsage>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FontEmbedUsage {
+    pub family: String,
+    pub bold: bool,
+    pub italic: bool,
+    pub label: String,
+    pub font_name: String,
+    pub glyph_count: usize,
+    pub codepoints: Vec<u32>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FontEmbedApplyRequest {
+    pub content: String,
+    pub fonts: Vec<FontSubsetPayload>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FontSubsetPayload {
+    pub font_name: String,
+    pub data: Vec<u8>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FontEmbedApplyResult {
+    pub content: String,
+    pub embedded_count: usize,
+}
+
 pub struct CliEngine {
     runtime: JsRuntime,
 }
@@ -106,6 +154,30 @@ impl CliEngine {
             "planRename",
             "ssahdrify-cli-plan-rename.js",
             "Batch Rename",
+            request,
+        )
+    }
+
+    pub fn plan_font_embed(
+        &mut self,
+        request: &FontEmbedPlanRequest,
+    ) -> Result<FontEmbedPlanResult, String> {
+        self.call_engine(
+            "planFontEmbed",
+            "ssahdrify-cli-plan-font-embed.js",
+            "Font Embed",
+            request,
+        )
+    }
+
+    pub fn apply_font_embed(
+        &mut self,
+        request: &FontEmbedApplyRequest,
+    ) -> Result<FontEmbedApplyResult, String> {
+        self.call_engine(
+            "applyFontEmbed",
+            "ssahdrify-cli-apply-font-embed.js",
+            "Font Embed",
             request,
         )
     }

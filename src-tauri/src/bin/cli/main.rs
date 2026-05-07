@@ -154,7 +154,7 @@ struct EmbedArgs {
     files: Vec<PathBuf>,
 }
 
-#[derive(Clone, Copy, Debug, ValueEnum)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 enum MissingFontAction {
     Warn,
     Fail,
@@ -226,6 +226,22 @@ enum FileStatus {
     Failed,
 }
 
+struct ResolvedEmbedFont {
+    label: String,
+    font_name: String,
+    path: String,
+    index: u32,
+    codepoints: Vec<u32>,
+}
+
+struct TempFontDbDir(PathBuf);
+
+impl Drop for TempFontDbDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
 impl CommandReport {
     fn new(command: &'static str) -> Self {
         Self {
@@ -278,7 +294,7 @@ fn run() -> Result<ExitCode, String> {
     match command {
         Command::Hdr(args) => run_hdr(&globals, args),
         Command::Shift(args) => run_shift(&globals, args),
-        Command::Embed(_) => unsupported_command(&globals, "embed"),
+        Command::Embed(args) => run_embed(&globals, args),
         Command::Rename(args) => run_rename(&globals, args),
     }
 }
@@ -536,6 +552,326 @@ fn process_shift_file(
     }
 }
 
+fn run_embed(globals: &GlobalOptions, args: EmbedArgs) -> Result<ExitCode, String> {
+    app_lib::fonts::init_system_dirs();
+    let use_user_fonts = !args.font_dirs.is_empty() || !args.font_files.is_empty();
+    let _font_db_dir = if use_user_fonts {
+        Some(init_cli_font_sources(globals, &args)?)
+    } else {
+        None
+    };
+
+    let mut engine = engine::CliEngine::new()?;
+    let output_dir = globals
+        .output_dir
+        .as_deref()
+        .map(absolute_path)
+        .transpose()?;
+    let mut report = CommandReport::new("embed");
+
+    for file in &args.files {
+        let result = process_embed_file(
+            globals,
+            &args,
+            use_user_fonts,
+            output_dir.as_deref(),
+            &mut engine,
+            file,
+        );
+        emit_file_report(globals, &result);
+        report.push(result);
+    }
+
+    emit_report_summary(globals, &report)?;
+    Ok(report.exit_code())
+}
+
+fn init_cli_font_sources(
+    globals: &GlobalOptions,
+    args: &EmbedArgs,
+) -> Result<TempFontDbDir, String> {
+    let db_dir = std::env::temp_dir().join(format!("ssahdrify-cli-font-db-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&db_dir);
+    app_lib::fonts::init_user_font_db(&db_dir)?;
+
+    for (index, dir) in args.font_dirs.iter().enumerate() {
+        let dir = absolute_path(dir)?;
+        let source_id = format!("cli-dir-{index}");
+        let summary = app_lib::fonts::import_font_directory_for_cli(&dir, &source_id)?;
+        emit_font_source_summary(globals, "font dir", &dir, &summary);
+    }
+
+    if !args.font_files.is_empty() {
+        let paths: Result<Vec<String>, String> = args
+            .font_files
+            .iter()
+            .map(|path| absolute_path(path).map(|path| display_path(&path)))
+            .collect();
+        let summary = app_lib::fonts::import_font_files_for_cli(paths?, "cli-files")?;
+        if globals.verbose && !globals.json && !globals.quiet {
+            println!(
+                "font files: {} faces scanned, {} added, {} duplicated",
+                summary.total, summary.added, summary.duplicated
+            );
+        }
+    }
+
+    Ok(TempFontDbDir(db_dir))
+}
+
+fn emit_font_source_summary(
+    globals: &GlobalOptions,
+    label: &str,
+    path: &Path,
+    summary: &app_lib::fonts::FontSourceImportSummary,
+) {
+    if !globals.verbose || globals.json || globals.quiet {
+        return;
+    }
+    let reason = match summary.reason {
+        app_lib::fonts::ScanStopReason::Natural => "",
+        app_lib::fonts::ScanStopReason::UserCancel => " (cancelled)",
+        app_lib::fonts::ScanStopReason::CeilingHit => " (ceiling hit)",
+    };
+    println!(
+        "{label}: {} faces scanned, {} added, {} duplicated{} ({})",
+        summary.total,
+        summary.added,
+        summary.duplicated,
+        reason,
+        display_path(path)
+    );
+}
+
+fn process_embed_file(
+    globals: &GlobalOptions,
+    args: &EmbedArgs,
+    use_user_fonts: bool,
+    output_dir: Option<&Path>,
+    engine: &mut engine::CliEngine,
+    file: &Path,
+) -> FileReport {
+    let input_path = match absolute_path(file) {
+        Ok(path) => path,
+        Err(error) => return failed_report(file, None, None, error),
+    };
+    let input = display_path(&input_path);
+
+    if !has_ass_extension(&input_path) {
+        return failed_report(
+            &input_path,
+            None,
+            None,
+            "font embed only supports ASS/SSA subtitle files".to_string(),
+        );
+    }
+
+    let read_result = match app_lib::encoding::read_text_detect_encoding(input.clone()) {
+        Ok(result) => result,
+        Err(error) => return failed_report(&input_path, None, None, error),
+    };
+
+    let plan_request = engine::FontEmbedPlanRequest {
+        input_path: input.clone(),
+        content: read_result.text.clone(),
+        output_template: args.output_template.clone(),
+    };
+    let plan = match engine.plan_font_embed(&plan_request) {
+        Ok(result) => result,
+        Err(error) => {
+            return failed_report(&input_path, None, Some(read_result.encoding), error);
+        }
+    };
+
+    let output_path = match relocate_output_path(&plan.output_path, output_dir) {
+        Ok(path) => path,
+        Err(error) => {
+            return failed_report(&input_path, None, Some(read_result.encoding), error);
+        }
+    };
+    let output = display_path(&output_path);
+
+    if output_path_exists(&output_path) && !globals.overwrite {
+        return FileReport {
+            input,
+            output: Some(output),
+            encoding: Some(read_result.encoding),
+            status: FileStatus::Skipped,
+            error: Some("output exists; pass --overwrite to replace it".to_string()),
+        };
+    }
+
+    let resolved_fonts = match resolve_embed_fonts(globals, args, use_user_fonts, &plan.fonts) {
+        Ok(fonts) => fonts,
+        Err(error) => {
+            return failed_report(&input_path, Some(output), Some(read_result.encoding), error);
+        }
+    };
+
+    if globals.verbose && !globals.json && !globals.quiet {
+        let glyph_count: usize = plan.fonts.iter().map(|font| font.glyph_count).sum();
+        println!(
+            "embed: {} referenced fonts ({} glyphs), {} resolved",
+            plan.fonts.len(),
+            glyph_count,
+            resolved_fonts.len()
+        );
+    }
+
+    if globals.dry_run {
+        return FileReport {
+            input,
+            output: Some(output),
+            encoding: Some(read_result.encoding),
+            status: FileStatus::Planned,
+            error: None,
+        };
+    }
+
+    let subset_payloads = match subset_resolved_fonts(globals, args, &resolved_fonts) {
+        Ok(payloads) => payloads,
+        Err(error) => {
+            return failed_report(&input_path, Some(output), Some(read_result.encoding), error);
+        }
+    };
+
+    let apply_request = engine::FontEmbedApplyRequest {
+        content: read_result.text,
+        fonts: subset_payloads,
+    };
+    let applied = match engine.apply_font_embed(&apply_request) {
+        Ok(result) => result,
+        Err(error) => {
+            return failed_report(&input_path, Some(output), Some(read_result.encoding), error);
+        }
+    };
+
+    if globals.verbose && !globals.json && !globals.quiet {
+        println!("embed: {} fonts embedded", applied.embedded_count);
+    }
+
+    if let Err(error) = write_output(&output_path, &applied.content) {
+        return failed_report(&input_path, Some(output), Some(read_result.encoding), error);
+    }
+
+    FileReport {
+        input,
+        output: Some(output),
+        encoding: Some(read_result.encoding),
+        status: FileStatus::Written,
+        error: None,
+    }
+}
+
+fn resolve_embed_fonts(
+    globals: &GlobalOptions,
+    args: &EmbedArgs,
+    use_user_fonts: bool,
+    fonts: &[engine::FontEmbedUsage],
+) -> Result<Vec<ResolvedEmbedFont>, String> {
+    let mut resolved = Vec::new();
+    let mut missing = Vec::new();
+
+    for font in fonts {
+        let lookup = resolve_embed_font(args, use_user_fonts, font);
+        let (path, index) = match lookup {
+            Ok(Some(found)) => found,
+            Ok(None) => {
+                missing.push(font.label.clone());
+                continue;
+            }
+            Err(error) => {
+                missing.push(format!("{} ({error})", font.label));
+                continue;
+            }
+        };
+
+        resolved.push(ResolvedEmbedFont {
+            label: font.label.clone(),
+            font_name: font.font_name.clone(),
+            path,
+            index,
+            codepoints: font.codepoints.clone(),
+        });
+    }
+
+    if !missing.is_empty() {
+        if globals.verbose && !globals.json && !globals.quiet {
+            eprintln!("embed: missing/skipped fonts: {}", missing.join(", "));
+        }
+        if args.on_missing == MissingFontAction::Fail {
+            return Err(format!("missing/skipped fonts: {}", missing.join(", ")));
+        }
+    }
+
+    Ok(resolved)
+}
+
+fn subset_resolved_fonts(
+    globals: &GlobalOptions,
+    args: &EmbedArgs,
+    fonts: &[ResolvedEmbedFont],
+) -> Result<Vec<engine::FontSubsetPayload>, String> {
+    let mut payloads = Vec::new();
+    let mut skipped = Vec::new();
+
+    for font in fonts {
+        match app_lib::fonts::subset_font(font.path.clone(), font.index, font.codepoints.clone()) {
+            Ok(data) => payloads.push(engine::FontSubsetPayload {
+                font_name: font.font_name.clone(),
+                data,
+            }),
+            Err(error) => skipped.push(format!("{} ({error})", font.label)),
+        }
+    }
+
+    if !skipped.is_empty() {
+        if globals.verbose && !globals.json && !globals.quiet {
+            eprintln!("embed: skipped fonts: {}", skipped.join(", "));
+        }
+        if args.on_missing == MissingFontAction::Fail {
+            return Err(format!("skipped fonts: {}", skipped.join(", ")));
+        }
+    }
+
+    Ok(payloads)
+}
+
+fn resolve_embed_font(
+    args: &EmbedArgs,
+    use_user_fonts: bool,
+    font: &engine::FontEmbedUsage,
+) -> Result<Option<(String, u32)>, String> {
+    if use_user_fonts {
+        if let Some(found) =
+            app_lib::fonts::resolve_user_font(font.family.clone(), font.bold, font.italic)?
+        {
+            return Ok(Some((found.path, found.index)));
+        }
+    }
+
+    if args.no_system_fonts {
+        return Ok(None);
+    }
+
+    app_lib::fonts::find_system_font(font.family.clone(), font.bold, font.italic)
+        .map(|found| Some((found.path, found.index)))
+        .or_else(|error| {
+            if error.starts_with("Font not found:") {
+                Ok(None)
+            } else {
+                Err(error)
+            }
+        })
+}
+
+fn has_ass_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| matches!(ext.to_ascii_lowercase().as_str(), "ass" | "ssa"))
+        .unwrap_or(false)
+}
+
 fn run_rename(globals: &GlobalOptions, args: RenameArgs) -> Result<ExitCode, String> {
     let output_dir = globals
         .output_dir
@@ -691,25 +1027,6 @@ fn process_rename_pair(
         status: FileStatus::Written,
         error: None,
     }
-}
-
-fn unsupported_command(globals: &GlobalOptions, command: &'static str) -> Result<ExitCode, String> {
-    if globals.json {
-        let mut report = CommandReport::new(command);
-        report.push(FileReport {
-            input: String::new(),
-            output: None,
-            encoding: None,
-            status: FileStatus::Failed,
-            error: Some("command is not implemented yet".to_string()),
-        });
-        let json = serde_json::to_string_pretty(&report)
-            .map_err(|err| format!("failed to encode JSON report: {err}"))?;
-        println!("{json}");
-    } else if !globals.quiet {
-        eprintln!("ssahdrify-cli: '{command}' is not implemented yet");
-    }
-    Ok(ExitCode::from(2))
 }
 
 fn emit_report_summary(globals: &GlobalOptions, report: &CommandReport) -> Result<(), String> {

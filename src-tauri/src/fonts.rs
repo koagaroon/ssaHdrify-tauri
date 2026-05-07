@@ -417,6 +417,14 @@ struct ScanOutcome {
     reason: ScanStopReason,
 }
 
+#[derive(Debug, Clone)]
+pub struct FontSourceImportSummary {
+    pub total: usize,
+    pub added: usize,
+    pub duplicated: usize,
+    pub reason: ScanStopReason,
+}
+
 struct ActiveScanGuard {
     scan_id: u64,
 }
@@ -1349,6 +1357,72 @@ where
         }
     );
     Ok(())
+}
+
+fn run_blocking_scan_import<S>(
+    source_id: &str,
+    scan_body: S,
+) -> Result<FontSourceImportSummary, String>
+where
+    S: FnOnce(
+        u64,
+        &mut dyn FnMut(Vec<LocalFontEntry>) -> Result<(), String>,
+    ) -> Result<ScanOutcome, String>,
+{
+    validate_font_source_id(source_id)?;
+    let mut conn = open_user_font_db()?;
+    let tx = conn
+        .transaction()
+        .map_err(|e| db_error("transaction start failed", e))?;
+    let source_order = create_user_font_source_tx(&tx, source_id)?;
+    let mut import = ImportOutcome::default();
+    let outcome = scan_body(NO_SCAN_ID, &mut |batch| {
+        let batch_import = import_user_font_batch_tx(&tx, source_id, source_order, batch)?;
+        import.added += batch_import.added;
+        import.duplicated += batch_import.duplicated;
+        Ok(())
+    })?;
+    remove_empty_user_font_source_tx(&tx, source_id, import.added)?;
+    tx.commit()
+        .map_err(|e| db_error("transaction commit failed", e))?;
+
+    Ok(FontSourceImportSummary {
+        total: outcome.total,
+        added: import.added,
+        duplicated: import.duplicated,
+        reason: outcome.reason,
+    })
+}
+
+pub fn import_font_directory_for_cli(
+    dir: &Path,
+    source_id: &str,
+) -> Result<FontSourceImportSummary, String> {
+    let canonical_dir = dir.canonicalize().map_err(|e| {
+        log::warn!("canonicalize directory failed: {e}");
+        "Cannot resolve directory path".to_string()
+    })?;
+    if !canonical_dir.is_dir() {
+        return Err("Not a directory".to_string());
+    }
+    run_blocking_scan_import(source_id, |scan_id, emit_batch| {
+        scan_directory_inner(&canonical_dir, scan_id, emit_batch)
+    })
+}
+
+pub fn import_font_files_for_cli(
+    paths: Vec<String>,
+    source_id: &str,
+) -> Result<FontSourceImportSummary, String> {
+    if paths.len() > MAX_INPUT_PATHS {
+        return Err(format!(
+            "Too many file paths ({}, max {MAX_INPUT_PATHS})",
+            paths.len()
+        ));
+    }
+    run_blocking_scan_import(source_id, |scan_id, emit_batch| {
+        scan_files_inner(paths, scan_id, emit_batch)
+    })
 }
 
 /// Tauri command wrapping `scan_directory_inner` with a typed progress
