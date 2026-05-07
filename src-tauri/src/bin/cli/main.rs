@@ -1090,7 +1090,7 @@ fn process_rename_pair(
     }
 
     let operation_result = if args.mode.is_copy() {
-        copy_file_output(&input_path, &output_path)
+        copy_file_output(&input_path, &output_path, globals.overwrite)
     } else {
         rename_file_output(&input_path, &output_path, globals.overwrite)
     };
@@ -1247,9 +1247,22 @@ fn write_output(path: &Path, content: &str, overwrite: bool) -> Result<(), Strin
         .map_err(|err| format!("failed to write output: {err}"))
 }
 
-fn copy_file_output(input: &Path, output: &Path) -> Result<(), String> {
+fn copy_file_output(input: &Path, output: &Path, overwrite: bool) -> Result<(), String> {
     ensure_output_parent(output)?;
-    fs::copy(input, output)
+
+    if overwrite && output_path_exists(output) {
+        fs::remove_file(output)
+            .map_err(|err| format!("failed to remove existing output before copy: {err}"))?;
+    }
+
+    let mut source = fs::File::open(input).map_err(|err| format!("failed to open input: {err}"))?;
+    let mut destination = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(output)
+        .map_err(|err| format!("failed to create output: {err}"))?;
+
+    std::io::copy(&mut source, &mut destination)
         .map(|_| ())
         .map_err(|err| format!("failed to copy file: {err}"))
 }
@@ -1423,8 +1436,9 @@ fn parse_timestamp_part(part: &str, label: &str) -> Result<i64, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        create_cli_font_db_dir, duplicate_rename_output_keys, engine, normalize_output_key,
-        parse_duration_ms, parse_timestamp_ms, write_output, TempFontDbDir, CLI_FONT_DB_FILENAME,
+        copy_file_output, create_cli_font_db_dir, duplicate_rename_output_keys, engine,
+        normalize_output_key, parse_duration_ms, parse_timestamp_ms, write_output, TempFontDbDir,
+        CLI_FONT_DB_FILENAME,
     };
     use std::fs;
     use std::path::Path;
@@ -1515,6 +1529,25 @@ mod tests {
         write_output(&output, "new", true).unwrap();
         assert_eq!(fs::read_to_string(&output).unwrap(), "new");
 
+        let _ = fs::remove_file(&output);
+        let _ = fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn copy_file_output_uses_create_new_and_explicit_overwrite() {
+        let dir = create_cli_font_db_dir().unwrap();
+        let input = dir.join("in.ass");
+        let output = dir.join("out.ass");
+
+        fs::write(&input, b"copied").unwrap();
+        fs::write(&output, b"old").unwrap();
+        assert!(copy_file_output(&input, &output, false).is_err());
+        assert_eq!(fs::read_to_string(&output).unwrap(), "old");
+
+        copy_file_output(&input, &output, true).unwrap();
+        assert_eq!(fs::read_to_string(&output).unwrap(), "copied");
+
+        let _ = fs::remove_file(&input);
         let _ = fs::remove_file(&output);
         let _ = fs::remove_dir(&dir);
     }
