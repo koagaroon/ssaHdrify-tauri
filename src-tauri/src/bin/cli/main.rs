@@ -926,9 +926,9 @@ fn run_rename(globals: &GlobalOptions, args: RenameArgs) -> Result<ExitCode, Str
         return Ok(report.exit_code());
     }
 
-    let mut seen_outputs = HashSet::new();
+    let duplicate_outputs = duplicate_rename_output_keys(&plan.pairings);
     for row in &plan.pairings {
-        let result = process_rename_pair(globals, &args, row, &mut seen_outputs);
+        let result = process_rename_pair(globals, &args, row, &duplicate_outputs);
         emit_file_report(globals, &result);
         report.push(result);
     }
@@ -954,7 +954,7 @@ fn process_rename_pair(
     globals: &GlobalOptions,
     args: &RenameArgs,
     row: &engine::RenamePlanRow,
-    seen_outputs: &mut HashSet<String>,
+    duplicate_outputs: &HashSet<String>,
 ) -> FileReport {
     let input_path = PathBuf::from(&row.input_path);
     let output_path = PathBuf::from(&row.output_path);
@@ -972,7 +972,7 @@ fn process_rename_pair(
     }
 
     let output_key = normalize_output_key(&output_path);
-    if !seen_outputs.insert(output_key) {
+    if duplicate_outputs.contains(&output_key) {
         return failed_report(
             &input_path,
             Some(output),
@@ -1027,6 +1027,23 @@ fn process_rename_pair(
         status: FileStatus::Written,
         error: None,
     }
+}
+
+fn duplicate_rename_output_keys(rows: &[engine::RenamePlanRow]) -> HashSet<String> {
+    let mut seen = HashSet::new();
+    let mut duplicates = HashSet::new();
+
+    for row in rows {
+        if row.no_op {
+            continue;
+        }
+        let key = normalize_output_key(Path::new(&row.output_path));
+        if !seen.insert(key.clone()) {
+            duplicates.insert(key);
+        }
+    }
+
+    duplicates
 }
 
 fn emit_report_summary(globals: &GlobalOptions, report: &CommandReport) -> Result<(), String> {
@@ -1306,7 +1323,7 @@ fn parse_timestamp_part(part: &str, label: &str) -> Result<i64, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_duration_ms, parse_timestamp_ms};
+    use super::{duplicate_rename_output_keys, engine, parse_duration_ms, parse_timestamp_ms};
 
     #[test]
     fn parses_signed_duration_examples() {
@@ -1336,5 +1353,33 @@ mod tests {
         assert!(parse_timestamp_ms("10:00").is_err());
         assert!(parse_timestamp_ms("00:60:00").is_err());
         assert!(parse_timestamp_ms("00:00:00.1234").is_err());
+    }
+
+    #[test]
+    fn detects_duplicate_rename_outputs_before_writes() {
+        let rows = vec![
+            engine::RenamePlanRow {
+                input_path: "C:\\Subs\\episode.sc.ass".to_string(),
+                output_path: "C:\\Subs\\Episode.ass".to_string(),
+                video_path: "C:\\Subs\\Episode.mkv".to_string(),
+                no_op: false,
+            },
+            engine::RenamePlanRow {
+                input_path: "C:\\Subs\\episode.tc.ass".to_string(),
+                output_path: "C:\\Subs\\Episode.ass".to_string(),
+                video_path: "C:\\Subs\\Episode.mkv".to_string(),
+                no_op: false,
+            },
+            engine::RenamePlanRow {
+                input_path: "C:\\Subs\\already.ass".to_string(),
+                output_path: "C:\\Subs\\Episode.ass".to_string(),
+                video_path: "C:\\Subs\\Episode.mkv".to_string(),
+                no_op: true,
+            },
+        ];
+
+        let duplicates = duplicate_rename_output_keys(&rows);
+        assert_eq!(duplicates.len(), 1);
+        assert!(duplicates.contains("c:\\subs\\episode.ass"));
     }
 }

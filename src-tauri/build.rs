@@ -14,10 +14,27 @@ fn copy_cli_engine_bundle() {
 
     println!("cargo:rerun-if-changed={}", source_path.display());
 
-    let source = std::fs::read_to_string(&source_path).unwrap_or_else(|_| {
-        r#"globalThis.ssaHdrifyCliEngine={convertHdr(){throw new Error("CLI engine bundle is missing. Run `npm run build:engine` before building ssahdrify-cli.")}};"#
-            .to_string()
-    });
+    let source = std::fs::read_to_string(&source_path).unwrap_or_else(|_| missing_engine_stub());
 
     std::fs::write(output_path, source).expect("failed to write CLI engine bundle for Cargo");
+}
+
+fn missing_engine_stub() -> String {
+    const MESSAGE: &str =
+        "CLI engine bundle is missing. Run `npm run build:engine` before building ssahdrify-cli.";
+    const FUNCTIONS: &[&str] = &[
+        "convertHdr",
+        "convertShift",
+        "planRename",
+        "planFontEmbed",
+        "applyFontEmbed",
+    ];
+
+    let methods = FUNCTIONS
+        .iter()
+        .map(|name| format!("{name}(){{throw new Error({MESSAGE:?})}}"))
+        .collect::<Vec<_>>()
+        .join(",");
+
+    format!("globalThis.ssaHdrifyCliEngine={{{methods}}};")
 }
