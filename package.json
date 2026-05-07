@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "build:gui": "vite build",
-    "build:engine": "esbuild src/cli-engine-entry.ts --bundle --minify --format=iife --global-name=ssaHdrifyCliEngine --target=es2020 --platform=neutral --outfile=dist-engine/engine.js",
+    "build:engine": "esbuild src/cli-engine-entry.ts --bundle --minify --format=iife --global-name=ssaHdrifyCliEngine --target=es2020 --platform=neutral --main-fields=module,main --outfile=dist-engine/engine.js",
     "build:cli": "npm run build:engine && cargo build --release --bin ssahdrify-cli --manifest-path src-tauri/Cargo.toml",
     "build:all": "npm run build && npm run build:cli",
     "lint": "npm run lint:js && npm run lint:css && npm run lint:rs",

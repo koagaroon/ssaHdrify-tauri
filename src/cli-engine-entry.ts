@@ -1,4 +1,6 @@
+import { parse as parseAss } from "ass-compiler";
 import { processAssContent } from "./features/hdr-convert/ass-processor";
+import { SECTION_HEADER_RE } from "./features/hdr-convert/ass-processor";
 import {
   DEFAULT_STYLE,
   buildAssDocument,
@@ -17,6 +19,12 @@ import {
   type PairingSource,
   type ParsedFile,
 } from "./features/batch-rename/pairing-engine";
+import { buildFontEntry } from "./features/font-embed/ass-uuencode";
+import {
+  collectFontsWithParser,
+  fontKeyLabel,
+  type FontKey,
+} from "./features/font-embed/font-collector";
 import { deriveShiftedPath, shiftSubtitles } from "./features/timing-shift/timing-engine";
 import { extractLangFromBaseName, LANG_TAGS } from "./lib/lang-detection";
 import { parseSubtitle } from "./lib/subtitle-parser";
@@ -73,6 +81,42 @@ export interface RenamePlanRow {
   key: string;
   language: string;
   noOp: boolean;
+}
+
+export interface FontEmbedPlanRequest {
+  inputPath: string;
+  content: string;
+  outputTemplate?: string;
+}
+
+export interface FontEmbedPlanResult {
+  outputPath: string;
+  fonts: FontEmbedUsage[];
+}
+
+export interface FontEmbedUsage {
+  family: string;
+  bold: boolean;
+  italic: boolean;
+  label: string;
+  fontName: string;
+  glyphCount: number;
+  codepoints: number[];
+}
+
+export interface FontEmbedApplyRequest {
+  content: string;
+  fonts: FontSubsetPayload[];
+}
+
+export interface FontSubsetPayload {
+  fontName: string;
+  data: number[];
+}
+
+export interface FontEmbedApplyResult {
+  content: string;
+  embeddedCount: number;
 }
 
 export function convertHdr(request: HdrConversionRequest): HdrConversionResult {
@@ -161,6 +205,42 @@ export function planRename(request: RenamePlanRequest): RenamePlanResult {
   };
 }
 
+export function planFontEmbed(request: FontEmbedPlanRequest): FontEmbedPlanResult {
+  const usages = collectFontsWithParser(request.content, parseAss);
+
+  return {
+    outputPath: resolveEmbedOutputPath(request.inputPath, request.outputTemplate),
+    fonts: usages.map((usage) => ({
+      family: usage.key.family,
+      bold: usage.key.bold,
+      italic: usage.key.italic,
+      label: fontKeyLabel(usage.key),
+      fontName: buildFontFileName(usage.key),
+      glyphCount: usage.codepoints.size,
+      codepoints: Array.from(usage.codepoints),
+    })),
+  };
+}
+
+export function applyFontEmbed(request: FontEmbedApplyRequest): FontEmbedApplyResult {
+  const fontEntries = request.fonts.map((font) =>
+    buildFontEntry(font.fontName, Uint8Array.from(font.data))
+  );
+
+  if (fontEntries.length === 0) {
+    return {
+      content: request.content,
+      embeddedCount: 0,
+    };
+  }
+
+  const fontsSection = `[Fonts]\n${fontEntries.join("\n\n")}\n`;
+  return {
+    content: insertFontsSection(request.content, fontsSection),
+    embeddedCount: fontEntries.length,
+  };
+}
+
 function resolveShiftOutputPath(
   inputPath: string,
   template: string | undefined,
@@ -198,6 +278,7 @@ function resolveShiftOutputPath(
   if (!outputName.trim()) {
     throw new Error("Template resolves to empty filename");
   }
+  // eslint-disable-next-line no-control-regex -- reject control characters in output filenames
   if (/[\x00-\x1f\x7f<>:"|?*\\/]/.test(outputName)) {
     throw new Error(`Output filename contains illegal characters: ${outputName}`);
   }
@@ -211,6 +292,120 @@ function resolveShiftOutputPath(
 
 function isAbsoluteInputPath(path: string): boolean {
   return path.startsWith("/") || path.startsWith("\\") || /^[A-Za-z]:[\\/]/.test(path);
+}
+
+function resolveEmbedOutputPath(inputPath: string, template = "{name}.embed.ass"): string {
+  const usedBackslash = inputPath.includes("\\");
+  const normalized = inputPath.replace(/\\/g, "/");
+  const lastSlash = normalized.lastIndexOf("/");
+  const dir = lastSlash >= 0 ? normalized.slice(0, lastSlash) : "";
+  const fullName = lastSlash >= 0 ? normalized.slice(lastSlash + 1) : normalized;
+  const lastDot = fullName.lastIndexOf(".");
+  const baseName = lastDot > 0 ? fullName.slice(0, lastDot) : fullName;
+
+  if (!dir || !isAbsoluteInputPath(inputPath)) {
+    throw new Error("Input path must be absolute");
+  }
+  if (!baseName || !baseName.replace(/^\.+/, "").trim()) {
+    throw new Error("Input filename has no valid stem");
+  }
+
+  const outputName = template
+    .replace(/\{name\}/g, baseName)
+    .replace(/\{ext\}/g, ".ass")
+    .replace(/\.{2,}/g, ".");
+
+  if (!outputName.trim()) {
+    throw new Error("Template resolves to empty filename");
+  }
+  // eslint-disable-next-line no-control-regex -- reject control characters in output filenames
+  if (/[\x00-\x1f\x7f<>:"|?*\\/]/.test(outputName)) {
+    throw new Error(`Output filename contains illegal characters: ${outputName}`);
+  }
+
+  const outputPath = `${dir}/${outputName}`;
+  if (outputPath.toLowerCase() === normalized.toLowerCase()) {
+    throw new Error("Output path is the same as input (would overwrite source file)");
+  }
+  return usedBackslash ? outputPath.replace(/\//g, "\\") : outputPath;
+}
+
+function buildFontFileName(key: FontKey): string {
+  let name = key.family
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_|_$/g, "");
+  if (!name) name = `font_${familyFnvHash(key.family)}`;
+  if (key.bold) name += "_bold";
+  if (key.italic) name += "_italic";
+  return `${name}.ttf`;
+}
+
+function familyFnvHash(family: string): string {
+  let h = 0x811c9dc5;
+  for (const ch of family) {
+    const cp = ch.codePointAt(0) ?? 0;
+    h ^= cp & 0xff;
+    h = Math.imul(h, 0x01000193);
+    h ^= (cp >>> 8) & 0xff;
+    h = Math.imul(h, 0x01000193);
+    h ^= (cp >>> 16) & 0xff;
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16).padStart(8, "0");
+}
+
+function insertFontsSection(content: string, fontsSection: string): string {
+  const lineEnding = content.includes("\r\n") ? "\r\n" : "\n";
+  const normalized = content.replace(/[\u2028\u2029]/g, "\n");
+  const lines = normalized.split(/\r?\n/);
+  const adaptedFontsSection = fontsSection.replace(/\n/g, lineEnding);
+  const headerFontsRe = /^\[[Ff][Oo][Nn][Tt][Ss]\][ \t]*$/;
+  const existingFontsIdx = lines.findIndex((line) => headerFontsRe.test(line));
+
+  const buildBefore = (endIdx: number): { text: string; sep: string } => {
+    const slice = lines.slice(0, endIdx);
+    while (slice.length > 0 && slice[slice.length - 1].trim() === "") {
+      slice.pop();
+    }
+    const text = slice.join(lineEnding);
+    const sep = slice.length > 0 ? lineEnding + lineEnding : "";
+    return { text, sep };
+  };
+
+  const buildAfter = (startIdx: number): string => {
+    const slice = lines.slice(startIdx);
+    while (slice.length > 0 && slice[0].trim() === "") {
+      slice.shift();
+    }
+    return slice.join(lineEnding);
+  };
+
+  const isSectionHeader = (line: string) => SECTION_HEADER_RE.test(line.trim().toLowerCase());
+
+  if (existingFontsIdx >= 0) {
+    let endIdx = existingFontsIdx + 1;
+    while (endIdx < lines.length && !isSectionHeader(lines[endIdx])) {
+      endIdx += 1;
+    }
+
+    const { text: before, sep } = buildBefore(existingFontsIdx);
+    const after = buildAfter(endIdx);
+    const afterSep = after.length > 0 ? lineEnding : "";
+    return `${before}${sep}${adaptedFontsSection}${afterSep}${after}`;
+  }
+
+  const headerEventsRe = /^\[[Ee][Vv][Ee][Nn][Tt][Ss]\][ \t]*$/;
+  const eventsIdx = lines.findIndex((line) => headerEventsRe.test(line));
+  if (eventsIdx >= 0) {
+    const { text: before, sep } = buildBefore(eventsIdx);
+    const after = lines.slice(eventsIdx).join(lineEnding);
+    return `${before}${sep}${adaptedFontsSection}${lineEnding}${after}`;
+  }
+
+  const trimmedContent = content.replace(/(\r\n|\n)+$/, "");
+  return `${trimmedContent}${lineEnding}${lineEnding}${adaptedFontsSection}`;
 }
 
 const VIDEO_EXTS = new Set([

@@ -15,7 +15,9 @@ import type { ParsedASS } from "ass-compiler";
 // Lazy dynamic import — only triggers when ensureLoaded() is first called.
 // Previously this ran at module load time, which blocked startup after the
 // CSS visibility refactor made all tabs mount immediately.
-let parseFn: ((text: string) => ParsedASS) | null = null;
+export type AssParseFunction = (text: string) => ParsedASS;
+
+let parseFn: AssParseFunction | null = null;
 let assCompilerReady: Promise<void> | null = null;
 
 /**
@@ -110,9 +112,12 @@ export function collectFonts(assContent: string): FontUsage[] {
   if (!parseFn) {
     throw new Error("ASS compiler not loaded yet");
   }
+  return collectFontsWithParser(assContent, parseFn);
+}
 
+export function collectFontsWithParser(assContent: string, parser: AssParseFunction): FontUsage[] {
   // Parse ASS file
-  const parsed = parseFn(assContent);
+  const parsed = parser(assContent);
   if (!parsed) {
     throw new Error("Failed to parse ASS file");
   }
