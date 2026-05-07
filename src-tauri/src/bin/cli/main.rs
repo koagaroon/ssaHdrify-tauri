@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -165,10 +166,6 @@ struct RenameArgs {
     #[arg(long, value_enum, default_value_t = RenameMode::CopyToVideo)]
     mode: RenameMode,
 
-    /// Required when --mode copy-to-chosen.
-    #[arg(long, value_name = "DIR")]
-    output_dir: Option<PathBuf>,
-
     /// Language selection: auto, all, or a comma-separated list such as sc,jp.
     #[arg(long, default_value = "auto")]
     langs: String,
@@ -183,6 +180,20 @@ enum RenameMode {
     Rename,
     CopyToVideo,
     CopyToChosen,
+}
+
+impl RenameMode {
+    fn as_engine_value(self) -> &'static str {
+        match self {
+            RenameMode::Rename => "rename",
+            RenameMode::CopyToVideo => "copy_to_video",
+            RenameMode::CopyToChosen => "copy_to_chosen",
+        }
+    }
+
+    fn is_copy(self) -> bool {
+        matches!(self, RenameMode::CopyToVideo | RenameMode::CopyToChosen)
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -268,7 +279,7 @@ fn run() -> Result<ExitCode, String> {
         Command::Hdr(args) => run_hdr(&globals, args),
         Command::Shift(args) => run_shift(&globals, args),
         Command::Embed(_) => unsupported_command(&globals, "embed"),
-        Command::Rename(_) => unsupported_command(&globals, "rename"),
+        Command::Rename(args) => run_rename(&globals, args),
     }
 }
 
@@ -525,6 +536,163 @@ fn process_shift_file(
     }
 }
 
+fn run_rename(globals: &GlobalOptions, args: RenameArgs) -> Result<ExitCode, String> {
+    let output_dir = globals
+        .output_dir
+        .as_deref()
+        .map(absolute_path)
+        .transpose()?;
+
+    match (args.mode, output_dir.as_deref()) {
+        (RenameMode::CopyToChosen, None) => {
+            return Err("--output-dir is required with rename --mode copy-to-chosen".to_string());
+        }
+        (RenameMode::Rename | RenameMode::CopyToVideo, Some(_)) => {
+            return Err(
+                "--output-dir can only be used with rename --mode copy-to-chosen".to_string(),
+            );
+        }
+        _ => {}
+    }
+
+    let expanded_paths = expand_rename_inputs(&args.paths)?;
+    let mut engine = engine::CliEngine::new()?;
+    let request = engine::RenamePlanRequest {
+        paths: expanded_paths,
+        mode: args.mode.as_engine_value().to_string(),
+        output_dir: output_dir.as_deref().map(display_path),
+        langs: args.langs.clone(),
+    };
+    let plan = engine.plan_rename(&request)?;
+    let mut report = CommandReport::new("rename");
+
+    if globals.verbose && !globals.json && !globals.quiet {
+        println!(
+            "rename: {} videos, {} subtitles, {} ignored, {} unknown",
+            plan.video_count, plan.subtitle_count, plan.ignored_count, plan.unknown_count
+        );
+    }
+
+    if plan.pairings.is_empty() {
+        let result = FileReport {
+            input: "<batch>".to_string(),
+            output: None,
+            encoding: None,
+            status: FileStatus::Failed,
+            error: Some(format!(
+                "no subtitle/video pairs found ({} videos, {} subtitles, {} unknown)",
+                plan.video_count, plan.subtitle_count, plan.unknown_count
+            )),
+        };
+        emit_file_report(globals, &result);
+        report.push(result);
+        emit_report_summary(globals, &report)?;
+        return Ok(report.exit_code());
+    }
+
+    let mut seen_outputs = HashSet::new();
+    for row in &plan.pairings {
+        let result = process_rename_pair(globals, &args, row, &mut seen_outputs);
+        emit_file_report(globals, &result);
+        report.push(result);
+    }
+
+    emit_report_summary(globals, &report)?;
+    Ok(report.exit_code())
+}
+
+fn expand_rename_inputs(paths: &[PathBuf]) -> Result<Vec<String>, String> {
+    let absolute_paths: Result<Vec<String>, String> = paths
+        .iter()
+        .map(|path| absolute_path(path).map(|path| display_path(&path)))
+        .collect();
+    let expanded = app_lib::dropzone::expand_dropped_paths(absolute_paths?)?;
+
+    if expanded.is_empty() {
+        return Err("no regular files found in rename input paths".to_string());
+    }
+    Ok(expanded)
+}
+
+fn process_rename_pair(
+    globals: &GlobalOptions,
+    args: &RenameArgs,
+    row: &engine::RenamePlanRow,
+    seen_outputs: &mut HashSet<String>,
+) -> FileReport {
+    let input_path = PathBuf::from(&row.input_path);
+    let output_path = PathBuf::from(&row.output_path);
+    let input = display_path(&input_path);
+    let output = display_path(&output_path);
+
+    if row.no_op {
+        return FileReport {
+            input,
+            output: Some(output),
+            encoding: None,
+            status: FileStatus::Skipped,
+            error: Some("subtitle already matches the target path".to_string()),
+        };
+    }
+
+    let output_key = normalize_output_key(&output_path);
+    if !seen_outputs.insert(output_key) {
+        return failed_report(
+            &input_path,
+            Some(output),
+            None,
+            "duplicate output path in planned batch".to_string(),
+        );
+    }
+
+    if output_path_exists(&output_path) && !globals.overwrite {
+        return FileReport {
+            input,
+            output: Some(output),
+            encoding: None,
+            status: FileStatus::Skipped,
+            error: Some("output exists; pass --overwrite to replace it".to_string()),
+        };
+    }
+
+    if globals.verbose && !globals.json && !globals.quiet {
+        println!(
+            "rename: {} -> {} (video: {})",
+            display_path(&input_path),
+            display_path(&output_path),
+            row.video_path
+        );
+    }
+
+    if globals.dry_run {
+        return FileReport {
+            input,
+            output: Some(output),
+            encoding: None,
+            status: FileStatus::Planned,
+            error: None,
+        };
+    }
+
+    let operation_result = if args.mode.is_copy() {
+        copy_file_output(&input_path, &output_path)
+    } else {
+        rename_file_output(&input_path, &output_path, globals.overwrite)
+    };
+
+    if let Err(error) = operation_result {
+        return failed_report(&input_path, Some(output), None, error);
+    }
+
+    FileReport {
+        input,
+        output: Some(output),
+        encoding: None,
+        status: FileStatus::Written,
+        error: None,
+    }
+}
+
 fn unsupported_command(globals: &GlobalOptions, command: &'static str) -> Result<ExitCode, String> {
     if globals.json {
         let mut report = CommandReport::new(command);
@@ -542,6 +710,28 @@ fn unsupported_command(globals: &GlobalOptions, command: &'static str) -> Result
         eprintln!("ssahdrify-cli: '{command}' is not implemented yet");
     }
     Ok(ExitCode::from(2))
+}
+
+fn emit_report_summary(globals: &GlobalOptions, report: &CommandReport) -> Result<(), String> {
+    if globals.json {
+        let json = serde_json::to_string_pretty(report)
+            .map_err(|err| format!("failed to encode JSON report: {err}"))?;
+        println!("{json}");
+    } else if !globals.quiet {
+        let message = localize(
+            globals,
+            format!(
+                "Done: {} written, {} planned, {} skipped, {} failed",
+                report.written, report.planned, report.skipped, report.failed
+            ),
+            format!(
+                "完成：{} 个已写入，{} 个计划写入，{} 个已跳过，{} 个失败",
+                report.written, report.planned, report.skipped, report.failed
+            ),
+        );
+        println!("{message}");
+    }
+    Ok(())
 }
 
 fn emit_file_report(globals: &GlobalOptions, result: &FileReport) {
@@ -633,6 +823,29 @@ fn write_output(path: &Path, content: &str) -> Result<(), String> {
     fs::write(path, content.as_bytes()).map_err(|err| format!("failed to write output: {err}"))
 }
 
+fn copy_file_output(input: &Path, output: &Path) -> Result<(), String> {
+    ensure_output_parent(output)?;
+    fs::copy(input, output)
+        .map(|_| ())
+        .map_err(|err| format!("failed to copy file: {err}"))
+}
+
+fn rename_file_output(input: &Path, output: &Path, overwrite: bool) -> Result<(), String> {
+    ensure_output_parent(output)?;
+    if overwrite && output_path_exists(output) {
+        fs::remove_file(output)
+            .map_err(|err| format!("failed to remove existing output before rename: {err}"))?;
+    }
+    fs::rename(input, output).map_err(|err| format!("failed to rename file: {err}"))
+}
+
+fn ensure_output_parent(path: &Path) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "output path has no parent directory".to_string())?;
+    fs::create_dir_all(parent).map_err(|err| format!("failed to create output directory: {err}"))
+}
+
 fn display_path(path: &Path) -> String {
     let path = path.to_string_lossy().into_owned();
     if cfg!(windows) {
@@ -640,6 +853,10 @@ fn display_path(path: &Path) -> String {
     } else {
         path
     }
+}
+
+fn normalize_output_key(path: &Path) -> String {
+    display_path(path).replace('/', "\\").to_lowercase()
 }
 
 fn localize(globals: &GlobalOptions, en: String, zh: String) -> String {

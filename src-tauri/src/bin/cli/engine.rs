@@ -41,6 +41,34 @@ pub struct ShiftConversionResult {
     pub shifted_count: usize,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenamePlanRequest {
+    pub paths: Vec<String>,
+    pub mode: String,
+    pub output_dir: Option<String>,
+    pub langs: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenamePlanResult {
+    pub video_count: usize,
+    pub subtitle_count: usize,
+    pub unknown_count: usize,
+    pub ignored_count: usize,
+    pub pairings: Vec<RenamePlanRow>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenamePlanRow {
+    pub input_path: String,
+    pub output_path: String,
+    pub video_path: String,
+    pub no_op: bool,
+}
+
 pub struct CliEngine {
     runtime: JsRuntime,
 }
@@ -69,6 +97,15 @@ impl CliEngine {
             "convertShift",
             "ssahdrify-cli-convert-shift.js",
             "Time Shift",
+            request,
+        )
+    }
+
+    pub fn plan_rename(&mut self, request: &RenamePlanRequest) -> Result<RenamePlanResult, String> {
+        self.call_engine(
+            "planRename",
+            "ssahdrify-cli-plan-rename.js",
+            "Batch Rename",
             request,
         )
     }
