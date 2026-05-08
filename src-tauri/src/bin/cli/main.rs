@@ -367,25 +367,7 @@ fn run_hdr(globals: &GlobalOptions, args: HdrArgs) -> Result<ExitCode, String> {
         report.push(result);
     }
 
-    if globals.json {
-        let json = serde_json::to_string_pretty(&report)
-            .map_err(|err| format!("failed to encode JSON report: {err}"))?;
-        println!("{json}");
-    } else if !globals.quiet {
-        let message = localize(
-            globals,
-            format!(
-                "Done: {} written, {} planned, {} skipped, {} failed",
-                report.written, report.planned, report.skipped, report.failed
-            ),
-            format!(
-                "完成：{} 个已写入，{} 个计划写入，{} 个已跳过，{} 个失败",
-                report.written, report.planned, report.skipped, report.failed
-            ),
-        );
-        println!("{message}");
-    }
-
+    emit_report_summary(globals, &report)?;
     Ok(report.exit_code())
 }
 
@@ -428,24 +410,15 @@ fn process_hdr_file(
     };
     let output = display_path(&output_path);
 
-    if !seen_outputs.insert(normalize_output_key(&output_path)) {
-        return failed_report(
-            &input_path,
-            Some(output),
-            None,
-            "duplicate output path in planned batch".to_string(),
-        );
-    }
-
-    if output_path_exists(globals, &output_path) && !globals.overwrite {
-        return FileReport {
-            input,
-            output: Some(output),
-            encoding: None,
-            status: FileStatus::Skipped,
-            error: Some("output exists; pass --overwrite to replace it".to_string()),
-            warnings: None,
-        };
+    if let Some(early) = dedup_and_exists_check(
+        globals,
+        &input_path,
+        &output_path,
+        &output,
+        None,
+        seen_outputs,
+    ) {
+        return early;
     }
 
     if globals.dry_run {
@@ -453,14 +426,7 @@ fn process_hdr_file(
         // name on `--dry-run` invocations: no I/O, no V8 work, just the
         // resolved path. encoding is None because we haven't read —
         // matches the cheap-first contract (Embed already does this).
-        return FileReport {
-            input,
-            output: Some(output),
-            encoding: None,
-            status: FileStatus::Planned,
-            error: None,
-            warnings: None,
-        };
+        return planned_report(&input_path, Some(output), None);
     }
 
     let read_result = match app_lib::encoding::read_text_detect_encoding(input.clone()) {
@@ -536,25 +502,7 @@ fn run_shift(globals: &GlobalOptions, args: ShiftArgs) -> Result<ExitCode, Strin
         report.push(result);
     }
 
-    if globals.json {
-        let json = serde_json::to_string_pretty(&report)
-            .map_err(|err| format!("failed to encode JSON report: {err}"))?;
-        println!("{json}");
-    } else if !globals.quiet {
-        let message = localize(
-            globals,
-            format!(
-                "Done: {} written, {} planned, {} skipped, {} failed",
-                report.written, report.planned, report.skipped, report.failed
-            ),
-            format!(
-                "完成：{} 个已写入，{} 个计划写入，{} 个已跳过，{} 个失败",
-                report.written, report.planned, report.skipped, report.failed
-            ),
-        );
-        println!("{message}");
-    }
-
+    emit_report_summary(globals, &report)?;
     Ok(report.exit_code())
 }
 
@@ -587,9 +535,8 @@ fn process_shift_file(
 // or `None` (cheap-first, before read). Returns `Option` rather than
 // `Result` because FileReport is large (>128 bytes); a Result variant
 // would trip clippy::result_large_err.
-fn shift_dedup_and_exists_check(
+fn dedup_and_exists_check(
     globals: &GlobalOptions,
-    input: &str,
     input_path: &Path,
     output_path: &Path,
     output: &str,
@@ -606,14 +553,12 @@ fn shift_dedup_and_exists_check(
         ));
     }
     if output_path_exists(globals, output_path) && !globals.overwrite {
-        return Some(FileReport {
-            input: input.to_string(),
-            output: Some(output.to_string()),
-            encoding: take_encoding(),
-            status: FileStatus::Skipped,
-            error: Some("output exists; pass --overwrite to replace it".to_string()),
-            warnings: None,
-        });
+        return Some(skipped_report(
+            input_path,
+            Some(output.to_string()),
+            take_encoding(),
+            "output exists; pass --overwrite to replace it".to_string(),
+        ));
     }
     None
 }
@@ -663,9 +608,8 @@ fn process_shift_file_cheap_first(
     };
     let output = display_path(&output_path);
 
-    if let Some(early) = shift_dedup_and_exists_check(
+    if let Some(early) = dedup_and_exists_check(
         globals,
-        &input,
         &input_path,
         &output_path,
         &output,
@@ -679,14 +623,7 @@ fn process_shift_file_cheap_first(
         // Dry-run gates BEFORE the read so cheap-first lives up to its
         // name on `--dry-run` invocations. encoding is None because we
         // haven't read — matches the cheap-first contract.
-        return FileReport {
-            input,
-            output: Some(output),
-            encoding: None,
-            status: FileStatus::Planned,
-            error: None,
-            warnings: None,
-        };
+        return planned_report(&input_path, Some(output), None);
     }
 
     let read_result = match app_lib::encoding::read_text_detect_encoding(input.clone()) {
@@ -708,23 +645,18 @@ fn process_shift_file_cheap_first(
         }
     };
 
-    if globals.verbose && !globals.json && !globals.quiet {
-        let format_upper = conversion.format.to_uppercase();
-        println!(
-            "{}",
-            localize(
-                globals,
-                format!(
-                    "shift: {} captions, {} shifted, format {}",
-                    conversion.caption_count, conversion.shifted_count, format_upper
-                ),
-                format!(
-                    "时间轴偏移：{} 条字幕，{} 条已偏移，格式 {}",
-                    conversion.caption_count, conversion.shifted_count, format_upper
-                ),
-            )
-        );
-    }
+    let format_upper = conversion.format.to_uppercase();
+    emit_verbose(
+        globals,
+        format!(
+            "shift: {} captions, {} shifted, format {}",
+            conversion.caption_count, conversion.shifted_count, format_upper
+        ),
+        format!(
+            "时间轴偏移：{} 条字幕，{} 条已偏移，格式 {}",
+            conversion.caption_count, conversion.shifted_count, format_upper
+        ),
+    );
 
     if let Err(error) = write_output(
         globals,
@@ -790,9 +722,8 @@ fn process_shift_file_heavy_first(
     };
     let output = display_path(&output_path);
 
-    if let Some(early) = shift_dedup_and_exists_check(
+    if let Some(early) = dedup_and_exists_check(
         globals,
-        &input,
         &input_path,
         &output_path,
         &output,
@@ -807,33 +738,21 @@ fn process_shift_file_heavy_first(
     // captions, M shifted" line because no shift was actually
     // committed. Matches the cheap-first path's ordering.
     if globals.dry_run {
-        return FileReport {
-            input,
-            output: Some(output),
-            encoding: Some(read_result.encoding),
-            status: FileStatus::Planned,
-            error: None,
-            warnings: None,
-        };
+        return planned_report(&input_path, Some(output), Some(read_result.encoding));
     }
 
-    if globals.verbose && !globals.json && !globals.quiet {
-        let format_upper = conversion.format.to_uppercase();
-        println!(
-            "{}",
-            localize(
-                globals,
-                format!(
-                    "shift: {} captions, {} shifted, format {}",
-                    conversion.caption_count, conversion.shifted_count, format_upper
-                ),
-                format!(
-                    "时间轴偏移：{} 条字幕，{} 条已偏移，格式 {}",
-                    conversion.caption_count, conversion.shifted_count, format_upper
-                ),
-            )
-        );
-    }
+    let format_upper = conversion.format.to_uppercase();
+    emit_verbose(
+        globals,
+        format!(
+            "shift: {} captions, {} shifted, format {}",
+            conversion.caption_count, conversion.shifted_count, format_upper
+        ),
+        format!(
+            "时间轴偏移：{} 条字幕，{} 条已偏移，格式 {}",
+            conversion.caption_count, conversion.shifted_count, format_upper
+        ),
+    );
 
     if let Err(error) = write_output(
         globals,
@@ -1046,24 +965,15 @@ fn process_embed_file(
     };
     let output = display_path(&output_path);
 
-    if !seen_outputs.insert(normalize_output_key(&output_path)) {
-        return failed_report(
-            &input_path,
-            Some(output),
-            None,
-            "duplicate output path in planned batch".to_string(),
-        );
-    }
-
-    if output_path_exists(globals, &output_path) && !globals.overwrite {
-        return FileReport {
-            input,
-            output: Some(output),
-            encoding: None,
-            status: FileStatus::Skipped,
-            error: Some("output exists; pass --overwrite to replace it".to_string()),
-            warnings: None,
-        };
+    if let Some(early) = dedup_and_exists_check(
+        globals,
+        &input_path,
+        &output_path,
+        &output,
+        None,
+        seen_outputs,
+    ) {
+        return early;
     }
 
     if globals.dry_run {
@@ -1071,14 +981,7 @@ fn process_embed_file(
         // doing font discovery or content parsing — matches HDR/Shift
         // dry-run behavior and avoids the surprise of "dry-run scanned
         // 17k fonts then planned no actual write."
-        return FileReport {
-            input,
-            output: Some(output),
-            encoding: None,
-            status: FileStatus::Planned,
-            error: None,
-            warnings: None,
-        };
+        return planned_report(&input_path, Some(output), None);
     }
 
     let read_result = match app_lib::encoding::read_text_detect_encoding(input.clone()) {
@@ -1110,23 +1013,18 @@ fn process_embed_file(
         }
     };
 
-    if globals.verbose && !globals.json && !globals.quiet {
-        let glyph_count: usize = plan.fonts.iter().map(|font| font.glyph_count).sum();
-        let referenced = plan.fonts.len();
-        let resolved_count = resolved_fonts.len();
-        println!(
-            "{}",
-            localize(
-                globals,
-                format!(
-                    "embed: {referenced} referenced fonts ({glyph_count} glyphs), {resolved_count} resolved"
-                ),
-                format!(
-                    "字体嵌入：{referenced} 个引用字体（{glyph_count} 个字符），{resolved_count} 个已解析"
-                ),
-            )
-        );
-    }
+    let glyph_count: usize = plan.fonts.iter().map(|font| font.glyph_count).sum();
+    let referenced = plan.fonts.len();
+    let resolved_count = resolved_fonts.len();
+    emit_verbose(
+        globals,
+        format!(
+            "embed: {referenced} referenced fonts ({glyph_count} glyphs), {resolved_count} resolved"
+        ),
+        format!(
+            "字体嵌入：{referenced} 个引用字体（{glyph_count} 个字符），{resolved_count} 个已解析"
+        ),
+    );
 
     let subset_payloads = match subset_resolved_fonts(globals, args, &resolved_fonts) {
         Ok((payloads, mut subset_warnings)) => {
@@ -1160,17 +1058,12 @@ fn process_embed_file(
         }
     };
 
-    if globals.verbose && !globals.json && !globals.quiet {
-        let n = applied.embedded_count;
-        println!(
-            "{}",
-            localize(
-                globals,
-                format!("embed: {n} fonts embedded"),
-                format!("字体嵌入：{n} 个字体已嵌入"),
-            )
-        );
-    }
+    let n = applied.embedded_count;
+    emit_verbose(
+        globals,
+        format!("embed: {n} fonts embedded"),
+        format!("字体嵌入：{n} 个字体已嵌入"),
+    );
 
     if let Err(error) = write_output(globals, &output_path, &applied.content, globals.overwrite) {
         return failed_report(&input_path, Some(output), Some(read_result.encoding), error);
@@ -1227,19 +1120,14 @@ fn resolve_embed_fonts(
     }
 
     if !missing.is_empty() {
-        if globals.verbose && !globals.json && !globals.quiet {
-            let joined = missing.join(", ");
-            eprintln!(
-                "{}",
-                localize(
-                    globals,
-                    format!("embed: missing/skipped fonts: {joined}"),
-                    format!("字体嵌入：缺失/跳过的字体：{joined}"),
-                )
-            );
-        }
+        let joined = missing.join(", ");
+        emit_verbose_err(
+            globals,
+            format!("embed: missing/skipped fonts: {joined}"),
+            format!("字体嵌入：缺失/跳过的字体：{joined}"),
+        );
         if args.on_missing == MissingFontAction::Fail {
-            return Err(format!("missing/skipped fonts: {}", missing.join(", ")));
+            return Err(format!("missing/skipped fonts: {joined}"));
         }
     }
 
@@ -1271,19 +1159,14 @@ fn subset_resolved_fonts(
     }
 
     if !skipped.is_empty() {
-        if globals.verbose && !globals.json && !globals.quiet {
-            let joined = skipped.join(", ");
-            eprintln!(
-                "{}",
-                localize(
-                    globals,
-                    format!("embed: skipped fonts: {joined}"),
-                    format!("字体嵌入：跳过的字体：{joined}"),
-                )
-            );
-        }
+        let joined = skipped.join(", ");
+        emit_verbose_err(
+            globals,
+            format!("embed: skipped fonts: {joined}"),
+            format!("字体嵌入：跳过的字体：{joined}"),
+        );
         if args.on_missing == MissingFontAction::Fail {
-            return Err(format!("skipped fonts: {}", skipped.join(", ")));
+            return Err(format!("skipped fonts: {joined}"));
         }
     }
 
@@ -1365,20 +1248,15 @@ fn run_rename(globals: &GlobalOptions, args: RenameArgs) -> Result<ExitCode, Str
     let plan = engine.plan_rename(&request)?;
     let mut report = CommandReport::new("rename");
 
-    if globals.verbose && !globals.json && !globals.quiet {
-        let v = plan.video_count;
-        let s = plan.subtitle_count;
-        let i = plan.ignored_count;
-        let u = plan.unknown_count;
-        println!(
-            "{}",
-            localize(
-                globals,
-                format!("rename: {v} videos, {s} subtitles, {i} ignored, {u} unknown"),
-                format!("重命名：{v} 个视频，{s} 个字幕，{i} 个忽略，{u} 个未知"),
-            )
-        );
-    }
+    let v = plan.video_count;
+    let s = plan.subtitle_count;
+    let i = plan.ignored_count;
+    let u = plan.unknown_count;
+    emit_verbose(
+        globals,
+        format!("rename: {v} videos, {s} subtitles, {i} ignored, {u} unknown"),
+        format!("重命名：{v} 个视频，{s} 个字幕，{i} 个忽略，{u} 个未知"),
+    );
 
     if plan.pairings.is_empty() {
         let result = FileReport {
@@ -1434,14 +1312,12 @@ fn process_rename_pair(
     let output = display_path(&output_path);
 
     if row.no_op {
-        return FileReport {
-            input,
-            output: Some(output),
-            encoding: None,
-            status: FileStatus::Skipped,
-            error: Some("subtitle already matches the target path".to_string()),
-            warnings: None,
-        };
+        return skipped_report(
+            &input_path,
+            Some(output),
+            None,
+            "subtitle already matches the target path".to_string(),
+        );
     }
 
     let output_key = normalize_output_key(&output_path);
@@ -1455,39 +1331,25 @@ fn process_rename_pair(
     }
 
     if output_path_exists(globals, &output_path) && !globals.overwrite {
-        return FileReport {
-            input,
-            output: Some(output),
-            encoding: None,
-            status: FileStatus::Skipped,
-            error: Some("output exists; pass --overwrite to replace it".to_string()),
-            warnings: None,
-        };
-    }
-
-    if globals.verbose && !globals.json && !globals.quiet {
-        let from = display_path(&input_path);
-        let to = display_path(&output_path);
-        let video = &row.video_path;
-        println!(
-            "{}",
-            localize(
-                globals,
-                format!("rename: {from} -> {to} (video: {video})"),
-                format!("重命名：{from} -> {to}（视频：{video}）"),
-            )
+        return skipped_report(
+            &input_path,
+            Some(output),
+            None,
+            "output exists; pass --overwrite to replace it".to_string(),
         );
     }
 
+    let from = display_path(&input_path);
+    let to = display_path(&output_path);
+    let video = &row.video_path;
+    emit_verbose(
+        globals,
+        format!("rename: {from} -> {to} (video: {video})"),
+        format!("重命名：{from} -> {to}（视频：{video}）"),
+    );
+
     if globals.dry_run {
-        return FileReport {
-            input,
-            output: Some(output),
-            encoding: None,
-            status: FileStatus::Planned,
-            error: None,
-            warnings: None,
-        };
+        return planned_report(&input_path, Some(output), None);
     }
 
     let operation_result = if args.mode.is_copy() {
@@ -1663,6 +1525,37 @@ fn failed_report(
     }
 }
 
+fn skipped_report(
+    input: impl AsRef<Path>,
+    output: Option<String>,
+    encoding: Option<String>,
+    error: String,
+) -> FileReport {
+    FileReport {
+        input: display_path(input.as_ref()),
+        output,
+        encoding,
+        status: FileStatus::Skipped,
+        error: Some(error),
+        warnings: None,
+    }
+}
+
+fn planned_report(
+    input: impl AsRef<Path>,
+    output: Option<String>,
+    encoding: Option<String>,
+) -> FileReport {
+    FileReport {
+        input: display_path(input.as_ref()),
+        output,
+        encoding,
+        status: FileStatus::Planned,
+        error: None,
+        warnings: None,
+    }
+}
+
 // Trust model: --output-dir is user-controlled CLI argument. We
 // normalize it to absolute form here but DO NOT canonicalize (which
 // would resolve symlinks). On Windows, fs::canonicalize returns the
@@ -1711,8 +1604,8 @@ fn relocate_output_path(path: &str, output_dir: Option<&Path>) -> Result<PathBuf
     // would over-restrict CJK paths the OS would happily accept.
     let display = relocated.to_string_lossy();
     let lower = display.to_lowercase();
-    let is_long_local = lower.starts_with("\\\\?\\") && !lower.starts_with("\\\\?\\unc\\")
-        || lower.starts_with("//?/") && !lower.starts_with("//?/unc/");
+    let is_long_local = (lower.starts_with("\\\\?\\") && !lower.starts_with("\\\\?\\unc\\"))
+        || (lower.starts_with("//?/") && !lower.starts_with("//?/unc/"));
     let cap = if is_long_local {
         RELOCATED_LONG_PATH_MAX_LEN
     } else {
@@ -1863,6 +1756,18 @@ fn localize(globals: &GlobalOptions, en: String, zh: String) -> String {
     match globals.lang.unwrap_or_else(detect_os_locale) {
         OutputLang::En => en,
         OutputLang::Zh => zh,
+    }
+}
+
+fn emit_verbose(globals: &GlobalOptions, en: String, zh: String) {
+    if globals.verbose && !globals.json && !globals.quiet {
+        println!("{}", localize(globals, en, zh));
+    }
+}
+
+fn emit_verbose_err(globals: &GlobalOptions, en: String, zh: String) {
+    if globals.verbose && !globals.json && !globals.quiet {
+        eprintln!("{}", localize(globals, en, zh));
     }
 }
 

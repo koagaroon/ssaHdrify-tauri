@@ -21,6 +21,7 @@ import {
   type LocalFontEntry,
 } from "../../lib/tauri-api";
 import { SECTION_HEADER_RE } from "../hdr-convert/ass-processor";
+import { assertSafeOutputFilename, assertSafeOutputPath } from "../../lib/path-validation";
 
 // ── Types ─────────────────────────────────────────────────
 
@@ -336,8 +337,6 @@ export function aggregateFonts(perFile: Map<string, FileAnalysis>): {
   }
   return { infos: aggInfos, usages: aggUsages };
 }
-
-import { assertSafeOutputFilename, assertSafeOutputPath } from "../../lib/path-validation";
 
 /**
  * Derive the `.embedded.ass` output path for a given input ASS path.
