@@ -6,6 +6,7 @@
  */
 import type { Eotf } from "./color-engine";
 import { extractLangFromBaseName } from "../../lib/lang-detection";
+import { assertSafeOutputFilename, assertSafeOutputPath } from "../../lib/path-validation";
 
 // ── Template Presets ──────────────────────────────────────
 
@@ -51,35 +52,6 @@ function stripVideoExtension(fileName: string): string {
   const ext = tail.slice(dotIdx + 1).toLowerCase();
   return VIDEO_EXTENSIONS.has(ext) ? tail.slice(0, dotIdx) : tail;
 }
-
-// ── Windows Reserved Names ────────────────────────────────
-// These filenames are forbidden on Windows regardless of extension
-const WINDOWS_RESERVED = new Set([
-  "CON",
-  "PRN",
-  "AUX",
-  "NUL",
-  "COM1",
-  "COM2",
-  "COM3",
-  "COM4",
-  "COM5",
-  "COM6",
-  "COM7",
-  "COM8",
-  "COM9",
-  "LPT1",
-  "LPT2",
-  "LPT3",
-  "LPT4",
-  "LPT5",
-  "LPT6",
-  "LPT7",
-  "LPT8",
-  "LPT9",
-  "CONIN$",
-  "CONOUT$",
-]);
 
 /** Optional resolution context for tokens that depend on out-of-band data
  *  (a paired video filename, an explicit language tag). All fields default
@@ -187,73 +159,22 @@ export function resolveOutputPath(
     // literal `..` (very rare, almost always a typo) collapse here too.
     .replace(/\.{2,}/g, ".");
 
-  // Safety: reject characters that are illegal in filenames on Windows, plus
-  // all control chars / DEL (tab / newline would pass the ordinary check and
-  // only fail when the OS rejects the write, producing an unhelpful error).
-  //
-  // Cross-platform note: `:` is technically valid in macOS/Linux filenames
-  // (HFS+ traditionally rejected it for legacy compatibility, but APFS and
-  // ext4 allow it). Rejecting it unconditionally is intentionally
-  // Windows-conservative — this app's primary platform is Windows and the
-  // output gets shipped between machines, so the strictest filesystem's
-  // rules win. Mac users who explicitly want `:` in subtitle filenames
-  // are not the target user and would have other Windows-portability
-  // problems already.
-  // eslint-disable-next-line no-control-regex -- intentional: reject control chars in filenames
-  const ILLEGAL_CHARS = /[\x00-\x1f\x7f<>:"|?*\\/]/;
-  if (ILLEGAL_CHARS.test(resolved)) {
-    throw new Error(`Output filename contains illegal characters: ${resolved}`);
-  }
+  // Filename-level safety: empty / illegal chars / Windows reserved
+  // names. Extracted into ../../lib/path-validation so Shift / Embed
+  // resolvers on both CLI and GUI sides apply the same rules.
+  assertSafeOutputFilename(resolved);
 
-  // Safety: reject empty filename
-  if (!resolved.trim()) {
-    throw new Error("Template resolves to empty filename");
-  }
-
-  // Safety: check for Windows reserved names
-  const stemDotIdx = resolved.lastIndexOf(".");
-  const stem = (stemDotIdx > 0 ? resolved.slice(0, stemDotIdx) : resolved).replace(/[\s.]+$/, "");
-  if (WINDOWS_RESERVED.has(stem.toUpperCase())) {
-    throw new Error(`Output filename is a Windows reserved name: ${stem}`);
-  }
-
-  // Build full output path
+  // Build full output path.
   const outputPath = `${dir}/${resolved}`;
 
-  // Safety: reject paths that exceed Windows MAX_PATH limit.
-  // Local long-path paths (input form `\\?\C:\...`, normalized here to
-  // `//?/C:/...` because we ran `inputPath.replace(/\\/g, "/")` on the
-  // way in) support up to 32767 chars on Windows 10+ when long-path mode
-  // is enabled; relax the cap ONLY for that case. UNC long paths
-  // (`\\?\UNC\server\share\...` → `//?/UNC/...`) may exceed OS limits on
-  // the server side, so we keep the 260 cap for those.
-  // Case-insensitive UNC prefix check: a lowercased `//?/unc/...`
-  // (slashes already normalized from `\\?\unc\...`) should still be
-  // classified as UNC, not as "long local path with relaxed cap".
-  const lowerPath = outputPath.toLowerCase();
-  const isLongLocalPath = lowerPath.startsWith("//?/") && !lowerPath.startsWith("//?/unc/");
-  const maxPathLen = isLongLocalPath ? 32767 : 260;
-  if (outputPath.length > maxPathLen) {
-    throw new Error(`Output path too long (${outputPath.length} chars, max ${maxPathLen})`);
-  }
+  // Path-level safety: traversal, dir-escape, MAX_PATH, self-overwrite.
+  assertSafeOutputPath(outputPath, normalized);
 
-  // Safety: reject path traversal — check unconditionally
-  // dir and outputPath are already forward-slash normalized (derived from `normalized`)
-  if (/(^|\/)\.\.($|\/)/.test(outputPath)) {
-    throw new Error(`Output path contains directory traversal: ${outputPath}`);
-  }
-  if (!outputPath.startsWith(dir + "/")) {
-    throw new Error(`Output path escapes input directory: ${outputPath}`);
-  }
-
-  // Safety: output must have .ass extension
+  // HDR-specific: output must have .ass extension. Shift preserves the
+  // input's extension (.srt → .srt) and Embed always emits .ass via
+  // template — so this rule only belongs here.
   if (!resolved.toLowerCase().endsWith(".ass")) {
     throw new Error("Output filename must end with .ass");
-  }
-
-  // Safety: reject self-overwrite (case-insensitive for Windows)
-  if (outputPath.toLowerCase() === normalized.toLowerCase()) {
-    throw new Error("Output path is the same as input (would overwrite source file)");
   }
 
   // Restore native Windows separators on the final return value when the

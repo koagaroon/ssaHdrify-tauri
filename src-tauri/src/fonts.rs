@@ -771,6 +771,12 @@ pub fn find_system_font(
             // would spam dev logs every time a batch is analyzed before
             // sources are added; release builds (Warn+) hide info entirely.
             log::info!("font lookup failed for '{family}' (bold={bold}, italic={italic}): {e}");
+            // The "Font not found:" prefix is parsed by the CLI shell
+            // (`bin/cli/main.rs` `resolve_embed_font`) to distinguish a
+            // benign system-miss from a real error under
+            // `--on-missing warn`. Any change to this prefix MUST update
+            // the matcher there in lockstep — the GUI doesn't care, but
+            // the CLI breaks silently.
             format!("Font not found: {family} (bold={bold}, italic={italic})")
         })?;
 

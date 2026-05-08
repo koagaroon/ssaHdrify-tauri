@@ -45,6 +45,7 @@ fontcull-read-fonts = "0.38"
 fontcull-write-fonts = "0.44"
 unicode-normalization = "0.1"
 sys-locale = "0.3"
+env_logger = "0.11"
 # Direct dep on rfd matches the transitive version pulled in by
 # tauri-plugin-dialog. Used at app setup to surface init failures via a
 # native MessageBox: a Windows GUI subsystem app has no visible stdout

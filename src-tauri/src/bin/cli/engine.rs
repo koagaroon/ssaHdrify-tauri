@@ -40,6 +40,27 @@ pub struct HdrPathRequest {
     pub output_template: String,
 }
 
+/// Cheap path-only resolution request for shift. Caller MUST pre-check
+/// `output_template.contains("{format}")` — the JS resolver assumes
+/// no `{format}` token (the value defaults to ""), and templates that
+/// reference {format} need parsing the file to know the value, so the
+/// Rust shell falls back to heavy-first ordering for those.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShiftPathRequest {
+    pub input_path: String,
+    pub output_template: String,
+}
+
+/// Cheap path-only resolution request for embed. No format dependency,
+/// so it always works for any template.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbedPathRequest {
+    pub input_path: String,
+    pub output_template: String,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ShiftConversionRequest {
@@ -96,10 +117,15 @@ pub struct FontEmbedPlanRequest {
     pub output_template: String,
 }
 
+/// Plan result from `planFontEmbed`. The JS side also returns
+/// `outputPath`, but the Rust shell now resolves that cheaply via
+/// `resolve_embed_output_path` before invoking `plan_font_embed`, so
+/// the JS `outputPath` is intentionally absent here — serde drops the
+/// unknown field. If you re-add this field, also remove the cheap
+/// resolver path in `process_embed_file` so the two stay paired.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FontEmbedPlanResult {
-    pub output_path: String,
     pub fonts: Vec<FontEmbedUsage>,
 }
 
@@ -185,7 +211,13 @@ impl CliEngine {
         &mut self,
         request: &HdrConversionRequest,
     ) -> Result<HdrConversionResult, String> {
-        self.call_engine("convertHdr", "ssahdrify-cli-convert-hdr.js", "HDR", request)
+        self.call_engine(
+            "convertHdr",
+            "ssahdrify-cli-convert-hdr.js",
+            "HDR",
+            "conversion",
+            request,
+        )
     }
 
     pub fn resolve_hdr_output_path(&mut self, request: &HdrPathRequest) -> Result<String, String> {
@@ -193,6 +225,33 @@ impl CliEngine {
             "resolveHdrOutputPath",
             "ssahdrify-cli-resolve-hdr-output-path.js",
             "HDR",
+            "path resolution",
+            request,
+        )
+    }
+
+    pub fn resolve_shift_output_path(
+        &mut self,
+        request: &ShiftPathRequest,
+    ) -> Result<String, String> {
+        self.call_engine(
+            "resolveShiftOutputPath",
+            "ssahdrify-cli-resolve-shift-output-path.js",
+            "Time Shift",
+            "path resolution",
+            request,
+        )
+    }
+
+    pub fn resolve_embed_output_path(
+        &mut self,
+        request: &EmbedPathRequest,
+    ) -> Result<String, String> {
+        self.call_engine(
+            "resolveEmbedOutputPath",
+            "ssahdrify-cli-resolve-embed-output-path.js",
+            "Font Embed",
+            "path resolution",
             request,
         )
     }
@@ -205,6 +264,7 @@ impl CliEngine {
             "convertShift",
             "ssahdrify-cli-convert-shift.js",
             "Time Shift",
+            "conversion",
             request,
         )
     }
@@ -214,6 +274,7 @@ impl CliEngine {
             "planRename",
             "ssahdrify-cli-plan-rename.js",
             "Batch Rename",
+            "plan",
             request,
         )
     }
@@ -226,6 +287,7 @@ impl CliEngine {
             "planFontEmbed",
             "ssahdrify-cli-plan-font-embed.js",
             "Font Embed",
+            "plan",
             request,
         )
     }
@@ -238,15 +300,17 @@ impl CliEngine {
             "applyFontEmbed",
             "ssahdrify-cli-apply-font-embed.js",
             "Font Embed",
+            "embed",
             request,
         )
     }
 
     fn call_engine<Request, Response>(
         &mut self,
-        function_name: &str,
+        function_name: &'static str,
         script_name: &'static str,
         label: &str,
+        step: &str,
         request: &Request,
     ) -> Result<Response, String>
     where
@@ -254,9 +318,16 @@ impl CliEngine {
         Response: DeserializeOwned,
     {
         let request_json = serde_json::to_string(request)
-            .map_err(|err| format!("failed to encode request: {err}"))?;
-        // Build the JS call by string concatenation. Three load-bearing
-        // invariants make this safe:
+            .map_err(|err| format!("failed to encode {label} request: {err}"))?;
+        // Stash payload on globalThis instead of inlining it into the
+        // call script. V8's stack-trace formatter echoes the source
+        // line verbatim in JsError display — inlining a 10 MB ASS body
+        // into the call script would flood stderr (potentially MB) on
+        // any JS-side exception. A short call referencing
+        // `globalThis.__ssahdrifyCliPayload` keeps stack traces readable.
+        //
+        // Three load-bearing invariants for the JSON-into-source
+        // construction below:
         //   1. serde_json::to_string emits RFC 8259 JSON, a strict
         //      subset of valid JS expression syntax (escapes ", \, and
         //      control chars; emits U+2028/U+2029 as literal bytes,
@@ -264,20 +335,31 @@ impl CliEngine {
         //   2. V8 14.7 (deno_core 0.400) is well past ES2019.
         //   3. function_name comes from a hardcoded &'static str at
         //      every call site — never user-controlled.
-        // If any invariant shifts (downgrade to pre-ES2019, swap
-        // serde_json for a non-JSON-superset writer, or accept dynamic
-        // function_name), move to a v8 function-call path that takes
-        // the argument as a v8::Value instead.
-        let script = format!("globalThis.ssaHdrifyCliEngine.{function_name}({request_json})");
+        // If any invariant shifts, move to a v8 function-call path
+        // that takes the argument as a v8::Value instead.
+        let payload_setup = format!("globalThis.__ssahdrifyCliPayload = {request_json};");
+        self.runtime
+            .execute_script("ssahdrify-cli-payload.js", payload_setup)
+            .map_err(|err| format!("{label} {step} failed: {err}"))?;
 
+        let script = format!(
+            "globalThis.ssaHdrifyCliEngine.{function_name}(globalThis.__ssahdrifyCliPayload)"
+        );
         let result = self
             .runtime
             .execute_script(script_name, script)
-            .map_err(|err| format!("{label} conversion failed: {err}"))?;
+            .map_err(|err| format!("{label} {step} failed: {err}"))?;
+
+        // Clear the global so V8 doesn't retain large JSON payloads
+        // across calls. Best-effort: cleanup failures aren't surfaced.
+        let _ = self.runtime.execute_script(
+            "ssahdrify-cli-payload-cleanup.js",
+            "globalThis.__ssahdrifyCliPayload = undefined;",
+        );
 
         deno_core::scope!(scope, &mut self.runtime);
         let local = v8::Local::new(scope, result);
         serde_v8::from_v8(scope, local)
-            .map_err(|err| format!("failed to decode {label} conversion result: {err}"))
+            .map_err(|err| format!("failed to decode {label} {step} result: {err}"))
     }
 }

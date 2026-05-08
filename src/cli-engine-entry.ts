@@ -27,6 +27,7 @@ import {
 } from "./features/font-embed/font-collector";
 import { deriveShiftedPath, shiftSubtitles } from "./features/timing-shift/timing-engine";
 import { extractLangFromBaseName, LANG_TAGS } from "./lib/lang-detection";
+import { assertSafeOutputFilename, assertSafeOutputPath } from "./lib/path-validation";
 import { parseSubtitle } from "./lib/subtitle-parser";
 
 export interface HdrConversionRequest {
@@ -134,6 +135,11 @@ export function resolveHdrOutputPath(request: {
 export function convertHdr(request: HdrConversionRequest): HdrConversionResult {
   const brightness = request.brightness ?? DEFAULT_BRIGHTNESS;
   const outputTemplate = request.outputTemplate ?? DEFAULT_TEMPLATE;
+  // outputPath is computed here AND in resolveHdrOutputPath; the CLI
+  // shell calls the cheap resolver first for dedup/exists checks, then
+  // calls convertHdr only for content. The duplicate compute is cheap
+  // (string ops only) and the two paths route through resolveOutputPath
+  // with identical defaults — byte equality is structurally guaranteed.
   const outputPath = resolveOutputPath(request.inputPath, outputTemplate, request.eotf);
   const fileName = request.inputPath.replace(/\\/g, "/").split("/").pop() ?? request.inputPath;
 
@@ -171,7 +177,11 @@ export function convertShift(request: ShiftConversionRequest): ShiftConversionRe
   });
 
   return {
-    outputPath: resolveShiftOutputPath(request.inputPath, request.outputTemplate, result.format),
+    outputPath: resolveShiftOutputPathInternal(
+      request.inputPath,
+      request.outputTemplate,
+      result.format
+    ),
     content: result.content,
     format: result.format,
     captionCount: result.captionCount,
@@ -221,7 +231,7 @@ export function planFontEmbed(request: FontEmbedPlanRequest): FontEmbedPlanResul
   const usages = collectFontsWithParser(request.content, parseAss);
 
   return {
-    outputPath: resolveEmbedOutputPath(request.inputPath, request.outputTemplate),
+    outputPath: resolveEmbedOutputPathInternal(request.inputPath, request.outputTemplate),
     fonts: usages.map((usage) => ({
       family: usage.key.family,
       bold: usage.key.bold,
@@ -253,7 +263,28 @@ export function applyFontEmbed(request: FontEmbedApplyRequest): FontEmbedApplyRe
   };
 }
 
-function resolveShiftOutputPath(
+/**
+ * Cheap path-only resolver for shift, used by the CLI shell to dedup
+ * outputs and skip-on-exists BEFORE invoking the heavy convert_shift.
+ * Caller MUST ensure the template does NOT contain `{format}` — that
+ * token requires content parsing (the format value comes from
+ * shiftSubtitles' parser output), which the cheap path cannot provide.
+ * The Rust shell pre-checks `args.output_template.contains("{format}")`
+ * and falls back to heavy-first ordering when present.
+ *
+ * Output is byte-identical to convertShift's returned outputPath for
+ * templates without {format}; pinned in cli-engine-roundtrip.test.ts.
+ */
+export function resolveShiftOutputPath(request: {
+  inputPath: string;
+  outputTemplate?: string;
+}): string {
+  // Empty placeholder for `format` is safe: with no `{format}` token
+  // in the template, the substitution is a no-op.
+  return resolveShiftOutputPathInternal(request.inputPath, request.outputTemplate, "");
+}
+
+function resolveShiftOutputPathInternal(
   inputPath: string,
   template: string | undefined,
   format: string
@@ -287,18 +318,13 @@ function resolveShiftOutputPath(
     .replace(/\{format\}/g, format.toLowerCase())
     .replace(/\.{2,}/g, ".");
 
-  if (!outputName.trim()) {
-    throw new Error("Template resolves to empty filename");
-  }
-  // eslint-disable-next-line no-control-regex -- reject control characters in output filenames
-  if (/[\x00-\x1f\x7f<>:"|?*\\/]/.test(outputName)) {
-    throw new Error(`Output filename contains illegal characters: ${outputName}`);
-  }
-
+  // Shared filename + path safety checks (reserved names, traversal,
+  // MAX_PATH, self-overwrite). Same helpers used by HDR's resolver and
+  // by GUI's deriveShiftedPath / deriveEmbeddedPath.
+  assertSafeOutputFilename(outputName);
   const outputPath = `${dir}/${outputName}`;
-  if (outputPath.toLowerCase() === normalized.toLowerCase()) {
-    throw new Error("Output path is the same as input (would overwrite source file)");
-  }
+  assertSafeOutputPath(outputPath, normalized);
+
   return usedBackslash ? outputPath.replace(/\//g, "\\") : outputPath;
 }
 
@@ -306,7 +332,22 @@ function isAbsoluteInputPath(path: string): boolean {
   return path.startsWith("/") || path.startsWith("\\") || /^[A-Za-z]:[\\/]/.test(path);
 }
 
-function resolveEmbedOutputPath(inputPath: string, template = "{name}.embed.ass"): string {
+/**
+ * Cheap path-only resolver for embed, used by the CLI shell to dedup
+ * outputs and skip-on-exists BEFORE planFontEmbed parses the ASS.
+ * No format dependency, so always works.
+ *
+ * Output is byte-identical to what planFontEmbed would have returned;
+ * pinned in cli-engine-roundtrip.test.ts.
+ */
+export function resolveEmbedOutputPath(request: {
+  inputPath: string;
+  outputTemplate?: string;
+}): string {
+  return resolveEmbedOutputPathInternal(request.inputPath, request.outputTemplate);
+}
+
+function resolveEmbedOutputPathInternal(inputPath: string, template = "{name}.embed.ass"): string {
   const usedBackslash = inputPath.includes("\\");
   const normalized = inputPath.replace(/\\/g, "/");
   const lastSlash = normalized.lastIndexOf("/");
@@ -327,18 +368,12 @@ function resolveEmbedOutputPath(inputPath: string, template = "{name}.embed.ass"
     .replace(/\{ext\}/g, ".ass")
     .replace(/\.{2,}/g, ".");
 
-  if (!outputName.trim()) {
-    throw new Error("Template resolves to empty filename");
-  }
-  // eslint-disable-next-line no-control-regex -- reject control characters in output filenames
-  if (/[\x00-\x1f\x7f<>:"|?*\\/]/.test(outputName)) {
-    throw new Error(`Output filename contains illegal characters: ${outputName}`);
-  }
-
+  // Shared filename + path safety checks. See note in
+  // resolveShiftOutputPathInternal.
+  assertSafeOutputFilename(outputName);
   const outputPath = `${dir}/${outputName}`;
-  if (outputPath.toLowerCase() === normalized.toLowerCase()) {
-    throw new Error("Output path is the same as input (would overwrite source file)");
-  }
+  assertSafeOutputPath(outputPath, normalized);
+
   return usedBackslash ? outputPath.replace(/\//g, "\\") : outputPath;
 }
 

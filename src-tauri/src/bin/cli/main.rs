@@ -294,6 +294,7 @@ impl CommandReport {
 }
 
 fn main() -> ExitCode {
+    init_logger();
     match run() {
         Ok(code) => code,
         Err(err) => {
@@ -301,6 +302,19 @@ fn main() -> ExitCode {
             ExitCode::from(2)
         }
     }
+}
+
+// Wire a stderr-targeted env_logger so library-side `log::warn!` and
+// `log::error!` calls (dropzone path-rejections, font-scan canonicalize
+// failures, font-kit lookup details) become visible to CLI users.
+// Without an init, the log crate's default null logger discards every
+// message, leaving the user blind to "why did expand_dropped_paths
+// return empty?"-class issues. Default level `warn` keeps the happy
+// path quiet; `RUST_LOG=info` opens diagnostic detail.
+fn init_logger() {
+    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn"))
+        .target(env_logger::Target::Stderr)
+        .try_init();
 }
 
 fn run() -> Result<ExitCode, String> {
@@ -476,13 +490,11 @@ fn run_shift(globals: &GlobalOptions, args: ShiftArgs) -> Result<ExitCode, Strin
         .map(absolute_path)
         .transpose()?;
     let mut report = CommandReport::new("shift");
-    // Same first-wins dedup policy as run_hdr. Note: shift does NOT
-    // pre-resolve output paths before engine.convert_shift — its
-    // template can include {format}, whose value comes from parsing
-    // content. So dedup runs AFTER convert here, unlike HDR which
-    // dedups BEFORE via resolve_hdr_output_path. Acceptable cost: the
-    // wasted JS work only kicks in on duplicate-output batches with
-    // shift, which are rare in practice.
+    // Same first-wins dedup policy as run_hdr. Shift now does
+    // cheap-first dedup for the common case (default template, no
+    // `{format}` token). Templates that reference `{format}` need
+    // parsing content to resolve and fall back to heavy-first ordering
+    // inside process_shift_file_heavy_first.
     let mut seen_outputs = HashSet::new();
 
     for file in &args.files {
@@ -532,11 +544,135 @@ fn process_shift_file(
     file: &Path,
     seen_outputs: &mut HashSet<String>,
 ) -> FileReport {
+    // Dispatch by template shape: `{format}` substitution requires
+    // parsing the file (the value comes from shiftSubtitles' detected
+    // format), so cheap-first ordering doesn't apply to those. The
+    // common case (default template `{name}.shifted{ext}` and any
+    // user template lacking `{format}`) goes through the cheap path,
+    // mirroring HDR's process_hdr_file.
+    if args.output_template.contains("{format}") {
+        process_shift_file_heavy_first(globals, args, context, engine, file, seen_outputs)
+    } else {
+        process_shift_file_cheap_first(globals, args, context, engine, file, seen_outputs)
+    }
+}
+
+fn process_shift_file_cheap_first(
+    globals: &GlobalOptions,
+    args: &ShiftArgs,
+    context: &ShiftProcessContext<'_>,
+    engine: &mut engine::CliEngine,
+    file: &Path,
+    seen_outputs: &mut HashSet<String>,
+) -> FileReport {
     let input_path = match absolute_path(file) {
         Ok(path) => path,
+        Err(error) => return failed_report(file, None, None, error),
+    };
+    let input = display_path(&input_path);
+
+    // Cheap path resolution before any I/O or V8 work.
+    let path_request = engine::ShiftPathRequest {
+        input_path: input.clone(),
+        output_template: args.output_template.clone(),
+    };
+    let resolved_output_path = match engine.resolve_shift_output_path(&path_request) {
+        Ok(path) => path,
+        Err(error) => return failed_report(&input_path, None, None, error),
+    };
+
+    let output_path = match relocate_output_path(&resolved_output_path, context.output_dir) {
+        Ok(path) => path,
+        Err(error) => return failed_report(&input_path, None, None, error),
+    };
+    let output = display_path(&output_path);
+
+    if !seen_outputs.insert(normalize_output_key(&output_path)) {
+        return failed_report(
+            &input_path,
+            Some(output),
+            None,
+            "duplicate output path in planned batch".to_string(),
+        );
+    }
+
+    if output_path_exists(&output_path) && !globals.overwrite {
+        return FileReport {
+            input,
+            output: Some(output),
+            encoding: None,
+            status: FileStatus::Skipped,
+            error: Some("output exists; pass --overwrite to replace it".to_string()),
+        };
+    }
+
+    let read_result = match app_lib::encoding::read_text_detect_encoding(input.clone()) {
+        Ok(result) => result,
+        Err(error) => return failed_report(&input_path, Some(output), None, error),
+    };
+
+    if globals.dry_run {
+        return FileReport {
+            input,
+            output: Some(output),
+            encoding: Some(read_result.encoding),
+            status: FileStatus::Planned,
+            error: None,
+        };
+    }
+
+    let request = engine::ShiftConversionRequest {
+        input_path: input.clone(),
+        content: read_result.text,
+        offset_ms: context.offset_ms,
+        threshold_ms: context.threshold_ms,
+        output_template: args.output_template.clone(),
+    };
+
+    let conversion = match engine.convert_shift(&request) {
+        Ok(result) => result,
         Err(error) => {
-            return failed_report(file, None, None, error);
+            return failed_report(&input_path, Some(output), Some(read_result.encoding), error);
         }
+    };
+
+    if globals.verbose && !globals.json && !globals.quiet {
+        println!(
+            "shift: {} captions, {} shifted, format {}",
+            conversion.caption_count,
+            conversion.shifted_count,
+            conversion.format.to_uppercase()
+        );
+    }
+
+    if let Err(error) = write_output(&output_path, &conversion.content, globals.overwrite) {
+        return failed_report(&input_path, Some(output), Some(read_result.encoding), error);
+    }
+
+    FileReport {
+        input,
+        output: Some(output),
+        encoding: Some(read_result.encoding),
+        status: FileStatus::Written,
+        error: None,
+    }
+}
+
+fn process_shift_file_heavy_first(
+    globals: &GlobalOptions,
+    args: &ShiftArgs,
+    context: &ShiftProcessContext<'_>,
+    engine: &mut engine::CliEngine,
+    file: &Path,
+    seen_outputs: &mut HashSet<String>,
+) -> FileReport {
+    // Original heavy-first ordering, used only when the template
+    // contains `{format}`. Read + parse + shift first; only then
+    // resolve and dedup. Wasted work on rerun-skip and dedup-fail
+    // batches is accepted because `{format}` templates are rare.
+    let input_path = match absolute_path(file) {
+        Ok(path) => path,
+        Err(error) => return failed_report(file, None, None, error),
     };
     let input = display_path(&input_path);
 
@@ -622,7 +758,12 @@ fn process_shift_file(
 fn run_embed(globals: &GlobalOptions, args: EmbedArgs) -> Result<ExitCode, String> {
     app_lib::fonts::init_system_dirs();
     let use_user_fonts = !args.font_dirs.is_empty() || !args.font_files.is_empty();
-    let _font_db_dir = if use_user_fonts {
+    // Skip the user-font scan in dry-run mode. process_embed_file's
+    // cheap-first ordering returns Planned BEFORE reading content or
+    // resolving fonts, so dry-run never needs the SQLite source index.
+    // Saves a 17k-font-folder scan when the user passes --font-dir
+    // alongside --dry-run just to preview output paths.
+    let _font_db_dir = if use_user_fonts && !globals.dry_run {
         Some(init_cli_font_sources(globals, &args)?)
     } else {
         None
@@ -662,8 +803,13 @@ fn init_cli_font_sources(
     globals: &GlobalOptions,
     args: &EmbedArgs,
 ) -> Result<TempFontDbDir, String> {
-    let db_dir = create_cli_font_db_dir()?;
-    app_lib::fonts::init_user_font_db(&db_dir)?;
+    // Wrap the temp dir in TempFontDbDir IMMEDIATELY so any `?` in the
+    // init/import sequence below drops the guard and runs the cleanup.
+    // The earlier shape (return Ok(TempFontDbDir(db_dir)) only at the
+    // end) leaked the directory on every failure between create and
+    // return.
+    let guard = TempFontDbDir(create_cli_font_db_dir()?);
+    app_lib::fonts::init_user_font_db(&guard.0)?;
 
     for (index, dir) in args.font_dirs.iter().enumerate() {
         let dir = absolute_path(dir)?;
@@ -687,7 +833,7 @@ fn init_cli_font_sources(
         }
     }
 
-    Ok(TempFontDbDir(db_dir))
+    Ok(guard)
 }
 
 fn create_cli_font_db_dir() -> Result<PathBuf, String> {
@@ -762,9 +908,65 @@ fn process_embed_file(
         );
     }
 
+    // Cheap-first ordering (mirrors process_hdr_file). Resolve output
+    // path BEFORE reading content or running plan_font_embed (which
+    // parses the entire ASS via ass-compiler — non-trivial cost on
+    // large files). Saves the read + parse + V8 round-trip on dedup,
+    // exists-skip, and dry-run paths. Both resolve_embed_output_path
+    // and plan_font_embed route through the same JS resolveOutputPath
+    // helper with identical defaults, so the resolved path is byte-
+    // identical to what plan_font_embed would have returned.
+    let path_request = engine::EmbedPathRequest {
+        input_path: input.clone(),
+        output_template: args.output_template.clone(),
+    };
+    let resolved_output_path = match engine.resolve_embed_output_path(&path_request) {
+        Ok(path) => path,
+        Err(error) => return failed_report(&input_path, None, None, error),
+    };
+
+    let output_path = match relocate_output_path(&resolved_output_path, output_dir) {
+        Ok(path) => path,
+        Err(error) => return failed_report(&input_path, None, None, error),
+    };
+    let output = display_path(&output_path);
+
+    if !seen_outputs.insert(normalize_output_key(&output_path)) {
+        return failed_report(
+            &input_path,
+            Some(output),
+            None,
+            "duplicate output path in planned batch".to_string(),
+        );
+    }
+
+    if output_path_exists(&output_path) && !globals.overwrite {
+        return FileReport {
+            input,
+            output: Some(output),
+            encoding: None,
+            status: FileStatus::Skipped,
+            error: Some("output exists; pass --overwrite to replace it".to_string()),
+        };
+    }
+
+    if globals.dry_run {
+        // Dry-run for embed reports the planned output path without
+        // doing font discovery or content parsing — matches HDR/Shift
+        // dry-run behavior and avoids the surprise of "dry-run scanned
+        // 17k fonts then planned no actual write."
+        return FileReport {
+            input,
+            output: Some(output),
+            encoding: None,
+            status: FileStatus::Planned,
+            error: None,
+        };
+    }
+
     let read_result = match app_lib::encoding::read_text_detect_encoding(input.clone()) {
         Ok(result) => result,
-        Err(error) => return failed_report(&input_path, None, None, error),
+        Err(error) => return failed_report(&input_path, Some(output), None, error),
     };
 
     let plan_request = engine::FontEmbedPlanRequest {
@@ -775,36 +977,9 @@ fn process_embed_file(
     let plan = match engine.plan_font_embed(&plan_request) {
         Ok(result) => result,
         Err(error) => {
-            return failed_report(&input_path, None, Some(read_result.encoding), error);
+            return failed_report(&input_path, Some(output), Some(read_result.encoding), error);
         }
     };
-
-    let output_path = match relocate_output_path(&plan.output_path, output_dir) {
-        Ok(path) => path,
-        Err(error) => {
-            return failed_report(&input_path, None, Some(read_result.encoding), error);
-        }
-    };
-    let output = display_path(&output_path);
-
-    if !seen_outputs.insert(normalize_output_key(&output_path)) {
-        return failed_report(
-            &input_path,
-            Some(output),
-            Some(read_result.encoding),
-            "duplicate output path in planned batch".to_string(),
-        );
-    }
-
-    if output_path_exists(&output_path) && !globals.overwrite {
-        return FileReport {
-            input,
-            output: Some(output),
-            encoding: Some(read_result.encoding),
-            status: FileStatus::Skipped,
-            error: Some("output exists; pass --overwrite to replace it".to_string()),
-        };
-    }
 
     let resolved_fonts = match resolve_embed_fonts(globals, args, use_user_fonts, &plan.fonts) {
         Ok(fonts) => fonts,
@@ -821,16 +996,6 @@ fn process_embed_file(
             glyph_count,
             resolved_fonts.len()
         );
-    }
-
-    if globals.dry_run {
-        return FileReport {
-            input,
-            output: Some(output),
-            encoding: Some(read_result.encoding),
-            status: FileStatus::Planned,
-            error: None,
-        };
     }
 
     let subset_payloads = match subset_resolved_fonts(globals, args, &resolved_fonts) {
@@ -973,6 +1138,11 @@ fn resolve_embed_font(
     app_lib::fonts::find_system_font(font.family.clone(), font.bold, font.italic)
         .map(|found| Some((found.path, found.index)))
         .or_else(|error| {
+            // String-coupled to fonts.rs's `format!("Font not found: ...)`.
+            // Any change to that prefix in fonts.rs MUST update this
+            // matcher; otherwise a "miss" becomes a hard Err and breaks
+            // --on-missing warn semantics. fonts.rs has the matching
+            // WHY comment at the format-string site.
             if error.starts_with("Font not found:") {
                 Ok(None)
             } else {
@@ -1152,13 +1322,17 @@ fn duplicate_rename_output_keys(rows: &[engine::RenamePlanRow]) -> HashSet<Strin
     // file into a stable name. Every participant in a duplicate set is
     // flagged here and refuses to act in process_rename_pair. See
     // ssahdrify_cli_design.md § Cross-cutting 行为.
+    //
+    // No-op rows DO claim their output key — a no-op row's output is a
+    // real file already on disk, so a non-no-op row targeting the same
+    // key would silently overwrite it under --overwrite. The no-op row
+    // itself is still skipped at process_rename_pair (no_op branch
+    // returns Skipped before the duplicate check); the conflict signal
+    // lands on the colliding non-no-op rows.
     let mut seen = HashSet::new();
     let mut duplicates = HashSet::new();
 
     for row in rows {
-        if row.no_op {
-            continue;
-        }
         let key = normalize_output_key(Path::new(&row.output_path));
         if !seen.insert(key.clone()) {
             duplicates.insert(key);
@@ -1492,6 +1666,16 @@ fn parse_timestamp_ms(input: &str) -> Result<i64, String> {
     }
 
     let hours = parse_timestamp_part(parts[0], "hours")?;
+    // Bound hours so the multiply below cannot wrap i64. 100k hours
+    // (~11 years) is generous beyond any subtitle reality and keeps
+    // hours * 3_600_000 well within i64 range. Without this cap a
+    // pathological --after value like "9999999999999:00:00" would
+    // panic in debug builds and silently wrap in release.
+    if hours > 100_000 {
+        return Err(format!(
+            "invalid timestamp '{trimmed}'; hours value too large"
+        ));
+    }
     let minutes = parse_timestamp_part(parts[1], "minutes")?;
     let (seconds_text, millis_text) = parts[2]
         .split_once('.')
@@ -1600,6 +1784,66 @@ mod tests {
         assert!(parse_timestamp_ms("10:00").is_err());
         assert!(parse_timestamp_ms("00:60:00").is_err());
         assert!(parse_timestamp_ms("00:00:00.1234").is_err());
+    }
+
+    #[test]
+    fn parse_duration_ms_caps_extreme_values() {
+        // Far-future hours: f64 multiplication produces a value beyond
+        // MAX_SHIFT_OFFSET_MS — bound check fires before the as-cast
+        // saturates. Pre-N4 fix this would have wrapped via
+        // i64::MIN.abs() and bypassed the cap.
+        assert!(parse_duration_ms("+9999999999999h").is_err());
+        // Negative analogue (the original wrap path).
+        assert!(parse_duration_ms("-9999999999999h").is_err());
+        // Above-cap seconds.
+        assert!(parse_duration_ms("+999999999999s").is_err());
+    }
+
+    #[test]
+    fn parse_timestamp_ms_caps_extreme_hours() {
+        // 100k hours (~11 years) is the upper bound; above it the cap
+        // fires before hours * 3_600_000 can wrap i64.
+        assert!(parse_timestamp_ms("100001:00:00").is_err());
+        assert!(parse_timestamp_ms("9999999999999:00:00").is_err());
+        // Just under the cap still parses cleanly.
+        assert_eq!(
+            parse_timestamp_ms("100000:00:00").unwrap(),
+            100_000_i64 * 3_600_000
+        );
+    }
+
+    #[test]
+    fn rename_dedup_flags_non_no_op_against_no_op_with_same_target() {
+        // Concrete repro for round-2 N-R2-1: row 0 is a no-op (subtitle
+        // already correctly named), row 1 wants to rename a different
+        // subtitle onto that same target. The dedup must flag the
+        // collision so process_rename_pair's --overwrite path doesn't
+        // silently destroy row 0's existing file.
+        let rows = vec![
+            engine::RenamePlanRow {
+                input_path: "C:\\Subs\\Episode.ass".to_string(),
+                output_path: "C:\\Subs\\Episode.ass".to_string(),
+                video_path: "C:\\Subs\\Episode.mkv".to_string(),
+                no_op: true,
+            },
+            engine::RenamePlanRow {
+                input_path: "C:\\Subs\\episode.tc.ass".to_string(),
+                output_path: "C:\\Subs\\Episode.ass".to_string(),
+                video_path: "C:\\Subs\\Episode.mkv".to_string(),
+                no_op: false,
+            },
+        ];
+
+        let duplicates = duplicate_rename_output_keys(&rows);
+        let expected_key = if cfg!(windows) {
+            "c:/subs/episode.ass"
+        } else {
+            "C:/Subs/Episode.ass"
+        };
+        assert!(
+            duplicates.contains(expected_key),
+            "no-op row's target should be claimed in the seen set"
+        );
     }
 
     #[test]

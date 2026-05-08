@@ -16,6 +16,7 @@ import {
   type Caption,
   type SubtitleFormat,
 } from "../../lib/subtitle-parser";
+import { assertSafeOutputFilename, assertSafeOutputPath } from "../../lib/path-validation";
 
 export type { Caption, SubtitleFormat };
 export { formatDisplayTime, parseDisplayTime };
@@ -148,6 +149,12 @@ export function deriveShiftedPath(inputPath: string): string {
     baseName = baseName.slice(0, -".shifted".length);
   }
   const outputName = `${baseName}.shifted${ext}`;
+  // Apply the shared safety checks. Before this extraction, shift only
+  // verified the input was absolute; reserved names, `..` segments,
+  // and MAX_PATH overflow slipped through and would surface as
+  // unhelpful OS errors at write time. Now consistent with HDR / Embed.
+  assertSafeOutputFilename(outputName);
   const outputPath = dir ? `${dir}/${outputName}` : outputName;
+  assertSafeOutputPath(outputPath, normalized);
   return usedBackslash ? outputPath.replace(/\//g, "\\") : outputPath;
 }

@@ -15,7 +15,7 @@
  */
 import { describe, it, expect } from "vitest";
 
-import { convertHdr, convertShift } from "./cli-engine-entry";
+import { convertHdr, convertShift, planFontEmbed, planRename } from "./cli-engine-entry";
 import { DEFAULT_BRIGHTNESS, type Eotf } from "./features/hdr-convert/color-engine";
 import { processAssContent } from "./features/hdr-convert/ass-processor";
 import {
@@ -27,6 +27,12 @@ import {
 } from "./features/hdr-convert/srt-converter";
 import { DEFAULT_TEMPLATE, resolveOutputPath } from "./features/hdr-convert/output-naming";
 import { deriveShiftedPath, shiftSubtitles } from "./features/timing-shift/timing-engine";
+import { deriveEmbeddedPath } from "./features/font-embed/font-embedder";
+import {
+  buildPairings,
+  deriveRenameOutputPath,
+  parseFilename,
+} from "./features/batch-rename/pairing-engine";
 import { parseSubtitle } from "./lib/subtitle-parser";
 
 // ── Fixtures ─────────────────────────────────────────────
@@ -181,5 +187,74 @@ describe("Time shift — GUI ↔ CLI byte equivalence", () => {
 
     expect(cli.outputPath).toBe(deriveShiftedPath(input));
     expect(cli.content).toBe(guiResult.content);
+  });
+});
+
+// Helper: extract bare filename from a Windows or POSIX path.
+function fileNameOf(path: string): string {
+  const normalized = path.replace(/\\/g, "/");
+  const slash = normalized.lastIndexOf("/");
+  return slash >= 0 ? normalized.slice(slash + 1) : normalized;
+}
+
+describe("Rename plan — GUI ↔ CLI byte equivalence", () => {
+  const video = "C:\\media\\[Group][Show][01][1080p].mkv";
+  const subSc = "C:\\media\\[Group][Show][01][1080p].sc.ass";
+  const subTc = "C:\\media\\[Group][Show][01][1080p].tc.ass";
+
+  it("auto mode produces the same outputPath the GUI's BatchRename flow would write", () => {
+    const cli = planRename({
+      paths: [video, subSc, subTc],
+      mode: "copy_to_video",
+      langs: "auto",
+    });
+
+    // GUI replay (BatchRename.tsx): parseFilename → buildPairings → take
+    // selected rows → deriveRenameOutputPath. Both wrappers route
+    // through pairing-engine, so byte equality is structural — this
+    // test pins it against drift in the CLI wrapper's call sequence.
+    const guiVideos = [video].map((p) => parseFilename(p, fileNameOf(p)));
+    const guiSubtitles = [subSc, subTc].map((p) => parseFilename(p, fileNameOf(p)));
+    const guiOutputs = buildPairings(guiVideos, guiSubtitles)
+      .filter((row) => row.selected && row.video && row.subtitle)
+      .map((row) =>
+        deriveRenameOutputPath(row.video!.path, row.subtitle!.path, "copy_to_video", null)
+      );
+
+    expect(cli.pairings.map((p) => p.outputPath)).toEqual(guiOutputs);
+  });
+});
+
+describe("Font embed plan — GUI ↔ CLI byte equivalence", () => {
+  const ASS_FOR_EMBED = [
+    "[Script Info]",
+    "Title: Embed Roundtrip",
+    "",
+    "[V4+ Styles]",
+    "Format: Name, Fontname, Fontsize, Bold, Italic",
+    "Style: Default,Arial,20,0,0",
+    "",
+    "[Events]",
+    "Format: Layer, Start, End, Style, Text",
+    "Dialogue: 0,0:00:00.00,0:00:01.00,Default,Hello",
+    "",
+  ].join("\n");
+
+  it("default template produces the same outputPath the GUI's deriveEmbeddedPath would write", () => {
+    const inputPath = "C:\\subs\\episode.ass";
+
+    // CLI uses cli-engine-entry's resolveEmbedOutputPath for the
+    // default "{name}.embed.ass" template; GUI uses deriveEmbeddedPath
+    // which produces "{name}.embedded.ass". They differ deliberately
+    // (CLI defaults to a shorter infix, GUI defaults to the longer
+    // one) — but if a caller passes the GUI's "{name}.embedded.ass"
+    // template explicitly, the two paths must match exactly.
+    const cli = planFontEmbed({
+      inputPath,
+      content: ASS_FOR_EMBED,
+      outputTemplate: "{name}.embedded.ass",
+    });
+
+    expect(cli.outputPath).toBe(deriveEmbeddedPath(inputPath));
   });
 });

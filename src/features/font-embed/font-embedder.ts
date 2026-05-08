@@ -337,6 +337,8 @@ export function aggregateFonts(perFile: Map<string, FileAnalysis>): {
   return { infos: aggInfos, usages: aggUsages };
 }
 
+import { assertSafeOutputFilename, assertSafeOutputPath } from "../../lib/path-validation";
+
 /**
  * Derive the `.embedded.ass` output path for a given input ASS path.
  *
@@ -371,7 +373,13 @@ export function deriveEmbeddedPath(inputPath: string): string {
   // Output is always .ass — the embed step rebuilds an ASS-format file
   // regardless of whether the input was .ass or .ssa.
   const outputName = `${baseName}.embedded.ass`;
+  // Apply the shared safety checks (reserved names, traversal,
+  // MAX_PATH, self-overwrite). Before this extraction, embed only
+  // wrapped the input's separator style; the strict checks lived in
+  // HDR's resolver only.
+  assertSafeOutputFilename(outputName);
   const outputPath = dir ? `${dir}/${outputName}` : outputName;
+  assertSafeOutputPath(outputPath, normalized);
   return usedBackslash ? outputPath.replace(/\//g, "\\") : outputPath;
 }
 
