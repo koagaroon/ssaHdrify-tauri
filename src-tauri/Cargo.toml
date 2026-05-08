@@ -7,6 +7,12 @@ license = "GPL-3.0-or-later"
 repository = "https://github.com/koagaroon/ssaHdrify-tauri"
 edition = "2021"
 rust-version = "1.77.2"
+# Required because the crate now ships two bin targets (the implicit
+# `ssahdrify` GUI binary from src/main.rs + the explicit `[[bin]]`
+# entry for `ssahdrify-cli`). Without `default-run`, `cargo run` and
+# `tauri build` fail with "failed to find main binary". Tauri's
+# bundle pipeline picks up this default.
+default-run = "ssahdrify"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
