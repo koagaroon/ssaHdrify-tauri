@@ -437,7 +437,7 @@ fn process_hdr_file(
         );
     }
 
-    if output_path_exists(&output_path) && !globals.overwrite {
+    if output_path_exists(globals, &output_path) && !globals.overwrite {
         return FileReport {
             input,
             output: Some(output),
@@ -483,7 +483,12 @@ fn process_hdr_file(
         }
     };
 
-    if let Err(error) = write_output(&output_path, &conversion.content, globals.overwrite) {
+    if let Err(error) = write_output(
+        globals,
+        &output_path,
+        &conversion.content,
+        globals.overwrite,
+    ) {
         return failed_report(&input_path, Some(output), Some(read_result.encoding), error);
     }
 
@@ -600,7 +605,7 @@ fn shift_dedup_and_exists_check(
             "duplicate output path in planned batch".to_string(),
         ));
     }
-    if output_path_exists(output_path) && !globals.overwrite {
+    if output_path_exists(globals, output_path) && !globals.overwrite {
         return Some(FileReport {
             input: input.to_string(),
             output: Some(output.to_string()),
@@ -721,7 +726,12 @@ fn process_shift_file_cheap_first(
         );
     }
 
-    if let Err(error) = write_output(&output_path, &conversion.content, globals.overwrite) {
+    if let Err(error) = write_output(
+        globals,
+        &output_path,
+        &conversion.content,
+        globals.overwrite,
+    ) {
         return failed_report(&input_path, Some(output), Some(read_result.encoding), error);
     }
 
@@ -825,7 +835,12 @@ fn process_shift_file_heavy_first(
         );
     }
 
-    if let Err(error) = write_output(&output_path, &conversion.content, globals.overwrite) {
+    if let Err(error) = write_output(
+        globals,
+        &output_path,
+        &conversion.content,
+        globals.overwrite,
+    ) {
         return failed_report(&input_path, Some(output), Some(read_result.encoding), error);
     }
 
@@ -919,7 +934,7 @@ fn init_cli_font_sources(
                         summary.total, summary.added, summary.duplicated
                     ),
                     format!(
-                        "字体文件：扫描 {} 个字体，{} 个已添加,{} 个已去重",
+                        "字体文件：扫描 {} 个字体，{} 个已添加，{} 个已去重",
                         summary.total, summary.added, summary.duplicated
                     ),
                 )
@@ -1041,7 +1056,7 @@ fn process_embed_file(
         );
     }
 
-    if output_path_exists(&output_path) && !globals.overwrite {
+    if output_path_exists(globals, &output_path) && !globals.overwrite {
         return FileReport {
             input,
             output: Some(output),
@@ -1158,7 +1173,7 @@ fn process_embed_file(
         );
     }
 
-    if let Err(error) = write_output(&output_path, &applied.content, globals.overwrite) {
+    if let Err(error) = write_output(globals, &output_path, &applied.content, globals.overwrite) {
         return failed_report(&input_path, Some(output), Some(read_result.encoding), error);
     }
 
@@ -1440,7 +1455,7 @@ fn process_rename_pair(
         );
     }
 
-    if output_path_exists(&output_path) && !globals.overwrite {
+    if output_path_exists(globals, &output_path) && !globals.overwrite {
         return FileReport {
             input,
             output: Some(output),
@@ -1477,9 +1492,9 @@ fn process_rename_pair(
     }
 
     let operation_result = if args.mode.is_copy() {
-        copy_file_output(&input_path, &output_path, globals.overwrite)
+        copy_file_output(globals, &input_path, &output_path, globals.overwrite)
     } else {
-        rename_file_output(&input_path, &output_path, globals.overwrite)
+        rename_file_output(globals, &input_path, &output_path, globals.overwrite)
     };
 
     if let Err(error) = operation_result {
@@ -1688,6 +1703,11 @@ fn relocate_output_path(path: &str, output_dir: Option<&Path>) -> Result<PathBuf
     // Re-validate length on the relocated path. The JS validators saw
     // the pre-relocation path and signed off; relocation can grow it
     // beyond MAX_PATH if --output-dir itself is long.
+    //
+    // Count UTF-16 code units (NOT UTF-8 bytes), matching Windows
+    // MAX_PATH semantics. CJK characters take 3 bytes in UTF-8 but
+    // typically 1 UTF-16 code unit, so a `display.len()` (byte count)
+    // would over-restrict CJK paths the OS would happily accept.
     let display = relocated.to_string_lossy();
     let lower = display.to_lowercase();
     let is_long_local = lower.starts_with("\\\\?\\") && !lower.starts_with("\\\\?\\unc\\")
@@ -1697,16 +1717,16 @@ fn relocate_output_path(path: &str, output_dir: Option<&Path>) -> Result<PathBuf
     } else {
         RELOCATED_PATH_MAX_LEN
     };
-    if display.len() > cap {
+    let len = display.encode_utf16().count();
+    if len > cap {
         return Err(format!(
-            "relocated output path is too long ({} chars, max {cap}); shorten --output-dir",
-            display.len()
+            "relocated output path is too long ({len} chars, max {cap}); shorten --output-dir"
         ));
     }
     Ok(relocated)
 }
 
-fn output_path_exists(path: &Path) -> bool {
+fn output_path_exists(globals: &GlobalOptions, path: &Path) -> bool {
     match fs::metadata(path) {
         Ok(_) => true,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => false,
@@ -1716,9 +1736,14 @@ fn output_path_exists(path: &Path) -> bool {
             // network shares with metadata-read denied). Surface a
             // stderr warning so the user sees the real cause instead of
             // a misleading "skipped: output exists" diagnostic.
+            let display = path.display();
             eprintln!(
-                "warning: stat({}) failed: {err}; treating as 'output exists'",
-                path.display()
+                "{}",
+                localize(
+                    globals,
+                    format!("warning: stat({display}) failed: {err}; treating as 'output exists'"),
+                    format!("警告：stat({display}) 失败：{err}；按「输出存在」处理"),
+                )
             );
             true
         }
@@ -1740,13 +1765,18 @@ fn output_path_exists(path: &Path) -> bool {
 //     attempt, so no race there.
 // Single-user desktop scope makes this acceptable; documented for
 // future adversarial-review eyes.
-fn write_output(path: &Path, content: &str, overwrite: bool) -> Result<(), String> {
+fn write_output(
+    globals: &GlobalOptions,
+    path: &Path,
+    content: &str,
+    overwrite: bool,
+) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| "output path has no parent directory".to_string())?;
     fs::create_dir_all(parent)
         .map_err(|err| format!("failed to create output directory: {err}"))?;
-    if overwrite && output_path_exists(path) {
+    if overwrite && output_path_exists(globals, path) {
         fs::remove_file(path)
             .map_err(|err| format!("failed to remove existing output before write: {err}"))?;
     }
@@ -1760,10 +1790,15 @@ fn write_output(path: &Path, content: &str, overwrite: bool) -> Result<(), Strin
         .map_err(|err| format!("failed to write output: {err}"))
 }
 
-fn copy_file_output(input: &Path, output: &Path, overwrite: bool) -> Result<(), String> {
+fn copy_file_output(
+    globals: &GlobalOptions,
+    input: &Path,
+    output: &Path,
+    overwrite: bool,
+) -> Result<(), String> {
     ensure_output_parent(output)?;
 
-    if overwrite && output_path_exists(output) {
+    if overwrite && output_path_exists(globals, output) {
         fs::remove_file(output)
             .map_err(|err| format!("failed to remove existing output before copy: {err}"))?;
     }
@@ -1780,9 +1815,14 @@ fn copy_file_output(input: &Path, output: &Path, overwrite: bool) -> Result<(), 
         .map_err(|err| format!("failed to copy file: {err}"))
 }
 
-fn rename_file_output(input: &Path, output: &Path, overwrite: bool) -> Result<(), String> {
+fn rename_file_output(
+    globals: &GlobalOptions,
+    input: &Path,
+    output: &Path,
+    overwrite: bool,
+) -> Result<(), String> {
     ensure_output_parent(output)?;
-    if overwrite && output_path_exists(output) {
+    if overwrite && output_path_exists(globals, output) {
         fs::remove_file(output)
             .map_err(|err| format!("failed to remove existing output before rename: {err}"))?;
     }
@@ -1995,10 +2035,11 @@ fn parse_timestamp_part(part: &str, label: &str) -> Result<i64, String> {
     if part.is_empty() || !part.chars().all(|ch| ch.is_ascii_digit()) {
         return Err(format!("invalid {label} value '{part}'"));
     }
-    // i64::MAX is 19 digits (9223372036854775807); anything longer
-    // overflows i64. Surface as "out of range" rather than a generic
-    // "invalid value" parse error so the user sees what's actually
-    // wrong with the input.
+    // i64::MAX is 19 digits (9223372036854775807). Anything > 19
+    // digits unconditionally overflows; 19-digit values may or may
+    // not fit (e.g., 9999999999999999999 is 19 digits and overflows).
+    // Both branches surface "out of range" — the > 19 pre-check just
+    // shortcuts the parse for clearly-too-large inputs.
     if part.len() > 19 {
         return Err(format!("{label} value '{part}' is out of range"));
     }
@@ -2010,11 +2051,26 @@ fn parse_timestamp_part(part: &str, label: &str) -> Result<i64, String> {
 mod tests {
     use super::{
         classify_locale, copy_file_output, create_cli_font_db_dir, duplicate_rename_output_keys,
-        engine, normalize_output_key, parse_duration_ms, parse_timestamp_ms, write_output,
-        OutputLang, TempFontDbDir, CLI_FONT_DB_FILENAME,
+        engine, normalize_output_key, parse_duration_ms, parse_timestamp_ms, relocate_output_path,
+        write_output, GlobalOptions, OutputLang, TempFontDbDir, CLI_FONT_DB_FILENAME,
     };
     use std::fs;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
+
+    /// Construct a default GlobalOptions for tests that need to call
+    /// fs-touching helpers (write_output / copy_file_output etc.) which
+    /// take `&GlobalOptions` for stat-failure warning localization.
+    fn test_globals() -> GlobalOptions {
+        GlobalOptions {
+            output_dir: None,
+            overwrite: false,
+            dry_run: false,
+            quiet: true,
+            verbose: false,
+            json: false,
+            lang: Some(OutputLang::En),
+        }
+    }
 
     #[test]
     fn classify_locale_picks_zh_for_chinese_tags() {
@@ -2184,14 +2240,15 @@ mod tests {
 
     #[test]
     fn write_output_uses_create_new_and_explicit_overwrite() {
+        let globals = test_globals();
         let dir = create_cli_font_db_dir().unwrap();
         let output = dir.join("out.ass");
 
         fs::write(&output, b"old").unwrap();
-        assert!(write_output(&output, "new", false).is_err());
+        assert!(write_output(&globals, &output, "new", false).is_err());
         assert_eq!(fs::read_to_string(&output).unwrap(), "old");
 
-        write_output(&output, "new", true).unwrap();
+        write_output(&globals, &output, "new", true).unwrap();
         assert_eq!(fs::read_to_string(&output).unwrap(), "new");
 
         let _ = fs::remove_file(&output);
@@ -2200,21 +2257,76 @@ mod tests {
 
     #[test]
     fn copy_file_output_uses_create_new_and_explicit_overwrite() {
+        let globals = test_globals();
         let dir = create_cli_font_db_dir().unwrap();
         let input = dir.join("in.ass");
         let output = dir.join("out.ass");
 
         fs::write(&input, b"copied").unwrap();
         fs::write(&output, b"old").unwrap();
-        assert!(copy_file_output(&input, &output, false).is_err());
+        assert!(copy_file_output(&globals, &input, &output, false).is_err());
         assert_eq!(fs::read_to_string(&output).unwrap(), "old");
 
-        copy_file_output(&input, &output, true).unwrap();
+        copy_file_output(&globals, &input, &output, true).unwrap();
         assert_eq!(fs::read_to_string(&output).unwrap(), "copied");
 
         let _ = fs::remove_file(&input);
         let _ = fs::remove_file(&output);
         let _ = fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn relocate_output_path_returns_input_when_no_output_dir() {
+        let result = relocate_output_path("C:\\subs\\episode.shifted.ass", None).unwrap();
+        assert_eq!(result, PathBuf::from("C:\\subs\\episode.shifted.ass"));
+    }
+
+    #[test]
+    fn relocate_output_path_joins_filename_with_output_dir() {
+        let out_dir = PathBuf::from("D:\\out");
+        let result = relocate_output_path("C:\\subs\\episode.shifted.ass", Some(&out_dir)).unwrap();
+        assert_eq!(result, out_dir.join("episode.shifted.ass"));
+    }
+
+    #[test]
+    fn relocate_output_path_rejects_overlong_relocated_path() {
+        // A 300-char path comfortably exceeds the 259-char cap.
+        let long_dir_name: String = "a".repeat(300);
+        let out_dir = PathBuf::from(format!("C:\\{long_dir_name}"));
+        let err =
+            relocate_output_path("C:\\subs\\episode.shifted.ass", Some(&out_dir)).unwrap_err();
+        assert!(
+            err.contains("relocated output path is too long"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn relocate_output_path_counts_utf16_units_not_utf8_bytes_for_cjk() {
+        // Pin the round-4 N-R4-1 fix: a CJK directory path is 200
+        // UTF-16 code units (well under 259) but ~600 UTF-8 bytes
+        // (over 259). The cap must accept this.
+        let cjk_dir: String = "字".repeat(200);
+        let out_dir = PathBuf::from(format!("C:\\{cjk_dir}"));
+        // 200 + drive prefix + filename ≈ 215 UTF-16 cu — within cap.
+        let result = relocate_output_path("C:\\subs\\episode.shifted.ass", Some(&out_dir));
+        assert!(
+            result.is_ok(),
+            "CJK path within UTF-16 cap should pass; got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn relocate_output_path_relaxes_cap_for_long_local_paths() {
+        // \\?\ prefix gets the 32766 cap. A 1000-char path exceeds
+        // the standard 259 cap but is well under the long-local cap.
+        let long_dir_name: String = "a".repeat(1000);
+        let out_dir = PathBuf::from(format!("\\\\?\\C:\\{long_dir_name}"));
+        let result = relocate_output_path("C:\\subs\\episode.shifted.ass", Some(&out_dir));
+        assert!(
+            result.is_ok(),
+            "long-local path under 32766 cap should pass; got: {result:?}"
+        );
     }
 
     #[test]

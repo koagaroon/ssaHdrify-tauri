@@ -1404,6 +1404,12 @@ pub fn import_font_directory_for_cli(
     dir: &Path,
     source_id: &str,
 ) -> Result<FontSourceImportSummary, String> {
+    // Canonicalize: the font scanner indexes by the resolved path so
+    // sources reached via different symlinks aren't double-imported.
+    // (CLI's --output-dir handling deliberately does NOT canonicalize
+    // — see absolute_path() in bin/cli/main.rs — because output paths
+    // round-trip through user-facing diagnostics where the user-typed
+    // form should be preserved. Indexing has no such constraint.)
     let canonical_dir = dir.canonicalize().map_err(|e| {
         log::warn!("canonicalize directory failed: {e}");
         "Cannot resolve directory path".to_string()

@@ -337,6 +337,14 @@ impl CliEngine {
         //      every call site — never user-controlled.
         // If any invariant shifts, move to a v8 function-call path
         // that takes the argument as a v8::Value instead.
+        //
+        // Future-field hazard: any new request struct field with f64
+        // (NaN/∞ surface as serialization errors — fail-safe), i128 /
+        // u128 (silent truncate to JS Number), or i64 / u64 outside
+        // ±2^53 (silent precision loss to JS Number) requires
+        // re-evaluating this path. Today's fields (i64 offsets bounded
+        // by MAX_SHIFT_OFFSET_MS, u16 brightness, bool, String) are
+        // all within JS Number range. Audit before adding new fields.
         let payload_setup = format!("globalThis.__ssahdrifyCliPayload = {request_json};");
         self.runtime
             .execute_script("ssahdrify-cli-payload.js", payload_setup)

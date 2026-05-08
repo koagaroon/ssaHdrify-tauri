@@ -427,22 +427,38 @@ export function deriveRenameOutputPath(
   const outputPath = normTargetDir ? `${normTargetDir}/${outName}` : outName;
 
   // Apply the shared path validators (Windows reserved name / path
-  // traversal / MAX_PATH / self-overwrite). Reference for the dir-escape
-  // and self-overwrite checks is mode-dependent: rename keeps output in
-  // the subtitle's dir, copy-to-video puts it in the video's dir,
-  // copy-to-chosen uses the chosen dir. Without this the rename command
-  // was the only command bypassing the validators (HDR / shift / embed
-  // all routed through them).
+  // traversal / MAX_PATH / self-overwrite). Reference for the
+  // dir-escape and self-overwrite checks is mode-dependent: rename
+  // keeps output in the subtitle's dir, copy-to-video puts it in the
+  // video's dir, copy-to-chosen uses the chosen dir.
+  //
+  // Trade-off: the self-overwrite check (assertSafeOutputPath's
+  // case-insensitive lower === inputLower comparison) is structurally
+  // weakened in copy modes — `videoPath` and `chosenDir/__validator_ref__`
+  // never equal `outputPath`, so the check never fires. The ACTUAL
+  // self-overwrite risk in copy modes is "would copying the input
+  // subtitle to the output overwrite the input subtitle?" — that is
+  // closed by `process_rename_pair`'s `no_op` skip in the Rust shell
+  // (a no-op row's output path equals its input, and no_op rows
+  // return Skipped before any write attempt). Splitting
+  // assertSafeOutputPath into a directory-taking variant would let
+  // these checks be perfectly mode-appropriate, but is
+  // disproportionate to the closed-by-no_op risk.
   let validatorRef: string;
   if (mode === "rename") {
     validatorRef = subtitlePath;
   } else if (mode === "copy_to_video") {
     validatorRef = videoPath;
   } else {
-    // copy_to_chosen — synthesize a reference path under chosenDir so
-    // assertSafeOutputPath can extract a directory and run the
-    // dir-escape / MAX_PATH / traversal checks against it.
-    const cleanChosen = (chosenDir as string).replace(/\\/g, "/").replace(/\/$/, "");
+    // copy_to_chosen — chosenDir was already narrowed and assigned to
+    // targetDir above; reuse that to avoid an unsafe re-cast. Guard
+    // against a chosenDir that resolves to empty after normalization
+    // (theoretical degenerate input — clap's PathBuf parse rejects
+    // empty strings, but defense-in-depth).
+    const cleanChosen = targetDir.replace(/\\/g, "/").replace(/\/$/, "");
+    if (!cleanChosen) {
+      throw new Error("deriveRenameOutputPath: chosenDir resolves to empty after normalization");
+    }
     validatorRef = `${cleanChosen}/__validator_ref__`;
   }
   assertSafeOutputFilename(outName);

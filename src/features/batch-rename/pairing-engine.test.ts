@@ -369,6 +369,47 @@ describe("deriveRenameOutputPath — exact basename match (no lang suffix)", () 
   });
 });
 
+describe("deriveRenameOutputPath — path-validator integration (round-3 N1 wiring)", () => {
+  // Pin the round-3 fix that wires assertSafeOutputFilename +
+  // assertSafeOutputPath into the rename derivation. Each mode picks
+  // a different validator reference (rename → subtitlePath,
+  // copy_to_video → videoPath, copy_to_chosen → chosenDir-synthesized
+  // ref).
+  it("rejects Windows reserved name as the output basename (CON.mkv → CON.ass)", () => {
+    const video = "C:\\media\\CON.mkv";
+    const sub = "C:\\media\\episode.ass";
+    expect(() => deriveRenameOutputPath(video, sub, "copy_to_video", null)).toThrow(
+      /reserved name/
+    );
+  });
+
+  it("rejects copy_to_chosen with a chosenDir that resolves to empty after normalization", () => {
+    const video = "C:\\media\\episode.mkv";
+    const sub = "C:\\media\\episode.zh.ass";
+    // "/" normalizes to "" after trailing-slash strip; the round-4
+    // N-R4-5 guard converts that into a clear error rather than
+    // silently accepting any rooted path.
+    expect(() => deriveRenameOutputPath(video, sub, "copy_to_chosen", "/")).toThrow(
+      /empty after normalization/
+    );
+  });
+
+  it("accepts ordinary fan-sub names through the validator (negative control)", () => {
+    const video = "C:\\media\\Show.S01E01.1080p.mkv";
+    const sub = "C:\\media\\Show.S01E01.1080p.zh.ass";
+    expect(() => deriveRenameOutputPath(video, sub, "copy_to_video", null)).not.toThrow();
+  });
+
+  it("rejects an output filename with an unsubstituted template token literal", () => {
+    // Indirect path: a video whose basename contains literal `{` would
+    // synthesize an output filename with `{` — the validator (round-3
+    // A8) rejects it.
+    const video = "C:\\media\\Show.{name}.mkv";
+    const sub = "C:\\media\\episode.ass";
+    expect(() => deriveRenameOutputPath(video, sub, "copy_to_video", null)).toThrow(/illegal/);
+  });
+});
+
 describe("assignSubtitleToRow — manual edit", () => {
   function row(id: string, videoPath: string, subPath: string | null, selected = true): PairingRow {
     return {
