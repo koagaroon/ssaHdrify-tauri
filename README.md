@@ -2,9 +2,9 @@
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](LICENSE) [![GitHub release](https://img.shields.io/github/v/release/koagaroon/ssaHdrify-tauri?include_prereleases)](https://github.com/koagaroon/ssaHdrify-tauri/releases) ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)
 
-> **将 SSA/ASS 字幕颜色从 SDR 色彩空间转换到 HDR 色彩空间的桌面工具，附带时间轴偏移、字体嵌入和批量重命名功能。**
+> **给 SSA/ASS 字幕添加正确 HDR 色彩数据的桌面工具，附带时间轴偏移、字体嵌入和批量重命名功能。**
 >
-> _A desktop tool to convert SSA/ASS subtitle colors from SDR to HDR color space, with timing shift, font embedding, and batch rename._
+> _A desktop tool that writes the right HDR color data into SSA/ASS subtitles, with timing shift, font embedding, and batch rename._
 
 Tauri 桌面重写版，基于 [gky99/ssaHdrify](https://github.com/gky99/ssaHdrify)（Python 原版）。
 
@@ -49,14 +49,14 @@ A Tauri desktop rewrite of [gky99/ssaHdrify](https://github.com/gky99/ssaHdrify)
 
 ## 下载 | Download
 
-从 [Releases](https://github.com/koagaroon/ssaHdrify-tauri/releases/latest) 页面下载最新便携式 exe，双击即可运行，无需安装：
+从 [Releases](https://github.com/koagaroon/ssaHdrify-tauri/releases/latest) 页面下载最新 exe 文件：
 
 - **`ssahdrify_*.exe`** — 图形界面（GUI），适合手动操作
 - **`ssahdrify-cli_*.exe`** — 命令行（CLI），适合 pipeline / 批处理 / 脚本化场景
 
 macOS / Linux 用户请参考下方「从源码构建」。
 
-Download the latest portable exes from [Releases](https://github.com/koagaroon/ssaHdrify-tauri/releases/latest) — double-click to run, no install needed:
+Download the latest exe files from [Releases](https://github.com/koagaroon/ssaHdrify-tauri/releases/latest):
 
 - **`ssahdrify_*.exe`** — graphical interface (GUI), for manual workflows
 - **`ssahdrify-cli_*.exe`** — command line (CLI), for pipeline / batch / scripting
@@ -69,10 +69,10 @@ macOS / Linux users, see "Build from Source" below.
 
 | 标签页 / Tab                            | 功能 / Function                                                                                                                                                                                                                       |
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **HDR 色彩转换 / HDR Color Conversion** | 将字幕颜色从 sRGB 色域转换到 BT.2100 PQ 或 HLG 色域 / Convert subtitle colors from sRGB to BT.2100 PQ or HLG color space                                                                                                              |
-| **时间轴偏移 / Timing Shift**           | 批量偏移字幕时间戳，支持阈值过滤和实时预览 / Batch-offset subtitle timestamps with threshold filter and live preview                                                                                                                  |
-| **字体嵌入 / Font Embedding**           | 自动检测字幕所用字体，从系统字体库或本地文件夹匹配并以子集化形式嵌入 ASS 文件 / Auto-detect fonts referenced by the subtitle, match against system fonts or a local folder, and embed them (subset) into the ASS                      |
-| **批量重命名 / Batch Rename**           | 自动匹配视频文件和字幕文件，按视频文件名重命名字幕；多语言字幕共享同一视频；匹配表内可手动调整配对 / Auto-match video and subtitle files and rename subs to match the video filename; multi-language subs share one video; manual re-pairing in the table |
+| **HDR 色彩转换 / HDR Color Conversion** | 为字幕添加对应的 BT.2100 PQ 或 HLG 色域数据 / Add the matching BT.2100 PQ or HLG color-space data to subtitles                                                                                                                       |
+| **时间轴偏移 / Timing Shift**           | 批量偏移字幕时间戳，支持指定时间点后部分偏移和实时预览 / Batch-offset subtitle timestamps, with partial-shift after a chosen timestamp and live preview                                                                              |
+| **字体嵌入 / Font Embedding**           | 自动检测字幕所用字体，从系统字体库或本地匹配并以子集化形式嵌入 ASS 文件 / Auto-detect fonts referenced by the subtitle, match against system fonts or local sources, and embed them (subset) into the ASS                              |
+| **批量重命名 / Batch Rename**           | 自动匹配视频文件和字幕文件，按视频文件名重命名字幕；同一视频文件有多个对应字幕时，用户可自由选择字幕文件，手动调整配对 / Auto-match video and subtitle files and rename subs to match the video filename; when a video has multiple subtitle candidates, the user can pick the desired one and adjust pairing manually |
 
 > [!TIP]
 > **中文路径完全支持** — 包含中文或其他非 ASCII 字符的文件路径不会导致任何问题。Tauri 和 Rust 底层使用 Unicode API，不受传统 ANSI 编码限制。
@@ -140,9 +140,9 @@ macOS / Linux users, see "Build from Source" below.
 
 ## CLI 使用 | CLI Usage
 
-`ssahdrify-cli` 是 GUI 的命令行兄弟二进制，从同一份源代码构建。四个功能（HDR 转换 / 时间轴偏移 / 字体嵌入 / 批量重命名）覆盖与 GUI 对等，差异只在交互方式。适用于 pipeline 集成、批量处理和脚本化字幕工作流。
+`ssahdrify-cli` 是 GUI 的命令行（CLI）版本，从同一份源代码构建。四个功能（HDR 转换 / 时间轴偏移 / 字体嵌入 / 批量重命名）覆盖与 GUI 版本相同。
 
-`ssahdrify-cli` is a command-line sibling binary built from the same source as the GUI. It covers the same four features (HDR convert / Timing shift / Font embed / Batch rename) at parity with the GUI, differing only in interaction. Useful for pipeline integration, batch processing, and scripted subtitle workflows.
+`ssahdrify-cli` is the command-line (CLI) version of the GUI, built from the same source. The four features (HDR convert / Timing shift / Font embed / Batch rename) match the GUI exactly.
 
 ### 快速示例 | Quick Examples
 
@@ -285,32 +285,39 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端测试 / Rust bac
 ## 架构 | Architecture
 
 ```
-┌────────────────────────────────────────────────────────────┐
-│                   Tauri 2 Application                      │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  Web Frontend (React + Tailwind CSS)                 │  │
-│  │  - 4 tabs: HDR Convert, Time Shift, Font Embed,      │  │
-│  │    Batch Rename                                      │  │
-│  │  - Color.js for sRGB → HDR color math                │  │
-│  │  - ass-compiler for ASS parsing (font tab)           │  │
-│  │  - Custom subtitle parser (timing + rename tabs)     │  │
-│  │  - Fan-sub regex pairing engine (rename tab)         │  │
-│  │  - FontSourceModal: folder/file picker + coverage UI │  │
-│  │  - i18n (zh/en), dark/light/auto theme               │  │
-│  └──────────────┬───────────────────────────────────────┘  │
-│                 │ Tauri IPC                                │
-│  ┌──────────────▼───────────────────────────────────────┐  │
-│  │  Rust Backend                                        │  │
-│  │  - font-kit: system font discovery + matching        │  │
-│  │  - fontcull: font subsetting (Google klippa)         │  │
-│  │  - fontcull-skrifa: name-table reader → every        │  │
-│  │    localized family-name variant per face            │  │
-│  │  - scan_font_directory / scan_font_files: enumerate  │  │
-│  │    user-picked folders / files                       │  │
-│  │  - chardetng + encoding_rs: encoding detection       │  │
-│  │  - File I/O via Tauri fs/dialog plugins              │  │
-│  └──────────────────────────────────────────────────────┘  │
-└────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  Shared TypeScript engine                                                    │
+│  - 4 features: HDR Convert, Time Shift, Font Embed, Batch Rename             │
+│  - Color.js (PQ/HLG color math), ass-compiler (font collection)              │
+│  - Custom subtitle parser, fan-sub regex pairing engine                      │
+└──────────────┬───────────────────────────────────────┬───────────────────────┘
+               │                                       │
+   imported as React modules              bundled via esbuild (IIFE)
+               │                                       │
+┌──────────────┴───────────────┐ ┌─────────────────────┴───────────────────────┐
+│  GUI binary                  │ │  CLI binary                                 │
+│  ssahdrify.exe  ~10 MB       │ │  ssahdrify-cli.exe  ~37-58 MB               │
+│                              │ │                                             │
+│  Tauri 2 + React +           │ │  clap (argv parsing)                        │
+│  Tailwind frontend           │ │  deno_core / V8 (embedded engine.js)        │
+│  - 4 tabs                    │ │  - 4 subcommands                            │
+│  - i18n (zh/en),             │ │  - --json mode for pipelines                │
+│    dark/light/auto theme     │ │  - env_logger (stderr warnings)             │
+│  - FontSourceModal UI        │ │  - sys-locale (--lang auto)                 │
+└──────────────┬───────────────┘ └─────────────────────┬───────────────────────┘
+               │                                       │
+           Tauri IPC                              deno_core ops
+               │                                       │
+               └────────────────────┬──────────────────┘
+                                    │
+┌───────────────────────────────────┴──────────────────────────────────────────┐
+│  Shared Rust crates                                                          │
+│  - font-kit (system font discovery + matching)                               │
+│  - fontcull / fontcull-skrifa (subsetting + name-table reader)               │
+│  - chardetng + encoding_rs (encoding detection + conversion)                 │
+│  - serde / serde_json (serialization)                                        │
+│  - rusqlite (user font index)                                                │
+└──────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -376,6 +383,11 @@ All dependencies use licenses compatible with GPL-3.0.
 | [chardetng](https://github.com/hsivonen/chardetng)        | MIT OR Apache-2.0 | 编码检测 (Firefox 引擎) / Encoding detection (Firefox's engine)                                                |
 | [encoding_rs](https://github.com/hsivonen/encoding_rs)    | MIT OR Apache-2.0 | 编码转换 / Encoding conversion                                                                                 |
 | [serde](https://serde.rs/)                                | MIT OR Apache-2.0 | Rust 序列化 / Rust serialization                                                                               |
+| [deno_core](https://github.com/denoland/deno)             | MIT               | 嵌入式 V8 JS 运行时（CLI）/ Embedded V8 JS runtime (CLI)                                                       |
+| [V8](https://v8.dev/)                                     | BSD-3-Clause      | JavaScript 引擎（经 deno_core 嵌入，CLI）/ JavaScript engine via deno_core (CLI)                               |
+| [clap](https://github.com/clap-rs/clap)                   | MIT OR Apache-2.0 | CLI 参数解析（CLI）/ CLI argument parsing (CLI)                                                                |
+| [env_logger](https://github.com/rust-cli/env_logger)      | MIT OR Apache-2.0 | CLI 日志后端 stderr（CLI）/ CLI logging backend on stderr (CLI)                                                |
+| [sys-locale](https://github.com/1Password/sys-locale)     | MIT OR Apache-2.0 | OS 区域设置检测（驱动 `--lang` 自动检测，CLI）/ OS locale detection driving `--lang` auto (CLI)                |
 
 #### 捆绑字体（随应用分发）| Bundled Fonts (shipped with the application)
 
@@ -398,3 +410,4 @@ All dependencies use licenses compatible with GPL-3.0.
 | [ESLint](https://eslint.org/)                 | MIT              | 代码检查 / Linting                   |
 | [Prettier](https://prettier.io/)              | MIT              | 代码格式化 / Code formatter          |
 | [Vitest](https://vitest.dev/)                 | MIT              | 单元测试 / Unit testing              |
+| [esbuild](https://esbuild.github.io/)         | MIT              | engine.js 打包（CLI 嵌入用）/ Bundles engine.js for CLI embedding |
