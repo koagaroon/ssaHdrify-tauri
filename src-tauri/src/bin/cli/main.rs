@@ -527,14 +527,14 @@ fn process_shift_file(
     }
 }
 
-// Shared post-resolve check for both shift dispatchers. Returns
-// `Some(FileReport)` when the file should short-circuit (duplicate
-// output in the same batch, or pre-existing output without
-// --overwrite), `None` to proceed. Encoding is taken by reference so
-// the caller can pass `Some(&read.encoding)` (heavy-first, after read)
-// or `None` (cheap-first, before read). Returns `Option` rather than
-// `Result` because FileReport is large (>128 bytes); a Result variant
-// would trip clippy::result_large_err.
+// Shared post-resolve check used by HDR, Shift (cheap + heavy), and
+// Embed dispatchers. Returns `Some(FileReport)` when the file should
+// short-circuit (duplicate output in the same batch, or pre-existing
+// output without --overwrite), `None` to proceed. Encoding is taken by
+// reference so the caller can pass `Some(&read.encoding)` (heavy-first,
+// after read) or `None` (cheap-first, before read). Returns `Option`
+// rather than `Result` because FileReport is large (>128 bytes); a
+// Result variant would trip clippy::result_large_err.
 fn dedup_and_exists_check(
     globals: &GlobalOptions,
     input_path: &Path,
@@ -543,12 +543,12 @@ fn dedup_and_exists_check(
     encoding: Option<&str>,
     seen_outputs: &mut HashSet<String>,
 ) -> Option<FileReport> {
-    let take_encoding = || encoding.map(|s| s.to_string());
+    let cloned_encoding = || encoding.map(|s| s.to_string());
     if !seen_outputs.insert(normalize_output_key(output_path)) {
         return Some(failed_report(
             input_path,
             Some(output.to_string()),
-            take_encoding(),
+            cloned_encoding(),
             "duplicate output path in planned batch".to_string(),
         ));
     }
@@ -556,7 +556,7 @@ fn dedup_and_exists_check(
         return Some(skipped_report(
             input_path,
             Some(output.to_string()),
-            take_encoding(),
+            cloned_encoding(),
             "output exists; pass --overwrite to replace it".to_string(),
         ));
     }
