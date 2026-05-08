@@ -14,7 +14,23 @@ fn copy_cli_engine_bundle() {
 
     println!("cargo:rerun-if-changed={}", source_path.display());
 
-    let source = std::fs::read_to_string(&source_path).unwrap_or_else(|_| missing_engine_stub());
+    // Distinguish "missing" (the expected first-build path before
+    // `npm run build:engine` runs) from "found but unreadable"
+    // (permission denied, transient I/O, partial-write from a
+    // concurrent build:engine). Both fall through to the stub so the
+    // build still succeeds, but a non-NotFound error gets a
+    // cargo:warning so the developer notices the underlying cause.
+    let source = match std::fs::read_to_string(&source_path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => missing_engine_stub(),
+        Err(error) => {
+            println!(
+                "cargo:warning=CLI engine bundle at {} could not be read: {error}; falling back to stub",
+                source_path.display()
+            );
+            missing_engine_stub()
+        }
+    };
 
     std::fs::write(output_path, source).expect("failed to write CLI engine bundle for Cargo");
 }

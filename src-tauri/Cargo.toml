@@ -53,6 +53,14 @@ env_logger = "0.11"
 # silent — the user just saw the app fail to launch with no signal.
 rfd = "0.16"
 
+# Release-profile tuning was introduced for the CLI binary and applies
+# to BOTH the CLI and GUI binaries because they share this `[package]`.
+# GUI exe shrinks ~30–40%, compile time grows, Rust hot paths
+# (font scan / IPC marshal) become marginally slower; webview-driven
+# UI is unaffected. If a future release wants to peel apart per-binary
+# profiles, Cargo's `[profile.release.package.<name>]` overrides are
+# the way — see the GUI design doc's 2026-05-08 spillover entry for
+# context. Keep this comment if the profile block is reorganized.
 [profile.release]
 opt-level = "z"
 lto = true

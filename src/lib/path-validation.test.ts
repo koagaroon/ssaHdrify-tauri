@@ -56,6 +56,30 @@ describe("assertSafeOutputFilename", () => {
     expect(() => assertSafeOutputFilename("CONFIG.ass")).not.toThrow();
     expect(() => assertSafeOutputFilename("COM10.ass")).not.toThrow();
   });
+
+  it("rejects COM0 / LPT0 (added per current MS spec)", () => {
+    expect(() => assertSafeOutputFilename("COM0.ass")).toThrow(/reserved name/);
+    expect(() => assertSafeOutputFilename("LPT0.ass")).toThrow(/reserved name/);
+  });
+
+  it("rejects COM/LPT superscript-digit variants (¹ ² ³)", () => {
+    expect(() => assertSafeOutputFilename("COM¹.ass")).toThrow(/reserved name/);
+    expect(() => assertSafeOutputFilename("COM².ass")).toThrow(/reserved name/);
+    expect(() => assertSafeOutputFilename("COM³.ass")).toThrow(/reserved name/);
+    expect(() => assertSafeOutputFilename("LPT¹.ass")).toThrow(/reserved name/);
+    expect(() => assertSafeOutputFilename("LPT².ass")).toThrow(/reserved name/);
+    expect(() => assertSafeOutputFilename("LPT³.ass")).toThrow(/reserved name/);
+  });
+
+  it("rejects { and } in filenames (catches unsubstituted template tokens)", () => {
+    // `{Format}` typed instead of `{format}` would otherwise produce a
+    // literal `episode.{Format}.ass` because the substitution path is
+    // case-sensitive. Rejecting brace literals turns the typo into an
+    // error.
+    expect(() => assertSafeOutputFilename("episode.{Format}.ass")).toThrow(/illegal/);
+    expect(() => assertSafeOutputFilename("a{b.ass")).toThrow(/illegal/);
+    expect(() => assertSafeOutputFilename("a}b.ass")).toThrow(/illegal/);
+  });
 });
 
 describe("assertSafeOutputPath", () => {
@@ -89,18 +113,21 @@ describe("assertSafeOutputPath", () => {
     expect(() => assertSafeOutputPath("C:/subs2/episode01.ass", inputBackslash)).toThrow(/escapes/);
   });
 
-  it("rejects paths exceeding MAX_PATH (260 by default)", () => {
+  it("rejects paths exceeding the 259-char practical MAX_PATH limit", () => {
+    // 259 = 260 buffer minus the trailing null terminator. A 260-char
+    // path passes a naive `> 260` check but trips
+    // ERROR_PATH_NOT_FOUND at write time on standard Windows APIs.
     const long = "C:/subs/" + "a".repeat(300) + ".ass";
     expect(() => assertSafeOutputPath(long, inputBackslash)).toThrow(/too long/);
   });
 
-  it("relaxes the cap to 32767 for `\\\\?\\` long-local paths", () => {
+  it("relaxes the cap to 32766 for `\\\\?\\` long-local paths", () => {
     const longInput = "\\\\?\\C:\\subs\\episode01.ass";
     const longButOk = "//?/C:/subs/" + "a".repeat(500) + ".ass";
     expect(() => assertSafeOutputPath(longButOk, longInput)).not.toThrow();
   });
 
-  it("keeps the 260 cap for UNC long paths (server may not support long paths)", () => {
+  it("keeps the 259 cap for UNC long paths (server may not support long paths)", () => {
     const uncInput = "\\\\?\\UNC\\server\\share\\subs\\episode01.ass";
     const longUnc = "//?/UNC/server/share/subs/" + "a".repeat(300) + ".ass";
     expect(() => assertSafeOutputPath(longUnc, uncInput)).toThrow(/too long/);

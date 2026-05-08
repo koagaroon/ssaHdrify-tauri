@@ -221,6 +221,16 @@ struct FileReport {
     encoding: Option<String>,
     status: FileStatus,
     error: Option<String>,
+    /// Non-fatal warnings carried alongside a successful or planned
+    /// result. Currently used by embed under `--on-missing warn` to
+    /// surface unresolved / failed-to-subset fonts to JSON consumers
+    /// (without warnings here, JSON callers couldn't distinguish
+    /// "all fonts embedded" from "embedded what we found").
+    /// `serde(skip_serializing_if)` keeps the JSON shape backward-
+    /// compatible: the field is absent unless something actually
+    /// warned.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    warnings: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -434,6 +444,22 @@ fn process_hdr_file(
             encoding: None,
             status: FileStatus::Skipped,
             error: Some("output exists; pass --overwrite to replace it".to_string()),
+            warnings: None,
+        };
+    }
+
+    if globals.dry_run {
+        // Dry-run gates BEFORE the read so cheap-first lives up to its
+        // name on `--dry-run` invocations: no I/O, no V8 work, just the
+        // resolved path. encoding is None because we haven't read —
+        // matches the cheap-first contract (Embed already does this).
+        return FileReport {
+            input,
+            output: Some(output),
+            encoding: None,
+            status: FileStatus::Planned,
+            error: None,
+            warnings: None,
         };
     }
 
@@ -441,16 +467,6 @@ fn process_hdr_file(
         Ok(result) => result,
         Err(error) => return failed_report(&input_path, Some(output), None, error),
     };
-
-    if globals.dry_run {
-        return FileReport {
-            input,
-            output: Some(output),
-            encoding: Some(read_result.encoding),
-            status: FileStatus::Planned,
-            error: None,
-        };
-    }
 
     let request = engine::HdrConversionRequest {
         input_path: input.clone(),
@@ -477,6 +493,7 @@ fn process_hdr_file(
         encoding: Some(read_result.encoding),
         status: FileStatus::Written,
         error: None,
+        warnings: None,
     }
 }
 
@@ -557,6 +574,60 @@ fn process_shift_file(
     }
 }
 
+// Shared post-resolve check for both shift dispatchers. Returns
+// `Some(FileReport)` when the file should short-circuit (duplicate
+// output in the same batch, or pre-existing output without
+// --overwrite), `None` to proceed. Encoding is taken by reference so
+// the caller can pass `Some(&read.encoding)` (heavy-first, after read)
+// or `None` (cheap-first, before read). Returns `Option` rather than
+// `Result` because FileReport is large (>128 bytes); a Result variant
+// would trip clippy::result_large_err.
+fn shift_dedup_and_exists_check(
+    globals: &GlobalOptions,
+    input: &str,
+    input_path: &Path,
+    output_path: &Path,
+    output: &str,
+    encoding: Option<&str>,
+    seen_outputs: &mut HashSet<String>,
+) -> Option<FileReport> {
+    let take_encoding = || encoding.map(|s| s.to_string());
+    if !seen_outputs.insert(normalize_output_key(output_path)) {
+        return Some(failed_report(
+            input_path,
+            Some(output.to_string()),
+            take_encoding(),
+            "duplicate output path in planned batch".to_string(),
+        ));
+    }
+    if output_path_exists(output_path) && !globals.overwrite {
+        return Some(FileReport {
+            input: input.to_string(),
+            output: Some(output.to_string()),
+            encoding: take_encoding(),
+            status: FileStatus::Skipped,
+            error: Some("output exists; pass --overwrite to replace it".to_string()),
+            warnings: None,
+        });
+    }
+    None
+}
+
+fn build_shift_request(
+    input: String,
+    content: String,
+    context: &ShiftProcessContext<'_>,
+    output_template: String,
+) -> engine::ShiftConversionRequest {
+    engine::ShiftConversionRequest {
+        input_path: input,
+        content,
+        offset_ms: context.offset_ms,
+        threshold_ms: context.threshold_ms,
+        output_template,
+    }
+}
+
 fn process_shift_file_cheap_first(
     globals: &GlobalOptions,
     args: &ShiftArgs,
@@ -587,22 +658,29 @@ fn process_shift_file_cheap_first(
     };
     let output = display_path(&output_path);
 
-    if !seen_outputs.insert(normalize_output_key(&output_path)) {
-        return failed_report(
-            &input_path,
-            Some(output),
-            None,
-            "duplicate output path in planned batch".to_string(),
-        );
+    if let Some(early) = shift_dedup_and_exists_check(
+        globals,
+        &input,
+        &input_path,
+        &output_path,
+        &output,
+        None,
+        seen_outputs,
+    ) {
+        return early;
     }
 
-    if output_path_exists(&output_path) && !globals.overwrite {
+    if globals.dry_run {
+        // Dry-run gates BEFORE the read so cheap-first lives up to its
+        // name on `--dry-run` invocations. encoding is None because we
+        // haven't read — matches the cheap-first contract.
         return FileReport {
             input,
             output: Some(output),
             encoding: None,
-            status: FileStatus::Skipped,
-            error: Some("output exists; pass --overwrite to replace it".to_string()),
+            status: FileStatus::Planned,
+            error: None,
+            warnings: None,
         };
     }
 
@@ -611,23 +689,12 @@ fn process_shift_file_cheap_first(
         Err(error) => return failed_report(&input_path, Some(output), None, error),
     };
 
-    if globals.dry_run {
-        return FileReport {
-            input,
-            output: Some(output),
-            encoding: Some(read_result.encoding),
-            status: FileStatus::Planned,
-            error: None,
-        };
-    }
-
-    let request = engine::ShiftConversionRequest {
-        input_path: input.clone(),
-        content: read_result.text,
-        offset_ms: context.offset_ms,
-        threshold_ms: context.threshold_ms,
-        output_template: args.output_template.clone(),
-    };
+    let request = build_shift_request(
+        input.clone(),
+        read_result.text,
+        context,
+        args.output_template.clone(),
+    );
 
     let conversion = match engine.convert_shift(&request) {
         Ok(result) => result,
@@ -637,11 +704,20 @@ fn process_shift_file_cheap_first(
     };
 
     if globals.verbose && !globals.json && !globals.quiet {
+        let format_upper = conversion.format.to_uppercase();
         println!(
-            "shift: {} captions, {} shifted, format {}",
-            conversion.caption_count,
-            conversion.shifted_count,
-            conversion.format.to_uppercase()
+            "{}",
+            localize(
+                globals,
+                format!(
+                    "shift: {} captions, {} shifted, format {}",
+                    conversion.caption_count, conversion.shifted_count, format_upper
+                ),
+                format!(
+                    "时间轴偏移：{} 条字幕，{} 条已偏移，格式 {}",
+                    conversion.caption_count, conversion.shifted_count, format_upper
+                ),
+            )
         );
     }
 
@@ -655,6 +731,7 @@ fn process_shift_file_cheap_first(
         encoding: Some(read_result.encoding),
         status: FileStatus::Written,
         error: None,
+        warnings: None,
     }
 }
 
@@ -681,13 +758,12 @@ fn process_shift_file_heavy_first(
         Err(error) => return failed_report(&input_path, None, None, error),
     };
 
-    let request = engine::ShiftConversionRequest {
-        input_path: input.clone(),
-        content: read_result.text,
-        offset_ms: context.offset_ms,
-        threshold_ms: context.threshold_ms,
-        output_template: args.output_template.clone(),
-    };
+    let request = build_shift_request(
+        input.clone(),
+        read_result.text,
+        context,
+        args.output_template.clone(),
+    );
 
     let conversion = match engine.convert_shift(&request) {
         Ok(result) => result,
@@ -704,34 +780,22 @@ fn process_shift_file_heavy_first(
     };
     let output = display_path(&output_path);
 
-    if !seen_outputs.insert(normalize_output_key(&output_path)) {
-        return failed_report(
-            &input_path,
-            Some(output),
-            Some(read_result.encoding),
-            "duplicate output path in planned batch".to_string(),
-        );
+    if let Some(early) = shift_dedup_and_exists_check(
+        globals,
+        &input,
+        &input_path,
+        &output_path,
+        &output,
+        Some(&read_result.encoding),
+        seen_outputs,
+    ) {
+        return early;
     }
 
-    if output_path_exists(&output_path) && !globals.overwrite {
-        return FileReport {
-            input,
-            output: Some(output),
-            encoding: Some(read_result.encoding),
-            status: FileStatus::Skipped,
-            error: Some("output exists; pass --overwrite to replace it".to_string()),
-        };
-    }
-
-    if globals.verbose && !globals.json && !globals.quiet {
-        println!(
-            "shift: {} captions, {} shifted, format {}",
-            conversion.caption_count,
-            conversion.shifted_count,
-            conversion.format.to_uppercase()
-        );
-    }
-
+    // Dry-run gates BEFORE the verbose progress print: a
+    // `--dry-run --verbose` invocation should NOT emit the "shift: N
+    // captions, M shifted" line because no shift was actually
+    // committed. Matches the cheap-first path's ordering.
     if globals.dry_run {
         return FileReport {
             input,
@@ -739,7 +803,26 @@ fn process_shift_file_heavy_first(
             encoding: Some(read_result.encoding),
             status: FileStatus::Planned,
             error: None,
+            warnings: None,
         };
+    }
+
+    if globals.verbose && !globals.json && !globals.quiet {
+        let format_upper = conversion.format.to_uppercase();
+        println!(
+            "{}",
+            localize(
+                globals,
+                format!(
+                    "shift: {} captions, {} shifted, format {}",
+                    conversion.caption_count, conversion.shifted_count, format_upper
+                ),
+                format!(
+                    "时间轴偏移：{} 条字幕，{} 条已偏移，格式 {}",
+                    conversion.caption_count, conversion.shifted_count, format_upper
+                ),
+            )
+        );
     }
 
     if let Err(error) = write_output(&output_path, &conversion.content, globals.overwrite) {
@@ -752,6 +835,7 @@ fn process_shift_file_heavy_first(
         encoding: Some(read_result.encoding),
         status: FileStatus::Written,
         error: None,
+        warnings: None,
     }
 }
 
@@ -827,8 +911,18 @@ fn init_cli_font_sources(
         let summary = app_lib::fonts::import_font_files_for_cli(paths?, "cli-files")?;
         if globals.verbose && !globals.json && !globals.quiet {
             println!(
-                "font files: {} faces scanned, {} added, {} duplicated",
-                summary.total, summary.added, summary.duplicated
+                "{}",
+                localize(
+                    globals,
+                    format!(
+                        "font files: {} faces scanned, {} added, {} duplicated",
+                        summary.total, summary.added, summary.duplicated
+                    ),
+                    format!(
+                        "字体文件：扫描 {} 个字体，{} 个已添加,{} 个已去重",
+                        summary.total, summary.added, summary.duplicated
+                    ),
+                )
             );
         }
     }
@@ -869,18 +963,25 @@ fn emit_font_source_summary(
     if !globals.verbose || globals.json || globals.quiet {
         return;
     }
-    let reason = match summary.reason {
-        app_lib::fonts::ScanStopReason::Natural => "",
-        app_lib::fonts::ScanStopReason::UserCancel => " (cancelled)",
-        app_lib::fonts::ScanStopReason::CeilingHit => " (ceiling hit)",
+    let (reason_en, reason_zh) = match summary.reason {
+        app_lib::fonts::ScanStopReason::Natural => ("", ""),
+        app_lib::fonts::ScanStopReason::UserCancel => (" (cancelled)", "（已取消）"),
+        app_lib::fonts::ScanStopReason::CeilingHit => (" (ceiling hit)", "（已达上限）"),
     };
+    let display = display_path(path);
     println!(
-        "{label}: {} faces scanned, {} added, {} duplicated{} ({})",
-        summary.total,
-        summary.added,
-        summary.duplicated,
-        reason,
-        display_path(path)
+        "{}",
+        localize(
+            globals,
+            format!(
+                "{label}: {} faces scanned, {} added, {} duplicated{reason_en} ({display})",
+                summary.total, summary.added, summary.duplicated
+            ),
+            format!(
+                "{label}：扫描 {} 个字体，{} 个已添加，{} 个已去重{reason_zh}（{display}）",
+                summary.total, summary.added, summary.duplicated
+            ),
+        )
     );
 }
 
@@ -947,6 +1048,7 @@ fn process_embed_file(
             encoding: None,
             status: FileStatus::Skipped,
             error: Some("output exists; pass --overwrite to replace it".to_string()),
+            warnings: None,
         };
     }
 
@@ -961,6 +1063,7 @@ fn process_embed_file(
             encoding: None,
             status: FileStatus::Planned,
             error: None,
+            warnings: None,
         };
     }
 
@@ -981,8 +1084,13 @@ fn process_embed_file(
         }
     };
 
+    let mut warnings: Vec<String> = Vec::new();
+
     let resolved_fonts = match resolve_embed_fonts(globals, args, use_user_fonts, &plan.fonts) {
-        Ok(fonts) => fonts,
+        Ok((fonts, mut resolve_warnings)) => {
+            warnings.append(&mut resolve_warnings);
+            fonts
+        }
         Err(error) => {
             return failed_report(&input_path, Some(output), Some(read_result.encoding), error);
         }
@@ -990,16 +1098,27 @@ fn process_embed_file(
 
     if globals.verbose && !globals.json && !globals.quiet {
         let glyph_count: usize = plan.fonts.iter().map(|font| font.glyph_count).sum();
+        let referenced = plan.fonts.len();
+        let resolved_count = resolved_fonts.len();
         println!(
-            "embed: {} referenced fonts ({} glyphs), {} resolved",
-            plan.fonts.len(),
-            glyph_count,
-            resolved_fonts.len()
+            "{}",
+            localize(
+                globals,
+                format!(
+                    "embed: {referenced} referenced fonts ({glyph_count} glyphs), {resolved_count} resolved"
+                ),
+                format!(
+                    "字体嵌入：{referenced} 个引用字体（{glyph_count} 个字符），{resolved_count} 个已解析"
+                ),
+            )
         );
     }
 
     let subset_payloads = match subset_resolved_fonts(globals, args, &resolved_fonts) {
-        Ok(payloads) => payloads,
+        Ok((payloads, mut subset_warnings)) => {
+            warnings.append(&mut subset_warnings);
+            payloads
+        }
         Err(error) => {
             return failed_report(&input_path, Some(output), Some(read_result.encoding), error);
         }
@@ -1028,7 +1147,15 @@ fn process_embed_file(
     };
 
     if globals.verbose && !globals.json && !globals.quiet {
-        println!("embed: {} fonts embedded", applied.embedded_count);
+        let n = applied.embedded_count;
+        println!(
+            "{}",
+            localize(
+                globals,
+                format!("embed: {n} fonts embedded"),
+                format!("字体嵌入：{n} 个字体已嵌入"),
+            )
+        );
     }
 
     if let Err(error) = write_output(&output_path, &applied.content, globals.overwrite) {
@@ -1041,15 +1168,24 @@ fn process_embed_file(
         encoding: Some(read_result.encoding),
         status: FileStatus::Written,
         error: None,
+        warnings: if warnings.is_empty() {
+            None
+        } else {
+            Some(warnings)
+        },
     }
 }
 
+/// Resolve fonts; under `--on-missing warn`, returns the resolved
+/// list AND the missing-font diagnostics so the caller can surface
+/// them in `FileReport.warnings` (not just on stderr).
+/// Under `--on-missing fail`, returns Err on any missing font.
 fn resolve_embed_fonts(
     globals: &GlobalOptions,
     args: &EmbedArgs,
     use_user_fonts: bool,
     fonts: &[engine::FontEmbedUsage],
-) -> Result<Vec<ResolvedEmbedFont>, String> {
+) -> Result<(Vec<ResolvedEmbedFont>, Vec<String>), String> {
     let mut resolved = Vec::new();
     let mut missing = Vec::new();
 
@@ -1078,21 +1214,35 @@ fn resolve_embed_fonts(
 
     if !missing.is_empty() {
         if globals.verbose && !globals.json && !globals.quiet {
-            eprintln!("embed: missing/skipped fonts: {}", missing.join(", "));
+            let joined = missing.join(", ");
+            eprintln!(
+                "{}",
+                localize(
+                    globals,
+                    format!("embed: missing/skipped fonts: {joined}"),
+                    format!("字体嵌入：缺失/跳过的字体：{joined}"),
+                )
+            );
         }
         if args.on_missing == MissingFontAction::Fail {
             return Err(format!("missing/skipped fonts: {}", missing.join(", ")));
         }
     }
 
-    Ok(resolved)
+    let warnings = missing
+        .into_iter()
+        .map(|m| format!("missing font: {m}"))
+        .collect();
+    Ok((resolved, warnings))
 }
 
+/// Subset fonts; under `--on-missing warn`, returns successful
+/// payloads AND the skipped-font diagnostics for `FileReport.warnings`.
 fn subset_resolved_fonts(
     globals: &GlobalOptions,
     args: &EmbedArgs,
     fonts: &[ResolvedEmbedFont],
-) -> Result<Vec<engine::FontSubsetPayload>, String> {
+) -> Result<(Vec<engine::FontSubsetPayload>, Vec<String>), String> {
     let mut payloads = Vec::new();
     let mut skipped = Vec::new();
 
@@ -1108,14 +1258,26 @@ fn subset_resolved_fonts(
 
     if !skipped.is_empty() {
         if globals.verbose && !globals.json && !globals.quiet {
-            eprintln!("embed: skipped fonts: {}", skipped.join(", "));
+            let joined = skipped.join(", ");
+            eprintln!(
+                "{}",
+                localize(
+                    globals,
+                    format!("embed: skipped fonts: {joined}"),
+                    format!("字体嵌入：跳过的字体：{joined}"),
+                )
+            );
         }
         if args.on_missing == MissingFontAction::Fail {
             return Err(format!("skipped fonts: {}", skipped.join(", ")));
         }
     }
 
-    Ok(payloads)
+    let warnings = skipped
+        .into_iter()
+        .map(|s| format!("font subset failed: {s}"))
+        .collect();
+    Ok((payloads, warnings))
 }
 
 fn resolve_embed_font(
@@ -1190,9 +1352,17 @@ fn run_rename(globals: &GlobalOptions, args: RenameArgs) -> Result<ExitCode, Str
     let mut report = CommandReport::new("rename");
 
     if globals.verbose && !globals.json && !globals.quiet {
+        let v = plan.video_count;
+        let s = plan.subtitle_count;
+        let i = plan.ignored_count;
+        let u = plan.unknown_count;
         println!(
-            "rename: {} videos, {} subtitles, {} ignored, {} unknown",
-            plan.video_count, plan.subtitle_count, plan.ignored_count, plan.unknown_count
+            "{}",
+            localize(
+                globals,
+                format!("rename: {v} videos, {s} subtitles, {i} ignored, {u} unknown"),
+                format!("重命名：{v} 个视频，{s} 个字幕，{i} 个忽略，{u} 个未知"),
+            )
         );
     }
 
@@ -1206,6 +1376,7 @@ fn run_rename(globals: &GlobalOptions, args: RenameArgs) -> Result<ExitCode, Str
                 "no subtitle/video pairs found ({} videos, {} subtitles, {} unknown)",
                 plan.video_count, plan.subtitle_count, plan.unknown_count
             )),
+            warnings: None,
         };
         emit_file_report(globals, &result);
         report.push(result);
@@ -1255,6 +1426,7 @@ fn process_rename_pair(
             encoding: None,
             status: FileStatus::Skipped,
             error: Some("subtitle already matches the target path".to_string()),
+            warnings: None,
         };
     }
 
@@ -1275,15 +1447,21 @@ fn process_rename_pair(
             encoding: None,
             status: FileStatus::Skipped,
             error: Some("output exists; pass --overwrite to replace it".to_string()),
+            warnings: None,
         };
     }
 
     if globals.verbose && !globals.json && !globals.quiet {
+        let from = display_path(&input_path);
+        let to = display_path(&output_path);
+        let video = &row.video_path;
         println!(
-            "rename: {} -> {} (video: {})",
-            display_path(&input_path),
-            display_path(&output_path),
-            row.video_path
+            "{}",
+            localize(
+                globals,
+                format!("rename: {from} -> {to} (video: {video})"),
+                format!("重命名：{from} -> {to}（视频：{video}）"),
+            )
         );
     }
 
@@ -1294,6 +1472,7 @@ fn process_rename_pair(
             encoding: None,
             status: FileStatus::Planned,
             error: None,
+            warnings: None,
         };
     }
 
@@ -1313,6 +1492,7 @@ fn process_rename_pair(
         encoding: None,
         status: FileStatus::Written,
         error: None,
+        warnings: None,
     }
 }
 
@@ -1371,7 +1551,14 @@ fn emit_file_report(globals: &GlobalOptions, result: &FileReport) {
 
     if matches!(result.status, FileStatus::Failed) {
         if let Some(error) = &result.error {
-            eprintln!("failed: {} ({error})", result.input);
+            eprintln!(
+                "{}",
+                localize(
+                    globals,
+                    format!("failed: {} ({error})", result.input),
+                    format!("失败：{}（{error}）", result.input),
+                )
+            );
         }
         return;
     }
@@ -1388,14 +1575,59 @@ fn emit_file_report(globals: &GlobalOptions, result: &FileReport) {
         FileStatus::Written => {
             if globals.verbose {
                 let encoding = result.encoding.as_deref().unwrap_or("unknown");
-                println!("written: {} -> {} ({encoding})", result.input, output);
+                println!(
+                    "{}",
+                    localize(
+                        globals,
+                        format!("written: {} -> {} ({encoding})", result.input, output),
+                        format!("已写入：{} -> {}（{encoding}）", result.input, output),
+                    )
+                );
             } else {
-                println!("written: {output}");
+                println!(
+                    "{}",
+                    localize(
+                        globals,
+                        format!("written: {output}"),
+                        format!("已写入：{output}"),
+                    )
+                );
             }
         }
-        FileStatus::Planned => println!("would write: {output}"),
-        FileStatus::Skipped => println!("skipped: {output}"),
+        FileStatus::Planned => println!(
+            "{}",
+            localize(
+                globals,
+                format!("would write: {output}"),
+                format!("将写入：{output}"),
+            )
+        ),
+        FileStatus::Skipped => println!(
+            "{}",
+            localize(
+                globals,
+                format!("skipped: {output}"),
+                format!("已跳过：{output}"),
+            )
+        ),
         FileStatus::Failed => {}
+    }
+
+    // Surface non-fatal warnings (currently embed's missing /
+    // failed-subset fonts under --on-missing warn). JSON mode passes
+    // these via the warnings field on FileReport; human mode prints
+    // one line per warning, indented to associate with the file.
+    if let Some(warnings) = &result.warnings {
+        for warning in warnings {
+            eprintln!(
+                "  {}",
+                localize(
+                    globals,
+                    format!("warning: {warning}"),
+                    format!("警告：{warning}"),
+                )
+            );
+        }
     }
 }
 
@@ -1411,9 +1643,17 @@ fn failed_report(
         encoding,
         status: FileStatus::Failed,
         error: Some(error),
+        warnings: None,
     }
 }
 
+// Trust model: --output-dir is user-controlled CLI argument. We
+// normalize it to absolute form here but DO NOT canonicalize (which
+// would resolve symlinks). On Windows, fs::canonicalize returns the
+// `\\?\C:\...` extended-path form which surprises downstream tools;
+// on POSIX it would silently follow symlinks the user may have set
+// up intentionally. The trust boundary is "the user supplied this
+// path" — any symlinks they set up are theirs to manage.
 fn absolute_path(path: &Path) -> Result<PathBuf, String> {
     if path.is_absolute() {
         return Ok(path.to_path_buf());
@@ -1424,6 +1664,16 @@ fn absolute_path(path: &Path) -> Result<PathBuf, String> {
         .map_err(|err| format!("failed to resolve current directory: {err}"))
 }
 
+// Cap on the relocated output path — same 259-char buffer-fitting
+// limit the JS validators apply (per the GUI design doc's path-
+// validation extraction). A user-supplied --output-dir that's longer
+// than the input dir can push the relocated path past MAX_PATH even
+// if the JS resolver's pre-relocation path was within bounds.
+// Long-local paths (`\\?\C:\...`) get the extended cap. UNC long
+// paths keep the standard cap because the server side may not.
+const RELOCATED_PATH_MAX_LEN: usize = 259;
+const RELOCATED_LONG_PATH_MAX_LEN: usize = 32766;
+
 fn relocate_output_path(path: &str, output_dir: Option<&Path>) -> Result<PathBuf, String> {
     let path = PathBuf::from(path);
     let Some(output_dir) = output_dir else {
@@ -1433,7 +1683,27 @@ fn relocate_output_path(path: &str, output_dir: Option<&Path>) -> Result<PathBuf
     let file_name = path
         .file_name()
         .ok_or_else(|| "engine returned an output path without a filename".to_string())?;
-    Ok(output_dir.join(file_name))
+    let relocated = output_dir.join(file_name);
+
+    // Re-validate length on the relocated path. The JS validators saw
+    // the pre-relocation path and signed off; relocation can grow it
+    // beyond MAX_PATH if --output-dir itself is long.
+    let display = relocated.to_string_lossy();
+    let lower = display.to_lowercase();
+    let is_long_local = lower.starts_with("\\\\?\\") && !lower.starts_with("\\\\?\\unc\\")
+        || lower.starts_with("//?/") && !lower.starts_with("//?/unc/");
+    let cap = if is_long_local {
+        RELOCATED_LONG_PATH_MAX_LEN
+    } else {
+        RELOCATED_PATH_MAX_LEN
+    };
+    if display.len() > cap {
+        return Err(format!(
+            "relocated output path is too long ({} chars, max {cap}); shorten --output-dir",
+            display.len()
+        ));
+    }
+    Ok(relocated)
 }
 
 fn output_path_exists(path: &Path) -> bool {
@@ -1455,6 +1725,21 @@ fn output_path_exists(path: &Path) -> bool {
     }
 }
 
+// TOCTOU note (applies to write_output / copy_file_output /
+// rename_file_output): there's a small window between the
+// `output_path_exists` skip-check or the `remove_file` overwrite step
+// and the `OpenOptions::create_new(true).open(path)` below where
+// another process in the same user context could swap the path. The
+// window is bounded and the consequences are limited:
+//   - `create_new(true)` is atomic at the OS level — refuses if the
+//     path now exists, regardless of symlink. No through-symlink
+//     write.
+//   - On race, we get `ErrorKind::AlreadyExists` → "failed to create
+//     output" — surfaced cleanly, no data corruption.
+//   - The non-overwrite skip path returns early before any write
+//     attempt, so no race there.
+// Single-user desktop scope makes this acceptable; documented for
+// future adversarial-review eyes.
 fn write_output(path: &Path, content: &str, overwrite: bool) -> Result<(), String> {
     let parent = path
         .parent()
@@ -1710,8 +1995,15 @@ fn parse_timestamp_part(part: &str, label: &str) -> Result<i64, String> {
     if part.is_empty() || !part.chars().all(|ch| ch.is_ascii_digit()) {
         return Err(format!("invalid {label} value '{part}'"));
     }
+    // i64::MAX is 19 digits (9223372036854775807); anything longer
+    // overflows i64. Surface as "out of range" rather than a generic
+    // "invalid value" parse error so the user sees what's actually
+    // wrong with the input.
+    if part.len() > 19 {
+        return Err(format!("{label} value '{part}' is out of range"));
+    }
     part.parse::<i64>()
-        .map_err(|_| format!("invalid {label} value '{part}'"))
+        .map_err(|_| format!("{label} value '{part}' is out of range"))
 }
 
 #[cfg(test)]

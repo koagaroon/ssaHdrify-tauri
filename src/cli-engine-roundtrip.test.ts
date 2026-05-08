@@ -15,7 +15,15 @@
  */
 import { describe, it, expect } from "vitest";
 
-import { convertHdr, convertShift, planFontEmbed, planRename } from "./cli-engine-entry";
+import {
+  convertHdr,
+  convertShift,
+  planFontEmbed,
+  planRename,
+  resolveEmbedOutputPath,
+  resolveHdrOutputPath,
+  resolveShiftOutputPath,
+} from "./cli-engine-entry";
 import { DEFAULT_BRIGHTNESS, type Eotf } from "./features/hdr-convert/color-engine";
 import { processAssContent } from "./features/hdr-convert/ass-processor";
 import {
@@ -222,6 +230,80 @@ describe("Rename plan — GUI ↔ CLI byte equivalence", () => {
       );
 
     expect(cli.pairings.map((p) => p.outputPath)).toEqual(guiOutputs);
+  });
+});
+
+describe("Cheap resolver ↔ heavy converter byte equivalence", () => {
+  // The CLI shell calls cheap path-only resolvers (resolveHdrOutputPath,
+  // resolveShiftOutputPath, resolveEmbedOutputPath) BEFORE the heavy
+  // conversion call to dedup outputs and skip-on-exists. This contract
+  // — cheap and heavy must produce identical outputPath bytes for the
+  // same inputs — is load-bearing: a drift in template defaulting
+  // between resolver and converter would silently break dedup/exists
+  // semantics. These tests pin it.
+  const inputAss = "C:\\subs\\episode01.ass";
+
+  it("resolveHdrOutputPath matches convertHdr.outputPath for the default template", () => {
+    const req = {
+      inputPath: inputAss,
+      eotf: "PQ" as const,
+      outputTemplate: DEFAULT_TEMPLATE,
+    };
+    const cheap = resolveHdrOutputPath(req);
+    const heavy = convertHdr({
+      ...req,
+      content: ASS_FIXTURE,
+      brightness: 1000,
+    });
+    expect(cheap).toBe(heavy.outputPath);
+  });
+
+  it("resolveHdrOutputPath matches convertHdr.outputPath for HLG / custom template / brightness defaults", () => {
+    const req = {
+      inputPath: inputAss,
+      eotf: "HLG" as const,
+      outputTemplate: "{name}.{eotf}.ass",
+    };
+    const cheap = resolveHdrOutputPath(req);
+    const heavy = convertHdr({ ...req, content: ASS_FIXTURE });
+    expect(cheap).toBe(heavy.outputPath);
+  });
+
+  it("resolveShiftOutputPath matches convertShift.outputPath for the default template", () => {
+    const req = {
+      inputPath: inputAss,
+      outputTemplate: "{name}.shifted{ext}",
+    };
+    const cheap = resolveShiftOutputPath(req);
+    const heavy = convertShift({
+      ...req,
+      content: ASS_FIXTURE,
+      offsetMs: 500,
+    });
+    expect(cheap).toBe(heavy.outputPath);
+  });
+
+  it("resolveEmbedOutputPath matches planFontEmbed.outputPath for the default template", () => {
+    const embedAss = [
+      "[Script Info]",
+      "Title: Embed Cheap-vs-Heavy",
+      "",
+      "[V4+ Styles]",
+      "Format: Name, Fontname, Fontsize, Bold, Italic",
+      "Style: Default,Arial,20,0,0",
+      "",
+      "[Events]",
+      "Format: Layer, Start, End, Style, Text",
+      "Dialogue: 0,0:00:00.00,0:00:01.00,Default,Hi",
+      "",
+    ].join("\n");
+    const req = {
+      inputPath: inputAss,
+      outputTemplate: "{name}.embed.ass",
+    };
+    const cheap = resolveEmbedOutputPath(req);
+    const heavy = planFontEmbed({ ...req, content: embedAss });
+    expect(cheap).toBe(heavy.outputPath);
   });
 });
 

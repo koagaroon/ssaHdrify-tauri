@@ -345,17 +345,19 @@ impl CliEngine {
         let script = format!(
             "globalThis.ssaHdrifyCliEngine.{function_name}(globalThis.__ssahdrifyCliPayload)"
         );
-        let result = self
-            .runtime
-            .execute_script(script_name, script)
-            .map_err(|err| format!("{label} {step} failed: {err}"))?;
+        let call_result = self.runtime.execute_script(script_name, script);
 
-        // Clear the global so V8 doesn't retain large JSON payloads
-        // across calls. Best-effort: cleanup failures aren't surfaced.
+        // Clear the global UNCONDITIONALLY (whether the call succeeded
+        // or threw). Running cleanup only on the success path leaves
+        // the previous payload accessible in V8's heap if the engine
+        // bundle ever holds a reference to globalThis.__ssahdrifyCliPayload.
+        // Best-effort: cleanup failures aren't surfaced to the user.
         let _ = self.runtime.execute_script(
             "ssahdrify-cli-payload-cleanup.js",
             "globalThis.__ssahdrifyCliPayload = undefined;",
         );
+
+        let result = call_result.map_err(|err| format!("{label} {step} failed: {err}"))?;
 
         deno_core::scope!(scope, &mut self.runtime);
         let local = v8::Local::new(scope, result);

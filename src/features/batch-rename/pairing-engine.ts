@@ -21,6 +21,7 @@
  */
 
 import { normalizeOutputKey } from "../../lib/dedup-helpers";
+import { assertSafeOutputFilename, assertSafeOutputPath } from "../../lib/path-validation";
 
 // ── Bracket cleanup ──────────────────────────────────────
 
@@ -424,6 +425,29 @@ export function deriveRenameOutputPath(
   const usedBackslash = subtitlePath.includes("\\");
   const normTargetDir = targetDir.replace(/\\/g, "/").replace(/\/$/, "");
   const outputPath = normTargetDir ? `${normTargetDir}/${outName}` : outName;
+
+  // Apply the shared path validators (Windows reserved name / path
+  // traversal / MAX_PATH / self-overwrite). Reference for the dir-escape
+  // and self-overwrite checks is mode-dependent: rename keeps output in
+  // the subtitle's dir, copy-to-video puts it in the video's dir,
+  // copy-to-chosen uses the chosen dir. Without this the rename command
+  // was the only command bypassing the validators (HDR / shift / embed
+  // all routed through them).
+  let validatorRef: string;
+  if (mode === "rename") {
+    validatorRef = subtitlePath;
+  } else if (mode === "copy_to_video") {
+    validatorRef = videoPath;
+  } else {
+    // copy_to_chosen — synthesize a reference path under chosenDir so
+    // assertSafeOutputPath can extract a directory and run the
+    // dir-escape / MAX_PATH / traversal checks against it.
+    const cleanChosen = (chosenDir as string).replace(/\\/g, "/").replace(/\/$/, "");
+    validatorRef = `${cleanChosen}/__validator_ref__`;
+  }
+  assertSafeOutputFilename(outName);
+  assertSafeOutputPath(outputPath, validatorRef);
+
   return usedBackslash ? outputPath.replace(/\//g, "\\") : outputPath;
 }
 
