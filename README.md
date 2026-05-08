@@ -37,6 +37,7 @@ A Tauri desktop rewrite of [gky99/ssaHdrify](https://github.com/gky99/ssaHdrify)
 - [下载 | Download](#下载--download)
 - [功能 | Features](#功能--features)
 - [使用方法 | Usage](#使用方法--usage)
+- [CLI 使用 | CLI Usage](#cli-使用--cli-usage)
 - [使用场景 | Background](#使用场景--background)
 - [HDR 转换原理 | How HDR Conversion Works](#hdr-转换原理--how-hdr-conversion-works)
 - [从源码构建 | Build from Source](#从源码构建--build-from-source)
@@ -48,9 +49,19 @@ A Tauri desktop rewrite of [gky99/ssaHdrify](https://github.com/gky99/ssaHdrify)
 
 ## 下载 | Download
 
-从 [Releases](https://github.com/koagaroon/ssaHdrify-tauri/releases/latest) 页面下载最新便携式 exe，双击即可运行，无需安装。macOS / Linux 用户请参考下方「从源码构建」。
+从 [Releases](https://github.com/koagaroon/ssaHdrify-tauri/releases/latest) 页面下载最新便携式 exe，双击即可运行，无需安装：
 
-Download the latest portable exe from [Releases](https://github.com/koagaroon/ssaHdrify-tauri/releases/latest) — double-click to run, no install needed. macOS / Linux users, see "Build from Source" below.
+- **`ssahdrify_*.exe`** — 图形界面（GUI），适合手动操作
+- **`ssahdrify-cli_*.exe`** — 命令行（CLI），适合 pipeline / 批处理 / 脚本化场景
+
+macOS / Linux 用户请参考下方「从源码构建」。
+
+Download the latest portable exes from [Releases](https://github.com/koagaroon/ssaHdrify-tauri/releases/latest) — double-click to run, no install needed:
+
+- **`ssahdrify_*.exe`** — graphical interface (GUI), for manual workflows
+- **`ssahdrify-cli_*.exe`** — command line (CLI), for pipeline / batch / scripting
+
+macOS / Linux users, see "Build from Source" below.
 
 ---
 
@@ -124,6 +135,62 @@ Download the latest portable exe from [Releases](https://github.com/koagaroon/ss
 > 流水线：括号清理 → 优先级化的剧集号正则集（`S\d+E\d+`、`][NN][`、`- NN`、`第N话`、`EP\d+`）→ 季度并行扫描 → `(season, episode)` 配对键 → LCS 回退 → 手动选择作为最终安全网。模式覆盖在多组真实的字幕组命名样本（中日双语、外挂多语字幕、季度后缀变体等）上验证过。
 >
 > Pipeline: bracket cleanup → priority-ordered episode regex (`S\d+E\d+`, `][NN][`, `- NN`, `第N话`, `EP\d+`) → parallel season scan → `(season, episode)` pairing key → LCS fallback → manual selection as the final safety net. Pattern coverage was validated against representative real-world fan-sub naming variants (bilingual CJK titles, externally-shipped multi-language subs, season-suffix variants, and so on).
+
+---
+
+## CLI 使用 | CLI Usage
+
+`ssahdrify-cli` 是 GUI 的命令行兄弟二进制，从同一份源代码构建。四个功能（HDR 转换 / 时间轴偏移 / 字体嵌入 / 批量重命名）覆盖与 GUI 对等，差异只在交互方式。适用于 pipeline 集成、批量处理和脚本化字幕工作流。
+
+`ssahdrify-cli` is a command-line sibling binary built from the same source as the GUI. It covers the same four features (HDR convert / Timing shift / Font embed / Batch rename) at parity with the GUI, differing only in interaction. Useful for pipeline integration, batch processing, and scripted subtitle workflows.
+
+### 快速示例 | Quick Examples
+
+```bash
+# HDR 色彩转换（PQ 曲线）/ HDR conversion (PQ curve)
+ssahdrify-cli hdr --eotf pq input.ass
+
+# 时间轴偏移 +500ms / Timing shift +500ms
+ssahdrify-cli shift --offset +500ms input.ass
+
+# 字体嵌入：从指定文件夹搜索字体 / Font embed: search a folder for fonts
+ssahdrify-cli embed --font-dir "C:/Fonts" input.ass
+
+# 批量重命名：默认复制到视频所在目录 / Batch rename (default: copy sub next to video)
+ssahdrify-cli rename "C:/My Series"
+```
+
+### 全部子命令 | All Subcommands
+
+每个子命令都支持 `--help` 查看完整参数。
+
+Each subcommand supports `--help` for the full parameter reference.
+
+```bash
+ssahdrify-cli --help
+ssahdrify-cli hdr     --help
+ssahdrify-cli shift   --help
+ssahdrify-cli embed   --help
+ssahdrify-cli rename  --help
+```
+
+### 全局选项 | Global Options
+
+| 选项 / Option        | 说明 / Description                                                                                                                                  |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--lang <en\|zh>`    | 输出语言；不指定时按系统区域设置自动检测（zh\* → zh，否则 en）/ Output language; auto-detected from OS locale when omitted (zh\* → zh, otherwise en) |
+| `--json`             | 输出机器可读 JSON 报告 / Emit a machine-readable JSON report                                                                                        |
+| `--verbose`          | 显示更多进度细节 / Show more progress detail                                                                                                        |
+| `--quiet`            | 抑制常规进度输出 / Suppress normal progress output                                                                                                  |
+| `--dry-run`          | 预演计划工作但不写文件 / Preview planned work without writing files                                                                                 |
+| `--overwrite`        | 允许覆盖已存在的输出文件 / Replace existing output files instead of skipping                                                                        |
+| `--output-dir <DIR>` | 重定向输出到指定目录 / Redirect output to a specific directory                                                                                      |
+
+> **JSON 模式 | JSON Mode**
+>
+> `--json` 输出固定 schema 报告，按文件给出 status (`Succeeded` / `Skipped` / `Failed` / `Planned` / `NoOp`)、output path、encoding、warnings 等字段；stderr 仍可携带人类可读诊断。pipeline 集成场景建议固定使用此模式。
+>
+> `--json` emits a fixed-schema report listing per-file status (`Succeeded` / `Skipped` / `Failed` / `Planned` / `NoOp`), output path, encoding, warnings, etc.; stderr still carries human-readable diagnostics. For pipeline integration, prefer this mode.
 
 ---
 
