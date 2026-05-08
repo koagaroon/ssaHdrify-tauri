@@ -450,16 +450,17 @@ export function deriveRenameOutputPath(
   } else if (mode === "copy_to_video") {
     validatorRef = videoPath;
   } else {
-    // copy_to_chosen — chosenDir was already narrowed and assigned to
-    // targetDir above; reuse that to avoid an unsafe re-cast. Guard
+    // copy_to_chosen — `normTargetDir` (computed above) already holds
+    // the slash-normalized, trailing-slash-stripped form of targetDir,
+    // which IS chosenDir at this point. Reuse it directly to avoid a
+    // duplicate normalization that could drift if rules change. Guard
     // against a chosenDir that resolves to empty after normalization
-    // (theoretical degenerate input — clap's PathBuf parse rejects
-    // empty strings, but defense-in-depth).
-    const cleanChosen = targetDir.replace(/\\/g, "/").replace(/\/$/, "");
-    if (!cleanChosen) {
-      throw new Error("deriveRenameOutputPath: chosenDir resolves to empty after normalization");
+    // (degenerate input — clap's PathBuf parse rejects empty strings,
+    // but defense-in-depth).
+    if (!normTargetDir) {
+      throw new Error("chosenDir is empty after normalization");
     }
-    validatorRef = `${cleanChosen}/__validator_ref__`;
+    validatorRef = `${normTargetDir}/__validator_ref__`;
   }
   assertSafeOutputFilename(outName);
   assertSafeOutputPath(outputPath, validatorRef);

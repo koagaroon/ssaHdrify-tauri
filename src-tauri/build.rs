@@ -38,11 +38,22 @@ fn copy_cli_engine_bundle() {
 fn missing_engine_stub() -> String {
     const MESSAGE: &str =
         "CLI engine bundle is missing. Run `npm run build:engine` before building ssahdrify-cli.";
+    // Every function on globalThis.ssaHdrifyCliEngine that the Rust
+    // shell calls. The CLI's cheap-first ordering reaches the
+    // resolveX*OutputPath functions FIRST per file; if those aren't
+    // stubbed, a missing engine.js produces an inscrutable
+    // "ssaHdrifyCliEngine.resolveHdrOutputPath is not a function"
+    // V8 error instead of the friendly "Run `npm run build:engine`"
+    // message this stub exists to surface. Keep this list in sync
+    // with the methods on `CliEngine` in `bin/cli/engine.rs`.
     const FUNCTIONS: &[&str] = &[
         "convertHdr",
+        "resolveHdrOutputPath",
         "convertShift",
+        "resolveShiftOutputPath",
         "planRename",
         "planFontEmbed",
+        "resolveEmbedOutputPath",
         "applyFontEmbed",
     ];
 

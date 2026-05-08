@@ -189,6 +189,13 @@ export function convertShift(request: ShiftConversionRequest): ShiftConversionRe
   };
 }
 
+// Note: planRename is intentionally atomic — a single bad output
+// filename in any pairing row throws synchronously and aborts the
+// whole plan, unlike HDR/Shift/Embed's per-file failure-and-continue
+// model. Rationale: the rename plan is one logical unit (the user
+// reviews the entire pairing grid before any writes happen), so a
+// validator failure on any row signals "the plan needs to be
+// recomputed", not "skip this file and continue with the rest."
 export function planRename(request: RenamePlanRequest): RenamePlanResult {
   const selection = parseLanguageSelection(request.langs ?? "auto");
   const categorized = categorizeRenamePaths(request.paths);

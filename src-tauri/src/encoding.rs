@@ -123,12 +123,12 @@ pub fn read_text_detect_encoding(path: String) -> Result<ReadTextResult, String>
     // characters are blocked here too. Path-traversal `..` segments are
     // NOT rejected at this layer — they're defanged by the canonicalize
     // step below ON THE SUCCESS BRANCH; the canonicalize-fails fallback
-    // (line 175 below) reads through the raw path with `..` intact, but
-    // OS-level `fs::read` resolves `..` correctly so traversal isn't
-    // exploitable, just structurally less defended on the fallback
-    // path. Earlier comments in this function claimed unconditional
-    // `..` rejection; that was inaccurate (the validator never
-    // enforced it).
+    // later in this function reads through the raw path with `..`
+    // intact, but OS-level `fs::read` resolves `..` correctly so
+    // traversal isn't exploitable, just structurally less defended on
+    // the fallback path. Earlier comments in this function claimed
+    // unconditional `..` rejection; that was inaccurate (the validator
+    // never enforced it).
     crate::util::validate_ipc_path(&path, "Subtitle")?;
 
     // Extension validation: only allow subtitle/text file types

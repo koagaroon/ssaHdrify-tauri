@@ -914,7 +914,7 @@ fn init_cli_font_sources(
         let dir = absolute_path(dir)?;
         let source_id = format!("cli-dir-{index}");
         let summary = app_lib::fonts::import_font_directory_for_cli(&dir, &source_id)?;
-        emit_font_source_summary(globals, "font dir", &dir, &summary);
+        emit_font_source_summary(globals, "font dir", "字体目录", Some(&dir), &summary);
     }
 
     if !args.font_files.is_empty() {
@@ -924,22 +924,11 @@ fn init_cli_font_sources(
             .map(|path| absolute_path(path).map(|path| display_path(&path)))
             .collect();
         let summary = app_lib::fonts::import_font_files_for_cli(paths?, "cli-files")?;
-        if globals.verbose && !globals.json && !globals.quiet {
-            println!(
-                "{}",
-                localize(
-                    globals,
-                    format!(
-                        "font files: {} faces scanned, {} added, {} duplicated",
-                        summary.total, summary.added, summary.duplicated
-                    ),
-                    format!(
-                        "字体文件：扫描 {} 个字体，{} 个已添加，{} 个已去重",
-                        summary.total, summary.added, summary.duplicated
-                    ),
-                )
-            );
-        }
+        // Funnel through emit_font_source_summary so ScanStopReason
+        // (UserCancel / CeilingHit) surfaces with the same suffix as
+        // font-dir summaries. Path is None — font files are a flat
+        // list without a single "source path."
+        emit_font_source_summary(globals, "font files", "字体文件", None, &summary);
     }
 
     Ok(guard)
@@ -971,8 +960,9 @@ fn create_cli_font_db_dir() -> Result<PathBuf, String> {
 
 fn emit_font_source_summary(
     globals: &GlobalOptions,
-    label: &str,
-    path: &Path,
+    label_en: &str,
+    label_zh: &str,
+    path: Option<&Path>,
     summary: &app_lib::fonts::FontSourceImportSummary,
 ) {
     if !globals.verbose || globals.json || globals.quiet {
@@ -983,17 +973,26 @@ fn emit_font_source_summary(
         app_lib::fonts::ScanStopReason::UserCancel => (" (cancelled)", "（已取消）"),
         app_lib::fonts::ScanStopReason::CeilingHit => (" (ceiling hit)", "（已达上限）"),
     };
-    let display = display_path(path);
+    // Path suffix is optional: font dirs always have one; font files
+    // are a flat list with no single "source path" so the suffix is
+    // omitted in that case.
+    let (path_suffix_en, path_suffix_zh) = match path {
+        Some(p) => {
+            let display = display_path(p);
+            (format!(" ({display})"), format!("（{display}）"))
+        }
+        None => (String::new(), String::new()),
+    };
     println!(
         "{}",
         localize(
             globals,
             format!(
-                "{label}: {} faces scanned, {} added, {} duplicated{reason_en} ({display})",
+                "{label_en}: {} faces scanned, {} added, {} duplicated{reason_en}{path_suffix_en}",
                 summary.total, summary.added, summary.duplicated
             ),
             format!(
-                "{label}：扫描 {} 个字体，{} 个已添加，{} 个已去重{reason_zh}（{display}）",
+                "{label_zh}：扫描 {} 个字体，{} 个已添加，{} 个已去重{reason_zh}{path_suffix_zh}",
                 summary.total, summary.added, summary.duplicated
             ),
         )
@@ -1564,6 +1563,9 @@ fn emit_file_report(globals: &GlobalOptions, result: &FileReport) {
         return;
     }
 
+    // Status line first. Failed always surfaces to stderr regardless
+    // of --quiet (it's an error, not output); other statuses respect
+    // --quiet.
     if matches!(result.status, FileStatus::Failed) {
         if let Some(error) = &result.error {
             eprintln!(
@@ -1575,73 +1577,72 @@ fn emit_file_report(globals: &GlobalOptions, result: &FileReport) {
                 )
             );
         }
-        return;
-    }
-
-    if globals.quiet {
-        return;
-    }
-
-    let Some(output) = &result.output else {
-        return;
-    };
-
-    match result.status {
-        FileStatus::Written => {
-            if globals.verbose {
-                let encoding = result.encoding.as_deref().unwrap_or("unknown");
-                println!(
+    } else if !globals.quiet {
+        if let Some(output) = &result.output {
+            match result.status {
+                FileStatus::Written => {
+                    if globals.verbose {
+                        let encoding = result.encoding.as_deref().unwrap_or("unknown");
+                        println!(
+                            "{}",
+                            localize(
+                                globals,
+                                format!("written: {} -> {} ({encoding})", result.input, output),
+                                format!("已写入：{} -> {}（{encoding}）", result.input, output),
+                            )
+                        );
+                    } else {
+                        println!(
+                            "{}",
+                            localize(
+                                globals,
+                                format!("written: {output}"),
+                                format!("已写入：{output}"),
+                            )
+                        );
+                    }
+                }
+                FileStatus::Planned => println!(
                     "{}",
                     localize(
                         globals,
-                        format!("written: {} -> {} ({encoding})", result.input, output),
-                        format!("已写入：{} -> {}（{encoding}）", result.input, output),
+                        format!("would write: {output}"),
+                        format!("将写入：{output}"),
                     )
-                );
-            } else {
-                println!(
+                ),
+                FileStatus::Skipped => println!(
                     "{}",
                     localize(
                         globals,
-                        format!("written: {output}"),
-                        format!("已写入：{output}"),
+                        format!("skipped: {output}"),
+                        format!("已跳过：{output}"),
+                    )
+                ),
+                FileStatus::Failed => {}
+            }
+        }
+    }
+
+    // Warnings: stderr, after the status line for ANY status — moved
+    // out of the Failed early-return scope so a future
+    // failed-with-warnings path (e.g., partial-success-with-critical-
+    // error) doesn't silently drop them. Currently no failed_report
+    // caller sets warnings; the structure is preventive. JSON mode
+    // already returned; --quiet suppresses warnings too because the
+    // user explicitly silenced output (Failed errors still surface
+    // above as a hard exception to that rule).
+    if !globals.quiet {
+        if let Some(warnings) = &result.warnings {
+            for warning in warnings {
+                eprintln!(
+                    "  {}",
+                    localize(
+                        globals,
+                        format!("warning: {warning}"),
+                        format!("警告：{warning}"),
                     )
                 );
             }
-        }
-        FileStatus::Planned => println!(
-            "{}",
-            localize(
-                globals,
-                format!("would write: {output}"),
-                format!("将写入：{output}"),
-            )
-        ),
-        FileStatus::Skipped => println!(
-            "{}",
-            localize(
-                globals,
-                format!("skipped: {output}"),
-                format!("已跳过：{output}"),
-            )
-        ),
-        FileStatus::Failed => {}
-    }
-
-    // Surface non-fatal warnings (currently embed's missing /
-    // failed-subset fonts under --on-missing warn). JSON mode passes
-    // these via the warnings field on FileReport; human mode prints
-    // one line per warning, indented to associate with the file.
-    if let Some(warnings) = &result.warnings {
-        for warning in warnings {
-            eprintln!(
-                "  {}",
-                localize(
-                    globals,
-                    format!("warning: {warning}"),
-                    format!("警告：{warning}"),
-                )
-            );
         }
     }
 }
