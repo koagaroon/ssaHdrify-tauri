@@ -16,13 +16,11 @@ const MAX_SHIFT_OFFSET_MS: i64 = 365 * 24 * 60 * 60 * 1000;
 const CLI_FONT_DB_DIR_PREFIX: &str = "ssahdrify-cli-font-db";
 const CLI_FONT_DB_FILENAME: &str = "user-font-sources.session.sqlite3";
 
+/// Command-line interface for SSA HDRify subtitle workflows.
+///
+/// SSA HDRify 字幕工作流命令行工具。
 #[derive(Debug, Parser)]
-#[command(
-    name = "ssahdrify-cli",
-    version,
-    about = "Command-line interface for SSA HDRify subtitle workflows",
-    arg_required_else_help = true
-)]
+#[command(name = "ssahdrify-cli", version, arg_required_else_help = true)]
 struct Cli {
     #[command(flatten)]
     globals: GlobalOptions,
@@ -33,31 +31,31 @@ struct Cli {
 
 #[derive(Args, Debug)]
 struct GlobalOptions {
-    /// Output directory. Defaults to each input file's directory.
+    /// Output directory. Defaults to each input file's directory. 输出目录；不指定时为每个输入文件所在目录。
     #[arg(long, global = true, value_name = "DIR")]
     output_dir: Option<PathBuf>,
 
-    /// Replace existing output files instead of skipping them.
+    /// Replace existing output files instead of skipping them. 覆盖已存在的输出文件而非跳过。
     #[arg(long, global = true)]
     overwrite: bool,
 
-    /// Show planned work without writing files.
+    /// Show planned work without writing files. 预演计划工作但不写入文件。
     #[arg(long, global = true)]
     dry_run: bool,
 
-    /// Suppress normal progress output.
+    /// Suppress normal progress output. 抑制常规进度输出。
     #[arg(long, global = true, conflicts_with = "verbose")]
     quiet: bool,
 
-    /// Show more progress detail.
+    /// Show more progress detail. 显示更多进度细节。
     #[arg(long, global = true)]
     verbose: bool,
 
-    /// Emit machine-readable JSON.
+    /// Emit machine-readable JSON. 输出机器可读的 JSON。
     #[arg(long, global = true)]
     json: bool,
 
-    /// Output language. Defaults to OS locale (zh* → zh, otherwise en).
+    /// Output language. Defaults to OS locale (zh* → zh, otherwise en). 输出语言；不指定时按系统区域设置自动检测。
     #[arg(long, global = true, value_enum, value_name = "LANG")]
     lang: Option<OutputLang>,
 }
@@ -70,31 +68,31 @@ enum OutputLang {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Convert SDR subtitle colors to HDR.
+    /// Convert SDR subtitle colors to HDR. 将 SDR 字幕颜色转换为 HDR。
     Hdr(HdrArgs),
-    /// Shift subtitle timings by an offset.
+    /// Shift subtitle timings by an offset. 按偏移量平移字幕时间轴。
     Shift(ShiftArgs),
-    /// Embed fonts into ASS subtitle files.
+    /// Embed fonts into ASS subtitle files. 将字体嵌入 ASS 字幕文件。
     Embed(EmbedArgs),
-    /// Pair subtitles with videos and rename subtitles to match.
+    /// Pair subtitles with videos and rename subtitles to match. 配对视频和字幕，按视频名重命名字幕。
     Rename(RenameArgs),
 }
 
 #[derive(Args, Debug)]
 struct HdrArgs {
-    /// Transfer function.
+    /// Transfer function. EOTF 曲线（PQ / HLG）。
     #[arg(long, value_enum)]
     eotf: EotfArg,
 
-    /// Target subtitle brightness in nits.
+    /// Target subtitle brightness in nits. 字幕目标亮度（nits）。
     #[arg(long, default_value_t = 203)]
     nits: u16,
 
-    /// Output filename template.
+    /// Output filename template. 输出文件名模板。
     #[arg(long, default_value = "{name}.hdr.ass")]
     output_template: String,
 
-    /// Subtitle files to convert.
+    /// Subtitle files to convert. 要转换的字幕文件。
     #[arg(required = true)]
     files: Vec<PathBuf>,
 }
@@ -116,46 +114,46 @@ impl EotfArg {
 
 #[derive(Args, Debug)]
 struct ShiftArgs {
-    /// Signed duration, for example "+2.5s", "-500ms", or "+1m30s".
+    /// Signed duration, for example "+2.5s", "-500ms", or "+1m30s". 带符号的偏移量，如 "+2.5s"、"-500ms" 或 "+1m30s"。
     #[arg(long, allow_hyphen_values = true)]
     offset: String,
 
-    /// Shift only entries after this timestamp.
+    /// Shift only entries after this timestamp. 仅平移此时间戳之后的字幕条目。
     #[arg(long)]
     after: Option<String>,
 
-    /// Output filename template.
+    /// Output filename template. 输出文件名模板。
     #[arg(long, default_value = "{name}.shifted{ext}")]
     output_template: String,
 
-    /// Subtitle files to shift.
+    /// Subtitle files to shift. 要平移的字幕文件。
     #[arg(required = true)]
     files: Vec<PathBuf>,
 }
 
 #[derive(Args, Debug)]
 struct EmbedArgs {
-    /// Local font directory. Can be passed multiple times.
+    /// Local font directory. Can be passed multiple times. 本地字体目录；可多次传入。
     #[arg(long = "font-dir", value_name = "DIR")]
     font_dirs: Vec<PathBuf>,
 
-    /// Local font file. Can be passed multiple times.
+    /// Local font file. Can be passed multiple times. 本地字体文件；可多次传入。
     #[arg(long = "font-file", value_name = "FILE")]
     font_files: Vec<PathBuf>,
 
-    /// Do not use system-installed fonts.
+    /// Do not use system-installed fonts. 不使用系统已安装的字体。
     #[arg(long)]
     no_system_fonts: bool,
 
-    /// Behavior when referenced fonts are missing.
+    /// Behavior when referenced fonts are missing. 缺失字体时的行为。
     #[arg(long, value_enum, default_value_t = MissingFontAction::Warn)]
     on_missing: MissingFontAction,
 
-    /// Output filename template.
+    /// Output filename template. 输出文件名模板。
     #[arg(long, default_value = "{name}.embed.ass")]
     output_template: String,
 
-    /// ASS/SSA files to process.
+    /// ASS/SSA files to process. 要处理的 ASS/SSA 文件。
     #[arg(required = true)]
     files: Vec<PathBuf>,
 }
@@ -168,15 +166,15 @@ enum MissingFontAction {
 
 #[derive(Args, Debug)]
 struct RenameArgs {
-    /// Output mode.
+    /// Output mode. 输出模式。
     #[arg(long, value_enum, default_value_t = RenameMode::CopyToVideo)]
     mode: RenameMode,
 
-    /// Language selection: auto, all, or a comma-separated list such as sc,jp.
+    /// Language selection: auto, all, or a comma-separated list such as sc,jp. 语言选择：auto、all 或逗号分隔列表（如 sc,jp）。
     #[arg(long, default_value = "auto")]
     langs: String,
 
-    /// Video/subtitle files or folders to pair.
+    /// Video/subtitle files or folders to pair. 要配对的视频/字幕文件或文件夹。
     #[arg(required = true)]
     paths: Vec<PathBuf>,
 }
