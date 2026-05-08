@@ -30,9 +30,17 @@ fn missing_engine_stub() -> String {
         "applyFontEmbed",
     ];
 
+    // Use serde_json (not Rust Debug) to escape MESSAGE into a JS-safe
+    // string literal. Debug's escape rules diverge from JSON in edge
+    // cases (e.g. \u{xxxx} vs \uXXXX, control-char rendering); future
+    // edits to MESSAGE that introduce backticks, ${...}, or surrogate
+    // pairs would otherwise emit malformed JS.
+    let escaped_message =
+        serde_json::to_string(MESSAGE).expect("serializing &str literal to JSON never fails");
+
     let methods = FUNCTIONS
         .iter()
-        .map(|name| format!("{name}(){{throw new Error({MESSAGE:?})}}"))
+        .map(|name| format!("{name}(){{throw new Error({escaped_message})}}"))
         .collect::<Vec<_>>()
         .join(",");
 

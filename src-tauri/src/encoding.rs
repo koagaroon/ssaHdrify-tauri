@@ -119,9 +119,11 @@ pub fn read_text_detect_encoding(path: String) -> Result<ReadTextResult, String>
     // Length and content guards on the IPC-supplied path itself. Reject
     // obviously-hostile or pathological shapes BEFORE touching the
     // filesystem. Control chars / NUL in a path on Windows can truncate
-    // the access target at the null byte; `..` segments, while mostly
-    // defanged by canonicalize later, are rejected here as an early
-    // signal that the caller is not the native file picker.
+    // the access target at the null byte; zero-width and bidi-control
+    // characters are blocked here too. Path-traversal `..` segments are
+    // NOT rejected at this layer — they are defanged by the canonicalize
+    // step below. Earlier comments in this function claimed `..`
+    // rejection; that was inaccurate (the validator never enforced it).
     crate::util::validate_ipc_path(&path, "Subtitle")?;
 
     // Extension validation: only allow subtitle/text file types

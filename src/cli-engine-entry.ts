@@ -119,6 +119,18 @@ export interface FontEmbedApplyResult {
   embeddedCount: number;
 }
 
+export function resolveHdrOutputPath(request: {
+  inputPath: string;
+  eotf: Eotf;
+  outputTemplate?: string;
+}): string {
+  // Cheap path-only resolution. MUST stay byte-identical to convertHdr's
+  // returned outputPath — both route through resolveOutputPath with the
+  // same template defaulting, so byte equality holds by construction.
+  const outputTemplate = request.outputTemplate ?? DEFAULT_TEMPLATE;
+  return resolveOutputPath(request.inputPath, outputTemplate, request.eotf);
+}
+
 export function convertHdr(request: HdrConversionRequest): HdrConversionResult {
   const brightness = request.brightness ?? DEFAULT_BRIGHTNESS;
   const outputTemplate = request.outputTemplate ?? DEFAULT_TEMPLATE;
@@ -362,7 +374,20 @@ function insertFontsSection(content: string, fontsSection: string): string {
   const lines = normalized.split(/\r?\n/);
   const adaptedFontsSection = fontsSection.replace(/\n/g, lineEnding);
   const headerFontsRe = /^\[[Ff][Oo][Nn][Tt][Ss]\][ \t]*$/;
-  const existingFontsIdx = lines.findIndex((line) => headerFontsRe.test(line));
+  // Reject malformed input with multiple [Fonts] sections. The replace
+  // path below only rewrites the first occurrence; silently leaving
+  // additional sections in place would produce a corrupted ASS with
+  // conflicting font data.
+  const fontsHeaderIndices: number[] = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    if (headerFontsRe.test(lines[i])) fontsHeaderIndices.push(i);
+  }
+  if (fontsHeaderIndices.length > 1) {
+    throw new Error(
+      `Cannot embed: input ASS has ${fontsHeaderIndices.length} [Fonts] sections; expected at most one`
+    );
+  }
+  const existingFontsIdx = fontsHeaderIndices[0] ?? -1;
 
   const buildBefore = (endIdx: number): { text: string; sep: string } => {
     const slice = lines.slice(0, endIdx);

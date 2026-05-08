@@ -117,3 +117,114 @@ describe("font embed engine helpers", () => {
     expect(result.content).toContain("fontname: arial.ttf");
   });
 });
+
+describe("font embed engine helpers — gap coverage", () => {
+  it("planFontEmbed collects every distinct (family, bold, italic) tuple referenced in dialogue", () => {
+    const multiFontAss = `[Script Info]
+Title: Multi Font Test
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, Bold, Italic
+Style: Default,Arial,20,0,0
+Style: BoldStyle,Arial,20,1,0
+Style: Other,Times New Roman,20,0,1
+
+[Events]
+Format: Layer, Start, End, Style, Text
+Dialogue: 0,0:00:00.00,0:00:01.00,Default,Hello
+Dialogue: 0,0:00:01.00,0:00:02.00,BoldStyle,World
+Dialogue: 0,0:00:02.00,0:00:03.00,Other,Italic
+`;
+    const plan = planFontEmbed({
+      inputPath: "C:\\subs\\multi.ass",
+      content: multiFontAss,
+    });
+
+    expect(plan.fonts).toHaveLength(3);
+    const tuples = plan.fonts.map((f) => `${f.family}|${f.bold}|${f.italic}`);
+    expect(new Set(tuples).size).toBe(3);
+  });
+
+  it("planFontEmbed falls back to FNV hash when family strips to empty (non-ASCII case)", () => {
+    const cjkAss = `[Script Info]
+Title: CJK Font Test
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, Bold, Italic
+Style: Default,思源黑体,20,0,0
+
+[Events]
+Format: Layer, Start, End, Style, Text
+Dialogue: 0,0:00:00.00,0:00:01.00,Default,中文
+`;
+    const plan = planFontEmbed({
+      inputPath: "C:\\subs\\cjk.ass",
+      content: cjkAss,
+    });
+
+    expect(plan.fonts).toHaveLength(1);
+    // CJK family strips to empty under [^a-z0-9_-]; fontName must
+    // engage the FNV fallback (font_<8 hex chars>.ttf).
+    expect(plan.fonts[0].fontName).toMatch(/^font_[0-9a-f]{8}\.ttf$/);
+  });
+
+  it("applyFontEmbed short-circuits to embeddedCount=0 with an empty fonts array", () => {
+    const result = applyFontEmbed({
+      content: SIMPLE_ASS,
+      fonts: [],
+    });
+
+    expect(result.embeddedCount).toBe(0);
+    expect(result.content).toBe(SIMPLE_ASS);
+  });
+
+  it("applyFontEmbed rejects malformed ASS containing multiple [Fonts] sections", () => {
+    const malformedAss = `[Script Info]
+Title: Two Fonts
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, Bold, Italic
+Style: Default,Arial,20,0,0
+
+[Fonts]
+fontname: a.ttf
+abc==
+
+[Fonts]
+fontname: b.ttf
+def==
+
+[Events]
+Format: Layer, Start, End, Style, Text
+Dialogue: 0,0:00:00.00,0:00:01.00,Default,Hi
+`;
+    expect(() =>
+      applyFontEmbed({
+        content: malformedAss,
+        fonts: [{ fontName: "arial.ttf", data: [0, 1, 2] }],
+      })
+    ).toThrow(/2 \[Fonts\] sections/);
+  });
+
+  it("applyFontEmbed replaces existing [Fonts] section even when [Events] is absent", () => {
+    const noEventsAss = `[Script Info]
+Title: No Events
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, Bold, Italic
+Style: Default,Arial,20,0,0
+
+[Fonts]
+fontname: stale.ttf
+abc==
+`;
+    const result = applyFontEmbed({
+      content: noEventsAss,
+      fonts: [{ fontName: "arial.ttf", data: [0, 1, 2] }],
+    });
+
+    expect(result.embeddedCount).toBe(1);
+    expect(result.content).toContain("fontname: arial.ttf");
+    expect(result.content).not.toContain("fontname: stale.ttf");
+  });
+});

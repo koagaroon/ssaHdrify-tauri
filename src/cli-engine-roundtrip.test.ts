@@ -16,10 +16,7 @@
 import { describe, it, expect } from "vitest";
 
 import { convertHdr, convertShift } from "./cli-engine-entry";
-import {
-  DEFAULT_BRIGHTNESS,
-  type Eotf,
-} from "./features/hdr-convert/color-engine";
+import { DEFAULT_BRIGHTNESS, type Eotf } from "./features/hdr-convert/color-engine";
 import { processAssContent } from "./features/hdr-convert/ass-processor";
 import {
   DEFAULT_STYLE,
@@ -29,10 +26,7 @@ import {
   processSrtUserText,
 } from "./features/hdr-convert/srt-converter";
 import { DEFAULT_TEMPLATE, resolveOutputPath } from "./features/hdr-convert/output-naming";
-import {
-  deriveShiftedPath,
-  shiftSubtitles,
-} from "./features/timing-shift/timing-engine";
+import { deriveShiftedPath, shiftSubtitles } from "./features/timing-shift/timing-engine";
 import { parseSubtitle } from "./lib/subtitle-parser";
 
 // ── Fixtures ─────────────────────────────────────────────
@@ -54,7 +48,7 @@ const ASS_FIXTURE = [
 const SRT_FIXTURE = [
   "1",
   "00:00:00,000 --> 00:00:01,500",
-  "<font color=\"#FF0000\">Red</font> opening",
+  '<font color="#FF0000">Red</font> opening',
   "",
   "2",
   "00:00:01,500 --> 00:00:03,000",
@@ -100,11 +94,11 @@ describe("HDR convert — GUI ↔ CLI byte equivalence", () => {
     const cli = convertHdr({
       inputPath: inputAss,
       content: ASS_FIXTURE,
-      eotf: "pq",
+      eotf: "PQ",
       brightness: 1000,
       outputTemplate: DEFAULT_TEMPLATE,
     });
-    const gui = guiHdrFlow(inputAss, ASS_FIXTURE, "pq", 1000, DEFAULT_TEMPLATE);
+    const gui = guiHdrFlow(inputAss, ASS_FIXTURE, "PQ", 1000, DEFAULT_TEMPLATE);
 
     expect(cli.outputPath).toBe(gui.outputPath);
     expect(cli.content).toBe(gui.content);
@@ -114,11 +108,11 @@ describe("HDR convert — GUI ↔ CLI byte equivalence", () => {
     const cli = convertHdr({
       inputPath: inputSrt,
       content: SRT_FIXTURE,
-      eotf: "hlg",
+      eotf: "HLG",
       brightness: 4000,
       outputTemplate: DEFAULT_TEMPLATE,
     });
-    const gui = guiHdrFlow(inputSrt, SRT_FIXTURE, "hlg", 4000, DEFAULT_TEMPLATE);
+    const gui = guiHdrFlow(inputSrt, SRT_FIXTURE, "HLG", 4000, DEFAULT_TEMPLATE);
 
     expect(cli.outputPath).toBe(gui.outputPath);
     expect(cli.content).toBe(gui.content);
@@ -128,10 +122,10 @@ describe("HDR convert — GUI ↔ CLI byte equivalence", () => {
     const cli = convertHdr({
       inputPath: inputAss,
       content: ASS_FIXTURE,
-      eotf: "pq",
+      eotf: "PQ",
       outputTemplate: DEFAULT_TEMPLATE,
     });
-    const gui = guiHdrFlow(inputAss, ASS_FIXTURE, "pq", DEFAULT_BRIGHTNESS, DEFAULT_TEMPLATE);
+    const gui = guiHdrFlow(inputAss, ASS_FIXTURE, "PQ", DEFAULT_BRIGHTNESS, DEFAULT_TEMPLATE);
 
     expect(cli.content).toBe(gui.content);
   });
@@ -169,5 +163,23 @@ describe("Time shift — GUI ↔ CLI byte equivalence", () => {
 
     expect(cli.content).toBe(gui.content);
     expect(cli.shiftedCount).toBe(gui.preview.filter((p) => p.wasShifted).length);
+  });
+
+  it("template-driven shift path matches deriveShiftedPath for the default template", () => {
+    // Production CLI always supplies output_template (clap's default is
+    // "{name}.shifted{ext}"); the no-template branch above only covers
+    // the API-internal fallback. This pins the template-driven branch
+    // in resolveShiftOutputPath so a future refactor that drifts it
+    // from deriveShiftedPath surfaces here.
+    const cli = convertShift({
+      inputPath: input,
+      content: ASS_FIXTURE,
+      offsetMs: 1000,
+      outputTemplate: "{name}.shifted{ext}",
+    });
+    const guiResult = shiftSubtitles(ASS_FIXTURE, { offsetMs: 1000 });
+
+    expect(cli.outputPath).toBe(deriveShiftedPath(input));
+    expect(cli.content).toBe(guiResult.content);
   });
 });

@@ -322,6 +322,12 @@ fn run_hdr(globals: &GlobalOptions, args: HdrArgs) -> Result<ExitCode, String> {
         .map(absolute_path)
         .transpose()?;
     let mut report = CommandReport::new("hdr");
+    // First-input-wins dedup is intentional for non-destructive
+    // transformations (HDR/Shift/Embed): the second input's work is
+    // wasted but no source data is lost. Rename takes the opposite
+    // all-fail policy (see duplicate_rename_output_keys) because
+    // picking a "winner" there could move the wrong file. See
+    // ssahdrify_cli_design.md § Cross-cutting 行为.
     let mut seen_outputs = HashSet::new();
 
     for file in &args.files {
@@ -375,10 +381,62 @@ fn process_hdr_file(
     };
     let input = display_path(&input_path);
 
-    let read_result = match app_lib::encoding::read_text_detect_encoding(input.clone()) {
-        Ok(result) => result,
+    // Cheap-first ordering: resolve the output path before reading
+    // content or running the heavy convert_hdr. Lets dedup and
+    // exists-check skip duplicate-output and already-existing-target
+    // batches without paying the V8 conversion cost. Both
+    // resolve_hdr_output_path and convert_hdr route through the same
+    // JS resolveOutputPath helper, so the resolved path is
+    // byte-identical to what convert_hdr would have returned.
+    let path_request = engine::HdrPathRequest {
+        input_path: input.clone(),
+        eotf: args.eotf.as_engine_value().to_string(),
+        output_template: args.output_template.clone(),
+    };
+    let resolved_output_path = match engine.resolve_hdr_output_path(&path_request) {
+        Ok(path) => path,
         Err(error) => return failed_report(&input_path, None, None, error),
     };
+
+    let output_path = match relocate_output_path(&resolved_output_path, output_dir) {
+        Ok(path) => path,
+        Err(error) => return failed_report(&input_path, None, None, error),
+    };
+    let output = display_path(&output_path);
+
+    if !seen_outputs.insert(normalize_output_key(&output_path)) {
+        return failed_report(
+            &input_path,
+            Some(output),
+            None,
+            "duplicate output path in planned batch".to_string(),
+        );
+    }
+
+    if output_path_exists(&output_path) && !globals.overwrite {
+        return FileReport {
+            input,
+            output: Some(output),
+            encoding: None,
+            status: FileStatus::Skipped,
+            error: Some("output exists; pass --overwrite to replace it".to_string()),
+        };
+    }
+
+    let read_result = match app_lib::encoding::read_text_detect_encoding(input.clone()) {
+        Ok(result) => result,
+        Err(error) => return failed_report(&input_path, Some(output), None, error),
+    };
+
+    if globals.dry_run {
+        return FileReport {
+            input,
+            output: Some(output),
+            encoding: Some(read_result.encoding),
+            status: FileStatus::Planned,
+            error: None,
+        };
+    }
 
     let request = engine::HdrConversionRequest {
         input_path: input.clone(),
@@ -391,46 +449,9 @@ fn process_hdr_file(
     let conversion = match engine.convert_hdr(&request) {
         Ok(result) => result,
         Err(error) => {
-            return failed_report(&input_path, None, Some(read_result.encoding), error);
+            return failed_report(&input_path, Some(output), Some(read_result.encoding), error);
         }
     };
-
-    let output_path = match relocate_output_path(&conversion.output_path, output_dir) {
-        Ok(path) => path,
-        Err(error) => {
-            return failed_report(&input_path, None, Some(read_result.encoding), error);
-        }
-    };
-    let output = display_path(&output_path);
-
-    if !seen_outputs.insert(normalize_output_key(&output_path)) {
-        return failed_report(
-            &input_path,
-            Some(output),
-            Some(read_result.encoding),
-            "duplicate output path in planned batch".to_string(),
-        );
-    }
-
-    if output_path_exists(&output_path) && !globals.overwrite {
-        return FileReport {
-            input,
-            output: Some(output),
-            encoding: Some(read_result.encoding),
-            status: FileStatus::Skipped,
-            error: Some("output exists; pass --overwrite to replace it".to_string()),
-        };
-    }
-
-    if globals.dry_run {
-        return FileReport {
-            input,
-            output: Some(output),
-            encoding: Some(read_result.encoding),
-            status: FileStatus::Planned,
-            error: None,
-        };
-    }
 
     if let Err(error) = write_output(&output_path, &conversion.content, globals.overwrite) {
         return failed_report(&input_path, Some(output), Some(read_result.encoding), error);
@@ -447,12 +468,6 @@ fn process_hdr_file(
 
 fn run_shift(globals: &GlobalOptions, args: ShiftArgs) -> Result<ExitCode, String> {
     let offset_ms = parse_duration_ms(&args.offset)?;
-    if offset_ms.abs() > MAX_SHIFT_OFFSET_MS {
-        return Err(format!(
-            "offset is too large: max supported range is +/-{} ms",
-            MAX_SHIFT_OFFSET_MS
-        ));
-    }
     let threshold_ms = args.after.as_deref().map(parse_timestamp_ms).transpose()?;
     let mut engine = engine::CliEngine::new()?;
     let output_dir = globals
@@ -461,6 +476,13 @@ fn run_shift(globals: &GlobalOptions, args: ShiftArgs) -> Result<ExitCode, Strin
         .map(absolute_path)
         .transpose()?;
     let mut report = CommandReport::new("shift");
+    // Same first-wins dedup policy as run_hdr. Note: shift does NOT
+    // pre-resolve output paths before engine.convert_shift — its
+    // template can include {format}, whose value comes from parsing
+    // content. So dedup runs AFTER convert here, unlike HDR which
+    // dedups BEFORE via resolve_hdr_output_path. Acceptable cost: the
+    // wasted JS work only kicks in on duplicate-output batches with
+    // shift, which are rare in practice.
     let mut seen_outputs = HashSet::new();
 
     for file in &args.files {
@@ -613,6 +635,9 @@ fn run_embed(globals: &GlobalOptions, args: EmbedArgs) -> Result<ExitCode, Strin
         .map(absolute_path)
         .transpose()?;
     let mut report = CommandReport::new("embed");
+    // Same first-wins dedup policy as run_hdr. Embed already orders
+    // dedup correctly (cheap plan_font_embed → dedup → expensive
+    // subset+apply), so no JS work is wasted on duplicate batches.
     let mut seen_outputs = HashSet::new();
 
     for file in &args.files {
@@ -815,14 +840,25 @@ fn process_embed_file(
         }
     };
 
-    let apply_request = engine::FontEmbedApplyRequest {
-        content: read_result.text,
-        fonts: subset_payloads,
-    };
-    let applied = match engine.apply_font_embed(&apply_request) {
-        Ok(result) => result,
-        Err(error) => {
-            return failed_report(&input_path, Some(output), Some(read_result.encoding), error);
+    let applied = if subset_payloads.is_empty() {
+        // No fonts left to embed (all referenced fonts missing under
+        // --on-missing warn). Skip the V8 round-trip — applyFontEmbed
+        // JS-side does the same short-circuit, but avoiding the call
+        // saves work on batches with many no-resolve files.
+        engine::FontEmbedApplyResult {
+            content: read_result.text,
+            embedded_count: 0,
+        }
+    } else {
+        let apply_request = engine::FontEmbedApplyRequest {
+            content: read_result.text,
+            fonts: subset_payloads,
+        };
+        match engine.apply_font_embed(&apply_request) {
+            Ok(result) => result,
+            Err(error) => {
+                return failed_report(&input_path, Some(output), Some(read_result.encoding), error);
+            }
         }
     };
 
@@ -968,7 +1004,8 @@ fn run_rename(globals: &GlobalOptions, args: RenameArgs) -> Result<ExitCode, Str
                 "--output-dir can only be used with rename --mode copy-to-chosen".to_string(),
             );
         }
-        _ => {}
+        (RenameMode::Rename | RenameMode::CopyToVideo, None) => {}
+        (RenameMode::CopyToChosen, Some(_)) => {}
     }
 
     let expanded_paths = expand_rename_inputs(&args.paths)?;
@@ -1110,6 +1147,11 @@ fn process_rename_pair(
 }
 
 fn duplicate_rename_output_keys(rows: &[engine::RenamePlanRow]) -> HashSet<String> {
+    // All-fail dedup (not first-wins) for rename: rename is destructive,
+    // so picking a "winner" among duplicates risks moving the wrong
+    // file into a stable name. Every participant in a duplicate set is
+    // flagged here and refuses to act in process_rename_pair. See
+    // ssahdrify_cli_design.md § Cross-cutting 行为.
     let mut seen = HashSet::new();
     let mut duplicates = HashSet::new();
 
@@ -1224,7 +1266,18 @@ fn output_path_exists(path: &Path) -> bool {
     match fs::metadata(path) {
         Ok(_) => true,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => false,
-        Err(_) => true,
+        Err(err) => {
+            // Treat non-NotFound errors as "exists" so we never silently
+            // overwrite a file we couldn't stat (restrictive ACLs,
+            // network shares with metadata-read denied). Surface a
+            // stderr warning so the user sees the real cause instead of
+            // a misleading "skipped: output exists" diagnostic.
+            eprintln!(
+                "warning: stat({}) failed: {err}; treating as 'output exists'",
+                path.display()
+            );
+            true
+        }
     }
 }
 
@@ -1334,7 +1387,7 @@ fn detect_os_locale() -> OutputLang {
 // and `@` (POSIX modifier).
 fn classify_locale(raw: &str) -> OutputLang {
     let primary = raw
-        .split(|c: char| c == '-' || c == '_' || c == '.' || c == '@')
+        .split(['-', '_', '.', '@'])
         .next()
         .unwrap_or("")
         .to_ascii_lowercase();
@@ -1415,7 +1468,18 @@ fn parse_duration_ms(input: &str) -> Result<i64, String> {
     if !total.is_finite() {
         return Err("offset is not finite".to_string());
     }
-    Ok((sign * total).round() as i64)
+    // Bound BEFORE casting to i64. f64 -> i64 saturates at i64::MIN/MAX,
+    // and i64::MIN.abs() wraps to i64::MIN in release mode — so a cap
+    // check after the cast can be silently bypassed by inputs that
+    // round to i64 saturation. Bounding the f64 first closes that path.
+    let signed = sign * total;
+    if signed.abs() > MAX_SHIFT_OFFSET_MS as f64 {
+        return Err(format!(
+            "offset is too large: max supported range is +/-{} ms",
+            MAX_SHIFT_OFFSET_MS
+        ));
+    }
+    Ok(signed.round() as i64)
 }
 
 fn parse_timestamp_ms(input: &str) -> Result<i64, String> {
@@ -1493,7 +1557,17 @@ mod tests {
 
     #[test]
     fn classify_locale_falls_back_to_en_for_others_and_garbage() {
-        for tag in ["", "en", "en-US", "en_US.UTF-8", "C", "POSIX", "ja-JP", "-zh", "."] {
+        for tag in [
+            "",
+            "en",
+            "en-US",
+            "en_US.UTF-8",
+            "C",
+            "POSIX",
+            "ja-JP",
+            "-zh",
+            ".",
+        ] {
             assert_eq!(classify_locale(tag), OutputLang::En, "tag = {tag}");
         }
     }
