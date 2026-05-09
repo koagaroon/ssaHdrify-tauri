@@ -34,6 +34,20 @@ import {
 } from "./lib/path-validation";
 import { parseSubtitle } from "./lib/subtitle-parser";
 
+// Chain feature — runtime + types re-exported so the Rust shell can
+// reach them via the bundled engine.js. Adding the chain entry here
+// is what makes the chain runtime get included in esbuild's bundle.
+export { runChain, resolveChainOutputPath } from "./features/chain/chain-runtime";
+export type {
+  ChainPlan,
+  ChainResult,
+  ChainStep,
+  StepKind,
+  HdrStepParams,
+  ShiftStepParams,
+  EmbedStepParams,
+} from "./features/chain/chain-types";
+
 export interface HdrConversionRequest {
   inputPath: string;
   content: string;
