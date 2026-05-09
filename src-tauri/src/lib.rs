@@ -1,5 +1,6 @@
 pub mod dropzone;
 pub mod encoding;
+pub mod font_cache;
 pub mod fonts;
 pub mod util;
 
