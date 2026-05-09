@@ -90,6 +90,13 @@ enum Command {
     /// Tips / 提示:
     ///   --font-dir and --font-file are repeatable — pass once per folder/file.
     ///   --font-dir 与 --font-file 可重复传入：每个目录或文件传一次。
+    ///
+    ///   Font cache (when present): used automatically. With --font-dir,
+    ///   the cache merges with the dirs you supplied; without --font-dir,
+    ///   the cache is the primary source. Pass --no-cache to skip the
+    ///   cache for one run, or run `refresh-fonts` to rebuild it.
+    ///   字体缓存（如已存在）：自动使用。提供 --font-dir 时与缓存合并；
+    ///   不提供时缓存为主源。--no-cache 跳过本次；refresh-fonts 重建。
     Embed(EmbedArgs),
     /// Pair subtitles with videos and rename subtitles to match. 配对视频和字幕，按视频名重命名字幕。
     Rename(RenameArgs),

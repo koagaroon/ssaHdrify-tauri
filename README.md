@@ -157,6 +157,10 @@ ssahdrify-cli shift --offset +500ms input.ass
 # 字体嵌入：从指定文件夹搜索字体 / Font embed: search a folder for fonts
 ssahdrify-cli embed --font-dir "C:/Fonts" input.ass
 
+# 持久化字体缓存：先一次性扫描，后续 embed 复用 / Persistent font cache: scan once, reuse on every embed
+ssahdrify-cli refresh-fonts --font-dir "C:/Fonts"
+ssahdrify-cli embed input.ass            # uses cache automatically
+
 # 批量重命名：默认复制到视频所在目录 / Batch rename (default: copy sub next to video)
 ssahdrify-cli rename "C:/My Series"
 ```
@@ -169,10 +173,12 @@ Each subcommand supports `--help` for the full parameter reference.
 
 ```bash
 ssahdrify-cli --help
-ssahdrify-cli hdr     --help
-ssahdrify-cli shift   --help
-ssahdrify-cli embed   --help
-ssahdrify-cli rename  --help
+ssahdrify-cli hdr            --help
+ssahdrify-cli shift          --help
+ssahdrify-cli embed          --help
+ssahdrify-cli rename         --help
+ssahdrify-cli refresh-fonts  --help
+ssahdrify-cli chain          --help
 ```
 
 ### 全局选项 | Global Options
@@ -186,12 +192,62 @@ ssahdrify-cli rename  --help
 | `--dry-run`          | 预演计划工作但不写文件 / Preview planned work without writing files                                                                                 |
 | `--overwrite`        | 允许覆盖已存在的输出文件 / Replace existing output files instead of skipping                                                                        |
 | `--output-dir <DIR>` | 重定向输出到指定目录 / Redirect output to a specific directory                                                                                      |
+| `--no-cache`         | 跳过本次运行的字体缓存；缓存文件保持不变 / Skip the font cache for this run; cache file untouched                                                   |
+| `--cache-file <PATH>` | 覆盖默认的缓存文件路径（缺省 `%APPDATA%/ssaHdrify/cli_font_cache.sqlite3`）/ Override the default cache file path                                  |
 
 > **JSON 模式 | JSON Mode**
 >
 > `--json` 输出固定 schema 报告，按文件给出 status (`Succeeded` / `Skipped` / `Failed` / `Planned` / `NoOp`)、output path、encoding、warnings 等字段；stderr 仍可携带人类可读诊断。pipeline 集成场景建议固定使用此模式。
 >
 > `--json` emits a fixed-schema report listing per-file status (`Succeeded` / `Skipped` / `Failed` / `Planned` / `NoOp`), output path, encoding, warnings, etc.; stderr still carries human-readable diagnostics. For pipeline integration, prefer this mode.
+
+### 字体缓存 | Font Cache
+
+`embed` 子命令每次启动都需要扫描 `--font-dir` 里的所有字体文件来构建查表（通常几秒到几十秒，5000+ 字体级别可达分钟级）。**持久化字体缓存**让你只扫描一次：第一次跑 `refresh-fonts` 把元数据写到磁盘上的 SQLite 文件，之后所有 `embed` 调用都自动用这份缓存做查表，跳过扫描。fan-sub 团队按集打包时尤其有用。
+
+The `embed` subcommand normally rescans every `--font-dir` on every invocation to build its lookup table (seconds to tens of seconds; minutes for 5000+ font collections). The **persistent font cache** lets you scan once: a first `refresh-fonts` run writes metadata to a SQLite file on disk, and all subsequent `embed` calls reuse it. Especially useful for fan-sub teams encoding episodes in batches.
+
+#### 工作流 | Workflow
+
+```bash
+# 一次性扫描字体目录，构建缓存 / Scan once to build the cache
+ssahdrify-cli refresh-fonts --font-dir "C:/Fonts/Anime" --font-dir "C:/Fonts/Latin"
+
+# 后续 embed 自动用缓存（不再扫描） / Subsequent embed uses cache (no scan)
+ssahdrify-cli embed input.ass
+
+# 仍可加 --font-dir 临时混入额外字体源（cache + 额外目录合并） /
+# You can still pass --font-dir to merge extra dirs with the cache
+ssahdrify-cli embed --font-dir "C:/Fonts/Project-Specific" input.ass
+
+# 强制不用缓存 / Force no-cache for one run
+ssahdrify-cli --no-cache embed --font-dir "C:/Fonts" input.ass
+
+# 字体目录变了之后刷新缓存 / Refresh cache when fonts changed
+ssahdrify-cli refresh-fonts --font-dir "C:/Fonts/Anime" --font-dir "C:/Fonts/Latin"
+```
+
+#### 缓存位置 | Cache Location
+
+默认 `%APPDATA%/ssaHdrify/cli_font_cache.sqlite3`（与 GUI 缓存独立，避免锁竞争）。`--cache-file <PATH>` 可覆盖。
+
+Default `%APPDATA%/ssaHdrify/cli_font_cache.sqlite3` (separate from the GUI cache to avoid lock contention). Override with `--cache-file <PATH>`.
+
+#### 漂移检测 | Drift Detection
+
+`embed` 启动时会对缓存做轻量验证：用 `stat()` 检查每个已缓存文件夹的 mtime，如果跟缓存里记录的不一致（说明你添加 / 删除 / 替换 / 重命名了字体文件），CLI 在 stderr 列出哪些文件夹改了，自动 fallback 到无缓存模式（这次 embed 走 `--font-dir` 或系统字体），并提示你跑 `refresh-fonts` 更新。**永远不会自动重建缓存**——缓存动作必须由 `refresh-fonts` 显式触发。
+
+`embed` runs a lightweight cache validation at startup: a single `stat()` per cached folder checks mtime drift. If drift is detected (you added / deleted / replaced / renamed font files), the CLI lists the changed folders on stderr, transparently falls back to no-cache for this run (uses `--font-dir` or system fonts), and tells you to run `refresh-fonts`. **The cache is never silently rebuilt** — cache mutations are always explicit via `refresh-fonts`.
+
+#### 限制 | Limitations
+
+- 每个 `--font-dir` 一层深扫描（不递归），与 `embed --font-dir` 语义一致。树状字体目录请逐层显式传入。
+- 当前仅支持 1 个字体缓存文件（per binary）。多 `embed` 步骤进 `chain` 时缓存暂不参与，未来再扩。
+- Schema 升级（不同 release 之间）不自动 migrate；版本不匹配时 CLI 显式提示删文件重跑 `refresh-fonts`。
+
+- Each `--font-dir` is scanned one level deep (non-recursive), matching `embed --font-dir` semantics. Pass each leaf folder explicitly for tree-shaped collections.
+- One cache file per binary. Cache currently doesn't participate in `chain`'s embed step; future work.
+- No automatic schema migration across releases — version mismatch surfaces as an explicit "delete the cache file and rerun `refresh-fonts`" prompt.
 
 ---
 
