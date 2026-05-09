@@ -181,7 +181,7 @@ pub fn read_text_detect_encoding(path: String) -> Result<ReadTextResult, String>
             canonical
         }
         Err(e) => {
-            // Log-level discrimination per ~/.claude/rules/log-levels.md.
+            // Log-level discrimination per ~/.claude/rules/vibe-coding.md.
             // Reparse-point + canonicalize-failure is the path that
             // genuinely refuses the read; WARN names the user-visible
             // action. The non-reparse fallback succeeds with the raw

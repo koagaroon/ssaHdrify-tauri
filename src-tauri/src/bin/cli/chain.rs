@@ -148,7 +148,7 @@ pub fn parse_chain_argv(
         // Locked rule: non-terminal step's --output-template is a
         // chain-level flag; only valid before any step. Surface as
         // a parse-time error rather than silent ignore — silent
-        // ignore violates ~/.claude/rules/log-levels.md "no silent
+        // ignore violates ~/.claude/rules/vibe-coding.md "no silent
         // fallback" and teaches the wrong mental model.
         if !is_terminal && segment_has_output_template_token(segment) {
             return Err(format!(
