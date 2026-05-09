@@ -101,6 +101,16 @@ impl DriftReport {
     }
 }
 
+/// Lookup result from `FontCache::lookup_family`. Identifies a single
+/// font face (`font_path` + `face_index`) — both pieces are needed
+/// for subsetting since TTC files require the face index alongside
+/// the file path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FontLookupResult {
+    pub font_path: String,
+    pub face_index: i32,
+}
+
 /// Persistent font cache backed by SQLite. One instance per binary
 /// (gui vs cli) — the caller chooses the file path.
 pub struct FontCache {
@@ -338,10 +348,11 @@ impl FontCache {
 
             for key in &font.family_keys {
                 tx.execute(
-                    "INSERT INTO cached_family_keys(font_path, family_name, bold, italic) \
-                     VALUES(?1, ?2, ?3, ?4)",
+                    "INSERT INTO cached_family_keys(font_path, face_index, family_name, bold, italic) \
+                     VALUES(?1, ?2, ?3, ?4, ?5)",
                     params![
                         font.file_path,
+                        font.face_index,
                         key.family_name,
                         i32::from(key.bold),
                         i32::from(key.italic),
@@ -455,6 +466,52 @@ impl FontCache {
         Ok(report)
     }
 
+    /// Look up a font face by family name + bold/italic flags. Returns
+    /// `Some(FontLookupResult { font_path, face_index })` for the
+    /// first match, or `None` if no font in the cache advertises the
+    /// requested family + style combination.
+    ///
+    /// Match semantics: exact equality on `family_name` (no case
+    /// folding, no Unicode normalization done here — caller's
+    /// responsibility to normalize the query the same way it
+    /// normalized writes). Bold/italic must match exactly.
+    ///
+    /// Determinism: when multiple fonts advertise the same family
+    /// alias (rare; typically alternate weights or different
+    /// foundries' versions of a famous name), the result is sorted
+    /// by `(font_path, face_index)` and the first row returned. Same
+    /// query gives the same answer across runs.
+    ///
+    /// Future cleanup item from the design doc: extract a shared
+    /// `family_lookup(db_conn, ...)` helper that this method and the
+    /// GUI session DB's equivalent can both use. For now the queries
+    /// live in their own modules; consolidation is a Step-1-of-real-
+    /// implementation task whenever both consumers exist.
+    pub fn lookup_family(
+        &self,
+        family_name: &str,
+        bold: bool,
+        italic: bool,
+    ) -> Result<Option<FontLookupResult>, CacheError> {
+        let row: Result<(String, i32), _> = self.conn.query_row(
+            "SELECT k.font_path, k.face_index \
+             FROM cached_family_keys k \
+             WHERE k.family_name = ?1 AND k.bold = ?2 AND k.italic = ?3 \
+             ORDER BY k.font_path, k.face_index \
+             LIMIT 1",
+            params![family_name, i32::from(bold), i32::from(italic)],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        );
+        match row {
+            Ok((font_path, face_index)) => Ok(Some(FontLookupResult {
+                font_path,
+                face_index,
+            })),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(CacheError::Io(format!("lookup_family: {e}"))),
+        }
+    }
+
     /// List every folder currently tracked in the cache. Used by
     /// drift detection (Step 3) to iterate cached folders and check
     /// each against the filesystem.
@@ -503,16 +560,18 @@ fn current_unix_seconds() -> i64 {
 /// the primary drift signal — that's `folder_mtime` compared against
 /// the live `stat()`.
 ///
-/// `cached_fonts.face_index`: 0 for non-TTC fonts; >=0 for TrueType
-/// Collections. Identifies which face inside a TTC file the row
-/// describes.
+/// `cached_fonts` PK is composite `(font_path, face_index)`: a single
+/// TTC file (TrueType Collection) holds multiple faces, each with its
+/// own family names and addressable independently for subsetting. The
+/// composite key lets one font_path appear N times — once per face.
+/// `face_index` is 0 for non-TTC files; >=0 for TTC.
 ///
-/// `cached_family_keys`: composite primary key on (family_name, bold,
-/// italic, font_path). One font face produces multiple rows here —
-/// CJK fonts especially advertise family names in several language
-/// IDs (Latin transliteration + Simplified Chinese + Traditional +
-/// Japanese + Korean), and embed-time lookup must hit the family name
-/// the subtitle author wrote regardless of which locale that was.
+/// `cached_family_keys` PK includes `(family_name, bold, italic,
+/// font_path, face_index)` so the same face_index of the same file
+/// can appear for multiple family aliases — CJK fonts especially
+/// advertise family names in several language IDs (Latin + Simplified
+/// Chinese + Traditional + Japanese + Korean) on one face. Embed-time
+/// lookup must hit whichever locale the subtitle author wrote.
 const SCHEMA_SQL: &str = r#"
 CREATE TABLE cached_folders (
     folder_path     TEXT PRIMARY KEY,
@@ -520,20 +579,22 @@ CREATE TABLE cached_folders (
     last_scanned_at INTEGER NOT NULL
 );
 CREATE TABLE cached_fonts (
-    font_path       TEXT PRIMARY KEY,
+    font_path       TEXT NOT NULL,
+    face_index      INTEGER NOT NULL,
     folder_path     TEXT NOT NULL,
     file_size       INTEGER NOT NULL,
     file_mtime      INTEGER NOT NULL,
-    face_index      INTEGER NOT NULL,
+    PRIMARY KEY (font_path, face_index),
     FOREIGN KEY (folder_path) REFERENCES cached_folders(folder_path)
 );
 CREATE TABLE cached_family_keys (
     font_path       TEXT NOT NULL,
+    face_index      INTEGER NOT NULL,
     family_name     TEXT NOT NULL,
     bold            INTEGER NOT NULL,
     italic          INTEGER NOT NULL,
-    PRIMARY KEY (family_name, bold, italic, font_path),
-    FOREIGN KEY (font_path) REFERENCES cached_fonts(font_path)
+    PRIMARY KEY (family_name, bold, italic, font_path, face_index),
+    FOREIGN KEY (font_path, face_index) REFERENCES cached_fonts(font_path, face_index)
 );
 CREATE TABLE cache_meta (
     key             TEXT PRIMARY KEY,
@@ -1039,6 +1100,211 @@ mod tests {
             ..Default::default()
         };
         assert!(!with_removed.is_empty());
+    }
+
+    // ── Step 4: family-name lookup ──────────────────────────
+
+    #[test]
+    fn lookup_family_returns_match() {
+        let path = temp_cache_path();
+        let mut cache = FontCache::open_or_create(&path).expect("open");
+        cache
+            .replace_folder(
+                "/test/dir",
+                100,
+                &[synthetic_font("/test/dir/arial.ttf", "Arial")],
+            )
+            .unwrap();
+        let result = cache
+            .lookup_family("Arial", false, false)
+            .expect("lookup")
+            .expect("hit expected");
+        assert_eq!(result.font_path, "/test/dir/arial.ttf");
+        assert_eq!(result.face_index, 0);
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn lookup_family_returns_none_for_missing_family() {
+        let path = temp_cache_path();
+        let mut cache = FontCache::open_or_create(&path).expect("open");
+        cache
+            .replace_folder(
+                "/test/dir",
+                100,
+                &[synthetic_font("/test/dir/arial.ttf", "Arial")],
+            )
+            .unwrap();
+        let result = cache
+            .lookup_family("Helvetica", false, false)
+            .expect("lookup ok");
+        assert!(result.is_none(), "expected None, got {result:?}");
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn lookup_family_distinguishes_bold_and_italic() {
+        let path = temp_cache_path();
+        let mut cache = FontCache::open_or_create(&path).expect("open");
+        // Two synthetic faces of "Source Han Sans": regular and bold.
+        let regular = FontMetadata {
+            file_path: "/test/dir/SHS-Regular.otf".into(),
+            file_size: 1_000_000,
+            file_mtime: 100,
+            face_index: 0,
+            family_keys: vec![FamilyKey {
+                family_name: "Source Han Sans".into(),
+                bold: false,
+                italic: false,
+            }],
+        };
+        let bold = FontMetadata {
+            file_path: "/test/dir/SHS-Bold.otf".into(),
+            file_size: 1_000_000,
+            file_mtime: 100,
+            face_index: 0,
+            family_keys: vec![FamilyKey {
+                family_name: "Source Han Sans".into(),
+                bold: true,
+                italic: false,
+            }],
+        };
+        cache
+            .replace_folder("/test/dir", 100, &[regular, bold])
+            .unwrap();
+
+        // Regular query hits regular file.
+        let r = cache
+            .lookup_family("Source Han Sans", false, false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(r.font_path, "/test/dir/SHS-Regular.otf");
+        // Bold query hits bold file.
+        let b = cache
+            .lookup_family("Source Han Sans", true, false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(b.font_path, "/test/dir/SHS-Bold.otf");
+        // Italic-not-present query misses.
+        let i = cache.lookup_family("Source Han Sans", false, true).unwrap();
+        assert!(i.is_none());
+
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn lookup_family_finds_cjk_alias() {
+        // CJK font advertises multiple family aliases on the same face.
+        // Lookup must hit any of them.
+        let path = temp_cache_path();
+        let mut cache = FontCache::open_or_create(&path).expect("open");
+        let cjk = FontMetadata {
+            file_path: "/test/dir/SourceHanSans.otf".into(),
+            file_size: 10_000_000,
+            file_mtime: 100,
+            face_index: 0,
+            family_keys: vec![
+                FamilyKey {
+                    family_name: "Source Han Sans CN".into(),
+                    bold: false,
+                    italic: false,
+                },
+                FamilyKey {
+                    family_name: "思源黑体 CN".into(),
+                    bold: false,
+                    italic: false,
+                },
+                FamilyKey {
+                    family_name: "Noto Sans CJK SC".into(),
+                    bold: false,
+                    italic: false,
+                },
+            ],
+        };
+        cache.replace_folder("/test/dir", 100, &[cjk]).unwrap();
+
+        for name in &["Source Han Sans CN", "思源黑体 CN", "Noto Sans CJK SC"] {
+            let result = cache
+                .lookup_family(name, false, false)
+                .unwrap()
+                .unwrap_or_else(|| panic!("expected hit for {name}"));
+            assert_eq!(result.font_path, "/test/dir/SourceHanSans.otf");
+        }
+
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn ttc_file_with_multiple_faces_is_supported() {
+        // TrueType Collection: one file, multiple faces, each its
+        // own family. Schema's composite PK on (font_path,
+        // face_index) lets all faces coexist.
+        let path = temp_cache_path();
+        let mut cache = FontCache::open_or_create(&path).expect("open");
+        let mingliu_face0 = FontMetadata {
+            file_path: "/test/dir/MingLiU.ttc".into(),
+            file_size: 5_000_000,
+            file_mtime: 100,
+            face_index: 0,
+            family_keys: vec![FamilyKey {
+                family_name: "MingLiU".into(),
+                bold: false,
+                italic: false,
+            }],
+        };
+        let mingliu_face1 = FontMetadata {
+            file_path: "/test/dir/MingLiU.ttc".into(), // same path
+            file_size: 5_000_000,
+            file_mtime: 100,
+            face_index: 1,
+            family_keys: vec![FamilyKey {
+                family_name: "PMingLiU".into(),
+                bold: false,
+                italic: false,
+            }],
+        };
+        cache
+            .replace_folder("/test/dir", 100, &[mingliu_face0, mingliu_face1])
+            .expect("TTC with 2 faces inserts cleanly");
+
+        // Both family names resolve, each to the right face.
+        let m0 = cache.lookup_family("MingLiU", false, false).unwrap().unwrap();
+        assert_eq!(m0.font_path, "/test/dir/MingLiU.ttc");
+        assert_eq!(m0.face_index, 0);
+        let m1 = cache
+            .lookup_family("PMingLiU", false, false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(m1.font_path, "/test/dir/MingLiU.ttc");
+        assert_eq!(m1.face_index, 1);
+
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn lookup_family_is_deterministic_across_collisions() {
+        // Two different files claim the same family name (rare in
+        // practice — alternate vendor's "Arial" — but the API must
+        // produce the same answer across runs).
+        let path = temp_cache_path();
+        let mut cache = FontCache::open_or_create(&path).expect("open");
+        cache
+            .replace_folder(
+                "/test/dir",
+                100,
+                &[
+                    synthetic_font("/test/dir/zzz_arial.ttf", "Arial"),
+                    synthetic_font("/test/dir/aaa_arial.ttf", "Arial"),
+                ],
+            )
+            .unwrap();
+        // ORDER BY font_path → "aaa..." comes first.
+        let result = cache
+            .lookup_family("Arial", false, false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.font_path, "/test/dir/aaa_arial.ttf");
+        let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]
