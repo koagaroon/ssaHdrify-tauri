@@ -23,12 +23,52 @@ use std::path::Path;
 use rusqlite::{params, Connection};
 
 /// Schema version. Bumped when any table layout changes; mismatch on
-/// open returns `CacheOpenError::SchemaVersionMismatch` so the caller
+/// open returns `CacheError::SchemaVersionMismatch` so the caller
 /// can rebuild (CLI: drift-equivalent fallback to no-cache; GUI:
 /// prompt). Per the locked "no auto-migrate" decision, the cache is
 /// never silently migrated — release notes call out version bumps so
 /// users intentionally rebuild via `refresh-fonts` or the GUI modal.
 pub const SCHEMA_VERSION: i32 = 1;
+
+/// One font face's metadata, ready to be written into the cache by
+/// `FontCache::replace_folder`. The cache module deliberately does NOT
+/// parse fonts — the caller (existing scan path in `app_lib::fonts`,
+/// or a test fixture, or future scan code) produces these records and
+/// hands them to the cache for persistence. This keeps font-parsing
+/// concerns out of the cache module entirely.
+#[derive(Debug, Clone)]
+pub struct FontMetadata {
+    /// Absolute path to the font file.
+    pub file_path: String,
+    /// File size in bytes from the OS at scan time.
+    pub file_size: i64,
+    /// File mtime as Unix seconds.
+    pub file_mtime: i64,
+    /// 0 for non-TTC; >=0 for TrueType Collection (face index inside).
+    pub face_index: i32,
+    /// Each (family_name, bold, italic) tuple this face advertises.
+    /// CJK fonts typically produce multiple entries (Latin + Simplified
+    /// Chinese + Traditional + Japanese, etc.) — embed-time lookup must
+    /// hit whichever locale's name the subtitle author wrote.
+    pub family_keys: Vec<FamilyKey>,
+}
+
+/// One (family_name, bold, italic) tuple advertised by a font face.
+/// Stored 1:N relative to a `FontMetadata` (one face → multiple keys).
+#[derive(Debug, Clone)]
+pub struct FamilyKey {
+    pub family_name: String,
+    pub bold: bool,
+    pub italic: bool,
+}
+
+/// One row from `cached_folders`, returned by `FontCache::list_folders`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FolderRecord {
+    pub folder_path: String,
+    pub folder_mtime: i64,
+    pub last_scanned_at: i64,
+}
 
 /// Persistent font cache backed by SQLite. One instance per binary
 /// (gui vs cli) — the caller chooses the file path.
@@ -46,24 +86,29 @@ impl std::fmt::Debug for FontCache {
     }
 }
 
-/// Recoverable errors when opening or creating the cache. The caller
-/// chooses how to react: CLI falls back to no-cache and warns; GUI
-/// prompts the user.
+/// Recoverable errors during cache operations. The caller chooses how
+/// to react: CLI falls back to no-cache and warns; GUI prompts the user.
+///
+/// Unified across open/read/write to keep the public API simple — the
+/// caller mostly cares about "did it work" + a message; specific
+/// variant only matters for `SchemaVersionMismatch` which has its own
+/// recovery path.
 #[derive(Debug)]
-pub enum CacheOpenError {
+pub enum CacheError {
     /// Filesystem or SQLite-level failure. Includes a human-readable
     /// message embedding the underlying error.
     Io(String),
     /// Existing cache file was opened, but its schema_version row
     /// either doesn't match `SCHEMA_VERSION` (different release) or is
     /// missing entirely (corrupt or pre-versioned cache). Both cases
-    /// route to the same recovery path: rebuild the cache. `found =
-    /// -1` is the sentinel for "row missing"; any other negative or
-    /// positive value comes from the cache file itself.
+    /// route to the same recovery path: rebuild the cache.
+    /// Sentinels: `found = -1` for "row missing", `-2` for
+    /// "row present but unparseable", any other value for "actual
+    /// version found in the file".
     SchemaVersionMismatch { found: i32, expected: i32 },
 }
 
-impl std::fmt::Display for CacheOpenError {
+impl std::fmt::Display for CacheError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io(msg) => write!(f, "cache I/O error: {msg}"),
@@ -71,6 +116,11 @@ impl std::fmt::Display for CacheOpenError {
                 f,
                 "cache schema_version row missing (cache predates version tracking \
                  or is corrupt); expected version {expected}, must rebuild"
+            ),
+            Self::SchemaVersionMismatch { found, expected } if *found == -2 => write!(
+                f,
+                "cache schema_version value unparseable (corrupt cache); \
+                 expected version {expected}, must rebuild"
             ),
             Self::SchemaVersionMismatch { found, expected } => write!(
                 f,
@@ -92,7 +142,7 @@ impl FontCache {
     /// On open of an existing file, the schema_version row is verified
     /// against `SCHEMA_VERSION`. Any mismatch (including missing row)
     /// returns `SchemaVersionMismatch`; the caller decides recovery.
-    pub fn open_or_create(cache_path: &Path) -> Result<Self, CacheOpenError> {
+    pub fn open_or_create(cache_path: &Path) -> Result<Self, CacheError> {
         // Ensure the parent directory exists. If the caller passed a
         // path under a not-yet-created folder (e.g., %APPDATA%/ssaHdrify
         // on a fresh user profile), this avoids a confusing
@@ -100,7 +150,7 @@ impl FontCache {
         if let Some(parent) = cache_path.parent() {
             if !parent.as_os_str().is_empty() {
                 std::fs::create_dir_all(parent).map_err(|e| {
-                    CacheOpenError::Io(format!(
+                    CacheError::Io(format!(
                         "creating parent directory {}: {e}",
                         parent.display()
                     ))
@@ -110,7 +160,7 @@ impl FontCache {
 
         let already_existed = cache_path.exists();
         let conn = Connection::open(cache_path).map_err(|e| {
-            CacheOpenError::Io(format!("opening {}: {e}", cache_path.display()))
+            CacheError::Io(format!("opening {}: {e}", cache_path.display()))
         })?;
 
         // WAL journal mode + 5s busy_timeout matches the existing GUI
@@ -119,9 +169,9 @@ impl FontCache {
         // decision; for now it costs nothing extra and keeps schema
         // patterns consistent across the project.
         conn.pragma_update(None, "journal_mode", "WAL")
-            .map_err(|e| CacheOpenError::Io(format!("setting WAL mode: {e}")))?;
+            .map_err(|e| CacheError::Io(format!("setting WAL mode: {e}")))?;
         conn.busy_timeout(std::time::Duration::from_secs(5))
-            .map_err(|e| CacheOpenError::Io(format!("setting busy_timeout: {e}")))?;
+            .map_err(|e| CacheError::Io(format!("setting busy_timeout: {e}")))?;
 
         let cache = Self { conn };
         if already_existed {
@@ -136,23 +186,23 @@ impl FontCache {
     /// current `SCHEMA_VERSION` to `cache_meta`. Called once on fresh
     /// create; idempotent if called on an empty DB but never invoked
     /// after open.
-    fn init_schema(&self) -> Result<(), CacheOpenError> {
+    fn init_schema(&self) -> Result<(), CacheError> {
         self.conn
             .execute_batch(SCHEMA_SQL)
-            .map_err(|e| CacheOpenError::Io(format!("initializing schema: {e}")))?;
+            .map_err(|e| CacheError::Io(format!("initializing schema: {e}")))?;
         self.conn
             .execute(
                 "INSERT INTO cache_meta(key, value) VALUES('schema_version', ?1)",
                 params![SCHEMA_VERSION.to_string()],
             )
-            .map_err(|e| CacheOpenError::Io(format!("writing schema_version: {e}")))?;
+            .map_err(|e| CacheError::Io(format!("writing schema_version: {e}")))?;
         Ok(())
     }
 
     /// Read the schema_version row and compare against `SCHEMA_VERSION`.
     /// A missing or unparseable row counts as mismatch (cache predates
     /// version tracking, or corrupt).
-    fn verify_schema_version(&self) -> Result<(), CacheOpenError> {
+    fn verify_schema_version(&self) -> Result<(), CacheError> {
         let row: Result<String, _> = self.conn.query_row(
             "SELECT value FROM cache_meta WHERE key = 'schema_version'",
             [],
@@ -166,7 +216,7 @@ impl FontCache {
                 // to "rebuild the cache."
                 let found: i32 = value.parse().unwrap_or(-2);
                 if found != SCHEMA_VERSION {
-                    Err(CacheOpenError::SchemaVersionMismatch {
+                    Err(CacheError::SchemaVersionMismatch {
                         found,
                         expected: SCHEMA_VERSION,
                     })
@@ -175,16 +225,174 @@ impl FontCache {
                 }
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => {
-                Err(CacheOpenError::SchemaVersionMismatch {
+                Err(CacheError::SchemaVersionMismatch {
                     found: -1,
                     expected: SCHEMA_VERSION,
                 })
             }
-            Err(e) => Err(CacheOpenError::Io(format!(
+            Err(e) => Err(CacheError::Io(format!(
                 "reading schema_version: {e}"
             ))),
         }
     }
+
+    /// Insert or replace all rows for one folder. Atomic — wraps the
+    /// delete-and-rewrite in a single transaction so a partial
+    /// failure leaves the previous state intact rather than partial
+    /// rows.
+    ///
+    /// Use cases:
+    /// - First-time scan of a folder: cache has no rows for it, this
+    ///   inserts them.
+    /// - Refresh after drift: cache has stale rows for this folder,
+    ///   this replaces them with the current scan output.
+    ///
+    /// `last_scanned_at` is set to current Unix seconds. The
+    /// `folder_mtime` value comes from the caller's `stat()` of the
+    /// folder at scan time — it's the value drift detection compares
+    /// against on next startup.
+    pub fn replace_folder(
+        &mut self,
+        folder_path: &str,
+        folder_mtime: i64,
+        fonts: &[FontMetadata],
+    ) -> Result<(), CacheError> {
+        let tx = self
+            .conn
+            .transaction()
+            .map_err(|e| CacheError::Io(format!("begin transaction: {e}")))?;
+
+        // Delete in dependency order: family_keys → fonts → folder.
+        // Foreign keys aren't enforced (no PRAGMA foreign_keys=ON in
+        // open_or_create) but the deletion order keeps the row
+        // graph consistent for any future enforcement.
+        tx.execute(
+            "DELETE FROM cached_family_keys WHERE font_path IN \
+             (SELECT font_path FROM cached_fonts WHERE folder_path = ?1)",
+            params![folder_path],
+        )
+        .map_err(|e| CacheError::Io(format!("delete family_keys: {e}")))?;
+        tx.execute(
+            "DELETE FROM cached_fonts WHERE folder_path = ?1",
+            params![folder_path],
+        )
+        .map_err(|e| CacheError::Io(format!("delete fonts: {e}")))?;
+        tx.execute(
+            "DELETE FROM cached_folders WHERE folder_path = ?1",
+            params![folder_path],
+        )
+        .map_err(|e| CacheError::Io(format!("delete folder: {e}")))?;
+
+        let now = current_unix_seconds();
+        tx.execute(
+            "INSERT INTO cached_folders(folder_path, folder_mtime, last_scanned_at) \
+             VALUES(?1, ?2, ?3)",
+            params![folder_path, folder_mtime, now],
+        )
+        .map_err(|e| CacheError::Io(format!("insert folder: {e}")))?;
+
+        for font in fonts {
+            tx.execute(
+                "INSERT INTO cached_fonts(font_path, folder_path, file_size, file_mtime, face_index) \
+                 VALUES(?1, ?2, ?3, ?4, ?5)",
+                params![
+                    font.file_path,
+                    folder_path,
+                    font.file_size,
+                    font.file_mtime,
+                    font.face_index,
+                ],
+            )
+            .map_err(|e| CacheError::Io(format!("insert font {}: {e}", font.file_path)))?;
+
+            for key in &font.family_keys {
+                tx.execute(
+                    "INSERT INTO cached_family_keys(font_path, family_name, bold, italic) \
+                     VALUES(?1, ?2, ?3, ?4)",
+                    params![
+                        font.file_path,
+                        key.family_name,
+                        i32::from(key.bold),
+                        i32::from(key.italic),
+                    ],
+                )
+                .map_err(|e| CacheError::Io(format!(
+                    "insert family_key for {}: {e}",
+                    font.file_path
+                )))?;
+            }
+        }
+
+        tx.commit()
+            .map_err(|e| CacheError::Io(format!("commit transaction: {e}")))?;
+        Ok(())
+    }
+
+    /// Remove all rows for one folder (folder + its fonts + their
+    /// family_keys). Atomic via transaction. Use case: drift
+    /// detection found this folder is gone from the filesystem.
+    pub fn remove_folder(&mut self, folder_path: &str) -> Result<(), CacheError> {
+        let tx = self
+            .conn
+            .transaction()
+            .map_err(|e| CacheError::Io(format!("begin transaction: {e}")))?;
+        tx.execute(
+            "DELETE FROM cached_family_keys WHERE font_path IN \
+             (SELECT font_path FROM cached_fonts WHERE folder_path = ?1)",
+            params![folder_path],
+        )
+        .map_err(|e| CacheError::Io(format!("delete family_keys: {e}")))?;
+        tx.execute(
+            "DELETE FROM cached_fonts WHERE folder_path = ?1",
+            params![folder_path],
+        )
+        .map_err(|e| CacheError::Io(format!("delete fonts: {e}")))?;
+        tx.execute(
+            "DELETE FROM cached_folders WHERE folder_path = ?1",
+            params![folder_path],
+        )
+        .map_err(|e| CacheError::Io(format!("delete folder: {e}")))?;
+        tx.commit()
+            .map_err(|e| CacheError::Io(format!("commit transaction: {e}")))?;
+        Ok(())
+    }
+
+    /// List every folder currently tracked in the cache. Used by
+    /// drift detection (Step 3) to iterate cached folders and check
+    /// each against the filesystem.
+    pub fn list_folders(&self) -> Result<Vec<FolderRecord>, CacheError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT folder_path, folder_mtime, last_scanned_at \
+                 FROM cached_folders ORDER BY folder_path",
+            )
+            .map_err(|e| CacheError::Io(format!("prepare list_folders: {e}")))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(FolderRecord {
+                    folder_path: row.get(0)?,
+                    folder_mtime: row.get(1)?,
+                    last_scanned_at: row.get(2)?,
+                })
+            })
+            .map_err(|e| CacheError::Io(format!("execute list_folders: {e}")))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| CacheError::Io(format!("read row: {e}")))?);
+        }
+        Ok(out)
+    }
+}
+
+/// Current Unix timestamp in seconds. Used for `last_scanned_at` on
+/// inserts. Returns 0 if the system clock is somehow before the Unix
+/// epoch (impossible in practice; defensive default).
+fn current_unix_seconds() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 /// Schema SQL — one statement per table. Tables match the design
@@ -314,7 +522,7 @@ mod tests {
         }
         // Reopen detects mismatch.
         match FontCache::open_or_create(&path) {
-            Err(CacheOpenError::SchemaVersionMismatch { found, expected }) => {
+            Err(CacheError::SchemaVersionMismatch { found, expected }) => {
                 assert_eq!(found, 0);
                 assert_eq!(expected, SCHEMA_VERSION);
             }
@@ -338,7 +546,7 @@ mod tests {
             .unwrap();
         }
         match FontCache::open_or_create(&path) {
-            Err(CacheOpenError::SchemaVersionMismatch { found, expected }) => {
+            Err(CacheError::SchemaVersionMismatch { found, expected }) => {
                 assert_eq!(found, -1, "missing row sentinel");
                 assert_eq!(expected, SCHEMA_VERSION);
             }
@@ -361,12 +569,231 @@ mod tests {
             .unwrap();
         }
         match FontCache::open_or_create(&path) {
-            Err(CacheOpenError::SchemaVersionMismatch { found, expected }) => {
+            Err(CacheError::SchemaVersionMismatch { found, expected }) => {
                 assert_eq!(found, -2, "unparseable sentinel");
                 assert_eq!(expected, SCHEMA_VERSION);
             }
             other => panic!("expected SchemaVersionMismatch, got {other:?}"),
         }
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// Synthetic font metadata for tests — no real font file required.
+    fn synthetic_font(file_path: &str, family: &str) -> FontMetadata {
+        FontMetadata {
+            file_path: file_path.to_string(),
+            file_size: 100_000,
+            file_mtime: 1_700_000_000,
+            face_index: 0,
+            family_keys: vec![FamilyKey {
+                family_name: family.to_string(),
+                bold: false,
+                italic: false,
+            }],
+        }
+    }
+
+    #[test]
+    fn replace_folder_with_no_fonts_inserts_empty_folder_row() {
+        let path = temp_cache_path();
+        let mut cache = FontCache::open_or_create(&path).expect("open");
+        cache
+            .replace_folder("/test/empty", 1_700_000_000, &[])
+            .expect("replace empty");
+        let folders = cache.list_folders().expect("list");
+        assert_eq!(folders.len(), 1);
+        assert_eq!(folders[0].folder_path, "/test/empty");
+        assert_eq!(folders[0].folder_mtime, 1_700_000_000);
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn replace_folder_inserts_fonts_and_family_keys() {
+        let path = temp_cache_path();
+        let mut cache = FontCache::open_or_create(&path).expect("open");
+        let fonts = vec![
+            synthetic_font("/test/dir/font_a.otf", "Source Han Sans CN"),
+            synthetic_font("/test/dir/font_b.ttf", "Arial"),
+        ];
+        cache
+            .replace_folder("/test/dir", 1_700_000_000, &fonts)
+            .expect("replace");
+
+        // Verify font rows.
+        let count: i32 = cache
+            .conn
+            .query_row("SELECT COUNT(*) FROM cached_fonts", [], |r| r.get(0))
+            .expect("count fonts");
+        assert_eq!(count, 2);
+
+        // Verify family_key rows.
+        let count: i32 = cache
+            .conn
+            .query_row("SELECT COUNT(*) FROM cached_family_keys", [], |r| r.get(0))
+            .expect("count keys");
+        assert_eq!(count, 2);
+
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn replace_folder_replaces_previous_rows() {
+        let path = temp_cache_path();
+        let mut cache = FontCache::open_or_create(&path).expect("open");
+        // First scan.
+        cache
+            .replace_folder(
+                "/test/dir",
+                1_700_000_000,
+                &[
+                    synthetic_font("/test/dir/old1.otf", "Old1"),
+                    synthetic_font("/test/dir/old2.otf", "Old2"),
+                ],
+            )
+            .expect("first replace");
+        // Second scan with different fonts.
+        cache
+            .replace_folder(
+                "/test/dir",
+                1_800_000_000,
+                &[synthetic_font("/test/dir/new.otf", "New")],
+            )
+            .expect("second replace");
+
+        // Should have only the new font + key.
+        let font_count: i32 = cache
+            .conn
+            .query_row("SELECT COUNT(*) FROM cached_fonts", [], |r| r.get(0))
+            .expect("count fonts");
+        assert_eq!(font_count, 1);
+        let family: String = cache
+            .conn
+            .query_row(
+                "SELECT family_name FROM cached_family_keys",
+                [],
+                |r| r.get(0),
+            )
+            .expect("read family");
+        assert_eq!(family, "New");
+        // Folder mtime should be updated.
+        let folders = cache.list_folders().expect("list");
+        assert_eq!(folders[0].folder_mtime, 1_800_000_000);
+
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn replace_folder_with_multiple_family_keys_per_font() {
+        // CJK fonts: one face advertises Latin + CJK names.
+        let path = temp_cache_path();
+        let mut cache = FontCache::open_or_create(&path).expect("open");
+        let cjk_font = FontMetadata {
+            file_path: "/test/cjk/SourceHanSans.otf".to_string(),
+            file_size: 10_000_000,
+            file_mtime: 1_700_000_000,
+            face_index: 0,
+            family_keys: vec![
+                FamilyKey {
+                    family_name: "Source Han Sans CN".to_string(),
+                    bold: false,
+                    italic: false,
+                },
+                FamilyKey {
+                    family_name: "思源黑体 CN".to_string(),
+                    bold: false,
+                    italic: false,
+                },
+                FamilyKey {
+                    family_name: "Noto Sans CJK SC".to_string(),
+                    bold: false,
+                    italic: false,
+                },
+            ],
+        };
+        cache
+            .replace_folder("/test/cjk", 1_700_000_000, &[cjk_font])
+            .expect("replace");
+
+        let key_count: i32 = cache
+            .conn
+            .query_row("SELECT COUNT(*) FROM cached_family_keys", [], |r| r.get(0))
+            .expect("count keys");
+        assert_eq!(key_count, 3, "all three family aliases should be indexed");
+
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn remove_folder_clears_all_related_rows() {
+        let path = temp_cache_path();
+        let mut cache = FontCache::open_or_create(&path).expect("open");
+        cache
+            .replace_folder(
+                "/test/a",
+                1_700_000_000,
+                &[synthetic_font("/test/a/f1.otf", "F1")],
+            )
+            .expect("replace a");
+        cache
+            .replace_folder(
+                "/test/b",
+                1_700_000_000,
+                &[synthetic_font("/test/b/f2.otf", "F2")],
+            )
+            .expect("replace b");
+
+        cache.remove_folder("/test/a").expect("remove a");
+
+        // /test/a's rows gone, /test/b's intact.
+        let folders = cache.list_folders().expect("list");
+        assert_eq!(folders.len(), 1);
+        assert_eq!(folders[0].folder_path, "/test/b");
+        let font_count: i32 = cache
+            .conn
+            .query_row("SELECT COUNT(*) FROM cached_fonts", [], |r| r.get(0))
+            .expect("count fonts");
+        assert_eq!(font_count, 1);
+        let key_count: i32 = cache
+            .conn
+            .query_row("SELECT COUNT(*) FROM cached_family_keys", [], |r| r.get(0))
+            .expect("count keys");
+        assert_eq!(key_count, 1);
+
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn list_folders_returns_in_path_order() {
+        let path = temp_cache_path();
+        let mut cache = FontCache::open_or_create(&path).expect("open");
+        // Insert in non-alphabetical order.
+        cache
+            .replace_folder("/test/zzz", 1_700_000_000, &[])
+            .unwrap();
+        cache
+            .replace_folder("/test/aaa", 1_700_000_000, &[])
+            .unwrap();
+        cache
+            .replace_folder("/test/mmm", 1_700_000_000, &[])
+            .unwrap();
+        let folders = cache.list_folders().expect("list");
+        let paths: Vec<&str> = folders.iter().map(|f| f.folder_path.as_str()).collect();
+        assert_eq!(paths, vec!["/test/aaa", "/test/mmm", "/test/zzz"]);
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn last_scanned_at_set_to_current_time() {
+        let path = temp_cache_path();
+        let mut cache = FontCache::open_or_create(&path).expect("open");
+        let before = current_unix_seconds();
+        cache
+            .replace_folder("/test/timing", 1_700_000_000, &[])
+            .unwrap();
+        let after = current_unix_seconds();
+        let folders = cache.list_folders().expect("list");
+        assert!(folders[0].last_scanned_at >= before);
+        assert!(folders[0].last_scanned_at <= after);
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
