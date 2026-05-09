@@ -18,9 +18,49 @@
 //! Step 1 of the implementation plan (this file): schema + open/create + version check.
 //! Subsequent steps add scan/populate, drift detection, family-name lookup, CLI integration, and GUI integration.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection};
+
+/// Default cache file path for the CLI binary on Windows.
+/// Resolves to `%APPDATA%/ssaHdrify/cli_font_cache.sqlite3`.
+///
+/// Returns an Err if `APPDATA` isn't set (extremely unusual on Windows;
+/// would indicate a broken environment). Caller can override the path
+/// via a flag for testing or non-default locations.
+///
+/// Cross-platform: this Windows-first path. macOS / Linux equivalents
+/// (`~/Library/Application Support/ssaHdrify/...` and
+/// `$XDG_DATA_HOME/ssaHdrify/...`) can be added when the project ships
+/// non-Windows builds. Returning Err on missing `APPDATA` keeps the
+/// caller's error path tight.
+pub fn default_cli_cache_path() -> Result<PathBuf, String> {
+    let appdata = std::env::var("APPDATA").map_err(|_| {
+        "APPDATA environment variable not set; cannot determine \
+         default cache location. Pass --cache-file <PATH> to override."
+            .to_string()
+    })?;
+    Ok(PathBuf::from(appdata)
+        .join("ssaHdrify")
+        .join("cli_font_cache.sqlite3"))
+}
+
+/// Default cache file path for the GUI binary on Windows.
+/// Resolves to `%APPDATA%/ssaHdrify/gui_font_cache.sqlite3`.
+///
+/// GUI typically uses Tauri's `app_data_dir()` directly (which
+/// resolves to the same location); this helper exists for
+/// symmetry / non-Tauri callers (tests, future utilities).
+pub fn default_gui_cache_path() -> Result<PathBuf, String> {
+    let appdata = std::env::var("APPDATA").map_err(|_| {
+        "APPDATA environment variable not set; cannot determine \
+         default cache location."
+            .to_string()
+    })?;
+    Ok(PathBuf::from(appdata)
+        .join("ssaHdrify")
+        .join("gui_font_cache.sqlite3"))
+}
 
 /// Schema version. Bumped when any table layout changes; mismatch on
 /// open returns `CacheError::SchemaVersionMismatch` so the caller

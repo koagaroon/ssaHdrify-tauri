@@ -1400,6 +1400,35 @@ where
     })
 }
 
+/// Scan one directory (one level, non-recursive — matching the
+/// existing `import_font_directory_for_cli` semantics) and return
+/// every font face found, without touching any database.
+///
+/// Used by the persistent-font-cache `refresh-fonts` flow: the CLI
+/// shell calls this to get raw `LocalFontEntry` records, converts
+/// them into `font_cache::FontMetadata`, and writes them to the
+/// persistent cache (NOT the GUI session DB). Keeps the cache
+/// module decoupled from font parsing.
+///
+/// Uses `NO_SCAN_ID` like `run_blocking_scan_import` does — the
+/// scan is non-cancellable, callers must Ctrl+C if they want to
+/// abort. Acceptable for refresh-fonts which is a foreground
+/// operation under user attention.
+pub fn scan_directory_collecting(dir: &Path) -> Result<Vec<LocalFontEntry>, String> {
+    let canonical = dir.canonicalize().map_err(|e| {
+        format!("Cannot resolve directory '{}': {e}", dir.display())
+    })?;
+    if !canonical.is_dir() {
+        return Err(format!("Not a directory: {}", canonical.display()));
+    }
+    let mut entries: Vec<LocalFontEntry> = Vec::new();
+    scan_directory_inner(&canonical, NO_SCAN_ID, |batch| {
+        entries.extend(batch);
+        Ok(())
+    })?;
+    Ok(entries)
+}
+
 pub fn import_font_directory_for_cli(
     dir: &Path,
     source_id: &str,

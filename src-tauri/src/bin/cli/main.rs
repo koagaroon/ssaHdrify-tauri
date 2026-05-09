@@ -82,6 +82,20 @@ enum Command {
     /// Pair subtitles with videos and rename subtitles to match. 配对视频和字幕，按视频名重命名字幕。
     Rename(RenameArgs),
 
+    /// Build or refresh the persistent font cache. Always requires
+    /// at least one --font-dir (cache-recorded source roots are not
+    /// auto-rescanned; user must specify).
+    /// 构建或刷新持久化字体缓存。始终必须传至少一个 --font-dir
+    /// （缓存记录的 source roots 不会自动 rescan，用户必须显式指定）。
+    ///
+    /// Each --font-dir is treated as a flat font folder (one level,
+    /// non-recursive) — same semantics as `embed`'s --font-dir. To
+    /// index a tree, pass each leaf folder explicitly.
+    ///
+    /// Example / 示例:
+    ///   ssahdrify-cli refresh-fonts --font-dir ./Fonts/Anime --font-dir ./Fonts/Latin
+    RefreshFonts(RefreshFontsArgs),
+
     /// Chain multiple steps in one invocation; only the terminal step writes to disk.
     /// 将多个步骤串联执行，仅终端步骤写盘。
     ///
@@ -240,6 +254,27 @@ impl RenameMode {
     fn is_copy(self) -> bool {
         matches!(self, RenameMode::CopyToVideo | RenameMode::CopyToChosen)
     }
+}
+
+#[derive(Args, Debug)]
+struct RefreshFontsArgs {
+    /// Add a font folder to scan (repeatable). Required — pass at
+    /// least once. 添加要扫描的字体目录（可重复传入），必须至少传一次。
+    ///
+    /// Each folder is scanned one level deep (non-recursive); same
+    /// semantics as `embed --font-dir`. To index a tree of fonts,
+    /// pass each leaf folder explicitly.
+    /// 每个目录扫描一层（不递归）；与 `embed --font-dir` 语义一致。
+    /// 树状字体目录请逐层显式传入。
+    #[arg(long = "font-dir", value_name = "DIR", required = true)]
+    font_dirs: Vec<PathBuf>,
+
+    /// Override the default cache file path. Useful for testing or
+    /// for non-default deployment layouts. Default:
+    /// %APPDATA%/ssaHdrify/cli_font_cache.sqlite3.
+    /// 覆盖缓存文件位置；缺省 %APPDATA%/ssaHdrify/cli_font_cache.sqlite3。
+    #[arg(long, value_name = "PATH")]
+    cache_file: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]
@@ -479,7 +514,135 @@ fn run() -> Result<ExitCode, String> {
         Command::Embed(args) => run_embed(&globals, args),
         Command::Rename(args) => run_rename(&globals, args),
         Command::Chain(args) => run_chain(&globals, args),
+        Command::RefreshFonts(args) => run_refresh_fonts(&globals, args),
     }
+}
+
+fn run_refresh_fonts(
+    globals: &GlobalOptions,
+    args: RefreshFontsArgs,
+) -> Result<ExitCode, String> {
+    // Resolve cache file path: user override or default Windows path.
+    let cache_path = match args.cache_file {
+        Some(p) => p,
+        None => app_lib::font_cache::default_cli_cache_path()?,
+    };
+
+    if !globals.quiet {
+        eprintln!(
+            "ℹ Refreshing cache. Scanning {} source root{}:",
+            args.font_dirs.len(),
+            if args.font_dirs.len() == 1 { "" } else { "s" }
+        );
+        for dir in &args.font_dirs {
+            eprintln!("    {}", dir.display());
+        }
+    }
+
+    // Open or create cache. Schema version mismatch on existing file
+    // is treated as drift-equivalent: tell user, suggest rebuild via
+    // wiping the file. Per the no-silent-action principle, we don't
+    // auto-delete.
+    let mut cache = match app_lib::font_cache::FontCache::open_or_create(&cache_path) {
+        Ok(c) => c,
+        Err(app_lib::font_cache::CacheError::SchemaVersionMismatch { found, expected }) => {
+            return Err(format!(
+                "Cache at {} has schema version {found} but this CLI uses version {expected}.\n\
+                 The cache is from a different release and must be rebuilt.\n\
+                 Delete the file manually and re-run refresh-fonts:\n  \
+                 (file: {})",
+                cache_path.display(),
+                cache_path.display(),
+            ));
+        }
+        Err(e) => return Err(format!("opening cache: {e}")),
+    };
+
+    let mut total_fonts: usize = 0;
+    let mut total_folders: usize = 0;
+
+    for dir in &args.font_dirs {
+        // Resolve to absolute path (mirrors embed's behavior so cache
+        // entries are stable across invocations from different cwd's).
+        let abs_dir = absolute_path(dir)?;
+        let canonical = abs_dir.canonicalize().map_err(|e| {
+            format!(
+                "cannot canonicalize {}: {e}",
+                abs_dir.display()
+            )
+        })?;
+        let folder_path_str = display_path(&canonical);
+
+        // Stat the folder for mtime — drift detection on next run
+        // compares this against live stat.
+        let folder_mtime = std::fs::metadata(&canonical)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+
+        // Scan the folder. Non-recursive — matches `embed`'s
+        // --font-dir semantics exactly.
+        let entries = app_lib::fonts::scan_directory_collecting(&canonical)?;
+
+        // Convert each LocalFontEntry to a FontMetadata, attaching
+        // file mtime via stat (cache module needs it for drift but
+        // LocalFontEntry doesn't carry it).
+        let metadata: Vec<app_lib::font_cache::FontMetadata> = entries
+            .into_iter()
+            .map(|e| {
+                let file_mtime = std::fs::metadata(&e.path)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                app_lib::font_cache::FontMetadata {
+                    file_path: e.path,
+                    file_size: e.size_bytes as i64,
+                    file_mtime,
+                    face_index: e.index as i32,
+                    family_keys: e
+                        .families
+                        .into_iter()
+                        .map(|family_name| app_lib::font_cache::FamilyKey {
+                            family_name,
+                            bold: e.bold,
+                            italic: e.italic,
+                        })
+                        .collect(),
+                }
+            })
+            .collect();
+
+        let font_count = metadata.len();
+        cache
+            .replace_folder(&folder_path_str, folder_mtime, &metadata)
+            .map_err(|e| format!("writing cache for {}: {e}", folder_path_str))?;
+
+        if !globals.quiet {
+            eprintln!(
+                "  ✓ {}: indexed {} font face{}",
+                folder_path_str,
+                font_count,
+                if font_count == 1 { "" } else { "s" }
+            );
+        }
+        total_fonts += font_count;
+        total_folders += 1;
+    }
+
+    if !globals.quiet {
+        eprintln!(
+            "✓ Cache updated: {total_fonts} font face{} indexed across {total_folders} folder{}.",
+            if total_fonts == 1 { "" } else { "s" },
+            if total_folders == 1 { "" } else { "s" }
+        );
+        eprintln!("  Cache file: {}", cache_path.display());
+    }
+
+    Ok(ExitCode::SUCCESS)
 }
 
 fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, String> {
