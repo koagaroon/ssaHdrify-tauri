@@ -16,14 +16,6 @@
 //! See `docs/architecture/ssahdrify_cli_design.md` § "v1.4.1 stable
 //! 后续用户反馈" feature #4 for the locked design decisions.
 
-// Step 2 ships the parser + validator + plan builder without a
-// caller in main.rs — Step 3 (clap wire-up) introduces the
-// `Chain(ChainArgs)` Subcommand variant whose handler calls
-// `parse_chain_argv`. Until then, dead-code warnings on the
-// internal helpers (collect_suspicious_orderings, etc.) are
-// expected. This allow is REMOVED at Step 3.
-#![allow(dead_code)]
-
 use std::path::PathBuf;
 
 use clap::Parser;

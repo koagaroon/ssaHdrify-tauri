@@ -81,6 +81,24 @@ enum Command {
     Embed(EmbedArgs),
     /// Pair subtitles with videos and rename subtitles to match. 配对视频和字幕，按视频名重命名字幕。
     Rename(RenameArgs),
+
+    /// Chain multiple steps in one invocation; only the terminal step writes to disk.
+    /// 将多个步骤串联执行，仅终端步骤写盘。
+    ///
+    /// Available steps / 可用步骤:
+    ///   hdr     Convert SDR subtitle colors to HDR. SDR 字幕颜色转 HDR。
+    ///   shift   Shift subtitle timings by an offset. 按偏移量平移字幕时间轴。
+    ///   embed   Embed fonts into ASS subtitle files. 将字体嵌入 ASS 字幕文件。
+    ///
+    /// Step separator is `+`. The chain-global `--output-dir` and
+    /// `--output-template` apply at the terminal step only; passing
+    /// `--output-template` inside any step segment is a parse-time error.
+    /// 步骤分隔符为 `+`。链全局 `--output-dir` 与 `--output-template` 仅
+    /// 在终端步骤应用；将 `--output-template` 放在步骤内部为 parse-time 错误。
+    ///
+    /// Example / 示例:
+    ///   ssahdrify-cli chain hdr --eotf pq + shift --offset +2s + embed --font-dir ./fonts cat.ass
+    Chain(ChainArgs),
 }
 
 #[derive(Args, Debug)]
@@ -224,6 +242,25 @@ impl RenameMode {
     }
 }
 
+#[derive(Args, Debug)]
+struct ChainArgs {
+    /// Chain-global output filename template applied at the terminal step.
+    /// Defaults to a stacked-suffix form (`{name}.<step1>.<step2>...<stepN>.ass`).
+    /// 链全局输出文件名模板，仅终端步骤应用；缺省按各步后缀堆叠。
+    #[arg(long)]
+    output_template: Option<String>,
+
+    /// Steps and input files: `<step1> + <step2> + ... <stepN> file...`.
+    /// 步骤与输入文件：`<step1> + <step2> + ... <stepN> file...`。
+    ///
+    // `trailing_var_arg` captures everything after the first positional
+    // (which is also the first step's keyword). `allow_hyphen_values`
+    // is required because step segments contain `--eotf`-style flags
+    // that would otherwise be interpreted as ChainArgs's own flags.
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    raw_argv: Vec<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CommandReport {
@@ -357,6 +394,67 @@ fn run() -> Result<ExitCode, String> {
         Command::Shift(args) => run_shift(&globals, args),
         Command::Embed(args) => run_embed(&globals, args),
         Command::Rename(args) => run_rename(&globals, args),
+        Command::Chain(args) => run_chain(&globals, args),
+    }
+}
+
+fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, String> {
+    // Capture whether the user explicitly supplied --output-template
+    // BEFORE moving args.output_template into parse_chain_argv —
+    // needed for the β stderr info line below ("did the user pick
+    // this template, or are we using the stacked default?").
+    let user_supplied_template = args.output_template.is_some();
+    let plan = chain::parse_chain_argv(&args.raw_argv, args.output_template)?;
+
+    // Suspicious-pattern warnings are non-blocking per the locked
+    // decision (catalog: HDR×2, shift-after-embed). Emit to stderr
+    // and proceed.
+    for warning in &plan.warnings {
+        eprintln!("{warning}");
+    }
+
+    // β behavior for default-stacked output: stderr info line +
+    // dry-run hint, NO interactive prompt (preserves the no-prompt
+    // principle in `命令设计 § Cross-cutting 行为`). Users wanting
+    // safety run with --dry-run; users wanting a different name
+    // pass --output-template.
+    if !user_supplied_template {
+        eprintln!(
+            "ℹ Output template defaulted to '{}' (stacked from chain steps).",
+            plan.output_template
+        );
+        eprintln!(
+            "  Pass --output-template <T> to override, or --dry-run to preview."
+        );
+    }
+
+    if globals.dry_run {
+        emit_chain_dry_run(&plan);
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    // Step 4 introduces the deno_core op layer that actually executes
+    // the chain. Until that lands, surface a clear "what works /
+    // what's pending" error rather than a confusing "command not
+    // found"-style failure.
+    Err(
+        "chain execution is pending Step 4 (deno_core op layer). \
+         Run with --dry-run to validate the plan; standalone subcommands \
+         (hdr / shift / embed / rename) still work as today."
+            .into(),
+    )
+}
+
+fn emit_chain_dry_run(plan: &chain::ChainPlan) {
+    println!("Plan (no files written):");
+    println!();
+    println!("Output template: {}", plan.output_template);
+    println!();
+    for input in &plan.input_files {
+        println!("  {}", input.display());
+        for (i, step) in plan.steps.iter().enumerate() {
+            println!("    {}. {}", i + 1, step.kind_name());
+        }
     }
 }
 
