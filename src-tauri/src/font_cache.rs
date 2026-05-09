@@ -70,6 +70,37 @@ pub struct FolderRecord {
     pub last_scanned_at: i64,
 }
 
+/// Drift detection result. Each variant lists folder paths grouped by
+/// what change is needed; the caller iterates these to decide actions
+/// (rescan modified ones, evict removed ones, scan added ones).
+///
+/// Empty `added` / `modified` / `removed` collectively mean "cache is
+/// in sync with current filesystem state" — caller can use the cache
+/// as-is.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DriftReport {
+    /// Folders present on the filesystem but not in the cache.
+    /// Need a fresh scan to populate cache rows.
+    pub added: Vec<String>,
+    /// Folders in both cache and filesystem, but `folder_mtime`
+    /// differs. Need a rescan to update files added/removed/renamed
+    /// inside the folder.
+    pub modified: Vec<String>,
+    /// Folders in the cache but not on the filesystem (deleted, moved
+    /// outside the current source roots, etc.). Need eviction.
+    pub removed: Vec<String>,
+}
+
+impl DriftReport {
+    /// True when the cache is fully in sync with the filesystem
+    /// snapshot — no folders need scanning, rescanning, or eviction.
+    /// CLI uses this to decide whether to print the drift warning at
+    /// startup; GUI uses it to decide whether to show the modal.
+    pub fn is_empty(&self) -> bool {
+        self.added.is_empty() && self.modified.is_empty() && self.removed.is_empty()
+    }
+}
+
 /// Persistent font cache backed by SQLite. One instance per binary
 /// (gui vs cli) — the caller chooses the file path.
 pub struct FontCache {
@@ -355,6 +386,73 @@ impl FontCache {
         tx.commit()
             .map_err(|e| CacheError::Io(format!("commit transaction: {e}")))?;
         Ok(())
+    }
+
+    /// Compare cached folders against a snapshot of currently-existing
+    /// folders. Caller is responsible for producing the snapshot
+    /// (walking source roots and `stat()`-ing each font-bearing
+    /// folder) — keeps filesystem-walking code out of the cache
+    /// module so this function is pure / unit-testable.
+    ///
+    /// The drift categories follow the locked design:
+    /// - **added**: in the filesystem snapshot but not in the cache.
+    ///   Caller scans these and calls `replace_folder` for each.
+    /// - **modified**: in both, but `folder_mtime` differs. Caller
+    ///   rescans (catches files added/removed/renamed inside the
+    ///   folder per the locked stat-based invalidation strategy).
+    /// - **removed**: in the cache but not in the filesystem
+    ///   snapshot. Caller calls `remove_folder` for each.
+    ///
+    /// Folders unchanged (in both with matching mtime) are silently
+    /// OK and don't appear in any report list.
+    pub fn diff_against(
+        &self,
+        current_folders: &[(String, i64)],
+    ) -> Result<DriftReport, CacheError> {
+        // Pre-build a map of cached folders keyed by path. Single
+        // O(N) read of cached_folders; subsequent membership checks
+        // are O(1).
+        let cached: std::collections::HashMap<String, i64> = self
+            .list_folders()?
+            .into_iter()
+            .map(|r| (r.folder_path, r.folder_mtime))
+            .collect();
+
+        // Map current folders for O(1) "is this in the snapshot?"
+        // lookup when checking the cache side. Last-write-wins on
+        // duplicates (caller bug); we don't validate.
+        let current: std::collections::HashMap<&str, i64> = current_folders
+            .iter()
+            .map(|(p, m)| (p.as_str(), *m))
+            .collect();
+
+        let mut report = DriftReport::default();
+
+        for (path, current_mtime) in &current {
+            match cached.get(*path) {
+                None => report.added.push((*path).to_string()),
+                Some(cached_mtime) if cached_mtime != current_mtime => {
+                    report.modified.push((*path).to_string());
+                }
+                Some(_) => {
+                    // mtime matches — unchanged, no report entry
+                }
+            }
+        }
+
+        for cached_path in cached.keys() {
+            if !current.contains_key(cached_path.as_str()) {
+                report.removed.push(cached_path.clone());
+            }
+        }
+
+        // Sort each list for deterministic output (test assertions,
+        // reproducible stderr diff reports). Cheap; lists are small.
+        report.added.sort();
+        report.modified.sort();
+        report.removed.sort();
+
+        Ok(report)
     }
 
     /// List every folder currently tracked in the cache. Used by
@@ -795,6 +893,152 @@ mod tests {
         assert!(folders[0].last_scanned_at >= before);
         assert!(folders[0].last_scanned_at <= after);
         let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    // ── Step 3: drift detection ─────────────────────────────
+
+    #[test]
+    fn diff_against_empty_cache_reports_all_as_added() {
+        let path = temp_cache_path();
+        let cache = FontCache::open_or_create(&path).expect("open");
+        let snapshot = vec![
+            ("/test/a".to_string(), 100),
+            ("/test/b".to_string(), 200),
+        ];
+        let report = cache.diff_against(&snapshot).expect("diff");
+        assert_eq!(report.added, vec!["/test/a", "/test/b"]);
+        assert!(report.modified.is_empty());
+        assert!(report.removed.is_empty());
+        assert!(!report.is_empty());
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn diff_against_perfect_match_is_empty() {
+        let path = temp_cache_path();
+        let mut cache = FontCache::open_or_create(&path).expect("open");
+        cache.replace_folder("/test/a", 100, &[]).unwrap();
+        cache.replace_folder("/test/b", 200, &[]).unwrap();
+        let snapshot = vec![
+            ("/test/a".to_string(), 100),
+            ("/test/b".to_string(), 200),
+        ];
+        let report = cache.diff_against(&snapshot).expect("diff");
+        assert!(report.is_empty(), "expected no drift, got {report:?}");
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn diff_against_detects_modified_folders_via_mtime() {
+        let path = temp_cache_path();
+        let mut cache = FontCache::open_or_create(&path).expect("open");
+        cache.replace_folder("/test/a", 100, &[]).unwrap();
+        cache.replace_folder("/test/b", 200, &[]).unwrap();
+        // /test/a's mtime drifted; /test/b unchanged.
+        let snapshot = vec![
+            ("/test/a".to_string(), 150),
+            ("/test/b".to_string(), 200),
+        ];
+        let report = cache.diff_against(&snapshot).expect("diff");
+        assert_eq!(report.modified, vec!["/test/a"]);
+        assert!(report.added.is_empty());
+        assert!(report.removed.is_empty());
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn diff_against_detects_removed_folders() {
+        let path = temp_cache_path();
+        let mut cache = FontCache::open_or_create(&path).expect("open");
+        cache.replace_folder("/test/a", 100, &[]).unwrap();
+        cache.replace_folder("/test/b", 200, &[]).unwrap();
+        // Snapshot only has /test/a; /test/b vanished from FS.
+        let snapshot = vec![("/test/a".to_string(), 100)];
+        let report = cache.diff_against(&snapshot).expect("diff");
+        assert_eq!(report.removed, vec!["/test/b"]);
+        assert!(report.added.is_empty());
+        assert!(report.modified.is_empty());
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn diff_against_detects_added_folders() {
+        let path = temp_cache_path();
+        let mut cache = FontCache::open_or_create(&path).expect("open");
+        cache.replace_folder("/test/a", 100, &[]).unwrap();
+        // Snapshot has /test/a + a new /test/c.
+        let snapshot = vec![
+            ("/test/a".to_string(), 100),
+            ("/test/c".to_string(), 300),
+        ];
+        let report = cache.diff_against(&snapshot).expect("diff");
+        assert_eq!(report.added, vec!["/test/c"]);
+        assert!(report.modified.is_empty());
+        assert!(report.removed.is_empty());
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn diff_against_handles_all_three_categories_at_once() {
+        let path = temp_cache_path();
+        let mut cache = FontCache::open_or_create(&path).expect("open");
+        // Cache has a/b/c.
+        cache.replace_folder("/test/a", 100, &[]).unwrap();
+        cache.replace_folder("/test/b", 200, &[]).unwrap();
+        cache.replace_folder("/test/c", 300, &[]).unwrap();
+        // Snapshot: a unchanged, b modified, c removed, d added.
+        let snapshot = vec![
+            ("/test/a".to_string(), 100),
+            ("/test/b".to_string(), 250), // mtime drifted
+            ("/test/d".to_string(), 400), // new
+        ];
+        let report = cache.diff_against(&snapshot).expect("diff");
+        assert_eq!(report.added, vec!["/test/d"]);
+        assert_eq!(report.modified, vec!["/test/b"]);
+        assert_eq!(report.removed, vec!["/test/c"]);
+        assert!(!report.is_empty());
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn diff_against_lists_are_sorted_for_deterministic_output() {
+        let path = temp_cache_path();
+        let mut cache = FontCache::open_or_create(&path).expect("open");
+        // Cache has folders in non-alpha order.
+        cache.replace_folder("/test/zzz", 100, &[]).unwrap();
+        cache.replace_folder("/test/aaa", 100, &[]).unwrap();
+        // Snapshot adds in non-alpha order; doesn't include the
+        // cached ones (so they all become removed).
+        let snapshot = vec![
+            ("/test/yyy".to_string(), 100),
+            ("/test/bbb".to_string(), 100),
+            ("/test/mmm".to_string(), 100),
+        ];
+        let report = cache.diff_against(&snapshot).expect("diff");
+        assert_eq!(report.added, vec!["/test/bbb", "/test/mmm", "/test/yyy"]);
+        assert_eq!(report.removed, vec!["/test/aaa", "/test/zzz"]);
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn drift_report_is_empty_method() {
+        let empty = DriftReport::default();
+        assert!(empty.is_empty());
+        let with_added = DriftReport {
+            added: vec!["x".to_string()],
+            ..Default::default()
+        };
+        assert!(!with_added.is_empty());
+        let with_modified = DriftReport {
+            modified: vec!["x".to_string()],
+            ..Default::default()
+        };
+        assert!(!with_modified.is_empty());
+        let with_removed = DriftReport {
+            removed: vec!["x".to_string()],
+            ..Default::default()
+        };
+        assert!(!with_removed.is_empty());
     }
 
     #[test]
