@@ -162,6 +162,31 @@ pub struct FontEmbedApplyResult {
     pub embedded_count: usize,
 }
 
+/// Result returned from the TS-side `runChain`. Single source of
+/// truth for the chain output: `content` is what gets written,
+/// `output_path` is where, `notes` is the per-step diagnostic
+/// summary surfaced in the Rust shell's per-file report.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChainRunResult {
+    pub content: String,
+    pub output_path: String,
+    pub notes: Vec<String>,
+}
+
+/// Wrapper struct exists only because the existing `call_engine`
+/// helper takes a `Request: Serialize` typed value. The chain plan
+/// is built in Rust as a `serde_json::Value` (via per-Args
+/// `to_chain_step` methods), so we wrap the already-serialized
+/// payload in this struct that just passes through. `flatten`
+/// inlines the wrapped Value's keys into the JSON output, producing
+/// the `{ plan, inputPath, content }` shape the TS runtime expects.
+#[derive(Debug, Serialize)]
+pub struct ChainRunRequest {
+    #[serde(flatten)]
+    pub payload: serde_json::Value,
+}
+
 pub struct CliEngine {
     runtime: JsRuntime,
 }
@@ -301,6 +326,16 @@ impl CliEngine {
             "ssahdrify-cli-apply-font-embed.js",
             "Font Embed",
             "embed",
+            request,
+        )
+    }
+
+    pub fn run_chain(&mut self, request: &ChainRunRequest) -> Result<ChainRunResult, String> {
+        self.call_engine(
+            "runChain",
+            "ssahdrify-cli-run-chain.js",
+            "Chain",
+            "execution",
             request,
         )
     }

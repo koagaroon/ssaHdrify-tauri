@@ -21,8 +21,8 @@ import {
   decomposeInputPath,
 } from "../../lib/path-validation";
 import type {
-  ChainPlan,
   ChainResult,
+  ChainRunRequest,
   ChainStep,
   EmbedStepParams,
   HdrStepParams,
@@ -34,15 +34,18 @@ import type {
  * input path, returns the next in-flight content plus optional
  * diagnostic notes.
  *
- * Async because future steps (notably embed once wired) need to
- * call back to Rust ops for font subset resolution. Returning a
- * Promise from the start keeps the registry shape stable when
- * embed's real implementation lands.
+ * Synchronous — matches the existing engine's call boundary, where
+ * the Rust shell's `call_engine` helper invokes a sync JS function
+ * via `execute_script`. Embed-in-chain (Step 4b) keeps this sync
+ * shape: font resolution happens in the Rust shell BEFORE calling
+ * runChain (planFontEmbed result returned to Rust → fonts resolved
+ * → applyFontEmbed-style payload bundled into EmbedStepParams),
+ * not as a TS-side async callback to Rust ops.
  */
 type StepTransform<P> = (
   ctx: TransformContext,
   params: P
-) => Promise<TransformResult>;
+) => TransformResult;
 
 interface TransformContext {
   /** ASS content currently in flight. */
@@ -81,10 +84,10 @@ const TRANSFORMS: {
   embed: embedTransform,
 };
 
-async function hdrTransform(
+function hdrTransform(
   ctx: TransformContext,
   params: HdrStepParams
-): Promise<TransformResult> {
+): TransformResult {
   // Direct call to the underlying ASS color processor — bypasses
   // convertHdr's outputPath computation, which is meaningless in a
   // chain (only the chain-global terminal output path matters).
@@ -94,10 +97,10 @@ async function hdrTransform(
   return { content };
 }
 
-async function shiftTransform(
+function shiftTransform(
   ctx: TransformContext,
   params: ShiftStepParams
-): Promise<TransformResult> {
+): TransformResult {
   const result = shiftSubtitles(ctx.content, {
     offsetMs: params.offsetMs,
     thresholdMs: params.thresholdMs,
@@ -112,35 +115,37 @@ async function shiftTransform(
   return { content: result.content, note };
 }
 
-async function embedTransform(
+function embedTransform(
   ctx: TransformContext,
   params: EmbedStepParams
-): Promise<TransformResult> {
-  // Embed in chain requires font-resolution callback to Rust ops
-  // (find_system_font + subset_font), wired in a follow-up. Standalone
-  // `embed` subcommand still works as today; users wanting embed in
-  // a chain wait until step 5 of the implementation order lands.
+): TransformResult {
+  // Embed in chain is wired in Step 4b. The Rust shell will pre-
+  // resolve fonts (planFontEmbed → font subset bytes) and pack the
+  // results into EmbedStepParams, so this transform stays sync —
+  // matching every other engine call boundary. Until that's wired,
+  // chains containing an embed step error here.
   void ctx;
   void params;
   throw new Error(
-    "embed step in chain is not yet implemented (font resolution callback pending)"
+    "embed step in chain is not yet implemented (font resolution callback pending in Step 4b)"
   );
 }
 
 /**
  * Execute a chain plan against a single input file's content.
  *
+ * Single-payload signature matches the deno_core call boundary —
+ * the Rust shell's `call_engine` helper packs the request as one
+ * JSON-serializable object on `globalThis.__ssahdrifyCliPayload`.
+ *
  * Errors propagate per locked failure model: any step throwing
  * aborts this file's chain immediately. The Rust shell catches the
- * thrown error, attributes it to the input file, and continues with
- * the next file (skip + continue + report semantics, matching the
- * existing per-feature CLI).
+ * thrown error, attributes it to the input file, and continues
+ * with the next file (skip + continue + report semantics, matching
+ * the existing per-feature CLI).
  */
-export async function runChain(
-  plan: ChainPlan,
-  inputPath: string,
-  content: string
-): Promise<ChainResult> {
+export function runChain(request: ChainRunRequest): ChainResult {
+  const { plan, inputPath, content } = request;
   const notes: string[] = [];
   let current = content;
 
@@ -154,7 +159,7 @@ export async function runChain(
       // through the indexed access — but the registry's mapped type
       // above guarantees the correspondence by construction. The
       // runtime correctness is unchanged; this is a TS limitation.
-      result = await (transform as StepTransform<unknown>)(
+      result = (transform as StepTransform<unknown>)(
         { content: current, inputPath },
         step.params
       );

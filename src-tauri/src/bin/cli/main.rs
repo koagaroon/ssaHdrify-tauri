@@ -261,6 +261,90 @@ struct ChainArgs {
     raw_argv: Vec<String>,
 }
 
+// ── Chain serialization ─────────────────────────────────────
+//
+// Each per-feature Args struct provides a `to_chain_step` method
+// that produces a JSON shape matching the TS-side `ChainStep`
+// discriminated union (see src/features/chain/chain-types.ts).
+// Living in main.rs keeps the field-access privacy minimal — chain
+// step variants need to read `eotf`, `nits`, `offset`, `after`,
+// `font_dirs`, etc., which are private to main.rs.
+//
+// The TS side (`runChain` registry) is the contract: any drift in
+// field naming, optionality, or value form will fail at runtime. The
+// `to_runtime_payload` helper in chain.rs has unit tests pinning the
+// JSON shape so changes here that miss the TS side surface fast.
+
+impl HdrArgs {
+    pub(crate) fn to_chain_step(&self) -> serde_json::Value {
+        // `nits` here maps to TS-side `brightness` — the existing CLI
+        // surface uses `--nits` for UX (matches HDR signaling vocabulary)
+        // while the engine API was named `brightness` from the Python
+        // original. Renaming either side is more disruptive than a
+        // single-point translation here.
+        serde_json::json!({
+            "kind": "hdr",
+            "params": {
+                "eotf": self.eotf.as_engine_value(),
+                "brightness": self.nits,
+            },
+        })
+    }
+}
+
+impl ShiftArgs {
+    pub(crate) fn to_chain_step(&self) -> Result<serde_json::Value, String> {
+        let offset_ms = parse_duration_ms(&self.offset)?;
+        let threshold_ms = match &self.after {
+            Some(text) => Some(parse_timestamp_ms(text)?),
+            None => None,
+        };
+        let mut params = serde_json::json!({ "offsetMs": offset_ms });
+        if let Some(t) = threshold_ms {
+            params["thresholdMs"] = serde_json::Value::from(t);
+        }
+        Ok(serde_json::json!({
+            "kind": "shift",
+            "params": params,
+        }))
+    }
+}
+
+impl EmbedArgs {
+    pub(crate) fn to_chain_step(&self) -> serde_json::Value {
+        // Path → string conversion uses `to_string_lossy` so non-UTF-8
+        // path bytes (Windows wide chars converted via WTF-8, or the
+        // rare UNIX path with invalid UTF-8) survive the JSON round-
+        // trip. The TS side treats the strings opaquely until
+        // resolution time, where they're handed back to Rust ops and
+        // converted back to PathBuf — at which point lossy-encoded
+        // bytes become a different lookup but produce a clear "font
+        // not found" error rather than silent corruption.
+        let font_dirs: Vec<String> = self
+            .font_dirs
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+        let font_files: Vec<String> = self
+            .font_files
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+        serde_json::json!({
+            "kind": "embed",
+            "params": {
+                "fontDirs": font_dirs,
+                "fontFiles": font_files,
+                "noSystemFonts": self.no_system_fonts,
+                "onMissing": match self.on_missing {
+                    MissingFontAction::Warn => "warn",
+                    MissingFontAction::Fail => "fail",
+                },
+            },
+        })
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CommandReport {
@@ -433,16 +517,122 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
         return Ok(ExitCode::SUCCESS);
     }
 
-    // Step 4 introduces the deno_core op layer that actually executes
-    // the chain. Until that lands, surface a clear "what works /
-    // what's pending" error rather than a confusing "command not
-    // found"-style failure.
-    Err(
-        "chain execution is pending Step 4 (deno_core op layer). \
-         Run with --dry-run to validate the plan; standalone subcommands \
-         (hdr / shift / embed / rename) still work as today."
-            .into(),
-    )
+    // Step 4a: HDR + Shift chains execute end-to-end. Embed-in-chain
+    // throws "not yet implemented" on the TS side and surfaces here
+    // as a per-file failure (Step 4b wires embed's font-resolution
+    // bridge so embed steps work too).
+    let mut engine = engine::CliEngine::new()?;
+    let mut written = 0usize;
+    let mut failed = 0usize;
+    let mut skipped = 0usize;
+    for input in &plan.input_files {
+        match process_one_chain_input(&mut engine, &plan, input, globals) {
+            ChainFileOutcome::Written(out) => {
+                if !globals.quiet {
+                    println!("✓ {} → {}", input.display(), out.display());
+                }
+                written += 1;
+            }
+            ChainFileOutcome::Skipped(reason) => {
+                if !globals.quiet {
+                    println!("⊘ {}: {}", input.display(), reason);
+                }
+                skipped += 1;
+            }
+            ChainFileOutcome::Failed(err) => {
+                eprintln!("✗ {}: {}", input.display(), err);
+                failed += 1;
+            }
+        }
+    }
+    if !globals.quiet {
+        println!(
+            "Summary: {written} written, {skipped} skipped, {failed} failed"
+        );
+    }
+    Ok(if failed > 0 {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    })
+}
+
+enum ChainFileOutcome {
+    Written(PathBuf),
+    Skipped(String),
+    Failed(String),
+}
+
+fn process_one_chain_input(
+    engine: &mut engine::CliEngine,
+    plan: &chain::ChainPlan,
+    input: &Path,
+    globals: &GlobalOptions,
+) -> ChainFileOutcome {
+    let input_abs = match absolute_path(input) {
+        Ok(p) => p,
+        Err(err) => return ChainFileOutcome::Failed(err),
+    };
+    let input_str = display_path(&input_abs);
+
+    // Read input via existing encoding-aware path. Honors the same
+    // size cap, BOM detection, and fallback-on-canonicalize-failure
+    // semantics every other CLI subcommand uses.
+    let read_result = match app_lib::encoding::read_text_detect_encoding(input_str.clone()) {
+        Ok(r) => r,
+        Err(err) => return ChainFileOutcome::Failed(err),
+    };
+
+    // Build the JSON payload matching the TS-side ChainRunRequest.
+    let payload = match plan.to_runtime_payload(&input_str, &read_result.text) {
+        Ok(p) => p,
+        Err(err) => return ChainFileOutcome::Failed(err),
+    };
+    let request = engine::ChainRunRequest { payload };
+
+    let result = match engine.run_chain(&request) {
+        Ok(r) => r,
+        Err(err) => return ChainFileOutcome::Failed(err),
+    };
+
+    // Apply --output-dir relocation (chain-global, terminal step
+    // only) using the existing helper. The runtime returned the
+    // path resolved against the input's directory; relocation
+    // re-roots that into --output-dir if set.
+    let output_path =
+        match relocate_output_path(&result.output_path, globals.output_dir.as_deref()) {
+            Ok(p) => p,
+            Err(err) => return ChainFileOutcome::Failed(err),
+        };
+
+    // Skip-or-overwrite check matching existing per-feature behavior.
+    if !globals.overwrite && output_path.exists() {
+        return ChainFileOutcome::Skipped(format!(
+            "{} already exists (use --overwrite to replace)",
+            output_path.display()
+        ));
+    }
+
+    if let Some(parent) = output_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            if let Err(err) = fs::create_dir_all(parent) {
+                return ChainFileOutcome::Failed(format!(
+                    "failed to create output directory: {err}"
+                ));
+            }
+        }
+    }
+    if let Err(err) = fs::write(&output_path, &result.content) {
+        return ChainFileOutcome::Failed(format!("failed to write output: {err}"));
+    }
+
+    if globals.verbose {
+        for note in &result.notes {
+            println!("  {note}");
+        }
+    }
+
+    ChainFileOutcome::Written(output_path)
 }
 
 fn emit_chain_dry_run(plan: &chain::ChainPlan) {

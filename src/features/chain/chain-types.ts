@@ -74,6 +74,19 @@ export interface ChainPlan {
 }
 
 /**
+ * Single-payload request shape for `runChain` at the deno_core
+ * boundary. Pack `plan`, `inputPath`, and `content` into one object
+ * so the Rust shell's `call_engine` helper (which marshals one
+ * payload via `globalThis.__ssahdrifyCliPayload`) can reach the
+ * runtime without needing a multi-arg JS calling convention.
+ */
+export interface ChainRunRequest {
+  plan: ChainPlan;
+  inputPath: string;
+  content: string;
+}
+
+/**
  * Result returned to the Rust shell after `runChain` completes.
  */
 export interface ChainResult {

@@ -44,7 +44,7 @@ describe("runChain — single HDR step", () => {
       steps: [{ kind: "hdr", params: { eotf: "PQ", brightness: 1000 } }],
       outputTemplate: "{name}.hdr.ass",
     };
-    const result = await runChain(plan, INPUT_PATH, ASS_FIXTURE);
+    const result = runChain({ plan, inputPath: INPUT_PATH, content: ASS_FIXTURE });
     const expected = processAssContent(ASS_FIXTURE, 1000, "PQ");
     expect(result.content).toBe(expected);
   });
@@ -54,7 +54,7 @@ describe("runChain — single HDR step", () => {
       steps: [{ kind: "hdr", params: { eotf: "HLG", brightness: 4000 } }],
       outputTemplate: "{name}.hdr.ass",
     };
-    const result = await runChain(plan, INPUT_PATH, ASS_FIXTURE);
+    const result = runChain({ plan, inputPath: INPUT_PATH, content: ASS_FIXTURE });
     const expected = processAssContent(ASS_FIXTURE, 4000, "HLG");
     expect(result.content).toBe(expected);
   });
@@ -64,7 +64,7 @@ describe("runChain — single HDR step", () => {
       steps: [{ kind: "hdr", params: { eotf: "PQ", brightness: 203 } }],
       outputTemplate: "{name}.hdr.ass",
     };
-    const result = await runChain(plan, INPUT_PATH, ASS_FIXTURE);
+    const result = runChain({ plan, inputPath: INPUT_PATH, content: ASS_FIXTURE });
     expect(result.notes).toEqual([]);
   });
 });
@@ -77,7 +77,7 @@ describe("runChain — single shift step", () => {
       steps: [{ kind: "shift", params: { offsetMs: 2000 } }],
       outputTemplate: "{name}.shifted.ass",
     };
-    const result = await runChain(plan, INPUT_PATH, ASS_FIXTURE);
+    const result = runChain({ plan, inputPath: INPUT_PATH, content: ASS_FIXTURE });
     const expected = shiftSubtitles(ASS_FIXTURE, { offsetMs: 2000 });
     expect(result.content).toBe(expected.content);
   });
@@ -87,7 +87,7 @@ describe("runChain — single shift step", () => {
       steps: [{ kind: "shift", params: { offsetMs: -500, thresholdMs: 60000 } }],
       outputTemplate: "{name}.shifted.ass",
     };
-    const result = await runChain(plan, INPUT_PATH, ASS_FIXTURE);
+    const result = runChain({ plan, inputPath: INPUT_PATH, content: ASS_FIXTURE });
     const expected = shiftSubtitles(ASS_FIXTURE, {
       offsetMs: -500,
       thresholdMs: 60000,
@@ -100,7 +100,7 @@ describe("runChain — single shift step", () => {
       steps: [{ kind: "shift", params: { offsetMs: 2000 } }],
       outputTemplate: "{name}.shifted.ass",
     };
-    const result = await runChain(plan, INPUT_PATH, ASS_FIXTURE);
+    const result = runChain({ plan, inputPath: INPUT_PATH, content: ASS_FIXTURE });
     expect(result.notes).toHaveLength(1);
     // `format` value is lowercase per `SubtitleFormat` (e.g., "ass") —
     // case-insensitive match so the test doesn't pin the format-token
@@ -120,7 +120,7 @@ describe("runChain — HDR + Shift composition", () => {
       ],
       outputTemplate: "{name}.hdr.shifted.ass",
     };
-    const result = await runChain(plan, INPUT_PATH, ASS_FIXTURE);
+    const result = runChain({ plan, inputPath: INPUT_PATH, content: ASS_FIXTURE });
 
     const afterHdr = processAssContent(ASS_FIXTURE, 1000, "PQ");
     const afterShift = shiftSubtitles(afterHdr, { offsetMs: 2000 });
@@ -135,7 +135,7 @@ describe("runChain — HDR + Shift composition", () => {
       ],
       outputTemplate: "{name}.shifted.hdr.ass",
     };
-    const result = await runChain(plan, INPUT_PATH, ASS_FIXTURE);
+    const result = runChain({ plan, inputPath: INPUT_PATH, content: ASS_FIXTURE });
 
     const afterShift = shiftSubtitles(ASS_FIXTURE, { offsetMs: 2000 });
     const afterHdr = processAssContent(afterShift.content, 1000, "PQ");
@@ -150,7 +150,7 @@ describe("runChain — HDR + Shift composition", () => {
       ],
       outputTemplate: "{name}.hdr.shifted.ass",
     };
-    const result = await runChain(plan, INPUT_PATH, ASS_FIXTURE);
+    const result = runChain({ plan, inputPath: INPUT_PATH, content: ASS_FIXTURE });
     // HDR currently emits no notes; shift emits one. If HDR adds
     // notes later, this assertion's shape stays — just the count
     // changes.
@@ -177,9 +177,9 @@ describe("runChain — embed step (placeholder)", () => {
       ],
       outputTemplate: "{name}.embed.ass",
     };
-    await expect(runChain(plan, INPUT_PATH, ASS_FIXTURE)).rejects.toThrow(
-      /step 1 \(embed\) failed: embed step in chain is not yet implemented/
-    );
+    expect(() =>
+      runChain({ plan, inputPath: INPUT_PATH, content: ASS_FIXTURE })
+    ).toThrow(/step 1 \(embed\) failed: embed step in chain is not yet implemented/);
   });
 });
 

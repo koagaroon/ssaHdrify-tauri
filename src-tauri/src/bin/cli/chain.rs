@@ -68,6 +68,18 @@ impl ParsedStep {
             Self::Embed(_) => "embed",
         }
     }
+
+    /// Serialize this step into the JSON shape consumed by the TS
+    /// `runChain` runtime (`{ kind, params }`). Delegates to per-Args
+    /// `to_chain_step` methods which live in main.rs alongside the
+    /// struct definitions (where the private fields are visible).
+    pub fn to_chain_step_json(&self) -> Result<serde_json::Value, String> {
+        match self {
+            Self::Hdr(args) => Ok(args.to_chain_step()),
+            Self::Shift(args) => args.to_chain_step(),
+            Self::Embed(args) => Ok(args.to_chain_step()),
+        }
+    }
 }
 
 /// A fully parsed and validated chain ready for runtime execution.
@@ -82,6 +94,33 @@ pub struct ChainPlan {
     pub output_template: String,
     pub input_files: Vec<PathBuf>,
     pub warnings: Vec<String>,
+}
+
+impl ChainPlan {
+    /// Build the JSON request payload for the TS-side `runChain` op.
+    /// Pairs `(plan, inputPath, content)` per the
+    /// `ChainRunRequest` shape in chain-types.ts.
+    ///
+    /// Note: `input_files` and `warnings` are intentionally NOT
+    /// serialized — those are Rust-side concerns. The TS runtime sees
+    /// only the plan-as-AST + the one input file currently being
+    /// processed (multi-file fanout is handled by the Rust shell).
+    pub fn to_runtime_payload(
+        &self,
+        input_path: &str,
+        content: &str,
+    ) -> Result<serde_json::Value, String> {
+        let steps: Result<Vec<_>, _> =
+            self.steps.iter().map(ParsedStep::to_chain_step_json).collect();
+        Ok(serde_json::json!({
+            "plan": {
+                "steps": steps?,
+                "outputTemplate": self.output_template,
+            },
+            "inputPath": input_path,
+            "content": content,
+        }))
+    }
 }
 
 /// Parse raw argv (post-`chain` keyword, post-clap-global flags)
@@ -605,6 +644,87 @@ mod tests {
         .unwrap();
         let template = derive_stacked_default(&[s1, s2, s3]);
         assert_eq!(template, "{name}.shifted.hdr.embed.ass");
+    }
+
+    // ── to_runtime_payload (Rust → TS marshaling) ────────────
+
+    #[test]
+    fn marshal_hdr_step_matches_ts_shape() {
+        let argv = argv_of(&["hdr", "--eotf", "pq", "--nits", "1000", "cat.ass"]);
+        let plan = parse_chain_argv(&argv, None).unwrap();
+        let payload = plan.to_runtime_payload("/tmp/cat.ass", "ass body").unwrap();
+        assert_eq!(payload["inputPath"], "/tmp/cat.ass");
+        assert_eq!(payload["content"], "ass body");
+        assert_eq!(payload["plan"]["outputTemplate"], "{name}.hdr.ass");
+        assert_eq!(payload["plan"]["steps"][0]["kind"], "hdr");
+        assert_eq!(payload["plan"]["steps"][0]["params"]["eotf"], "PQ");
+        assert_eq!(payload["plan"]["steps"][0]["params"]["brightness"], 1000);
+    }
+
+    #[test]
+    fn marshal_shift_step_translates_offset_to_ms() {
+        let argv = argv_of(&["shift", "--offset", "+2.5s", "cat.ass"]);
+        let plan = parse_chain_argv(&argv, None).unwrap();
+        let payload = plan.to_runtime_payload("/tmp/cat.ass", "ass body").unwrap();
+        assert_eq!(payload["plan"]["steps"][0]["kind"], "shift");
+        assert_eq!(payload["plan"]["steps"][0]["params"]["offsetMs"], 2500);
+        assert!(payload["plan"]["steps"][0]["params"]["thresholdMs"].is_null());
+    }
+
+    #[test]
+    fn marshal_shift_with_threshold_translates_after_to_ms() {
+        let argv = argv_of(&["shift", "--offset", "-500ms", "--after", "00:10:00", "cat.ass"]);
+        let plan = parse_chain_argv(&argv, None).unwrap();
+        let payload = plan.to_runtime_payload("/tmp/cat.ass", "ass body").unwrap();
+        assert_eq!(payload["plan"]["steps"][0]["params"]["offsetMs"], -500);
+        // 00:10:00 = 600_000 ms.
+        assert_eq!(payload["plan"]["steps"][0]["params"]["thresholdMs"], 600_000);
+    }
+
+    #[test]
+    fn marshal_embed_step_renames_to_camel_case() {
+        let argv = argv_of(&[
+            "embed",
+            "--font-dir", "./fonts",
+            "--font-file", "./SmileySans.ttf",
+            "--no-system-fonts",
+            "--on-missing", "fail",
+            "cat.ass",
+        ]);
+        let plan = parse_chain_argv(&argv, None).unwrap();
+        let payload = plan.to_runtime_payload("/tmp/cat.ass", "ass body").unwrap();
+        let params = &payload["plan"]["steps"][0]["params"];
+        assert_eq!(params["fontDirs"][0], "./fonts");
+        assert_eq!(params["fontFiles"][0], "./SmileySans.ttf");
+        assert_eq!(params["noSystemFonts"], true);
+        assert_eq!(params["onMissing"], "fail");
+    }
+
+    #[test]
+    fn marshal_two_step_chain_preserves_order() {
+        let argv = argv_of(&[
+            "hdr", "--eotf", "pq", "+",
+            "shift", "--offset", "+2s", "cat.ass",
+        ]);
+        let plan = parse_chain_argv(&argv, None).unwrap();
+        let payload = plan.to_runtime_payload("/tmp/cat.ass", "ass body").unwrap();
+        let steps = payload["plan"]["steps"].as_array().unwrap();
+        assert_eq!(steps.len(), 2);
+        assert_eq!(steps[0]["kind"], "hdr");
+        assert_eq!(steps[1]["kind"], "shift");
+    }
+
+    #[test]
+    fn marshal_does_not_include_rust_only_fields() {
+        // input_files and warnings are Rust-side concerns; the TS
+        // runtime should not see them.
+        let argv = argv_of(&["hdr", "--eotf", "pq", "+", "hdr", "--eotf", "hlg", "cat.ass"]);
+        let plan = parse_chain_argv(&argv, None).unwrap();
+        // Confirm warnings exist Rust-side (HDR×2 fires).
+        assert_eq!(plan.warnings.len(), 1);
+        let payload = plan.to_runtime_payload("/tmp/cat.ass", "ass body").unwrap();
+        assert!(payload["plan"].get("inputFiles").is_none());
+        assert!(payload["plan"].get("warnings").is_none());
     }
 
     #[test]

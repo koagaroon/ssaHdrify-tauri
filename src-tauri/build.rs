@@ -55,6 +55,8 @@ fn missing_engine_stub() -> String {
         "planFontEmbed",
         "resolveEmbedOutputPath",
         "applyFontEmbed",
+        "runChain",
+        "resolveChainOutputPath",
     ];
 
     // Use serde_json (not Rust Debug) to escape MESSAGE into a JS-safe
