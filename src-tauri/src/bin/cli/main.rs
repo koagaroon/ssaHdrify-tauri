@@ -10,6 +10,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 use unicode_normalization::UnicodeNormalization;
 
+mod chain;
 mod engine;
 
 const MAX_SHIFT_OFFSET_MS: i64 = 365 * 24 * 60 * 60 * 1000;
@@ -83,7 +84,7 @@ enum Command {
 }
 
 #[derive(Args, Debug)]
-struct HdrArgs {
+pub(crate) struct HdrArgs {
     /// Transfer function. EOTF 曲线（PQ / HLG）。
     #[arg(long, value_enum)]
     eotf: EotfArg,
@@ -97,8 +98,11 @@ struct HdrArgs {
     output_template: String,
 
     /// Subtitle files to convert. 要转换的字幕文件。
+    // pub(crate) so the chain module's parser can take/clear this
+    // field after parsing each step segment. Other fields stay
+    // private until a callsite needs them.
     #[arg(required = true)]
-    files: Vec<PathBuf>,
+    pub(crate) files: Vec<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -117,7 +121,7 @@ impl EotfArg {
 }
 
 #[derive(Args, Debug)]
-struct ShiftArgs {
+pub(crate) struct ShiftArgs {
     /// Signed duration, for example "+2.5s", "-500ms", or "+1m30s". 带符号的偏移量，如 "+2.5s"、"-500ms" 或 "+1m30s"。
     #[arg(long, allow_hyphen_values = true)]
     offset: String,
@@ -131,12 +135,13 @@ struct ShiftArgs {
     output_template: String,
 
     /// Subtitle files to shift. 要平移的字幕文件。
+    // See note on HdrArgs.files.
     #[arg(required = true)]
-    files: Vec<PathBuf>,
+    pub(crate) files: Vec<PathBuf>,
 }
 
 #[derive(Args, Debug)]
-struct EmbedArgs {
+pub(crate) struct EmbedArgs {
     /// Add a font folder (repeatable). 添加字体目录（可重复传入）。
     ///
     /// Pass once per folder; ssahdrify-cli scans all of them and embeds
@@ -172,8 +177,9 @@ struct EmbedArgs {
     output_template: String,
 
     /// ASS/SSA files to process. 要处理的 ASS/SSA 文件。
+    // See note on HdrArgs.files.
     #[arg(required = true)]
-    files: Vec<PathBuf>,
+    pub(crate) files: Vec<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
