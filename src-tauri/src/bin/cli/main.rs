@@ -59,6 +59,18 @@ struct GlobalOptions {
     /// Output language. Defaults to OS locale (zh* → zh, otherwise en). 输出语言；不指定时按系统区域设置自动检测。
     #[arg(long, global = true, value_enum, value_name = "LANG")]
     lang: Option<OutputLang>,
+
+    /// Skip the persistent font cache for this run. Cache file is left
+    /// untouched. Use when you want a fresh scan without affecting
+    /// the cached state. 本次运行跳过持久化字体缓存；缓存文件保持不变。
+    #[arg(long, global = true)]
+    no_cache: bool,
+
+    /// Override the default font cache file path. Default is
+    /// %APPDATA%/ssaHdrify/cli_font_cache.sqlite3. Useful for
+    /// testing or non-default layouts. 覆盖字体缓存文件路径。
+    #[arg(long, global = true, value_name = "PATH")]
+    cache_file: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
@@ -268,13 +280,6 @@ struct RefreshFontsArgs {
     /// 树状字体目录请逐层显式传入。
     #[arg(long = "font-dir", value_name = "DIR", required = true)]
     font_dirs: Vec<PathBuf>,
-
-    /// Override the default cache file path. Useful for testing or
-    /// for non-default deployment layouts. Default:
-    /// %APPDATA%/ssaHdrify/cli_font_cache.sqlite3.
-    /// 覆盖缓存文件位置；缺省 %APPDATA%/ssaHdrify/cli_font_cache.sqlite3。
-    #[arg(long, value_name = "PATH")]
-    cache_file: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]
@@ -522,9 +527,22 @@ fn run_refresh_fonts(
     globals: &GlobalOptions,
     args: RefreshFontsArgs,
 ) -> Result<ExitCode, String> {
-    // Resolve cache file path: user override or default Windows path.
-    let cache_path = match args.cache_file {
-        Some(p) => p,
+    // refresh-fonts's whole purpose is to write to the cache. Running
+    // with --no-cache is contradictory; surface as a clear error
+    // rather than silently doing nothing (per no-silent-action).
+    if globals.no_cache {
+        return Err(
+            "refresh-fonts requires the cache; --no-cache contradicts \
+             this subcommand's purpose. Remove --no-cache or use a \
+             different subcommand."
+                .to_string(),
+        );
+    }
+
+    // Resolve cache file path: user override (--cache-file) or default
+    // Windows path. Both come from globals now (they're global flags).
+    let cache_path = match &globals.cache_file {
+        Some(p) => p.clone(),
         None => app_lib::font_cache::default_cli_cache_path()?,
     };
 
@@ -1319,6 +1337,28 @@ fn run_embed(globals: &GlobalOptions, args: EmbedArgs) -> Result<ExitCode, Strin
         None
     };
 
+    // Open the persistent font cache (Step 6/7) per the locked design.
+    // Sequence:
+    //   1. If --no-cache, skip outright.
+    //   2. If --dry-run, skip — cheap-first ordering doesn't reach the
+    //      font-resolution step under dry-run, so cache I/O would be
+    //      wasted work.
+    //   3. Resolve cache path; if file doesn't exist, no cache for
+    //      this run (announce, but no fallback to declare).
+    //   4. Open. If schema version mismatch, surface as drift-equiv
+    //      and fall back to no-cache for this run.
+    //   5. Drift-check by listing cached folders + stat()-ing each.
+    //      If drift detected, verbose stderr report, fall back to
+    //      no-cache for this run, suggest `refresh-fonts`.
+    let cache = if globals.no_cache || globals.dry_run {
+        if globals.no_cache && !globals.quiet {
+            eprintln!("ℹ Cache disabled (--no-cache). Using --font-dir / system fonts only.");
+        }
+        None
+    } else {
+        prepare_embed_cache(globals, &args)
+    };
+
     let mut engine = engine::CliEngine::new()?;
     let output_dir = globals
         .output_dir
@@ -1336,6 +1376,7 @@ fn run_embed(globals: &GlobalOptions, args: EmbedArgs) -> Result<ExitCode, Strin
             globals,
             &args,
             use_user_fonts,
+            cache.as_ref(),
             output_dir.as_deref(),
             &mut engine,
             file,
@@ -1347,6 +1388,166 @@ fn run_embed(globals: &GlobalOptions, args: EmbedArgs) -> Result<ExitCode, Strin
 
     emit_report_summary(globals, &report)?;
     Ok(report.exit_code())
+}
+
+/// Resolve cache path, open the cache, detect drift, announce status
+/// to stderr per the locked transparency design, and return
+/// `Some(cache)` if usable for this run, or `None` to fall back to
+/// no-cache mode.
+///
+/// Never writes to the cache file — read-only operation. Refresh is
+/// the user's explicit `refresh-fonts` invocation.
+fn prepare_embed_cache(
+    globals: &GlobalOptions,
+    args: &EmbedArgs,
+) -> Option<app_lib::font_cache::FontCache> {
+    // Resolve path: --cache-file override or default Windows path.
+    let cache_path = match &globals.cache_file {
+        Some(p) => p.clone(),
+        None => match app_lib::font_cache::default_cli_cache_path() {
+            Ok(p) => p,
+            Err(e) => {
+                if !globals.quiet {
+                    eprintln!("⚠ Cannot resolve cache path: {e}");
+                    eprintln!("  Skipping cache for this run.");
+                }
+                return None;
+            }
+        },
+    };
+
+    if !cache_path.exists() {
+        // No cache yet (first-ever invocation, or user wiped it).
+        // Per locked design: distinct messaging from drift, same
+        // behavior (skip cache + suggest refresh-fonts).
+        if !globals.quiet {
+            eprintln!(
+                "ℹ No font cache exists yet at {}.",
+                cache_path.display()
+            );
+            eprintln!(
+                "  Run `ssahdrify-cli refresh-fonts --font-dir <DIR> ...` to build one."
+            );
+        }
+        return None;
+    }
+
+    let cache = match app_lib::font_cache::FontCache::open_or_create(&cache_path) {
+        Ok(c) => c,
+        Err(app_lib::font_cache::CacheError::SchemaVersionMismatch { found, expected }) => {
+            if !globals.quiet {
+                eprintln!(
+                    "⚠ Font cache schema mismatch (found {found}, expected {expected})."
+                );
+                eprintln!(
+                    "  Cache is from a different release; skipping for this run."
+                );
+                eprintln!(
+                    "  Delete {} and run `refresh-fonts` to rebuild.",
+                    cache_path.display()
+                );
+            }
+            return None;
+        }
+        Err(e) => {
+            if !globals.quiet {
+                eprintln!("⚠ Cannot open font cache: {e}");
+                eprintln!("  Skipping cache for this run.");
+            }
+            return None;
+        }
+    };
+
+    // Drift check: walk cached folders' stat()s and compare against
+    // recorded mtimes. "Added" folders aren't detectable here — we'd
+    // need to walk source roots, which embed doesn't have. So the
+    // report covers modified + removed; added is empty by design.
+    let drift = match check_cache_drift(&cache) {
+        Ok(report) => report,
+        Err(e) => {
+            if !globals.quiet {
+                eprintln!("⚠ Cannot validate cache: {e}");
+                eprintln!("  Skipping cache for this run.");
+            }
+            return None;
+        }
+    };
+
+    if !drift.is_empty() {
+        if !globals.quiet {
+            eprintln!(
+                "⚠ Cache drift detected — {} folder(s) changed since last refresh:",
+                drift.modified.len() + drift.removed.len()
+            );
+            for f in &drift.modified {
+                eprintln!("    ~ {f}  (modified)");
+            }
+            for f in &drift.removed {
+                eprintln!("    - {f}  (removed)");
+            }
+            eprintln!("  Skipping cache for this run; using --font-dir / system fonts only.");
+            eprintln!("  Run `refresh-fonts` to update the cache.");
+        }
+        return None;
+    }
+
+    // Cache is valid. Announce per locked transparency design:
+    // Situation A (--font-dir provided) → "cache + dirs" merge
+    // announcement; Situation B (no --font-dir) → implicit cache
+    // use announcement.
+    let user_supplied_dirs = !args.font_dirs.is_empty() || !args.font_files.is_empty();
+    if !globals.quiet {
+        if user_supplied_dirs {
+            eprintln!(
+                "ℹ Using font cache (at {}) plus the --font-dir / --font-file paths you supplied.",
+                cache_path.display()
+            );
+        } else {
+            eprintln!("ℹ Using font cache (at {}).", cache_path.display());
+            eprintln!("  Pass --no-cache to use system fonts only.");
+        }
+    }
+    Some(cache)
+}
+
+/// Walk every folder the cache has indexed, stat() each one, and
+/// build a snapshot for drift detection. Folders that no longer
+/// exist (or that we can't stat) get omitted from the snapshot,
+/// which `diff_against` then reports as `removed`.
+///
+/// `added` is intentionally not detectable here: embed doesn't walk
+/// source roots, so we can't see folders the user has on disk but
+/// hasn't yet cached. Those land in the cache via `refresh-fonts`,
+/// not via embed-time drift detection.
+fn check_cache_drift(
+    cache: &app_lib::font_cache::FontCache,
+) -> Result<app_lib::font_cache::DriftReport, String> {
+    let cached_folders = cache
+        .list_folders()
+        .map_err(|e| format!("list cached folders: {e}"))?;
+    let mut snapshot: Vec<(String, i64)> = Vec::with_capacity(cached_folders.len());
+    for folder in &cached_folders {
+        let folder_path_buf = std::path::Path::new(&folder.folder_path);
+        // Both metadata() and modified() can fail (folder gone,
+        // permission denied, etc.). We treat "can't stat" the same
+        // as "doesn't exist" — the folder won't appear in the
+        // snapshot and `diff_against` flags it as removed. For
+        // permission errors specifically, this is a slight false-
+        // positive (folder exists but we can't see it), but the
+        // user likely wants to know either way.
+        if let Ok(metadata) = std::fs::metadata(folder_path_buf) {
+            if let Ok(modified) = metadata.modified() {
+                let mtime = modified
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                snapshot.push((folder.folder_path.clone(), mtime));
+            }
+        }
+    }
+    cache
+        .diff_against(&snapshot)
+        .map_err(|e| format!("compute drift: {e}"))
 }
 
 fn init_cli_font_sources(
@@ -1450,10 +1651,17 @@ fn emit_font_source_summary(
     );
 }
 
+// 8 args: globals + args + use_user_fonts + cache + output_dir +
+// engine + file + seen_outputs. The cache and use_user_fonts could
+// be folded into a per-run state struct, but the existing run_embed
+// already passes them as parallel locals; bundling here would just
+// shift the boilerplate. Allowing this one lint locally.
+#[allow(clippy::too_many_arguments)]
 fn process_embed_file(
     globals: &GlobalOptions,
     args: &EmbedArgs,
     use_user_fonts: bool,
+    cache: Option<&app_lib::font_cache::FontCache>,
     output_dir: Option<&Path>,
     engine: &mut engine::CliEngine,
     file: &Path,
@@ -1535,7 +1743,7 @@ fn process_embed_file(
 
     let mut warnings: Vec<String> = Vec::new();
 
-    let resolved_fonts = match resolve_embed_fonts(globals, args, use_user_fonts, &plan.fonts) {
+    let resolved_fonts = match resolve_embed_fonts(globals, args, use_user_fonts, cache, &plan.fonts) {
         Ok((fonts, mut resolve_warnings)) => {
             warnings.append(&mut resolve_warnings);
             fonts
@@ -1650,8 +1858,12 @@ fn resolve_chain_embed_subsets(
     };
     let plan_result = engine.plan_font_embed(&plan_request)?;
 
+    // Chain's embed step doesn't use the persistent cache (yet) — chain
+    // pre-resolution runs against the input content with whatever
+    // --font-dir the embed step itself was given. Cache integration
+    // for chain is a future expansion; for now, pass None.
     let (resolved, _missing_warnings) =
-        resolve_embed_fonts(globals, embed_args, use_user_fonts, &plan_result.fonts)?;
+        resolve_embed_fonts(globals, embed_args, use_user_fonts, None, &plan_result.fonts)?;
     let (subsets, _skipped_warnings) =
         subset_resolved_fonts(globals, embed_args, &resolved)?;
     Ok(subsets)
@@ -1661,13 +1873,14 @@ fn resolve_embed_fonts(
     globals: &GlobalOptions,
     args: &EmbedArgs,
     use_user_fonts: bool,
+    cache: Option<&app_lib::font_cache::FontCache>,
     fonts: &[engine::FontEmbedUsage],
 ) -> Result<(Vec<ResolvedEmbedFont>, Vec<String>), String> {
     let mut resolved = Vec::new();
     let mut missing = Vec::new();
 
     for font in fonts {
-        let lookup = resolve_embed_font(args, use_user_fonts, font);
+        let lookup = resolve_embed_font(args, use_user_fonts, cache, font);
         let (path, index) = match lookup {
             Ok(Some(found)) => found,
             Ok(None) => {
@@ -1750,13 +1963,39 @@ fn subset_resolved_fonts(
 fn resolve_embed_font(
     args: &EmbedArgs,
     use_user_fonts: bool,
+    cache: Option<&app_lib::font_cache::FontCache>,
     font: &engine::FontEmbedUsage,
 ) -> Result<Option<(String, u32)>, String> {
+    // Lookup tier 1: session DB populated by --font-dir for THIS run
+    // (Situation A's explicit "merge in these dirs" inputs).
     if use_user_fonts {
         if let Some(found) =
             app_lib::fonts::resolve_user_font(font.family.clone(), font.bold, font.italic)?
         {
             return Ok(Some((found.path, found.index)));
+        }
+    }
+
+    // Lookup tier 2: persistent cache. Implements Situation A's
+    // "merge with cache" semantic (when --font-dir is also provided,
+    // cache fills in fonts the user didn't explicitly hand) and
+    // Situation B's "implicit cache use" (when no --font-dir, cache
+    // is the primary source). Cache is None when --no-cache is set,
+    // when the cache file doesn't exist, or when drift detection
+    // fell us back to no-cache for this run.
+    if let Some(c) = cache {
+        match c.lookup_family(&font.family, font.bold, font.italic) {
+            Ok(Some(result)) => {
+                return Ok(Some((result.font_path, result.face_index as u32)));
+            }
+            Ok(None) => {
+                // Cache miss; fall through to system fonts.
+            }
+            Err(e) => {
+                // Cache read error; log but don't fail the whole
+                // embed — fall through to system fonts.
+                log::warn!("font cache lookup failed for {}: {e}", font.family);
+            }
         }
     }
 
@@ -2545,6 +2784,8 @@ mod tests {
             verbose: false,
             json: false,
             lang: Some(OutputLang::En),
+            no_cache: false,
+            cache_file: None,
         }
     }
 
