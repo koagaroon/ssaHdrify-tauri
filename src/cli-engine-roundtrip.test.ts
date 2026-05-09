@@ -305,6 +305,71 @@ describe("Cheap resolver ↔ heavy converter byte equivalence", () => {
     const heavy = planFontEmbed({ ...req, content: embedAss });
     expect(cheap).toBe(heavy.outputPath);
   });
+
+  // Regression: 2026-05-09 forum tester reported HDR failing on
+  // `cat.ass` from cwd `Z:\` — Rust shell joined to `Z:\cat.ass` →
+  // resolver rejected because the prior decomposition extracted dir as
+  // `Z:` and a stray `^[A-Za-z]:$/` check conflated drive-rooted with
+  // drive-relative. After the shared-helper extraction, all three
+  // resolvers must accept drive-rooted files at byte parity with their
+  // heavy counterparts.
+  describe("drive-root file regression (Z:\\cat.ass)", () => {
+    const driveRootInput = "Z:\\cat.ass";
+
+    it("HDR resolver/converter accept and produce Z:\\cat.hdr.ass", () => {
+      const req = {
+        inputPath: driveRootInput,
+        eotf: "PQ" as const,
+        outputTemplate: DEFAULT_TEMPLATE,
+      };
+      const cheap = resolveHdrOutputPath(req);
+      const heavy = convertHdr({ ...req, content: ASS_FIXTURE });
+      expect(cheap).toBe("Z:\\cat.hdr.ass");
+      expect(heavy.outputPath).toBe("Z:\\cat.hdr.ass");
+    });
+
+    it("Shift resolver/converter accept and produce Z:\\cat.shifted.ass", () => {
+      const req = {
+        inputPath: driveRootInput,
+        outputTemplate: "{name}.shifted{ext}",
+      };
+      const cheap = resolveShiftOutputPath(req);
+      const heavy = convertShift({ ...req, content: ASS_FIXTURE, offsetMs: 500 });
+      expect(cheap).toBe("Z:\\cat.shifted.ass");
+      expect(heavy.outputPath).toBe("Z:\\cat.shifted.ass");
+    });
+
+    it("Embed resolver/planner accept and produce Z:\\cat.embed.ass", () => {
+      const embedAss = [
+        "[Script Info]",
+        "",
+        "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, Bold, Italic",
+        "Style: Default,Arial,20,0,0",
+        "",
+        "[Events]",
+        "Format: Layer, Start, End, Style, Text",
+        "Dialogue: 0,0:00:00.00,0:00:01.00,Default,Hi",
+        "",
+      ].join("\n");
+      const req = {
+        inputPath: driveRootInput,
+        outputTemplate: "{name}.embed.ass",
+      };
+      const cheap = resolveEmbedOutputPath(req);
+      const heavy = planFontEmbed({ ...req, content: embedAss });
+      expect(cheap).toBe("Z:\\cat.embed.ass");
+      expect(heavy.outputPath).toBe("Z:\\cat.embed.ass");
+    });
+
+    it("GUI deriveShiftedPath accepts drive-root input", () => {
+      expect(deriveShiftedPath(driveRootInput)).toBe("Z:\\cat.shifted.ass");
+    });
+
+    it("GUI deriveEmbeddedPath accepts drive-root input", () => {
+      expect(deriveEmbeddedPath(driveRootInput)).toBe("Z:\\cat.embedded.ass");
+    });
+  });
 });
 
 describe("Font embed plan — GUI ↔ CLI byte equivalence", () => {

@@ -82,6 +82,110 @@ export const WINDOWS_RESERVED_NAMES = new Set([
 export const ILLEGAL_FILENAME_CHARS = /[\x00-\x1f\x7f<>:"|?*\\/{}]/;
 
 /**
+ * Decomposed parts of a validated input path.
+ */
+export interface InputPathParts {
+  /** Directory portion with no trailing slash. For files at a drive root
+   *  like `C:\file.ass`, this is `C:` (drive letter only). Downstream
+   *  concatenation `${dir}/${filename}` produces a correct rooted path. */
+  dir: string;
+  /** Filename without extension. */
+  baseName: string;
+  /** File extension WITH leading dot (e.g., `.ass`); empty string when no
+   *  extension is present. */
+  ext: string;
+  /** Path with all backslashes converted to forward slashes. */
+  normalized: string;
+  /** Whether the input used Windows-style backslashes — caller restores
+   *  native separators on the returned output path. */
+  usedBackslash: boolean;
+}
+
+/**
+ * Decompose an absolute input path into directory, base name, extension,
+ * and separator-style parts. The single source of truth for what counts
+ * as a valid root path across HDR / Shift / Embed resolvers (CLI + GUI).
+ *
+ * Accepts:
+ *   - Drive-rooted Windows paths: `C:\foo\bar.ass`, `C:/foo/bar.ass`
+ *   - Drive-root files: `C:\bar.ass`, `Z:/bar.ass` (dir = `C:` / `Z:`)
+ *   - POSIX absolute paths: `/foo/bar.ass`
+ *   - UNC paths: `\\server\share\bar.ass`
+ *
+ * Rejects:
+ *   - Bare filenames: `foo.ass` (no directory at all)
+ *   - Drive-relative: `C:foo.ass` (drive letter without separator —
+ *     ambiguous; on Windows refers to the file in drive C's *current*
+ *     directory, which has no defined meaning at this layer)
+ *   - Empty / invalid stems
+ *   - Control characters anywhere in the path
+ *
+ * Why drive-root files (`C:\file.ass`) MUST be accepted: a CLI user may
+ * cd into a drive root and pass a bare filename; the Rust shell then
+ * canonicalizes argv against cwd, producing a drive-rooted absolute
+ * path. Earlier HDR-resolver code rejected `dir === "C:"` thinking it
+ * was drive-relative; that rejection caught the legitimate drive-root
+ * case along with the ambiguous one. This helper distinguishes them by
+ * checking for the separator after the colon BEFORE splitting dir.
+ *
+ * Why bare filenames must be rejected even though Rust shell
+ * canonicalizes argv: programmatic callers (tests, future internal
+ * modules) may bypass the shell. The engine layer enforces its own
+ * preconditions.
+ */
+export function decomposeInputPath(inputPath: string): InputPathParts {
+  if (!inputPath) {
+    throw new Error("Input path must be absolute");
+  }
+  // ANY backslash → output uses backslashes. Mixed-separator Windows
+  // paths (a `\\server\share/file.ass` from upstream JS normalization)
+  // bias to native style rather than to POSIX.
+  const usedBackslash = inputPath.includes("\\");
+  const normalized = inputPath.replace(/\\/g, "/");
+
+  // Reject control / NUL chars early. Windows would silently truncate
+  // at NUL — `evil\0.exe.ass` becomes `evil`, bypassing the trailing
+  // `.ass` extension allow-list. DEL / bidi controls slip past naive
+  // validators too.
+  // eslint-disable-next-line no-control-regex -- intentional: reject control chars
+  if (/[\x00-\x1f\x7f]/.test(normalized)) {
+    throw new Error("Input path contains control characters");
+  }
+
+  // Absolute = (a) starts with `/` (POSIX root or UNC after backslash
+  // conversion), or (b) drive letter + separator. Drive-relative
+  // `C:foo.ass` (no separator after colon) fails this check —
+  // intentional: that path shape has no defined meaning at this layer.
+  const isAbsolute = normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized);
+  if (!isAbsolute) {
+    throw new Error("Input path must be absolute");
+  }
+
+  const lastSlash = normalized.lastIndexOf("/");
+  // Defensive — isAbsolute guarantees a slash exists. Guard against
+  // edge inputs slipping past the absolute check.
+  if (lastSlash < 0) {
+    throw new Error("Input path has no directory component");
+  }
+
+  const dir = normalized.slice(0, lastSlash);
+  const fullName = normalized.slice(lastSlash + 1);
+  if (!fullName) {
+    throw new Error("Input path has no filename");
+  }
+
+  const lastDot = fullName.lastIndexOf(".");
+  const baseName = lastDot > 0 ? fullName.slice(0, lastDot) : fullName;
+  const ext = lastDot > 0 ? fullName.slice(lastDot) : "";
+
+  if (!baseName || !baseName.replace(/^\.+/, "").trim()) {
+    throw new Error("Input filename has no valid stem");
+  }
+
+  return { dir, baseName, ext, normalized, usedBackslash };
+}
+
+/**
  * Validate a single output filename (no path separators) for safety.
  * Caller is responsible for stripping the directory portion before
  * calling.

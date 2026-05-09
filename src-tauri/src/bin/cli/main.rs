@@ -73,6 +73,10 @@ enum Command {
     /// Shift subtitle timings by an offset. 按偏移量平移字幕时间轴。
     Shift(ShiftArgs),
     /// Embed fonts into ASS subtitle files. 将字体嵌入 ASS 字幕文件。
+    ///
+    /// Tips / 提示:
+    ///   --font-dir and --font-file are repeatable — pass once per folder/file.
+    ///   --font-dir 与 --font-file 可重复传入：每个目录或文件传一次。
     Embed(EmbedArgs),
     /// Pair subtitles with videos and rename subtitles to match. 配对视频和字幕，按视频名重命名字幕。
     Rename(RenameArgs),
@@ -133,11 +137,25 @@ struct ShiftArgs {
 
 #[derive(Args, Debug)]
 struct EmbedArgs {
-    /// Local font directory. Can be passed multiple times. 本地字体目录；可多次传入。
+    /// Add a font folder (repeatable). 添加字体目录（可重复传入）。
+    ///
+    /// Pass once per folder; ssahdrify-cli scans all of them and embeds
+    /// whatever the subtitle references.
+    /// 每个目录传一次；ssahdrify-cli 会全部扫描并嵌入字幕引用到的字体。
+    ///
+    /// Example / 示例:
+    ///   ssahdrify-cli embed --font-dir ./fonts --font-dir C:/MyFonts subs.ass
     #[arg(long = "font-dir", value_name = "DIR")]
     font_dirs: Vec<PathBuf>,
 
-    /// Local font file. Can be passed multiple times. 本地字体文件；可多次传入。
+    /// Add a specific font file (repeatable). 添加具体字体文件（可重复传入）。
+    ///
+    /// Pass once per file; useful for embedding a single TTF/OTF without
+    /// scanning a whole directory.
+    /// 每个文件传一次；适合只嵌入单个 TTF/OTF 而不扫描整个目录。
+    ///
+    /// Example / 示例:
+    ///   ssahdrify-cli embed --font-file ./SmileySans.ttf --font-file ./MyFont.otf subs.ass
     #[arg(long = "font-file", value_name = "FILE")]
     font_files: Vec<PathBuf>,
 

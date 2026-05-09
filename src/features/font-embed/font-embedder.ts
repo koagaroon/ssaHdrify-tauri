@@ -21,7 +21,11 @@ import {
   type LocalFontEntry,
 } from "../../lib/tauri-api";
 import { SECTION_HEADER_RE } from "../hdr-convert/ass-processor";
-import { assertSafeOutputFilename, assertSafeOutputPath } from "../../lib/path-validation";
+import {
+  assertSafeOutputFilename,
+  assertSafeOutputPath,
+  decomposeInputPath,
+} from "../../lib/path-validation";
 
 // ── Types ─────────────────────────────────────────────────
 
@@ -355,29 +359,16 @@ export function aggregateFonts(perFile: Map<string, FileAnalysis>): {
  * batch begins.
  */
 export function deriveEmbeddedPath(inputPath: string): string {
-  // Prefer backslash on output if the input has ANY backslash (Windows
-  // path), regardless of whether it also contains a forward slash.
-  // Mixed-separator inputs (e.g., a Windows path that picked up a `/`
-  // from JS-side normalization upstream) used to bias to forward slash
-  // because the heuristic only checked for "all backslash, no forward
-  // slash" — which produced surprising `/`-formatted paths on Windows
-  // when the rest of the system spoke `\`.
-  const usedBackslash = inputPath.includes("\\");
-  const normalized = inputPath.replace(/\\/g, "/");
-  const lastSlash = normalized.lastIndexOf("/");
-  const dir = lastSlash >= 0 ? normalized.slice(0, lastSlash) : "";
-  const fullName = lastSlash >= 0 ? normalized.slice(lastSlash + 1) : normalized;
-  const lastDot = fullName.lastIndexOf(".");
-  const baseName = lastDot > 0 ? fullName.slice(0, lastDot) : fullName;
+  // Decompose via the shared helper. Validates absolute, accepts drive-
+  // root files (`C:\foo.ass`), rejects drive-relative (`C:foo.ass`).
+  const { dir, baseName, normalized, usedBackslash } = decomposeInputPath(inputPath);
   // Output is always .ass — the embed step rebuilds an ASS-format file
   // regardless of whether the input was .ass or .ssa.
   const outputName = `${baseName}.embedded.ass`;
   // Apply the shared safety checks (reserved names, traversal,
-  // MAX_PATH, self-overwrite). Before this extraction, embed only
-  // wrapped the input's separator style; the strict checks lived in
-  // HDR's resolver only.
+  // MAX_PATH, self-overwrite). Same helpers as HDR / Shift resolvers.
   assertSafeOutputFilename(outputName);
-  const outputPath = dir ? `${dir}/${outputName}` : outputName;
+  const outputPath = `${dir}/${outputName}`;
   assertSafeOutputPath(outputPath, normalized);
   return usedBackslash ? outputPath.replace(/\//g, "\\") : outputPath;
 }

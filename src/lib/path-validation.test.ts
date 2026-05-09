@@ -4,6 +4,7 @@ import {
   WINDOWS_RESERVED_NAMES,
   assertSafeOutputFilename,
   assertSafeOutputPath,
+  decomposeInputPath,
 } from "./path-validation";
 
 describe("assertSafeOutputFilename", () => {
@@ -79,6 +80,104 @@ describe("assertSafeOutputFilename", () => {
     expect(() => assertSafeOutputFilename("episode.{Format}.ass")).toThrow(/illegal/);
     expect(() => assertSafeOutputFilename("a{b.ass")).toThrow(/illegal/);
     expect(() => assertSafeOutputFilename("a}b.ass")).toThrow(/illegal/);
+  });
+});
+
+describe("decomposeInputPath", () => {
+  it("decomposes a Windows drive-rooted path with subdirectory", () => {
+    const parts = decomposeInputPath("C:\\subs\\episode.ass");
+    expect(parts).toEqual({
+      dir: "C:/subs",
+      baseName: "episode",
+      ext: ".ass",
+      normalized: "C:/subs/episode.ass",
+      usedBackslash: true,
+    });
+  });
+
+  it("accepts a file at drive root (regression: Z:\\cat.ass)", () => {
+    // The forum-tester bug repro: bare filename `cat.ass` from cwd
+    // `Z:\` → Rust shell joins to `Z:\cat.ass` → engine resolver used
+    // to reject because dir == "Z:" matched a stray `^[A-Za-z]:$/`
+    // check that conflated drive-rooted with drive-relative.
+    const parts = decomposeInputPath("Z:\\cat.ass");
+    expect(parts).toEqual({
+      dir: "Z:",
+      baseName: "cat",
+      ext: ".ass",
+      normalized: "Z:/cat.ass",
+      usedBackslash: true,
+    });
+  });
+
+  it("accepts forward-slash drive-rooted path", () => {
+    const parts = decomposeInputPath("C:/subs/episode.ass");
+    expect(parts.usedBackslash).toBe(false);
+    expect(parts.dir).toBe("C:/subs");
+  });
+
+  it("biases to backslash output for mixed-separator Windows paths", () => {
+    // A Windows path that picked up a `/` from upstream JS normalization
+    // should still output backslashes — `inputPath.includes("\\")` is
+    // sufficient, no need for the older "no forward slash" form.
+    const parts = decomposeInputPath("C:\\subs/episode.ass");
+    expect(parts.usedBackslash).toBe(true);
+  });
+
+  it("accepts POSIX absolute paths", () => {
+    const parts = decomposeInputPath("/home/user/episode.ass");
+    expect(parts).toEqual({
+      dir: "/home/user",
+      baseName: "episode",
+      ext: ".ass",
+      normalized: "/home/user/episode.ass",
+      usedBackslash: false,
+    });
+  });
+
+  it("rejects bare filenames", () => {
+    expect(() => decomposeInputPath("episode.ass")).toThrow(/must be absolute/);
+  });
+
+  it("rejects drive-relative paths (drive letter without separator)", () => {
+    // `C:foo.ass` on Windows means "file foo.ass on drive C's CURRENT
+    // directory" — drive-relative, ambiguous, must be rejected.
+    expect(() => decomposeInputPath("C:episode.ass")).toThrow(/must be absolute/);
+  });
+
+  it("rejects empty input", () => {
+    expect(() => decomposeInputPath("")).toThrow(/must be absolute/);
+  });
+
+  it("rejects control characters in the path", () => {
+    expect(() => decomposeInputPath("C:\\subs\\evil\x00.ass")).toThrow(/control characters/);
+    expect(() => decomposeInputPath("C:\\sub\x1fs\\episode.ass")).toThrow(/control characters/);
+  });
+
+  it("rejects empty filename component (trailing slash)", () => {
+    expect(() => decomposeInputPath("C:/subs/")).toThrow(/no filename/);
+  });
+
+  it("rejects dots-only stem (e.g., '...')", () => {
+    // `.ass` alone is treated as a hidden-file shape (baseName=".ass",
+    // ext="") and accepted, consistent with `.bashrc` / `.gitignore`
+    // semantics. Only a stem that strips entirely to nothing — `...`
+    // → "" after `replace(/^\.+/, '')` — fails the valid-stem check.
+    expect(() => decomposeInputPath("C:/subs/...")).toThrow(/no valid stem/);
+  });
+
+  it("preserves no-extension files", () => {
+    const parts = decomposeInputPath("C:\\subs\\Makefile");
+    expect(parts.baseName).toBe("Makefile");
+    expect(parts.ext).toBe("");
+  });
+
+  it("treats hidden-file leading dots as part of the stem", () => {
+    // `.hidden.ass` → baseName `.hidden`, ext `.ass`. The stem-validity
+    // check (`replace(/^\.+/, '').trim()`) sees "hidden" — non-empty.
+    const parts = decomposeInputPath("/etc/.hidden.ass");
+    expect(parts.baseName).toBe(".hidden");
+    expect(parts.ext).toBe(".ass");
   });
 });
 

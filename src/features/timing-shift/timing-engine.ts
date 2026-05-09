@@ -16,7 +16,11 @@ import {
   type Caption,
   type SubtitleFormat,
 } from "../../lib/subtitle-parser";
-import { assertSafeOutputFilename, assertSafeOutputPath } from "../../lib/path-validation";
+import {
+  assertSafeOutputFilename,
+  assertSafeOutputPath,
+  decomposeInputPath,
+} from "../../lib/path-validation";
 
 export type { Caption, SubtitleFormat };
 export { formatDisplayTime, parseDisplayTime };
@@ -117,30 +121,11 @@ export function shiftSubtitles(content: string, options: ShiftOptions): ShiftRes
  * gate via `countExistingFiles` before the batch begins.
  */
 export function deriveShiftedPath(inputPath: string): string {
-  // Tauri's pickSubtitleFiles + drag-drop ingest always produce
-  // absolute paths; this guard only fires if a future internal
-  // caller threads a relative path through. resolveOutputPath in
-  // hdr-convert applies the same precondition — keep them aligned.
-  // We only reject empty / clearly-relative-like inputs (no leading
-  // `/`, no `\`, no drive letter); deeper validation is the OS's job.
-  const looksAbsolute =
-    inputPath.startsWith("/") || inputPath.startsWith("\\") || /^[A-Za-z]:[\\/]/.test(inputPath);
-  if (!inputPath || !looksAbsolute) {
-    throw new Error("Input path must be absolute");
-  }
-  // Same separator-preservation heuristic as deriveEmbeddedPath: if
-  // the input has ANY backslash, output with backslashes, regardless
-  // of whether it also contains a forward slash. The previous "all
-  // backslash, no forward slash" form mis-classified mixed-separator
-  // Windows paths as POSIX-style.
-  const usedBackslash = inputPath.includes("\\");
-  const normalized = inputPath.replace(/\\/g, "/");
-  const lastSlash = normalized.lastIndexOf("/");
-  const dir = lastSlash >= 0 ? normalized.slice(0, lastSlash) : "";
-  const fullName = lastSlash >= 0 ? normalized.slice(lastSlash + 1) : normalized;
-  const lastDot = fullName.lastIndexOf(".");
-  let baseName = lastDot > 0 ? fullName.slice(0, lastDot) : fullName;
-  const ext = lastDot > 0 ? fullName.slice(lastDot) : "";
+  // Decompose via the shared helper. Validates absolute, accepts drive-
+  // root files (`C:\foo.ass`), rejects drive-relative (`C:foo.ass`).
+  const parts = decomposeInputPath(inputPath);
+  const { dir, ext, normalized, usedBackslash } = parts;
+  let { baseName } = parts;
   // Strip any prior `.shifted` infix so re-shifting `EP01.shifted.ass`
   // yields `EP01.shifted.ass` (idempotent) rather than the cumulative
   // `EP01.shifted.shifted.ass`. Mirrors the strip-and-re-apply pattern
@@ -149,12 +134,10 @@ export function deriveShiftedPath(inputPath: string): string {
     baseName = baseName.slice(0, -".shifted".length);
   }
   const outputName = `${baseName}.shifted${ext}`;
-  // Apply the shared safety checks. Before this extraction, shift only
-  // verified the input was absolute; reserved names, `..` segments,
-  // and MAX_PATH overflow slipped through and would surface as
-  // unhelpful OS errors at write time. Now consistent with HDR / Embed.
+  // Apply the shared safety checks (reserved names, traversal,
+  // MAX_PATH, self-overwrite). Same helpers as HDR / Embed resolvers.
   assertSafeOutputFilename(outputName);
-  const outputPath = dir ? `${dir}/${outputName}` : outputName;
+  const outputPath = `${dir}/${outputName}`;
   assertSafeOutputPath(outputPath, normalized);
   return usedBackslash ? outputPath.replace(/\//g, "\\") : outputPath;
 }

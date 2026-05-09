@@ -27,7 +27,11 @@ import {
 } from "./features/font-embed/font-collector";
 import { deriveShiftedPath, shiftSubtitles } from "./features/timing-shift/timing-engine";
 import { extractLangFromBaseName, LANG_TAGS } from "./lib/lang-detection";
-import { assertSafeOutputFilename, assertSafeOutputPath } from "./lib/path-validation";
+import {
+  assertSafeOutputFilename,
+  assertSafeOutputPath,
+  decomposeInputPath,
+} from "./lib/path-validation";
 import { parseSubtitle } from "./lib/subtitle-parser";
 
 export interface HdrConversionRequest {
@@ -300,21 +304,15 @@ function resolveShiftOutputPathInternal(
     return deriveShiftedPath(inputPath);
   }
 
-  const usedBackslash = inputPath.includes("\\");
-  const normalized = inputPath.replace(/\\/g, "/");
-  const lastSlash = normalized.lastIndexOf("/");
-  const dir = lastSlash >= 0 ? normalized.slice(0, lastSlash) : "";
-  const fullName = lastSlash >= 0 ? normalized.slice(lastSlash + 1) : normalized;
-  const lastDot = fullName.lastIndexOf(".");
-  const ext = lastDot > 0 ? fullName.slice(lastDot) : "";
-  let baseName = lastDot > 0 ? fullName.slice(0, lastDot) : fullName;
-
-  if (!dir || !isAbsoluteInputPath(inputPath)) {
-    throw new Error("Input path must be absolute");
-  }
+  const parts = decomposeInputPath(inputPath);
+  const { dir, ext, normalized, usedBackslash } = parts;
+  let { baseName } = parts;
   if (baseName.toLowerCase().endsWith(".shifted")) {
     baseName = baseName.slice(0, -".shifted".length);
   }
+  // Re-check valid stem AFTER `.shifted` strip — `EP01.shifted.ass` is
+  // legitimate input but strips to `EP01` (fine), while `.shifted.ass`
+  // strips to "" (must reject).
   if (!baseName || !baseName.replace(/^\.+/, "").trim()) {
     throw new Error("Input filename has no valid stem");
   }
@@ -335,10 +333,6 @@ function resolveShiftOutputPathInternal(
   return usedBackslash ? outputPath.replace(/\//g, "\\") : outputPath;
 }
 
-function isAbsoluteInputPath(path: string): boolean {
-  return path.startsWith("/") || path.startsWith("\\") || /^[A-Za-z]:[\\/]/.test(path);
-}
-
 /**
  * Cheap path-only resolver for embed, used by the CLI shell to dedup
  * outputs and skip-on-exists BEFORE planFontEmbed parses the ASS.
@@ -355,20 +349,7 @@ export function resolveEmbedOutputPath(request: {
 }
 
 function resolveEmbedOutputPathInternal(inputPath: string, template = "{name}.embed.ass"): string {
-  const usedBackslash = inputPath.includes("\\");
-  const normalized = inputPath.replace(/\\/g, "/");
-  const lastSlash = normalized.lastIndexOf("/");
-  const dir = lastSlash >= 0 ? normalized.slice(0, lastSlash) : "";
-  const fullName = lastSlash >= 0 ? normalized.slice(lastSlash + 1) : normalized;
-  const lastDot = fullName.lastIndexOf(".");
-  const baseName = lastDot > 0 ? fullName.slice(0, lastDot) : fullName;
-
-  if (!dir || !isAbsoluteInputPath(inputPath)) {
-    throw new Error("Input path must be absolute");
-  }
-  if (!baseName || !baseName.replace(/^\.+/, "").trim()) {
-    throw new Error("Input filename has no valid stem");
-  }
+  const { dir, baseName, normalized, usedBackslash } = decomposeInputPath(inputPath);
 
   const outputName = template
     .replace(/\{name\}/g, baseName)

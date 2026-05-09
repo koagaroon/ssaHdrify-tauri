@@ -181,12 +181,25 @@ pub fn read_text_detect_encoding(path: String) -> Result<ReadTextResult, String>
             canonical
         }
         Err(e) => {
-            log::warn!("canonicalize failed: {e}");
+            // Log-level discrimination per ~/.claude/rules/log-levels.md.
+            // Reparse-point + canonicalize-failure is the path that
+            // genuinely refuses the read; WARN names the user-visible
+            // action. The non-reparse fallback succeeds with the raw
+            // path (common on network-mapped Z: drives, SUBST, OneDrive
+            // cloud-only — Rust's GetFinalPathNameByHandle returns
+            // ERROR_INVALID_PARAMETER on those filesystems, an upstream
+            // Windows-API limitation, not our bug). DEBUG keeps it
+            // available with `RUST_LOG=debug` without alarming default
+            // users every invocation.
             if is_reparse_point(path_ref) {
+                log::warn!(
+                    "Refusing to read possible symlink / junction (canonicalize failed: {e})"
+                );
                 return Err(
                     "Refusing to read symlink / junction when canonicalize fails".to_string(),
                 );
             }
+            log::debug!("canonicalize failed; falling back to raw path: {e}");
             path_ref.to_path_buf()
         }
     };

@@ -6,7 +6,11 @@
  */
 import type { Eotf } from "./color-engine";
 import { extractLangFromBaseName } from "../../lib/lang-detection";
-import { assertSafeOutputFilename, assertSafeOutputPath } from "../../lib/path-validation";
+import {
+  assertSafeOutputFilename,
+  assertSafeOutputPath,
+  decomposeInputPath,
+} from "../../lib/path-validation";
 
 // ── Template Presets ──────────────────────────────────────
 
@@ -84,30 +88,13 @@ export function resolveOutputPath(
   eotf: Eotf,
   options: ResolveOptions = {}
 ): string {
-  // Extract directory and base name from input path. We work on a
-  // forward-slash-normalized copy for path-parsing convenience, but remember
-  // whether the original used backslashes so the final output preserves the
-  // native separator on Windows — mixing `\\server\share\foo.hdr.ass`
-  // (input) with `//server/share/foo.hdr.ass` (output) would confuse
-  // downstream Win32 APIs and shell-integration tools.
-  const usedBackslash = inputPath.includes("\\") && !inputPath.includes("/");
-  const normalized = inputPath.replace(/\\/g, "/");
-  const lastSlash = normalized.lastIndexOf("/");
-  const dir = lastSlash >= 0 ? normalized.slice(0, lastSlash) : ".";
-  // Tauri's pickSubtitleFiles always returns absolute paths; this guard
-  // catches programmatic callers (tests, future internal code) that hand
-  // in a bare filename or relative path before we resolve the output.
-  if (dir === "." || dir === "") {
-    throw new Error("Input path must be absolute");
-  }
-  // Reject `C:` alone — that's drive-relative on Windows (refers to the
-  // CWD on drive C), not a root directory. Requires an explicit path.
-  if (/^[A-Za-z]:$/.test(dir)) {
-    throw new Error("Input path has no directory component");
-  }
-  const fullName = normalized.slice(lastSlash + 1);
-  const dotIdx = fullName.lastIndexOf(".");
-  let baseName = dotIdx > 0 ? fullName.slice(0, dotIdx) : fullName;
+  // Decompose via the shared helper. Validates the path is absolute,
+  // accepts drive-root files (`C:\foo.ass`), rejects drive-relative
+  // (`C:foo.ass`), and catches control chars across the whole path. See
+  // `decomposeInputPath` for the full accept/reject matrix.
+  const parts = decomposeInputPath(inputPath);
+  const { dir, normalized, usedBackslash } = parts;
+  let { baseName } = parts;
 
   // Strip existing .hdr / .sdr tags in a single regex pass — the previous
   // while-loop version was O(n²) for pathological stacks like
@@ -115,17 +102,11 @@ export function resolveOutputPath(
   // collapses the whole tail in one pass.
   baseName = baseName.replace(/(\.(hdr|sdr))+$/i, "");
 
-  // Guard: reject filenames with no valid stem (e.g., ".ass")
+  // Re-check valid stem AFTER the .hdr / .sdr strip. Inputs like
+  // `.hdr.ass` decompose to baseName=".hdr" (passes the helper's stem
+  // check) but strip down to "" — must surface here.
   if (!baseName || !baseName.replace(/^\.+/, "").trim()) {
     throw new Error("Input filename has no valid stem");
-  }
-
-  // Guard: reject null bytes and control chars in the base name. Windows
-  // would truncate at the null byte, turning `evil\0.exe.ass` into `evil`
-  // and bypassing the trailing `.ass` extension check further down.
-  // eslint-disable-next-line no-control-regex -- intentional: reject control chars in filenames
-  if (/[\x00-\x1f\x7f]/.test(baseName)) {
-    throw new Error("Input filename contains control characters");
   }
 
   // Resolve token values once. {lang} prefers the explicit option; falling
