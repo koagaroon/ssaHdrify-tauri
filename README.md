@@ -2,13 +2,9 @@
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](LICENSE) [![GitHub release](https://img.shields.io/github/v/release/koagaroon/ssaHdrify-tauri?include_prereleases)](https://github.com/koagaroon/ssaHdrify-tauri/releases) ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)
 
-> **给 SSA/ASS 字幕添加正确 HDR 色彩数据的桌面工具，附带时间轴偏移、字体嵌入和批量重命名功能。**
+> **SSA HDRify 是一款桌面工具，用于将正确的 HDR 色彩数据写入 SSA/ASS 字幕，同时附带有时间轴偏移、字体嵌入和批量重命名功能。** 本工具是基于 [gky99/ssaHdrify](https://github.com/gky99/ssaHdrify)（Python 原版）的 Tauri 桌面重写版。
 >
-> _A desktop tool that writes the right HDR color data into SSA/ASS subtitles, with timing shift, font embedding, and batch rename._
-
-Tauri 桌面重写版，基于 [gky99/ssaHdrify](https://github.com/gky99/ssaHdrify)（Python 原版）。
-
-A Tauri desktop rewrite of [gky99/ssaHdrify](https://github.com/gky99/ssaHdrify) (original Python version).
+> _SSA HDRify is a desktop tool that writes the correct HDR color data into SSA/ASS subtitles, along with timing shift, font embedding, and batch rename._ It is a Tauri desktop rewrite of [gky99/ssaHdrify](https://github.com/gky99/ssaHdrify) (the original Python version).
 
 ### 浅色主题（中文）/ Light Theme (Chinese)
 
@@ -69,13 +65,13 @@ macOS / Linux users, see "Build from Source" below.
 
 | 标签页 / Tab                            | 功能 / Function                                                                                                                                                                                                                       |
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **HDR 色彩转换 / HDR Color Conversion** | 为字幕添加对应的 BT.2100 PQ 或 HLG 色域数据 / Add the matching BT.2100 PQ or HLG color-space data to subtitles                                                                                                                       |
-| **时间轴偏移 / Timing Shift**           | 批量偏移字幕时间戳，支持指定时间点后部分偏移和实时预览 / Batch-offset subtitle timestamps, with partial-shift after a chosen timestamp and live preview                                                                              |
-| **字体嵌入 / Font Embedding**           | 自动检测字幕所用字体，从系统字体库或本地匹配并以子集化形式嵌入 ASS 文件 / Auto-detect fonts referenced by the subtitle, match against system fonts or local sources, and embed them (subset) into the ASS                              |
+| **HDR 色彩转换 / HDR Color Conversion** | 为字幕附加对应的 BT.2100 PQ 或 HLG 色彩空间数据 / Attach the matching BT.2100 PQ or HLG color-space data to subtitles                                                                                                                                              |
+| **时间轴偏移 / Timing Shift**           | 批量偏移字幕时间戳；可指定时间点后才开始偏移，并支持实时预览 / Batch-offset subtitle timestamps; the shift can begin from a chosen timestamp, with live preview                                                                                                     |
+| **字体嵌入 / Font Embedding**           | 自动检测字幕用到的字体，与系统字体库或本地字体源匹配，并以子集化形式嵌入 ASS 文件 / Auto-detect fonts referenced in the subtitle, match against system fonts or local sources, and embed them (subset) into the ASS                                                  |
 | **批量重命名 / Batch Rename**           | 自动匹配视频文件和字幕文件，按视频文件名重命名字幕；同一视频文件有多个对应字幕时，用户可自由选择字幕文件，手动调整配对 / Auto-match video and subtitle files and rename subs to match the video filename; when a video has multiple subtitle candidates, the user can pick the desired one and adjust pairing manually |
 
 > [!TIP]
-> **中文路径完全支持** — 包含中文或其他非 ASCII 字符的文件路径不会导致任何问题。Tauri 和 Rust 底层使用 Unicode API，不受传统 ANSI 编码限制。
+> **中文路径完全支持** — 包含中文或其他非 ASCII 字符的文件路径不会引起任何问题。Tauri 和 Rust 底层使用 Unicode API，不受传统 ANSI 编码限制。
 >
 > **Non-ASCII paths fully supported** — File paths containing Chinese, Japanese, or other non-ASCII characters work correctly. Tauri and Rust use native Unicode APIs under the hood.
 
@@ -109,12 +105,17 @@ macOS / Linux users, see "Build from Source" below.
 ### 字体嵌入 / Font Embedding
 
 1. 点击「选择字幕文件 / Select Subtitle File」选择 ASS 字幕文件 / Click **Select Subtitle File** to pick an ASS file
-2. 工具自动检测字幕所用字体，先尝试从系统字体库匹配 / Tool auto-detects fonts used in the subtitle and first tries to match them against the system font library
-3. 字幕组排版常用的字体多数没装在系统里——点击「字体来源 / Font Sources」打开本地来源管理面板，「添加文件夹 / Add Folder」扫描下载的字体目录，或「添加文件 / Add Files」单独添加文件；无需安装到系统即可参与匹配 / Fan-sub typesetting fonts are typically not system-installed — click **Font Sources** to open the local-source panel; use **Add Folder** to scan a downloaded font folder or **Add Files** to pick individual files — no system-wide installation needed
-4. 文件夹任意大小都可扫描，过程中实时显示已读字体数和取消按钮，可随时中止；选中超大目录（5000+ 文件或 > 1 GB）前会弹出确认对话框 / Folders of any size can be scanned; the scan shows live font count + cancel button and can be aborted at any moment. Very large selections (5000+ files or > 1 GB) prompt for confirmation first
-5. 主面板实时显示本地来源覆盖（覆盖 N / M）和尚未匹配的字体 / The main panel shows live local-source coverage (Coverage: N / M) and lists any still-missing families
-6. 每条字体标注来源（本地 / 系统）和匹配状态（已找到 / 缺失）/ Each detected font is tagged with its source (Local / System) and match status (Found / Missing)
-7. 点击「嵌入已选字体」，字体数据（子集化后）写入 ASS 文件 / Click **Embed Selected Fonts** to write the subset font data into the ASS file
+2. 工具自动检测字幕用到的字体，先尝试从系统字体库匹配 / Tool auto-detects fonts referenced in the subtitle and first tries to match them against the system font library
+3. 主面板实时显示本地来源覆盖（覆盖 N / M）和尚未匹配的字体；每条字体标注来源（本地 / 系统）和匹配状态（已找到 / 缺失）/ The main panel shows live local-source coverage (Coverage: N / M) and lists any still-missing families; each detected font is tagged with its source (Local / System) and status (Found / Missing)
+4. 点击「嵌入已选字体」，字体数据（子集化后）写入 ASS 文件 / Click **Embed Selected Fonts** to write the subset font data into the ASS file
+
+字幕组排版常用的字体大多未安装在系统中。点击「字体来源 / Font Sources」即可打开本地来源管理面板，添加你想扫描的文件夹，无需安装到系统即可参与匹配。
+
+Most fonts commonly used in fan-sub typesetting are not installed on the system. Click **Font Sources** to open the local-source manager, then add the folders you want to scan — no system-wide installation needed.
+
+文件夹大小不限，扫描过程会实时显示已读取的字体数量并支持随时取消；选择包含超过 5000 个文件或体积超过 1 GB 的目录前，会弹出确认对话框。
+
+Any folder size is accepted; the scan shows a real-time count of fonts found and can be cancelled at any time. Before selecting an exceptionally large directory (5000+ files or > 1 GB), a confirmation dialog will appear.
 
 > **字体名称匹配 / Font Name Matching**
 >
@@ -196,9 +197,9 @@ ssahdrify-cli rename  --help
 
 ## 使用场景 | Background
 
-播放 HDR 视频时，显示器会进入 HDR 模式。然而 SSA/ASS 字幕格式没有色彩空间元数据，字幕渲染器会将颜色当作 SDR 处理，导致字幕**过饱和、过亮**。
+SSA/ASS 字幕本身不含色彩空间元数据，因此渲染器会按 SDR 模式处理，使字幕看起来过饱和、过亮。播放 HDR 视频时，显示设备会进入 HDR 模式，但字幕却仍以 SDR 方式呈现，色差问题由此产生。
 
-When playing HDR video, the display enters HDR mode. However, SSA/ASS subtitles lack color space metadata — the renderer treats them as SDR, causing subtitles to appear **oversaturated and overly bright**.
+SSA/ASS subtitles lack embedded color space metadata, so renderers treat them as SDR content — making them appear oversaturated and overly bright. When playing HDR video, the display enters HDR mode, but subtitles are still rendered as SDR, causing a noticeable color mismatch.
 
 > 如果你的播放器已经能正确处理字幕亮度（例如 mpv 的 `blend-subtitles=video`，或 madVR 配合 xy-SubFilter 的字幕色彩管理），则不需要本工具。
 >
@@ -216,18 +217,18 @@ For the subtitle-and-video rename workflow, [arition/SubRenamer](https://github.
 
 ```
 SSA/ASS 字幕颜色 (sRGB)
-  │
-  ├─ 1. sRGB → rec2100-linear（Color.js 色彩空间转换）
-  │     sRGB → rec2100-linear (Color.js color space conversion)
-  │
-  ├─ 2. 亮度缩放：Y × (targetBrightness / 203)
-  │     Luminance scaling per BT.2408 reference white
-  │
-  ├─ 3. rec2100-linear → rec2100pq 或 rec2100hlg
-  │     Apply PQ (ST 2084) or HLG (ARIB STD-B67) transfer function
-  │
-  └─ 4. 输出 RGB
-        Output RGB
+├─ 1. sRGB → rec2100-linear（Color.js 色彩空间转换）
+├─ 2. 亮度缩放：Y × (targetBrightness / 203)
+├─ 3. rec2100-linear → rec2100pq 或 rec2100hlg
+└─ 4. 输出 RGB
+```
+
+```
+SSA/ASS subtitle colors (sRGB)
+├─ 1. sRGB → rec2100-linear (Color.js color space conversion)
+├─ 2. Luminance scaling: Y × (targetBrightness / 203)
+├─ 3. rec2100-linear → rec2100pq or rec2100hlg
+└─ 4. Output RGB
 ```
 
 ### 精度说明 | Accuracy Note
@@ -236,9 +237,9 @@ PQ 模式经过验证，与 Python 原版（colour-science）逐像素一致。H
 
 PQ mode is verified pixel-exact against the Python version (colour-science). HLG mode uses a manually implemented BT.2100 inverse OOTF + OETF (bypassing Color.js's rec2100hlg space), also exact-matching the Python version.
 
-由于字幕混合管线和 HDR 显示的不确定性（HDMI 元数据匹配、显示器 tone mapping 等），**实际效果只能保证"红是红、蓝是蓝"，不适用于对颜色精度有严格要求的场景**。
+由于字幕混合链路与 HDR 显示环境的复杂性（HDMI 元数据协商、显示器色调映射等），实际效果仅能做到"红是红的，蓝是蓝的"，不适用于严格颜色准确性场景。
 
-Due to the complex subtitle blending pipeline and HDR display behavior, **the result is only to the effect of "red is red and blue is blue" — not suitable for scenarios requiring strict color accuracy**.
+Due to the complexity of subtitle blending pipelines and HDR display environments (HDMI metadata negotiation, display tone mapping, etc.), the actual result can only ensure a "red is red, blue is blue" level of correctness — not suited for strict color accuracy requirements.
 
 ---
 
