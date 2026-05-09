@@ -174,6 +174,25 @@ pub fn parse_chain_argv(
         ));
     }
 
+    // v1 limitation: at most one embed step per chain. Multiple embed
+    // steps would each need their own font-source SQLite session,
+    // and `init_cli_font_sources` is process-global today; supporting
+    // multiple would require teardown/reinit between steps. The
+    // realistic use case is one embed at the end of the chain, so
+    // this is a small ergonomic restriction. Lift if real users hit it.
+    let embed_count = steps
+        .iter()
+        .filter(|s| matches!(s, ParsedStep::Embed(_)))
+        .count();
+    if embed_count > 1 {
+        return Err(format!(
+            "chain may include at most one embed step (got {embed_count}); \
+             multiple embed steps are not yet supported. Run separate \
+             chains, or combine font sources (--font-dir / --font-file) \
+             into a single embed step."
+        ));
+    }
+
     let warnings = collect_suspicious_orderings(&steps);
     let output_template = user_output_template
         .unwrap_or_else(|| derive_stacked_default(&steps));
@@ -571,6 +590,17 @@ mod tests {
         let argv = argv_of(&["hdr", "--eotf", "pq", "+", "shift", "--offset", "+2s"]);
         let err = parse_chain_argv(&argv, None).unwrap_err();
         assert!(err.contains("step 'shift'"), "got: {err}");
+    }
+
+    #[test]
+    fn full_parse_rejects_multiple_embed_steps() {
+        // v1 limitation: chain may include at most one embed step.
+        let argv = argv_of(&[
+            "embed", "--font-dir", "./fonts1", "+",
+            "embed", "--font-dir", "./fonts2", "cat.ass",
+        ]);
+        let err = parse_chain_argv(&argv, None).unwrap_err();
+        assert!(err.contains("at most one embed step"), "got: {err}");
     }
 
     #[test]

@@ -476,7 +476,7 @@ export async function embedFonts(
  * Position: after [V4+ Styles], before [Events].
  * If [Fonts] already exists, replace it.
  */
-function insertFontsSection(content: string, fontsSection: string): string {
+export function insertFontsSection(content: string, fontsSection: string): string {
   const lineEnding = content.includes("\r\n") ? "\r\n" : "\n";
   // Normalize Unicode line separators (U+2028 LINE SEPARATOR,
   // U+2029 PARAGRAPH SEPARATOR) to ASCII newlines BEFORE the split.

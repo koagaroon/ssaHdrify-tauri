@@ -517,16 +517,40 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
         return Ok(ExitCode::SUCCESS);
     }
 
-    // Step 4a: HDR + Shift chains execute end-to-end. Embed-in-chain
-    // throws "not yet implemented" on the TS side and surfaces here
-    // as a per-file failure (Step 4b wires embed's font-resolution
-    // bridge so embed steps work too).
+    // Step 4b: HDR / Shift / Embed all work in chain. Embed steps
+    // get their fonts pre-resolved against the original input
+    // content (HDR/Shift don't change font references, so this is
+    // safe) and the subsets injected into params before runChain.
+    app_lib::fonts::init_system_dirs();
+    let embed_step_index = find_embed_step_index(&plan);
+    // Hold the font-DB session for the duration of the chain batch.
+    // Mirrors run_embed's pattern — guard lives across all input
+    // files, dropped at end. Skipped if the embed step has no user
+    // fonts (saves the SQLite init + scan).
+    let _font_db_guard = match embed_step_index {
+        Some(idx) => {
+            let chain::ParsedStep::Embed(embed_args) = &plan.steps[idx] else {
+                // find_embed_step_index returns Some only for Embed
+                // variants — invariant holds by construction.
+                unreachable!("find_embed_step_index returned a non-Embed index");
+            };
+            let use_user_fonts =
+                !embed_args.font_dirs.is_empty() || !embed_args.font_files.is_empty();
+            if use_user_fonts {
+                Some(init_cli_font_sources(globals, embed_args)?)
+            } else {
+                None
+            }
+        }
+        None => None,
+    };
+
     let mut engine = engine::CliEngine::new()?;
     let mut written = 0usize;
     let mut failed = 0usize;
     let mut skipped = 0usize;
     for input in &plan.input_files {
-        match process_one_chain_input(&mut engine, &plan, input, globals) {
+        match process_one_chain_input(&mut engine, &plan, embed_step_index, input, globals) {
             ChainFileOutcome::Written(out) => {
                 if !globals.quiet {
                     println!("✓ {} → {}", input.display(), out.display());
@@ -563,9 +587,16 @@ enum ChainFileOutcome {
     Failed(String),
 }
 
+fn find_embed_step_index(plan: &chain::ChainPlan) -> Option<usize> {
+    plan.steps
+        .iter()
+        .position(|s| matches!(s, chain::ParsedStep::Embed(_)))
+}
+
 fn process_one_chain_input(
     engine: &mut engine::CliEngine,
     plan: &chain::ChainPlan,
+    embed_step_index: Option<usize>,
     input: &Path,
     globals: &GlobalOptions,
 ) -> ChainFileOutcome {
@@ -584,10 +615,38 @@ fn process_one_chain_input(
     };
 
     // Build the JSON payload matching the TS-side ChainRunRequest.
-    let payload = match plan.to_runtime_payload(&input_str, &read_result.text) {
+    let mut payload = match plan.to_runtime_payload(&input_str, &read_result.text) {
         Ok(p) => p,
         Err(err) => return ChainFileOutcome::Failed(err),
     };
+
+    // Pre-resolve fonts for the embed step (if present) and inject
+    // the subset bytes into its params. Done per-file because
+    // planFontEmbed needs the file's content; the user-font DB
+    // session itself is shared across files (set up once before the
+    // loop in run_chain).
+    if let Some(idx) = embed_step_index {
+        let chain::ParsedStep::Embed(embed_args) = &plan.steps[idx] else {
+            unreachable!("find_embed_step_index returned a non-Embed index");
+        };
+        let subsets = match resolve_chain_embed_subsets(
+            engine,
+            globals,
+            embed_args,
+            &input_str,
+            &read_result.text,
+        ) {
+            Ok(s) => s,
+            Err(err) => return ChainFileOutcome::Failed(err),
+        };
+        let subsets_json: Vec<serde_json::Value> = subsets
+            .into_iter()
+            .map(|s| serde_json::json!({ "fontName": s.font_name, "data": s.data }))
+            .collect();
+        payload["plan"]["steps"][idx]["params"]["subsets"] =
+            serde_json::Value::Array(subsets_json);
+    }
+
     let request = engine::ChainRunRequest { payload };
 
     let result = match engine.run_chain(&request) {
@@ -1397,6 +1456,44 @@ fn process_embed_file(
 /// list AND the missing-font diagnostics so the caller can surface
 /// them in `FileReport.warnings` (not just on stderr).
 /// Under `--on-missing fail`, returns Err on any missing font.
+/// Pre-resolve fonts for an embed step in a chain. Reuses the same
+/// plan_font_embed → resolve_embed_fonts → subset_resolved_fonts
+/// pipeline as the standalone `embed` subcommand. Returns the
+/// subset payloads ready for injection into the chain's runtime
+/// payload.
+///
+/// HDR/Shift do not modify [V4+ Styles] Fontname or dialogue \fn
+/// references, so planning against the original input content is
+/// safe — we get the same font list as if we'd planned against the
+/// post-HDR/Shift content. This lets the chain runtime stay
+/// synchronous (no async TS→Rust callbacks mid-chain).
+fn resolve_chain_embed_subsets(
+    engine: &mut engine::CliEngine,
+    globals: &GlobalOptions,
+    embed_args: &EmbedArgs,
+    input_path: &str,
+    content: &str,
+) -> Result<Vec<engine::FontSubsetPayload>, String> {
+    let use_user_fonts =
+        !embed_args.font_dirs.is_empty() || !embed_args.font_files.is_empty();
+
+    // output_template is unused at the chain level (the chain-global
+    // template wins) but plan_font_embed expects one. The default
+    // satisfies the schema; the returned outputPath gets ignored.
+    let plan_request = engine::FontEmbedPlanRequest {
+        input_path: input_path.to_string(),
+        content: content.to_string(),
+        output_template: "{name}.embed.ass".to_string(),
+    };
+    let plan_result = engine.plan_font_embed(&plan_request)?;
+
+    let (resolved, _missing_warnings) =
+        resolve_embed_fonts(globals, embed_args, use_user_fonts, &plan_result.fonts)?;
+    let (subsets, _skipped_warnings) =
+        subset_resolved_fonts(globals, embed_args, &resolved)?;
+    Ok(subsets)
+}
+
 fn resolve_embed_fonts(
     globals: &GlobalOptions,
     args: &EmbedArgs,

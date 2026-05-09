@@ -159,10 +159,12 @@ describe("runChain — HDR + Shift composition", () => {
   });
 });
 
-// ── Embed step is the not-yet-wired placeholder ─────────────
+// ── Embed step (pre-resolved subsets contract) ──────────────
 
-describe("runChain — embed step (placeholder)", () => {
-  it("throws a clear not-yet-implemented error", async () => {
+describe("runChain — embed step", () => {
+  it("throws a clear error when params.subsets is undefined", () => {
+    // Rust shell didn't pre-resolve — defensive error pointing at
+    // the contract violation rather than crashing in applyFontEmbed.
     const plan: ChainPlan = {
       steps: [
         {
@@ -172,6 +174,7 @@ describe("runChain — embed step (placeholder)", () => {
             fontFiles: [],
             noSystemFonts: false,
             onMissing: "warn",
+            // subsets intentionally omitted
           },
         },
       ],
@@ -179,7 +182,55 @@ describe("runChain — embed step (placeholder)", () => {
     };
     expect(() =>
       runChain({ plan, inputPath: INPUT_PATH, content: ASS_FIXTURE })
-    ).toThrow(/step 1 \(embed\) failed: embed step in chain is not yet implemented/);
+    ).toThrow(/step 1 \(embed\) failed: embed step in chain requires pre-resolved font subsets/);
+  });
+
+  it("returns input content unchanged when subsets array is empty", () => {
+    // Legit case: subtitle has no font references, or all lookups
+    // failed under --on-missing warn. Skip the [Fonts] insertion.
+    const plan: ChainPlan = {
+      steps: [
+        {
+          kind: "embed",
+          params: {
+            fontDirs: [],
+            fontFiles: [],
+            noSystemFonts: false,
+            onMissing: "warn",
+            subsets: [],
+          },
+        },
+      ],
+      outputTemplate: "{name}.embed.ass",
+    };
+    const result = runChain({ plan, inputPath: INPUT_PATH, content: ASS_FIXTURE });
+    expect(result.content).toBe(ASS_FIXTURE);
+    expect(result.notes).toEqual(["embed: 0 fonts embedded (no resolvable references)"]);
+  });
+
+  it("inserts a [Fonts] section when subsets are provided", () => {
+    // Synthetic single-byte payload — the test verifies the section
+    // appears, not the UU-encoded contents. buildFontEntry is itself
+    // tested in ass-uuencode.test.ts.
+    const plan: ChainPlan = {
+      steps: [
+        {
+          kind: "embed",
+          params: {
+            fontDirs: [],
+            fontFiles: [],
+            noSystemFonts: false,
+            onMissing: "warn",
+            subsets: [{ fontName: "Arial.ttf", data: [0, 1, 2, 3] }],
+          },
+        },
+      ],
+      outputTemplate: "{name}.embed.ass",
+    };
+    const result = runChain({ plan, inputPath: INPUT_PATH, content: ASS_FIXTURE });
+    expect(result.content).toContain("[Fonts]");
+    expect(result.content).toContain("fontname: Arial.ttf");
+    expect(result.notes).toEqual(["embed: 1 font(s) embedded"]);
   });
 });
 

@@ -40,6 +40,25 @@ export interface EmbedStepParams {
   fontFiles: string[];
   noSystemFonts: boolean;
   onMissing: "warn" | "fail";
+  /**
+   * Pre-resolved font subsets, populated by the Rust shell BEFORE
+   * runChain is invoked. The TS embed transform uses these directly
+   * (skipping planFontEmbed and font lookup, which the Rust shell
+   * already did against the original input content — HDR/Shift don't
+   * change which fonts are referenced, so pre-resolution is safe).
+   *
+   * Empty array means "no fonts to embed" (subtitle has no font
+   * references, or all lookups failed under `--on-missing warn`).
+   * Undefined means "Rust didn't pre-resolve" — the embed transform
+   * errors with a helpful message in that case (likely a
+   * runtime/CLI version mismatch).
+   */
+  subsets?: FontSubsetPayload[];
+}
+
+export interface FontSubsetPayload {
+  fontName: string;
+  data: number[];
 }
 
 /**

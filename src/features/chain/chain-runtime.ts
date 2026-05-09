@@ -15,6 +15,8 @@
 
 import { processAssContent } from "../hdr-convert/ass-processor";
 import { shiftSubtitles } from "../timing-shift/timing-engine";
+import { buildFontEntry } from "../font-embed/ass-uuencode";
+import { insertFontsSection } from "../font-embed/font-embedder";
 import {
   assertSafeOutputFilename,
   assertSafeOutputPath,
@@ -119,16 +121,39 @@ function embedTransform(
   ctx: TransformContext,
   params: EmbedStepParams
 ): TransformResult {
-  // Embed in chain is wired in Step 4b. The Rust shell will pre-
-  // resolve fonts (planFontEmbed → font subset bytes) and pack the
-  // results into EmbedStepParams, so this transform stays sync —
-  // matching every other engine call boundary. Until that's wired,
-  // chains containing an embed step error here.
-  void ctx;
-  void params;
-  throw new Error(
-    "embed step in chain is not yet implemented (font resolution callback pending in Step 4b)"
+  // Pre-resolution contract: the Rust shell calls planFontEmbed +
+  // font lookup + subset_font BEFORE runChain (against the original
+  // input content — HDR/Shift don't change [V4+ Styles] Fontname or
+  // dialogue \fn references, so pre-resolution is safe), then injects
+  // the subsetted bytes into params.subsets. This lets the transform
+  // stay sync (matching every other engine call boundary) without
+  // needing async TS→Rust callbacks mid-chain.
+  if (params.subsets === undefined) {
+    throw new Error(
+      "embed step in chain requires pre-resolved font subsets " +
+        "(params.subsets is undefined — likely a CLI/runtime version " +
+        "mismatch where Rust shell didn't pre-resolve)"
+    );
+  }
+
+  // Empty subsets array is legitimate — subtitle has no font
+  // references, or all lookups failed under `--on-missing warn`.
+  // Skip the [Fonts] section insertion in that case (matches
+  // applyFontEmbed's fast-path in cli-engine-entry.ts).
+  if (params.subsets.length === 0) {
+    return {
+      content: ctx.content,
+      note: "embed: 0 fonts embedded (no resolvable references)",
+    };
+  }
+
+  const fontEntries = params.subsets.map((s) =>
+    buildFontEntry(s.fontName, Uint8Array.from(s.data))
   );
+  const fontsSection = `[Fonts]\n${fontEntries.join("\n\n")}\n`;
+  const content = insertFontsSection(ctx.content, fontsSection);
+  const note = `embed: ${fontEntries.length} font(s) embedded`;
+  return { content, note };
 }
 
 /**
