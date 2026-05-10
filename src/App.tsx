@@ -152,12 +152,11 @@ function App() {
     }
   }, []);
 
-  const handleCacheRescanComplete = useCallback(() => {
-    setCacheDrift({ added: [], modified: [], removed: [] });
-    void refreshCacheStatus();
-  }, [refreshCacheStatus]);
-
-  const handleCacheClearComplete = useCallback(() => {
+  // Rescan and Clear converge to the same post-op state from the
+  // parent's perspective (drift cleared, status re-probed); the modal
+  // distinguishes them via its own working / doneMessage state. One
+  // shared callback wired to both modal props.
+  const handleCacheActionComplete = useCallback(() => {
     setCacheDrift({ added: [], modified: [], removed: [] });
     void refreshCacheStatus();
   }, [refreshCacheStatus]);
@@ -449,8 +448,8 @@ function App() {
         status={cacheStatus}
         drift={cacheDrift}
         onClose={handleCacheModalClose}
-        onRescanComplete={handleCacheRescanComplete}
-        onClearComplete={handleCacheClearComplete}
+        onRescanComplete={handleCacheActionComplete}
+        onClearComplete={handleCacheActionComplete}
       />
     </div>
   );

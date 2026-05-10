@@ -23,10 +23,15 @@ interface Props {
    *  embed will use stale entries until next launch's drift check. */
   onClose: () => void;
   /** Fires when Rescan completes successfully. Parent should re-run
-   *  detect_drift and clear `drift` state; modal closes itself. */
+   *  detect_drift and clear `drift` state. The modal stays mounted
+   *  showing the "Rescanned N folders" success line until the user
+   *  dismisses (X / scrim / Use as-is) — Round 2 changed this from
+   *  the original auto-close so the result count is visible. */
   onRescanComplete: () => void;
   /** Fires when Clear completes successfully. Parent should re-run
-   *  open_font_cache to refresh status; modal closes itself. */
+   *  open_font_cache to refresh status. Modal stays open showing
+   *  the "Font cache cleared" success line until user dismisses
+   *  (same Round 2 design change as onRescanComplete). */
   onClearComplete: () => void;
 }
 

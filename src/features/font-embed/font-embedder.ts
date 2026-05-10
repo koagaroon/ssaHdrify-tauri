@@ -550,7 +550,21 @@ export function insertFontsSection(content: string, fontsSection: string): strin
   // closes the false-positive hole that `.trim().toLowerCase()` left
   // open AND blocks the Unicode-line-sep smuggle.
   const HEADER_FONTS_RE = /^\[[Ff][Oo][Nn][Tt][Ss]\][ \t]*$/;
-  const existingFontsIdx = lines.findIndex((l) => HEADER_FONTS_RE.test(l));
+  // Reject malformed input with multiple [Fonts] sections. Mirrors the
+  // CLI's identical guard in cli-engine-entry.ts: the replace path
+  // below only rewrites the first occurrence; silently leaving extra
+  // sections in place would produce a corrupted ASS with conflicting
+  // font data. Pre-Round-3 fix the GUI accepted these.
+  const fontsHeaderIndices: number[] = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    if (HEADER_FONTS_RE.test(lines[i])) fontsHeaderIndices.push(i);
+  }
+  if (fontsHeaderIndices.length > 1) {
+    throw new Error(
+      `Cannot embed: input ASS has ${fontsHeaderIndices.length} [Fonts] sections; expected at most one`
+    );
+  }
+  const existingFontsIdx = fontsHeaderIndices[0] ?? -1;
 
   // Build "before" from a line slice: strip trailing blank lines so we control
   // the separator ourselves. Array.join() absorbs trailing "" elements into a
