@@ -928,7 +928,13 @@ export default function FontEmbed() {
                     <span className="font-stat">{t("fonts_glyphs", info.glyphCount)}</span>
                     {info.source ? (
                       <span className="badge badge-mute">
-                        {t(info.source === "local" ? "badge_local" : "badge_system")}
+                        {t(
+                          info.source === "local"
+                            ? "badge_local"
+                            : info.source === "cache"
+                              ? "badge_cache"
+                              : "badge_system"
+                        )}
                       </span>
                     ) : (
                       <span />

@@ -16,6 +16,7 @@ import {
 import { buildFontEntry } from "./ass-uuencode";
 import {
   findSystemFont,
+  lookupFontFamily,
   resolveUserFont,
   subsetFont,
   type LocalFontEntry,
@@ -32,8 +33,13 @@ import {
 /** Where a resolved font came from. Shown as a badge in the main font list.
  *  Named `FontProvenance` (not `FontSource`) to avoid colliding with
  *  `FontSource` in FontSourceModal, which is a struct describing a
- *  user-picked source (folder or file set). */
-export type FontProvenance = "local" | "system";
+ *  user-picked source (folder or file set).
+ *
+ *  - "local"  — this run's font sources (in-memory map or session DB).
+ *  - "cache"  — persistent gui_font_cache (#5); fonts indexed in a
+ *               previous launch or via the CLI's refresh-fonts.
+ *  - "system" — OS-installed system fonts via font-kit. */
+export type FontProvenance = "local" | "cache" | "system";
 
 export interface FontInfo {
   key: FontKey;
@@ -173,6 +179,24 @@ export async function analyzeFonts(
         });
         continue;
       }
+    }
+
+    // Persistent font cache (#5) — sits between the session-DB user
+    // sources and the OS system-font fallback. Mirrors the CLI's
+    // resolve_embed_font tier order. Returns null when the family
+    // isn't cached OR when the cache is unavailable (init failure /
+    // schema mismatch); both fall through to system lookup.
+    const cacheResult = await lookupFontFamily(usage.key.family, usage.key.bold, usage.key.italic);
+    if (cacheResult) {
+      if (isDev) console.debug(`[ssaHdrify] '${usage.key.family}' → CACHE ${cacheResult.path}`);
+      infos.push({
+        ...base,
+        filePath: cacheResult.path,
+        fontIndex: cacheResult.index,
+        error: null,
+        source: "cache",
+      });
+      continue;
     }
 
     // System lookup — first check the optional batch-shared cache so the

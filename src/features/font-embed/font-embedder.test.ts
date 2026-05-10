@@ -12,11 +12,14 @@ import type { LocalFontEntry } from "../../lib/tauri-api";
 // useRustUserFonts production path; subsetFont is unused here.
 const findSystemFontMock = vi.fn();
 const resolveUserFontMock = vi.fn();
+const lookupFontFamilyMock = vi.fn();
 vi.mock("../../lib/tauri-api", () => ({
   findSystemFont: (family: string, bold: boolean, italic: boolean) =>
     findSystemFontMock(family, bold, italic),
   resolveUserFont: (family: string, bold: boolean, italic: boolean) =>
     resolveUserFontMock(family, bold, italic),
+  lookupFontFamily: (family: string, bold: boolean, italic: boolean) =>
+    lookupFontFamilyMock(family, bold, italic),
   subsetFont: vi.fn(),
 }));
 
@@ -72,6 +75,11 @@ describe("analyzeFonts — match priority", () => {
     // — keeps state symmetric so a future test added here that flips
     // useRustUserFonts=true doesn't inherit stale mock state.
     resolveUserFontMock.mockReset();
+    // Cache lookup (#5) is called unconditionally by analyzeFonts;
+    // default to null so tests not exercising the cache fall through
+    // to the system-font path as before.
+    lookupFontFamilyMock.mockReset();
+    lookupFontFamilyMock.mockResolvedValue(null);
   });
 
   it("skips findSystemFont when a local font matches (and reports source=local)", async () => {
@@ -161,6 +169,11 @@ describe("analyzeFonts — real-world anime-release scenario", () => {
     // — keeps state symmetric so a future test added here that flips
     // useRustUserFonts=true doesn't inherit stale mock state.
     resolveUserFontMock.mockReset();
+    // Cache lookup (#5) is called unconditionally by analyzeFonts;
+    // default to null so tests not exercising the cache fall through
+    // to the system-font path as before.
+    lookupFontFamilyMock.mockReset();
+    lookupFontFamilyMock.mockResolvedValue(null);
   });
 
   // Simulates a real-world raw-pack scan output — ONE entry per face, with
@@ -264,6 +277,8 @@ describe("analyzeFonts — useRustUserFonts production path", () => {
   beforeEach(() => {
     findSystemFontMock.mockReset();
     resolveUserFontMock.mockReset();
+    lookupFontFamilyMock.mockReset();
+    lookupFontFamilyMock.mockResolvedValue(null);
   });
 
   // Covers the production code path that ships in FontEmbed batch mode:

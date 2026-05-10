@@ -299,6 +299,7 @@ export const strings: Record<string, StringEntry> = {
     zh: "已从 {1} 个来源加载 {0} 个本地字体",
   },
   badge_local: { en: "Local", zh: "本地" },
+  badge_cache: { en: "Cache", zh: "缓存" },
   badge_system: { en: "System", zh: "系统" },
 
   // Font source modal
@@ -396,6 +397,40 @@ export const strings: Record<string, StringEntry> = {
   font_sources_added: {
     en: "Added {0} font(s).",
     zh: "新增 {0} 个字体。",
+  },
+
+  // ── Persistent Font Cache (Drift Modal, #5) ─────────────
+  font_cache_drift_title: {
+    en: "Font cache out of date",
+    zh: "字体缓存已过期",
+  },
+  font_cache_drift_summary: {
+    en: "{0} folder(s) changed since the cache was last refreshed: {1} modified, {2} removed.",
+    zh: "自上次刷新以来，有 {0} 个文件夹发生变化：{1} 个被修改，{2} 个已移除。",
+  },
+  font_cache_drift_modified_label: { en: "Modified:", zh: "已修改：" },
+  font_cache_drift_removed_label: { en: "Removed:", zh: "已移除：" },
+  font_cache_drift_close_hint: {
+    en: "Closing this dialog (✕ / Esc) is the same as “Use as-is”.",
+    zh: "关闭此对话框（✕ / Esc）等同于「保持原样使用」。",
+  },
+  font_cache_drift_btn_rescan: { en: "Rescan now", zh: "立即重新扫描" },
+  font_cache_drift_btn_use_as_is: { en: "Use as-is", zh: "保持原样使用" },
+  font_cache_drift_btn_clear: { en: "Clear cache", zh: "清除缓存" },
+  font_cache_rescanning: { en: "Rescanning font cache…", zh: "正在重新扫描字体缓存…" },
+  font_cache_clearing: { en: "Clearing cache…", zh: "正在清除缓存…" },
+  font_cache_rescan_done: {
+    en: "Rescanned {0} folder(s); evicted {1}.",
+    zh: "已重新扫描 {0} 个文件夹；移除 {1} 个。",
+  },
+  font_cache_cleared: { en: "Font cache cleared.", zh: "字体缓存已清除。" },
+  font_cache_rebuild_required_title: {
+    en: "Font cache needs rebuilding",
+    zh: "字体缓存需要重建",
+  },
+  font_cache_rebuild_required_body: {
+    en: "The font cache file is from a different release. Click “Clear cache” to wipe it and start fresh.",
+    zh: "字体缓存文件来自不同版本。点击「清除缓存」将其清空并重新开始。",
   },
 
   // ── Shared ──────────────────────────────────────────────

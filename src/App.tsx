@@ -1,14 +1,21 @@
-import { useState, useRef, useMemo } from "react";
+import { useCallback, useEffect, useState, useRef, useMemo } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import HdrConvert from "./features/hdr-convert/HdrConvert";
 import TimingShift from "./features/timing-shift/TimingShift";
 import FontEmbed from "./features/font-embed/FontEmbed";
 import BatchRename from "./features/batch-rename/BatchRename";
+import FontCacheDriftModal from "./features/font-embed/FontCacheDriftModal";
 import { useI18n } from "./i18n/useI18n";
 import { useTheme } from "./theme/useTheme";
 import type { ThemeMode } from "./theme/useTheme";
 import { useStatus, type StatusTab } from "./lib/StatusContext";
 import { useClickOutside } from "./lib/useClickOutside";
+import {
+  openFontCache,
+  detectFontCacheDrift,
+  type FontCacheStatus,
+  type FontCacheDriftReport,
+} from "./lib/tauri-api";
 import "./shell.css";
 
 // Tab ids also serve as StatusTab keys — single source of truth.
@@ -71,6 +78,74 @@ function App() {
   // Close on click-outside + Escape — see useClickOutside for the
   // armed-on-next-tick rationale.
   useClickOutside(themeOpen, themeRef, () => setThemeOpen(false));
+
+  // Persistent font cache (#5): launch-time drift check. Probe the
+  // cache, and if it exists with drift OR with a schema mismatch,
+  // surface the FontCacheDriftModal so the user picks rescan / use
+  // as-is / clear. The cacheChecked ref guards against StrictMode's
+  // intentional double-mount in dev — drift queries are read-only
+  // but rescan_drifted writes; no need to double-do that.
+  const [cacheStatus, setCacheStatus] = useState<FontCacheStatus | null>(null);
+  const [cacheDrift, setCacheDrift] = useState<FontCacheDriftReport | null>(null);
+  const [showCacheModal, setShowCacheModal] = useState(false);
+  const cacheChecked = useRef(false);
+
+  useEffect(() => {
+    if (cacheChecked.current) return;
+    cacheChecked.current = true;
+    let cancelled = false;
+    (async () => {
+      try {
+        const status = await openFontCache();
+        if (cancelled) return;
+        setCacheStatus(status);
+        if (status.schemaMismatch) {
+          // Empty drift: cache file is unreadable, modal renders the
+          // rebuild-required path (Clear cache button only).
+          setCacheDrift({ added: [], modified: [], removed: [] });
+          setShowCacheModal(true);
+          return;
+        }
+        if (!status.available) {
+          // Init failed for a non-schema reason (logged Rust-side).
+          // Nothing actionable to surface; fall back to system fonts.
+          return;
+        }
+        const drift = await detectFontCacheDrift();
+        if (cancelled) return;
+        setCacheDrift(drift);
+        if (drift.modified.length > 0 || drift.removed.length > 0) {
+          setShowCacheModal(true);
+        }
+      } catch (e) {
+        // Don't block app launch on cache probe failures — the user
+        // can still use the app, embed just falls through to system
+        // fonts. Log so devs see it during tauri dev.
+        console.warn("font cache launch check failed:", e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleCacheModalClose = useCallback(() => {
+    setShowCacheModal(false);
+  }, []);
+
+  const handleCacheRescanComplete = useCallback(() => {
+    // Result fields (modified_rescanned / removed_evicted) are not
+    // surfaced in the UI yet — drift is cleared and the modal closes.
+    // Keep the callback nullary; modal calls it with no args.
+    setCacheDrift({ added: [], modified: [], removed: [] });
+    setShowCacheModal(false);
+  }, []);
+
+  const handleCacheClearComplete = useCallback(() => {
+    setCacheDrift({ added: [], modified: [], removed: [] });
+    setCacheStatus((prev) => (prev ? { ...prev, available: true, schemaMismatch: false } : null));
+    setShowCacheModal(false);
+  }, []);
 
   return (
     <div className="stage">
@@ -353,6 +428,15 @@ function App() {
           <span className="ver">{t("footer_version")}</span>
         </footer>
       </div>
+
+      <FontCacheDriftModal
+        open={showCacheModal}
+        status={cacheStatus}
+        drift={cacheDrift}
+        onClose={handleCacheModalClose}
+        onRescanComplete={handleCacheRescanComplete}
+        onClearComplete={handleCacheClearComplete}
+      />
     </div>
   );
 }

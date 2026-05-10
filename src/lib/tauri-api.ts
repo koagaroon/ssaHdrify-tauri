@@ -428,6 +428,72 @@ export async function clearFontSources(): Promise<void> {
   await invoke("clear_font_sources");
 }
 
+// ---- Persistent font cache (#5) ----------------------------------------
+// Wraps src-tauri/src/font_cache_commands.rs. Field names are camelCase
+// because Rust serializes with #[serde(rename_all = "camelCase")] on the
+// status / rescan-result types; DriftReport uses snake_case fields
+// (added/modified/removed) which happen to be camelCase-equivalent.
+
+/** Status of the GUI persistent font cache. Returned by openFontCache. */
+export interface FontCacheStatus {
+  /** True when the cache file is loaded and lookups will work. */
+  available: boolean;
+  /** True when the file on disk has a schema version different from this build.
+   *  Mutually exclusive with `available`. The drift modal renders a "rebuild
+   *  required" path in this state — `clearFontCache` is the recovery action. */
+  schemaMismatch: boolean;
+  /** Absolute path to the cache file. Always populated post-init. */
+  path: string;
+}
+
+/** Drift between cache and live filesystem. `added` is always empty in the
+ *  current GUI flow (we don't walk source roots from this command). */
+export interface FontCacheDriftReport {
+  added: string[];
+  modified: string[];
+  removed: string[];
+}
+
+/** Outcome of rescanFontCacheDrift. */
+export interface FontCacheRescanResult {
+  modifiedRescanned: number;
+  removedEvicted: number;
+}
+
+/** Probe the cache state. Idempotent; safe to call multiple times. */
+export async function openFontCache(): Promise<FontCacheStatus> {
+  return invoke<FontCacheStatus>("open_font_cache");
+}
+
+/** Detect drift between cached folders and live filesystem. */
+export async function detectFontCacheDrift(): Promise<FontCacheDriftReport> {
+  return invoke<FontCacheDriftReport>("detect_font_cache_drift");
+}
+
+/** Bring the cache back into sync: re-scan modified folders, evict removed
+ *  ones. May take a while on large libraries — show a spinner. */
+export async function rescanFontCacheDrift(): Promise<FontCacheRescanResult> {
+  return invoke<FontCacheRescanResult>("rescan_font_cache_drift");
+}
+
+/** Wipe the cache file and re-create an empty one with current schema.
+ *  Used as the modal's "Clear cache" button and as the recovery path
+ *  for `schemaMismatch`. */
+export async function clearFontCache(): Promise<void> {
+  await invoke("clear_font_cache");
+}
+
+/** Look up a (family, bold, italic) tuple in the cache. Returns null when
+ *  not found OR when the cache is unavailable — the embed pipeline treats
+ *  both the same (fall through to the next resolution tier). */
+export async function lookupFontFamily(
+  family: string,
+  bold: boolean,
+  italic: boolean
+): Promise<FontLookupResult | null> {
+  return invoke<FontLookupResult | null>("lookup_font_family", { family, bold, italic });
+}
+
 /** Shared streaming-invoke wrapper for both scan commands. Constructs a
  *  Channel<ScanProgress>, waits for Done, and resolves with the Rust-side
  *  registration counts and cancellation outcome.
