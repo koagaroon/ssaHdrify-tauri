@@ -22,44 +22,59 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection};
 
-/// Default cache file path for the CLI binary on Windows.
-/// Resolves to `%APPDATA%/ssaHdrify/cli_font_cache.sqlite3`.
+/// Default cache file path for the CLI binary, OS-specific:
+/// - Windows: `%APPDATA%/ssaHdrify/cli_font_cache.sqlite3`
+/// - macOS:   `$HOME/Library/Application Support/ssaHdrify/cli_font_cache.sqlite3`
+/// - Linux:   `${XDG_DATA_HOME:-$HOME/.local/share}/ssaHdrify/cli_font_cache.sqlite3`
 ///
-/// Returns an Err if `APPDATA` isn't set (extremely unusual on Windows;
-/// would indicate a broken environment). Caller can override the path
-/// via a flag for testing or non-default locations.
-///
-/// Cross-platform: this Windows-first path. macOS / Linux equivalents
-/// (`~/Library/Application Support/ssaHdrify/...` and
-/// `$XDG_DATA_HOME/ssaHdrify/...`) can be added when the project ships
-/// non-Windows builds. Returning Err on missing `APPDATA` keeps the
-/// caller's error path tight.
+/// Returns an `Err` when the platform's environment for the canonical
+/// per-user data directory isn't set (broken environment). Caller can
+/// override via `--cache-file <PATH>`.
 pub fn default_cli_cache_path() -> Result<PathBuf, String> {
-    let appdata = std::env::var("APPDATA").map_err(|_| {
-        "APPDATA environment variable not set; cannot determine \
-         default cache location. Pass --cache-file <PATH> to override."
-            .to_string()
-    })?;
-    Ok(PathBuf::from(appdata)
-        .join("ssaHdrify")
-        .join("cli_font_cache.sqlite3"))
+    let base = platform_data_dir()?;
+    Ok(base.join("ssaHdrify").join("cli_font_cache.sqlite3"))
 }
 
-/// Default cache file path for the GUI binary on Windows.
-/// Resolves to `%APPDATA%/ssaHdrify/gui_font_cache.sqlite3`.
-///
-/// GUI typically uses Tauri's `app_data_dir()` directly (which
-/// resolves to the same location); this helper exists for
-/// symmetry / non-Tauri callers (tests, future utilities).
-pub fn default_gui_cache_path() -> Result<PathBuf, String> {
-    let appdata = std::env::var("APPDATA").map_err(|_| {
-        "APPDATA environment variable not set; cannot determine \
-         default cache location."
-            .to_string()
-    })?;
-    Ok(PathBuf::from(appdata)
-        .join("ssaHdrify")
-        .join("gui_font_cache.sqlite3"))
+/// Per-user data directory, resolved per-OS without pulling in the
+/// `dirs` crate (one usage didn't justify the dep). Mirrors the
+/// well-known XDG and platform conventions:
+/// - Windows: `%APPDATA%` (Roaming)
+/// - macOS:   `$HOME/Library/Application Support`
+/// - Linux:   `$XDG_DATA_HOME` if set, else `$HOME/.local/share`
+fn platform_data_dir() -> Result<PathBuf, String> {
+    #[cfg(target_os = "windows")]
+    {
+        std::env::var("APPDATA").map(PathBuf::from).map_err(|_| {
+            "APPDATA environment variable not set; cannot determine \
+                 default cache location. Pass --cache-file <PATH> to override."
+                .to_string()
+        })
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::env::var("HOME")
+            .map(|h| PathBuf::from(h).join("Library").join("Application Support"))
+            .map_err(|_| {
+                "HOME environment variable not set; cannot determine \
+                 default cache location. Pass --cache-file <PATH> to override."
+                    .to_string()
+            })
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
+            if !xdg.is_empty() {
+                return Ok(PathBuf::from(xdg));
+            }
+        }
+        std::env::var("HOME")
+            .map(|h| PathBuf::from(h).join(".local").join("share"))
+            .map_err(|_| {
+                "Neither XDG_DATA_HOME nor HOME is set; cannot determine \
+                 default cache location. Pass --cache-file <PATH> to override."
+                    .to_string()
+            })
+    }
 }
 
 /// Schema version. Bumped when any table layout changes; mismatch on
@@ -240,9 +255,8 @@ impl FontCache {
         }
 
         let already_existed = cache_path.exists();
-        let conn = Connection::open(cache_path).map_err(|e| {
-            CacheError::Io(format!("opening {}: {e}", cache_path.display()))
-        })?;
+        let conn = Connection::open(cache_path)
+            .map_err(|e| CacheError::Io(format!("opening {}: {e}", cache_path.display())))?;
 
         // WAL journal mode + 5s busy_timeout matches the existing GUI
         // session DB convention. WAL keeps reader/writer concurrency
@@ -253,6 +267,12 @@ impl FontCache {
             .map_err(|e| CacheError::Io(format!("setting WAL mode: {e}")))?;
         conn.busy_timeout(std::time::Duration::from_secs(5))
             .map_err(|e| CacheError::Io(format!("setting busy_timeout: {e}")))?;
+        // Per-connection: SQLite ships with foreign_keys=OFF by default,
+        // so the FOREIGN KEY clauses in SCHEMA_SQL would be decorative
+        // unless turned on here. The session DB `open_user_font_db`
+        // mirrors this PRAGMA for the same reason.
+        conn.pragma_update(None, "foreign_keys", "ON")
+            .map_err(|e| CacheError::Io(format!("enabling foreign_keys: {e}")))?;
 
         let cache = Self { conn };
         if already_existed {
@@ -305,15 +325,11 @@ impl FontCache {
                     Ok(())
                 }
             }
-            Err(rusqlite::Error::QueryReturnedNoRows) => {
-                Err(CacheError::SchemaVersionMismatch {
-                    found: -1,
-                    expected: SCHEMA_VERSION,
-                })
-            }
-            Err(e) => Err(CacheError::Io(format!(
-                "reading schema_version: {e}"
-            ))),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Err(CacheError::SchemaVersionMismatch {
+                found: -1,
+                expected: SCHEMA_VERSION,
+            }),
+            Err(e) => Err(CacheError::Io(format!("reading schema_version: {e}"))),
         }
     }
 
@@ -344,9 +360,8 @@ impl FontCache {
             .map_err(|e| CacheError::Io(format!("begin transaction: {e}")))?;
 
         // Delete in dependency order: family_keys → fonts → folder.
-        // Foreign keys aren't enforced (no PRAGMA foreign_keys=ON in
-        // open_or_create) but the deletion order keeps the row
-        // graph consistent for any future enforcement.
+        // FK enforcement is on (PRAGMA foreign_keys=ON in
+        // open_or_create); reverse order would violate the constraints.
         tx.execute(
             "DELETE FROM cached_family_keys WHERE font_path IN \
              (SELECT font_path FROM cached_fonts WHERE folder_path = ?1)",
@@ -552,6 +567,26 @@ impl FontCache {
         }
     }
 
+    /// Cheap existence check for a font path. Used by `subset_font`'s
+    /// provenance gate: a path lookup_family returned must also be
+    /// recognized as a known scan output, otherwise subset rejects it
+    /// as "not discovered by a scan command" — and on a fresh launch
+    /// the session DB is empty, so this cache check is the only way
+    /// for cross-launch lookup hits to clear provenance without the
+    /// user re-adding the source.
+    pub fn path_known(&self, font_path: &str) -> Result<bool, CacheError> {
+        let row: Result<i64, _> = self.conn.query_row(
+            "SELECT 1 FROM cached_fonts WHERE font_path = ?1 LIMIT 1",
+            params![font_path],
+            |r| r.get(0),
+        );
+        match row {
+            Ok(_) => Ok(true),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
+            Err(e) => Err(CacheError::Io(format!("path_known: {e}"))),
+        }
+    }
+
     /// List every folder currently tracked in the cache. Used by
     /// drift detection (Step 3) to iterate cached folders and check
     /// each against the filesystem.
@@ -647,26 +682,50 @@ mod tests {
     use super::*;
     use std::fs;
 
-    /// Generate a unique cache file path under the OS temp dir for one
-    /// test. Caller is responsible for removing the parent directory
-    /// after the test (best-effort; OS cleanup catches anything left).
-    fn temp_cache_path() -> std::path::PathBuf {
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let dir = std::env::temp_dir().join(format!(
-            "ssahdrify-font-cache-test-{}-{}",
-            std::process::id(),
-            stamp
-        ));
-        fs::create_dir_all(&dir).expect("create test temp dir");
-        dir.join("cache.sqlite3")
+    /// RAII guard for one test's temporary cache directory. Drop
+    /// removes the entire dir + WAL sidecars, even on test panic —
+    /// the previous bare-PathBuf helper relied on OS temp cleanup
+    /// for panic paths and accumulated stale dirs across runs.
+    struct TempCacheDir(std::path::PathBuf);
+
+    impl TempCacheDir {
+        fn new() -> Self {
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let dir = std::env::temp_dir().join(format!(
+                "ssahdrify-font-cache-test-{}-{}",
+                std::process::id(),
+                stamp
+            ));
+            fs::create_dir_all(&dir).expect("create test temp dir");
+            Self(dir)
+        }
+
+        fn cache_path(&self) -> std::path::PathBuf {
+            self.0.join("cache.sqlite3")
+        }
+    }
+
+    impl Drop for TempCacheDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Convenience for tests that want the path directly. Returns
+    /// (guard, path) — guard MUST stay in scope for the test's
+    /// duration; binding it as `_` would drop it immediately.
+    fn temp_cache_path() -> (TempCacheDir, std::path::PathBuf) {
+        let guard = TempCacheDir::new();
+        let path = guard.cache_path();
+        (guard, path)
     }
 
     #[test]
     fn fresh_open_creates_schema_and_writes_version() {
-        let path = temp_cache_path();
+        let (_guard, path) = temp_cache_path();
         let cache = FontCache::open_or_create(&path).expect("fresh cache opens");
 
         // All four tables present.
@@ -697,7 +756,7 @@ mod tests {
 
     #[test]
     fn reopen_of_valid_cache_succeeds() {
-        let path = temp_cache_path();
+        let (_guard, path) = temp_cache_path();
         // Create.
         FontCache::open_or_create(&path).expect("first open creates");
         // Reopen.
@@ -707,7 +766,7 @@ mod tests {
 
     #[test]
     fn schema_version_mismatch_detected_on_old_cache() {
-        let path = temp_cache_path();
+        let (_guard, path) = temp_cache_path();
         // Create with current version.
         FontCache::open_or_create(&path).expect("first open");
         // Simulate an older release writing version 0.
@@ -732,17 +791,14 @@ mod tests {
 
     #[test]
     fn missing_schema_version_row_treated_as_mismatch() {
-        let path = temp_cache_path();
+        let (_guard, path) = temp_cache_path();
         FontCache::open_or_create(&path).expect("first open");
         // Delete the schema_version row to simulate a pre-versioning
         // cache or a corrupt write.
         {
             let conn = Connection::open(&path).unwrap();
-            conn.execute(
-                "DELETE FROM cache_meta WHERE key = 'schema_version'",
-                [],
-            )
-            .unwrap();
+            conn.execute("DELETE FROM cache_meta WHERE key = 'schema_version'", [])
+                .unwrap();
         }
         match FontCache::open_or_create(&path) {
             Err(CacheError::SchemaVersionMismatch { found, expected }) => {
@@ -756,7 +812,7 @@ mod tests {
 
     #[test]
     fn unparseable_schema_version_treated_as_mismatch() {
-        let path = temp_cache_path();
+        let (_guard, path) = temp_cache_path();
         FontCache::open_or_create(&path).expect("first open");
         // Write garbage to the version row.
         {
@@ -794,7 +850,7 @@ mod tests {
 
     #[test]
     fn replace_folder_with_no_fonts_inserts_empty_folder_row() {
-        let path = temp_cache_path();
+        let (_guard, path) = temp_cache_path();
         let mut cache = FontCache::open_or_create(&path).expect("open");
         cache
             .replace_folder("/test/empty", 1_700_000_000, &[])
@@ -808,7 +864,7 @@ mod tests {
 
     #[test]
     fn replace_folder_inserts_fonts_and_family_keys() {
-        let path = temp_cache_path();
+        let (_guard, path) = temp_cache_path();
         let mut cache = FontCache::open_or_create(&path).expect("open");
         let fonts = vec![
             synthetic_font("/test/dir/font_a.otf", "Source Han Sans CN"),
@@ -837,7 +893,7 @@ mod tests {
 
     #[test]
     fn replace_folder_replaces_previous_rows() {
-        let path = temp_cache_path();
+        let (_guard, path) = temp_cache_path();
         let mut cache = FontCache::open_or_create(&path).expect("open");
         // First scan.
         cache
@@ -867,11 +923,9 @@ mod tests {
         assert_eq!(font_count, 1);
         let family: String = cache
             .conn
-            .query_row(
-                "SELECT family_name FROM cached_family_keys",
-                [],
-                |r| r.get(0),
-            )
+            .query_row("SELECT family_name FROM cached_family_keys", [], |r| {
+                r.get(0)
+            })
             .expect("read family");
         assert_eq!(family, "New");
         // Folder mtime should be updated.
@@ -884,7 +938,7 @@ mod tests {
     #[test]
     fn replace_folder_with_multiple_family_keys_per_font() {
         // CJK fonts: one face advertises Latin + CJK names.
-        let path = temp_cache_path();
+        let (_guard, path) = temp_cache_path();
         let mut cache = FontCache::open_or_create(&path).expect("open");
         let cjk_font = FontMetadata {
             file_path: "/test/cjk/SourceHanSans.otf".to_string(),
@@ -924,7 +978,7 @@ mod tests {
 
     #[test]
     fn remove_folder_clears_all_related_rows() {
-        let path = temp_cache_path();
+        let (_guard, path) = temp_cache_path();
         let mut cache = FontCache::open_or_create(&path).expect("open");
         cache
             .replace_folder(
@@ -963,7 +1017,7 @@ mod tests {
 
     #[test]
     fn list_folders_returns_in_path_order() {
-        let path = temp_cache_path();
+        let (_guard, path) = temp_cache_path();
         let mut cache = FontCache::open_or_create(&path).expect("open");
         // Insert in non-alphabetical order.
         cache
@@ -983,7 +1037,7 @@ mod tests {
 
     #[test]
     fn last_scanned_at_set_to_current_time() {
-        let path = temp_cache_path();
+        let (_guard, path) = temp_cache_path();
         let mut cache = FontCache::open_or_create(&path).expect("open");
         let before = current_unix_seconds();
         cache
@@ -1000,12 +1054,9 @@ mod tests {
 
     #[test]
     fn diff_against_empty_cache_reports_all_as_added() {
-        let path = temp_cache_path();
+        let (_guard, path) = temp_cache_path();
         let cache = FontCache::open_or_create(&path).expect("open");
-        let snapshot = vec![
-            ("/test/a".to_string(), 100),
-            ("/test/b".to_string(), 200),
-        ];
+        let snapshot = vec![("/test/a".to_string(), 100), ("/test/b".to_string(), 200)];
         let report = cache.diff_against(&snapshot).expect("diff");
         assert_eq!(report.added, vec!["/test/a", "/test/b"]);
         assert!(report.modified.is_empty());
@@ -1016,14 +1067,11 @@ mod tests {
 
     #[test]
     fn diff_against_perfect_match_is_empty() {
-        let path = temp_cache_path();
+        let (_guard, path) = temp_cache_path();
         let mut cache = FontCache::open_or_create(&path).expect("open");
         cache.replace_folder("/test/a", 100, &[]).unwrap();
         cache.replace_folder("/test/b", 200, &[]).unwrap();
-        let snapshot = vec![
-            ("/test/a".to_string(), 100),
-            ("/test/b".to_string(), 200),
-        ];
+        let snapshot = vec![("/test/a".to_string(), 100), ("/test/b".to_string(), 200)];
         let report = cache.diff_against(&snapshot).expect("diff");
         assert!(report.is_empty(), "expected no drift, got {report:?}");
         let _ = fs::remove_dir_all(path.parent().unwrap());
@@ -1031,15 +1079,12 @@ mod tests {
 
     #[test]
     fn diff_against_detects_modified_folders_via_mtime() {
-        let path = temp_cache_path();
+        let (_guard, path) = temp_cache_path();
         let mut cache = FontCache::open_or_create(&path).expect("open");
         cache.replace_folder("/test/a", 100, &[]).unwrap();
         cache.replace_folder("/test/b", 200, &[]).unwrap();
         // /test/a's mtime drifted; /test/b unchanged.
-        let snapshot = vec![
-            ("/test/a".to_string(), 150),
-            ("/test/b".to_string(), 200),
-        ];
+        let snapshot = vec![("/test/a".to_string(), 150), ("/test/b".to_string(), 200)];
         let report = cache.diff_against(&snapshot).expect("diff");
         assert_eq!(report.modified, vec!["/test/a"]);
         assert!(report.added.is_empty());
@@ -1049,7 +1094,7 @@ mod tests {
 
     #[test]
     fn diff_against_detects_removed_folders() {
-        let path = temp_cache_path();
+        let (_guard, path) = temp_cache_path();
         let mut cache = FontCache::open_or_create(&path).expect("open");
         cache.replace_folder("/test/a", 100, &[]).unwrap();
         cache.replace_folder("/test/b", 200, &[]).unwrap();
@@ -1064,14 +1109,11 @@ mod tests {
 
     #[test]
     fn diff_against_detects_added_folders() {
-        let path = temp_cache_path();
+        let (_guard, path) = temp_cache_path();
         let mut cache = FontCache::open_or_create(&path).expect("open");
         cache.replace_folder("/test/a", 100, &[]).unwrap();
         // Snapshot has /test/a + a new /test/c.
-        let snapshot = vec![
-            ("/test/a".to_string(), 100),
-            ("/test/c".to_string(), 300),
-        ];
+        let snapshot = vec![("/test/a".to_string(), 100), ("/test/c".to_string(), 300)];
         let report = cache.diff_against(&snapshot).expect("diff");
         assert_eq!(report.added, vec!["/test/c"]);
         assert!(report.modified.is_empty());
@@ -1081,7 +1123,7 @@ mod tests {
 
     #[test]
     fn diff_against_handles_all_three_categories_at_once() {
-        let path = temp_cache_path();
+        let (_guard, path) = temp_cache_path();
         let mut cache = FontCache::open_or_create(&path).expect("open");
         // Cache has a/b/c.
         cache.replace_folder("/test/a", 100, &[]).unwrap();
@@ -1103,7 +1145,7 @@ mod tests {
 
     #[test]
     fn diff_against_lists_are_sorted_for_deterministic_output() {
-        let path = temp_cache_path();
+        let (_guard, path) = temp_cache_path();
         let mut cache = FontCache::open_or_create(&path).expect("open");
         // Cache has folders in non-alpha order.
         cache.replace_folder("/test/zzz", 100, &[]).unwrap();
@@ -1146,7 +1188,7 @@ mod tests {
 
     #[test]
     fn lookup_family_returns_match() {
-        let path = temp_cache_path();
+        let (_guard, path) = temp_cache_path();
         let mut cache = FontCache::open_or_create(&path).expect("open");
         cache
             .replace_folder(
@@ -1166,7 +1208,7 @@ mod tests {
 
     #[test]
     fn lookup_family_returns_none_for_missing_family() {
-        let path = temp_cache_path();
+        let (_guard, path) = temp_cache_path();
         let mut cache = FontCache::open_or_create(&path).expect("open");
         cache
             .replace_folder(
@@ -1184,7 +1226,7 @@ mod tests {
 
     #[test]
     fn lookup_family_distinguishes_bold_and_italic() {
-        let path = temp_cache_path();
+        let (_guard, path) = temp_cache_path();
         let mut cache = FontCache::open_or_create(&path).expect("open");
         // Two synthetic faces of "Source Han Sans": regular and bold.
         let regular = FontMetadata {
@@ -1236,7 +1278,7 @@ mod tests {
     fn lookup_family_finds_cjk_alias() {
         // CJK font advertises multiple family aliases on the same face.
         // Lookup must hit any of them.
-        let path = temp_cache_path();
+        let (_guard, path) = temp_cache_path();
         let mut cache = FontCache::open_or_create(&path).expect("open");
         let cjk = FontMetadata {
             file_path: "/test/dir/SourceHanSans.otf".into(),
@@ -1279,7 +1321,7 @@ mod tests {
         // TrueType Collection: one file, multiple faces, each its
         // own family. Schema's composite PK on (font_path,
         // face_index) lets all faces coexist.
-        let path = temp_cache_path();
+        let (_guard, path) = temp_cache_path();
         let mut cache = FontCache::open_or_create(&path).expect("open");
         let mingliu_face0 = FontMetadata {
             file_path: "/test/dir/MingLiU.ttc".into(),
@@ -1308,7 +1350,10 @@ mod tests {
             .expect("TTC with 2 faces inserts cleanly");
 
         // Both family names resolve, each to the right face.
-        let m0 = cache.lookup_family("MingLiU", false, false).unwrap().unwrap();
+        let m0 = cache
+            .lookup_family("MingLiU", false, false)
+            .unwrap()
+            .unwrap();
         assert_eq!(m0.font_path, "/test/dir/MingLiU.ttc");
         assert_eq!(m0.face_index, 0);
         let m1 = cache
@@ -1326,7 +1371,7 @@ mod tests {
         // Two different files claim the same family name (rare in
         // practice — alternate vendor's "Arial" — but the API must
         // produce the same answer across runs).
-        let path = temp_cache_path();
+        let (_guard, path) = temp_cache_path();
         let mut cache = FontCache::open_or_create(&path).expect("open");
         cache
             .replace_folder(
@@ -1339,10 +1384,7 @@ mod tests {
             )
             .unwrap();
         // ORDER BY font_path → "aaa..." comes first.
-        let result = cache
-            .lookup_family("Arial", false, false)
-            .unwrap()
-            .unwrap();
+        let result = cache.lookup_family("Arial", false, false).unwrap().unwrap();
         assert_eq!(result.font_path, "/test/dir/aaa_arial.ttf");
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }

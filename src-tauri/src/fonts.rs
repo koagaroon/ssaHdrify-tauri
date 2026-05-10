@@ -127,7 +127,7 @@ const MAX_PREFLIGHT_ENTRIES: usize = 200_000;
 /// form `\\?\C:\…` rewrites to `C:\…`. Without the UNC branch, network-
 /// share fonts would land in the dedup HashSet under a different prefix
 /// than their non-prefixed equivalents and fail equivalence dedup.
-fn normalize_canonical_path(canonical_str: &str) -> String {
+pub(crate) fn normalize_canonical_path(canonical_str: &str) -> String {
     if let Some(unc) = canonical_str.strip_prefix("\\\\?\\UNC\\") {
         format!("\\\\{unc}")
     } else if let Some(stripped) = canonical_str.strip_prefix("\\\\?\\") {
@@ -1436,9 +1436,9 @@ where
 /// abort. Acceptable for refresh-fonts which is a foreground
 /// operation under user attention.
 pub fn scan_directory_collecting(dir: &Path) -> Result<Vec<LocalFontEntry>, String> {
-    let canonical = dir.canonicalize().map_err(|e| {
-        format!("Cannot resolve directory '{}': {e}", dir.display())
-    })?;
+    let canonical = dir
+        .canonicalize()
+        .map_err(|e| format!("Cannot resolve directory '{}': {e}", dir.display()))?;
     if !canonical.is_dir() {
         return Err(format!("Not a directory: {}", canonical.display()));
     }
@@ -1826,11 +1826,7 @@ pub fn remove_font_source(source_id: String) -> Result<(), String> {
         )
         .optional()
         .map_err(|e| db_error("source-faces lookup failed", e))?
-        .and_then(|p| {
-            Path::new(&p)
-                .parent()
-                .map(|pp| pp.display().to_string())
-        });
+        .and_then(|p| Path::new(&p).parent().map(|pp| pp.display().to_string()));
     tx.execute(
         "DELETE FROM font_sources WHERE source_id = ?1",
         params![source_id],
@@ -2124,7 +2120,19 @@ pub fn subset_font(
     } else {
         is_user_font_path_registered(&canonical_string)?
     };
-    if !is_system && !is_user {
+    // Third tier: the persistent GUI cache. The session DB is empty on
+    // a fresh launch, so a cross-launch `lookupFontFamily` cache hit
+    // would have its returned path land here as "not registered" and
+    // subset would reject it — the entire cross-launch use case the
+    // persistent cache exists for. Cache membership IS legitimate
+    // provenance: the user's `refresh-fonts` (CLI) or scan_font_directory
+    // (GUI) is what populated it, both consent paths.
+    let is_cache = if is_system || is_user {
+        false
+    } else {
+        crate::font_cache_commands::path_in_gui_cache(&canonical_string)
+    };
+    if !is_system && !is_user && !is_cache {
         return Err("Font path was not discovered by a scan command".to_string());
     }
 

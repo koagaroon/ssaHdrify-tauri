@@ -158,6 +158,7 @@ pub struct CacheStatus {
 /// CLI's `check_cache_drift` semantic: drift = filesystem changes to
 /// folders the cache already tracks).
 #[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DriftReport {
     pub added: Vec<String>,
     pub modified: Vec<String>,
@@ -262,52 +263,79 @@ pub fn detect_font_cache_drift() -> Result<DriftReport, String> {
 /// the CLI's `refresh-fonts` subcommand.
 #[tauri::command]
 pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
-    let mut slot = GUI_FONT_CACHE
-        .lock()
-        .map_err(|_| "GUI cache mutex poisoned".to_string())?;
-    let cache = slot.as_mut().ok_or_else(|| {
-        "Cache not available (init failed or schema mismatch). \
-         Use clear_font_cache to rebuild."
-            .to_string()
-    })?;
-
-    let cached_folders = cache
-        .list_folders()
-        .map_err(|e| format!("list cached folders: {e}"))?;
-    let mut snapshot: Vec<(String, i64)> = Vec::with_capacity(cached_folders.len());
-    for folder in &cached_folders {
-        if let Ok(meta) = std::fs::metadata(&folder.folder_path) {
-            if let Ok(modified) = meta.modified() {
-                let mtime = modified
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs() as i64)
-                    .unwrap_or(0);
-                snapshot.push((folder.folder_path.clone(), mtime));
+    // Phase 1 — under lock: list cached folders + compute the
+    // filesystem-snapshot drift report. list_folders, the per-folder
+    // metadata stat, and diff_against are all cheap (small in-DB sets +
+    // one stat per cached folder).
+    let report = {
+        let slot = GUI_FONT_CACHE
+            .lock()
+            .map_err(|_| "GUI cache mutex poisoned".to_string())?;
+        let cache = slot.as_ref().ok_or_else(|| {
+            "Cache not available (init failed or schema mismatch). \
+             Use clear_font_cache to rebuild."
+                .to_string()
+        })?;
+        let cached_folders = cache
+            .list_folders()
+            .map_err(|e| format!("list cached folders: {e}"))?;
+        let mut snapshot: Vec<(String, i64)> = Vec::with_capacity(cached_folders.len());
+        for folder in &cached_folders {
+            if let Ok(meta) = std::fs::metadata(&folder.folder_path) {
+                if let Ok(modified) = meta.modified() {
+                    let mtime = modified
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0);
+                    snapshot.push((folder.folder_path.clone(), mtime));
+                }
             }
         }
-    }
-    let report = cache
-        .diff_against(&snapshot)
-        .map_err(|e| format!("compute drift: {e}"))?;
+        cache
+            .diff_against(&snapshot)
+            .map_err(|e| format!("compute drift: {e}"))?
+    };
 
-    let mut modified_rescanned = 0usize;
-    let mut removed_evicted = 0usize;
-
+    // Phase 2 — outside lock: scan each modified folder. This is the
+    // long step (full directory walk + name-table reads); concurrent
+    // lookup_font_family / try_record_folder_in_gui_cache calls run in
+    // parallel instead of waiting on a multi-second to multi-minute
+    // scan that used to be inside the lock.
+    let mut scanned: Vec<(String, i64, Vec<FontMetadata>)> =
+        Vec::with_capacity(report.modified.len());
     for folder in &report.modified {
         let folder_path = Path::new(folder);
         let folder_mtime = stat_mtime_or_zero(folder_path);
         let entries = crate::fonts::scan_directory_collecting(folder_path)?;
-        let metadata = entries_to_metadata(entries);
-        cache
-            .replace_folder(folder, folder_mtime, &metadata)
-            .map_err(|e| format!("replace_folder({folder}): {e}"))?;
-        modified_rescanned += 1;
+        scanned.push((folder.clone(), folder_mtime, entries_to_metadata(entries)));
     }
-    for folder in &report.removed {
-        cache
-            .remove_folder(folder)
-            .map_err(|e| format!("remove_folder({folder}): {e}"))?;
-        removed_evicted += 1;
+
+    // Phase 3 — under lock: apply the scan results + evict removed
+    // folders. Pure DB work, short hold time. Race window between
+    // Phase 1's diff and this apply is benign — replace_folder /
+    // remove_folder are atomic, and a concurrent populate writing the
+    // same folder gets overwritten with our newer snapshot.
+    let mut modified_rescanned = 0usize;
+    let mut removed_evicted = 0usize;
+    {
+        let mut slot = GUI_FONT_CACHE
+            .lock()
+            .map_err(|_| "GUI cache mutex poisoned".to_string())?;
+        let cache = slot
+            .as_mut()
+            .ok_or_else(|| "Cache became unavailable between drift detect and apply".to_string())?;
+        for (folder, folder_mtime, metadata) in &scanned {
+            cache
+                .replace_folder(folder, *folder_mtime, metadata)
+                .map_err(|e| format!("replace_folder({folder}): {e}"))?;
+            modified_rescanned += 1;
+        }
+        for folder in &report.removed {
+            cache
+                .remove_folder(folder)
+                .map_err(|e| format!("remove_folder({folder}): {e}"))?;
+            removed_evicted += 1;
+        }
     }
 
     Ok(RescanResult {
@@ -351,10 +379,7 @@ pub fn clear_font_cache() -> Result<(), String> {
         match std::fs::remove_file(&p) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => log::warn!(
-                "clear_font_cache: removing {} failed: {e}",
-                p.display()
-            ),
+            Err(e) => log::warn!("clear_font_cache: removing {} failed: {e}", p.display()),
         }
     }
 
@@ -435,7 +460,14 @@ pub fn try_record_folder_in_gui_cache(
                 .collect(),
         })
         .collect();
-    let folder_path_str = folder_path.display().to_string();
+    // Normalize the canonical path BEFORE storing it as the cache key.
+    // `font_faces.path` (session DB, source for the eviction key in
+    // try_remove_folder_from_gui_cache's caller) is normalized at scan
+    // time via fonts::normalize_canonical_path — without matching that
+    // here, the Windows extended-prefix form `\\?\C:\...` written here
+    // would never match the prefix-stripped form supplied to evict, and
+    // Step 8c eviction would silently no-op every dir-mode source.
+    let folder_path_str = crate::fonts::normalize_canonical_path(&folder_path.to_string_lossy());
     let face_count = metadata.len();
     match cache.replace_folder(&folder_path_str, folder_mtime, &metadata) {
         Ok(()) => {
@@ -446,9 +478,7 @@ pub fn try_record_folder_in_gui_cache(
             );
         }
         Err(e) => {
-            log::warn!(
-                "GUI cache populate for {folder_path_str} failed: {e}"
-            );
+            log::warn!("GUI cache populate for {folder_path_str} failed: {e}");
         }
     }
 }
@@ -463,9 +493,11 @@ pub fn try_record_folder_in_gui_cache(
 /// - `try_lock` (not `lock`) so a long rescan doesn't stall the
 ///   user-visible remove.
 /// - Cache unavailable → silent no-op (nothing to evict).
-/// - `cache.remove_folder` on a folder the cache doesn't track is a
-///   no-op (DELETE on zero rows). Acceptable for files-mode sources
-///   whose parent folder happens to coincide with a tracked dir.
+/// - `cache.remove_folder` on a folder the cache doesn't track still
+///   runs the 3-statement transaction but each DELETE matches zero
+///   rows. Acceptable for files-mode sources whose parent folder
+///   happens to coincide with a tracked dir — the wasted txn round-
+///   trip is negligible vs. adding a pre-check.
 ///
 /// Step 8c — pairs with Step 8b (auto-populate on scan) for symmetric
 /// add/remove cache hygiene.
@@ -477,9 +509,7 @@ pub fn try_remove_folder_from_gui_cache(folder_path: &str) {
             return;
         }
         Err(std::sync::TryLockError::WouldBlock) => {
-            log::warn!(
-                "GUI cache busy (rescan in progress); skipping evict for {folder_path}"
-            );
+            log::warn!("GUI cache busy (rescan in progress); skipping evict for {folder_path}");
             return;
         }
     };
@@ -490,6 +520,28 @@ pub fn try_remove_folder_from_gui_cache(folder_path: &str) {
     match cache.remove_folder(folder_path) {
         Ok(()) => log::info!("GUI cache evicted folder: {folder_path}"),
         Err(e) => log::warn!("GUI cache evict {folder_path} failed: {e}"),
+    }
+}
+
+/// Provenance check used by `fonts::subset_font`: returns true when the
+/// given path is recorded as a known font in the persistent cache. The
+/// cache acts as a third tier behind the in-memory ALLOWED_FONT_PATHS
+/// (system fonts) and the session DB's `font_faces` (this-run user
+/// sources) — without it, a cross-launch `lookupFontFamily` hit would
+/// return a path that subset_font then rejects, breaking the cache's
+/// primary use case.
+///
+/// Best-effort: returns false for cache unavailable, lock contention,
+/// or query error. The two upstream tiers cover the common case; this
+/// path is purely additive.
+pub fn path_in_gui_cache(font_path: &str) -> bool {
+    let slot = match GUI_FONT_CACHE.try_lock() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    match slot.as_ref() {
+        Some(cache) => cache.path_known(font_path).unwrap_or(false),
+        None => false,
     }
 }
 
