@@ -2709,6 +2709,12 @@ fn parse_duration_ms(input: &str) -> Result<i64, String> {
     let bytes = rest.as_bytes();
     let mut index = 0;
     let mut total = 0.0;
+    // Enforce strictly-descending unit order so each unit appears at
+    // most once and only in canonical h→m→s→ms sequence. Without this,
+    // `+1s2s` parses as 3000 ms (silent sum) and `+30s1m` flips the
+    // documented `+1m30s` form. Per the locked help docs, only the
+    // canonical descending form is contract.
+    let mut last_rank: Option<u8> = None;
 
     while index < bytes.len() {
         let value_start = index;
@@ -2743,13 +2749,23 @@ fn parse_duration_ms(input: &str) -> Result<i64, String> {
             ));
         }
 
-        let factor = match &rest[unit_start..index].to_ascii_lowercase()[..] {
-            "ms" => 1.0,
-            "s" => 1000.0,
-            "m" => 60_000.0,
-            "h" => 3_600_000.0,
+        let unit_lower = rest[unit_start..index].to_ascii_lowercase();
+        let (factor, rank) = match &unit_lower[..] {
+            "ms" => (1.0, 1u8),
+            "s" => (1000.0, 2u8),
+            "m" => (60_000.0, 3u8),
+            "h" => (3_600_000.0, 4u8),
             unit => return Err(format!("unsupported duration unit '{unit}'")),
         };
+        if let Some(prev) = last_rank {
+            if rank >= prev {
+                return Err(format!(
+                    "duration units must appear at most once and in descending order \
+                     (h, m, s, ms); '{unit_lower}' followed a same-or-larger unit"
+                ));
+            }
+        }
+        last_rank = Some(rank);
         total += value * factor;
     }
 
@@ -2909,6 +2925,21 @@ mod tests {
         assert!(parse_duration_ms("+").is_err());
         assert!(parse_duration_ms("10").is_err());
         assert!(parse_duration_ms("1week").is_err());
+    }
+
+    #[test]
+    fn rejects_repeated_or_out_of_order_units() {
+        // Same-unit repetition: silent-sum bug from Round 1 review
+        // (A-R1-14 / N-R2-1 / A-R2-1).
+        assert!(parse_duration_ms("+1s2s").is_err());
+        assert!(parse_duration_ms("-30s1s").is_err());
+        assert!(parse_duration_ms("+1m1m").is_err());
+        // Out-of-order: smaller unit cannot precede a larger one.
+        assert!(parse_duration_ms("+30s1m").is_err());
+        assert!(parse_duration_ms("+500ms2s").is_err());
+        assert!(parse_duration_ms("+1m1h").is_err());
+        // Canonical descending form still works.
+        assert_eq!(parse_duration_ms("+1h30m45s500ms").unwrap(), 5_445_500);
     }
 
     #[test]
