@@ -1,7 +1,7 @@
 /**
  * Round-trip GUI ↔ CLI byte-equivalence tests.
  *
- * Per the CLI design doc (Step 6): "same input + same arguments → GUI's
+ * Per the CLI design doc: "same input + same arguments → GUI's
  * full-flow output and CLI's full-flow output must be byte-identical".
  * This file pins that contract so a future refactor that drifts the CLI
  * wrapper (default resolution, output-path computation, intermediate

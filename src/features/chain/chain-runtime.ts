@@ -38,8 +38,8 @@ import type {
  *
  * Synchronous — matches the existing engine's call boundary, where
  * the Rust shell's `call_engine` helper invokes a sync JS function
- * via `execute_script`. Embed-in-chain (Step 4b) keeps this sync
- * shape: font resolution happens in the Rust shell BEFORE calling
+ * via `execute_script`. Embed-in-chain keeps this sync shape:
+ * font resolution happens in the Rust shell BEFORE calling
  * runChain (planFontEmbed result returned to Rust → fonts resolved
  * → applyFontEmbed-style payload bundled into EmbedStepParams),
  * not as a TS-side async callback to Rust ops.
