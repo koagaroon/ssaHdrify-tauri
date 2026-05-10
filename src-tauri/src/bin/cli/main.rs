@@ -177,7 +177,9 @@ pub(crate) struct ShiftArgs {
     #[arg(long, allow_hyphen_values = true)]
     offset: String,
 
-    /// Shift only entries after this timestamp. 仅平移此时间戳之后的字幕条目。
+    /// Shift only entries after this timestamp.
+    /// Format: HH:MM:SS, HH:MM:SS.mmm, or HH:MM:SS,mmm (ISO 8601 comma form).
+    /// 仅平移此时间戳之后的字幕条目。格式：HH:MM:SS、HH:MM:SS.mmm 或 HH:MM:SS,mmm。
     #[arg(long)]
     after: Option<String>,
 
@@ -706,10 +708,24 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
     // safe) and the subsets injected into params before runChain.
     app_lib::fonts::init_system_dirs();
     let embed_step_index = find_embed_step_index(&plan);
+    // Inform user when --no-cache is meaningless in chain — chain v1
+    // doesn't consult the persistent cache (`resolve_chain_embed_subsets`
+    // always passes None per the locked design). Without this, --no-cache
+    // looks like it's silently ignored. Mirror prepare_embed_cache's
+    // posture: stderr informational line, gated on --quiet.
+    if globals.no_cache && !globals.quiet && embed_step_index.is_some() {
+        eprintln!(
+            "ℹ --no-cache has no effect in chain mode; chain v1 doesn't use the persistent cache."
+        );
+    }
     // Hold the font-DB session for the duration of the chain batch.
     // Mirrors run_embed's pattern — guard lives across all input
     // files, dropped at end. Skipped if the embed step has no user
-    // fonts (saves the SQLite init + scan).
+    // fonts (saves the SQLite init + scan). N-R2-7 noted the dry-run
+    // gate is missing here; in fact dry-run short-circuits via the
+    // `emit_chain_dry_run` early return above (line 698) before this
+    // code runs, so the standalone-embed guard pattern is already
+    // satisfied structurally.
     let _font_db_guard = match embed_step_index {
         Some(idx) => {
             let chain::ParsedStep::Embed(embed_args) = &plan.steps[idx] else {
@@ -734,9 +750,17 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
     let mut skipped = 0usize;
     for input in &plan.input_files {
         match process_one_chain_input(&mut engine, &plan, embed_step_index, input, globals) {
-            ChainFileOutcome::Written(out) => {
+            ChainFileOutcome::Written(out, warnings) => {
                 if !globals.quiet {
                     println!("✓ {} → {}", input.display(), out.display());
+                    // Surface embed pre-resolution warnings (missing
+                    // fonts under --on-missing warn, subset failures)
+                    // — without this chain mode silently drops the
+                    // diagnostics that standalone embed surfaces
+                    // through FileReport.warnings.
+                    for warning in &warnings {
+                        eprintln!("  ⚠ {warning}");
+                    }
                 }
                 written += 1;
             }
@@ -763,7 +787,11 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
 }
 
 enum ChainFileOutcome {
-    Written(PathBuf),
+    /// Written(output_path, warnings) — warnings are non-fatal
+    /// diagnostics propagated from the embed pre-resolution path
+    /// (missing fonts, subset failures) so chain output matches
+    /// standalone embed's `FileReport.warnings` semantics.
+    Written(PathBuf, Vec<String>),
     Skipped(String),
     Failed(String),
 }
@@ -778,10 +806,16 @@ fn find_embed_step_index(plan: &chain::ChainPlan) -> Option<usize> {
 /// skip-on-exists check. Mirrors `resolveChainOutputPath` in
 /// chain-runtime.ts for the common template tokens (`{name}`, `{ext}`)
 /// so the Rust shell can short-circuit BEFORE invoking V8 when the
-/// destination already exists. The post-V8 path computed by the TS
-/// runtime is still re-checked downstream as defense-in-depth — any
-/// template-substitution corner case where prediction diverges from
-/// resolution is caught there.
+/// destination already exists.
+///
+/// Permissive prediction is the danger direction: if Rust predicts a
+/// path TS would reject (traversal `..`, path separators in the
+/// template, reserved Windows names), and that predicted path
+/// coincidentally exists, the cheap-first check would short-circuit
+/// to "Skipped: already exists" — a misleading false-skip instead of
+/// the precise rejection error TS would produce. Reject those shapes
+/// here by returning None so V8 sees the real input + TS reports the
+/// authoritative error.
 fn predict_chain_output_path(
     input_abs: &Path,
     output_template: &str,
@@ -799,6 +833,20 @@ fn predict_chain_output_path(
         .replace("{ext}", &ext);
     while output_name.contains("..") {
         output_name = output_name.replace("..", ".");
+    }
+    // Reject shapes TS-side `assertSafeOutputFilename` would reject:
+    // path separators (chain output is a single filename in input's
+    // dir, never a relative or absolute path), drive-letter prefixes,
+    // or empty after substitution. Any of these means "Rust prediction
+    // and TS resolution will diverge" → defer to V8 + TS.
+    if output_name.is_empty()
+        || output_name.contains('/')
+        || output_name.contains('\\')
+        || output_name.contains('\0')
+        || output_name.starts_with('.')
+        || (output_name.len() >= 2 && output_name.as_bytes()[1] == b':')
+    {
+        return None;
     }
     let predicted = parent.join(&output_name);
     relocate_output_path(&predicted.to_string_lossy(), output_dir).ok()
@@ -857,11 +905,12 @@ fn process_one_chain_input(
     // planFontEmbed needs the file's content; the user-font DB
     // session itself is shared across files (set up once before the
     // loop in run_chain).
+    let mut warnings: Vec<String> = Vec::new();
     if let Some(idx) = embed_step_index {
         let chain::ParsedStep::Embed(embed_args) = &plan.steps[idx] else {
             unreachable!("find_embed_step_index returned a non-Embed index");
         };
-        let subsets = match resolve_chain_embed_subsets(
+        let (subsets, embed_warnings) = match resolve_chain_embed_subsets(
             engine,
             globals,
             embed_args,
@@ -871,6 +920,7 @@ fn process_one_chain_input(
             Ok(s) => s,
             Err(err) => return ChainFileOutcome::Failed(err),
         };
+        warnings = embed_warnings;
         // Encode subset bytes as base64 strings. The previous form
         // (`{ "data": [byte, byte, ...] }`) expanded ~4-5× per byte
         // when serde_json wrote bytes as decimal+comma JSON-in-JS-source,
@@ -932,7 +982,7 @@ fn process_one_chain_input(
         }
     }
 
-    ChainFileOutcome::Written(output_path)
+    ChainFileOutcome::Written(output_path, warnings)
 }
 
 fn emit_chain_dry_run(plan: &chain::ChainPlan, globals: &GlobalOptions) {
@@ -1915,7 +1965,7 @@ fn resolve_chain_embed_subsets(
     embed_args: &EmbedArgs,
     input_path: &str,
     content: &str,
-) -> Result<Vec<engine::FontSubsetPayload>, String> {
+) -> Result<(Vec<engine::FontSubsetPayload>, Vec<String>), String> {
     let use_user_fonts = !embed_args.font_dirs.is_empty() || !embed_args.font_files.is_empty();
 
     // output_template is unused at the chain level (the chain-global
@@ -1932,15 +1982,22 @@ fn resolve_chain_embed_subsets(
     // pre-resolution runs against the input content with whatever
     // --font-dir the embed step itself was given. Cache integration
     // for chain is a future expansion; for now, pass None.
-    let (resolved, _missing_warnings) = resolve_embed_fonts(
+    //
+    // Propagate both warning lists to the caller so chain mode and
+    // standalone embed produce equivalent diagnostics. Standalone embed
+    // surfaces these as FileReport.warnings; chain wraps them into
+    // ChainFileOutcome::Written(_, warnings).
+    let (resolved, missing_warnings) = resolve_embed_fonts(
         globals,
         embed_args,
         use_user_fonts,
         None,
         &plan_result.fonts,
     )?;
-    let (subsets, _skipped_warnings) = subset_resolved_fonts(globals, embed_args, &resolved)?;
-    Ok(subsets)
+    let (subsets, skipped_warnings) = subset_resolved_fonts(globals, embed_args, &resolved)?;
+    let mut warnings = missing_warnings;
+    warnings.extend(skipped_warnings);
+    Ok((subsets, warnings))
 }
 
 fn resolve_embed_fonts(
@@ -2542,6 +2599,14 @@ fn output_path_exists(globals: &GlobalOptions, path: &Path) -> bool {
 //     attempt, so no race there.
 // Single-user desktop scope makes this acceptable; documented for
 // future adversarial-review eyes.
+//
+// Windows junction caveat: a junction whose target points at a
+// non-existent location is NOT caught by `create_new(true)` — the
+// file is created at the resolved location, not at the junction.
+// `output_path_exists` uses `fs::metadata` which DOES follow
+// junctions, so the cheap-first existence check would have caught
+// any such junction's target if it existed at check time. The
+// race-window junction-swap is bounded by single-user scope.
 fn write_output(
     globals: &GlobalOptions,
     path: &Path,
@@ -2623,11 +2688,28 @@ fn display_path(path: &Path) -> String {
 }
 
 fn normalize_output_key(path: &Path) -> String {
-    let normalized = path
-        .to_string_lossy()
-        .replace('\\', "/")
-        .nfc()
-        .collect::<String>();
+    let raw = path.to_string_lossy();
+    // Strip the Win32 extended-length prefix BEFORE slash folding so a
+    // future caller passing canonicalize() output keys identically to a
+    // sibling caller passing the user-shape `C:\…`. Without this strip,
+    // `\\?\C:\foo.ass` and `C:\foo.ass` produce different keys (the
+    // former becomes `//?/c:/foo.ass`, the latter `c:/foo.ass`) and
+    // within-batch dedup misses. Mirrors fonts::normalize_canonical_path.
+    let stripped: &str = if let Some(rest) = raw.strip_prefix("\\\\?\\UNC\\") {
+        // \\?\UNC\server\share\... → //server/share/...
+        // (handled inside the slash fold below; reattach the leading
+        // backslashes that map to // after folding)
+        return normalize_output_key_after_strip(&format!("\\\\{rest}"));
+    } else if let Some(rest) = raw.strip_prefix("\\\\?\\") {
+        rest
+    } else {
+        raw.as_ref()
+    };
+    normalize_output_key_after_strip(stripped)
+}
+
+fn normalize_output_key_after_strip(s: &str) -> String {
+    let normalized = s.replace('\\', "/").nfc().collect::<String>();
     if cfg!(windows) {
         normalized.to_lowercase()
     } else {

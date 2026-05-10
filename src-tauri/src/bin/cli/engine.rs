@@ -148,6 +148,14 @@ pub struct FontEmbedApplyRequest {
     pub fonts: Vec<FontSubsetPayload>,
 }
 
+/// One font's subset bytes for the standalone `embed` flow's
+/// `FontEmbedApplyRequest`. Serialized as `{ "fontName": ..., "data":
+/// [byte, byte, ...] }` (JSON number-array form). Chain mode does NOT
+/// use this struct on the wire — `process_one_chain_input` builds an
+/// inline base64 payload (`{ "fontName": ..., "dataB64": "..." }`)
+/// directly to dodge the ~4-5× expansion JSON-array form would impose
+/// on the worst-case CUMULATIVE_FALLBACK_BYTES path. The two wire
+/// formats are intentional, not a sign of unfinished migration.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FontSubsetPayload {

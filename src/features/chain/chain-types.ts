@@ -53,10 +53,19 @@ export interface EmbedStepParams {
    * errors with a helpful message in that case (likely a
    * runtime/CLI version mismatch).
    */
-  subsets?: FontSubsetPayload[];
+  subsets?: ChainFontSubsetPayload[];
 }
 
-export interface FontSubsetPayload {
+/**
+ * Chain-mode font subset payload: base64-encoded bytes. Renamed from
+ * the original `FontSubsetPayload` to disambiguate from the
+ * standalone-embed payload of the same name in
+ * `src/cli-engine-entry.ts`, which uses the JSON `number[]` form.
+ * The two coexist intentionally (different IPC paths, different
+ * expansion-vs-compatibility tradeoffs); the rename stops IDE
+ * auto-import from picking the wrong one.
+ */
+export interface ChainFontSubsetPayload {
   fontName: string;
   /**
    * Subset bytes encoded as base64. The Rust shell encodes `Vec<u8>`

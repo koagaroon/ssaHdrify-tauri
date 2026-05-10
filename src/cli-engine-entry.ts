@@ -128,6 +128,13 @@ export interface FontEmbedApplyRequest {
   fonts: FontSubsetPayload[];
 }
 
+/**
+ * Standalone-embed font subset payload: bytes serialized as JSON
+ * `number[]`. Distinct from chain-types.ts's `ChainFontSubsetPayload`
+ * which uses base64 (`dataB64`); the two coexist intentionally on
+ * different IPC paths. Don't auto-import; pick the one matching your
+ * call site.
+ */
 export interface FontSubsetPayload {
   fontName: string;
   data: number[];

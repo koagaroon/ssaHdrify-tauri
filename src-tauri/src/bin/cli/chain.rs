@@ -214,6 +214,7 @@ fn split_into_step_segments(argv: &[String]) -> Result<Vec<Vec<String>>, String>
         if tok == STEP_SEPARATOR {
             // `map_or(true, ...)` covers both "None" and "empty Vec";
             // `is_none_or` would read better but is MSRV >= 1.82.
+            // Revisit when `rust-version` in Cargo.toml reaches 1.82+.
             if segments.last().map_or(true, Vec::is_empty) {
                 return Err(
                     "empty step segment around `+` (chain requires `<step1> + <step2>...` form)"
@@ -372,6 +373,13 @@ fn collect_suspicious_orderings(steps: &[ParsedStep]) -> Vec<String> {
     // sections that shift touches. So shift-after-embed produces
     // identical content to shift-before-embed — the order has no
     // semantic effect, only obfuscates the chain.
+    //
+    // HDR-after-embed has the same mathematical no-op shape (embed
+    // doesn't touch color tags either), but it's deliberately NOT
+    // included per the locked "warn catalog 极保守" stance —
+    // empirically, shift-after-embed is the only ordering users
+    // actually file as confusing. Adding HDR-after-embed would erode
+    // trust without solving a real-user problem.
     for (i, kind) in kinds.iter().enumerate() {
         if *kind == "shift" && kinds[..i].contains(&"embed") {
             warnings.push(format!(

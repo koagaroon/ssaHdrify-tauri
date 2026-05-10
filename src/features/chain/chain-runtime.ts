@@ -133,7 +133,7 @@ function embedTransform(ctx: TransformContext, params: EmbedStepParams): Transfo
   }
 
   const fontEntries = params.subsets.map((s) =>
-    buildFontEntry(s.fontName, decodeBase64(s.dataB64))
+    buildFontEntry(s.fontName, decodeBase64(s.dataB64, s.fontName))
   );
   const fontsSection = `[Fonts]\n${fontEntries.join("\n\n")}\n`;
   const content = insertFontsSection(ctx.content, fontsSection);
@@ -143,13 +143,26 @@ function embedTransform(ctx: TransformContext, params: EmbedStepParams): Transfo
 
 /**
  * Decode the Rust shell's base64-encoded subset bytes into a
- * Uint8Array. Pairs with the `dataB64` field on `FontSubsetPayload`;
+ * Uint8Array. Pairs with the `dataB64` field on `ChainFontSubsetPayload`;
  * the previous JSON-array form (`Uint8Array.from(number[])`) expanded
  * the V8 source ~4-5× per byte and pressured the heap on the worst-
  * case CUMULATIVE_FALLBACK_BYTES path. atob() is built into V8 / web.
+ *
+ * `name` annotates errors: a corrupt subset payload from a future
+ * Rust-side encoder bug surfaces as `"base64 decode failed for font
+ * subset 'XYZ': InvalidCharacterError"` rather than a bare DOMException
+ * with no font / step attribution.
  */
-function decodeBase64(b64: string): Uint8Array {
-  const binary = atob(b64);
+function decodeBase64(b64: string, name: string): Uint8Array {
+  let binary: string;
+  try {
+    binary = atob(b64);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    throw new Error(`base64 decode failed for font subset '${name}': ${message}`, {
+      cause: e,
+    });
+  }
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) {
     bytes[i] = binary.charCodeAt(i);
