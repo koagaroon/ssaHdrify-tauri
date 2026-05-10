@@ -71,8 +71,12 @@ fn engine_bundle_missing() -> Option<String> {
     // stub error if engine.js wasn't built. We pass a non-existent
     // file so non-stub builds also fail (with a different error
     // about the missing input file), letting us distinguish the two.
+    //
+    // `--no-cache` keeps the probe from touching the user's real
+    // default cache file (would race with their live GUI / CLI usage).
     let output = Command::new(cli_path())
         .args([
+            "--no-cache",
             "chain",
             "hdr",
             "--eotf",
@@ -109,7 +113,9 @@ fn chain_hdr_shift_byte_equals_sequential_runs() {
 
     // Chain: HDR + Shift in one invocation.
     let chain_status = Command::new(cli_path())
-        .args(["chain", "hdr", "--eotf", "pq", "+", "shift", "--offset", "+2s"])
+        .args([
+            "chain", "hdr", "--eotf", "pq", "+", "shift", "--offset", "+2s",
+        ])
         .arg(&chain_input)
         .status()
         .expect("failed to run chain");
@@ -131,8 +137,8 @@ fn chain_hdr_shift_byte_equals_sequential_runs() {
     assert!(shift_status.success(), "shift run failed");
 
     // Both flows produce <name>.hdr.shifted.ass.
-    let chain_out = fs::read_to_string(chain_dir.join("cat.hdr.shifted.ass"))
-        .expect("chain output not found");
+    let chain_out =
+        fs::read_to_string(chain_dir.join("cat.hdr.shifted.ass")).expect("chain output not found");
     let seq_out = fs::read_to_string(seq_dir.join("cat.hdr.shifted.ass"))
         .expect("sequential output not found");
     assert_eq!(
@@ -155,14 +161,27 @@ fn chain_dry_run_prints_plan_without_writing() {
     let input = write_fixture(&dir, "cat.ass");
 
     let output = Command::new(cli_path())
-        .args(["--dry-run", "chain", "hdr", "--eotf", "pq", "+", "shift", "--offset", "+2s"])
+        .args([
+            "--dry-run",
+            "chain",
+            "hdr",
+            "--eotf",
+            "pq",
+            "+",
+            "shift",
+            "--offset",
+            "+2s",
+        ])
         .arg(&input)
         .output()
         .expect("failed to run chain");
     assert!(output.status.success(), "dry-run should succeed");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Plan (no files written)"), "stdout: {stdout}");
+    assert!(
+        stdout.contains("Plan (no files written)"),
+        "stdout: {stdout}"
+    );
     assert!(stdout.contains("hdr"), "stdout: {stdout}");
     assert!(stdout.contains("shift"), "stdout: {stdout}");
 
@@ -187,7 +206,9 @@ fn chain_multi_file_batch_processes_all_inputs() {
     let input_b = write_fixture(&dir, "b.ass");
 
     let status = Command::new(cli_path())
-        .args(["chain", "hdr", "--eotf", "pq", "+", "shift", "--offset", "+2s"])
+        .args([
+            "chain", "hdr", "--eotf", "pq", "+", "shift", "--offset", "+2s",
+        ])
         .arg(&input_a)
         .arg(&input_b)
         .status()
@@ -212,7 +233,9 @@ fn chain_overwrite_toggles_skip_vs_replace() {
 
     // First run: writes the output.
     let first = Command::new(cli_path())
-        .args(["chain", "hdr", "--eotf", "pq", "+", "shift", "--offset", "+2s"])
+        .args([
+            "chain", "hdr", "--eotf", "pq", "+", "shift", "--offset", "+2s",
+        ])
         .arg(&input)
         .status()
         .expect("first run failed to spawn");
@@ -223,13 +246,30 @@ fn chain_overwrite_toggles_skip_vs_replace() {
 
     // Second run without --overwrite: skips.
     let second_output = Command::new(cli_path())
-        .args(["chain", "hdr", "--eotf", "pq", "+", "shift", "--offset", "+2s"])
+        .args([
+            "chain", "hdr", "--eotf", "pq", "+", "shift", "--offset", "+2s",
+        ])
         .arg(&input)
         .output()
         .expect("second run failed to spawn");
-    assert!(second_output.status.success(), "second run should still exit 0");
+    assert!(
+        second_output.status.success(),
+        "second run should still exit 0"
+    );
     let stdout = String::from_utf8_lossy(&second_output.stdout);
-    assert!(stdout.contains("skipped"), "stdout: {stdout}");
+    // Pin the skip evidence: the per-file "⊘ ... already exists ..."
+    // line AND the summary's "0 written, 1 skipped" reading. Substring
+    // "skipped" alone would also pass on a partial-write that emits
+    // unrelated "skipped" text (e.g., "skipped (placeholder)"); the
+    // pair pins exactly the contract we want to test.
+    assert!(
+        stdout.contains("already exists (use --overwrite to replace)"),
+        "expected skip explanation in stdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("0 written, 1 skipped, 0 failed"),
+        "expected skip in summary line: {stdout}"
+    );
     let unchanged = fs::read_to_string(&output_path).unwrap();
     assert_eq!(first_content, unchanged, "skip path mutated the file");
 
@@ -237,7 +277,17 @@ fn chain_overwrite_toggles_skip_vs_replace() {
     // equality holds, but the operation should report 1 written
     // not 1 skipped).
     let third_output = Command::new(cli_path())
-        .args(["--overwrite", "chain", "hdr", "--eotf", "pq", "+", "shift", "--offset", "+2s"])
+        .args([
+            "--overwrite",
+            "chain",
+            "hdr",
+            "--eotf",
+            "pq",
+            "+",
+            "shift",
+            "--offset",
+            "+2s",
+        ])
         .arg(&input)
         .output()
         .expect("third run failed to spawn");
@@ -252,10 +302,11 @@ fn chain_overwrite_toggles_skip_vs_replace() {
 }
 
 #[test]
-fn chain_rejects_nonterminal_output_template() {
+fn chain_rejects_in_step_output_template() {
     // Locked design: --output-template inside any step segment is a
-    // parse-time error. Surface it as exit code 2 (clap parse error)
-    // or non-zero.
+    // parse-time error. Pin exit code = 2 (the conventional clap /
+    // CLI usage-error code; matches what the CLI returns for the
+    // analogous parse failure surface).
     let output = Command::new(cli_path())
         .args([
             "chain",
@@ -272,7 +323,13 @@ fn chain_rejects_nonterminal_output_template() {
         ])
         .output()
         .expect("failed to spawn");
-    assert!(!output.status.success(), "expected non-zero exit");
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "expected exit code 2 (parse error); got {:?}, stderr={}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("--output-template") && stderr.contains("chain-level"),

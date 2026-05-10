@@ -93,8 +93,12 @@ fn engine_bundle_missing() -> Option<String> {
     // Mirror test_chain.rs: detect the build.rs missing-engine stub
     // so we skip cleanly instead of false-failing in environments
     // where `npm run build:engine` hasn't run.
+    //
+    // `--no-cache` keeps the probe from touching the user's real
+    // default cache file (would race with their live GUI / CLI usage).
     let output = Command::new(cli_path())
         .args([
+            "--no-cache",
             "embed",
             "/nonexistent-test-input-do-not-create.ass",
         ])
@@ -135,12 +139,20 @@ fn refresh_fonts_creates_cache_with_one_folder_row() {
         "refresh-fonts failed: stderr={}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(cache.exists(), "cache file not created at {}", cache.display());
+    assert!(
+        cache.exists(),
+        "cache file not created at {}",
+        cache.display()
+    );
 
     // Open via library API and inspect.
     let inspect = FontCache::open_or_create(&cache).expect("open cache for inspection");
     let folders = inspect.list_folders().expect("list_folders");
-    assert_eq!(folders.len(), 1, "expected exactly 1 cached folder, got {folders:?}");
+    assert_eq!(
+        folders.len(),
+        1,
+        "expected exactly 1 cached folder, got {folders:?}"
+    );
     let canonical_font_dir = font_dir.canonicalize().expect("canonicalize font dir");
     let stored = &folders[0].folder_path;
     let canonical_str = canonical_font_dir.display().to_string();
