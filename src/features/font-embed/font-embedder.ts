@@ -122,6 +122,10 @@ export function buildUserFontMap(faces: LocalFontEntry[]): Map<string, LocalFont
  *                     Build with `buildUserFontMap()`. When present, entries
  *                     override system matches so that tests and small
  *                     in-memory callers can inject local fonts directly.
+ * @param systemFontCache - Optional batch-shared cache mapping a font key to
+ *                          a `findSystemFont` resolution. Without this, every
+ *                          file in an N-file batch repeats the same
+ *                          `findSystemFont` IPC for the same missing fonts.
  * @param useRustUserFonts - Production path: ask Rust's session-local source
  *                           index for a match before falling back to system.
  * @param cacheLookupCache - Optional batch-shared cache mapping a font key
