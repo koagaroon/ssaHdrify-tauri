@@ -369,8 +369,8 @@ describe("deriveRenameOutputPath — exact basename match (no lang suffix)", () 
   });
 });
 
-describe("deriveRenameOutputPath — path-validator integration (round-3 N1 wiring)", () => {
-  // Pin the round-3 fix that wires assertSafeOutputFilename +
+describe("deriveRenameOutputPath — path-validator integration", () => {
+  // Pin the contract that wires assertSafeOutputFilename +
   // assertSafeOutputPath into the rename derivation. Each mode picks
   // a different validator reference (rename → subtitlePath,
   // copy_to_video → videoPath, copy_to_chosen → chosenDir-synthesized
@@ -386,8 +386,8 @@ describe("deriveRenameOutputPath — path-validator integration (round-3 N1 wiri
   it("rejects copy_to_chosen with a chosenDir that resolves to empty after normalization", () => {
     const video = "C:\\media\\episode.mkv";
     const sub = "C:\\media\\episode.zh.ass";
-    // "/" normalizes to "" after trailing-slash strip; the round-4
-    // N-R4-5 guard converts that into a clear error rather than
+    // "/" normalizes to "" after trailing-slash strip; an empty-after-
+    // normalization guard converts that into a clear error rather than
     // silently accepting any rooted path.
     expect(() => deriveRenameOutputPath(video, sub, "copy_to_chosen", "/")).toThrow(
       /empty after normalization/
@@ -402,8 +402,9 @@ describe("deriveRenameOutputPath — path-validator integration (round-3 N1 wiri
 
   it("rejects an output filename with an unsubstituted template token literal", () => {
     // Indirect path: a video whose basename contains literal `{` would
-    // synthesize an output filename with `{` — the validator (round-3
-    // A8) rejects it.
+    // synthesize an output filename with `{` — the validator rejects
+    // template-token characters in output filenames as a guard against
+    // unsubstituted-template-leak.
     const video = "C:\\media\\Show.{name}.mkv";
     const sub = "C:\\media\\episode.ass";
     expect(() => deriveRenameOutputPath(video, sub, "copy_to_video", null)).toThrow(/illegal/);

@@ -1096,7 +1096,7 @@ mod tests {
         assert!(folders[0].last_scanned_at <= after);
     }
 
-    // ── Step 3: drift detection ─────────────────────────────
+    // ── Drift detection ─────────────────────────────────────
 
     #[test]
     fn diff_against_empty_cache_reports_all_as_added() {
@@ -1223,7 +1223,7 @@ mod tests {
         assert!(!with_removed.is_empty());
     }
 
-    // ── Step 4: family-name lookup ──────────────────────────
+    // ── Family-name lookup ──────────────────────────────────
 
     #[test]
     fn lookup_family_returns_match() {

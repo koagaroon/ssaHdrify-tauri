@@ -1293,11 +1293,12 @@ fn scan_directory_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
 /// the source index AND streams a count-only progress event, then sends
 /// the Done sentinel on the Ok path.
 ///
-/// Lifted out of `scan_font_directory` and `scan_font_files` once the
-/// shared body — open transaction, drive emit closure, send Done
-/// sentinel — accumulated meaningfully duplicated logic. The two
-/// commands now differ only in their pre-validation + canonicalize
-/// stages and the inner scan they invoke through `scan_body`.
+/// Lifted out of `scan_font_directory` and `scan_font_files` once
+/// their shared body — open transaction, drive emit closure, send
+/// Done sentinel — had accumulated enough duplication to extract.
+/// The two commands now differ only in their pre-validation +
+/// canonicalize stages and the inner scan they invoke through
+/// `scan_body`.
 ///
 /// `log_label` is the human-readable scan target (directory path, or
 /// "local font files" for the file-list command) — folded into the
