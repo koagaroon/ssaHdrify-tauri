@@ -1,6 +1,7 @@
 pub mod dropzone;
 pub mod encoding;
 pub mod font_cache;
+pub mod font_cache_commands;
 pub mod fonts;
 pub mod util;
 
@@ -45,6 +46,15 @@ pub fn run() {
                 return Err(std::io::Error::other(e).into());
             }
 
+            // GUI persistent font cache. Init failure is non-fatal —
+            // log a warning and continue with cache unavailable. The
+            // app keeps working (embed falls through to system fonts,
+            // matching pre-#5 behavior); the user just doesn't get
+            // cache acceleration this session.
+            if let Err(e) = font_cache_commands::init_gui_font_cache(&app_data_dir) {
+                log::warn!("GUI font cache init failed: {e}. Cache will be unavailable.");
+            }
+
             // Dev: INFO-level for full visibility while iterating.
             // Release: WARN/ERROR only — keeps crash-diagnostic signals in
             // bug reports without spamming healthy runs.
@@ -78,6 +88,11 @@ pub fn run() {
             fonts::resolve_user_font,
             fonts::remove_font_source,
             fonts::clear_font_sources,
+            font_cache_commands::open_font_cache,
+            font_cache_commands::detect_font_cache_drift,
+            font_cache_commands::rescan_font_cache_drift,
+            font_cache_commands::clear_font_cache,
+            font_cache_commands::lookup_font_family,
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {
