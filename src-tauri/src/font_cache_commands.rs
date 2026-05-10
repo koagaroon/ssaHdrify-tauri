@@ -117,7 +117,7 @@ pub fn init_gui_font_cache(app_data_dir: &Path) -> Result<(), String> {
             Ok(())
         }
         Err(e) => {
-            // N-R2-18: clear the path slot too so `open_font_cache`'s
+            // Clear the path slot too so `open_font_cache`'s
             // `schema_mismatch = !available && path.exists()` derivation
             // doesn't false-report schema_mismatch for a non-schema I/O
             // failure (which would route the user to "rebuild" when
