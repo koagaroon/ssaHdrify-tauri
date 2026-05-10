@@ -424,6 +424,10 @@ export const strings: Record<string, StringEntry> = {
     zh: "已重新扫描 {0} 个文件夹；移除 {1} 个。",
   },
   font_cache_cleared: { en: "Font cache cleared.", zh: "字体缓存已清除。" },
+  font_cache_unavailable_banner: {
+    en: "Font cache unavailable — embed will use system fonts only.",
+    zh: "字体缓存不可用 —— 嵌入将仅使用系统字体。",
+  },
   font_cache_rebuild_required_title: {
     en: "Font cache needs rebuilding",
     zh: "字体缓存需要重建",

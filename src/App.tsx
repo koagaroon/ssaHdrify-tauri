@@ -133,19 +133,29 @@ function App() {
     setShowCacheModal(false);
   }, []);
 
-  const handleCacheRescanComplete = useCallback(() => {
-    // Result fields (modified_rescanned / removed_evicted) are not
-    // surfaced in the UI yet — drift is cleared and the modal closes.
-    // Keep the callback nullary; modal calls it with no args.
-    setCacheDrift({ added: [], modified: [], removed: [] });
-    setShowCacheModal(false);
+  // Re-probe the cache instead of synthesizing the post-op state from
+  // assumptions about what the Rust commands did. The probe is cheap
+  // (one SQL query) and the rebuilt state is authoritative — avoids
+  // tightly coupling the UI to internal command behavior, and closes
+  // tiny race windows where another command mutated state in parallel.
+  const refreshCacheStatus = useCallback(async () => {
+    try {
+      const status = await openFontCache();
+      setCacheStatus(status);
+    } catch (e) {
+      console.warn("openFontCache re-probe failed:", e);
+    }
   }, []);
+
+  const handleCacheRescanComplete = useCallback(() => {
+    setCacheDrift({ added: [], modified: [], removed: [] });
+    void refreshCacheStatus();
+  }, [refreshCacheStatus]);
 
   const handleCacheClearComplete = useCallback(() => {
     setCacheDrift({ added: [], modified: [], removed: [] });
-    setCacheStatus((prev) => (prev ? { ...prev, available: true, schemaMismatch: false } : null));
-    setShowCacheModal(false);
-  }, []);
+    void refreshCacheStatus();
+  }, [refreshCacheStatus]);
 
   return (
     <div className="stage">

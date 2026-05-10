@@ -46,6 +46,11 @@ export default function FontCacheDriftModal({
   // enabled or both are disabled; never one-but-not-the-other.
   const [working, setWorking] = useState<null | "rescanning" | "clearing">(null);
   const [error, setError] = useState<string | null>(null);
+  // Surface the post-op success message inline rather than auto-closing
+  // silently — the i18n strings font_cache_rescan_done /
+  // font_cache_cleared exist precisely so the user sees what happened.
+  // null while the modal is in pre-op or working state.
+  const [doneMessage, setDoneMessage] = useState<string | null>(null);
 
   // Esc closes only when not working — closing mid-rescan would orphan
   // the in-flight Tauri command. The close button's disabled state
@@ -78,32 +83,29 @@ export default function FontCacheDriftModal({
     setError(null);
     setWorking("rescanning");
     try {
-      // Result counts (modified_rescanned / removed_evicted) are not
-      // surfaced in this modal's UI; the modal closes after success
-      // and the next launch's drift check will see the updated state.
-      await rescanFontCacheDrift();
+      const result = await rescanFontCacheDrift();
+      setWorking(null);
+      setDoneMessage(t("font_cache_rescan_done", result.modifiedRescanned, result.removedEvicted));
       onRescanComplete();
     } catch (e) {
       setError(String(e));
       setWorking(null);
     }
-    // setWorking(null) after success is intentionally skipped — the
-    // parent is expected to flip `open` to false in onRescanComplete,
-    // un-mounting the modal entirely. If parent leaves it open for
-    // some reason, the next render re-runs with fresh drift data.
-  }, [onRescanComplete]);
+  }, [onRescanComplete, t]);
 
   const handleClear = useCallback(async () => {
     setError(null);
     setWorking("clearing");
     try {
       await clearFontCache();
+      setWorking(null);
+      setDoneMessage(t("font_cache_cleared"));
       onClearComplete();
     } catch (e) {
       setError(String(e));
       setWorking(null);
     }
-  }, [onClearComplete]);
+  }, [onClearComplete, t]);
 
   if (!open) return null;
 
@@ -226,6 +228,17 @@ export default function FontCacheDriftModal({
               style={{ marginTop: "0.5rem", color: "var(--text-primary)" }}
             >
               {working === "rescanning" ? t("font_cache_rescanning") : t("font_cache_clearing")}
+            </p>
+          )}
+
+          {doneMessage !== null && (
+            <p
+              className="text-xs"
+              role="status"
+              aria-live="polite"
+              style={{ marginTop: "0.5rem", color: "var(--text-primary)" }}
+            >
+              {doneMessage}
             </p>
           )}
 

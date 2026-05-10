@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import {
   clearFontSources,
   fileNameFromPath,
+  openFontCache,
   pickAssFiles,
   readText,
   removeFontSource,
@@ -114,6 +115,29 @@ export default function FontEmbed() {
   const dropZoneRef = useRef<HTMLDivElement>(null);
   const fileContainerRef = useRef<HTMLDivElement>(null);
 
+  // Persistent cache availability — when init failed for a non-schema
+  // reason (disk full, permissions denied), the App-level launch hook
+  // logs WARN to stderr but a GUI app has no visible stderr. Surface
+  // the state inline here so users see why embed is silently using
+  // system fonts only. Schema-mismatch is handled by the launch-time
+  // modal and is NOT shown as a banner (avoids double-surfacing).
+  const [cacheUnavailable, setCacheUnavailable] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const status = await openFontCache();
+        if (cancelled) return;
+        setCacheUnavailable(!status.available && !status.schemaMismatch);
+      } catch {
+        if (!cancelled) setCacheUnavailable(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // ── Local font sources (persist for the tab session) ─────
   const [fontSources, setFontSources] = useState<FontSource[]>([]);
   const [sourceModalOpen, setSourceModalOpen] = useState(false);
@@ -193,6 +217,9 @@ export default function FontEmbed() {
         // and adding pointless latency to ingest. One cache per ingest
         // run keeps it scoped and disposable.
         const sysCache = new Map<string, SystemFontResolution>();
+        // Symmetric cache for the persistent font cache lookup tier
+        // (#5). Same N×M IPC concern as sysCache.
+        const cacheLookupCache = new Map<string, { path: string; index: number } | null>();
         for (const path of paths) {
           if (gen !== pickGenRef.current) return;
           let content: string;
@@ -209,7 +236,13 @@ export default function FontEmbed() {
           // legacy in-memory userFontMap is null here because the
           // heavy index lives in Rust now.
           const useRustUserFonts = true;
-          const analyzed = await analyzeFonts(content, null, sysCache, useRustUserFonts);
+          const analyzed = await analyzeFonts(
+            content,
+            null,
+            sysCache,
+            useRustUserFonts,
+            cacheLookupCache
+          );
           if (gen !== pickGenRef.current) return;
           cache.set(path, { content, infos: analyzed.infos, usages: analyzed.usages });
         }
@@ -293,12 +326,13 @@ export default function FontEmbed() {
     const gen = (pickGenRef.current = pickGenRef.current + 1);
     try {
       const newCache = new Map<string, FileAnalysis>();
-      // Same batch-shared cache as ingestPaths — one round of system
-      // lookups per source change, not per (file × font).
+      // Same batch-shared caches as ingestPaths — one round of
+      // system / cache lookups per source change, not per (file × font).
       const sysCache = new Map<string, SystemFontResolution>();
+      const cacheLookupCache = new Map<string, { path: string; index: number } | null>();
       for (const [path, prev] of cache) {
         if (gen !== pickGenRef.current) return;
-        const analyzed = await analyzeFonts(prev.content, null, sysCache, true);
+        const analyzed = await analyzeFonts(prev.content, null, sysCache, true, cacheLookupCache);
         if (gen !== pickGenRef.current) return;
         newCache.set(path, {
           content: prev.content,
@@ -773,6 +807,12 @@ export default function FontEmbed() {
 
       {/* Selection-rejected banner */}
       <DropErrorBanner message={dropError} onDismiss={() => setDropError(null)} />
+
+      {cacheUnavailable && (
+        <p className="text-xs ml-1" role="status" style={{ color: "var(--text-secondary)" }}>
+          {t("font_cache_unavailable_banner")}
+        </p>
+      )}
 
       {/* Drop hint when idle */}
       {fileCount === 0 && !dropError && (

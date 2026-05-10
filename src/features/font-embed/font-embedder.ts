@@ -124,12 +124,20 @@ export function buildUserFontMap(faces: LocalFontEntry[]): Map<string, LocalFont
  *                     in-memory callers can inject local fonts directly.
  * @param useRustUserFonts - Production path: ask Rust's session-local source
  *                           index for a match before falling back to system.
+ * @param cacheLookupCache - Optional batch-shared cache mapping a font key
+ *                           to its persistent-cache lookup outcome (hit OR
+ *                           miss stored as null). Without this, every file
+ *                           in an N-file batch repeats the same
+ *                           `lookupFontFamily` IPC for the same fonts —
+ *                           N×M IPC calls even when answers are stable.
+ *                           Symmetric with `systemFontCache`.
  */
 export async function analyzeFonts(
   assContent: string,
   userFontMap?: Map<string, LocalFontEntry> | null,
   systemFontCache?: Map<string, SystemFontResolution>,
-  useRustUserFonts = false
+  useRustUserFonts = false,
+  cacheLookupCache?: Map<string, { path: string; index: number } | null>
 ): Promise<{ infos: FontInfo[]; usages: FontUsage[] }> {
   await ensureCollectorLoaded();
 
@@ -149,6 +157,14 @@ export async function analyzeFonts(
     );
   }
 
+  // The `source` field on each FontInfo (`local` / `cache` / `system`)
+  // reflects the resolution tier captured at ANALYSIS time. Mid-session
+  // changes to the persistent cache (e.g., a CLI `refresh-fonts` run
+  // happening while the GUI is open) will not retroactively update the
+  // badge in the detection grid — only the next analyze pass refreshes
+  // it. The actual filePath stays valid because the file still exists
+  // either way; only the UI badge would be technically stale, not the
+  // embed result.
   for (const usage of usages) {
     const key = userFontKey(usage.key.family, usage.key.bold, usage.key.italic);
     const base = { key: usage.key, glyphCount: usage.codepoints.size };
@@ -185,8 +201,14 @@ export async function analyzeFonts(
     // sources and the OS system-font fallback. Mirrors the CLI's
     // resolve_embed_font tier order. Returns null when the family
     // isn't cached OR when the cache is unavailable (init failure /
-    // schema mismatch); both fall through to system lookup.
-    const cacheResult = await lookupFontFamily(usage.key.family, usage.key.bold, usage.key.italic);
+    // schema mismatch); both fall through to system lookup. Dedup
+    // via cacheLookupCache so an N-file batch doesn't repeat the
+    // same per-font IPC N times (mirrors systemFontCache below).
+    let cacheResult = cacheLookupCache?.get(key);
+    if (cacheResult === undefined) {
+      cacheResult = await lookupFontFamily(usage.key.family, usage.key.bold, usage.key.italic);
+      cacheLookupCache?.set(key, cacheResult);
+    }
     if (cacheResult) {
       if (isDev) console.debug(`[ssaHdrify] '${usage.key.family}' → CACHE ${cacheResult.path}`);
       infos.push({
