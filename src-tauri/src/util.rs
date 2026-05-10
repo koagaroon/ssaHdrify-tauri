@@ -71,6 +71,20 @@ pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
     }) {
         return Err(format!("{label} path contains invalid characters"));
     }
+    // Reject Windows DOS device namespaces (\\.\<device>) and the
+    // \\?\GLOBALROOT\… kernel-object form. These open raw device
+    // handles or kernel-namespace paths — never legitimate user data
+    // targets. The legitimate Win32 long-path prefixes (\\?\C:\… and
+    // \\?\UNC\server\share\…) remain allowed since they map onto
+    // ordinary filesystem paths and font scanning + drag-drop both
+    // produce them through canonicalize().
+    let lowered = path.to_ascii_lowercase();
+    let is_dos_device = lowered.starts_with("\\\\.\\") || lowered.starts_with("//./");
+    let is_globalroot =
+        lowered.starts_with("\\\\?\\globalroot\\") || lowered.starts_with("//?/globalroot/");
+    if is_dos_device || is_globalroot {
+        return Err(format!("{label} path uses a reserved device namespace"));
+    }
     Ok(())
 }
 

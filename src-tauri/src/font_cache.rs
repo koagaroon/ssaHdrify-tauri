@@ -62,9 +62,19 @@ fn platform_data_dir() -> Result<PathBuf, String> {
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
+        // XDG Base Dir spec § "Environment variables": "If
+        // $XDG_DATA_HOME is either not set or empty, a default equal
+        // to $HOME/.local/share should be used." The empty-check is
+        // spec-required, not defensive paranoia — don't simplify away
+        // the !is_empty() check. The is_absolute() guard rejects
+        // exotic values like "." or relative paths from a misconfigured
+        // shell, falling through to the HOME default.
         if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
             if !xdg.is_empty() {
-                return Ok(PathBuf::from(xdg));
+                let xdg_path = PathBuf::from(&xdg);
+                if xdg_path.is_absolute() {
+                    return Ok(xdg_path);
+                }
             }
         }
         std::env::var("HOME")
@@ -83,7 +93,28 @@ fn platform_data_dir() -> Result<PathBuf, String> {
 /// prompt). Per the locked "no auto-migrate" decision, the cache is
 /// never silently migrated — release notes call out version bumps so
 /// users intentionally rebuild via `refresh-fonts` or the GUI modal.
-pub const SCHEMA_VERSION: i32 = 1;
+///
+/// v1 → v2 (Round 2 review): added `family_name_key` column to
+/// `cached_family_keys` storing NFC-normalized lowercase form so
+/// lookup hit rate matches the session DB's user_font_key contract.
+/// Without it, CJK fonts whose name-table form differs from the
+/// ASS \fn / Style Fontname spelling missed every cache lookup.
+pub const SCHEMA_VERSION: i32 = 2;
+
+/// Normalize a family-name string into the lookup key used by
+/// `cached_family_keys.family_name_key`: NFC-normalize then full
+/// Unicode lowercase (so `É`→`é`, not just ASCII-only `A`→`a`).
+/// Mirrors `userFontKey`'s normalization in font-embedder.ts (which
+/// uses JS `toLowerCase()`, also full Unicode) so a font's name-table
+/// entry and an ASS file's `\fn` reference match regardless of NFC/NFD
+/// form (macOS HFS+ NFD vs Windows NFC) or case (`Café` vs `CAFÉ`,
+/// `Source Han Sans CN` vs `source han sans cn`). Plain ASCII
+/// `to_ascii_lowercase` would miss `É`/`Ñ`/`Ü` etc., breaking the
+/// CJK/Latin-extended fonts the cache exists to accelerate.
+pub(crate) fn family_lookup_key(family_name: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    family_name.nfc().collect::<String>().to_lowercase()
+}
 
 /// One font face's metadata, ready to be written into the cache by
 /// `FontCache::replace_folder`. The cache module deliberately does NOT
@@ -402,21 +433,23 @@ impl FontCache {
             .map_err(|e| CacheError::Io(format!("insert font {}: {e}", font.file_path)))?;
 
             for key in &font.family_keys {
+                let lookup_key = family_lookup_key(&key.family_name);
                 tx.execute(
-                    "INSERT INTO cached_family_keys(font_path, face_index, family_name, bold, italic) \
-                     VALUES(?1, ?2, ?3, ?4, ?5)",
+                    "INSERT INTO cached_family_keys(\
+                        font_path, face_index, family_name, family_name_key, bold, italic\
+                     ) VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
                     params![
                         font.file_path,
                         font.face_index,
                         key.family_name,
+                        lookup_key,
                         i32::from(key.bold),
                         i32::from(key.italic),
                     ],
                 )
-                .map_err(|e| CacheError::Io(format!(
-                    "insert family_key for {}: {e}",
-                    font.file_path
-                )))?;
+                .map_err(|e| {
+                    CacheError::Io(format!("insert family_key for {}: {e}", font.file_path))
+                })?;
             }
         }
 
@@ -526,10 +559,12 @@ impl FontCache {
     /// first match, or `None` if no font in the cache advertises the
     /// requested family + style combination.
     ///
-    /// Match semantics: exact equality on `family_name` (no case
-    /// folding, no Unicode normalization done here — caller's
-    /// responsibility to normalize the query the same way it
-    /// normalized writes). Bold/italic must match exactly.
+    /// Match semantics: NFC-normalize + ASCII-lowercase via
+    /// `family_lookup_key` on BOTH the query (here) and the storage
+    /// path (`replace_folder`). Bold/italic must match exactly.
+    /// Mirrors the session DB's `userFontKey` contract so a font's
+    /// name-table form (often NFC) and an ASS file's `\fn` reference
+    /// (often macOS-pasted NFD or arbitrary case) match consistently.
     ///
     /// Determinism: when multiple fonts advertise the same family
     /// alias (rare; typically alternate weights or different
@@ -548,13 +583,14 @@ impl FontCache {
         bold: bool,
         italic: bool,
     ) -> Result<Option<FontLookupResult>, CacheError> {
+        let lookup_key = family_lookup_key(family_name);
         let row: Result<(String, i32), _> = self.conn.query_row(
             "SELECT k.font_path, k.face_index \
              FROM cached_family_keys k \
-             WHERE k.family_name = ?1 AND k.bold = ?2 AND k.italic = ?3 \
+             WHERE k.family_name_key = ?1 AND k.bold = ?2 AND k.italic = ?3 \
              ORDER BY k.font_path, k.face_index \
              LIMIT 1",
-            params![family_name, i32::from(bold), i32::from(italic)],
+            params![lookup_key, i32::from(bold), i32::from(italic)],
             |r| Ok((r.get(0)?, r.get(1)?)),
         );
         match row {
@@ -618,6 +654,11 @@ impl FontCache {
 /// Current Unix timestamp in seconds. Used for `last_scanned_at` on
 /// inserts. Returns 0 if the system clock is somehow before the Unix
 /// epoch (impossible in practice; defensive default).
+///
+/// Sentinel collision note: a future caller MUST NOT reinterpret a 0
+/// in `last_scanned_at` as "missing" or "uninitialized" — every real
+/// insert calls this and gets the current epoch second. The 0 sentinel
+/// only fires for SystemTimeError, which can't happen on a sane clock.
 fn current_unix_seconds() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -663,12 +704,16 @@ CREATE TABLE cached_fonts (
     FOREIGN KEY (folder_path) REFERENCES cached_folders(folder_path)
 );
 CREATE TABLE cached_family_keys (
-    font_path       TEXT NOT NULL,
-    face_index      INTEGER NOT NULL,
-    family_name     TEXT NOT NULL,
-    bold            INTEGER NOT NULL,
-    italic          INTEGER NOT NULL,
-    PRIMARY KEY (family_name, bold, italic, font_path, face_index),
+    font_path        TEXT NOT NULL,
+    face_index       INTEGER NOT NULL,
+    family_name      TEXT NOT NULL,
+    -- v2: NFC-normalized + ASCII-lowercase form of family_name,
+    -- the actual lookup key. family_name kept verbatim for
+    -- diagnostics + future case-preserving display.
+    family_name_key  TEXT NOT NULL,
+    bold             INTEGER NOT NULL,
+    italic           INTEGER NOT NULL,
+    PRIMARY KEY (family_name_key, bold, italic, font_path, face_index),
     FOREIGN KEY (font_path, face_index) REFERENCES cached_fonts(font_path, face_index)
 );
 CREATE TABLE cache_meta (
@@ -1386,6 +1431,35 @@ mod tests {
         // ORDER BY font_path → "aaa..." comes first.
         let result = cache.lookup_family("Arial", false, false).unwrap().unwrap();
         assert_eq!(result.font_path, "/test/dir/aaa_arial.ttf");
+        let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn lookup_family_matches_across_case_and_nfc_form() {
+        // Round 2 review N-R2-14 / N-R2-28: cache lookup must
+        // NFC-normalize + lowercase BOTH the stored key and the
+        // query so a font's name-table form (often NFC) matches an
+        // ASS file's `\fn` reference regardless of NFD/NFC or case.
+        let (_guard, path) = temp_cache_path();
+        let mut cache = FontCache::open_or_create(&path).expect("open");
+        // Store an NFC-form precomposed family name.
+        cache
+            .replace_folder(
+                "/test/dir",
+                100,
+                &[synthetic_font("/test/dir/cafe.ttf", "Café")],
+            )
+            .unwrap();
+        // Query in different case → hits.
+        let by_case = cache.lookup_family("CAFÉ", false, false).unwrap();
+        assert!(
+            by_case.is_some(),
+            "case-insensitive lookup should match Café"
+        );
+        // Query in NFD form (decomposed e + combining acute) → hits.
+        let nfd = "Cafe\u{0301}";
+        let by_nfd = cache.lookup_family(nfd, false, false).unwrap();
+        assert!(by_nfd.is_some(), "NFD-form lookup should match NFC store");
         let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 

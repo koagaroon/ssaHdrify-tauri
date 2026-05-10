@@ -276,14 +276,25 @@ export async function findSystemFont(
   return invoke<FontLookupResult>("find_system_font", { family, bold, italic });
 }
 
-/** Subset a font file to only include the specified codepoints. */
+/** Subset a font file to only include the specified codepoints.
+ *
+ *  Wire format: Rust returns the bytes base64-encoded (`subset_font_b64`)
+ *  to dodge the JSON `[byte, byte, ...]` form's ~4–5× expansion. The
+ *  worst-case 10 MB fallback subset would otherwise produce a ~50 MB
+ *  IPC payload + main-thread JSON parse pass; base64 is ~1.33× and
+ *  `atob` is V8 builtin. Mirrors chain-runtime's `decodeBase64`. */
 export async function subsetFont(
   fontPath: string,
   fontIndex: number,
   codepoints: number[]
 ): Promise<Uint8Array> {
-  const bytes: number[] = await invoke("subset_font", { fontPath, fontIndex, codepoints });
-  return new Uint8Array(bytes);
+  const b64: string = await invoke("subset_font_b64", { fontPath, fontIndex, codepoints });
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
 }
 
 /** One font face discovered in a user-picked directory or file list.

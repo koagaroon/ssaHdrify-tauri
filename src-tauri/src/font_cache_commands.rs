@@ -11,12 +11,21 @@
 //! lookup tier ordering).
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use once_cell::sync::Lazy;
 use serde::Serialize;
 
 use crate::font_cache::{CacheError, FamilyKey, FontCache, FontMetadata};
+
+/// Sentinel set true while `rescan_font_cache_drift` is mid-flight
+/// (Phase 1 → Phase 3) so `clear_font_cache` can refuse rather than
+/// race the rescan's apply phase. The frontend modal already gates
+/// the buttons, but the IPC layer is the actual security boundary —
+/// a misbehaving / out-of-band caller could otherwise interleave the
+/// two and resurrect just-cleared data via Phase 3's apply.
+static RESCAN_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
 // Note: `crate::font_cache` also defines its own `FontLookupResult`
 // (font_path / face_index, i32). Not imported here — IPC commands
@@ -86,10 +95,20 @@ pub fn init_gui_font_cache(app_data_dir: &Path) -> Result<(), String> {
             );
             Ok(())
         }
-        Err(e) => Err(format!(
-            "Cannot open GUI font cache at {}: {e}",
-            cache_path.display()
-        )),
+        Err(e) => {
+            // N-R2-18: clear the path slot too so `open_font_cache`'s
+            // `schema_mismatch = !available && path.exists()` derivation
+            // doesn't false-report schema_mismatch for a non-schema I/O
+            // failure (which would route the user to "rebuild" when
+            // recreate also fails).
+            if let Ok(mut path_slot) = GUI_FONT_CACHE_PATH.lock() {
+                *path_slot = None;
+            }
+            Err(format!(
+                "Cannot open GUI font cache at {}: {e}",
+                cache_path.display()
+            ))
+        }
     }
 }
 
@@ -263,6 +282,25 @@ pub fn detect_font_cache_drift() -> Result<DriftReport, String> {
 /// the CLI's `refresh-fonts` subcommand.
 #[tauri::command]
 pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
+    // Sentinel: block parallel `clear_font_cache` between Phase 1 and
+    // Phase 3 so Clear can't drop+recreate the cache mid-rescan and
+    // have Phase 3's apply resurrect the cleared rows. Cleared in the
+    // RAII guard below so every exit path (Ok / Err / panic-unwind)
+    // releases the flag.
+    struct RescanGuard;
+    impl Drop for RescanGuard {
+        fn drop(&mut self) {
+            RESCAN_IN_PROGRESS.store(false, Ordering::Release);
+        }
+    }
+    if RESCAN_IN_PROGRESS
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return Err("Another rescan is already in progress".to_string());
+    }
+    let _rescan_guard = RescanGuard;
+
     // Phase 1 — under lock: list cached folders + compute the
     // filesystem-snapshot drift report. list_folders, the per-folder
     // metadata stat, and diff_against are all cheap (small in-DB sets +
@@ -311,10 +349,18 @@ pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
     }
 
     // Phase 3 — under lock: apply the scan results + evict removed
-    // folders. Pure DB work, short hold time. Race window between
-    // Phase 1's diff and this apply is benign — replace_folder /
-    // remove_folder are atomic, and a concurrent populate writing the
-    // same folder gets overwritten with our newer snapshot.
+    // folders. Pure DB work, short hold time.
+    //
+    // Removed-list re-stat: Phase 1's `report.removed` is a snapshot
+    // from before Phase 2's I/O. Between Phase 1 and Phase 3, another
+    // command can have called `try_record_folder_in_gui_cache` for X,
+    // freshly populating it (or the user can have re-added the source
+    // through the source modal). Blindly applying `remove_folder("X")`
+    // would clobber that fresh write. Re-stat each `removed` folder
+    // here; if it now exists on disk, skip — the drift report was
+    // stale. Modified-list doesn't need this dance: Phase 2's scan
+    // captured a snapshot strictly newer than any concurrent populate,
+    // so replace_folder's idempotent overwrite is safe.
     let mut modified_rescanned = 0usize;
     let mut removed_evicted = 0usize;
     {
@@ -331,6 +377,12 @@ pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
             modified_rescanned += 1;
         }
         for folder in &report.removed {
+            if std::fs::metadata(folder).is_ok() {
+                log::info!(
+                    "Skipping cache eviction for {folder}: folder reappeared between drift detect and apply"
+                );
+                continue;
+            }
             cache
                 .remove_folder(folder)
                 .map_err(|e| format!("remove_folder({folder}): {e}"))?;
@@ -353,6 +405,14 @@ pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
 /// rebuild path when `open_font_cache` reports `schema_mismatch`.
 #[tauri::command]
 pub fn clear_font_cache() -> Result<(), String> {
+    // Refuse mid-rescan: rescan_font_cache_drift's Phase 2 runs
+    // outside the cache mutex; if Clear succeeds during that window,
+    // Phase 3's apply re-creates rows the user just asked to wipe.
+    // The frontend modal already gates the buttons; this is the IPC-
+    // layer enforcement that out-of-band callers can't bypass.
+    if RESCAN_IN_PROGRESS.load(Ordering::Acquire) {
+        return Err("Cannot clear cache: rescan in progress".to_string());
+    }
     let path = GUI_FONT_CACHE_PATH
         .lock()
         .map_err(|_| "GUI cache path mutex poisoned".to_string())?
@@ -531,11 +591,15 @@ pub fn try_remove_folder_from_gui_cache(folder_path: &str) {
 /// return a path that subset_font then rejects, breaking the cache's
 /// primary use case.
 ///
-/// Best-effort: returns false for cache unavailable, lock contention,
-/// or query error. The two upstream tiers cover the common case; this
-/// path is purely additive.
+/// Uses the blocking `lock()` (not `try_lock`) — provenance is
+/// correctness-critical and a try_lock false-negative under rescan
+/// contention would have subset_font reject a path the cache
+/// legitimately knows. With the rescan mutex split (Phase 1/3 hold
+/// time is short; Phase 2 runs lock-free), the worst-case wait here
+/// is bounded. Returns false only for cache unavailable / poisoned
+/// / query error — never for "not yet checked".
 pub fn path_in_gui_cache(font_path: &str) -> bool {
-    let slot = match GUI_FONT_CACHE.try_lock() {
+    let slot = match GUI_FONT_CACHE.lock() {
         Ok(s) => s,
         Err(_) => return false,
     };
@@ -561,6 +625,19 @@ pub fn lookup_font_family(
     bold: bool,
     italic: bool,
 ) -> Result<Option<crate::fonts::FontLookupResult>, String> {
+    // IPC boundary validation matching find_system_font / resolve_user_font:
+    // bound family length and reject control characters before the SQL
+    // bind. Without this, a misbehaving frontend could pin a multi-MB
+    // string in a transient allocation per query.
+    if family.is_empty() {
+        return Err("Font family name is empty".to_string());
+    }
+    if family.chars().count() > 256 {
+        return Err("Font family name exceeds 256 characters".to_string());
+    }
+    if family.chars().any(|c| c.is_control()) {
+        return Err("Font family name contains control characters".to_string());
+    }
     let slot = GUI_FONT_CACHE
         .lock()
         .map_err(|_| "GUI cache mutex poisoned".to_string())?;

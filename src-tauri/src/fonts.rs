@@ -1852,6 +1852,14 @@ pub fn clear_font_sources() -> Result<(), String> {
         .map_err(|e| db_error("source clear failed", e))?;
     tx.commit()
         .map_err(|e| db_error("source clear commit failed", e))?;
+    // Reset the per-process subset-fallback budget on user-visible
+    // session boundaries. Without this, a long-running app that hit
+    // the 50 MB ceiling once (e.g., on a single corrupt font) keeps
+    // rejecting every fallback for the rest of the lifetime — even
+    // after the user has cleared sources and switched to an entirely
+    // different font set. The user just signaled "fresh slate"; honor
+    // it.
+    CUMULATIVE_FALLBACK_BYTES.store(0, Ordering::Release);
     Ok(())
 }
 
@@ -2047,21 +2055,25 @@ fn is_in_system_fonts_dir(canonical: &Path) -> bool {
 /// and CJK fullwidth forms (0xFF01–0xFF5E) as safety padding.
 /// Falls back to full font on error.
 ///
-/// Perf characteristic of `Vec<u8>` return: serde-serializes to JSON
-/// `number[]` (~10× expansion). For a typical 200 KB CJK subset that's
-/// a 2 MB JSON string + frontend `Uint8Array.from` conversion — fine
-/// for normal embed flows. The 10 MB fallback path on a degenerate-
-/// codepoint-set scenario hits ~100 MB serialized + main-thread parse,
-/// brief but observable. Switching to a custom binary IPC protocol
-/// would dodge the expansion; not done yet because the current cost
-/// is acceptable and the fallback path is rare.
-#[tauri::command]
+/// Public IPC entry point + the CLI's standalone-embed callsite both
+/// invoke this function as a regular `pub fn`; the `#[tauri::command]`
+/// shim `subset_font_b64` below wraps it for the GUI's IPC path with
+/// base64 encoding so the frontend doesn't pay the JSON `[byte, ...]`
+/// expansion (~4–5× per byte → ~50 MB on the worst-case fallback
+/// path). CLI's chain mode marshals subsets via base64 inline (see
+/// `process_one_chain_input`); CLI's standalone embed bundles them
+/// into `engine::FontSubsetPayload` and ships through the engine's
+/// JSON-payload boundary (where the expansion is bounded by per-font
+/// caps, not the cumulative ceiling).
 pub fn subset_font(
     font_path: String,
     font_index: u32,
     codepoints: Vec<u32>,
 ) -> Result<Vec<u8>, String> {
-    // IPC boundary validation: font_index and codepoints come from untrusted JS
+    // IPC boundary validation: font_index and codepoints come from untrusted JS.
+    // font_path also from JS — validate length / control-char / DOS-device
+    // shape before any allocation, matching find_system_font's posture.
+    crate::util::validate_ipc_path(&font_path, "Font")?;
     if font_index > 255 {
         return Err(format!("Invalid font face index: {font_index} (max 255)"));
     }
@@ -2280,6 +2292,24 @@ pub fn subset_font(
             Ok(font_data)
         }
     }
+}
+
+/// IPC wrapper around `subset_font` that base64-encodes the result so
+/// the GUI's frontend doesn't pay the JSON `[byte, byte, …]` expansion.
+/// Pre-fix this returned `Vec<u8>` directly; serde-json would write each
+/// byte as decimal+comma (~4–5× per byte), and a 10 MB fallback subset
+/// would expand to ~50 MB IPC payload + a main-thread JSON parse pass.
+/// Frontend `subsetFont()` decodes via `atob` (mirrors chain-runtime's
+/// `decodeBase64`).
+#[tauri::command]
+pub fn subset_font_b64(
+    font_path: String,
+    font_index: u32,
+    codepoints: Vec<u32>,
+) -> Result<String, String> {
+    use base64::Engine as _;
+    let bytes = subset_font(font_path, font_index, codepoints)?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
 }
 
 /// Subset a specific face from a TTC/OTC collection file.

@@ -79,7 +79,7 @@ pub fn run() {
             dropzone::expand_dropped_paths,
             encoding::read_text_detect_encoding,
             fonts::find_system_font,
-            fonts::subset_font,
+            fonts::subset_font_b64,
             fonts::preflight_font_directory,
             fonts::preflight_font_files,
             fonts::scan_font_directory,
