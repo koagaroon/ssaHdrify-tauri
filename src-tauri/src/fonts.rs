@@ -2231,11 +2231,16 @@ pub fn subset_font(
     }))
     .unwrap_or_else(|panic_payload| {
         // Convert panic payload (Box<dyn Any>) into a string for the log
-        // and IPC return. Try common payload shapes — &str, String, and
-        // boxed error types (anyhow::Error, std::io::Error,
-        // Box<dyn Error+Send+Sync>) — before falling back to a generic
-        // message. The boxed-error path picks up panics from `expect`
-        // chains in fontcull that wrap non-string Display impls.
+        // and IPC return. Most panics produce &str (`panic!("...")`) or
+        // String (`panic!("{}", x)`). The Box<dyn Error+Send+Sync> arm
+        // catches the narrow case of `panic_any(Box::new(some_err))` —
+        // explicit boxed-error panics, NOT all error types thrown via
+        // `.expect()` (which produce String). The std::io::Error arm
+        // catches `panic_any(io_err)`. A bare `anyhow::Error` panic or
+        // other typed payload hits the unknown-payload fallback (which
+        // surfaces TypeId for diagnostic triage). We do NOT pull anyhow
+        // as a dep just for the downcast — fontcull doesn't panic with
+        // anyhow::Error today, and the fallback is diagnostic-actionable.
         let panic_msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
             (*s).to_string()
         } else if let Some(s) = panic_payload.downcast_ref::<String>() {
