@@ -283,7 +283,7 @@ describe("resolveChainOutputPath", () => {
     );
   });
 
-  it("rejects bare-filename inputs (no directory component)", () => {
+  it("rejects relative-path inputs (must be absolute)", () => {
     expect(() => resolveChainOutputPath("ep01.ass", "{name}.processed.ass")).toThrow(
       /must be absolute/
     );

@@ -244,11 +244,12 @@ fn embed_with_no_cache_does_not_touch_cache_file() {
         .and_then(|m| m.modified())
         .expect("stat cache before");
 
-    // Sleep one full second so mtime resolution (NTFS is sub-second
-    // but FAT/SUBST/network drives can be 1-2 s) makes any post-hoc
-    // touch detectable. Otherwise a no-op write within the same
-    // second would tie the assertion.
-    thread::sleep(Duration::from_millis(1100));
+    // Sleep longer than the worst-case mtime granularity (FAT/SUBST/
+    // network drives can be 1-2 s; NTFS is sub-second). 2100 ms covers
+    // both branches symmetrically with the drift test below — without
+    // this, a no-op write on a 2-second-resolution volume would tie
+    // before/after and false-pass.
+    thread::sleep(Duration::from_millis(2100));
 
     let subtitle = write_fixture_ass(&work, "input.ass");
     let embed = run_cli(&[
@@ -313,8 +314,12 @@ fn embed_reports_drift_when_folder_mtime_changes() {
     // Capture stderr regardless of exit code — the drift report is
     // written before any embed-time font resolution can fail.
     let stderr = String::from_utf8_lossy(&embed.stderr);
+    // Pin the structured drift line — `contains("drift")` alone would
+    // pass for unrelated stderr text mentioning drift, undermining
+    // the test contract for "embed reports drift when folder mtime
+    // changes". The locked drift report begins with this exact prefix.
     assert!(
-        stderr.contains("Cache drift detected") || stderr.contains("drift"),
+        stderr.contains("Cache drift detected"),
         "expected drift warning in stderr, got: {stderr}"
     );
     // Locked design: drift fallback skips the cache for this run.
