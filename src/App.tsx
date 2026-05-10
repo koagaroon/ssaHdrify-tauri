@@ -85,6 +85,11 @@ function App() {
   // as-is / clear. The cacheChecked ref guards against StrictMode's
   // intentional double-mount in dev — drift queries are read-only
   // but rescan_drifted writes; no need to double-do that.
+  //
+  // Single-App-instance assumption: the ref-based guard relies on
+  // App rendering exactly once at the root. Multi-instance App
+  // rendering (e.g., a future routing refactor) would share the ref
+  // across instances and skip launch checks for all but the first.
   const [cacheStatus, setCacheStatus] = useState<FontCacheStatus | null>(null);
   const [cacheDrift, setCacheDrift] = useState<FontCacheDriftReport | null>(null);
   const [showCacheModal, setShowCacheModal] = useState(false);

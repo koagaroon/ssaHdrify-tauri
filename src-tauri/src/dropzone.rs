@@ -87,7 +87,14 @@ pub fn expand_dropped_paths(paths: Vec<String>) -> Result<Vec<String>, String> {
 }
 
 /// Read a directory one level deep, appending regular files. Hidden
-/// entries and reparse points are skipped.
+/// entries (Unix dotfiles) and reparse points are skipped.
+///
+/// Dotfile filter is a UX choice — drag-drop users almost never want
+/// `.DS_Store`, `.git/`, `.editorconfig`, etc. coming along for the
+/// ride. A `.legitimate.ass` placed by a user who actively wanted it
+/// will be silently dropped; that's accepted scope. Adversarially this
+/// is not exploitable as a read-extension surface — caller already
+/// validates extensions downstream.
 fn walk_one_level(dir: &Path, out: &mut Vec<String>) {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,

@@ -80,7 +80,12 @@ export default function FontCacheDriftModal({
   }, [working, onClose]);
 
   const handleRescan = useCallback(async () => {
+    // Reset both transient states at entry — `doneMessage` from a
+    // prior op (e.g., user clicks Rescan after Clear succeeded)
+    // would otherwise visibly persist next to the in-progress
+    // "Rescanning…" banner until rescan finishes.
     setError(null);
+    setDoneMessage(null);
     setWorking("rescanning");
     try {
       const result = await rescanFontCacheDrift();
@@ -95,6 +100,7 @@ export default function FontCacheDriftModal({
 
   const handleClear = useCallback(async () => {
     setError(null);
+    setDoneMessage(null);
     setWorking("clearing");
     try {
       await clearFontCache();
@@ -106,6 +112,18 @@ export default function FontCacheDriftModal({
       setWorking(null);
     }
   }, [onClearComplete, t]);
+
+  // Reset transient state on every open=false→true transition. App.tsx
+  // currently mounts/unmounts the modal so this is defense for a future
+  // refactor that keeps it mounted — without this, a stale doneMessage
+  // from a prior open would leak into the next drift report.
+  useEffect(() => {
+    if (open) {
+      setError(null);
+      setDoneMessage(null);
+      setWorking(null);
+    }
+  }, [open]);
 
   if (!open) return null;
 
@@ -254,6 +272,11 @@ export default function FontCacheDriftModal({
         </div>
 
         {/* ── Actions ── */}
+        {/* Drift mode: Rescan + Use-as-is + Clear (3 buttons).
+            Schema-mismatch mode: Clear only (1 button). The asymmetry is
+            intentional — rescan/use-as-is have no meaning when the cache
+            file's schema doesn't match this build. Keyboard tab order
+            shifts accordingly; close button (X) at top is always reachable. */}
         <div
           className="modal-body"
           style={{

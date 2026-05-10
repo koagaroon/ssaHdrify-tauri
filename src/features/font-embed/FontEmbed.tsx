@@ -121,6 +121,14 @@ export default function FontEmbed() {
   // the state inline here so users see why embed is silently using
   // system fonts only. Schema-mismatch is handled by the launch-time
   // modal and is NOT shown as a banner (avoids double-surfacing).
+  //
+  // Per-component probe is intentional (vs lifting cacheStatus into a
+  // Context shared with App.tsx): the banner needs to stay accurate
+  // across the user's session — if they hit "Clear cache" in the drift
+  // modal mid-session and clear succeeds-then-fails, this probe re-runs
+  // when they next mount Font Embed. App.tsx's launch-time probe is
+  // load-bearing for the modal; this one is load-bearing for the
+  // banner. Two cheap SQL queries per launch is below the perf bar.
   const [cacheUnavailable, setCacheUnavailable] = useState(false);
   useEffect(() => {
     let cancelled = false;

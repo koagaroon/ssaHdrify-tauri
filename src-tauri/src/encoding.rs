@@ -128,7 +128,9 @@ pub fn read_text_detect_encoding(path: String) -> Result<ReadTextResult, String>
     // traversal isn't exploitable, just structurally less defended on
     // the fallback path. Earlier comments in this function claimed
     // unconditional `..` rejection; that was inaccurate (the validator
-    // never enforced it).
+    // never enforced it). (On Windows, std::fs::read → CreateFileW
+    // resolves `..` per Win32 path canonicalization. On Unix, openat()
+    // with `..` traverses up the FS tree.)
     crate::util::validate_ipc_path(&path, "Subtitle")?;
 
     // Extension validation: only allow subtitle/text file types

@@ -72,7 +72,7 @@ export type SystemFontResolution = Pick<FontInfo, "filePath" | "fontIndex" | "er
  * Plain string so React state can memo-compare equality cheaply and the
  * same derivation is trivially reproducible in the UI layer.
  */
-const USER_FONT_KEY_SEP = "";
+const USER_FONT_KEY_SEP = "\u001F";
 export function userFontKey(family: string, bold: boolean, italic: boolean): string {
   // NFC-normalize before lowercase so macOS HFS+ NFD-form filenames
   // and NFC-form font internal names key identically. Without this,
@@ -130,7 +130,11 @@ export function buildUserFontMap(faces: LocalFontEntry[]): Map<string, LocalFont
  *                           in an N-file batch repeats the same
  *                           `lookupFontFamily` IPC for the same fonts —
  *                           N×M IPC calls even when answers are stable.
- *                           Symmetric with `systemFontCache`.
+ *                           Symmetric with `systemFontCache`. Note: `get()`
+ *                           returns `undefined` for "not yet looked up";
+ *                           `null` is stored for "known cache miss" so the
+ *                           three states stay distinguishable (untried /
+ *                           hit / known-miss).
  */
 export async function analyzeFonts(
   assContent: string,
