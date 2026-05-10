@@ -38,19 +38,23 @@ pub fn run() {
                 // real newlines: ASCII CR/LF, NEL (U+0085), and the
                 // Unicode line/paragraph separators (U+2028 / U+2029).
                 // Plain `replace(['\r','\n'], ...)` left the wide
-                // separators in, so a crafted error containing one
+                // separators in, so a crafted string containing one
                 // would still push the dialog body off-screen.
-                let error_one_line = e
-                    .replace(
-                        ['\r', '\n', '\u{0085}', '\u{2028}', '\u{2029}'],
-                        " — ",
-                    );
+                // Apply to BOTH the error message AND the path display:
+                // a hostile or pathological app_data_dir (rare but
+                // possible on locale-mangled Windows profiles or
+                // OS-resolved env-var rewrites) could otherwise sneak
+                // wide line breaks through the path slot.
+                fn one_line(s: &str) -> String {
+                    s.replace(['\r', '\n', '\u{0085}', '\u{2028}', '\u{2029}'], " — ")
+                }
+                let error_one_line = one_line(&e);
+                let path_one_line = one_line(&app_data_dir.display().to_string());
                 rfd::MessageDialog::new()
                     .set_level(rfd::MessageLevel::Error)
                     .set_title("SSA HDRify — startup failure")
                     .set_description(format!(
-                        "Failed to initialize the user-font index at\n{}\n\n{error_one_line}\n\nThe app cannot start.",
-                        app_data_dir.display()
+                        "Failed to initialize the user-font index at\n{path_one_line}\n\n{error_one_line}\n\nThe app cannot start."
                     ))
                     .show();
                 return Err(std::io::Error::other(e).into());

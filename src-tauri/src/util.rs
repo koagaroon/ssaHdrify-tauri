@@ -74,6 +74,15 @@ pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
                 // visual review and break path comparisons.
                 | '\u{200B}' | '\u{200C}' | '\u{200D}'
                 | '\u{2060}' | '\u{180E}' | '\u{FEFF}'
+                // BiDi format characters: LRM / RLM marks plus
+                // embedding / override / isolate codepoints. U+202E
+                // (RIGHT-TO-LEFT OVERRIDE) is the well-known
+                // filename-display-reversal vector — `evil\u{202E}txt.exe`
+                // displays as `evilexe.txt` in many UIs. Reject the
+                // whole 200E-202E + 2066-2069 family for symmetry.
+                | '\u{200E}' | '\u{200F}'
+                | '\u{202A}' | '\u{202B}' | '\u{202C}' | '\u{202D}' | '\u{202E}'
+                | '\u{2066}' | '\u{2067}' | '\u{2068}' | '\u{2069}'
             )
     }) {
         return Err(format!("{label} path contains invalid characters"));
