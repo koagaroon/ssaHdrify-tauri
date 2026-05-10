@@ -15,8 +15,12 @@
 //! See `docs/architecture/ssahdrify_cli_design.md` § "v1.4.1 stable
 //! 后续用户反馈" #5 for the full design lock.
 //!
-//! Step 1 of the implementation plan (this file): schema + open/create + version check.
-//! Subsequent steps add scan/populate, drift detection, family-name lookup, CLI integration, and GUI integration.
+//! This file owns the Tauri-free cache module: schema (v2 with NFC +
+//! Unicode-lowercase family lookup key), open / create / version check,
+//! per-folder scan write, drift detection, family-name lookup. The
+//! GUI-only IPC surface lives in `font_cache_commands.rs`; the CLI's
+//! `refresh-fonts` and embed-time cache integration live in
+//! `bin/cli/main.rs`.
 
 use std::path::{Path, PathBuf};
 
@@ -628,8 +632,8 @@ impl FontCache {
     }
 
     /// List every folder currently tracked in the cache. Used by
-    /// drift detection (Step 3) to iterate cached folders and check
-    /// each against the filesystem.
+    /// drift detection to iterate cached folders and check each
+    /// against the filesystem.
     pub fn list_folders(&self) -> Result<Vec<FolderRecord>, CacheError> {
         let mut stmt = self
             .conn

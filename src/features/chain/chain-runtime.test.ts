@@ -5,9 +5,9 @@
  * sequence (different argument shape, missing intermediate, double-
  * application), these tests fail before any user sees it.
  *
- * Embed-step tests are limited to the "throws not-yet-implemented"
- * placeholder; full embed-in-chain coverage lands when the
- * font-resolution callback is wired (implementation step 5).
+ * Embed-step tests cover the pre-resolved-subset contract: missing
+ * params throws, empty subsets array short-circuits, and a populated
+ * subsets array inserts a [Fonts] section with the supplied bytes.
  */
 
 import { describe, expect, it } from "vitest";

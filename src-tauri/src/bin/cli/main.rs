@@ -619,7 +619,10 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
                     .unwrap_or(0);
                 app_lib::font_cache::FontMetadata {
                     file_path: e.path,
-                    file_size: e.size_bytes as i64,
+                    // Saturating u64 → i64; matches the GUI sites'
+                    // entries_to_metadata + try_record_folder_in_gui_cache
+                    // pattern. 8.4 EB ceiling is impossible in practice.
+                    file_size: i64::try_from(e.size_bytes).unwrap_or(i64::MAX),
                     file_mtime,
                     face_index: e.index as i32,
                     family_keys: e
@@ -716,19 +719,18 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
         return Ok(ExitCode::SUCCESS);
     }
 
-    // Step 4b: HDR / Shift / Embed all work in chain. Embed steps
-    // get their fonts pre-resolved against the original input
-    // content (HDR/Shift don't change font references, so this is
-    // safe) and the subsets injected into params before runChain.
+    // HDR / Shift / Embed all work in chain. Embed steps get their
+    // fonts pre-resolved against the original input content (HDR/Shift
+    // don't change font references, so pre-resolution is safe) and the
+    // subsets injected into params before runChain.
     app_lib::fonts::init_system_dirs();
     // Hold the font-DB session for the duration of the chain batch.
     // Mirrors run_embed's pattern — guard lives across all input
     // files, dropped at end. Skipped if the embed step has no user
-    // fonts (saves the SQLite init + scan). N-R2-7 noted the dry-run
-    // gate is missing here; in fact dry-run short-circuits via the
-    // `emit_chain_dry_run` early return above (line 698) before this
-    // code runs, so the standalone-embed guard pattern is already
-    // satisfied structurally.
+    // fonts (saves the SQLite init + scan). dry-run short-circuits
+    // via the `emit_chain_dry_run` early return above before this code
+    // runs, so the standalone-embed guard pattern is already satisfied
+    // structurally.
     let _font_db_guard = match embed_step_index {
         Some(idx) => {
             let chain::ParsedStep::Embed(embed_args) = &plan.steps[idx] else {
@@ -1494,7 +1496,7 @@ fn run_embed(globals: &GlobalOptions, args: EmbedArgs) -> Result<ExitCode, Strin
         None
     };
 
-    // Open the persistent font cache (Step 6/7) per the locked design.
+    // Open the persistent font cache per the locked design.
     // Sequence:
     //   1. If --no-cache, skip outright.
     //   2. If --dry-run, skip — cheap-first ordering doesn't reach the

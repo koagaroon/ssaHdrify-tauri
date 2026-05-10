@@ -434,7 +434,15 @@ export function deriveEmbeddedPath(inputPath: string): string {
  * @param selectedFonts - Font infos to embed (must have valid filePaths)
  * @param fontUsages - Full font usage data (for codepoint sets)
  * @param onProgress - Optional progress callback
- * @returns Modified ASS content with [Fonts] section
+ * @param isCancelled - Optional cancellation probe; returning true mid-loop
+ *                      stops the embed and resolves to `null`. Polled per
+ *                      font so a multi-font batch responds promptly to user
+ *                      cancellation.
+ * @param t - Optional i18n translator. When omitted, error notes use raw
+ *            English keys (test paths); when present, notes are localized
+ *            via the same `useI18n` instance the calling tab uses.
+ * @returns Modified ASS content with [Fonts] section, or `null` when
+ *          isCancelled returned true mid-embed.
  */
 export async function embedFonts(
   assContent: string,

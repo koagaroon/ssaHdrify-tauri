@@ -37,7 +37,7 @@ const STEP_SEPARATOR: &str = "+";
 const CHAIN_NONTERMINAL_PLACEHOLDER: &str = "__chain_nonterminal_placeholder__";
 
 /// One parsed step. Variants hold the per-feature `Args` struct
-/// directly so a future Step 4 deno_core marshal reaches all
+/// directly so the deno_core marshal in `engine.rs` reaches all
 /// transform parameters through the existing struct shape.
 #[derive(Debug)]
 pub enum ParsedStep {

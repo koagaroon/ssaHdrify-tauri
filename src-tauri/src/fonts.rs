@@ -1521,7 +1521,7 @@ pub async fn scan_font_directory(
             return Err("Not a directory".to_string());
         }
         let log_label = format!("Scanned font directory '{}'", canonical_dir.display());
-        // Collect entries for the GUI persistent cache (#5 Step 8b).
+        // Collect entries for the GUI persistent cache.
         // Best-effort: if the cache populate later fails or the cache
         // handle isn't available, the user-visible scan still
         // succeeded. Empty Vec when the scan returns no faces is fine
@@ -1807,8 +1807,8 @@ pub fn remove_font_source(source_id: String) -> Result<(), String> {
     // ran-after-our-BEGIN (its inserts wait on us via WAL +
     // busy_timeout, then commit after our DELETE finishes).
     reject_during_active_scan("Cannot remove font source while a scan is running")?;
-    // Step 8c: capture one font_face.path BEFORE the DELETE so we can
-    // evict the matching folder from the GUI cache after commit. For
+    // Capture one font_face.path BEFORE the DELETE so we can evict
+    // the matching folder from the GUI persistent cache after commit. For
     // dir-mode sources every face shares the same parent (scan is
     // non-recursive), so any one face's parent identifies the folder
     // that was cached. Files-mode sources may yield a parent that

@@ -304,8 +304,9 @@ pub fn detect_font_cache_drift() -> Result<DriftReport, String> {
 /// can't get stale between detect and rescan. `added` is empty by
 /// design (see `detect_font_cache_drift`) so this command does not
 /// scan new folders — those come into the cache via the existing
-/// FontSourceModal scan flow (TODO: wire in a separate session) or
-/// the CLI's `refresh-fonts` subcommand.
+/// FontSourceModal scan flow (which best-effort writes to the cache
+/// after each successful scan via `try_record_folder_in_gui_cache`)
+/// or the CLI's `refresh-fonts` subcommand.
 #[tauri::command]
 pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
     // Block parallel `clear_font_cache` between Phase 1 and Phase 3 so
@@ -542,8 +543,9 @@ pub fn try_record_folder_in_gui_cache(
     // try_remove_folder_from_gui_cache's caller) is normalized at scan
     // time via fonts::normalize_canonical_path — without matching that
     // here, the Windows extended-prefix form `\\?\C:\...` written here
-    // would never match the prefix-stripped form supplied to evict, and
-    // Step 8c eviction would silently no-op every dir-mode source.
+    // would never match the prefix-stripped form supplied to evict,
+    // and remove_font_source's cache eviction would silently no-op
+    // every dir-mode source.
     let folder_path_str = crate::fonts::normalize_canonical_path(&folder_path.to_string_lossy());
     let face_count = metadata.len();
     match cache.replace_folder(&folder_path_str, folder_mtime, &metadata) {
@@ -576,8 +578,8 @@ pub fn try_record_folder_in_gui_cache(
 ///   happens to coincide with a tracked dir — the wasted txn round-
 ///   trip is negligible vs. adding a pre-check.
 ///
-/// Step 8c — pairs with Step 8b (auto-populate on scan) for symmetric
-/// add/remove cache hygiene.
+/// Pairs with `try_record_folder_in_gui_cache` (auto-populate on scan)
+/// for symmetric add/remove cache hygiene.
 pub fn try_remove_folder_from_gui_cache(folder_path: &str) {
     let mut slot = match GUI_FONT_CACHE.try_lock() {
         Ok(s) => s,
