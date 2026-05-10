@@ -520,7 +520,10 @@ pub fn try_record_folder_in_gui_cache(
         .iter()
         .map(|e| FontMetadata {
             file_path: e.path.clone(),
-            file_size: e.size_bytes as i64,
+            // Saturating u64 → i64 — matches entries_to_metadata's
+            // pattern; impossible in practice (8.4 EB font file) but
+            // keeps cast discipline consistent.
+            file_size: i64::try_from(e.size_bytes).unwrap_or(i64::MAX),
             file_mtime: stat_mtime_or_zero(Path::new(&e.path)),
             face_index: e.index as i32,
             family_keys: e
