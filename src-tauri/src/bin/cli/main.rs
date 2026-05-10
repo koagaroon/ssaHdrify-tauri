@@ -697,6 +697,20 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
         eprintln!("  Pass --output-template <T> to override, or --dry-run to preview.");
     }
 
+    let embed_step_index = find_embed_step_index(&plan);
+    // Inform user when --no-cache is meaningless in chain — chain v1
+    // doesn't consult the persistent cache (`resolve_chain_embed_subsets`
+    // always passes None per the locked design). Without this, --no-cache
+    // looks like it's silently ignored. Mirror prepare_embed_cache's
+    // posture: stderr informational line, gated on --quiet. Hoisted
+    // ABOVE the dry-run early-return so `--dry-run --no-cache` users
+    // also see the diagnostic (otherwise the early-return swallowed it).
+    if globals.no_cache && !globals.quiet && embed_step_index.is_some() {
+        eprintln!(
+            "ℹ --no-cache has no effect in chain mode; chain v1 doesn't use the persistent cache."
+        );
+    }
+
     if globals.dry_run {
         emit_chain_dry_run(&plan, globals);
         return Ok(ExitCode::SUCCESS);
@@ -707,17 +721,6 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
     // content (HDR/Shift don't change font references, so this is
     // safe) and the subsets injected into params before runChain.
     app_lib::fonts::init_system_dirs();
-    let embed_step_index = find_embed_step_index(&plan);
-    // Inform user when --no-cache is meaningless in chain — chain v1
-    // doesn't consult the persistent cache (`resolve_chain_embed_subsets`
-    // always passes None per the locked design). Without this, --no-cache
-    // looks like it's silently ignored. Mirror prepare_embed_cache's
-    // posture: stderr informational line, gated on --quiet.
-    if globals.no_cache && !globals.quiet && embed_step_index.is_some() {
-        eprintln!(
-            "ℹ --no-cache has no effect in chain mode; chain v1 doesn't use the persistent cache."
-        );
-    }
     // Hold the font-DB session for the duration of the chain batch.
     // Mirrors run_embed's pattern — guard lives across all input
     // files, dropped at end. Skipped if the embed step has no user
@@ -837,8 +840,13 @@ fn predict_chain_output_path(
     // Reject shapes TS-side `assertSafeOutputFilename` would reject:
     // path separators (chain output is a single filename in input's
     // dir, never a relative or absolute path), drive-letter prefixes,
-    // or empty after substitution. Any of these means "Rust prediction
-    // and TS resolution will diverge" → defer to V8 + TS.
+    // empty after substitution, OR a Windows reserved device name
+    // (CON, PRN, AUX, NUL, COM[0-9], LPT[0-9]) — Win32 treats these
+    // as device paths regardless of extension, and a template like
+    // `CON.{ext}` would predict a path that creates a console handle
+    // not a file. Any of these means "Rust prediction and TS
+    // resolution will diverge" → defer to V8 + TS for the precise
+    // rejection error.
     if output_name.is_empty()
         || output_name.contains('/')
         || output_name.contains('\\')
@@ -846,6 +854,18 @@ fn predict_chain_output_path(
         || output_name.starts_with('.')
         || (output_name.len() >= 2 && output_name.as_bytes()[1] == b':')
     {
+        return None;
+    }
+    let stem_upper = output_name
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .to_ascii_uppercase();
+    let is_reserved = matches!(stem_upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (stem_upper.len() == 4
+            && (stem_upper.starts_with("COM") || stem_upper.starts_with("LPT"))
+            && stem_upper.as_bytes()[3].is_ascii_digit());
+    if is_reserved {
         return None;
     }
     let predicted = parent.join(&output_name);

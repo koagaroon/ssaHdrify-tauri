@@ -10,7 +10,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use unicode_normalization::UnicodeNormalization;
 
 use crate::util::{validate_ipc_path, MAX_INPUT_PATHS};
 
@@ -524,10 +523,12 @@ pub struct FontLookupResult {
 /// so a folder with 3 TTFs shows as "3 fonts" even if we pulled 8 matchable
 /// name variants from them.
 ///
-/// `Deserialize` is derived for focused Rust tests. The production frontend
-/// no longer receives these entries; it keeps only source summaries while the
-/// heavy index stays in Rust.
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+/// `Deserialize` is derived only under `#[cfg(test)]` — production code
+/// never deserializes these (frontend gets source summaries, scan
+/// pipeline produces them in-process). Gating keeps the
+/// no-untrusted-deser invariant explicit at the type level.
+#[derive(Clone, serde::Serialize)]
+#[cfg_attr(test, derive(serde::Deserialize))]
 pub struct LocalFontEntry {
     /// Canonical path to the font file (may be shared across entries for TTC)
     pub path: String,
@@ -549,7 +550,8 @@ fn user_font_key(family: &str, bold: bool, italic: bool) -> String {
     // font internal names key identically; otherwise precomposed `é` (U+00E9)
     // and decomposed `e + ´` (U+0065 U+0301) produce different keys for the
     // same visual family. Mirrors the TS userFontKey flow.
-    let normalized: String = family.nfc().collect::<String>().to_lowercase();
+    // Shared with the persistent cache via `family_lookup_key`.
+    let normalized: String = crate::font_cache::family_lookup_key(family);
     // U+001F (Unit Separator) is a control character; real font family names
     // never contain it (would be a malformed font). Matches the TS
     // USER_FONT_KEY_SEP so future cross-layer audits land on the same byte.
@@ -1721,22 +1723,18 @@ pub fn cancel_font_scan(scan_id: u64) {
     // Mixed-ordering note: the load above is SeqCst because it reads
     // the same atomic that `begin_font_scan` writes via SeqCst CAS —
     // we want a consistent total order across all ACTIVE_SCAN_ID
-    // operations. The fetch_max below is Relaxed because the scan
-    // worker re-loads CANCEL_SCAN_ID inside its poll loop on every
-    // file iteration; visibility is bounded by the next poll, and any
-    // happens-before we'd care about is already established by the
-    // ACTIVE_SCAN_ID load. ARM/Apple-Silicon ordering doesn't change
-    // this story: the per-scan-id equality check in
-    // `font_scan_cancelled` is the actual correctness gate, not the
-    // ordering of CANCEL_SCAN_ID writes.
+    // operations. The fetch_max below uses Release so weakly-ordered
+    // ISAs (ARM / Apple Silicon) make this write visible to the
+    // worker's poll loop on its next iteration via the paired Acquire
+    // load in `font_scan_cancelled`. The per-scan-id equality check
+    // in `font_scan_cancelled` is the actual correctness gate, not
+    // the ordering of CANCEL_SCAN_ID writes — the Release here is
+    // for prompt cancel propagation, not correctness.
     //
     // `fetch_max` ensures a stale cancel for an OLDER (smaller-id) scan
     // arriving after a newer cancel cannot regress CANCEL_SCAN_ID. The
     // returned prior max is intentionally discarded — caller has no
     // useful action either way.
-    // Release pairs with the Acquire load in `font_scan_cancelled` so
-    // the worker's poll on weakly-ordered ISAs sees this write within
-    // the next iteration. See font_scan_cancelled for cost analysis.
     CANCEL_SCAN_ID.fetch_max(scan_id, Ordering::Release);
 }
 
@@ -1826,7 +1824,21 @@ pub fn remove_font_source(source_id: String) -> Result<(), String> {
         )
         .optional()
         .map_err(|e| db_error("source-faces lookup failed", e))?
-        .and_then(|p| Path::new(&p).parent().map(|pp| pp.display().to_string()));
+        .and_then(|p| {
+            Path::new(&p).parent().map(|pp| {
+                // font_faces.path is normalized at insert
+                // (`canonical_string = normalize_canonical_path(...)`),
+                // so `parent()` already returns the prefix-stripped form
+                // matching the cache write key. Calling
+                // normalize_canonical_path again here is a no-op for
+                // current data but makes the contract self-evident at
+                // the call site — defends against a future code path
+                // that bypasses insert-time normalization (e.g., a
+                // file-mode source where pp could be a `\\?\…`-form
+                // path that didn't get normalized through scan).
+                normalize_canonical_path(&pp.to_string_lossy())
+            })
+        });
     tx.execute(
         "DELETE FROM font_sources WHERE source_id = ?1",
         params![source_id],
@@ -2219,14 +2231,26 @@ pub fn subset_font(
     }))
     .unwrap_or_else(|panic_payload| {
         // Convert panic payload (Box<dyn Any>) into a string for the log
-        // and IPC return. Try the common payload shapes (&str / String)
-        // before falling back to a generic message.
+        // and IPC return. Try common payload shapes — &str, String, and
+        // boxed error types (anyhow::Error, std::io::Error,
+        // Box<dyn Error+Send+Sync>) — before falling back to a generic
+        // message. The boxed-error path picks up panics from `expect`
+        // chains in fontcull that wrap non-string Display impls.
         let panic_msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
             (*s).to_string()
         } else if let Some(s) = panic_payload.downcast_ref::<String>() {
             s.clone()
+        } else if let Some(e) =
+            panic_payload.downcast_ref::<Box<dyn std::error::Error + Send + Sync>>()
+        {
+            e.to_string()
+        } else if let Some(e) = panic_payload.downcast_ref::<std::io::Error>() {
+            e.to_string()
         } else {
-            "fontcull panicked with unknown payload".to_string()
+            format!(
+                "fontcull panicked with unknown payload type {:?}",
+                panic_payload.type_id()
+            )
         };
         log::warn!(
             "fontcull panicked while subsetting '{filename}' (face {font_index}): {panic_msg}"

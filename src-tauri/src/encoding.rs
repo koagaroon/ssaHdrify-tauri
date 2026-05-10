@@ -219,10 +219,12 @@ pub fn read_text_detect_encoding(path: String) -> Result<ReadTextResult, String>
     // check guards against the race-replaced target being a directory
     // / pipe / device.
     let metadata = std::fs::metadata(&read_path).map_err(|e| sanitize_io_error(&e, "stat"))?;
-    // Must be a regular file — directories, FIFOs, device files, and
-    // Windows device namespaces (`\\.\PhysicalDrive0` et al.) would
-    // otherwise slip through with a `.ass`-ended parent path, producing
-    // crashes or unbounded reads rather than a clean "unsupported" error.
+    // Must be a regular file — directories, FIFOs, and device files
+    // (Unix /dev/urandom, raw devices the FS reports as non-file)
+    // would otherwise produce crashes or unbounded reads. Windows DOS
+    // device namespaces (`\\.\PhysicalDrive0` and `\\?\GLOBALROOT\…`)
+    // are already rejected upstream by `validate_ipc_path`; this
+    // defense-in-depth check covers everything else.
     if !metadata.file_type().is_file() {
         return Err("Path does not point to a regular file".to_string());
     }

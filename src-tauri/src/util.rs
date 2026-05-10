@@ -66,7 +66,14 @@ pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
         c.is_control()
             || matches!(
                 c,
-                '\u{2028}' | '\u{2029}' | '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{FEFF}'
+                // Line / paragraph separators (Unicode line breaks).
+                '\u{2028}' | '\u{2029}'
+                // Zero-width joiners / non-joiners / spaces /
+                // word joiner / mongolian vowel separator / BOM —
+                // all invisible characters that can smuggle past
+                // visual review and break path comparisons.
+                | '\u{200B}' | '\u{200C}' | '\u{200D}'
+                | '\u{2060}' | '\u{180E}' | '\u{FEFF}'
             )
     }) {
         return Err(format!("{label} path contains invalid characters"));

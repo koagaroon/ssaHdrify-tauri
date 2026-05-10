@@ -34,7 +34,17 @@ pub fn run() {
                 // separator keeps the error readable on a single block.
                 // No other escape — rfd renders text plainly, no markup
                 // to bypass.
-                let error_one_line = e.replace(['\r', '\n'], " — ");
+                // Strip ALL Unicode line breaks rfd would honor as
+                // real newlines: ASCII CR/LF, NEL (U+0085), and the
+                // Unicode line/paragraph separators (U+2028 / U+2029).
+                // Plain `replace(['\r','\n'], ...)` left the wide
+                // separators in, so a crafted error containing one
+                // would still push the dialog body off-screen.
+                let error_one_line = e
+                    .replace(
+                        ['\r', '\n', '\u{0085}', '\u{2028}', '\u{2029}'],
+                        " — ",
+                    );
                 rfd::MessageDialog::new()
                     .set_level(rfd::MessageLevel::Error)
                     .set_title("SSA HDRify — startup failure")

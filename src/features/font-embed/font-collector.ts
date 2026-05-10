@@ -75,12 +75,15 @@ function normalizeFamily(raw: string): string {
 }
 
 /** Strip control characters and cap length — applied to every family name
- *  captured from a subtitle file before it flows into matching or output. */
+ *  captured from a subtitle file before it flows into matching or output.
+ *  Range covers C0 (0x00-0x1F), DEL (0x7F), and C1 (0x80-0x9F) — matches
+ *  ass-uuencode.ts's wider strip and avoids C1 sneak-through into chain
+ *  warning lines / log messages. */
 function sanitizeFamily(raw: string): string {
   return (
     raw
       // eslint-disable-next-line no-control-regex -- intentional: sanitize control chars from subtitle font names
-      .replace(/[\x00-\x1f\x7f]/g, "")
+      .replace(/[\x00-\x1f\x7f-\x9f]/g, "")
       .slice(0, 128)
   );
 }
