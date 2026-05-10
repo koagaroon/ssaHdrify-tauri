@@ -847,6 +847,16 @@ fn predict_chain_output_path(
     // not a file. Any of these means "Rust prediction and TS
     // resolution will diverge" → defer to V8 + TS for the precise
     // rejection error.
+    //
+    // Reserved-name coverage scope: ASCII digit variants only
+    // (COM0-COM9 / LPT0-LPT9). TS-side `assertSafeOutputFilename`
+    // additionally rejects Unicode superscript variants (COM¹/²/³,
+    // LPT¹/²/³). Those slip past this Rust pre-check, but Windows
+    // refuses to create files with reserved names, so the predicted
+    // path can never exist on disk — `predicted.exists()` returns
+    // false, prediction returns Some, V8 runs, TS rejects
+    // authoritatively. Harmless slip; the comment is the contract,
+    // not the regex.
     if output_name.is_empty()
         || output_name.contains('/')
         || output_name.contains('\\')

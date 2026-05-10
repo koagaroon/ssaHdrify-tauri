@@ -4,14 +4,16 @@
 //! `ChainPlan` that the deno_core op layer marshals across the
 //! Rust/TS boundary.
 //!
-//! Step 2 of the implementation roadmap. Not yet wired into clap's
-//! top-level `Command` enum (Step 3). Once wired, the chain
-//! subcommand handler will:
-//!   1. Receive raw argv after the `chain` keyword and chain-level
-//!      `--output-template` flag have been consumed by clap
-//!   2. Call `parse_chain_argv` to produce a validated `ChainPlan`
-//!   3. Iterate `plan.input_files`, call `runChain` op per file,
-//!      write the terminal output via existing fs primitives
+//! Wired through main.rs's `chain` subcommand handler. The flow:
+//!   1. clap parses `chain` keyword + chain-level `--output-template`
+//!      flag, leaves the rest as raw argv on `ChainArgs::raw_argv`.
+//!   2. `parse_chain_argv` splits on `+`, parses each step segment
+//!      against its per-feature `Args` wrapper, validates ordering
+//!      (warn catalog 极保守: only shift-after-embed warns), and
+//!      returns a `ChainPlan` with steps + input_files + warnings.
+//!   3. main.rs::run_chain iterates `plan.input_files`, calls
+//!      `runChain` via the engine per file, and writes the terminal
+//!      output via existing fs primitives.
 //!
 //! See `docs/architecture/ssahdrify_cli_design.md` § "v1.4.1 stable
 //! 后续用户反馈" feature #4 for the locked design decisions.
