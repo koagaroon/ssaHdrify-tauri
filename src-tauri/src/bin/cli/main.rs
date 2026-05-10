@@ -1976,10 +1976,6 @@ fn process_embed_file(
     }
 }
 
-/// Resolve fonts; under `--on-missing warn`, returns the resolved
-/// list AND the missing-font diagnostics so the caller can surface
-/// them in `FileReport.warnings` (not just on stderr).
-/// Under `--on-missing fail`, returns Err on any missing font.
 /// Pre-resolve fonts for an embed step in a chain. Reuses the same
 /// plan_font_embed → resolve_embed_fonts → subset_resolved_fonts
 /// pipeline as the standalone `embed` subcommand. Returns the
@@ -2032,6 +2028,10 @@ fn resolve_chain_embed_subsets(
     Ok((subsets, warnings))
 }
 
+/// Resolve fonts; under `--on-missing warn`, returns the resolved
+/// list AND the missing-font diagnostics so the caller can surface
+/// them in `FileReport.warnings` (not just on stderr). Under
+/// `--on-missing fail`, returns Err on any missing font.
 fn resolve_embed_fonts(
     globals: &GlobalOptions,
     args: &EmbedArgs,
