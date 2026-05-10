@@ -367,6 +367,92 @@ pub fn clear_font_cache() -> Result<(), String> {
     Ok(())
 }
 
+/// Best-effort populate of the GUI cache from a directory scan that has
+/// just succeeded against the session DB. Called from
+/// `fonts::scan_font_directory` after its transaction commits — the
+/// scan is the user-visible operation, this is a piggyback for next
+/// launch's lookup tier and drift detection.
+///
+/// Failures here MUST NOT propagate: the scan was already a success
+/// from the user's perspective; cache is a perf overlay, not part of
+/// the contract. Errors log at WARN with the folder context.
+///
+/// Called only for directory-scan sources (`kind="dir"` in the JS
+/// FontSource model). File-list scans (`kind="files"`) have no folder
+/// anchor for the cache's drift model and stay session-only.
+pub fn try_record_folder_in_gui_cache(
+    folder_path: &Path,
+    entries: &[crate::fonts::LocalFontEntry],
+) {
+    // try_lock (not lock) so a long-running rescan_font_cache_drift in
+    // another command doesn't make this scan's user-visible completion
+    // wait on cache write. If the lock is contended, skip with a WARN —
+    // the user just doesn't get cache acceleration for this folder
+    // until next time the folder is scanned (or next launch's drift
+    // detection picks up the difference).
+    let mut slot = match GUI_FONT_CACHE.try_lock() {
+        Ok(s) => s,
+        Err(std::sync::TryLockError::Poisoned(_)) => {
+            log::warn!("GUI cache mutex poisoned; skipping populate");
+            return;
+        }
+        Err(std::sync::TryLockError::WouldBlock) => {
+            log::warn!(
+                "GUI cache busy (rescan in progress); skipping populate \
+                 for {} this scan — will populate on next add",
+                folder_path.display()
+            );
+            return;
+        }
+    };
+    let cache = match slot.as_mut() {
+        Some(c) => c,
+        None => {
+            log::warn!(
+                "GUI cache unavailable (init failed or schema mismatch); \
+                 skipping populate for {}",
+                folder_path.display()
+            );
+            return;
+        }
+    };
+    let folder_mtime = stat_mtime_or_zero(folder_path);
+    let metadata: Vec<FontMetadata> = entries
+        .iter()
+        .map(|e| FontMetadata {
+            file_path: e.path.clone(),
+            file_size: e.size_bytes as i64,
+            file_mtime: stat_mtime_or_zero(Path::new(&e.path)),
+            face_index: e.index as i32,
+            family_keys: e
+                .families
+                .iter()
+                .map(|family_name| FamilyKey {
+                    family_name: family_name.clone(),
+                    bold: e.bold,
+                    italic: e.italic,
+                })
+                .collect(),
+        })
+        .collect();
+    let folder_path_str = folder_path.display().to_string();
+    let face_count = metadata.len();
+    match cache.replace_folder(&folder_path_str, folder_mtime, &metadata) {
+        Ok(()) => {
+            log::info!(
+                "GUI cache populated: {} ({} faces)",
+                folder_path_str,
+                face_count
+            );
+        }
+        Err(e) => {
+            log::warn!(
+                "GUI cache populate for {folder_path_str} failed: {e}"
+            );
+        }
+    }
+}
+
 /// Look up a (family_name, bold, italic) tuple in the cache. Returns
 /// `Some(FontLookupResult)` matching the existing `find_system_font`
 /// shape (path + index) so the frontend can use one TS type across the

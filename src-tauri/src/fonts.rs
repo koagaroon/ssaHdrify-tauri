@@ -1304,6 +1304,16 @@ fn run_streaming_scan_command<S>(
     source_id: &str,
     progress: tauri::ipc::Channel<ScanProgress>,
     log_label: &str,
+    // When `Some`, every batch is cloned into the supplied Vec before
+    // being passed downstream to the session-DB import. The directory
+    // scan path uses this to feed `try_record_folder_in_gui_cache`
+    // after commit; the file-list scan path passes `None` because it
+    // has no folder anchor for the cache's drift model. Clone cost is
+    // O(scan size) with peak memory at scan completion; for typical
+    // libraries (sub-10k faces) it's negligible, and for the XL bucket
+    // (~17k faces) it's <10 MB which the JS-heap streaming refactor
+    // ruled out only on the JS side.
+    mut collected_for_cache: Option<&mut Vec<LocalFontEntry>>,
     scan_body: S,
 ) -> Result<(), String>
 where
@@ -1321,6 +1331,17 @@ where
     let mut progress_total = 0usize;
     let outcome = scan_body(scan_id, &mut |batch| {
         let batch_size = batch.len();
+        // For directory scans, snapshot the batch before it's consumed
+        // by the session-DB import so we can populate the GUI cache
+        // post-commit. Cloning here (vs taking ownership and avoiding
+        // import's consume) keeps `import_user_font_batch_tx`'s API
+        // stable and the eviction/dedup semantics it owns intact.
+        // .as_mut() (not .as_deref_mut) so we hold &mut Vec<T>, not the
+        // &mut [T] slice that as_deref_mut would yield — slices can't
+        // grow, so .extend wouldn't compile against them.
+        if let Some(c) = collected_for_cache.as_mut() {
+            c.extend(batch.iter().cloned());
+        }
         // Run the SQLite import FIRST so progress_total only advances on
         // committed work. If the import errors, the closure short-
         // circuits via `?` and the next outer `?` rolls the whole scan
@@ -1498,13 +1519,28 @@ pub async fn scan_font_directory(
             return Err("Not a directory".to_string());
         }
         let log_label = format!("Scanned font directory '{}'", canonical_dir.display());
+        // Collect entries for the GUI persistent cache (#5 Step 8b).
+        // Best-effort: if the cache populate later fails or the cache
+        // handle isn't available, the user-visible scan still
+        // succeeded. Empty Vec when the scan returns no faces is fine
+        // — `try_record_folder_in_gui_cache` will write an empty
+        // folder row, which `diff_against` later treats as a known
+        // folder with no faces (consistent with the cache's data
+        // model).
+        let mut entries_for_cache: Vec<LocalFontEntry> = Vec::new();
         run_streaming_scan_command(
             scan_id,
             &source_id,
             progress,
             &log_label,
+            Some(&mut entries_for_cache),
             |scan_id, emit_batch| scan_directory_inner(&canonical_dir, scan_id, emit_batch),
-        )
+        )?;
+        crate::font_cache_commands::try_record_folder_in_gui_cache(
+            &canonical_dir,
+            &entries_for_cache,
+        );
+        Ok(())
     })
     .await
     .map_err(|e| format!("Font scan worker failed: {e}"))?
@@ -1630,6 +1666,11 @@ pub async fn scan_font_files(
             &source_id,
             progress,
             "Scanned local font files",
+            // No GUI cache populate for file-list scans: the cache's
+            // drift model is folder-anchored (folder mtime vs cached
+            // mtime), and an arbitrary file list has no single folder
+            // to anchor against. Files-mode sources stay session-only.
+            None,
             |scan_id, emit_batch| scan_files_inner(paths, scan_id, emit_batch),
         )
     })
