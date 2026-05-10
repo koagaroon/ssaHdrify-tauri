@@ -559,12 +559,14 @@ impl FontCache {
     /// first match, or `None` if no font in the cache advertises the
     /// requested family + style combination.
     ///
-    /// Match semantics: NFC-normalize + ASCII-lowercase via
+    /// Match semantics: NFC-normalize + full Unicode lowercase via
     /// `family_lookup_key` on BOTH the query (here) and the storage
     /// path (`replace_folder`). Bold/italic must match exactly.
     /// Mirrors the session DB's `userFontKey` contract so a font's
     /// name-table form (often NFC) and an ASS file's `\fn` reference
     /// (often macOS-pasted NFD or arbitrary case) match consistently.
+    /// (NOT ASCII-only lowercase — `to_ascii_lowercase` would miss
+    /// `É` / `Ñ` / `Ü` and break Latin-extended / CJK lookups.)
     ///
     /// Determinism: when multiple fonts advertise the same family
     /// alias (rare; typically alternate weights or different
@@ -572,11 +574,13 @@ impl FontCache {
     /// by `(font_path, face_index)` and the first row returned. Same
     /// query gives the same answer across runs.
     ///
-    /// Future cleanup item from the design doc: extract a shared
-    /// `family_lookup(db_conn, ...)` helper that this method and the
-    /// GUI session DB's equivalent can both use. For now the queries
-    /// live in their own modules; consolidation is a Step-1-of-real-
-    /// implementation task whenever both consumers exist.
+    /// Note on shared helper: persistent cache and session DB use
+    /// different schemas (`cached_family_keys` vs `font_family_keys`)
+    /// and different column names — extracting a single
+    /// `family_lookup(conn, ...)` would require parameterizing the
+    /// table/column shape, dragging both consumers' invariants into
+    /// one helper without a real win. Both queries are short and
+    /// already tested in isolation; intentional duplication.
     pub fn lookup_family(
         &self,
         family_name: &str,
@@ -707,7 +711,7 @@ CREATE TABLE cached_family_keys (
     font_path        TEXT NOT NULL,
     face_index       INTEGER NOT NULL,
     family_name      TEXT NOT NULL,
-    -- v2: NFC-normalized + ASCII-lowercase form of family_name,
+    -- v2: NFC-normalized + full Unicode lowercase form of family_name,
     -- the actual lookup key. family_name kept verbatim for
     -- diagnostics + future case-preserving display.
     family_name_key  TEXT NOT NULL,
@@ -768,6 +772,16 @@ mod tests {
         (guard, path)
     }
 
+    /// Like `temp_cache_path`, but the cache file path lives one
+    /// directory deeper than the guard — used to verify
+    /// `open_or_create` creates missing parent directories. The guard
+    /// owns the OUTER directory and Drop-cleans the entire tree.
+    fn temp_nested_cache_path() -> (TempCacheDir, std::path::PathBuf) {
+        let guard = TempCacheDir::new();
+        let nested_path = guard.0.join("nested").join("cache.sqlite3");
+        (guard, nested_path)
+    }
+
     #[test]
     fn fresh_open_creates_schema_and_writes_version() {
         let (_guard, path) = temp_cache_path();
@@ -795,8 +809,6 @@ mod tests {
             )
             .expect("query schema_version");
         assert_eq!(version, SCHEMA_VERSION.to_string());
-
-        let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]
@@ -806,7 +818,6 @@ mod tests {
         FontCache::open_or_create(&path).expect("first open creates");
         // Reopen.
         FontCache::open_or_create(&path).expect("second open reuses existing");
-        let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]
@@ -831,7 +842,6 @@ mod tests {
             }
             other => panic!("expected SchemaVersionMismatch, got {other:?}"),
         }
-        let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]
@@ -852,7 +862,6 @@ mod tests {
             }
             other => panic!("expected SchemaVersionMismatch, got {other:?}"),
         }
-        let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]
@@ -875,7 +884,6 @@ mod tests {
             }
             other => panic!("expected SchemaVersionMismatch, got {other:?}"),
         }
-        let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
     /// Synthetic font metadata for tests — no real font file required.
@@ -904,7 +912,6 @@ mod tests {
         assert_eq!(folders.len(), 1);
         assert_eq!(folders[0].folder_path, "/test/empty");
         assert_eq!(folders[0].folder_mtime, 1_700_000_000);
-        let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]
@@ -932,8 +939,6 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM cached_family_keys", [], |r| r.get(0))
             .expect("count keys");
         assert_eq!(count, 2);
-
-        let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]
@@ -976,8 +981,6 @@ mod tests {
         // Folder mtime should be updated.
         let folders = cache.list_folders().expect("list");
         assert_eq!(folders[0].folder_mtime, 1_800_000_000);
-
-        let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]
@@ -1017,8 +1020,6 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM cached_family_keys", [], |r| r.get(0))
             .expect("count keys");
         assert_eq!(key_count, 3, "all three family aliases should be indexed");
-
-        let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]
@@ -1056,8 +1057,6 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM cached_family_keys", [], |r| r.get(0))
             .expect("count keys");
         assert_eq!(key_count, 1);
-
-        let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]
@@ -1077,7 +1076,6 @@ mod tests {
         let folders = cache.list_folders().expect("list");
         let paths: Vec<&str> = folders.iter().map(|f| f.folder_path.as_str()).collect();
         assert_eq!(paths, vec!["/test/aaa", "/test/mmm", "/test/zzz"]);
-        let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]
@@ -1092,7 +1090,6 @@ mod tests {
         let folders = cache.list_folders().expect("list");
         assert!(folders[0].last_scanned_at >= before);
         assert!(folders[0].last_scanned_at <= after);
-        let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
     // ── Step 3: drift detection ─────────────────────────────
@@ -1107,7 +1104,6 @@ mod tests {
         assert!(report.modified.is_empty());
         assert!(report.removed.is_empty());
         assert!(!report.is_empty());
-        let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]
@@ -1119,7 +1115,6 @@ mod tests {
         let snapshot = vec![("/test/a".to_string(), 100), ("/test/b".to_string(), 200)];
         let report = cache.diff_against(&snapshot).expect("diff");
         assert!(report.is_empty(), "expected no drift, got {report:?}");
-        let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]
@@ -1134,7 +1129,6 @@ mod tests {
         assert_eq!(report.modified, vec!["/test/a"]);
         assert!(report.added.is_empty());
         assert!(report.removed.is_empty());
-        let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]
@@ -1149,7 +1143,6 @@ mod tests {
         assert_eq!(report.removed, vec!["/test/b"]);
         assert!(report.added.is_empty());
         assert!(report.modified.is_empty());
-        let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]
@@ -1163,7 +1156,6 @@ mod tests {
         assert_eq!(report.added, vec!["/test/c"]);
         assert!(report.modified.is_empty());
         assert!(report.removed.is_empty());
-        let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]
@@ -1185,7 +1177,6 @@ mod tests {
         assert_eq!(report.modified, vec!["/test/b"]);
         assert_eq!(report.removed, vec!["/test/c"]);
         assert!(!report.is_empty());
-        let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]
@@ -1205,7 +1196,6 @@ mod tests {
         let report = cache.diff_against(&snapshot).expect("diff");
         assert_eq!(report.added, vec!["/test/bbb", "/test/mmm", "/test/yyy"]);
         assert_eq!(report.removed, vec!["/test/aaa", "/test/zzz"]);
-        let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]
@@ -1248,7 +1238,6 @@ mod tests {
             .expect("hit expected");
         assert_eq!(result.font_path, "/test/dir/arial.ttf");
         assert_eq!(result.face_index, 0);
-        let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]
@@ -1266,7 +1255,6 @@ mod tests {
             .lookup_family("Helvetica", false, false)
             .expect("lookup ok");
         assert!(result.is_none(), "expected None, got {result:?}");
-        let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]
@@ -1315,8 +1303,6 @@ mod tests {
         // Italic-not-present query misses.
         let i = cache.lookup_family("Source Han Sans", false, true).unwrap();
         assert!(i.is_none());
-
-        let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]
@@ -1357,8 +1343,6 @@ mod tests {
                 .unwrap_or_else(|| panic!("expected hit for {name}"));
             assert_eq!(result.font_path, "/test/dir/SourceHanSans.otf");
         }
-
-        let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]
@@ -1407,8 +1391,6 @@ mod tests {
             .unwrap();
         assert_eq!(m1.font_path, "/test/dir/MingLiU.ttc");
         assert_eq!(m1.face_index, 1);
-
-        let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]
@@ -1431,7 +1413,6 @@ mod tests {
         // ORDER BY font_path → "aaa..." comes first.
         let result = cache.lookup_family("Arial", false, false).unwrap().unwrap();
         assert_eq!(result.font_path, "/test/dir/aaa_arial.ttf");
-        let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]
@@ -1460,24 +1441,15 @@ mod tests {
         let nfd = "Cafe\u{0301}";
         let by_nfd = cache.lookup_family(nfd, false, false).unwrap();
         assert!(by_nfd.is_some(), "NFD-form lookup should match NFC store");
-        let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]
     fn open_creates_parent_directory_if_missing() {
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let parent = std::env::temp_dir().join(format!(
-            "ssahdrify-font-cache-test-mkparent-{}-{}",
-            std::process::id(),
-            stamp
-        ));
-        // Don't create the parent — let open_or_create do it.
-        let path = parent.join("nested").join("cache.sqlite3");
+        // Don't pre-create the inner `nested/` — let open_or_create
+        // do it. TempCacheDir owns the outer dir and cleans the tree
+        // on Drop, including whatever open_or_create added under it.
+        let (_guard, path) = temp_nested_cache_path();
         FontCache::open_or_create(&path).expect("creates nested parents");
         assert!(path.exists());
-        let _ = fs::remove_dir_all(&parent);
     }
 }

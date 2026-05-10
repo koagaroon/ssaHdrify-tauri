@@ -27,6 +27,27 @@ use crate::font_cache::{CacheError, FamilyKey, FontCache, FontMetadata};
 /// two and resurrect just-cleared data via Phase 3's apply.
 static RESCAN_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
+/// RAII guard that owns the RESCAN_IN_PROGRESS flag for the lifetime
+/// of one rescan. CAS happens inside `try_acquire` and the flag is
+/// only set when the guard is constructed — there's no "flag set but
+/// guard not yet bound" window for a panic to leak the flag.
+struct RescanGuard;
+
+impl RescanGuard {
+    fn try_acquire() -> Result<Self, String> {
+        RESCAN_IN_PROGRESS
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map(|_| RescanGuard)
+            .map_err(|_| "Another rescan is already in progress".to_string())
+    }
+}
+
+impl Drop for RescanGuard {
+    fn drop(&mut self) {
+        RESCAN_IN_PROGRESS.store(false, Ordering::Release);
+    }
+}
+
 // Note: `crate::font_cache` also defines its own `FontLookupResult`
 // (font_path / face_index, i32). Not imported here — IPC commands
 // return `crate::fonts::FontLookupResult` (path / index, u32) so the
@@ -135,7 +156,12 @@ fn entries_to_metadata(entries: Vec<crate::fonts::LocalFontEntry>) -> Vec<FontMe
             let file_mtime = stat_mtime_or_zero(Path::new(&e.path));
             FontMetadata {
                 file_path: e.path,
-                file_size: e.size_bytes as i64,
+                // u64 → i64 saturating conversion. A font file >
+                // i64::MAX bytes is impossible in practice (8.4 EB)
+                // but try_from + saturate matches the broader cast-
+                // discipline pattern in the codebase and avoids the
+                // implicit `as` truncation if reality ever shifts.
+                file_size: i64::try_from(e.size_bytes).unwrap_or(i64::MAX),
                 file_mtime,
                 face_index: e.index as i32,
                 family_keys: e
@@ -282,24 +308,12 @@ pub fn detect_font_cache_drift() -> Result<DriftReport, String> {
 /// the CLI's `refresh-fonts` subcommand.
 #[tauri::command]
 pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
-    // Sentinel: block parallel `clear_font_cache` between Phase 1 and
-    // Phase 3 so Clear can't drop+recreate the cache mid-rescan and
-    // have Phase 3's apply resurrect the cleared rows. Cleared in the
-    // RAII guard below so every exit path (Ok / Err / panic-unwind)
-    // releases the flag.
-    struct RescanGuard;
-    impl Drop for RescanGuard {
-        fn drop(&mut self) {
-            RESCAN_IN_PROGRESS.store(false, Ordering::Release);
-        }
-    }
-    if RESCAN_IN_PROGRESS
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        return Err("Another rescan is already in progress".to_string());
-    }
-    let _rescan_guard = RescanGuard;
+    // Block parallel `clear_font_cache` between Phase 1 and Phase 3 so
+    // Clear can't drop+recreate the cache mid-rescan and have Phase 3's
+    // apply resurrect the cleared rows. RescanGuard's CAS-inside-new
+    // pattern makes "flag set but no guard yet" structurally impossible;
+    // Drop releases on every exit path (Ok / Err / panic-unwind).
+    let _rescan_guard = RescanGuard::try_acquire()?;
 
     // Phase 1 — under lock: list cached folders + compute the
     // filesystem-snapshot drift report. list_folders, the per-folder

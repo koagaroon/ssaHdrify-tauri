@@ -254,11 +254,11 @@ Override with `--cache-file <PATH>`.
 #### 限制 | Limitations
 
 - 每个 `--font-dir` 一层深扫描（不递归），与 `embed --font-dir` 语义一致。树状字体目录请逐层显式传入。
-- 当前仅支持 1 个字体缓存文件（per binary）。多 `embed` 步骤进 `chain` 时缓存暂不参与，未来再扩。
+- 每个 binary（GUI / CLI）使用各自独立的缓存文件，避免 SQLite 锁竞争；同一 binary 同时只读写一个缓存文件（默认路径或 `--cache-file` 覆盖路径）。`chain` 当前不调用缓存（embed 步永远走显式 `--font-dir` 或系统字体），未来扩展。
 - Schema 升级（不同 release 之间）不自动 migrate；版本不匹配时 CLI 显式提示删文件重跑 `refresh-fonts`。
 
 - Each `--font-dir` is scanned one level deep (non-recursive), matching `embed --font-dir` semantics. Pass each leaf folder explicitly for tree-shaped collections.
-- One cache file per binary. Cache currently doesn't participate in `chain`'s embed step; future work.
+- Per-binary cache file (GUI / CLI use separate paths to avoid SQLite lock contention); a single binary opens exactly one cache at a time (default path or `--cache-file` override). `chain` doesn't consult the cache in v1 (its embed step always uses explicit `--font-dir` or system fonts); future work.
 - No automatic schema migration across releases — version mismatch surfaces as an explicit "delete the cache file and rerun `refresh-fonts`" prompt.
 
 ---

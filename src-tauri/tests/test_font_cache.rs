@@ -259,10 +259,11 @@ fn embed_with_no_cache_does_not_touch_cache_file() {
         "embed",
         subtitle.to_str().unwrap(),
     ]);
-    // Embed may exit non-zero if Arial isn't resolvable on the host
-    // (--on-missing default is warn, but this test fixture leaves
-    // strict-mode platforms ambiguous). What we lock here is that
-    // even if embed succeeds, the cache file isn't touched.
+    // Embed exit status is intentionally not asserted: Arial
+    // resolvability varies across CI runners and dev machines, and
+    // the engine bundle can short-circuit before font resolution
+    // depending on available system fonts. The lock is narrow — even
+    // if embed succeeds, the cache file isn't touched.
     let _ = embed.status;
 
     let after = fs::metadata(&cache)
