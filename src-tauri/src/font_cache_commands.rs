@@ -453,6 +453,46 @@ pub fn try_record_folder_in_gui_cache(
     }
 }
 
+/// Best-effort eviction of a folder from the GUI cache. Called from
+/// `fonts::remove_font_source` after the session DB delete commits —
+/// the user's "remove this source" action is the user-visible
+/// operation; cache eviction is a side-effect that keeps cache state
+/// aligned with user intent ("I no longer want this folder").
+///
+/// Same posture as `try_record_folder_in_gui_cache`:
+/// - `try_lock` (not `lock`) so a long rescan doesn't stall the
+///   user-visible remove.
+/// - Cache unavailable → silent no-op (nothing to evict).
+/// - `cache.remove_folder` on a folder the cache doesn't track is a
+///   no-op (DELETE on zero rows). Acceptable for files-mode sources
+///   whose parent folder happens to coincide with a tracked dir.
+///
+/// Step 8c — pairs with Step 8b (auto-populate on scan) for symmetric
+/// add/remove cache hygiene.
+pub fn try_remove_folder_from_gui_cache(folder_path: &str) {
+    let mut slot = match GUI_FONT_CACHE.try_lock() {
+        Ok(s) => s,
+        Err(std::sync::TryLockError::Poisoned(_)) => {
+            log::warn!("GUI cache mutex poisoned; skipping evict for {folder_path}");
+            return;
+        }
+        Err(std::sync::TryLockError::WouldBlock) => {
+            log::warn!(
+                "GUI cache busy (rescan in progress); skipping evict for {folder_path}"
+            );
+            return;
+        }
+    };
+    let cache = match slot.as_mut() {
+        Some(c) => c,
+        None => return,
+    };
+    match cache.remove_folder(folder_path) {
+        Ok(()) => log::info!("GUI cache evicted folder: {folder_path}"),
+        Err(e) => log::warn!("GUI cache evict {folder_path} failed: {e}"),
+    }
+}
+
 /// Look up a (family_name, bold, italic) tuple in the cache. Returns
 /// `Some(FontLookupResult)` matching the existing `find_system_font`
 /// shape (path + index) so the frontend can use one TS type across the

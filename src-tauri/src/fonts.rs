@@ -1809,6 +1809,28 @@ pub fn remove_font_source(source_id: String) -> Result<(), String> {
     // ran-after-our-BEGIN (its inserts wait on us via WAL +
     // busy_timeout, then commit after our DELETE finishes).
     reject_during_active_scan("Cannot remove font source while a scan is running")?;
+    // Step 8c: capture one font_face.path BEFORE the DELETE so we can
+    // evict the matching folder from the GUI cache after commit. For
+    // dir-mode sources every face shares the same parent (scan is
+    // non-recursive), so any one face's parent identifies the folder
+    // that was cached. Files-mode sources may yield a parent that
+    // doesn't correspond to anything in the cache; cache.remove_folder
+    // on an unknown folder is a harmless no-op. ON DELETE CASCADE on
+    // font_sources sweeps font_faces, so we have to read this BEFORE
+    // the DELETE.
+    let evict_folder: Option<String> = tx
+        .query_row(
+            "SELECT path FROM font_faces WHERE source_id = ?1 LIMIT 1",
+            params![source_id],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|e| db_error("source-faces lookup failed", e))?
+        .and_then(|p| {
+            Path::new(&p)
+                .parent()
+                .map(|pp| pp.display().to_string())
+        });
     tx.execute(
         "DELETE FROM font_sources WHERE source_id = ?1",
         params![source_id],
@@ -1816,6 +1838,9 @@ pub fn remove_font_source(source_id: String) -> Result<(), String> {
     .map_err(|e| db_error("source delete failed", e))?;
     tx.commit()
         .map_err(|e| db_error("source delete commit failed", e))?;
+    if let Some(folder) = evict_folder {
+        crate::font_cache_commands::try_remove_folder_from_gui_cache(&folder);
+    }
     Ok(())
 }
 
