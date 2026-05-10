@@ -63,11 +63,11 @@ macOS / Linux users, see "Build from Source" below.
 
 ## 功能 | Features
 
-| 标签页 / Tab                            | 功能 / Function                                                                                                                                                                                                                       |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **HDR 色彩转换 / HDR Color Conversion** | 为字幕附加对应的 BT.2100 PQ 或 HLG 色彩空间数据 / Attach the matching BT.2100 PQ or HLG color-space data to subtitles                                                                                                                                              |
-| **时间轴偏移 / Timing Shift**           | 批量偏移字幕时间戳；可指定时间点后才开始偏移，并支持实时预览 / Batch-offset subtitle timestamps; the shift can begin from a chosen timestamp, with live preview                                                                                                     |
-| **字体嵌入 / Font Embedding**           | 自动检测字幕用到的字体，与系统字体库或本地字体源匹配，并以子集化形式嵌入 ASS 文件 / Auto-detect fonts referenced in the subtitle, match against system fonts or local sources, and embed them (subset) into the ASS                                                  |
+| 标签页 / Tab                            | 功能 / Function                                                                                                                                                                                                                                                                                                        |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **HDR 色彩转换 / HDR Color Conversion** | 为字幕附加对应的 BT.2100 PQ 或 HLG 色彩空间数据 / Attach the matching BT.2100 PQ or HLG color-space data to subtitles                                                                                                                                                                                                  |
+| **时间轴偏移 / Timing Shift**           | 批量偏移字幕时间戳；可指定时间点后才开始偏移，并支持实时预览 / Batch-offset subtitle timestamps; the shift can begin from a chosen timestamp, with live preview                                                                                                                                                        |
+| **字体嵌入 / Font Embedding**           | 自动检测字幕用到的字体，与系统字体库或本地字体源匹配，并以子集化形式嵌入 ASS 文件 / Auto-detect fonts referenced in the subtitle, match against system fonts or local sources, and embed them (subset) into the ASS                                                                                                    |
 | **批量重命名 / Batch Rename**           | 自动匹配视频文件和字幕文件，按视频文件名重命名字幕；同一视频文件有多个对应字幕时，用户可自由选择字幕文件，手动调整配对 / Auto-match video and subtitle files and rename subs to match the video filename; when a video has multiple subtitle candidates, the user can pick the desired one and adjust pairing manually |
 
 > [!TIP]
@@ -183,23 +183,23 @@ ssahdrify-cli chain          --help
 
 ### 全局选项 | Global Options
 
-| 选项 / Option        | 说明 / Description                                                                                                                                  |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--lang <en\|zh>`    | 输出语言；不指定时按系统区域设置自动检测（zh\* → zh，否则 en）/ Output language; auto-detected from OS locale when omitted (zh\* → zh, otherwise en) |
-| `--json`             | 输出机器可读 JSON 报告 / Emit a machine-readable JSON report                                                                                        |
-| `--verbose`          | 显示更多进度细节 / Show more progress detail                                                                                                        |
-| `--quiet`            | 抑制常规进度输出 / Suppress normal progress output                                                                                                  |
-| `--dry-run`          | 预演计划工作但不写文件 / Preview planned work without writing files                                                                                 |
-| `--overwrite`        | 允许覆盖已存在的输出文件 / Replace existing output files instead of skipping                                                                        |
-| `--output-dir <DIR>` | 重定向输出到指定目录 / Redirect output to a specific directory                                                                                      |
-| `--no-cache`         | 跳过本次运行的字体缓存；缓存文件保持不变 / Skip the font cache for this run; cache file untouched                                                   |
-| `--cache-file <PATH>` | 覆盖默认的缓存文件路径（缺省 `%APPDATA%/ssaHdrify/cli_font_cache.sqlite3`）/ Override the default cache file path                                  |
+| 选项 / Option         | 说明 / Description                                                                                                                                   |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--lang <en\|zh>`     | 输出语言；不指定时按系统区域设置自动检测（zh\* → zh，否则 en）/ Output language; auto-detected from OS locale when omitted (zh\* → zh, otherwise en) |
+| `--json`              | 输出机器可读 JSON 报告 / Emit a machine-readable JSON report                                                                                         |
+| `--verbose`           | 显示更多进度细节 / Show more progress detail                                                                                                         |
+| `--quiet`             | 抑制常规进度输出 / Suppress normal progress output                                                                                                   |
+| `--dry-run`           | 预演计划工作但不写文件 / Preview planned work without writing files                                                                                  |
+| `--overwrite`         | 允许覆盖已存在的输出文件 / Replace existing output files instead of skipping                                                                         |
+| `--output-dir <DIR>`  | 重定向输出到指定目录 / Redirect output to a specific directory                                                                                       |
+| `--no-cache`          | 跳过本次运行的字体缓存；缓存文件保持不变 / Skip the font cache for this run; cache file untouched                                                    |
+| `--cache-file <PATH>` | 覆盖默认的缓存文件路径 / Override the default cache file path (OS default: see Cache Location below)                                                 |
 
 > **JSON 模式 | JSON Mode**
 >
-> `--json` 输出固定 schema 报告，按文件给出 status (`Succeeded` / `Skipped` / `Failed` / `Planned` / `NoOp`)、output path、encoding、warnings 等字段；stderr 仍可携带人类可读诊断。pipeline 集成场景建议固定使用此模式。
+> `--json` 输出固定 schema 报告，按文件给出 status (`written` / `planned` / `skipped` / `failed`)、output path、encoding、warnings 等字段；stderr 仍可携带人类可读诊断。pipeline 集成场景建议固定使用此模式。
 >
-> `--json` emits a fixed-schema report listing per-file status (`Succeeded` / `Skipped` / `Failed` / `Planned` / `NoOp`), output path, encoding, warnings, etc.; stderr still carries human-readable diagnostics. For pipeline integration, prefer this mode.
+> `--json` emits a fixed-schema report listing per-file status (`written` / `planned` / `skipped` / `failed`), output path, encoding, warnings, etc.; stderr still carries human-readable diagnostics. For pipeline integration, prefer this mode.
 
 ### 字体缓存 | Font Cache
 
@@ -229,9 +229,21 @@ ssahdrify-cli refresh-fonts --font-dir "C:/Fonts/Anime" --font-dir "C:/Fonts/Lat
 
 #### 缓存位置 | Cache Location
 
-默认 `%APPDATA%/ssaHdrify/cli_font_cache.sqlite3`（与 GUI 缓存独立，避免锁竞争）。`--cache-file <PATH>` 可覆盖。
+默认按操作系统选择（与 GUI 缓存独立，避免锁竞争）：
 
-Default `%APPDATA%/ssaHdrify/cli_font_cache.sqlite3` (separate from the GUI cache to avoid lock contention). Override with `--cache-file <PATH>`.
+- Windows: `%APPDATA%/ssaHdrify/cli_font_cache.sqlite3`
+- macOS: `$HOME/Library/Application Support/ssaHdrify/cli_font_cache.sqlite3`
+- Linux: `${XDG_DATA_HOME:-$HOME/.local/share}/ssaHdrify/cli_font_cache.sqlite3`
+
+`--cache-file <PATH>` 可覆盖。
+
+OS-specific defaults (separate from the GUI cache to avoid lock contention):
+
+- Windows: `%APPDATA%/ssaHdrify/cli_font_cache.sqlite3`
+- macOS: `$HOME/Library/Application Support/ssaHdrify/cli_font_cache.sqlite3`
+- Linux: `${XDG_DATA_HOME:-$HOME/.local/share}/ssaHdrify/cli_font_cache.sqlite3`
+
+Override with `--cache-file <PATH>`.
 
 #### 漂移检测 | Drift Detection
 
@@ -459,12 +471,12 @@ All dependencies use licenses compatible with GPL-3.0.
 
 #### 构建时依赖（不随应用分发）| Build-time only (not shipped)
 
-| 组件 / Component                              | 许可证 / License | 用途 / Usage                         |
-| --------------------------------------------- | ---------------- | ------------------------------------ |
-| [Tailwind CSS](https://tailwindcss.com/)      | MIT              | CSS 工具框架 / CSS utility framework |
-| [TypeScript](https://www.typescriptlang.org/) | Apache-2.0       | 类型检查 / Type checking             |
-| [Vite](https://vite.dev/)                     | MIT              | 构建工具 / Build tool                |
-| [ESLint](https://eslint.org/)                 | MIT              | 代码检查 / Linting                   |
-| [Prettier](https://prettier.io/)              | MIT              | 代码格式化 / Code formatter          |
-| [Vitest](https://vitest.dev/)                 | MIT              | 单元测试 / Unit testing              |
+| 组件 / Component                              | 许可证 / License | 用途 / Usage                                                      |
+| --------------------------------------------- | ---------------- | ----------------------------------------------------------------- |
+| [Tailwind CSS](https://tailwindcss.com/)      | MIT              | CSS 工具框架 / CSS utility framework                              |
+| [TypeScript](https://www.typescriptlang.org/) | Apache-2.0       | 类型检查 / Type checking                                          |
+| [Vite](https://vite.dev/)                     | MIT              | 构建工具 / Build tool                                             |
+| [ESLint](https://eslint.org/)                 | MIT              | 代码检查 / Linting                                                |
+| [Prettier](https://prettier.io/)              | MIT              | 代码格式化 / Code formatter                                       |
+| [Vitest](https://vitest.dev/)                 | MIT              | 单元测试 / Unit testing                                           |
 | [esbuild](https://esbuild.github.io/)         | MIT              | engine.js 打包（CLI 嵌入用）/ Bundles engine.js for CLI embedding |
