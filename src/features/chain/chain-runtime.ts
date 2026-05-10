@@ -44,10 +44,7 @@ import type {
  * → applyFontEmbed-style payload bundled into EmbedStepParams),
  * not as a TS-side async callback to Rust ops.
  */
-type StepTransform<P> = (
-  ctx: TransformContext,
-  params: P
-) => TransformResult;
+type StepTransform<P> = (ctx: TransformContext, params: P) => TransformResult;
 
 interface TransformContext {
   /** ASS content currently in flight. */
@@ -77,19 +74,14 @@ interface TransformResult {
  * Three-line surface; that's the full extensibility cost.
  */
 const TRANSFORMS: {
-  [K in ChainStep["kind"]]: StepTransform<
-    Extract<ChainStep, { kind: K }>["params"]
-  >;
+  [K in ChainStep["kind"]]: StepTransform<Extract<ChainStep, { kind: K }>["params"]>;
 } = {
   hdr: hdrTransform,
   shift: shiftTransform,
   embed: embedTransform,
 };
 
-function hdrTransform(
-  ctx: TransformContext,
-  params: HdrStepParams
-): TransformResult {
+function hdrTransform(ctx: TransformContext, params: HdrStepParams): TransformResult {
   // Direct call to the underlying ASS color processor — bypasses
   // convertHdr's outputPath computation, which is meaningless in a
   // chain (only the chain-global terminal output path matters).
@@ -99,10 +91,7 @@ function hdrTransform(
   return { content };
 }
 
-function shiftTransform(
-  ctx: TransformContext,
-  params: ShiftStepParams
-): TransformResult {
+function shiftTransform(ctx: TransformContext, params: ShiftStepParams): TransformResult {
   const result = shiftSubtitles(ctx.content, {
     offsetMs: params.offsetMs,
     thresholdMs: params.thresholdMs,
@@ -112,15 +101,11 @@ function shiftTransform(
   // existing `convertShift` wrapper in cli-engine-entry.ts does it.
   const shiftedCount = result.preview.filter((entry) => entry.wasShifted).length;
   const note =
-    `shift: ${shiftedCount}/${result.captionCount} entries shifted ` +
-    `(format: ${result.format})`;
+    `shift: ${shiftedCount}/${result.captionCount} entries shifted ` + `(format: ${result.format})`;
   return { content: result.content, note };
 }
 
-function embedTransform(
-  ctx: TransformContext,
-  params: EmbedStepParams
-): TransformResult {
+function embedTransform(ctx: TransformContext, params: EmbedStepParams): TransformResult {
   // Pre-resolution contract: the Rust shell calls planFontEmbed +
   // font lookup + subset_font BEFORE runChain (against the original
   // input content — HDR/Shift don't change [V4+ Styles] Fontname or
@@ -148,12 +133,28 @@ function embedTransform(
   }
 
   const fontEntries = params.subsets.map((s) =>
-    buildFontEntry(s.fontName, Uint8Array.from(s.data))
+    buildFontEntry(s.fontName, decodeBase64(s.dataB64))
   );
   const fontsSection = `[Fonts]\n${fontEntries.join("\n\n")}\n`;
   const content = insertFontsSection(ctx.content, fontsSection);
   const note = `embed: ${fontEntries.length} font(s) embedded`;
   return { content, note };
+}
+
+/**
+ * Decode the Rust shell's base64-encoded subset bytes into a
+ * Uint8Array. Pairs with the `dataB64` field on `FontSubsetPayload`;
+ * the previous JSON-array form (`Uint8Array.from(number[])`) expanded
+ * the V8 source ~4-5× per byte and pressured the heap on the worst-
+ * case CUMULATIVE_FALLBACK_BYTES path. atob() is built into V8 / web.
+ */
+function decodeBase64(b64: string): Uint8Array {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
 }
 
 /**
@@ -184,10 +185,7 @@ export function runChain(request: ChainRunRequest): ChainResult {
       // through the indexed access — but the registry's mapped type
       // above guarantees the correspondence by construction. The
       // runtime correctness is unchanged; this is a TS limitation.
-      result = (transform as StepTransform<unknown>)(
-        { content: current, inputPath },
-        step.params
-      );
+      result = (transform as StepTransform<unknown>)({ content: current, inputPath }, step.params);
     } catch (err) {
       // Annotate which step failed so the Rust shell's error
       // reporting can show "step 2 (shift) failed: ..." rather than

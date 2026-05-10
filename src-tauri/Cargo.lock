@@ -4878,6 +4878,7 @@ dependencies = [
 name = "ssahdrify"
 version = "1.4.1"
 dependencies = [
+ "base64 0.22.1",
  "chardetng",
  "clap",
  "deno_core",

@@ -58,7 +58,14 @@ export interface EmbedStepParams {
 
 export interface FontSubsetPayload {
   fontName: string;
-  data: number[];
+  /**
+   * Subset bytes encoded as base64. The Rust shell encodes `Vec<u8>`
+   * into a base64 string (~1.33× expansion) instead of the previous
+   * JSON `[byte, byte, ...]` form (~4-5× expansion that pressured V8's
+   * heap on the worst-case CUMULATIVE_FALLBACK_BYTES path). The
+   * embed transform decodes via `atob`.
+   */
+  dataB64: string;
 }
 
 /**

@@ -110,8 +110,11 @@ impl ChainPlan {
         input_path: &str,
         content: &str,
     ) -> Result<serde_json::Value, String> {
-        let steps: Result<Vec<_>, _> =
-            self.steps.iter().map(ParsedStep::to_chain_step_json).collect();
+        let steps: Result<Vec<_>, _> = self
+            .steps
+            .iter()
+            .map(ParsedStep::to_chain_step_json)
+            .collect();
         Ok(serde_json::json!({
             "plan": {
                 "steps": steps?,
@@ -145,16 +148,17 @@ pub fn parse_chain_argv(
     for (i, segment) in segments.iter().enumerate() {
         let is_terminal = i == last_idx;
 
-        // Locked rule: non-terminal step's --output-template is a
-        // chain-level flag; only valid before any step. Surface as
-        // a parse-time error rather than silent ignore — silent
-        // ignore violates ~/.claude/rules/vibe-coding.md "no silent
-        // fallback" and teaches the wrong mental model.
-        if !is_terminal && segment_has_output_template_token(segment) {
+        // Locked rule: --output-template is chain-level only; placing
+        // it inside any step segment (terminal or not) is a parse-time
+        // error. Without this, the terminal step's wrapper would parse
+        // the value into its inner Args and silently drop it (the
+        // chain-level plan.output_template wins downstream), violating
+        // ~/.claude/rules/vibe-coding.md "no silent fallback".
+        if segment_has_output_template_token(segment) {
             return Err(format!(
-                "step {} ({}): --output-template is a chain-level flag and \
-                 only applies to the terminal step. Move it before any \
-                 step (e.g., `chain --output-template <T> ...`).",
+                "step {} ({}): --output-template is a chain-level flag. \
+                 Move it before any step (e.g., \
+                 `chain --output-template <T> ...`).",
                 i + 1,
                 first_token_or(segment, "<empty>")
             ));
@@ -194,8 +198,7 @@ pub fn parse_chain_argv(
     }
 
     let warnings = collect_suspicious_orderings(&steps);
-    let output_template = user_output_template
-        .unwrap_or_else(|| derive_stacked_default(&steps));
+    let output_template = user_output_template.unwrap_or_else(|| derive_stacked_default(&steps));
 
     Ok(ChainPlan {
         steps,
@@ -272,9 +275,10 @@ fn parse_one_step(segment: &[String], is_terminal: bool) -> Result<ParsedStep, S
         return Err("empty step segment (no step name)".into());
     }
     let kind = segment[0].as_str();
-    let rest_start = 1.min(segment.len());
-
-    let mut tokens: Vec<String> = segment[rest_start..].to_vec();
+    // segment.len() >= 1 here (guarded by is_empty above), so `1` is
+    // always the safe slice start. The previous `1.min(segment.len())`
+    // collapsed to the same value.
+    let mut tokens: Vec<String> = segment[1..].to_vec();
     if !is_terminal {
         tokens.push(CHAIN_NONTERMINAL_PLACEHOLDER.to_string());
     }
@@ -334,7 +338,10 @@ fn format_step_parse_error(kind: &str, err: &clap::Error) -> String {
     // a single-line message that names the step kind so the user
     // sees which step failed at a glance.
     let body = err.to_string();
-    let first_line = body.lines().find(|l| !l.trim().is_empty()).unwrap_or("parse failed");
+    let first_line = body
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("parse failed");
     format!("step '{kind}': {first_line}")
 }
 
@@ -412,7 +419,9 @@ mod tests {
 
     #[test]
     fn split_two_steps() {
-        let argv = argv_of(&["hdr", "--eotf", "pq", "+", "shift", "--offset", "+2s", "cat.ass"]);
+        let argv = argv_of(&[
+            "hdr", "--eotf", "pq", "+", "shift", "--offset", "+2s", "cat.ass",
+        ]);
         let segs = split_into_step_segments(&argv).unwrap();
         assert_eq!(segs.len(), 2);
         assert_eq!(segs[0], argv_of(&["hdr", "--eotf", "pq"]));
@@ -422,9 +431,18 @@ mod tests {
     #[test]
     fn split_three_steps() {
         let argv = argv_of(&[
-            "hdr", "--eotf", "pq", "+",
-            "shift", "--offset", "+2s", "+",
-            "embed", "--font-dir", "./fonts", "cat.ass",
+            "hdr",
+            "--eotf",
+            "pq",
+            "+",
+            "shift",
+            "--offset",
+            "+2s",
+            "+",
+            "embed",
+            "--font-dir",
+            "./fonts",
+            "cat.ass",
         ]);
         let segs = split_into_step_segments(&argv).unwrap();
         assert_eq!(segs.len(), 3);
@@ -497,9 +515,12 @@ mod tests {
     fn parse_terminal_embed_step_with_repeatable_font_flags() {
         let segment = argv_of(&[
             "embed",
-            "--font-dir", "./fonts",
-            "--font-dir", "C:/MyFonts",
-            "--font-file", "./SmileySans.ttf",
+            "--font-dir",
+            "./fonts",
+            "--font-dir",
+            "C:/MyFonts",
+            "--font-file",
+            "./SmileySans.ttf",
             "cat.ass",
         ]);
         let step = parse_one_step(&segment, true).unwrap();
@@ -553,19 +574,24 @@ mod tests {
     #[test]
     fn full_parse_two_step_chain() {
         let argv = argv_of(&[
-            "hdr", "--eotf", "pq", "+",
-            "shift", "--offset", "+2s", "cat.ass",
+            "hdr", "--eotf", "pq", "+", "shift", "--offset", "+2s", "cat.ass",
         ]);
         let plan = parse_chain_argv(&argv, None).unwrap();
         assert_eq!(plan.steps.len(), 2);
         assert_eq!(plan.input_files, vec![PathBuf::from("cat.ass")]);
         assert_eq!(plan.output_template, "{name}.hdr.shifted.ass");
-        assert!(plan.warnings.is_empty(), "got warnings: {:?}", plan.warnings);
+        assert!(
+            plan.warnings.is_empty(),
+            "got warnings: {:?}",
+            plan.warnings
+        );
     }
 
     #[test]
     fn full_parse_user_template_overrides_default() {
-        let argv = argv_of(&["hdr", "--eotf", "pq", "+", "shift", "--offset", "+2s", "cat.ass"]);
+        let argv = argv_of(&[
+            "hdr", "--eotf", "pq", "+", "shift", "--offset", "+2s", "cat.ass",
+        ]);
         let plan = parse_chain_argv(&argv, Some("{name}.processed.ass".into())).unwrap();
         assert_eq!(plan.output_template, "{name}.processed.ass");
     }
@@ -575,8 +601,16 @@ mod tests {
         // Locked rule: --output-template on a non-terminal step is a
         // parse-time error.
         let argv = argv_of(&[
-            "hdr", "--eotf", "pq", "--output-template", "ignored.ass", "+",
-            "shift", "--offset", "+2s", "cat.ass",
+            "hdr",
+            "--eotf",
+            "pq",
+            "--output-template",
+            "ignored.ass",
+            "+",
+            "shift",
+            "--offset",
+            "+2s",
+            "cat.ass",
         ]);
         let err = parse_chain_argv(&argv, None).unwrap_err();
         assert!(err.contains("--output-template"), "got: {err}");
@@ -596,8 +630,14 @@ mod tests {
     fn full_parse_rejects_multiple_embed_steps() {
         // v1 limitation: chain may include at most one embed step.
         let argv = argv_of(&[
-            "embed", "--font-dir", "./fonts1", "+",
-            "embed", "--font-dir", "./fonts2", "cat.ass",
+            "embed",
+            "--font-dir",
+            "./fonts1",
+            "+",
+            "embed",
+            "--font-dir",
+            "./fonts2",
+            "cat.ass",
         ]);
         let err = parse_chain_argv(&argv, None).unwrap_err();
         assert!(err.contains("at most one embed step"), "got: {err}");
@@ -606,8 +646,7 @@ mod tests {
     #[test]
     fn full_parse_warns_on_double_hdr() {
         let argv = argv_of(&[
-            "hdr", "--eotf", "pq", "+",
-            "hdr", "--eotf", "hlg", "cat.ass",
+            "hdr", "--eotf", "pq", "+", "hdr", "--eotf", "hlg", "cat.ass",
         ]);
         let plan = parse_chain_argv(&argv, None).unwrap();
         assert_eq!(plan.warnings.len(), 1);
@@ -617,8 +656,14 @@ mod tests {
     #[test]
     fn full_parse_warns_on_shift_after_embed() {
         let argv = argv_of(&[
-            "embed", "--font-dir", "./fonts", "+",
-            "shift", "--offset", "+2s", "cat.ass",
+            "embed",
+            "--font-dir",
+            "./fonts",
+            "+",
+            "shift",
+            "--offset",
+            "+2s",
+            "cat.ass",
         ]);
         let plan = parse_chain_argv(&argv, None).unwrap();
         assert_eq!(plan.warnings.len(), 1);
@@ -631,12 +676,25 @@ mod tests {
         // The "natural" pipeline order — timing → color → resources.
         // No warnings should fire.
         let argv = argv_of(&[
-            "hdr", "--eotf", "pq", "+",
-            "shift", "--offset", "+2s", "+",
-            "embed", "--font-dir", "./fonts", "cat.ass",
+            "hdr",
+            "--eotf",
+            "pq",
+            "+",
+            "shift",
+            "--offset",
+            "+2s",
+            "+",
+            "embed",
+            "--font-dir",
+            "./fonts",
+            "cat.ass",
         ]);
         let plan = parse_chain_argv(&argv, None).unwrap();
-        assert!(plan.warnings.is_empty(), "got warnings: {:?}", plan.warnings);
+        assert!(
+            plan.warnings.is_empty(),
+            "got warnings: {:?}",
+            plan.warnings
+        );
     }
 
     #[test]
@@ -646,11 +704,21 @@ mod tests {
         // avoid false positives. If real users complain about it,
         // we'd add the warning later.
         let argv = argv_of(&[
-            "embed", "--font-dir", "./fonts", "+",
-            "hdr", "--eotf", "pq", "cat.ass",
+            "embed",
+            "--font-dir",
+            "./fonts",
+            "+",
+            "hdr",
+            "--eotf",
+            "pq",
+            "cat.ass",
         ]);
         let plan = parse_chain_argv(&argv, None).unwrap();
-        assert!(plan.warnings.is_empty(), "got warnings: {:?}", plan.warnings);
+        assert!(
+            plan.warnings.is_empty(),
+            "got warnings: {:?}",
+            plan.warnings
+        );
     }
 
     // ── derive_stacked_default ────────────────────────────────
@@ -703,22 +771,30 @@ mod tests {
 
     #[test]
     fn marshal_shift_with_threshold_translates_after_to_ms() {
-        let argv = argv_of(&["shift", "--offset", "-500ms", "--after", "00:10:00", "cat.ass"]);
+        let argv = argv_of(&[
+            "shift", "--offset", "-500ms", "--after", "00:10:00", "cat.ass",
+        ]);
         let plan = parse_chain_argv(&argv, None).unwrap();
         let payload = plan.to_runtime_payload("/tmp/cat.ass", "ass body").unwrap();
         assert_eq!(payload["plan"]["steps"][0]["params"]["offsetMs"], -500);
         // 00:10:00 = 600_000 ms.
-        assert_eq!(payload["plan"]["steps"][0]["params"]["thresholdMs"], 600_000);
+        assert_eq!(
+            payload["plan"]["steps"][0]["params"]["thresholdMs"],
+            600_000
+        );
     }
 
     #[test]
     fn marshal_embed_step_renames_to_camel_case() {
         let argv = argv_of(&[
             "embed",
-            "--font-dir", "./fonts",
-            "--font-file", "./SmileySans.ttf",
+            "--font-dir",
+            "./fonts",
+            "--font-file",
+            "./SmileySans.ttf",
             "--no-system-fonts",
-            "--on-missing", "fail",
+            "--on-missing",
+            "fail",
             "cat.ass",
         ]);
         let plan = parse_chain_argv(&argv, None).unwrap();
@@ -733,8 +809,7 @@ mod tests {
     #[test]
     fn marshal_two_step_chain_preserves_order() {
         let argv = argv_of(&[
-            "hdr", "--eotf", "pq", "+",
-            "shift", "--offset", "+2s", "cat.ass",
+            "hdr", "--eotf", "pq", "+", "shift", "--offset", "+2s", "cat.ass",
         ]);
         let plan = parse_chain_argv(&argv, None).unwrap();
         let payload = plan.to_runtime_payload("/tmp/cat.ass", "ass body").unwrap();
@@ -748,7 +823,9 @@ mod tests {
     fn marshal_does_not_include_rust_only_fields() {
         // input_files and warnings are Rust-side concerns; the TS
         // runtime should not see them.
-        let argv = argv_of(&["hdr", "--eotf", "pq", "+", "hdr", "--eotf", "hlg", "cat.ass"]);
+        let argv = argv_of(&[
+            "hdr", "--eotf", "pq", "+", "hdr", "--eotf", "hlg", "cat.ass",
+        ]);
         let plan = parse_chain_argv(&argv, None).unwrap();
         // Confirm warnings exist Rust-side (HDR×2 fires).
         assert_eq!(plan.warnings.len(), 1);

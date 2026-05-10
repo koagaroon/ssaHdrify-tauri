@@ -180,9 +180,9 @@ describe("runChain — embed step", () => {
       ],
       outputTemplate: "{name}.embed.ass",
     };
-    expect(() =>
-      runChain({ plan, inputPath: INPUT_PATH, content: ASS_FIXTURE })
-    ).toThrow(/step 1 \(embed\) failed: embed step in chain requires pre-resolved font subsets/);
+    expect(() => runChain({ plan, inputPath: INPUT_PATH, content: ASS_FIXTURE })).toThrow(
+      /step 1 \(embed\) failed: embed step in chain requires pre-resolved font subsets/
+    );
   });
 
   it("returns input content unchanged when subsets array is empty", () => {
@@ -221,7 +221,10 @@ describe("runChain — embed step", () => {
             fontFiles: [],
             noSystemFonts: false,
             onMissing: "warn",
-            subsets: [{ fontName: "Arial.ttf", data: [0, 1, 2, 3] }],
+            // base64("\x00\x01\x02\x03") === "AAECAw==". Decoded by
+            // chain-runtime via atob() → matches the Rust shell's
+            // serde-base64 wire format.
+            subsets: [{ fontName: "Arial.ttf", dataB64: "AAECAw==" }],
           },
         },
       ],

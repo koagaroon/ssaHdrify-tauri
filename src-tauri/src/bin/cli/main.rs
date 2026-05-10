@@ -530,20 +530,15 @@ fn run() -> Result<ExitCode, String> {
     }
 }
 
-fn run_refresh_fonts(
-    globals: &GlobalOptions,
-    args: RefreshFontsArgs,
-) -> Result<ExitCode, String> {
+fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<ExitCode, String> {
     // refresh-fonts's whole purpose is to write to the cache. Running
     // with --no-cache is contradictory; surface as a clear error
     // rather than silently doing nothing (per no-silent-action).
     if globals.no_cache {
-        return Err(
-            "refresh-fonts requires the cache; --no-cache contradicts \
+        return Err("refresh-fonts requires the cache; --no-cache contradicts \
              this subcommand's purpose. Remove --no-cache or use a \
              different subcommand."
-                .to_string(),
-        );
+            .to_string());
     }
 
     // Resolve cache file path: user override (--cache-file) or default
@@ -590,12 +585,9 @@ fn run_refresh_fonts(
         // Resolve to absolute path (mirrors embed's behavior so cache
         // entries are stable across invocations from different cwd's).
         let abs_dir = absolute_path(dir)?;
-        let canonical = abs_dir.canonicalize().map_err(|e| {
-            format!(
-                "cannot canonicalize {}: {e}",
-                abs_dir.display()
-            )
-        })?;
+        let canonical = abs_dir
+            .canonicalize()
+            .map_err(|e| format!("cannot canonicalize {}: {e}", abs_dir.display()))?;
         let folder_path_str = display_path(&canonical);
 
         // Stat the folder for mtime — drift detection on next run
@@ -680,28 +672,31 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
 
     // Suspicious-pattern warnings are non-blocking per the locked
     // decision (catalog: HDR×2, shift-after-embed). Emit to stderr
-    // and proceed.
-    for warning in &plan.warnings {
-        eprintln!("{warning}");
+    // and proceed. Honors --quiet to match prepare_embed_cache's
+    // posture: --quiet suppresses informational diagnostics, errors
+    // still surface elsewhere.
+    if !globals.quiet {
+        for warning in &plan.warnings {
+            eprintln!("{warning}");
+        }
     }
 
     // β behavior for default-stacked output: stderr info line +
     // dry-run hint, NO interactive prompt (preserves the no-prompt
     // principle in `命令设计 § Cross-cutting 行为`). Users wanting
     // safety run with --dry-run; users wanting a different name
-    // pass --output-template.
-    if !user_supplied_template {
+    // pass --output-template. --quiet suppresses (consistent with
+    // every other informational stderr line in the CLI).
+    if !user_supplied_template && !globals.quiet {
         eprintln!(
             "ℹ Output template defaulted to '{}' (stacked from chain steps).",
             plan.output_template
         );
-        eprintln!(
-            "  Pass --output-template <T> to override, or --dry-run to preview."
-        );
+        eprintln!("  Pass --output-template <T> to override, or --dry-run to preview.");
     }
 
     if globals.dry_run {
-        emit_chain_dry_run(&plan);
+        emit_chain_dry_run(&plan, globals);
         return Ok(ExitCode::SUCCESS);
     }
 
@@ -758,9 +753,7 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
         }
     }
     if !globals.quiet {
-        println!(
-            "Summary: {written} written, {skipped} skipped, {failed} failed"
-        );
+        println!("Summary: {written} written, {skipped} skipped, {failed} failed");
     }
     Ok(if failed > 0 {
         ExitCode::from(1)
@@ -781,6 +774,36 @@ fn find_embed_step_index(plan: &chain::ChainPlan) -> Option<usize> {
         .position(|s| matches!(s, chain::ParsedStep::Embed(_)))
 }
 
+/// Best-effort prediction of the chain output path for the cheap-first
+/// skip-on-exists check. Mirrors `resolveChainOutputPath` in
+/// chain-runtime.ts for the common template tokens (`{name}`, `{ext}`)
+/// so the Rust shell can short-circuit BEFORE invoking V8 when the
+/// destination already exists. The post-V8 path computed by the TS
+/// runtime is still re-checked downstream as defense-in-depth — any
+/// template-substitution corner case where prediction diverges from
+/// resolution is caught there.
+fn predict_chain_output_path(
+    input_abs: &Path,
+    output_template: &str,
+    output_dir: Option<&Path>,
+) -> Option<PathBuf> {
+    let parent = input_abs.parent()?;
+    let stem = input_abs.file_stem()?.to_str()?;
+    let ext = input_abs
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| format!(".{e}"))
+        .unwrap_or_default();
+    let mut output_name = output_template
+        .replace("{name}", stem)
+        .replace("{ext}", &ext);
+    while output_name.contains("..") {
+        output_name = output_name.replace("..", ".");
+    }
+    let predicted = parent.join(&output_name);
+    relocate_output_path(&predicted.to_string_lossy(), output_dir).ok()
+}
+
 fn process_one_chain_input(
     engine: &mut engine::CliEngine,
     plan: &chain::ChainPlan,
@@ -793,6 +816,27 @@ fn process_one_chain_input(
         Err(err) => return ChainFileOutcome::Failed(err),
     };
     let input_str = display_path(&input_abs);
+
+    // Cheap-first skip: if the predicted output path already exists
+    // and --overwrite is off, return Skipped before any I/O or V8
+    // work. Mirrors the per-feature process_* paths' ordering. Path
+    // prediction is best-effort and may differ from TS-side
+    // resolution in template corner cases — the post-V8 existence
+    // check below catches anything prediction misses.
+    if !globals.overwrite {
+        if let Some(predicted) = predict_chain_output_path(
+            &input_abs,
+            &plan.output_template,
+            globals.output_dir.as_deref(),
+        ) {
+            if predicted.exists() {
+                return ChainFileOutcome::Skipped(format!(
+                    "{} already exists (use --overwrite to replace)",
+                    predicted.display()
+                ));
+            }
+        }
+    }
 
     // Read input via existing encoding-aware path. Honors the same
     // size cap, BOM detection, and fallback-on-canonicalize-failure
@@ -827,12 +871,21 @@ fn process_one_chain_input(
             Ok(s) => s,
             Err(err) => return ChainFileOutcome::Failed(err),
         };
+        // Encode subset bytes as base64 strings. The previous form
+        // (`{ "data": [byte, byte, ...] }`) expanded ~4-5× per byte
+        // when serde_json wrote bytes as decimal+comma JSON-in-JS-source,
+        // which compounds against CUMULATIVE_FALLBACK_BYTES (50 MB)
+        // into ~200 MB of V8 heap pressure on the worst-case fallback
+        // path. Base64 is ~1.33× and decoded in TS via atob().
         let subsets_json: Vec<serde_json::Value> = subsets
             .into_iter()
-            .map(|s| serde_json::json!({ "fontName": s.font_name, "data": s.data }))
+            .map(|s| {
+                use base64::Engine as _;
+                let data_b64 = base64::engine::general_purpose::STANDARD.encode(&s.data);
+                serde_json::json!({ "fontName": s.font_name, "dataB64": data_b64 })
+            })
             .collect();
-        payload["plan"]["steps"][idx]["params"]["subsets"] =
-            serde_json::Value::Array(subsets_json);
+        payload["plan"]["steps"][idx]["params"]["subsets"] = serde_json::Value::Array(subsets_json);
     }
 
     let request = engine::ChainRunRequest { payload };
@@ -846,11 +899,11 @@ fn process_one_chain_input(
     // only) using the existing helper. The runtime returned the
     // path resolved against the input's directory; relocation
     // re-roots that into --output-dir if set.
-    let output_path =
-        match relocate_output_path(&result.output_path, globals.output_dir.as_deref()) {
-            Ok(p) => p,
-            Err(err) => return ChainFileOutcome::Failed(err),
-        };
+    let output_path = match relocate_output_path(&result.output_path, globals.output_dir.as_deref())
+    {
+        Ok(p) => p,
+        Err(err) => return ChainFileOutcome::Failed(err),
+    };
 
     // Skip-or-overwrite check matching existing per-feature behavior.
     if !globals.overwrite && output_path.exists() {
@@ -882,13 +935,30 @@ fn process_one_chain_input(
     ChainFileOutcome::Written(output_path)
 }
 
-fn emit_chain_dry_run(plan: &chain::ChainPlan) {
+fn emit_chain_dry_run(plan: &chain::ChainPlan, globals: &GlobalOptions) {
     println!("Plan (no files written):");
     println!();
     println!("Output template: {}", plan.output_template);
     println!();
     for input in &plan.input_files {
         println!("  {}", input.display());
+        // Show the resolved output path for parity with per-feature
+        // dry-run output, so users can verify the template + output_dir
+        // combination produces what they expect before they remove
+        // --dry-run.
+        let resolved = absolute_path(input)
+            .ok()
+            .and_then(|abs| {
+                predict_chain_output_path(
+                    &abs,
+                    &plan.output_template,
+                    globals.output_dir.as_deref(),
+                )
+            })
+            .map(|p| p.display().to_string());
+        if let Some(out) = resolved {
+            println!("    → {out}");
+        }
         for (i, step) in plan.steps.iter().enumerate() {
             println!("    {}. {}", i + 1, step.kind_name());
         }
@@ -1428,12 +1498,9 @@ fn prepare_embed_cache(
         // Per locked design: distinct messaging from drift, same
         // behavior (skip cache + suggest refresh-fonts).
         if !globals.quiet {
+            eprintln!("ℹ No font cache exists yet at {}.", cache_path.display());
             eprintln!(
-                "ℹ No font cache exists yet at {}.",
-                cache_path.display()
-            );
-            eprintln!(
-                "  Run `ssahdrify-cli refresh-fonts --font-dir <DIR> ...` to build one."
+                "  Run `ssahdrify-cli refresh-fonts --font-dir <DIR>...` to build one (--font-dir is repeatable)."
             );
         }
         return None;
@@ -1443,12 +1510,8 @@ fn prepare_embed_cache(
         Ok(c) => c,
         Err(app_lib::font_cache::CacheError::SchemaVersionMismatch { found, expected }) => {
             if !globals.quiet {
-                eprintln!(
-                    "⚠ Font cache schema mismatch (found {found}, expected {expected})."
-                );
-                eprintln!(
-                    "  Cache is from a different release; skipping for this run."
-                );
+                eprintln!("⚠ Font cache schema mismatch (found {found}, expected {expected}).");
+                eprintln!("  Cache is from a different release; skipping for this run.");
                 eprintln!(
                     "  Delete {} and run `refresh-fonts` to rebuild.",
                     cache_path.display()
@@ -1750,15 +1813,16 @@ fn process_embed_file(
 
     let mut warnings: Vec<String> = Vec::new();
 
-    let resolved_fonts = match resolve_embed_fonts(globals, args, use_user_fonts, cache, &plan.fonts) {
-        Ok((fonts, mut resolve_warnings)) => {
-            warnings.append(&mut resolve_warnings);
-            fonts
-        }
-        Err(error) => {
-            return failed_report(&input_path, Some(output), Some(read_result.encoding), error);
-        }
-    };
+    let resolved_fonts =
+        match resolve_embed_fonts(globals, args, use_user_fonts, cache, &plan.fonts) {
+            Ok((fonts, mut resolve_warnings)) => {
+                warnings.append(&mut resolve_warnings);
+                fonts
+            }
+            Err(error) => {
+                return failed_report(&input_path, Some(output), Some(read_result.encoding), error);
+            }
+        };
 
     let glyph_count: usize = plan.fonts.iter().map(|font| font.glyph_count).sum();
     let referenced = plan.fonts.len();
@@ -1852,8 +1916,7 @@ fn resolve_chain_embed_subsets(
     input_path: &str,
     content: &str,
 ) -> Result<Vec<engine::FontSubsetPayload>, String> {
-    let use_user_fonts =
-        !embed_args.font_dirs.is_empty() || !embed_args.font_files.is_empty();
+    let use_user_fonts = !embed_args.font_dirs.is_empty() || !embed_args.font_files.is_empty();
 
     // output_template is unused at the chain level (the chain-global
     // template wins) but plan_font_embed expects one. The default
@@ -1869,10 +1932,14 @@ fn resolve_chain_embed_subsets(
     // pre-resolution runs against the input content with whatever
     // --font-dir the embed step itself was given. Cache integration
     // for chain is a future expansion; for now, pass None.
-    let (resolved, _missing_warnings) =
-        resolve_embed_fonts(globals, embed_args, use_user_fonts, None, &plan_result.fonts)?;
-    let (subsets, _skipped_warnings) =
-        subset_resolved_fonts(globals, embed_args, &resolved)?;
+    let (resolved, _missing_warnings) = resolve_embed_fonts(
+        globals,
+        embed_args,
+        use_user_fonts,
+        None,
+        &plan_result.fonts,
+    )?;
+    let (subsets, _skipped_warnings) = subset_resolved_fonts(globals, embed_args, &resolved)?;
     Ok(subsets)
 }
 
