@@ -222,8 +222,9 @@ describe("runChain — embed step", () => {
             noSystemFonts: false,
             onMissing: "warn",
             // base64("\x00\x01\x02\x03") === "AAECAw==". Decoded by
-            // chain-runtime via atob() → matches the Rust shell's
-            // serde-base64 wire format.
+            // chain-runtime via js-base64 → matches the Rust shell's
+            // serde-base64 wire format. (js-base64, not atob: the CLI
+            // runtime is bare deno_core without Web APIs.)
             subsets: [{ fontName: "Arial.ttf", dataB64: "AAECAw==" }],
           },
         },

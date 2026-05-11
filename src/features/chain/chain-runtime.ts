@@ -13,6 +13,8 @@
  * 后续用户反馈" feature #4 for the locked architectural decisions.
  */
 
+import { Base64 } from "js-base64";
+
 import { processAssContent } from "../hdr-convert/ass-processor";
 import { shiftSubtitles } from "../timing-shift/timing-engine";
 import { buildFontEntry } from "../font-embed/ass-uuencode";
@@ -146,28 +148,28 @@ function embedTransform(ctx: TransformContext, params: EmbedStepParams): Transfo
  * Uint8Array. Pairs with the `dataB64` field on `ChainFontSubsetPayload`;
  * the previous JSON-array form (`Uint8Array.from(number[])`) expanded
  * the V8 source ~4-5× per byte and pressured the heap on the worst-
- * case CUMULATIVE_FALLBACK_BYTES path. atob() is built into V8 / web.
+ * case CUMULATIVE_FALLBACK_BYTES path.
+ *
+ * Uses `js-base64` instead of the global `atob()`: the CLI runs on a
+ * bare `deno_core::JsRuntime` with `extensions: vec![]`, which does
+ * NOT provide Web APIs. `atob` would throw `ReferenceError: atob is
+ * not defined` in production even though Vitest passes because Node
+ * has a global atob.
  *
  * `name` annotates errors: a corrupt subset payload from a future
  * Rust-side encoder bug surfaces as `"base64 decode failed for font
- * subset 'XYZ': InvalidCharacterError"` rather than a bare DOMException
- * with no font / step attribution.
+ * subset 'XYZ': ..."` rather than a bare error with no font / step
+ * attribution.
  */
 function decodeBase64(b64: string, name: string): Uint8Array {
-  let binary: string;
   try {
-    binary = atob(b64);
+    return Base64.toUint8Array(b64);
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     throw new Error(`base64 decode failed for font subset '${name}': ${message}`, {
       cause: e,
     });
   }
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
 }
 
 /**
