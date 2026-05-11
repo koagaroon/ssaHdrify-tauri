@@ -3,7 +3,6 @@
  * Centralizes all native interactions so feature code stays pure JS.
  */
 import { open } from "@tauri-apps/plugin-dialog";
-import { writeTextFile, rename, copyFile } from "@tauri-apps/plugin-fs";
 import { invoke, Channel } from "@tauri-apps/api/core";
 
 // ── File Dialogs ──────────────────────────────────────────
@@ -228,26 +227,49 @@ export async function readTextDetectEncoding(path: string): Promise<ReadTextResu
   return invoke<ReadTextResult>("read_text_detect_encoding", { path });
 }
 
-/** Write a text file with explicit UTF-8. */
+/** Write a text file with explicit UTF-8.
+ *
+ *  Routes through the Rust-side `safe_write_text_file` command (not
+ *  `@tauri-apps/plugin-fs` writeTextFile, which follows reparse points
+ *  and would happily write through a planted symlink at the output
+ *  path — see Codex finding 776ff6ef / commit b7d9d21 + the safe_io
+ *  module doc). The command refuses if the destination already exists
+ *  as a symlink / junction, regardless of the overwrite flag; for
+ *  regular-file destinations it removes the file first and re-creates
+ *  via `OpenOptions::create_new(true)` for an atomic guard.
+ *
+ *  Overwrite is hardcoded to true here: every callsite preflights
+ *  collisions via `countExistingFiles` in `src/lib/output-collisions.ts`
+ *  and asks the user before invoking writeText. */
 export async function writeText(path: string, content: string): Promise<void> {
-  await writeTextFile(path, content);
+  await invoke("safe_write_text_file", { path, content, overwrite: true });
 }
 
-/** Rename / move a file. Atomic on the same volume; falls back to the
- *  OS's copy-then-delete on cross-volume targets (Tauri plugin-fs
- *  semantics). Used by Batch Rename's "rename in place" mode where
- *  the source file disappears. Throws on failure — collisions surface
- *  as the OS rejecting the rename, which the caller logs per-file. */
+/** Rename / move a file. Atomic on the same volume; cross-volume falls
+ *  back to copy-then-delete (std::fs::rename semantics). Used by Batch
+ *  Rename's "rename in place" mode where the source file disappears.
+ *
+ *  Routes through `safe_rename_file` rather than `@tauri-apps/plugin-fs`
+ *  rename, which would let a symlinked source rename a sensitive target
+ *  or let a symlinked destination redirect the move outside the user-
+ *  selected output dir (Codex findings 818eb84f / d29ac141). The
+ *  command refuses if either endpoint is a reparse point. */
 export async function renamePath(from: string, to: string): Promise<void> {
-  await rename(from, to);
+  await invoke("safe_rename_file", { src: from, dst: to, overwrite: true });
 }
 
 /** Copy a file. Source is preserved. Used by Batch Rename's two copy
  *  modes (copy-to-video-directory / copy-to-chosen). Overwrites the
  *  target if it exists — pre-flight overwrite confirmation lives at
- *  the caller. */
+ *  the caller.
+ *
+ *  Routes through `safe_copy_file` for the same reason as renamePath:
+ *  the plugin-fs copyFile follows symlinks on both endpoints, which a
+ *  malicious or accidental shortcut in a downloaded fan-sub pack can
+ *  abuse to read a sensitive source (e.g. `~/.ssh/id_rsa`) and copy
+ *  it into the user's video directory under a subtitle-looking name. */
 export async function copyPath(from: string, to: string): Promise<void> {
-  await copyFile(from, to);
+  await invoke("safe_copy_file", { src: from, dst: to, overwrite: true });
 }
 
 // ── Path Utilities ───────────────────────────────────────

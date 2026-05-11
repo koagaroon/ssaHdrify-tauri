@@ -1214,21 +1214,31 @@ fn scan_directory_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
             Err(_) => continue,
         };
         let path = entry.path();
+        // Skip reparse points (symlinks / Windows junctions / OneDrive
+        // placeholders) BEFORE any metadata or canonicalize call, matching
+        // preflight_directory_inner's policy. The earlier design followed
+        // symlinks via canonicalize + starts_with containment; that left
+        // a preflight↔scan mismatch where a malicious font pack could
+        // hide thousands of font files behind top-level symlinks (preflight
+        // reported few/zero files → "huge folder" warning never fired →
+        // scan parsed everything). With input-provenance treated as
+        // untrusted (subtitle/font packs from public release channels),
+        // refusing to chase symlinks in scan keeps the size warning honest
+        // and bounds parse work to what the user actually picked. Cost:
+        // packager workflows that ship fonts as symlinks to a shared
+        // store stop working — those are rare on Windows desktop, and
+        // affected users can resolve the symlinks before importing.
+        if crate::util::is_reparse_point(&path) {
+            continue;
+        }
         if !path.is_file() {
             continue;
         }
 
-        // Canonicalize per-entry to follow symlinks/reparse points, then
-        // verify the resolved file is still under the picked directory.
-        // This is what blocks a symlink inside the chosen Fonts/ folder
-        // from pointing at /etc/shadow or similar.
-        //
-        // N-7 note: an in-directory junction whose target also lies under
-        // the same picked directory passes `starts_with` and is parsed.
-        // Acceptable — the target is still inside user-trusted space.
-        // Adding an `is_reparse_point` early-skip here would also drop
-        // legitimate symlink-organized font folders (some packagers
-        // distribute fonts as symlinks to a shared store).
+        // Defense-in-depth: even with the reparse-point skip above,
+        // canonicalize + starts_with stays as a backstop against any
+        // future reparse-point family the helper doesn't yet recognize
+        // (junctions, hardlinks-via-NTFS-features, future Win API types).
         let canonical = match path.canonicalize() {
             Ok(c) => c,
             Err(_) => continue,

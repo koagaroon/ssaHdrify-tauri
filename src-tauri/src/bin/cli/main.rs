@@ -995,17 +995,13 @@ fn process_one_chain_input(
         ));
     }
 
-    if let Some(parent) = output_path.parent() {
-        if !parent.as_os_str().is_empty() {
-            if let Err(err) = fs::create_dir_all(parent) {
-                return ChainFileOutcome::Failed(format!(
-                    "failed to create output directory: {err}"
-                ));
-            }
-        }
-    }
-    if let Err(err) = fs::write(&output_path, &result.content) {
-        return ChainFileOutcome::Failed(format!("failed to write output: {err}"));
+    // Route through the safe writer used by every other CLI subcommand
+    // (write_output uses OpenOptions::create_new(true), which refuses to
+    // create through a pre-planted symlink/junction at the output path
+    // — fs::write would follow it and clobber an attacker-chosen target
+    // outside the intended output directory).
+    if let Err(err) = write_output(globals, &output_path, &result.content, globals.overwrite) {
+        return ChainFileOutcome::Failed(err);
     }
 
     if globals.verbose {

@@ -3,6 +3,7 @@ pub mod encoding;
 pub mod font_cache;
 pub mod font_cache_commands;
 pub mod fonts;
+pub mod safe_io;
 pub mod util;
 
 use tauri::Manager;
@@ -107,6 +108,9 @@ pub fn run() {
             font_cache_commands::rescan_font_cache_drift,
             font_cache_commands::clear_font_cache,
             font_cache_commands::lookup_font_family,
+            safe_io::safe_write_text_file,
+            safe_io::safe_copy_file,
+            safe_io::safe_rename_file,
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {

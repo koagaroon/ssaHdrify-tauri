@@ -37,14 +37,11 @@ vi.mock("@tauri-apps/api/core", () => ({
   },
 }));
 
-// These two only need stub objects — runStreamingScan doesn't call them
-// in this test, but tauri-api.ts imports them at top level.
+// Dialog plugin is the only top-level @tauri-apps/* import remaining in
+// tauri-api.ts after the symlink-safety refactor moved write/copy/rename
+// off plugin-fs onto Rust-side `safe_io` commands. The plugin-fs mock
+// previously needed here is gone with that import.
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: (...args: unknown[]) => openMock(...args) }));
-vi.mock("@tauri-apps/plugin-fs", () => ({
-  writeTextFile: vi.fn(),
-  rename: vi.fn(),
-  copyFile: vi.fn(),
-}));
 
 // Import AFTER vi.mock so the mocked Channel is picked up.
 import {
