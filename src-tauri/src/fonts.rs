@@ -2573,6 +2573,19 @@ mod tests {
     /// wasn't DB-only.
     static SCAN_TEST_LOCK: Mutex<()> = Mutex::new(());
 
+    /// Round 1 A4.N-R1-13 tripwire: behavioral test for
+    /// `MAX_FAMILY_VARIANTS_PER_FACE` needs a real font with > 8
+    /// localized name-table entries, which the repo doesn't ship (CJK
+    /// font licensing — see `tests/test_subset.rs` for the same
+    /// constraint). Pin the constant value so an accidental raise is
+    /// noticed; the math behind the cap (8 variants × bounded name
+    /// length × MAX_CACHE_POPULATE_FACES = OOM-on-crafted-pack ceiling)
+    /// is in the constant's doc comment above.
+    #[test]
+    fn max_family_variants_per_face_cap_value() {
+        assert_eq!(MAX_FAMILY_VARIANTS_PER_FACE, 8);
+    }
+
     fn init_test_user_font_db(name: &str) {
         let dir = std::env::temp_dir().join(format!(
             "ssahdrify-user-font-db-test-{}-{name}",

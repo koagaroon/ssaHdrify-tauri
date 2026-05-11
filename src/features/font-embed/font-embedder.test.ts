@@ -359,6 +359,42 @@ describe("analyzeFonts — useRustUserFonts production path", () => {
     const fzRustCalls = resolveUserFontMock.mock.calls.filter((c) => c[0] === "FZLanTingHei");
     expect(fzRustCalls.length).toBe(0);
   });
+
+  // Round 1 F3.N-R1-21: positive coverage for the persistent-cache
+  // lookup tier. Previous suite asserted MISSING-cache (`mockResolvedValue(null)`)
+  // and the fall-through, but never the resolved-via-cache branch. Without
+  // this test a regression that swapped the source label ("cache" → "system")
+  // or dropped the cache tier entirely would still pass every existing test.
+  it("resolves via persistent cache when session DB misses but cache hits", async () => {
+    resolveUserFontMock.mockResolvedValue(null);
+    lookupFontFamilyMock.mockImplementation(async (family: string, bold: boolean) => {
+      if (family === "FZLanTingHei" && !bold) {
+        return { path: "C:/cache/FZ.ttf", index: 0 };
+      }
+      return null;
+    });
+    findSystemFontMock.mockImplementation(async (family: string, bold: boolean) => {
+      if (family === "Arial" && bold) return { path: "C:/Windows/Fonts/arialbd.ttf", index: 0 };
+      throw new Error("Font not found");
+    });
+
+    const { infos } = await analyzeFonts(MINIMAL_ASS, null, undefined, true);
+    const fz = infos.find((i) => i.key.family === "FZLanTingHei");
+    const arial = infos.find((i) => i.key.family === "Arial" && i.key.bold);
+
+    // Cache hit: source labeled "cache" (NOT "local" — that's the session
+    // DB tier — and NOT "system"). filePath comes from the cache row.
+    expect(fz?.source).toBe("cache");
+    expect(fz?.filePath).toBe("C:/cache/FZ.ttf");
+    // findSystemFont must NOT have been consulted for FZ — the cache
+    // tier short-circuits the system lookup.
+    const fzSystemCalls = findSystemFontMock.mock.calls.filter((c) => c[0] === "FZLanTingHei");
+    expect(fzSystemCalls.length).toBe(0);
+
+    // Cache miss for Arial falls through to system, as before.
+    expect(arial?.source).toBe("system");
+    expect(arial?.filePath).toBe("C:/Windows/Fonts/arialbd.ttf");
+  });
 });
 
 describe("userFontKey", () => {

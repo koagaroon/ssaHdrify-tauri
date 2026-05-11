@@ -386,37 +386,61 @@ fn scan_font_files_accepts_max_input_paths_boundary() {
     assert_eq!(done.reason, REASON_NATURAL);
 }
 
+// Round 1 A4.N-R1-7: the three rejection paths are distinct contracts.
+// Splitting per case + pinning the message lets a future refactor that
+// accidentally collapses them (e.g. early-bailing all three to
+// "invalid directory") get caught by name in the failing case rather
+// than the generic `.is_err()` always passing for any error.
+
 #[test]
-fn rejects_invalid_directory_inputs() {
+fn rejects_empty_directory_path() {
     let _guard = SCAN_TEST_LOCK.lock().unwrap();
-    // Init the user-font DB even though all three calls below are
-    // expected to reject before the DB is touched. Future code that
-    // adds a DB access before the path validation would otherwise fail
-    // this test with a cryptic "User font index is not initialized"
-    // error masking the directory-validation failure we actually want
-    // to assert on. Every other test holding SCAN_TEST_LOCK does this.
-    init_scan_test_db("invalid-dir-inputs");
-    assert!(tauri::async_runtime::block_on(scan_font_directory(
+    init_scan_test_db("invalid-empty");
+    let err = tauri::async_runtime::block_on(scan_font_directory(
         String::new(),
         early_error_channel(),
         next_test_scan_id(),
-        "invalid-empty".to_string()
+        "invalid-empty".to_string(),
     ))
-    .is_err());
-    assert!(tauri::async_runtime::block_on(scan_font_directory(
+    .unwrap_err();
+    assert!(
+        err.contains("must be 1-"),
+        "empty path should hit the length-floor branch of validate_ipc_path; got: {err}"
+    );
+}
+
+#[test]
+fn rejects_directory_path_with_control_characters() {
+    let _guard = SCAN_TEST_LOCK.lock().unwrap();
+    init_scan_test_db("invalid-control");
+    let err = tauri::async_runtime::block_on(scan_font_directory(
         "\0path\0with\0nulls".to_string(),
         early_error_channel(),
         next_test_scan_id(),
-        "invalid-control".to_string()
+        "invalid-control".to_string(),
     ))
-    .is_err());
-    assert!(tauri::async_runtime::block_on(scan_font_directory(
+    .unwrap_err();
+    assert!(
+        err.contains("invalid characters"),
+        "control-char path should hit the character-allowlist branch of validate_ipc_path; got: {err}"
+    );
+}
+
+#[test]
+fn rejects_nonexistent_directory_path() {
+    let _guard = SCAN_TEST_LOCK.lock().unwrap();
+    init_scan_test_db("invalid-missing");
+    let err = tauri::async_runtime::block_on(scan_font_directory(
         "Z:\\definitely\\does\\not\\exist".to_string(),
         early_error_channel(),
         next_test_scan_id(),
-        "invalid-missing".to_string()
+        "invalid-missing".to_string(),
     ))
-    .is_err());
+    .unwrap_err();
+    assert!(
+        err.contains("Cannot resolve directory path"),
+        "nonexistent path should hit the canonicalize-failure branch in scan_font_directory; got: {err}"
+    );
 }
 
 /// Pre-arm cancel for an inactive scan id must not affect a subsequent

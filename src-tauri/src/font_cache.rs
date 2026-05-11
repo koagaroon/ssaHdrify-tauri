@@ -1017,6 +1017,59 @@ mod tests {
         assert_eq!(key_count, 3, "all three family aliases should be indexed");
     }
 
+    /// Round 1 A4.N-R1-14: Wave 5 added `INSERT OR IGNORE` on
+    /// `cached_family_keys` so duplicate raw family names that
+    /// NFC-normalize + lowercase to the same `family_name_key` (e.g.
+    /// the NFC and NFD forms of `Café`, or two case variants of an
+    /// English name) don't violate the PK `(family_name_key, bold,
+    /// italic, font_path, face_index)`. Without OR IGNORE this would
+    /// throw, aborting the whole `replace_folder` transaction.
+    #[test]
+    fn replace_folder_dedupes_normalize_equal_family_keys() {
+        let (_guard, path) = temp_cache_path();
+        let mut cache = FontCache::open_or_create(&path).expect("open");
+        let font = FontMetadata {
+            file_path: "/test/dedupe/normalize.otf".to_string(),
+            file_size: 1_000,
+            file_mtime: 1_700_000_000,
+            face_index: 0,
+            family_keys: vec![
+                FamilyKey {
+                    family_name: "Café".to_string(), // NFC: U+00E9
+                    bold: false,
+                    italic: false,
+                },
+                FamilyKey {
+                    family_name: "Cafe\u{0301}".to_string(), // NFD: e + U+0301
+                    bold: false,
+                    italic: false,
+                },
+                FamilyKey {
+                    family_name: "CAFÉ".to_string(), // case variant
+                    bold: false,
+                    italic: false,
+                },
+                FamilyKey {
+                    family_name: "Other Font".to_string(), // distinct
+                    bold: false,
+                    italic: false,
+                },
+            ],
+        };
+        cache
+            .replace_folder("/test/dedupe", 1_700_000_000, &[font])
+            .expect("replace");
+
+        let key_count: i32 = cache
+            .conn
+            .query_row("SELECT COUNT(*) FROM cached_family_keys", [], |r| r.get(0))
+            .expect("count keys");
+        assert_eq!(
+            key_count, 2,
+            "three Café variants should collapse to one row + one Other Font row"
+        );
+    }
+
     #[test]
     fn remove_folder_clears_all_related_rows() {
         let (_guard, path) = temp_cache_path();

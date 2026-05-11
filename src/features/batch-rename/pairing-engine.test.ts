@@ -367,6 +367,27 @@ describe("deriveRenameOutputPath — exact basename match (no lang suffix)", () 
     expect(out2).toBe(expected);
     expect(isNoOpRename(expected, out2)).toBe(true);
   });
+
+  // Round 1 F4.N-R1-13 / F4.N-R1-14: pin the Wave 5 self-overwrite
+  // bypass — rename mode where the subtitle path already matches the
+  // video stem must NOT trip assertSafeOutputPath's self-overwrite
+  // guard. The bypass at pairing-engine.ts:486 is the load-bearing
+  // line; without this test a refactor that drops the guard could
+  // re-introduce the regression (legitimate "rename to same name"
+  // throws self-overwrite error) and existing tests would still pass.
+  it("rename mode no-op (sub already matches video stem) does not throw self-overwrite", () => {
+    const v = "C:\\media\\MyShow.S01E01.mkv";
+    const sub = "C:\\media\\MyShow.S01E01.ass";
+    // mode=rename is the branch the bypass protects: without
+    // pairing-engine.ts:486's `!(mode === "rename" && isNoOpRename(...))`
+    // guard, deriveRenameOutputPath here would have invoked
+    // assertSafeOutputPath which self-overwrite-rejects (Codex 30c18b79).
+    // The legitimate "rename to same name" case is OK because the
+    // rename loop later skips no-op rows before any I/O attempt.
+    const out = deriveRenameOutputPath(v, sub, "rename", null);
+    expect(out).toBe(sub);
+    expect(isNoOpRename(sub, out)).toBe(true);
+  });
 });
 
 describe("deriveRenameOutputPath — path-validator integration", () => {

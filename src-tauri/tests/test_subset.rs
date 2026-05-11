@@ -65,7 +65,12 @@ fn subset_real_cjk_font() {
         "Subset should be smaller than original"
     );
     assert!(subset_size > 0, "Subset should not be empty");
-    // For ~50 Chinese chars, expect at least 90% reduction
+    // For ~50 Chinese chars, the bound here is `ratio < 30.0` — a 70%
+    // reduction floor (Round 1 A4.N-R1-12: a previous comment claimed
+    // "90% reduction" which contradicted the 30.0 threshold). 70% is
+    // already a strong signal that subsetting is doing real work on
+    // CJK fonts; tightening to 90% would over-pin font-specific glyph
+    // density.
     assert!(
         ratio < 30.0,
         "Expected significant size reduction, got {:.1}%",
