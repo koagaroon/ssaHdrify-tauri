@@ -8,6 +8,7 @@ use crate::util::is_reparse_point;
 use chardetng::EncodingDetector;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use tauri_plugin_fs::FsExt;
 
 /// Verify a path's extension is in `ALLOWED_TEXT_EXTENSIONS`. Case-folded.
 fn ext_is_allowed(path: &Path) -> bool {
@@ -24,12 +25,17 @@ fn ext_is_allowed(path: &Path) -> bool {
 
 const MAX_TEXT_SIZE: u64 = 50 * 1024 * 1024; // 50 MB
 
-/// Allowed subtitle file extensions for `read_text_detect_encoding`.
-/// Defense-in-depth: the frontend only sends paths from file dialogs, but
-/// this prevents the IPC command from being repurposed as a generic file reader.
-/// `.txt` is intentionally excluded — the frontend dialogs never offer it,
-/// and keeping it in the allow-list would widen arbitrary-read via any JS bug.
-const ALLOWED_TEXT_EXTENSIONS: &[&str] = &["ass", "ssa", "srt", "vtt", "sub", "sbv", "lrc"];
+/// Allowed subtitle file extensions for `read_text_detect_encoding` AND
+/// the safe_io write/copy/rename commands — read and write sides must
+/// agree on what counts as a subtitle file, so this is the single
+/// source of truth for both. Defense-in-depth: the frontend only sends
+/// paths from file dialogs, but this prevents the IPC commands from
+/// being repurposed as a generic file reader / writer. `.txt` is
+/// intentionally excluded — the frontend dialogs never offer it, and
+/// keeping it in the allow-list would widen arbitrary-read via any JS
+/// bug.
+pub(crate) const ALLOWED_TEXT_EXTENSIONS: &[&str] =
+    &["ass", "ssa", "srt", "vtt", "sub", "sbv", "lrc"];
 
 /// Map a std::io::Error to a generic, path-free message for IPC. The detailed
 /// error is logged server-side so it's still reachable during debug, but never
@@ -108,14 +114,23 @@ pub struct ReadTextResult {
     pub encoding: String,
 }
 
-/// Read a file, detect its encoding, and return UTF-8 text + encoding name.
+/// Read a file, detect its encoding, and return UTF-8 text + encoding
+/// name. Inner implementation parameterized over the fs:scope policy.
 ///
 /// Detection order:
 /// 1. BOM (UTF-8, UTF-16 LE/BE) — deterministic, highest priority
 /// 2. chardetng heuristic — handles GBK, Big5, Shift_JIS, EUC-KR, etc.
 /// 3. Lossy UTF-8 fallback — if all else fails
-#[tauri::command]
-pub fn read_text_detect_encoding(path: String) -> Result<ReadTextResult, String> {
+///
+/// The Tauri command (`read_text_detect_encoding`) wraps this with
+/// `app.fs_scope().is_allowed`; the CLI binary (which has no Tauri app
+/// handle and treats argv-provided paths as the trust surface) passes
+/// an allow-all closure. Same shape as `safe_io`'s `*_inner` helpers —
+/// keeps the policy gate testable without an `AppHandle` mock.
+pub fn read_text_detect_encoding_inner(
+    path: &str,
+    is_allowed: impl Fn(&Path) -> bool,
+) -> Result<ReadTextResult, String> {
     // Length and content guards on the IPC-supplied path itself. Reject
     // obviously-hostile or pathological shapes BEFORE touching the
     // filesystem. Control chars / NUL in a path on Windows can truncate
@@ -131,10 +146,10 @@ pub fn read_text_detect_encoding(path: String) -> Result<ReadTextResult, String>
     // never enforced it). (On Windows, std::fs::read → CreateFileW
     // resolves `..` per Win32 path canonicalization. On Unix, openat()
     // with `..` traverses up the FS tree.)
-    crate::util::validate_ipc_path(&path, "Subtitle")?;
+    crate::util::validate_ipc_path(path, "Subtitle")?;
 
     // Extension validation: only allow subtitle/text file types
-    let path_ref = Path::new(&path);
+    let path_ref = Path::new(path);
     if !ext_is_allowed(path_ref) {
         let ext = path_ref
             .extension()
@@ -150,6 +165,22 @@ pub fn read_text_detect_encoding(path: String) -> Result<ReadTextResult, String>
             format!(".{ext}")
         };
         return Err(format!("Unsupported file type: {label}"));
+    }
+
+    // fs_scope consultation: mirror safe_io's policy on the READ side so
+    // read + write enforce the same allow/deny set. Without this, a
+    // misbehaving frontend or compromised WebView could read files in
+    // scope-denied locations (e.g. `$HOME/.ssh/id_rsa`) through the
+    // subtitle reader even though the symmetric write path would refuse.
+    // First pass checks the RAW path so a directly-typed deny-listed
+    // path fails fast. A second pass after canonicalize (below) catches
+    // symlink redirection that resolves into a deny-listed location.
+    if !is_allowed(path_ref) {
+        return Err(format!(
+            "Subtitle path is denied by the application's filesystem scope \
+             policy: {}",
+            path_ref.display()
+        ));
     }
 
     // Resolve symlinks / reparse points. Two attack surfaces drive the
@@ -179,6 +210,17 @@ pub fn read_text_detect_encoding(path: String) -> Result<ReadTextResult, String>
                     "Resolved path is not a subtitle file (symlink to disallowed target?)"
                         .to_string(),
                 );
+            }
+            // Post-canonicalize scope re-check: a same-name reparse point
+            // can pass the raw `is_allowed` (e.g. user-picked `foo.ass`
+            // in a scope-allowed dir) and resolve into a deny-listed
+            // target (`~/.ssh/id_rsa.ass`). Catch that path here.
+            if !is_allowed(&canonical) {
+                return Err(format!(
+                    "Resolved subtitle path is denied by the application's \
+                     filesystem scope policy: {}",
+                    canonical.display()
+                ));
             }
             canonical
         }
@@ -215,9 +257,10 @@ pub fn read_text_detect_encoding(path: String) -> Result<ReadTextResult, String>
     // attacker on this local machine," (b) `std::fs::read` itself
     // would still cap at the OS's per-syscall read limits, and (c)
     // Rust's `Vec::reserve` plus the read loop would surface OOM as
-    // a normal Err instead of a crash. The post-read `is_file()`
-    // check guards against the race-replaced target being a directory
-    // / pipe / device.
+    // a normal Err instead of a crash. The pre-read `is_file()` check
+    // immediately below covers the race-target being a non-file at
+    // stat time; a race-replaced target between stat and read still
+    // produces a normal `std::fs::read` error on a directory / pipe.
     let metadata = std::fs::metadata(&read_path).map_err(|e| sanitize_io_error(&e, "stat"))?;
     // Must be a regular file — directories, FIFOs, and device files
     // (Unix /dev/urandom, raw devices the FS reports as non-file)
@@ -246,6 +289,17 @@ pub fn read_text_detect_encoding(path: String) -> Result<ReadTextResult, String>
     }
 
     Ok(decode_bytes(&bytes))
+}
+
+/// Tauri command wrapper. Resolves fs:scope via the live AppHandle then
+/// delegates to `read_text_detect_encoding_inner`.
+#[tauri::command]
+pub fn read_text_detect_encoding(
+    app: tauri::AppHandle,
+    path: String,
+) -> Result<ReadTextResult, String> {
+    let scope = app.fs_scope();
+    read_text_detect_encoding_inner(&path, move |p| scope.is_allowed(p))
 }
 
 /// Check for Byte Order Mark and decode accordingly. When the decoded text

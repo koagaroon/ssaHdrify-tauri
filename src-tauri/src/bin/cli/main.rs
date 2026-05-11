@@ -932,7 +932,7 @@ fn process_one_chain_input(
     // Read input via existing encoding-aware path. Honors the same
     // size cap, BOM detection, and fallback-on-canonicalize-failure
     // semantics every other CLI subcommand uses.
-    let read_result = match app_lib::encoding::read_text_detect_encoding(input_str.clone()) {
+    let read_result = match app_lib::encoding::read_text_detect_encoding_inner(&input_str, |_| true) {
         Ok(r) => r,
         Err(err) => return ChainFileOutcome::Failed(err),
     };
@@ -1145,7 +1145,7 @@ fn process_hdr_file(
         return planned_report(&input_path, Some(output), None);
     }
 
-    let read_result = match app_lib::encoding::read_text_detect_encoding(input.clone()) {
+    let read_result = match app_lib::encoding::read_text_detect_encoding_inner(&input, |_| true) {
         Ok(result) => result,
         Err(error) => return failed_report(&input_path, Some(output), None, error),
     };
@@ -1342,7 +1342,7 @@ fn process_shift_file_cheap_first(
         return planned_report(&input_path, Some(output), None);
     }
 
-    let read_result = match app_lib::encoding::read_text_detect_encoding(input.clone()) {
+    let read_result = match app_lib::encoding::read_text_detect_encoding_inner(&input, |_| true) {
         Ok(result) => result,
         Err(error) => return failed_report(&input_path, Some(output), None, error),
     };
@@ -1411,7 +1411,7 @@ fn process_shift_file_heavy_first(
     };
     let input = display_path(&input_path);
 
-    let read_result = match app_lib::encoding::read_text_detect_encoding(input.clone()) {
+    let read_result = match app_lib::encoding::read_text_detect_encoding_inner(&input, |_| true) {
         Ok(result) => result,
         Err(error) => return failed_report(&input_path, None, None, error),
     };
@@ -1883,7 +1883,7 @@ fn process_embed_file(
         return planned_report(&input_path, Some(output), None);
     }
 
-    let read_result = match app_lib::encoding::read_text_detect_encoding(input.clone()) {
+    let read_result = match app_lib::encoding::read_text_detect_encoding_inner(&input, |_| true) {
         Ok(result) => result,
         Err(error) => return failed_report(&input_path, Some(output), None, error),
     };

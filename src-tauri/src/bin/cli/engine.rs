@@ -221,12 +221,19 @@ impl CliEngine {
         // these into a single small bootstrap keeps the surface area
         // minimal; the bundled `platform.ts` IIFE reads the global at
         // module init time, before any consumer.
-        let platform_bootstrap = format!(
-            "globalThis.__ssahdrifyPlatform = {{ isWindows: {}, \
-             isCaseInsensitiveFs: {} }};",
-            cfg!(target_os = "windows"),
-            cfg!(target_os = "windows") || cfg!(target_os = "macos"),
-        );
+        //
+        // Serialize via serde_json — matches the payload_setup pattern
+        // below for `__ssahdrifyCliPayload`. Bool's `Display` produces
+        // the same JS-valid `true`/`false`, but routing every Rust→JS
+        // injection through one serializer keeps the encoding rules
+        // consistent and avoids surprise if a future field is added
+        // that isn't safe to format!-inject.
+        let platform_json = serde_json::json!({
+            "isWindows": cfg!(target_os = "windows"),
+            "isCaseInsensitiveFs": cfg!(target_os = "windows") || cfg!(target_os = "macos"),
+        });
+        let platform_bootstrap =
+            format!("globalThis.__ssahdrifyPlatform = {platform_json};");
         runtime
             .execute_script("ssahdrify-cli-platform-bootstrap.js", platform_bootstrap)
             .map_err(|err| format!("failed to bootstrap CLI engine platform globals: {err}"))?;

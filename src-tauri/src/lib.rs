@@ -14,6 +14,32 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
+            // Install the log plugin FIRST so any `log::warn!` / `log::info!`
+            // calls from `init_system_dirs`, `init_user_font_db`,
+            // `init_gui_font_cache`, or any helper they call have a
+            // subscriber to receive them. Without this ordering, early-init
+            // diagnostics (e.g. a font-DB schema mismatch's warning) are
+            // dropped silently.
+            //
+            // Dev: INFO-level for full visibility while iterating.
+            // Release: WARN/ERROR only — keeps crash-diagnostic signals in
+            // bug reports without spamming healthy runs.
+            // UseLocal so terminal log timestamps match the user's wall
+            // clock instead of UTC — at UTC+8 the default-UTC output
+            // looks 8 hours off, which reads as a real bug at first
+            // glance even though the times are technically correct.
+            let level = if cfg!(debug_assertions) {
+                log::LevelFilter::Info
+            } else {
+                log::LevelFilter::Warn
+            };
+            app.handle().plugin(
+                tauri_plugin_log::Builder::default()
+                    .level(level)
+                    .timezone_strategy(tauri_plugin_log::TimezoneStrategy::UseLocal)
+                    .build(),
+            )?;
+
             // Snapshot env-derived system-fonts paths eagerly, before any
             // user action can run. Defense-in-depth against post-launch
             // env-var manipulation; see fonts::init_system_dirs.
@@ -69,25 +95,6 @@ pub fn run() {
             if let Err(e) = font_cache_commands::init_gui_font_cache(&app_data_dir) {
                 log::warn!("GUI font cache init failed: {e}. Cache will be unavailable.");
             }
-
-            // Dev: INFO-level for full visibility while iterating.
-            // Release: WARN/ERROR only — keeps crash-diagnostic signals in
-            // bug reports without spamming healthy runs.
-            let level = if cfg!(debug_assertions) {
-                log::LevelFilter::Info
-            } else {
-                log::LevelFilter::Warn
-            };
-            // UseLocal so terminal log timestamps match the user's wall
-            // clock instead of UTC — at UTC+8 the default-UTC output
-            // looks 8 hours off, which reads as a real bug at first
-            // glance even though the times are technically correct.
-            app.handle().plugin(
-                tauri_plugin_log::Builder::default()
-                    .level(level)
-                    .timezone_strategy(tauri_plugin_log::TimezoneStrategy::UseLocal)
-                    .build(),
-            )?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

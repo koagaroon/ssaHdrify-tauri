@@ -43,17 +43,12 @@
 //! `is_allowed` closure so the Tauri command's `AppHandle` doesn't have
 //! to be mocked. Production wraps `app.fs_scope().is_allowed(...)`.
 
+use crate::encoding::ALLOWED_TEXT_EXTENSIONS;
 use crate::util::{is_reparse_point, validate_ipc_path};
 use std::fs;
 use std::io::Write;
 use std::path::Path;
 use tauri_plugin_fs::FsExt;
-
-/// Subtitle file extensions accepted by safe_io. Same set as
-/// `encoding::ALLOWED_TEXT_EXTENSIONS` so the read and write sides agree
-/// on what counts as a subtitle file. ASCII-only — case folding via
-/// `to_ascii_lowercase`.
-const ALLOWED_SUBTITLE_EXTENSIONS: &[&str] = &["ass", "ssa", "srt", "vtt", "sub", "sbv", "lrc"];
 
 fn check_subtitle_extension(path: &Path, label: &str) -> Result<(), String> {
     let ext = path
@@ -61,7 +56,7 @@ fn check_subtitle_extension(path: &Path, label: &str) -> Result<(), String> {
         .and_then(|e| e.to_str())
         .map(|e| e.to_ascii_lowercase())
         .unwrap_or_default();
-    if !ALLOWED_SUBTITLE_EXTENSIONS.contains(&ext.as_str()) {
+    if !ALLOWED_TEXT_EXTENSIONS.contains(&ext.as_str()) {
         let pretty = if ext.is_empty() {
             "(no extension)".to_string()
         } else {
@@ -70,7 +65,7 @@ fn check_subtitle_extension(path: &Path, label: &str) -> Result<(), String> {
         return Err(format!(
             "{label} path must end with a subtitle extension; got {pretty} \
              (allowed: {})",
-            ALLOWED_SUBTITLE_EXTENSIONS.join(", ")
+            ALLOWED_TEXT_EXTENSIONS.join(", ")
         ));
     }
     Ok(())
