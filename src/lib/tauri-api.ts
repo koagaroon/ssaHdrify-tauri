@@ -453,8 +453,13 @@ export async function resolveUserFont(
   return invoke<FontLookupResult | null>("resolve_user_font", { family, bold, italic });
 }
 
-export async function removeFontSource(sourceId: string): Promise<void> {
-  await invoke("remove_font_source", { sourceId });
+/** Remove a font source from the session index. `kind` ("dir" or "files")
+ *  determines whether the persistent cache eviction runs — only dir-mode
+ *  sources populated the cache in the first place, so files-mode removals
+ *  must skip eviction to avoid wrongly evicting a coincident dir source
+ *  whose folder shares a parent with the removed file (Codex 3d751e26). */
+export async function removeFontSource(sourceId: string, kind: "dir" | "files"): Promise<void> {
+  await invoke("remove_font_source", { sourceId, kind });
 }
 
 export async function clearFontSources(): Promise<void> {

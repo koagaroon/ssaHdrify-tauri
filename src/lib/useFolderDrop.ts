@@ -120,7 +120,16 @@ export function useFolderDrop({
               if (!inside) return;
               try {
                 const expanded = await expandDroppedPaths(event.payload.paths);
-                if (mounted && expanded.length > 0) {
+                // Re-check `disabled` AFTER the await (Codex f0cd1143).
+                // If the consumer flipped disabled=true while the IPC
+                // round-trip was in flight (e.g. another batch just
+                // started and the parent tab raised its busy flag), a
+                // stale `onPaths` commit here would jam paths into the
+                // current operation. Without this guard, the start-of-
+                // event check at line 96 only covers the trivial "drop
+                // arrives when already busy" case — not "drop arrives
+                // when idle, becomes busy mid-await."
+                if (mounted && !disabledRef.current && expanded.length > 0) {
                   onPathsRef.current(expanded);
                 }
               } catch (e) {

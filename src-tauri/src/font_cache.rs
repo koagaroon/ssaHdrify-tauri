@@ -438,8 +438,19 @@ impl FontCache {
 
             for key in &font.family_keys {
                 let lookup_key = family_lookup_key(&key.family_name);
+                // INSERT OR IGNORE so two raw family names that normalize
+                // to the same lookup_key (e.g., 'Café' as NFC + 'Cafe\u{301}'
+                // as NFD; or 'Foo' + 'foo' with bold/italic identical)
+                // don't violate the (font_path, face_index, family_name_key,
+                // bold, italic) primary key and abort the whole folder
+                // populate (Codex 1a7ba4bd). The first variant lands;
+                // subsequent normalized-duplicates are dropped — they'd
+                // produce identical lookup results anyway since
+                // family_lookup_key is what later queries match on. A
+                // legitimate diagnostic family_name is still preserved
+                // for the surviving row.
                 tx.execute(
-                    "INSERT INTO cached_family_keys(\
+                    "INSERT OR IGNORE INTO cached_family_keys(\
                         font_path, face_index, family_name, family_name_key, bold, italic\
                      ) VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
                     params![

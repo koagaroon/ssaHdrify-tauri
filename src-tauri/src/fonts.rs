@@ -436,6 +436,22 @@ impl Drop for ActiveScanGuard {
             Ordering::SeqCst,
             Ordering::SeqCst,
         );
+        // Release CANCEL_SCAN_ID's claim on this scan's id, if any.
+        // Codex 7e355cb7: CANCEL_SCAN_ID is a monotonic high-water
+        // mark via fetch_max, so a finished scan whose id was the
+        // current max would leave the cancel state "poisoned" — every
+        // subsequent scan with a lower id (Date.now()-seeded ids are
+        // ~1.7e12, far below u64::MAX) would silently fail to cancel
+        // because fetch_max(lower) cannot reduce CANCEL_SCAN_ID. Reset
+        // back to NO_SCAN_ID atomically when this scan was the high
+        // mark; any newer scan that won the slot will reset it again
+        // on its own Drop, so the eventual-state invariant holds.
+        let _ = CANCEL_SCAN_ID.compare_exchange(
+            self.scan_id,
+            NO_SCAN_ID,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
     }
 }
 
@@ -1310,10 +1326,18 @@ fn scan_directory_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
         emit_batch(buffer)?;
     }
 
-    Ok(ScanOutcome {
-        total,
-        reason: ScanStopReason::Natural,
-    })
+    // Post-loop cancellation re-check (Codex 5421ac47). The top-of-loop
+    // `font_scan_cancelled` only fires on the NEXT iteration; when
+    // `parse_local_font_file`'s per-face cancel poll fires inside the
+    // FINAL directory entry / file, the loop exits naturally and the
+    // outer reason would otherwise read as Natural — UI sees "completed
+    // normally" while the partial buffer is silently kept.
+    let reason = if font_scan_cancelled(scan_id) {
+        ScanStopReason::UserCancel
+    } else {
+        ScanStopReason::Natural
+    };
+    Ok(ScanOutcome { total, reason })
 }
 
 /// Shared scan-command body: opens the SQLite transaction, drives the
@@ -1711,10 +1735,18 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
         emit_batch(buffer)?;
     }
 
-    Ok(ScanOutcome {
-        total,
-        reason: ScanStopReason::Natural,
-    })
+    // Post-loop cancellation re-check (Codex 5421ac47). The top-of-loop
+    // `font_scan_cancelled` only fires on the NEXT iteration; when
+    // `parse_local_font_file`'s per-face cancel poll fires inside the
+    // FINAL directory entry / file, the loop exits naturally and the
+    // outer reason would otherwise read as Natural — UI sees "completed
+    // normally" while the partial buffer is silently kept.
+    let reason = if font_scan_cancelled(scan_id) {
+        ScanStopReason::UserCancel
+    } else {
+        ScanStopReason::Natural
+    };
+    Ok(ScanOutcome { total, reason })
 }
 
 /// Tauri command wrapping `scan_files_inner` with a typed progress channel.
@@ -1871,7 +1903,7 @@ pub fn resolve_user_font(
 }
 
 #[tauri::command]
-pub fn remove_font_source(source_id: String) -> Result<(), String> {
+pub fn remove_font_source(source_id: String, kind: Option<String>) -> Result<(), String> {
     validate_font_source_id(&source_id)?;
     let mut conn = open_user_font_db()?;
     let tx = conn
@@ -1886,17 +1918,28 @@ pub fn remove_font_source(source_id: String) -> Result<(), String> {
     // ran-after-our-BEGIN (its inserts wait on us via WAL +
     // busy_timeout, then commit after our DELETE finishes).
     reject_during_active_scan("Cannot remove font source while a scan is running")?;
-    // Capture one font_face.path BEFORE the DELETE so we can evict
-    // the matching folder from the GUI persistent cache after commit. For
-    // dir-mode sources every face shares the same parent (scan is
-    // non-recursive), so any one face's parent identifies the folder
-    // that was cached. Files-mode sources may yield a parent that
-    // doesn't correspond to anything in the cache; cache.remove_folder
-    // on an unknown folder is a harmless no-op. ON DELETE CASCADE on
-    // font_sources sweeps font_faces, so we have to read this BEFORE
-    // the DELETE.
-    let evict_folder: Option<String> = tx
-        .query_row(
+    // Only dir-mode sources populate the persistent GUI cache
+    // (try_record_folder_in_gui_cache is called from
+    // scan_font_directory; scan_font_files explicitly passes None for
+    // the cache collector — see comment in scan_font_files). So we
+    // ONLY derive an evict_folder when this source is a dir.
+    //
+    // Codex 3d751e26: the prior unconditional "grab any face path's
+    // parent → evict" would wrongly evict a coincident dir source's
+    // cache row when the user removed a files-mode source whose face
+    // happened to share a parent (e.g. files source picking
+    // `D:\Fonts\extra.ttf` from inside an existing dir source `D:\Fonts`).
+    // Kind comes from the frontend's FontSource model where the
+    // dir/files distinction was already tracked.
+    //
+    // `kind` is Option<> for forward compatibility — an older frontend
+    // bundle or a missed callsite passes None and falls back to the
+    // safe path (no eviction). The cost is a stale cache row that
+    // next-launch drift detection picks up, vs the over-evict that
+    // would silently break a different source's cache acceleration.
+    let is_dir_source = kind.as_deref() == Some("dir");
+    let evict_folder: Option<String> = if is_dir_source {
+        tx.query_row(
             "SELECT path FROM font_faces WHERE source_id = ?1 LIMIT 1",
             params![source_id],
             |r| r.get::<_, String>(0),
@@ -1911,13 +1954,13 @@ pub fn remove_font_source(source_id: String) -> Result<(), String> {
                 // matching the cache write key. Calling
                 // normalize_canonical_path again here is a no-op for
                 // current data but makes the contract self-evident at
-                // the call site — defends against a future code path
-                // that bypasses insert-time normalization (e.g., a
-                // file-mode source where pp could be a `\\?\…`-form
-                // path that didn't get normalized through scan).
+                // the call site.
                 normalize_canonical_path(&pp.to_string_lossy())
             })
-        });
+        })
+    } else {
+        None
+    };
     tx.execute(
         "DELETE FROM font_sources WHERE source_id = ?1",
         params![source_id],
@@ -2668,7 +2711,7 @@ mod tests {
             vec![sample_entry("C:\\Fonts\\B.ttf", "Demo Sans", 0)],
         );
 
-        remove_font_source("source-b".to_string()).unwrap();
+        remove_font_source("source-b".to_string(), None).unwrap();
         let resolved = resolve_user_font("Demo Sans".to_string(), false, false)
             .unwrap()
             .expect("older source should become visible again");

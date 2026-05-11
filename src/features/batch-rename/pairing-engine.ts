@@ -465,7 +465,19 @@ export function deriveRenameOutputPath(
     validatorRef = `${normTargetDir}/__validator_ref__`;
   }
   assertSafeOutputFilename(outName);
-  assertSafeOutputPath(outputPath, validatorRef);
+  // Rename mode's legitimate no-op (subtitle already matches the
+  // video name) makes outputPath === subtitlePath, which would trip
+  // assertSafeOutputPath's self-overwrite-guards-against-source-loss
+  // check (Codex 30c18b79). Skip the full path validator for that
+  // case — the traversal / MAX_PATH / dir-escape checks would all
+  // pass trivially (output equals input, which was validated
+  // upstream), and the rename loop later treats noOp rows as
+  // Skipped before any I/O attempt. Other modes (copy_to_video,
+  // copy_to_chosen) always have outputPath in a different directory
+  // and need the full validator.
+  if (!(mode === "rename" && isNoOpRename(subtitlePath, outputPath))) {
+    assertSafeOutputPath(outputPath, validatorRef);
+  }
 
   return usedBackslash ? outputPath.replace(/\//g, "\\") : outputPath;
 }

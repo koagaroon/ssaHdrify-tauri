@@ -247,12 +247,17 @@ function processDialogueText(
       current = applyOverrideTags(block, current, initialFont, styleMap);
       // Reset drawing on \p0 or \r — checked independently from \p[1-9]
       // so that {\r\p1} correctly resets then re-enables drawing mode.
-      // The \r anchor is `\r(?=\\|}|$|[A-Za-z])` so both `\rStyleName` and
-      // lowercased `\rdefault` match, while made-up tokens like `\rnd`
-      // (the only one rejected) do not trigger a false style reset.
-      // (Technically `\rnd` would still match [A-Za-z] — but no real
-      // ASS override starts with `\rn...`, so collisions are a non-issue.)
-      if (/\\p0/.test(block) || /\\r(?=\\|}|$|[A-Za-z])/.test(block)) {
+      // The \r anchor accepts:
+      //   - End markers: `\` (next override starts), `}` (block closes),
+      //     `$` (end of block) — bare `\r` reset.
+      //   - Style-name leading chars: any Unicode letter `\p{L}` plus
+      //     underscore. Covers ASCII `\rdefault`, mixed-case `\rJP`,
+      //     leading-underscore `\r_Alt`, and CJK `\r字幕` — all valid
+      //     style names that the prior `[A-Za-z]` class silently
+      //     rejected (Codex 52379e14: subsequent visible text was
+      //     attributed to the wrong override font, causing missing
+      //     glyphs in embed output).
+      if (/\\p0/.test(block) || /\\r(?=\\|\}|$|[\p{L}_])/u.test(block)) {
         isDrawing = false;
       }
       if (/\\p[1-9]/.test(block)) {
@@ -294,16 +299,18 @@ function applyOverrideTags(
   // named style's font and produced "font not found" rendering when the
   // user's audience didn't have the named style's font installed.
   //
-  // Capture group is anchored on `[A-Za-z]` so `\r` followed by
-  // non-letter (`\rfn...`, `\r\b1`) does NOT match a name — those are
-  // bare `\r` resets. Style names containing only ASCII letters / digits
-  // / underscore / dash cover every name VSFilter / libass accept.
+  // Capture group leads on Unicode letter (`\p{L}`) or underscore, then
+  // accepts letters / digits / underscore / dash. The prior `[A-Za-z]`
+  // start rejected legitimate style names like `_Alt` (Aegisub style
+  // imports), `字幕` (CJK-named styles common in fan-sub releases),
+  // and `José` — falling through to the bare-`\r` initialFont path
+  // even when the named style was defined (Codex 52379e14).
   // `\rdefault` is the canonical "reset to dialogue initial" form and
   // explicitly takes the initialFont path (the literal "default" name
   // in [V4+ Styles] would shadow the dialogue's initial style — by
   // convention `\rdefault` means "the dialogue's initial style", not
   // "the style literally named 'default'").
-  const rMatch = block.match(/\\r([A-Za-z][A-Za-z0-9_-]*)?/);
+  const rMatch = block.match(/\\r([\p{L}_][\p{L}\p{N}_-]*)?/u);
   if (rMatch) {
     const styleName = rMatch[1];
     if (styleName && styleName.toLowerCase() !== "default" && styleMap.has(styleName)) {

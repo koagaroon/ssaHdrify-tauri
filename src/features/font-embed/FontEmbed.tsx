@@ -458,9 +458,16 @@ export default function FontEmbed() {
   const handleRemoveFontSource = useCallback(
     (id: string) => {
       void (async () => {
+        // Look up the source's kind before the remove call — needed to
+        // gate the persistent cache eviction (Codex 3d751e26). Defaults
+        // to "dir" if the source isn't found, matching the safer
+        // pre-bug behavior; the source-not-found branch is unreachable
+        // in practice since the button only renders for present rows.
+        const source = fontSources.find((s) => s.id === id);
+        const kind = source?.kind ?? "dir";
         setSourceBusy(true);
         try {
-          await removeFontSource(id);
+          await removeFontSource(id, kind);
           const nextSources = fontSources.filter((s) => s.id !== id);
           setFontSources(nextSources);
           await reanalyzeWithSources();
