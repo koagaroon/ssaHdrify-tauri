@@ -1,4 +1,5 @@
-//! Symlink-safe file write / copy / rename commands for the GUI.
+//! Symlink-safe + scope-honoring file write / copy / rename commands for
+//! the GUI.
 //!
 //! Codex security scan (2026-05-11) flagged two reachable paths where a
 //! malicious or accidental symlink in an attacker-influenced subtitle
@@ -8,32 +9,87 @@
 //! shortcut named like an expected output (`video.ass`) silently
 //! overwrites the target the shortcut points at.
 //!
-//! These commands replace the plugin-fs writeTextFile / copyFile /
-//! rename callsites the frontend used to invoke directly. Each one:
+//! Initial migration moved the write/copy/rename operations onto these
+//! commands, dropping the `fs:allow-write-text-file` / `-copy-file` /
+//! `-rename` plugin-fs permission grants. A follow-up Codex finding
+//! (2ec537b0, HIGH) noticed that move ALSO dropped the `fs:scope` deny
+//! list as a side effect: the policy was tied to plugin-fs callsites,
+//! not to the new commands. A compromised WebView could call
+//! `safe_copy_file($HOME/.ssh/id_rsa, /tmp/leak.ass)` and then read the
+//! copy through the normal subtitle reader; `safe_write_text_file`
+//! could plant a file under Windows Start Menu autostart paths. The
+//! current implementation closes both regressions with three layered
+//! defenses, applied to BOTH source and destination on copy/rename and
+//! to destination on write:
 //!
-//!   1. Validates both source and destination paths through
-//!      `validate_ipc_path` (Cc / BiDi / DOS-device gates from util.rs).
-//!   2. lstat-checks the destination via `is_reparse_point`. If the
-//!      destination already exists AND is a symlink / junction, refuses
-//!      regardless of `overwrite` — never write through a shortcut.
-//!   3. For copy and rename, lstat-checks the SOURCE too. A symlinked
-//!      input (e.g. `Show.S01E01.ass → ~/.ssh/id_rsa`) would otherwise
-//!      let plugin-fs copy the resolved target as a subtitle output.
-//!   4. Uses `OpenOptions::create_new(true)` so even a TOCTOU-planted
-//!      symlink between the lstat and the open call refuses to create
-//!      through it (atomic OS-level guard).
+//!   1. **`validate_ipc_path`** (util.rs) — Cc / BiDi / DOS-device
+//!      gates. Rejects malformed paths before any fs syscall.
+//!   2. **Subtitle-extension whitelist** — destinations (and copy/rename
+//!      sources) must end with `.ass / .ssa / .srt / .vtt / .sub /
+//!      .sbv / .lrc`. Matches `read_text_detect_encoding`'s pattern;
+//!      closes the "Start Menu autostart .desktop / .lnk" persistence
+//!      class because those extensions are outside the set.
+//!   3. **`fs_scope().is_allowed()`** — reuses Tauri's plugin-fs
+//!      allow/deny policy verbatim (no manual port of the 50-entry deny
+//!      list; single source of truth in `capabilities/default.json`).
+//!      Closes the "exfil credentials via copy" class because
+//!      `$HOME/.ssh` and the rest of the deny list refuse on both src
+//!      and dst.
+//!   4. **`is_reparse_point` rejection + `create_new(true)`** —
+//!      original symlink-safety defenses against TOCTOU symlink
+//!      planting between the lstat and the open call.
 //!
-//! The frontend's `writeText` / `copyPath` / `renamePath` wrappers in
-//! `src/lib/tauri-api.ts` now invoke these commands; the plugin-fs
-//! permissions (`fs:allow-write-text-file` / `fs:allow-copy-file` /
-//! `fs:allow-rename`) are dropped from `capabilities/default.json` so
-//! a future regression that tries the old API is rejected at the
-//! capability layer instead of silently succeeding.
+//! Tests pin the gating logic via `*_inner` helpers that take an
+//! `is_allowed` closure so the Tauri command's `AppHandle` doesn't have
+//! to be mocked. Production wraps `app.fs_scope().is_allowed(...)`.
 
 use crate::util::{is_reparse_point, validate_ipc_path};
 use std::fs;
 use std::io::Write;
 use std::path::Path;
+use tauri_plugin_fs::FsExt;
+
+/// Subtitle file extensions accepted by safe_io. Same set as
+/// `encoding::ALLOWED_TEXT_EXTENSIONS` so the read and write sides agree
+/// on what counts as a subtitle file. ASCII-only — case folding via
+/// `to_ascii_lowercase`.
+const ALLOWED_SUBTITLE_EXTENSIONS: &[&str] = &["ass", "ssa", "srt", "vtt", "sub", "sbv", "lrc"];
+
+fn check_subtitle_extension(path: &Path, label: &str) -> Result<(), String> {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    if !ALLOWED_SUBTITLE_EXTENSIONS.contains(&ext.as_str()) {
+        let pretty = if ext.is_empty() {
+            "(no extension)".to_string()
+        } else {
+            format!(".{ext}")
+        };
+        return Err(format!(
+            "{label} path must end with a subtitle extension; got {pretty} \
+             (allowed: {})",
+            ALLOWED_SUBTITLE_EXTENSIONS.join(", ")
+        ));
+    }
+    Ok(())
+}
+
+fn check_scope_allows(
+    is_allowed: &impl Fn(&Path) -> bool,
+    path: &Path,
+    label: &str,
+) -> Result<(), String> {
+    if !is_allowed(path) {
+        return Err(format!(
+            "{label} path is denied by the application's filesystem scope \
+             policy: {}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
 
 fn ensure_parent_dir(path: &Path) -> Result<(), String> {
     if let Some(parent) = path.parent() {
@@ -105,30 +161,37 @@ fn create_new_and_write_bytes(path: &Path, content: &[u8]) -> Result<(), String>
         .map_err(|e| format!("Failed to write destination: {e}"))
 }
 
-/// Write a text file safely. Refuses to write through an existing
-/// symlink / junction at the destination. When `overwrite` is true and
-/// the destination is a regular file, the file is removed first and
-/// the new content is written atomically via `create_new(true)`.
-#[tauri::command]
-pub fn safe_write_text_file(path: String, content: String, overwrite: bool) -> Result<(), String> {
-    validate_ipc_path(&path, "Output")?;
-    let path_ref = Path::new(&path);
+// ── Inner helpers (testable without an AppHandle) ────────────────
+
+fn safe_write_text_file_inner(
+    path: &str,
+    content: &str,
+    overwrite: bool,
+    is_allowed: impl Fn(&Path) -> bool,
+) -> Result<(), String> {
+    validate_ipc_path(path, "Output")?;
+    let path_ref = Path::new(path);
+    check_subtitle_extension(path_ref, "Output")?;
+    check_scope_allows(&is_allowed, path_ref, "Output")?;
     ensure_parent_dir(path_ref)?;
     clear_existing_destination(path_ref, overwrite)?;
     create_new_and_write_bytes(path_ref, content.as_bytes())
 }
 
-/// Copy `src` to `dst` safely. Refuses if either endpoint is a
-/// symlink / junction. The source's bytes are read via the resolved
-/// regular file; the destination is created with `create_new(true)`
-/// after the existing-destination check (or after removal when
-/// `overwrite=true`).
-#[tauri::command]
-pub fn safe_copy_file(src: String, dst: String, overwrite: bool) -> Result<(), String> {
-    validate_ipc_path(&src, "Source")?;
-    validate_ipc_path(&dst, "Destination")?;
-    let src_ref = Path::new(&src);
-    let dst_ref = Path::new(&dst);
+fn safe_copy_file_inner(
+    src: &str,
+    dst: &str,
+    overwrite: bool,
+    is_allowed: impl Fn(&Path) -> bool,
+) -> Result<(), String> {
+    validate_ipc_path(src, "Source")?;
+    validate_ipc_path(dst, "Destination")?;
+    let src_ref = Path::new(src);
+    let dst_ref = Path::new(dst);
+    check_subtitle_extension(src_ref, "Source")?;
+    check_subtitle_extension(dst_ref, "Destination")?;
+    check_scope_allows(&is_allowed, src_ref, "Source")?;
+    check_scope_allows(&is_allowed, dst_ref, "Destination")?;
     reject_reparse_source(src_ref, "copy")?;
     ensure_parent_dir(dst_ref)?;
     clear_existing_destination(dst_ref, overwrite)?;
@@ -144,21 +207,72 @@ pub fn safe_copy_file(src: String, dst: String, overwrite: bool) -> Result<(), S
         .map_err(|e| format!("Failed to copy file: {e}"))
 }
 
-/// Rename / move `src` to `dst` safely. Refuses if either endpoint is
-/// a symlink / junction. `fs::rename` is atomic on the same volume and
-/// falls back to copy-then-delete cross-volume (std semantics); both
-/// paths fail-shut on a pre-existing dst symlink because we removed
-/// any planted shortcut earlier.
-#[tauri::command]
-pub fn safe_rename_file(src: String, dst: String, overwrite: bool) -> Result<(), String> {
-    validate_ipc_path(&src, "Source")?;
-    validate_ipc_path(&dst, "Destination")?;
-    let src_ref = Path::new(&src);
-    let dst_ref = Path::new(&dst);
+fn safe_rename_file_inner(
+    src: &str,
+    dst: &str,
+    overwrite: bool,
+    is_allowed: impl Fn(&Path) -> bool,
+) -> Result<(), String> {
+    validate_ipc_path(src, "Source")?;
+    validate_ipc_path(dst, "Destination")?;
+    let src_ref = Path::new(src);
+    let dst_ref = Path::new(dst);
+    check_subtitle_extension(src_ref, "Source")?;
+    check_subtitle_extension(dst_ref, "Destination")?;
+    check_scope_allows(&is_allowed, src_ref, "Source")?;
+    check_scope_allows(&is_allowed, dst_ref, "Destination")?;
     reject_reparse_source(src_ref, "rename")?;
     ensure_parent_dir(dst_ref)?;
     clear_existing_destination(dst_ref, overwrite)?;
     fs::rename(src_ref, dst_ref).map_err(|e| format!("Failed to rename file: {e}"))
+}
+
+// ── Tauri commands (production) ────────────────────────────────
+
+/// Write a text file safely. Layered defenses: scope deny enforcement,
+/// subtitle-extension whitelist, symlink rejection on destination,
+/// atomic `create_new(true)` open.
+#[tauri::command]
+pub fn safe_write_text_file(
+    app: tauri::AppHandle,
+    path: String,
+    content: String,
+    overwrite: bool,
+) -> Result<(), String> {
+    let scope = app.fs_scope();
+    safe_write_text_file_inner(&path, &content, overwrite, move |p| scope.is_allowed(p))
+}
+
+/// Copy `src` to `dst` safely. Both endpoints pass the same gates as
+/// `safe_write_text_file`'s destination; source is additionally
+/// reparse-point-rejected (a symlinked input would otherwise resolve
+/// to e.g. `~/.ssh/id_rsa` and copy its bytes as if they were a
+/// subtitle).
+#[tauri::command]
+pub fn safe_copy_file(
+    app: tauri::AppHandle,
+    src: String,
+    dst: String,
+    overwrite: bool,
+) -> Result<(), String> {
+    let scope = app.fs_scope();
+    safe_copy_file_inner(&src, &dst, overwrite, move |p| scope.is_allowed(p))
+}
+
+/// Rename / move `src` to `dst` safely. Same gating as `safe_copy_file`.
+/// `fs::rename` is atomic on the same volume and falls back to
+/// copy-then-delete cross-volume (std semantics); both paths fail-shut
+/// on a pre-existing dst symlink because we removed any planted
+/// shortcut earlier.
+#[tauri::command]
+pub fn safe_rename_file(
+    app: tauri::AppHandle,
+    src: String,
+    dst: String,
+    overwrite: bool,
+) -> Result<(), String> {
+    let scope = app.fs_scope();
+    safe_rename_file_inner(&src, &dst, overwrite, move |p| scope.is_allowed(p))
 }
 
 // ── Tests ────────────────────────────────────────────────
@@ -167,6 +281,14 @@ pub fn safe_rename_file(src: String, dst: String, overwrite: bool) -> Result<(),
 mod tests {
     use super::*;
     use std::io::Read as _;
+
+    fn allow_all(_: &Path) -> bool {
+        true
+    }
+
+    fn deny_all(_: &Path) -> bool {
+        false
+    }
 
     fn temp_dir(name: &str) -> std::path::PathBuf {
         let mut dir = std::env::temp_dir();
@@ -183,13 +305,8 @@ mod tests {
     #[test]
     fn write_creates_file_when_dest_missing() {
         let dir = temp_dir("write_missing");
-        let path = dir.join("out.txt");
-        safe_write_text_file(
-            path.to_string_lossy().to_string(),
-            "hello".to_string(),
-            false,
-        )
-        .unwrap();
+        let path = dir.join("out.ass");
+        safe_write_text_file_inner(&path.to_string_lossy(), "hello", false, allow_all).unwrap();
         let content = fs::read_to_string(&path).unwrap();
         assert_eq!(content, "hello");
     }
@@ -197,9 +314,9 @@ mod tests {
     #[test]
     fn write_overwrites_when_flag_set() {
         let dir = temp_dir("write_overwrite");
-        let path = dir.join("out.txt");
+        let path = dir.join("out.ass");
         fs::write(&path, b"old").unwrap();
-        safe_write_text_file(path.to_string_lossy().to_string(), "new".to_string(), true).unwrap();
+        safe_write_text_file_inner(&path.to_string_lossy(), "new", true, allow_all).unwrap();
         let content = fs::read_to_string(&path).unwrap();
         assert_eq!(content, "new");
     }
@@ -207,26 +324,51 @@ mod tests {
     #[test]
     fn write_refuses_overwrite_when_flag_unset() {
         let dir = temp_dir("write_no_overwrite");
-        let path = dir.join("out.txt");
+        let path = dir.join("out.ass");
         fs::write(&path, b"old").unwrap();
-        let err =
-            safe_write_text_file(path.to_string_lossy().to_string(), "new".to_string(), false)
-                .unwrap_err();
+        let err = safe_write_text_file_inner(&path.to_string_lossy(), "new", false, allow_all)
+            .unwrap_err();
         assert!(err.contains("already exists"));
         let content = fs::read_to_string(&path).unwrap();
         assert_eq!(content, "old");
     }
 
     #[test]
+    fn write_refuses_non_subtitle_extension() {
+        let dir = temp_dir("write_bad_ext");
+        let path = dir.join("malicious.desktop");
+        let err = safe_write_text_file_inner(
+            &path.to_string_lossy(),
+            "[Desktop Entry]\nExec=/tmp/payload",
+            true,
+            allow_all,
+        )
+        .unwrap_err();
+        assert!(err.contains("subtitle extension"));
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn write_refuses_when_scope_denies() {
+        let dir = temp_dir("write_scope_deny");
+        let path = dir.join("out.ass");
+        let err =
+            safe_write_text_file_inner(&path.to_string_lossy(), "x", false, deny_all).unwrap_err();
+        assert!(err.contains("denied by"));
+        assert!(!path.exists());
+    }
+
+    #[test]
     fn copy_preserves_source_and_creates_destination() {
         let dir = temp_dir("copy_basic");
-        let src = dir.join("src.bin");
-        let dst = dir.join("dst.bin");
+        let src = dir.join("src.ass");
+        let dst = dir.join("dst.ass");
         fs::write(&src, b"payload").unwrap();
-        safe_copy_file(
-            src.to_string_lossy().to_string(),
-            dst.to_string_lossy().to_string(),
+        safe_copy_file_inner(
+            &src.to_string_lossy(),
+            &dst.to_string_lossy(),
             false,
+            allow_all,
         )
         .unwrap();
         let mut buf = Vec::new();
@@ -236,15 +378,35 @@ mod tests {
     }
 
     #[test]
+    fn copy_refuses_when_scope_denies_destination() {
+        let dir = temp_dir("copy_scope_deny");
+        let src = dir.join("src.ass");
+        let dst = dir.join("dst.ass");
+        fs::write(&src, b"payload").unwrap();
+        // Allow source, deny destination — simulates a scope policy that
+        // permits reading the input but rejects the proposed output
+        // location.
+        let dst_str = dst.to_string_lossy().to_string();
+        let dst_str_for_closure = dst_str.clone();
+        let err = safe_copy_file_inner(&src.to_string_lossy(), &dst_str, false, move |p| {
+            p.to_string_lossy() != dst_str_for_closure
+        })
+        .unwrap_err();
+        assert!(err.contains("denied by"));
+        assert!(!dst.exists());
+    }
+
+    #[test]
     fn rename_moves_source_to_destination() {
         let dir = temp_dir("rename_basic");
-        let src = dir.join("src.bin");
-        let dst = dir.join("dst.bin");
+        let src = dir.join("src.ass");
+        let dst = dir.join("dst.ass");
         fs::write(&src, b"payload").unwrap();
-        safe_rename_file(
-            src.to_string_lossy().to_string(),
-            dst.to_string_lossy().to_string(),
+        safe_rename_file_inner(
+            &src.to_string_lossy(),
+            &dst.to_string_lossy(),
             false,
+            allow_all,
         )
         .unwrap();
         assert!(!src.exists());
@@ -261,15 +423,16 @@ mod tests {
     fn write_refuses_existing_symlink_destination() {
         use std::os::unix::fs::symlink;
         let dir = temp_dir("write_symlink_dst");
-        let target = dir.join("real_target");
-        let link = dir.join("looks_like_output.txt");
+        let target = dir.join("real_target.ass");
+        let link = dir.join("looks_like_output.ass");
         fs::write(&target, b"sensitive").unwrap();
         symlink(&target, &link).unwrap();
 
-        let err = safe_write_text_file(
-            link.to_string_lossy().to_string(),
-            "attacker_content".to_string(),
-            true, // even with overwrite=true, the symlink is refused
+        let err = safe_write_text_file_inner(
+            &link.to_string_lossy(),
+            "attacker_content",
+            true,
+            allow_all,
         )
         .unwrap_err();
         assert!(err.contains("symlink"));
@@ -282,16 +445,17 @@ mod tests {
     fn copy_refuses_symlinked_source() {
         use std::os::unix::fs::symlink;
         let dir = temp_dir("copy_symlink_src");
-        let target = dir.join("real_target");
+        let target = dir.join("real_target.ass");
         let link = dir.join("Show.S01E01.ass");
         let dst = dir.join("video.ass");
         fs::write(&target, b"sensitive").unwrap();
         symlink(&target, &link).unwrap();
 
-        let err = safe_copy_file(
-            link.to_string_lossy().to_string(),
-            dst.to_string_lossy().to_string(),
+        let err = safe_copy_file_inner(
+            &link.to_string_lossy(),
+            &dst.to_string_lossy(),
             false,
+            allow_all,
         )
         .unwrap_err();
         assert!(err.contains("symlink"));

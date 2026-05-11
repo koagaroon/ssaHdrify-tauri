@@ -209,6 +209,28 @@ impl CliEngine {
             extensions: vec![],
             ..Default::default()
         });
+
+        // Inject platform globals BEFORE the engine bundle runs (Codex
+        // 47c58c78): `src/lib/platform.ts` defaults to POSIX /
+        // case-sensitive when neither Node's `process` nor a browser
+        // `navigator` is available. The bare deno_core JsRuntime
+        // provides neither, so without this injection the CLI would
+        // run as if it were on Linux even on Windows / macOS —
+        // breaking `C:\...` path normalization and collapsing case-
+        // only-rename safety on case-insensitive volumes. Bundling
+        // these into a single small bootstrap keeps the surface area
+        // minimal; the bundled `platform.ts` IIFE reads the global at
+        // module init time, before any consumer.
+        let platform_bootstrap = format!(
+            "globalThis.__ssahdrifyPlatform = {{ isWindows: {}, \
+             isCaseInsensitiveFs: {} }};",
+            cfg!(target_os = "windows"),
+            cfg!(target_os = "windows") || cfg!(target_os = "macos"),
+        );
+        runtime
+            .execute_script("ssahdrify-cli-platform-bootstrap.js", platform_bootstrap)
+            .map_err(|err| format!("failed to bootstrap CLI engine platform globals: {err}"))?;
+
         runtime
             .execute_script("ssahdrify-cli-engine.js", ENGINE_SOURCE)
             .map_err(|err| format!("failed to initialize CLI engine: {err}"))?;
