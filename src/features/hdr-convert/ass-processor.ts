@@ -139,9 +139,13 @@ function transformStyleLine(
   // we computed from the Format header against this Style line; if the
   // shifted slot lands on something that isn't a color, transformColorString
   // would produce garbage and we'd silently corrupt the output. Validate
-  // the &Hxxxxxx{6,8} shape before transforming — anything else falls
-  // through untouched. Mirrors the strictness of COLOR_TAG_RE.
-  const COLOR_FIELD_RE = /^&H[0-9A-Fa-f]{2,8}$/;
+  // the `&Hxxxxxx` or `&Hxxxxxxxx` shape (6 or 8 hex digits — RGB or
+  // ABGR with alpha) before transforming. Round 1 F2.N-R1-11: previous
+  // `{2,8}` accepted 2-, 3-, 4-, 5-, and 7-digit values that the inline
+  // `\cN&Hxxxxxx` tag regex (`COLOR_TAG_RE`, line 101) correctly
+  // rejected — the asymmetry let a malformed Style field through that
+  // wouldn't have been transformed if inlined as `\c&H...`.
+  const COLOR_FIELD_RE = /^&H(?:[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$/;
   for (const idx of styleColorIndices) {
     if (idx < fields.length && fields[idx]) {
       const trimmed = fields[idx].trim();

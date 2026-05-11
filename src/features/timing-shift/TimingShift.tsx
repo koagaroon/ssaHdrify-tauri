@@ -62,14 +62,24 @@ interface PreviewRowData {
 function PreviewRow({
   index,
   style,
+  ariaAttributes,
   preview,
   formatTime,
   origLabel,
   shiftedLabel,
 }: RowComponentProps<PreviewRowData>) {
   const entry = preview[index];
+  // Spread `ariaAttributes` (Round 1 F2.N-R1-24): react-window 2.x
+  // supplies `role`, `aria-rowindex`, etc. via this prop and expects
+  // the row component to apply them to the root element. Without the
+  // spread, screen readers can't navigate the virtualized list as a
+  // table.
   return (
-    <div style={style} className={"timeline-row" + (entry.wasShifted ? "" : " unchanged")}>
+    <div
+      {...ariaAttributes}
+      style={style}
+      className={"timeline-row" + (entry.wasShifted ? "" : " unchanged")}
+    >
       <span className="idx">{entry.index}</span>
       <span className="t-orig" title={`${origLabel}: ${formatTime(entry.originalStart)}`}>
         {formatTime(entry.originalStart)}
@@ -159,6 +169,21 @@ export default function TimingShift() {
       height: Math.min(preview.length * PREVIEW_ROW_HEIGHT, PREVIEW_LIST_MAX_HEIGHT),
     }),
     [preview.length]
+  );
+
+  // Memoize `rowProps` for the virtualized list (Round 1 F2.N-R1-31).
+  // A fresh `{}` per render forced react-window's internal memo to bust
+  // every state change, costing a full PreviewRow re-render across every
+  // visible row for unrelated state updates (overflow toggles, drag
+  // active, etc.).
+  const previewRowProps = useMemo<PreviewRowData>(
+    () => ({
+      preview,
+      formatTime: formatDisplayTime,
+      origLabel: t("col_original"),
+      shiftedLabel: t("col_shifted"),
+    }),
+    [preview, t]
   );
 
   // Live preview is computed from the FIRST file only. The same offset
@@ -308,8 +333,19 @@ export default function TimingShift() {
       // Pre-flight overwrite check — same project-wide pattern as HDR
       // Convert. Template-derived output paths would silently overwrite
       // a previous run otherwise; one ask() before the batch is the
-      // single safety net.
-      const projectedOutputs = paths.map((p) => deriveShiftedPath(p));
+      // single safety net. Per-file try mirrors HDR Convert's shape
+      // (Round 1 F2.N-R1-27): a single bad path used to fail the entire
+      // batch with no attribution; now resolution failures fall through
+      // to the main loop's per-file error logging and the pre-flight
+      // existence check just skips them.
+      const projectedOutputs: string[] = [];
+      for (const filePath of paths) {
+        try {
+          projectedOutputs.push(deriveShiftedPath(filePath));
+        } catch {
+          // Re-thrown with per-file context inside the main loop below.
+        }
+      }
       try {
         const existingCount = await countExistingFiles(projectedOutputs);
         if (existingCount > 0) {
@@ -348,7 +384,17 @@ export default function TimingShift() {
             break;
           }
 
-          const fileName = fileNameFromPath(filePath);
+          // Defensive fallback: see HdrConvert's matching site —
+          // `fileName` must remain bound to something usable across the
+          // entire iteration so the catch block can attribute errors
+          // even if a future `fileNameFromPath` refactor starts throwing
+          // (Round 1 F2.N-R1-1).
+          let fileName = filePath;
+          try {
+            fileName = fileNameFromPath(filePath);
+          } catch {
+            // Keep the raw path — better than no attribution.
+          }
           addLog(t("msg_processing", fileName));
 
           try {
@@ -799,12 +845,7 @@ export default function TimingShift() {
             rowCount={preview.length}
             rowHeight={PREVIEW_ROW_HEIGHT}
             rowComponent={PreviewRow}
-            rowProps={{
-              preview,
-              formatTime: formatDisplayTime,
-              origLabel: t("col_original"),
-              shiftedLabel: t("col_shifted"),
-            }}
+            rowProps={previewRowProps}
           />
         </div>
       )}

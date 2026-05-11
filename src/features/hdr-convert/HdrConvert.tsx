@@ -319,7 +319,18 @@ export default function HdrConvert() {
             break;
           }
 
-          const fileName = fileNameFromPath(filePath);
+          // Defensive fallback: `fileNameFromPath` is currently total but
+          // a future refactor (path-validation rejection, etc.) could
+          // make it throw — and then the catch block at the bottom of
+          // the loop would lose `fileName` (Round 1 F2.N-R1-1 brittle
+          // TDZ shape). `let` + initial = filePath gives the catch a
+          // usable identifier in every code path.
+          let fileName = filePath;
+          try {
+            fileName = fileNameFromPath(filePath);
+          } catch {
+            // Keep the raw path — better than no attribution.
+          }
           addLog(t("msg_processing", fileName));
 
           try {
