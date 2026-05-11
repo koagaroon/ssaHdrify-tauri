@@ -602,8 +602,19 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
             .unwrap_or(0);
 
         // Scan the folder. Non-recursive — matches `embed`'s
-        // --font-dir semantics exactly.
-        let entries = app_lib::fonts::scan_directory_collecting(&canonical)?;
+        // --font-dir semantics exactly. Per-source error (e.g. cache-
+        // populate cap exceeded for malicious / oversized packs) is
+        // logged and skipped so one bad source doesn't abort the whole
+        // refresh run — refresh-fonts is multi-dir by design.
+        let entries = match app_lib::fonts::scan_directory_collecting(&canonical) {
+            Ok(e) => e,
+            Err(err) => {
+                if !globals.quiet {
+                    eprintln!("  ⚠ {}: skipped — {err}", folder_path_str);
+                }
+                continue;
+            }
+        };
 
         // Convert each LocalFontEntry to a FontMetadata, attaching
         // file mtime via stat (cache module needs it for drift but

@@ -602,32 +602,6 @@ pub fn try_remove_folder_from_gui_cache(folder_path: &str) {
     }
 }
 
-/// Provenance check used by `fonts::subset_font`: returns true when the
-/// given path is recorded as a known font in the persistent cache. The
-/// cache acts as a third tier behind the in-memory ALLOWED_FONT_PATHS
-/// (system fonts) and the session DB's `font_faces` (this-run user
-/// sources) — without it, a cross-launch `lookupFontFamily` hit would
-/// return a path that subset_font then rejects, breaking the cache's
-/// primary use case.
-///
-/// Uses the blocking `lock()` (not `try_lock`) — provenance is
-/// correctness-critical and a try_lock false-negative under rescan
-/// contention would have subset_font reject a path the cache
-/// legitimately knows. With the rescan mutex split (Phase 1/3 hold
-/// time is short; Phase 2 runs lock-free), the worst-case wait here
-/// is bounded. Returns false only for cache unavailable / poisoned
-/// / query error — never for "not yet checked".
-pub fn path_in_gui_cache(font_path: &str) -> bool {
-    let slot = match GUI_FONT_CACHE.lock() {
-        Ok(s) => s,
-        Err(_) => return false,
-    };
-    match slot.as_ref() {
-        Some(cache) => cache.path_known(font_path).unwrap_or(false),
-        None => false,
-    }
-}
-
 /// Look up a (family_name, bold, italic) tuple in the cache. Returns
 /// `Some(FontLookupResult)` matching the existing `find_system_font`
 /// shape (path + index) so the frontend can use one TS type across the

@@ -280,12 +280,18 @@ function buildVtt(captions: Caption[], header: string = "WEBVTT"): string {
 
 // Single source of truth for the Dialogue line regex.
 // `i`: ASS renderers are case-insensitive on `Dialogue:` — real-world tooling
-// sometimes emits `DIALOGUE:`. Leading `\s*` tolerates indentation; the
-// captured whitespace is preserved via the prefix group so buildAss
-// round-trips it exactly. A factory (not a shared instance) is used so each
-// call gets a fresh `lastIndex` — guarding against pollution if a previous
+// sometimes emits `DIALOGUE:`. Leading `[\t ]*` tolerates indentation
+// WITHOUT spanning lines: with the `m` flag, `\s*` here would have let the
+// engine consume any number of newlines + blank-line whitespace at each line
+// anchor before failing to match `Dialogue:` and backtracking — a crafted
+// file like `[Script Info]\n` + thousands of empty lines without any
+// Dialogue line drove O(n^2) regex work (Codex 3e8a86d0 — ReDoS via
+// quadratic backtracking on attacker-controlled subtitle inputs). The
+// captured whitespace is preserved via the prefix group so buildAss round-
+// trips it exactly. A factory (not a shared instance) is used so each call
+// gets a fresh `lastIndex` — guarding against pollution if a previous
 // parseAss call threw mid-loop.
-const DIALOGUE_PATTERN = String.raw`^(\s*Dialogue:\s*\d+,)(\d+:\d{2}:\d{2}\.\d{2}),( *)(\d+:\d{2}:\d{2}\.\d{2}),(.*)$`;
+const DIALOGUE_PATTERN = String.raw`^([\t ]*Dialogue:[\t ]*\d+,)(\d+:\d{2}:\d{2}\.\d{2}),( *)(\d+:\d{2}:\d{2}\.\d{2}),(.*)$`;
 const DIALOGUE_FLAGS = "gim";
 
 function createDialogueRe(): RegExp {

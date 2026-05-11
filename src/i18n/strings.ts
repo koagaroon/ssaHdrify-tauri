@@ -158,6 +158,14 @@ export const strings: Record<string, StringEntry> = {
     en: "No supported subtitle files in the dropped items",
     zh: "拖入的内容中没有支持的字幕文件",
   },
+  err_batch_too_many_files: {
+    en: "Batch too large: {0} files exceeds the {1}-file safety cap. Split the selection.",
+    zh: "批量过大：选择了 {0} 个文件，超过 {1} 的安全上限。请分批处理。",
+  },
+  err_batch_aggregate_too_large: {
+    en: "Batch content exceeds the {1} MB safety cap (reached {0} MB). Split the selection.",
+    zh: "批量内容超过 {1} MB 安全上限（已达 {0} MB）。请分批处理。",
+  },
   hdr_drop_hint: {
     en: "Tip: drag subtitle files or a folder onto the file strip above (videos in the folder are skipped automatically)",
     zh: "提示：可将字幕文件或文件夹拖到上方文件栏（文件夹内的视频会自动忽略）",

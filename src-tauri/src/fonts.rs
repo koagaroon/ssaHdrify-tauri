@@ -808,10 +808,28 @@ pub fn find_system_font(
     }
 }
 
-/// Cap on distinct family-name variants pulled from one font face. Real fonts
-/// have 2–4 (English + localized); 32 is a generous safety ceiling against a
-/// pathological name table.
-const MAX_FAMILY_VARIANTS_PER_FACE: usize = 32;
+/// Per-face cap on the number of localized family-name variants kept
+/// from the OpenType `name` table. Worst-case real-world fonts ship at
+/// most ~5 variants (English plus Simplified Chinese, Traditional
+/// Chinese, Japanese, Korean — e.g. Source Han / Noto CJK families); 8
+/// keeps 60% margin over that without giving attacker-influenced font
+/// packs room to bloat per-entry memory.
+///
+/// Codex 13b4e2c0 / 9ece045f flagged the prior value of 32 multiplied
+/// across MAX_FONTS_PER_SCAN (100k) times 256 codepoints times 4 bytes
+/// at roughly 3.2 GB of string data accumulated during cache-write
+/// windows; lowering this to 8 cuts the worst case to ~800 MB and
+/// combines with MAX_CACHE_POPULATE_FACES for ~160 MB peak in practice.
+const MAX_FAMILY_VARIANTS_PER_FACE: usize = 8;
+
+/// Cap on the number of font faces a single directory scan will
+/// snapshot into the GUI / CLI persistent cache. Above this threshold
+/// the cache populate is skipped with a WARN log — session-DB import
+/// still succeeds, the user just doesn't get cross-launch acceleration
+/// for that source. Defense-in-depth against Codex 13b4e2c0 (GUI cache
+/// OOM) and 9ece045f (refresh-fonts OOM): real font libraries top out
+/// at a few thousand faces; 20k is 5× margin over anything legitimate.
+pub const MAX_CACHE_POPULATE_FACES: usize = 20_000;
 
 fn bounded_font_family_name(chars: impl Iterator<Item = char>) -> Option<String> {
     // Take chars lazily with a short ceiling so a malformed font with a
@@ -1322,14 +1340,13 @@ fn run_streaming_scan_command<S>(
     // being passed downstream to the session-DB import. The directory
     // scan path uses this to feed `try_record_folder_in_gui_cache`
     // after commit; the file-list scan path passes `None` because it
-    // has no folder anchor for the cache's drift model. Clone cost is
-    // O(scan size) with peak memory at scan completion; for typical
-    // libraries (sub-10k faces) it's negligible, and for the XL bucket
-    // (~17k faces) it's <10 MB which the JS-heap streaming refactor
-    // ruled out only on the JS side.
+    // has no folder anchor for the cache's drift model. Bounded by
+    // MAX_CACHE_POPULATE_FACES — exceeding the cap clears the Vec and
+    // signals via the returned `populate_cache` bool that the caller
+    // must skip the cache-populate call (Codex 13b4e2c0 OOM defense).
     mut collected_for_cache: Option<&mut Vec<LocalFontEntry>>,
     scan_body: S,
-) -> Result<(), String>
+) -> Result<StreamingScanResult, String>
 where
     S: FnOnce(
         u64,
@@ -1343,6 +1360,10 @@ where
     let source_order = create_user_font_source_tx(&tx, source_id)?;
     let mut import = ImportOutcome::default();
     let mut progress_total = 0usize;
+    // Track whether the cache populate cap was hit mid-scan. Set inside
+    // the closure; consumed by the caller after the scan completes to
+    // decide whether to write the persistent cache for this source.
+    let mut cache_cap_exceeded = false;
     let outcome = scan_body(scan_id, &mut |batch| {
         let batch_size = batch.len();
         // For directory scans, snapshot the batch before it's consumed
@@ -1353,8 +1374,24 @@ where
         // .as_mut() (not .as_deref_mut) so we hold &mut Vec<T>, not the
         // &mut [T] slice that as_deref_mut would yield — slices can't
         // grow, so .extend wouldn't compile against them.
-        if let Some(c) = collected_for_cache.as_mut() {
-            c.extend(batch.iter().cloned());
+        if !cache_cap_exceeded {
+            if let Some(c) = collected_for_cache.as_mut() {
+                if c.len() + batch.len() > MAX_CACHE_POPULATE_FACES {
+                    log::warn!(
+                        "Persistent font cache populate skipped: scan size exceeds {} faces \
+                         (defense-in-depth cap against malicious or abnormally large font \
+                         packs). Session-DB import for this scan is unaffected.",
+                        MAX_CACHE_POPULATE_FACES
+                    );
+                    // Drop accumulated entries to release the peak memory
+                    // — caller signal is via the returned bool, the Vec
+                    // itself is no longer trustworthy.
+                    c.clear();
+                    cache_cap_exceeded = true;
+                } else {
+                    c.extend(batch.iter().cloned());
+                }
+            }
         }
         // Run the SQLite import FIRST so progress_total only advances on
         // committed work. If the import errors, the closure short-
@@ -1397,7 +1434,20 @@ where
             ScanStopReason::CeilingHit => " (ceiling hit)",
         }
     );
-    Ok(())
+    Ok(StreamingScanResult {
+        populate_cache: !cache_cap_exceeded,
+    })
+}
+
+/// Outcome of `run_streaming_scan_command` from the caller's
+/// perspective. Currently a single bool — the cache-populate gate. New
+/// post-scan signals (e.g. drift hints, partial-import counts) can be
+/// added as fields here without breaking call sites.
+struct StreamingScanResult {
+    /// `true` when `collected_for_cache` (if provided) is safe to pass
+    /// to `try_record_folder_in_gui_cache`. `false` when the cap was
+    /// exceeded mid-scan and the Vec has been cleared.
+    populate_cache: bool,
 }
 
 fn run_blocking_scan_import<S>(
@@ -1458,6 +1508,20 @@ pub fn scan_directory_collecting(dir: &Path) -> Result<Vec<LocalFontEntry>, Stri
     }
     let mut entries: Vec<LocalFontEntry> = Vec::new();
     scan_directory_inner(&canonical, NO_SCAN_ID, |batch| {
+        // Defense-in-depth against Codex 9ece045f (refresh-fonts OOM
+        // on crafted font folders): fail fast if a single source would
+        // push us past the cache-populate cap. The CLI caller in
+        // run_refresh_fonts catches this and continues with the next
+        // dir; without the cap, a malicious pack could hold hundreds
+        // of MB to multi-GB of font metadata in memory before the
+        // `cache.replace_folder` write would even start.
+        if entries.len() + batch.len() > MAX_CACHE_POPULATE_FACES {
+            return Err(format!(
+                "Source has more font faces than the persistent cache safely accepts \
+                 ({}+ faces, cap {MAX_CACHE_POPULATE_FACES}). Skipping this source.",
+                entries.len() + batch.len()
+            ));
+        }
         entries.extend(batch);
         Ok(())
     })?;
@@ -1542,7 +1606,7 @@ pub async fn scan_font_directory(
         // folder with no faces (consistent with the cache's data
         // model).
         let mut entries_for_cache: Vec<LocalFontEntry> = Vec::new();
-        run_streaming_scan_command(
+        let result = run_streaming_scan_command(
             scan_id,
             &source_id,
             progress,
@@ -1550,10 +1614,12 @@ pub async fn scan_font_directory(
             Some(&mut entries_for_cache),
             |scan_id, emit_batch| scan_directory_inner(&canonical_dir, scan_id, emit_batch),
         )?;
-        crate::font_cache_commands::try_record_folder_in_gui_cache(
-            &canonical_dir,
-            &entries_for_cache,
-        );
+        if result.populate_cache {
+            crate::font_cache_commands::try_record_folder_in_gui_cache(
+                &canonical_dir,
+                &entries_for_cache,
+            );
+        }
         Ok(())
     })
     .await
@@ -1687,6 +1753,7 @@ pub async fn scan_font_files(
             None,
             |scan_id, emit_batch| scan_files_inner(paths, scan_id, emit_batch),
         )
+        .map(|_result| ())
     })
     .await
     .map_err(|e| format!("Font scan worker failed: {e}"))?
@@ -2141,11 +2208,23 @@ pub fn subset_font(
         "Cannot resolve font path".to_string()
     })?;
 
-    // Primary guard: the path must have been discovered by one of the scan
-    // commands (find_system_font OR scan_font_directory / scan_font_files).
-    // System paths use the small in-memory provenance set; user-picked paths
-    // are checked against the session SQLite source index so XL folders do
-    // not pin a huge path HashSet in RAM.
+    // Provenance guard: the path must have been discovered by one of
+    // the scan commands run in THIS session (find_system_font OR
+    // scan_font_directory / scan_font_files). System paths use the
+    // small in-memory provenance set; user-picked paths are checked
+    // against the session SQLite source index so XL folders do not pin
+    // a huge path HashSet in RAM.
+    //
+    // Persistent GUI cache rows are NOT a provenance source — Codex
+    // 7a34374f: cache rows carry no signature that they were produced
+    // by a trusted scan, and the cache file on disk only checks schema
+    // version. An attacker who can preplant or tamper with the SQLite
+    // file can name any local path as a "cached font" and have subset
+    // read it as bytes (fall-through fallback returns the file's raw
+    // bytes when font parsing fails). Cost: a cached folder still
+    // needs a session-time scan (re-add the source in the GUI, or one
+    // run of refresh-fonts then a normal embed in the CLI) before its
+    // fonts can be embedded — same UX as the pre-#5 baseline.
     let canonical_string = normalize_canonical_path(&canonical.to_string_lossy());
     let is_system = ALLOWED_FONT_PATHS
         .lock()
@@ -2156,19 +2235,7 @@ pub fn subset_font(
     } else {
         is_user_font_path_registered(&canonical_string)?
     };
-    // Third tier: the persistent GUI cache. The session DB is empty on
-    // a fresh launch, so a cross-launch `lookupFontFamily` cache hit
-    // would have its returned path land here as "not registered" and
-    // subset would reject it — the entire cross-launch use case the
-    // persistent cache exists for. Cache membership IS legitimate
-    // provenance: the user's `refresh-fonts` (CLI) or scan_font_directory
-    // (GUI) is what populated it, both consent paths.
-    let is_cache = if is_system || is_user {
-        false
-    } else {
-        crate::font_cache_commands::path_in_gui_cache(&canonical_string)
-    };
-    if !is_system && !is_user && !is_cache {
+    if !is_system && !is_user {
         return Err("Font path was not discovered by a scan command".to_string());
     }
 

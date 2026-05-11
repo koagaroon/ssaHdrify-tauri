@@ -611,26 +611,6 @@ impl FontCache {
         }
     }
 
-    /// Cheap existence check for a font path. Used by `subset_font`'s
-    /// provenance gate: a path lookup_family returned must also be
-    /// recognized as a known scan output, otherwise subset rejects it
-    /// as "not discovered by a scan command" — and on a fresh launch
-    /// the session DB is empty, so this cache check is the only way
-    /// for cross-launch lookup hits to clear provenance without the
-    /// user re-adding the source.
-    pub fn path_known(&self, font_path: &str) -> Result<bool, CacheError> {
-        let row: Result<i64, _> = self.conn.query_row(
-            "SELECT 1 FROM cached_fonts WHERE font_path = ?1 LIMIT 1",
-            params![font_path],
-            |r| r.get(0),
-        );
-        match row {
-            Ok(_) => Ok(true),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
-            Err(e) => Err(CacheError::Io(format!("path_known: {e}"))),
-        }
-    }
-
     /// List every folder currently tracked in the cache. Used by
     /// drift detection to iterate cached folders and check each
     /// against the filesystem.

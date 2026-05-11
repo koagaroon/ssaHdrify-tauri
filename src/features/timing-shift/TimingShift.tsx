@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
+import { List, type RowComponentProps } from "react-window";
 import { pickSubtitleFiles, readText, writeText, fileNameFromPath } from "../../lib/tauri-api";
 import { ask } from "@tauri-apps/plugin-dialog";
 import {
@@ -35,6 +36,52 @@ function fileNameHasSubtitleExt(name: string): boolean {
   const dot = name.lastIndexOf(".");
   if (dot < 0) return false;
   return SUBTITLE_EXTS.has(name.slice(dot + 1).toLowerCase());
+}
+
+// Preview list virtualization (Codex d611ab66 / 7f04ebe6 — preview DOM
+// explosion at the parser's 500k-entry ceiling). The previous
+// preview.map(...) materialized one DOM node per caption regardless of
+// scroll position, freezing the WebView on large inputs even though only
+// a few rows fit in the 280px viewport at any time. react-window
+// constrains the rendered set to overscan + visible rows.
+//
+// PREVIEW_ROW_HEIGHT: derived from the .timeline-row CSS — 12px mono
+// text × 1.2 line-height + 6px top/bottom padding ≈ 26.4px; rounded up
+// to 30 for a margin so descenders don't clip. If the row CSS ever
+// changes, this constant must follow OR the preview will misalign.
+const PREVIEW_ROW_HEIGHT = 30;
+const PREVIEW_LIST_MAX_HEIGHT = 280;
+
+interface PreviewRowData {
+  preview: PreviewEntry[];
+  formatTime: (ms: number) => string;
+  origLabel: string;
+  shiftedLabel: string;
+}
+
+function PreviewRow({
+  index,
+  style,
+  preview,
+  formatTime,
+  origLabel,
+  shiftedLabel,
+}: RowComponentProps<PreviewRowData>) {
+  const entry = preview[index];
+  return (
+    <div style={style} className={"timeline-row" + (entry.wasShifted ? "" : " unchanged")}>
+      <span className="idx">{entry.index}</span>
+      <span className="t-orig" title={`${origLabel}: ${formatTime(entry.originalStart)}`}>
+        {formatTime(entry.originalStart)}
+      </span>
+      <span className="t-new" title={`${shiftedLabel}: ${formatTime(entry.shiftedStart)}`}>
+        {formatTime(entry.shiftedStart)}
+      </span>
+      <span className="txt" title={entry.fullText}>
+        {entry.text}
+      </span>
+    </div>
+  );
 }
 
 export default function TimingShift() {
@@ -102,6 +149,17 @@ export default function TimingShift() {
   const firstFileContent = timingFiles?.firstFileContent ?? "";
   const primaryFileName = fileNames[0] ?? "";
   const fileCount = filePaths.length;
+
+  // Virtualized preview list height — shrinks with the actual row count
+  // for short previews, caps at PREVIEW_LIST_MAX_HEIGHT for long ones.
+  // Computed in a memo so the eslint inline-style rule (`no-restricted-syntax`)
+  // sees an Identifier at the call site instead of a fresh object literal.
+  const previewListStyle = useMemo(
+    () => ({
+      height: Math.min(preview.length * PREVIEW_ROW_HEIGHT, PREVIEW_LIST_MAX_HEIGHT),
+    }),
+    [preview.length]
+  );
 
   // Live preview is computed from the FIRST file only. The same offset
   // applies uniformly to every file in a batch, so a sample of file #1
@@ -731,31 +789,23 @@ export default function TimingShift() {
             <span>{t("col_shifted")}</span>
             <span>{t("col_text")}</span>
           </div>
-          <div className="timeline-list">
-            {preview.map((entry) => (
-              <div
-                key={entry.index}
-                className={"timeline-row" + (entry.wasShifted ? "" : " unchanged")}
-              >
-                <span className="idx">{entry.index}</span>
-                <span
-                  className="t-orig"
-                  title={`${t("col_original")}: ${formatDisplayTime(entry.originalStart)}`}
-                >
-                  {formatDisplayTime(entry.originalStart)}
-                </span>
-                <span
-                  className="t-new"
-                  title={`${t("col_shifted")}: ${formatDisplayTime(entry.shiftedStart)}`}
-                >
-                  {formatDisplayTime(entry.shiftedStart)}
-                </span>
-                <span className="txt" title={entry.fullText}>
-                  {entry.text}
-                </span>
-              </div>
-            ))}
-          </div>
+          <List<PreviewRowData>
+            className="timeline-list"
+            // previewListStyle is a useMemo identifier — passes the inline-style
+            // CSS-injection lint, which forbids object literals / call
+            // expressions at the JSX call site (those can hide user-controlled
+            // input). The computed value comes from preview.length only.
+            style={previewListStyle}
+            rowCount={preview.length}
+            rowHeight={PREVIEW_ROW_HEIGHT}
+            rowComponent={PreviewRow}
+            rowProps={{
+              preview,
+              formatTime: formatDisplayTime,
+              origLabel: t("col_original"),
+              shiftedLabel: t("col_shifted"),
+            }}
+          />
         </div>
       )}
 

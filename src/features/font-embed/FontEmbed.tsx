@@ -61,6 +61,24 @@ function fileNameHasAssExt(name: string): boolean {
   return ASS_EXTS.has(name.slice(dot + 1).toLowerCase());
 }
 
+// Batch ingest caps (Codex 9a2e7e9e — OOM-by-input defense).
+//
+// Font Embed is the only tab that retains EVERY batch file's decoded content
+// in `perFileAnalysisRef` for the unified detection grid + embed loop —
+// HDR / Time Shift / Batch Rename process per-file and discard. Without
+// these caps, a 5000-file folder drop (the drag-drop expansion ceiling on
+// the Rust side) × the 50 MB per-file encoding-layer cap = up to 250 GB
+// theoretical retention. Realistic batches are season-scoped: ≤ 24 ASS
+// files per pick; 500 leaves ample slack for full-series or multi-language
+// batches without straying into adversarial territory.
+//
+// The aggregate-bytes cap is the load-bearing one — file count alone
+// doesn't bound memory when individual files approach 50 MB. 500 MB
+// covers any legitimate workflow (a typical fan-sub ASS is 30-200 KB,
+// even rich-typography ones rarely exceed 5 MB).
+const MAX_BATCH_FILES = 500;
+const MAX_BATCH_AGGREGATE_BYTES = 500 * 1024 * 1024;
+
 export default function FontEmbed() {
   const { t } = useI18n();
   const { fontsFiles, setFontsFiles, clearFile, isFileInUse } = useFileContext();
@@ -207,6 +225,15 @@ export default function FontEmbed() {
         setDropError(conflictMsg);
         return;
       }
+      // Defense-in-depth file-count cap (Codex 9a2e7e9e). The drag-drop
+      // expansion on the Rust side caps at 5000 entries; the multi-file
+      // picker has no explicit cap. Reject up front so a malicious /
+      // accidental large folder doesn't even start consuming readText
+      // IPC bandwidth.
+      if (paths.length > MAX_BATCH_FILES) {
+        setDropError(t("err_batch_too_many_files", paths.length, MAX_BATCH_FILES));
+        return;
+      }
       setDropError(null);
 
       setFonts([]);
@@ -228,6 +255,15 @@ export default function FontEmbed() {
         // Symmetric cache for the persistent font cache lookup tier
         // (#5). Same N×M IPC concern as sysCache.
         const cacheLookupCache = new Map<string, { path: string; index: number } | null>();
+        // Tracks total decoded-content bytes already retained in
+        // `cache` so we abort before the next read pushes the batch
+        // past MAX_BATCH_AGGREGATE_BYTES. UTF-16 string length × 2
+        // approximates the JS-engine retention; the actual memory
+        // footprint with `infos`/`usages` is somewhat higher, but the
+        // dominant term is the decoded content (subtitles average
+        // hundreds of bytes per Dialogue line; analysis structures
+        // average a couple of bytes per font reference).
+        let aggregateBytes = 0;
         for (const path of paths) {
           if (gen !== pickGenRef.current) return;
           let content: string;
@@ -239,6 +275,13 @@ export default function FontEmbed() {
             continue;
           }
           if (gen !== pickGenRef.current) return;
+          aggregateBytes += content.length * 2;
+          if (aggregateBytes > MAX_BATCH_AGGREGATE_BYTES) {
+            const mb = Math.round(aggregateBytes / (1024 * 1024));
+            const capMb = Math.round(MAX_BATCH_AGGREGATE_BYTES / (1024 * 1024));
+            setDropError(t("err_batch_aggregate_too_large", mb, capMb));
+            return;
+          }
           // Production path: ask Rust's session-local source index
           // for matches before falling back to system fonts. The
           // legacy in-memory userFontMap is null here because the
