@@ -31,6 +31,7 @@ import {
   assertSafeOutputFilename,
   assertSafeOutputPath,
   decomposeInputPath,
+  substituteTemplate,
 } from "./lib/path-validation";
 import { parseSubtitle } from "./lib/subtitle-parser";
 
@@ -338,11 +339,11 @@ function resolveShiftOutputPathInternal(
     throw new Error("Input filename has no valid stem");
   }
 
-  const outputName = template
-    .replace(/\{name\}/g, baseName)
-    .replace(/\{ext\}/g, ext)
-    .replace(/\{format\}/g, format.toLowerCase())
-    .replace(/\.{2,}/g, ".");
+  const outputName = substituteTemplate(template, {
+    name: baseName,
+    ext,
+    format: format.toLowerCase(),
+  });
 
   // Shared filename + path safety checks (reserved names, traversal,
   // MAX_PATH, self-overwrite). Same helpers used by HDR's resolver and
@@ -372,10 +373,7 @@ export function resolveEmbedOutputPath(request: {
 function resolveEmbedOutputPathInternal(inputPath: string, template = "{name}.embed.ass"): string {
   const { dir, baseName, normalized, usedBackslash } = decomposeInputPath(inputPath);
 
-  const outputName = template
-    .replace(/\{name\}/g, baseName)
-    .replace(/\{ext\}/g, ".ass")
-    .replace(/\.{2,}/g, ".");
+  const outputName = substituteTemplate(template, { name: baseName, ext: ".ass" });
 
   // Shared filename + path safety checks. See note in
   // resolveShiftOutputPathInternal.

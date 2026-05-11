@@ -277,11 +277,37 @@ describe("resolveChainOutputPath", () => {
   it("collapses adjacent dots from empty token substitutions", () => {
     // A template like `{name}.{lang}.ass` with no `{lang}` token
     // support at chain level leaves `{lang}` literal — but if a user
-    // writes a deliberate `{name}..ass`, the `\.{2,}/g` collapse
-    // normalizes it.
+    // writes a deliberate `{name}..ass`, substituteTemplate normalizes
+    // it (template-literal dot-run collapse, Phase A).
     expect(resolveChainOutputPath("C:\\subs\\ep01.ass", "{name}..processed.ass")).toBe(
       "C:\\subs\\ep01.processed.ass"
     );
+  });
+
+  it("preserves intentional `..` inside user content (Round 1 F4.N-R1-1)", () => {
+    // Fan-sub filenames legitimately carry `..` in the baseName — e.g.,
+    // `[Group]Show..special.ass`. The blanket post-substitution
+    // collapse used previously fused those into a single dot, corrupting
+    // the output filename. The boundary-aware substituteTemplate now
+    // touches dots only at value↔literal junctions and inside template
+    // literals; value-internal `..` survives.
+    expect(
+      resolveChainOutputPath("C:\\subs\\[Group]Show..special.ass", "{name}.shifted{ext}")
+    ).toBe("C:\\subs\\[Group]Show..special.shifted.ass");
+    expect(
+      resolveChainOutputPath("C:\\subs\\[Group]Show..special.ass", "{name}.shifted.{ext}")
+    ).toBe("C:\\subs\\[Group]Show..special.shifted.ass");
+  });
+
+  it("substitutes values containing `$` literally (Round 1 F4.A-R1-3)", () => {
+    // String#replace with $-bearing replacement strings interprets
+    // `$&` / `$'` / `` $` `` / `$<N>` as backref tokens. Filenames
+    // with `$` are rare but legal (Windows admin shares like `c$`,
+    // batch scripts named `build_$1.ass`, etc.). substituteTemplate
+    // routes values through split-join so `$&` stays literal.
+    expect(
+      resolveChainOutputPath("C:\\subs\\build_$&_v2.ass", "{name}.shifted{ext}")
+    ).toBe("C:\\subs\\build_$&_v2.shifted.ass");
   });
 
   it("rejects relative-path inputs (must be absolute)", () => {

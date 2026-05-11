@@ -23,6 +23,7 @@ import {
   assertSafeOutputFilename,
   assertSafeOutputPath,
   decomposeInputPath,
+  substituteTemplate,
 } from "../../lib/path-validation";
 import type {
   ChainResult,
@@ -238,10 +239,7 @@ export function runChain(request: ChainRunRequest): ChainResult {
 export function resolveChainOutputPath(inputPath: string, template: string): string {
   const { dir, baseName, ext, normalized, usedBackslash } = decomposeInputPath(inputPath);
 
-  const outputName = template
-    .replace(/\{name\}/g, baseName)
-    .replace(/\{ext\}/g, ext)
-    .replace(/\.{2,}/g, ".");
+  const outputName = substituteTemplate(template, { name: baseName, ext });
 
   assertSafeOutputFilename(outputName);
   const outputPath = `${dir}/${outputName}`;

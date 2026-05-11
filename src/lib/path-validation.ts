@@ -193,6 +193,80 @@ export function decomposeInputPath(inputPath: string): InputPathParts {
 }
 
 /**
+ * Substitute `{token}` placeholders in `template` with `vars` values.
+ *
+ * Two design choices, both responses to Round 1 findings:
+ *
+ * 1. **No `$`-interpretation on values.** A naïve
+ *    `template.replace(/\{token\}/g, value)` interprets `$&`, `$'`,
+ *    `` $` ``, and `$<N>` inside `value` as backreference tokens.
+ *    Filenames legitimately can contain `$` (rare but valid on every
+ *    supported filesystem) — and CLI argv on Windows lets a user pass
+ *    paths containing `$`. This helper substitutes via `split().join()`,
+ *    which treats values literally.
+ *
+ * 2. **Boundary-only adjacent-dot collapse.** Earlier callsites used a
+ *    blanket `replace(/\.{2,}/g, ".")` post-pass to clean up artifacts
+ *    like `name..ass` (from `{name}.{ext}` with `ext = ".ass"`) or
+ *    `name..ass` (from an empty `{lang}` between dots in
+ *    `{name}.{lang}.ass`). That post-pass also collapsed `..` INSIDE
+ *    user content (baseName like `[Group]Show..special` →
+ *    `[Group]Show.special`, mangling intentional double-dots in fan-sub
+ *    filenames). This helper inspects each token-substitution boundary
+ *    instead and trims at most one boundary dot — user content's
+ *    internal dots stay intact.
+ *
+ * `vars` keys are token names without braces; tokens whose key is
+ * missing substitute to "".
+ */
+export function substituteTemplate(template: string, vars: Record<string, string>): string {
+  // Parse template into ordered segments — alternating literal text
+  // (template structure) and value text (substituted token data).
+  type Seg = { kind: "literal" | "value"; text: string };
+  const segments: Seg[] = [];
+  const tokenRe = /\{([a-z_][a-z0-9_]*)\}/g;
+  let cursor = 0;
+  let m: RegExpExecArray | null;
+  while ((m = tokenRe.exec(template)) !== null) {
+    if (m.index > cursor) {
+      segments.push({ kind: "literal", text: template.slice(cursor, m.index) });
+    }
+    segments.push({ kind: "value", text: vars[m[1]] ?? "" });
+    cursor = m.index + m[0].length;
+  }
+  if (cursor < template.length) {
+    segments.push({ kind: "literal", text: template.slice(cursor) });
+  }
+
+  // Phase A: collapse `\.{2,}` runs INSIDE template literals. Catches
+  // user typos like `{name}..processed.ass`. Values are never touched
+  // here — `[Group]Show..special` inside a baseName keeps its `..`.
+  for (const seg of segments) {
+    if (seg.kind === "literal") {
+      seg.text = seg.text.replace(/\.{2,}/g, ".");
+    }
+  }
+
+  // Phase B: concatenate segments. At each junction, if both sides
+  // contribute a dot (value ends with `.` + next literal starts with
+  // `.`, or literal ends with `.` + next value starts with `.`), drop
+  // one boundary dot. An empty value collapses to "no contribution":
+  // its surrounding `.`s only collapse if literal-meets-literal at the
+  // junction (which produces a single `..` in the literal sequence,
+  // not handled here — falls through to the next iteration's boundary
+  // check). Internal value dots stay verbatim.
+  let out = "";
+  for (const seg of segments) {
+    let chunk = seg.text;
+    if (chunk.startsWith(".") && out.endsWith(".")) {
+      chunk = chunk.slice(1);
+    }
+    out += chunk;
+  }
+  return out;
+}
+
+/**
  * Validate a single output filename (no path separators) for safety.
  * Caller is responsible for stripping the directory portion before
  * calling.

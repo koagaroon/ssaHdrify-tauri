@@ -10,6 +10,7 @@ import {
   assertSafeOutputFilename,
   assertSafeOutputPath,
   decomposeInputPath,
+  substituteTemplate,
 } from "../../lib/path-validation";
 
 // ── Template Presets ──────────────────────────────────────
@@ -116,29 +117,18 @@ export function resolveOutputPath(
   const langValue = (options.lang ?? extractLangFromBaseName(baseName)).toLowerCase();
   const videoStem = stripVideoExtension(options.videoName ?? "");
 
-  // Resolve template variables in a single pass to prevent double-substitution
-  // (e.g., a filename containing literal "{eotf}" being expanded by the second replace)
-  const resolved = template
-    .replace(/\{(name|eotf|video_name|lang)\}/g, (_, key: string) => {
-      switch (key) {
-        case "name":
-          return baseName;
-        case "eotf":
-          return eotf.toLowerCase();
-        case "video_name":
-          return videoStem;
-        case "lang":
-          return langValue;
-        default:
-          return "";
-      }
-    })
-    // Collapse adjacent-dot artifacts produced when an optional token
-    // ({lang} or {video_name}) resolves to an empty string in the middle
-    // of a template like `{video_name}.{lang}.ass`. Templates without
-    // empty tokens are unchanged. Side note: input filenames containing
-    // literal `..` (very rare, almost always a typo) collapse here too.
-    .replace(/\.{2,}/g, ".");
+  // Shared template substitution: handles empty-token boundary-dot
+  // collapse (`{video_name}.{lang}.ass` with empty values reads as
+  // `name.ass`) without fusing user content's intentional `..` (a
+  // baseName like `[Group]Show..special` keeps its double-dot). Also
+  // routes values through literal split-join so `$&`/`$'` sequences
+  // inside values stay literal.
+  const resolved = substituteTemplate(template, {
+    name: baseName,
+    eotf: eotf.toLowerCase(),
+    video_name: videoStem,
+    lang: langValue,
+  });
 
   // Filename-level safety: empty / illegal chars / Windows reserved
   // names. Extracted into ../../lib/path-validation so Shift / Embed
