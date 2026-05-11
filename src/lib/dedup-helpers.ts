@@ -11,12 +11,14 @@
  *
  * `normalizeOutputKey`: the dedup key shared by within-batch output
  * collision checks (HDR / Timing / Fonts / Rename loops). NFC + forward
- * slash + lowercase, so Windows case-insensitive paths and
- * macOS HFS+/APFS-produced NFD filenames don't appear distinct from
- * their NFC counterparts on disk.
+ * slash + (case-insensitive-FS-only) lowercase, so the same on-disk
+ * file isn't seen as two distinct outputs across encodings or path-
+ * separator conventions on Windows / macOS while Linux ext4/btrfs/xfs
+ * keep case-distinct names distinct.
  */
 import type { TabId } from "./FileContext";
 import { TAB_LABEL_KEYS } from "./tab-labels";
+import { isCaseInsensitiveFs } from "./platform";
 
 /** Translator signature used by `buildConflictMessage`. Matches the
  *  `t` callback returned from `useI18n`. */
@@ -67,11 +69,21 @@ export function buildConflictMessage(
 
 /**
  * Canonical dedup key for an output path. NFC normalization + forward
- * slashes + lowercase so the same on-disk file isn't seen as two
- * distinct outputs across encodings or path-separator conventions.
+ * slashes + (on case-insensitive filesystems) lowercase so the same
+ * on-disk file isn't seen as two distinct outputs across encodings or
+ * path-separator conventions.
+ *
+ * Lowercase is gated on `isCaseInsensitiveFs` so Linux ext4/btrfs/xfs
+ * (case-sensitive) keeps `Episode.ass` and `episode.ass` as distinct
+ * outputs while Windows NTFS / macOS APFS / HFS+ (case-insensitive by
+ * default) collapses them — matches OS-level filesystem semantics so
+ * the dedup catches real on-disk collisions but doesn't over-merge on
+ * platforms where case-only names are legitimately distinct (Codex
+ * dd2d9554).
  */
 export function normalizeOutputKey(path: string): string {
-  return path.normalize("NFC").replace(/\\/g, "/").toLowerCase();
+  const normalized = path.normalize("NFC").replace(/\\/g, "/");
+  return isCaseInsensitiveFs ? normalized.toLowerCase() : normalized;
 }
 
 /** Bidirectional controls + line/paragraph separators whose visual

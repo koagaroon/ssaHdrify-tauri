@@ -2749,7 +2749,15 @@ fn normalize_output_key(path: &Path) -> String {
 
 fn normalize_output_key_after_strip(s: &str) -> String {
     let normalized = s.replace('\\', "/").nfc().collect::<String>();
-    if cfg!(windows) {
+    // Lowercase on case-insensitive filesystems (Codex dd2d9554): Windows
+    // NTFS and macOS APFS / HFS+ default to case-insensitive, so
+    // `Episode.ass` and `episode.ass` collide on disk and must collapse
+    // to one dedup key. Linux ext4 / btrfs / xfs are case-sensitive and
+    // keep distinct names distinct. macOS users who opt into the
+    // case-sensitive APFS variant are <1% and have to live with the
+    // over-merge (better to over-merge than to under-merge and silently
+    // overwrite outputs).
+    if cfg!(windows) || cfg!(target_os = "macos") {
         normalized.to_lowercase()
     } else {
         normalized
@@ -3126,7 +3134,10 @@ mod tests {
         ];
 
         let duplicates = duplicate_rename_output_keys(&rows);
-        let expected_key = if cfg!(windows) {
+        // Lowercase expected on case-insensitive filesystems (Windows + macOS);
+        // matches the production normalize_output_key_after_strip logic so
+        // Linux CI sees a case-distinct key and macOS/Windows see the folded form.
+        let expected_key = if cfg!(windows) || cfg!(target_os = "macos") {
             "c:/subs/episode.ass"
         } else {
             "C:/Subs/Episode.ass"
@@ -3162,7 +3173,7 @@ mod tests {
 
         let duplicates = duplicate_rename_output_keys(&rows);
         assert_eq!(duplicates.len(), 1);
-        let expected_key = if cfg!(windows) {
+        let expected_key = if cfg!(windows) || cfg!(target_os = "macos") {
             "c:/subs/episode.ass"
         } else {
             "C:/Subs/Episode.ass"
@@ -3176,7 +3187,7 @@ mod tests {
         let precomposed = normalize_output_key(Path::new("C:/Subs/Caf\u{00e9}.ass"));
         assert_eq!(decomposed, precomposed);
 
-        if cfg!(windows) {
+        if cfg!(windows) || cfg!(target_os = "macos") {
             assert_eq!(precomposed, "c:/subs/caf\u{00e9}.ass");
         }
     }

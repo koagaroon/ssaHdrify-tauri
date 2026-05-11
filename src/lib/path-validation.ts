@@ -1,3 +1,5 @@
+import { isWindowsRuntime } from "./platform";
+
 /**
  * Shared output-path validation helpers.
  *
@@ -137,11 +139,16 @@ export function decomposeInputPath(inputPath: string): InputPathParts {
   if (!inputPath) {
     throw new Error("Input path must be absolute");
   }
-  // ANY backslash → output uses backslashes. Mixed-separator Windows
-  // paths (a `\\server\share/file.ass` from upstream JS normalization)
-  // bias to native style rather than to POSIX.
-  const usedBackslash = inputPath.includes("\\");
-  const normalized = inputPath.replace(/\\/g, "/");
+  // ANY backslash → output uses backslashes — but ONLY on Windows.
+  // On POSIX, `\` is a valid filename character (Codex 8850ede7 /
+  // edb0e74f), not a path separator; treating it as one normalizes
+  // `/home/u/ep\01.srt` to `/home/u/ep/01.srt` and replaces output
+  // slashes with backslashes, producing `\home\u\ep\01.shifted.srt`
+  // which is a relative filename rather than a path under /home/u.
+  // Mixed-separator Windows paths (a `\\server\share/file.ass` from
+  // upstream JS normalization) still bias to native style on Windows.
+  const usedBackslash = isWindowsRuntime && inputPath.includes("\\");
+  const normalized = usedBackslash ? inputPath.replace(/\\/g, "/") : inputPath;
 
   // Reject control / NUL chars early. Windows would silently truncate
   // at NUL — `evil\0.exe.ass` becomes `evil`, bypassing the trailing

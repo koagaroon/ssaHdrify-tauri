@@ -22,6 +22,7 @@
 
 import { normalizeOutputKey } from "../../lib/dedup-helpers";
 import { assertSafeOutputFilename, assertSafeOutputPath } from "../../lib/path-validation";
+import { isWindowsRuntime } from "../../lib/platform";
 
 // ── Bracket cleanup ──────────────────────────────────────
 
@@ -417,12 +418,13 @@ export function deriveRenameOutputPath(
     targetDir = chosenDir;
   }
 
-  // Preserve native path separator from the subtitle path. Use the
-  // "any backslash → use backslash" form (matches deriveShiftedPath /
-  // deriveEmbeddedPath); the older "all backslash, no forward slash"
-  // form misclassifies mixed-separator Windows paths and emits forward
-  // slashes for them.
-  const usedBackslash = subtitlePath.includes("\\");
+  // Preserve native path separator from the subtitle path. Only emit
+  // backslashes when running on Windows: on POSIX `\` is a valid
+  // filename character (Codex edb0e74f), and a path like
+  // `/home/u/Show\01.ass` would otherwise have every `/` rewritten to
+  // `\`, producing a relative path rooted at the cwd instead of the
+  // intended directory.
+  const usedBackslash = isWindowsRuntime && subtitlePath.includes("\\");
   const normTargetDir = targetDir.replace(/\\/g, "/").replace(/\/$/, "");
   const outputPath = normTargetDir ? `${normTargetDir}/${outName}` : outName;
 
@@ -550,12 +552,14 @@ function baseName(path: string): string {
 }
 
 function dirname(path: string): string {
-  const norm = path.replace(/\\/g, "/");
+  // Backslashes are only path separators on Windows (Codex edb0e74f /
+  // 8850ede7); on POSIX they're valid filename characters. The earlier
+  // unconditional `path.replace(/\\/g, "/")` would split POSIX filenames
+  // that contain a backslash.
+  const windowsPath = isWindowsRuntime && path.includes("\\");
+  const norm = windowsPath ? path.replace(/\\/g, "/") : path;
   const lastSlash = norm.lastIndexOf("/");
   if (lastSlash < 0) return "";
-  // "any backslash → use backslash" — see deriveRenameOutputPath above
-  // for why mixed-separator paths must take the backslash branch.
-  const usedBackslash = path.includes("\\");
   const dir = norm.slice(0, lastSlash);
-  return usedBackslash ? dir.replace(/\//g, "\\") : dir;
+  return windowsPath ? dir.replace(/\//g, "\\") : dir;
 }
