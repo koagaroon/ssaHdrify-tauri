@@ -283,12 +283,18 @@ export async function analyzeFonts(
  * surrogate halves independently — two fonts that differ only in the
  * astral half could otherwise collide.
  */
-function familyFnvHash(family: string): string {
+// FNV-1a-INSPIRED, not FNV-1a (Round 1 F1.N-R1-5): standard FNV-1a runs
+// on a byte stream, typically the UTF-8 encoding of the input. This
+// variant iterates over Unicode codepoints and mixes each one as three
+// 8-bit chunks (low / mid / high) — a stable, deterministic hash with
+// the same shape but distinct outputs from a textbook FNV-1a on the
+// UTF-8 bytes of the same string. The function's only contract is
+// "stable, distinct outputs for distinct inputs"; the name is
+// `familyStableHash` to avoid promising a wire-compatible FNV-1a.
+function familyStableHash(family: string): string {
   let h = 0x811c9dc5;
   for (const ch of family) {
     const cp = ch.codePointAt(0) ?? 0;
-    // Mix each byte of the 32-bit codepoint into the hash so astral-plane
-    // codepoints (U+10000..U+10FFFF) contribute all their bits.
     h ^= cp & 0xff;
     h = Math.imul(h, 0x01000193);
     h ^= (cp >>> 8) & 0xff;
@@ -320,7 +326,7 @@ function buildFontFileName(key: FontKey): string {
   // When the ASCII-only strip empties the name — common for pure-CJK family
   // names — append a stable hash of the original so distinct CJK fonts don't
   // collide on the same `font.ttf` filename inside the [Fonts] section.
-  if (!name) name = `font_${familyFnvHash(key.family)}`;
+  if (!name) name = `font_${familyStableHash(key.family)}`;
   if (key.bold) name += "_bold";
   if (key.italic) name += "_italic";
   return `${name}.ttf`;

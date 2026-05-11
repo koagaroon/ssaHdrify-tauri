@@ -98,7 +98,7 @@ export default function FontCacheDriftModal({
       setDoneMessage(t("font_cache_rescan_done", result.modifiedRescanned, result.removedEvicted));
       onRescanComplete();
     } catch (e) {
-      setError(String(e));
+      setError(e instanceof Error ? e.message : String(e));
       setWorking(null);
     }
   }, [onRescanComplete, t]);
@@ -113,7 +113,7 @@ export default function FontCacheDriftModal({
       setDoneMessage(t("font_cache_cleared"));
       onClearComplete();
     } catch (e) {
-      setError(String(e));
+      setError(e instanceof Error ? e.message : String(e));
       setWorking(null);
     }
   }, [onClearComplete, t]);

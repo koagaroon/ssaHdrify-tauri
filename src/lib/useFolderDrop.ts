@@ -129,8 +129,20 @@ export function useFolderDrop({
                 // event check at line 96 only covers the trivial "drop
                 // arrives when already busy" case — not "drop arrives
                 // when idle, becomes busy mid-await."
-                if (mounted && !disabledRef.current && expanded.length > 0) {
-                  onPathsRef.current(expanded);
+                if (mounted && !disabledRef.current) {
+                  if (expanded.length > 0) {
+                    onPathsRef.current(expanded);
+                  } else if (event.payload.paths.length > 0) {
+                    // Non-empty input that expanded to zero paths — the
+                    // user dropped *something*, the Rust side accepted
+                    // the call, and yet we'd silently do nothing without
+                    // this signal (Round 1 F1.N-R1-17). Surface as an
+                    // error so the consumer banner reads "no usable
+                    // files in this drop" instead of nothing.
+                    onErrorRef.current?.(
+                      new Error("Drop expanded to zero usable paths")
+                    );
+                  }
                 }
               } catch (e) {
                 console.error("expandDroppedPaths failed:", e);

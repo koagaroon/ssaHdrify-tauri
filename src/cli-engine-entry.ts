@@ -397,13 +397,13 @@ function buildFontFileName(key: FontKey): string {
     .replace(/[^a-z0-9_-]/g, "_")
     .replace(/_+/g, "_")
     .replace(/^_|_$/g, "");
-  if (!name) name = `font_${familyFnvHash(key.family)}`;
+  if (!name) name = `font_${familyStableHash(key.family)}`;
   if (key.bold) name += "_bold";
   if (key.italic) name += "_italic";
   return `${name}.ttf`;
 }
 
-function familyFnvHash(family: string): string {
+function familyStableHash(family: string): string {
   let h = 0x811c9dc5;
   for (const ch of family) {
     const cp = ch.codePointAt(0) ?? 0;

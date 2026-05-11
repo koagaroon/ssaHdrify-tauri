@@ -4,6 +4,7 @@
  */
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke, Channel } from "@tauri-apps/api/core";
+import { Base64 } from "js-base64";
 
 // ── File Dialogs ──────────────────────────────────────────
 
@@ -311,11 +312,11 @@ export async function subsetFont(
   codepoints: number[]
 ): Promise<Uint8Array> {
   const b64: string = await invoke("subset_font_b64", { fontPath, fontIndex, codepoints });
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
+  // js-base64 (consistent with chain-runtime's decodeBase64). WebView2
+  // has a working `atob`, but using one decoder library across both
+  // paths keeps the encoding contract single-rooted — a future bug fix
+  // in one site shows up in the other automatically (Round 1 F1.N-R1-15).
+  const bytes = Base64.toUint8Array(b64);
   return bytes;
 }
 

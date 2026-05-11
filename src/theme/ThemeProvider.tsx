@@ -4,7 +4,7 @@
  * "auto" listens to prefers-color-scheme media query and updates
  * the resolved appearance in real time. Persists mode to localStorage.
  */
-import { useState, useEffect, useMemo, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { ThemeContext, type ThemeMode, type ThemeAppearance } from "./useTheme";
 
 const STORAGE_KEY = "ssahdrify-theme";
@@ -34,14 +34,18 @@ export default function ThemeProvider({ children }: { children: ReactNode }) {
   const [mode, setModeState] = useState<ThemeMode>(loadMode);
   const [systemPref, setSystemPref] = useState<ThemeAppearance>(getSystemPreference);
 
-  const setMode = (next: ThemeMode) => {
+  // Stable setMode identity so the context value's reference is only
+  // recreated when mode / appearance change (matched in the useMemo
+  // below). Sibling providers (I18nProvider, StatusProvider) use the
+  // same pattern; ThemeProvider was the outlier (Round 1 F1.N-R1-16).
+  const setMode = useCallback((next: ThemeMode) => {
     setModeState(next);
     try {
       localStorage.setItem(STORAGE_KEY, next);
     } catch {
       // Keep the live mode even when persistence is unavailable.
     }
-  };
+  }, []);
 
   // Listen for system preference changes (for auto mode)
   useEffect(() => {
@@ -64,7 +68,10 @@ export default function ThemeProvider({ children }: { children: ReactNode }) {
     document.documentElement.setAttribute("data-theme", appearance);
   }, [appearance]);
 
-  return (
-    <ThemeContext.Provider value={{ mode, appearance, setMode }}>{children}</ThemeContext.Provider>
+  const contextValue = useMemo(
+    () => ({ mode, appearance, setMode }),
+    [mode, appearance, setMode]
   );
+
+  return <ThemeContext.Provider value={contextValue}>{children}</ThemeContext.Provider>;
 }
