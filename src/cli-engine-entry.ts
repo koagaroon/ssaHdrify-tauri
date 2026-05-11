@@ -1,4 +1,5 @@
 import { parse as parseAss } from "ass-compiler";
+import { isWindowsRuntime } from "./lib/platform";
 import { processAssContent } from "./features/hdr-convert/ass-processor";
 import { SECTION_HEADER_RE } from "./features/hdr-convert/ass-processor";
 import {
@@ -167,7 +168,13 @@ export function convertHdr(request: HdrConversionRequest): HdrConversionResult {
   // (string ops only) and the two paths route through resolveOutputPath
   // with identical defaults — byte equality is structurally guaranteed.
   const outputPath = resolveOutputPath(request.inputPath, outputTemplate, request.eotf);
-  const fileName = request.inputPath.replace(/\\/g, "/").split("/").pop() ?? request.inputPath;
+  // Backslash → forward only on Windows. On POSIX, `\` is a valid
+  // filename character; treating it as a separator would mis-extract
+  // `EP\01.ass` as `01.ass` instead of the actual filename.
+  const normalizedForName = isWindowsRuntime
+    ? request.inputPath.replace(/\\/g, "/")
+    : request.inputPath;
+  const fileName = normalizedForName.split("/").pop() ?? request.inputPath;
 
   if (isNativeAss(fileName)) {
     return {
@@ -686,7 +693,10 @@ function canonicalLanguage(language: string): string {
 }
 
 function fileNameFromPath(path: string): string {
-  const normalized = path.replace(/\\/g, "/");
+  // Conditional separator normalization: `\` is a valid filename char on
+  // POSIX (Codex edb0e74f / 8850ede7). Unconditional conversion turned
+  // single Linux filenames containing `\` into path components.
+  const normalized = isWindowsRuntime ? path.replace(/\\/g, "/") : path;
   const slash = normalized.lastIndexOf("/");
   return slash >= 0 ? normalized.slice(slash + 1) : normalized;
 }

@@ -1,4 +1,4 @@
-import { isWindowsRuntime } from "./platform";
+import { isCaseInsensitiveFs, isWindowsRuntime } from "./platform";
 
 /**
  * Shared output-path validation helpers.
@@ -193,6 +193,31 @@ export function decomposeInputPath(inputPath: string): InputPathParts {
 }
 
 /**
+ * Filesystem-aware path equality. Returns true if two paths refer to
+ * the same file on the runtime's filesystem.
+ *
+ * Why two gates, not one:
+ * - **Separator normalization** is conditional on `isWindowsRuntime`. On
+ *   Windows `/` and `\` are interchangeable separators; on POSIX `\` is
+ *   a valid filename character (Codex edb0e74f / 8850ede7). Normalizing
+ *   `EP\01.ass` to `EP/01.ass` on Linux turns a single file into a path.
+ * - **Case folding** is conditional on `isCaseInsensitiveFs`. NTFS (Win)
+ *   and APFS / HFS+ (macOS default) are case-insensitive; Linux ext4 /
+ *   btrfs / xfs are case-sensitive. Folding case on Linux false-conflates
+ *   `Episode.ass` and `episode.ass`, which legitimately are distinct
+ *   files there (Codex dd2d9554).
+ *
+ * Use this anywhere two paths need to be compared for "is this the same
+ * file" semantics: cross-tab duplicate guard, self-overwrite check,
+ * output-collision pre-check.
+ */
+export function pathsEqualOnFs(a: string, b: string): boolean {
+  const normSep = (p: string) => (isWindowsRuntime ? p.replace(/\\/g, "/") : p);
+  const normCase = (p: string) => (isCaseInsensitiveFs ? p.toLowerCase() : p);
+  return normCase(normSep(a)) === normCase(normSep(b));
+}
+
+/**
  * Substitute `{token}` placeholders in `template` with `vars` values.
  *
  * Two design choices, both responses to Round 1 findings:
@@ -346,10 +371,12 @@ export function assertSafeOutputPath(outputPath: string, inputPath: string): voi
     throw new Error(`Output path too long (${normalizedOutput.length} chars, max ${maxPathLen})`);
   }
 
-  // Self-overwrite. Case-insensitive because Windows file names are
-  // typically case-insensitive; conservative everywhere because the
-  // app's primary platform is Windows.
-  if (lower === normalizedInput.toLowerCase()) {
+  // Self-overwrite. Filesystem-aware: case-folding only on Windows /
+  // macOS where the FS is case-insensitive. On Linux ext4 / btrfs / xfs,
+  // `Episode.ass` and `episode.ass` are distinct files so unconditional
+  // lowercase would false-reject a legitimate `episode.ass` output when
+  // the input was `Episode.ass`.
+  if (pathsEqualOnFs(normalizedOutput, normalizedInput)) {
     throw new Error("Output path is the same as input (would overwrite source file)");
   }
 }

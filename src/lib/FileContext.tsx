@@ -21,6 +21,8 @@
 
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
 
+import { pathsEqualOnFs } from "./path-validation";
+
 // ── Types ────────────────────────────────────────────────
 
 export type TabId = "hdr" | "timing" | "fonts" | "rename";
@@ -102,18 +104,21 @@ export function FileProvider({ children }: { children: ReactNode }) {
 
   const isFileInUse = useCallback(
     (path: string, excludeTab?: TabId): TabId | null => {
-      // Normalize to forward-slash + lowercase for Windows case-insensitive comparison.
-      // Without this, the same physical file at different cases (e.g., "Movie.ass"
-      // vs "movie.ass") would bypass the duplicate guard on Windows.
-      const norm = (p: string) => p.replace(/\\/g, "/").toLowerCase();
-      const np = norm(path);
-      if (excludeTab !== "hdr" && hdrFiles?.filePaths.some((p) => norm(p) === np)) {
+      // `pathsEqualOnFs` handles separator + case folding conditionally
+      // on the runtime FS (`\` is a valid filename char on POSIX; only
+      // NTFS / APFS / HFS+ are case-insensitive). Without that gating
+      // Linux users would see false-positive collisions between
+      // legitimately distinct files like `Episode.ass` vs `episode.ass`.
+      if (excludeTab !== "hdr" && hdrFiles?.filePaths.some((p) => pathsEqualOnFs(p, path))) {
         return "hdr";
       }
-      if (excludeTab !== "timing" && timingFiles?.filePaths.some((p) => norm(p) === np)) {
+      if (
+        excludeTab !== "timing" &&
+        timingFiles?.filePaths.some((p) => pathsEqualOnFs(p, path))
+      ) {
         return "timing";
       }
-      if (excludeTab !== "fonts" && fontsFiles?.filePaths.some((p) => norm(p) === np)) {
+      if (excludeTab !== "fonts" && fontsFiles?.filePaths.some((p) => pathsEqualOnFs(p, path))) {
         return "fonts";
       }
       // Tab 4 holds both videos and subtitles, but only the SUBTITLE
@@ -122,7 +127,10 @@ export function FileProvider({ children }: { children: ReactNode }) {
       // conflict with anything in the other three tabs. Within Tab 4
       // itself, both lists are checked (excludeTab === "rename" skips
       // this whole block).
-      if (excludeTab !== "rename" && renameFiles?.subtitlePaths.some((p) => norm(p) === np)) {
+      if (
+        excludeTab !== "rename" &&
+        renameFiles?.subtitlePaths.some((p) => pathsEqualOnFs(p, path))
+      ) {
         return "rename";
       }
       return null;
