@@ -66,9 +66,12 @@ struct GlobalOptions {
     #[arg(long, global = true)]
     no_cache: bool,
 
-    /// Override the default font cache file path. Default is
-    /// %APPDATA%/ssaHdrify/cli_font_cache.sqlite3. Useful for
-    /// testing or non-default layouts. 覆盖字体缓存文件路径。
+    /// Override the default font cache file path. Default location
+    /// follows each OS's user-data convention: `%APPDATA%/ssaHdrify/`
+    /// on Windows, `$XDG_DATA_HOME/ssaHdrify/` or `~/.local/share/ssaHdrify/`
+    /// on Linux, `~/Library/Application Support/ssaHdrify/` on macOS,
+    /// always named `cli_font_cache.sqlite3`. Useful for testing or
+    /// non-default layouts. 覆盖字体缓存文件路径。
     #[arg(long, global = true, value_name = "PATH")]
     cache_file: Option<PathBuf>,
 }
@@ -2581,16 +2584,23 @@ fn output_path_exists(globals: &GlobalOptions, path: &Path) -> bool {
             // overwrite a file we couldn't stat (restrictive ACLs,
             // network shares with metadata-read denied). Surface a
             // stderr warning so the user sees the real cause instead of
-            // a misleading "skipped: output exists" diagnostic.
-            let display = path.display();
-            eprintln!(
-                "{}",
-                localize(
-                    globals,
-                    format!("warning: stat({display}) failed: {err}; treating as 'output exists'"),
-                    format!("警告：stat({display}) 失败：{err}；按「输出存在」处理"),
-                )
-            );
+            // a misleading "skipped: output exists" diagnostic. Honors
+            // --quiet (Round 1 A3.N-R1-9): the user opted into a
+            // diagnostics-free run and this warning fired even then,
+            // breaking the "no stderr noise when --quiet" contract.
+            if !globals.quiet {
+                let display = path.display();
+                eprintln!(
+                    "{}",
+                    localize(
+                        globals,
+                        format!(
+                            "warning: stat({display}) failed: {err}; treating as 'output exists'"
+                        ),
+                        format!("警告：stat({display}) 失败：{err}；按「输出存在」处理"),
+                    )
+                );
+            }
             true
         }
     }

@@ -71,8 +71,10 @@ export interface ChainFontSubsetPayload {
    * Subset bytes encoded as base64. The Rust shell encodes `Vec<u8>`
    * into a base64 string (~1.33× expansion) instead of the previous
    * JSON `[byte, byte, ...]` form (~4-5× expansion that pressured V8's
-   * heap on the worst-case CUMULATIVE_FALLBACK_BYTES path). The
-   * embed transform decodes via `atob`.
+   * heap on the worst-case CUMULATIVE_FALLBACK_BYTES path). The embed
+   * transform decodes via `js-base64`; the bare deno_core JsRuntime
+   * has no `atob` global, and the GUI's `subsetFont` decodes the same
+   * way so both paths share one decoder.
    */
   dataB64: string;
 }

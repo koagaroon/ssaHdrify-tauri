@@ -128,8 +128,10 @@ function chineseNumeralToInt(s: string): number {
     九: 9,
     十: 10,
   };
+  // single-char `s` (including "十") covered by the map above:
+  // map["十"] === 10, so the previous explicit "十"-check here was
+  // unreachable (Round 1 F4.N-R1-9, deleted).
   if (s.length === 1) return map[s] ?? 1;
-  if (s === "十") return 10;
   const tenIdx = s.indexOf("十");
   if (tenIdx === -1) return 1;
   // Forms: 十N (10..19), N十 (20, 30...), N十M (21..99).
@@ -178,7 +180,13 @@ export function extractSeason(rawName: string, cleanedName: string): number {
     const m = rawName.match(regex) ?? cleanedName.match(regex);
     if (m) {
       const n = build(m);
-      if (n >= 0) return n;
+      // !isNaN(n) reads "build returned a valid number" — `n >= 0`
+      // misled future readers into thinking we filter out negative
+      // seasons specifically, when the actual intent is just "skip
+      // when the regex caught something but build() failed to parse
+      // it" (returns NaN). 0 is accepted for shows that genuinely use
+      // "Season 0" / specials (Round 1 F4.N-R1-10).
+      if (!Number.isNaN(n)) return n;
     }
   }
   return 1;

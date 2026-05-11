@@ -141,9 +141,9 @@ Any folder size is accepted; the scan shows a real-time count of fonts found and
 
 ## CLI 使用 | CLI Usage
 
-`ssahdrify-cli` 是 GUI 的命令行（CLI）版本，从同一份源代码构建。四个功能（HDR 转换 / 时间轴偏移 / 字体嵌入 / 批量重命名）覆盖与 GUI 版本相同。
+`ssahdrify-cli` 是 GUI 的命令行（CLI）版本，从同一份源代码构建。四个核心功能（HDR 转换 / 时间轴偏移 / 字体嵌入 / 批量重命名）与 GUI 版对等；CLI 额外提供 `chain`（一次调用串联多步、仅终端步落盘）和 `refresh-fonts`（持久化字体缓存）两个子命令。
 
-`ssahdrify-cli` is the command-line (CLI) version of the GUI, built from the same source. The four features (HDR convert / Timing shift / Font embed / Batch rename) match the GUI exactly.
+`ssahdrify-cli` is the command-line (CLI) version of the GUI, built from the same source. The four core features (HDR convert / Timing shift / Font embed / Batch rename) match the GUI; the CLI additionally exposes `chain` (multi-step pipeline in one invocation, only the terminal step writes to disk) and `refresh-fonts` (persistent font cache) — both CLI-only for now.
 
 ### 快速示例 | Quick Examples
 
@@ -160,6 +160,9 @@ ssahdrify-cli embed --font-dir "C:/Fonts" input.ass
 # 持久化字体缓存：先一次性扫描，后续 embed 复用 / Persistent font cache: scan once, reuse on every embed
 ssahdrify-cli refresh-fonts --font-dir "C:/Fonts"
 ssahdrify-cli embed input.ass            # uses cache automatically
+
+# 链式调用：HDR 转 + 时间轴偏移单次完成，仅终端步落盘 / Chain: HDR + shift in one shot, only terminal step writes
+ssahdrify-cli chain hdr --eotf pq + shift --offset +500ms input.ass
 
 # 批量重命名：默认复制到视频所在目录 / Batch rename (default: copy sub next to video)
 ssahdrify-cli rename "C:/My Series"
