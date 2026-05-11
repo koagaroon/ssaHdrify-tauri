@@ -12,6 +12,7 @@ import {
   type FontScanResult,
 } from "../../lib/tauri-api";
 import { ask } from "@tauri-apps/plugin-dialog";
+import { sanitizeForDialog } from "../../lib/dedup-helpers";
 import { useI18n } from "../../i18n/useI18n";
 import type { FontUsage } from "./font-collector";
 import { fontKeyLabel } from "./font-collector";
@@ -601,10 +602,16 @@ export default function FontSourceModal(props: Props) {
               style={{ border: "1px solid var(--border-light)" }}
             >
               {sources.map((src) => {
+                // BiDi control sanitization (Round 1 F3.A-R1-8): a folder
+                // name carrying RLO / LRO / PDF could visually reverse
+                // adjacent characters in the source list, making
+                // `evil.ttf` look benign. `sanitizeForDialog` is the
+                // shared strip used in BatchRename's ask() dialogs.
+                const safeLabel = sanitizeForDialog(src.label);
                 const label =
                   src.kind === "dir"
-                    ? t("font_sources_folder_entry", src.label, src.count)
-                    : src.label;
+                    ? t("font_sources_folder_entry", safeLabel, src.count)
+                    : safeLabel;
                 return (
                   <li
                     key={src.id}

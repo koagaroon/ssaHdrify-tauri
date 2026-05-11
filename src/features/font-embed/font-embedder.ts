@@ -488,9 +488,21 @@ export async function embedFonts(
     if (!usage) {
       // Selected FontInfo has no matching FontUsage — means analyzeFonts and
       // the current fontUsages array disagree, which should be impossible if
-      // both came from the same ASS parse. Log so the drift is debuggable
-      // instead of silently producing an embed file missing this font.
-      console.warn(`[ssaHdrify] embedFonts: no usage entry for ${fontKeyLabel(info.key)}`);
+      // both came from the same ASS parse. Surface the drift through
+      // onProgress (Round 1 F3.N-R1-19) so the user sees in the log
+      // panel that a selected font silently won't embed — the previous
+      // `console.warn`-only path left the user with no feedback. Reuses
+      // the existing `msg_font_skipped` i18n key for consistency with
+      // the subsetting-failure path below.
+      const label = fontKeyLabel(info.key);
+      console.warn(`[ssaHdrify] embedFonts: no usage entry for ${label}`);
+      onProgress?.({
+        stage:
+          t?.("msg_font_skipped", info.key.family, "no usage entry") ??
+          `Skipped ${info.key.family}: no usage entry`,
+        current: i + 1,
+        total,
+      });
       continue;
     }
 

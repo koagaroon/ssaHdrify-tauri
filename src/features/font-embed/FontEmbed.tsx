@@ -460,11 +460,15 @@ export default function FontEmbed() {
       void (async () => {
         // Look up the source's kind before the remove call — needed to
         // gate the persistent cache eviction (Codex 3d751e26). Defaults
-        // to "dir" if the source isn't found, matching the safer
-        // pre-bug behavior; the source-not-found branch is unreachable
-        // in practice since the button only renders for present rows.
+        // to "files" (NOT "dir") when the source isn't found: dir-mode
+        // removal triggers a `try_remove_folder_from_gui_cache` side
+        // effect, and an unknown id falling into that branch could evict
+        // an unrelated tracked folder if a previous source label
+        // collided. files-mode never touches the persistent cache, so
+        // it's the safe fallback for the (in-practice unreachable)
+        // source-not-found path (Round 1 F3.N-R1-2).
         const source = fontSources.find((s) => s.id === id);
-        const kind = source?.kind ?? "dir";
+        const kind = source?.kind ?? "files";
         setSourceBusy(true);
         try {
           await removeFontSource(id, kind);
@@ -508,8 +512,23 @@ export default function FontEmbed() {
     if (busyRef.current) return;
     busyRef.current = true;
     try {
-      // Pre-flight overwrite check — same project-wide pattern.
-      const projectedOutputs = filePaths.map((p) => deriveEmbeddedPath(p));
+      // Pre-flight overwrite check — same project-wide pattern. Per-file
+      // try wraps `deriveEmbeddedPath` so a single bad path surfaces with
+      // filename context instead of aborting the whole batch with a
+      // template-error string and no attribution (Round 1 F3.N-R1-20).
+      const projectedOutputs: string[] = [];
+      for (const p of filePaths) {
+        try {
+          projectedOutputs.push(deriveEmbeddedPath(p));
+        } catch (e) {
+          addLog(
+            t("msg_fonts_error", fileNameFromPath(p), e instanceof Error ? e.message : String(e)),
+            "error"
+          );
+          setLastActionResult("error");
+          return;
+        }
+      }
       try {
         const existingCount = await countExistingFiles(projectedOutputs);
         if (existingCount > 0) {
@@ -563,26 +582,17 @@ export default function FontEmbed() {
             seenOutputs.add(normalizedOut);
 
             // Pull from the per-file analysis cache populated at ingest.
-            // The cache holds content, infos, and usages so the embed
-            // loop avoids any disk re-read or re-analysis. Fall back to
-            // a fresh read + analyze if cache somehow missed this path
-            // (shouldn't happen — we ingest every file before showing
-            // the grid — but defensive).
-            let cached = perFileAnalysisRef.current.get(filePath);
+            // Every visible path in the grid was ingested before this
+            // loop runs (see `ingestPaths`), and ingest is the site that
+            // enforces MAX_BATCH_AGGREGATE_BYTES. The previous defensive
+            // fresh-read fallback bypassed that cap (Round 1 F3.N-R1-1);
+            // a cache miss at this point is a real inconsistency that
+            // should surface as an error rather than silently re-read
+            // outside the ingest guards.
+            const cached = perFileAnalysisRef.current.get(filePath);
             if (!cached) {
-              let content: string;
-              try {
-                content = await readText(filePath);
-              } catch (e) {
-                addLog(
-                  t("msg_read_error", fileName, e instanceof Error ? e.message : String(e)),
-                  "error"
-                );
-                continue;
-              }
-              if (abortRef.current?.signal.aborted) break;
-              const analyzed = await analyzeFonts(content, null, undefined, true);
-              cached = { content, infos: analyzed.infos, usages: analyzed.usages };
+              addLog(t("msg_fonts_error", fileName, "analysis cache miss"), "error");
+              continue;
             }
             if (abortRef.current?.signal.aborted) break;
 

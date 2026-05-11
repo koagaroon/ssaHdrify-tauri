@@ -76,14 +76,17 @@ function normalizeFamily(raw: string): string {
 
 /** Strip control characters and cap length — applied to every family name
  *  captured from a subtitle file before it flows into matching or output.
- *  Range covers C0 (0x00-0x1F), DEL (0x7F), and C1 (0x80-0x9F) — matches
- *  ass-uuencode.ts's wider strip and avoids C1 sneak-through into chain
- *  warning lines / log messages. */
+ *  Range covers C0 (0x00-0x1F), DEL (0x7F), C1 (0x80-0x9F), and the
+ *  Unicode line/paragraph separators (U+2028 / U+2029) — full parity
+ *  with `ass-uuencode.ts::safeName` (Round 1 F3.N-R1-14). The [Fonts]
+ *  header layer was already stripping U+2028/U+2029, but the same name
+ *  flowed verbatim into log lines and chain warning text where these
+ *  separators could break line-oriented output. */
 function sanitizeFamily(raw: string): string {
   return (
     raw
       // eslint-disable-next-line no-control-regex -- intentional: sanitize control chars from subtitle font names
-      .replace(/[\x00-\x1f\x7f-\x9f]/g, "")
+      .replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029]/g, "")
       .slice(0, 128)
   );
 }

@@ -561,6 +561,52 @@ pub struct LocalFontEntry {
     pub size_bytes: u64,
 }
 
+/// Convert scan entries to persistent-cache rows, dedup-statting each
+/// distinct file path once (TTC files contribute N entries with the
+/// same `path`, so a naive per-entry stat was N+1 syscalls per TTC —
+/// Round 1 A2.N-R1-17). Shared between GUI's
+/// `try_record_folder_in_gui_cache` + `entries_to_metadata` callers
+/// and CLI's `run_refresh_fonts` loop.
+///
+/// Saturating u64→i64 on `size_bytes` and u32→i32 on `face_index`
+/// keep with the codebase's cast-discipline pattern (A2.N-R1-18); the
+/// limits are impossible in practice (8.4 EB / 2.1 G faces) but the
+/// explicit saturate makes intent visible.
+pub fn entries_to_cache_metadata(
+    entries: &[LocalFontEntry],
+) -> Vec<crate::font_cache::FontMetadata> {
+    let mut mtime_cache: std::collections::HashMap<&str, i64> =
+        std::collections::HashMap::new();
+    entries
+        .iter()
+        .map(|e| {
+            let mtime = *mtime_cache.entry(e.path.as_str()).or_insert_with(|| {
+                std::fs::metadata(&e.path)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0)
+            });
+            crate::font_cache::FontMetadata {
+                file_path: e.path.clone(),
+                file_size: i64::try_from(e.size_bytes).unwrap_or(i64::MAX),
+                file_mtime: mtime,
+                face_index: i32::try_from(e.index).unwrap_or(i32::MAX),
+                family_keys: e
+                    .families
+                    .iter()
+                    .map(|family_name| crate::font_cache::FamilyKey {
+                        family_name: family_name.clone(),
+                        bold: e.bold,
+                        italic: e.italic,
+                    })
+                    .collect(),
+            }
+        })
+        .collect()
+}
+
 fn user_font_key(family: &str, bold: bool, italic: bool) -> String {
     // NFC-normalize before lowercase so HFS+ NFD-form filenames and NFC-form
     // font internal names key identically; otherwise precomposed `é` (U+00E9)
@@ -734,11 +780,21 @@ fn remove_empty_user_font_source_tx(
 // `Lazy<Mutex<Connection>>` shared cache. Note that `journal_mode = WAL`
 // no longer runs per-connection (hoisted to init), which already
 // removed the bulk of the per-call cost.
-fn is_user_font_path_registered(canonical_path: &str) -> Result<bool, String> {
+fn is_user_font_face_registered(
+    canonical_path: &str,
+    face_index: u32,
+) -> Result<bool, String> {
     let conn = open_user_font_db()?;
+    // Face-index narrowed: TTC files carry multiple faces under one path
+    // (e.g. Source Han Serif Regular = face 0, Bold = face 1). Checking
+    // only `path` lets a request for an un-scanned face (an attacker-
+    // chosen index, or a face not present in the file) pass the
+    // provenance gate — subsetting then reads the raw font bytes via
+    // the fall-through fallback. UNIQUE(path, face_index) in the schema
+    // already supports this lookup shape.
     conn.query_row(
-        "SELECT 1 FROM font_faces WHERE path = ?1 LIMIT 1",
-        params![canonical_path],
+        "SELECT 1 FROM font_faces WHERE path = ?1 AND face_index = ?2 LIMIT 1",
+        params![canonical_path, face_index as i64],
         |_| Ok(()),
     )
     .optional()
@@ -2276,7 +2332,7 @@ pub fn subset_font(
     let is_user = if is_system {
         false
     } else {
-        is_user_font_path_registered(&canonical_string)?
+        is_user_font_face_registered(&canonical_string, font_index)?
     };
     if !is_system && !is_user {
         return Err("Font path was not discovered by a scan command".to_string());
@@ -2676,7 +2732,11 @@ mod tests {
             .unwrap()
             .expect("family should resolve");
         assert_eq!(resolved.path, "C:\\Fonts\\A.ttf");
-        assert!(is_user_font_path_registered("C:\\Fonts\\A.ttf").unwrap());
+        assert!(is_user_font_face_registered("C:\\Fonts\\A.ttf", 0).unwrap());
+        // Un-scanned face of the same TTC must fail provenance: protects
+        // the subset_font gate against face-index forgery on TTC files
+        // where only one face was actually scanned. Round 1 A2.N-R1-1.
+        assert!(!is_user_font_face_registered("C:\\Fonts\\A.ttf", 1).unwrap());
     }
 
     #[test]
@@ -2716,13 +2776,13 @@ mod tests {
             .unwrap()
             .expect("older source should become visible again");
         assert_eq!(resolved.path, "C:\\Fonts\\A.ttf");
-        assert!(!is_user_font_path_registered("C:\\Fonts\\B.ttf").unwrap());
+        assert!(!is_user_font_face_registered("C:\\Fonts\\B.ttf", 0).unwrap());
 
         clear_font_sources().unwrap();
         assert!(resolve_user_font("Demo Sans".to_string(), false, false)
             .unwrap()
             .is_none());
-        assert!(!is_user_font_path_registered("C:\\Fonts\\A.ttf").unwrap());
+        assert!(!is_user_font_face_registered("C:\\Fonts\\A.ttf", 0).unwrap());
     }
 
     /// `scan_directory_inner` on a non-existent path surfaces the read_dir

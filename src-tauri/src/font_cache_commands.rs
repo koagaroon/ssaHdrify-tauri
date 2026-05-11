@@ -17,7 +17,8 @@ use std::sync::Mutex;
 use once_cell::sync::Lazy;
 use serde::Serialize;
 
-use crate::font_cache::{CacheError, FamilyKey, FontCache, FontMetadata};
+use crate::font_cache::{CacheError, FontCache, FontMetadata};
+use crate::fonts::entries_to_cache_metadata;
 
 /// Sentinel set true while any cache-mutating IPC command
 /// (`rescan_font_cache_drift` or `clear_font_cache`) is mid-flight, so
@@ -149,39 +150,12 @@ fn stat_mtime_or_zero(path: &Path) -> i64 {
         .unwrap_or(0)
 }
 
-/// Convert scan output (`fonts::LocalFontEntry`) to cache rows
-/// (`font_cache::FontMetadata`). Mirrors the conversion in CLI
-/// `run_refresh_fonts`; deliberately not extracted to a shared helper
-/// because the two sites are the only callers and extracting drags
-/// `LocalFontEntry` into `font_cache.rs` (currently independent).
-fn entries_to_metadata(entries: Vec<crate::fonts::LocalFontEntry>) -> Vec<FontMetadata> {
-    entries
-        .into_iter()
-        .map(|e| {
-            let file_mtime = stat_mtime_or_zero(Path::new(&e.path));
-            FontMetadata {
-                file_path: e.path,
-                // u64 → i64 saturating conversion. A font file >
-                // i64::MAX bytes is impossible in practice (8.4 EB)
-                // but try_from + saturate matches the broader cast-
-                // discipline pattern in the codebase and avoids the
-                // implicit `as` truncation if reality ever shifts.
-                file_size: i64::try_from(e.size_bytes).unwrap_or(i64::MAX),
-                file_mtime,
-                face_index: e.index as i32,
-                family_keys: e
-                    .families
-                    .into_iter()
-                    .map(|family_name| FamilyKey {
-                        family_name,
-                        bold: e.bold,
-                        italic: e.italic,
-                    })
-                    .collect(),
-            }
-        })
-        .collect()
-}
+// `entries_to_cache_metadata` (in `crate::fonts`) is the shared helper —
+// `try_record_folder_in_gui_cache` and the rescan-apply path here both
+// route through it, and the CLI's `run_refresh_fonts` loop does too.
+// The previous local `entries_to_metadata` duplicated that conversion
+// AND lacked the per-file mtime dedup needed for TTC files
+// (Round 1 A2.N-R1-15 / A2.N-R1-17 / A2.N-R1-18).
 
 // ---- IPC types ---------------------------------------------------------
 
@@ -379,7 +353,7 @@ pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
                 continue;
             }
         };
-        scanned.push((folder.clone(), folder_mtime, entries_to_metadata(entries)));
+        scanned.push((folder.clone(), folder_mtime, entries_to_cache_metadata(&entries)));
     }
 
     // Phase 3 — under lock: apply the scan results + evict removed
@@ -536,27 +510,7 @@ pub fn try_record_folder_in_gui_cache(
         }
     };
     let folder_mtime = stat_mtime_or_zero(folder_path);
-    let metadata: Vec<FontMetadata> = entries
-        .iter()
-        .map(|e| FontMetadata {
-            file_path: e.path.clone(),
-            // Saturating u64 → i64 — matches entries_to_metadata's
-            // pattern; impossible in practice (8.4 EB font file) but
-            // keeps cast discipline consistent.
-            file_size: i64::try_from(e.size_bytes).unwrap_or(i64::MAX),
-            file_mtime: stat_mtime_or_zero(Path::new(&e.path)),
-            face_index: e.index as i32,
-            family_keys: e
-                .families
-                .iter()
-                .map(|family_name| FamilyKey {
-                    family_name: family_name.clone(),
-                    bold: e.bold,
-                    italic: e.italic,
-                })
-                .collect(),
-        })
-        .collect();
+    let metadata: Vec<FontMetadata> = entries_to_cache_metadata(entries);
     // Normalize the canonical path BEFORE storing it as the cache key.
     // `font_faces.path` (session DB, source for the eviction key in
     // try_remove_folder_from_gui_cache's caller) is normalized at scan

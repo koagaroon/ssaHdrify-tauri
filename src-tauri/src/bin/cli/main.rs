@@ -616,38 +616,11 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
             }
         };
 
-        // Convert each LocalFontEntry to a FontMetadata, attaching
-        // file mtime via stat (cache module needs it for drift but
-        // LocalFontEntry doesn't carry it).
-        let metadata: Vec<app_lib::font_cache::FontMetadata> = entries
-            .into_iter()
-            .map(|e| {
-                let file_mtime = std::fs::metadata(&e.path)
-                    .and_then(|m| m.modified())
-                    .ok()
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs() as i64)
-                    .unwrap_or(0);
-                app_lib::font_cache::FontMetadata {
-                    file_path: e.path,
-                    // Saturating u64 → i64; matches the GUI sites'
-                    // entries_to_metadata + try_record_folder_in_gui_cache
-                    // pattern. 8.4 EB ceiling is impossible in practice.
-                    file_size: i64::try_from(e.size_bytes).unwrap_or(i64::MAX),
-                    file_mtime,
-                    face_index: e.index as i32,
-                    family_keys: e
-                        .families
-                        .into_iter()
-                        .map(|family_name| app_lib::font_cache::FamilyKey {
-                            family_name,
-                            bold: e.bold,
-                            italic: e.italic,
-                        })
-                        .collect(),
-                }
-            })
-            .collect();
+        // Shared GUI/CLI helper: per-file mtime dedup (TTC files
+        // contribute multiple entries with one path) + saturating cast
+        // discipline + family-key flattening.
+        let metadata: Vec<app_lib::font_cache::FontMetadata> =
+            app_lib::fonts::entries_to_cache_metadata(&entries);
 
         let font_count = metadata.len();
         cache
