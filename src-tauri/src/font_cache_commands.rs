@@ -19,32 +19,37 @@ use serde::Serialize;
 
 use crate::font_cache::{CacheError, FamilyKey, FontCache, FontMetadata};
 
-/// Sentinel set true while `rescan_font_cache_drift` is mid-flight
-/// (Phase 1 → Phase 3) so `clear_font_cache` can refuse rather than
-/// race the rescan's apply phase. The frontend modal already gates
-/// the buttons, but the IPC layer is the actual security boundary —
-/// a misbehaving / out-of-band caller could otherwise interleave the
-/// two and resurrect just-cleared data via Phase 3's apply.
-static RESCAN_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+/// Sentinel set true while any cache-mutating IPC command
+/// (`rescan_font_cache_drift` or `clear_font_cache`) is mid-flight, so
+/// the other one can refuse rather than race. The frontend modal
+/// already gates the buttons, but the IPC layer is the actual security
+/// boundary — a misbehaving / out-of-band caller could otherwise
+/// interleave the two and either (a) have rescan's Phase 3 apply
+/// resurrect rows clear just wiped (clear-during-rescan window) or
+/// (b) have clear drop+recreate the handle between rescan's Phase 1
+/// snapshot and Phase 3 apply (rescan-during-clear window). One CAS-
+/// gated flag covers both directions.
+static CACHE_MUTATION_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
-/// RAII guard that owns the RESCAN_IN_PROGRESS flag for the lifetime
-/// of one rescan. CAS happens inside `try_acquire` and the flag is
-/// only set when the guard is constructed — there's no "flag set but
-/// guard not yet bound" window for a panic to leak the flag.
-struct RescanGuard;
+/// RAII guard that owns the CACHE_MUTATION_IN_PROGRESS flag for the
+/// lifetime of one cache-mutating operation. CAS happens inside
+/// `try_acquire` and the flag is only set when the guard is
+/// constructed — there's no "flag set but guard not yet bound" window
+/// for a panic to leak the flag.
+struct CacheMutationGuard;
 
-impl RescanGuard {
+impl CacheMutationGuard {
     fn try_acquire() -> Result<Self, String> {
-        RESCAN_IN_PROGRESS
+        CACHE_MUTATION_IN_PROGRESS
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .map(|_| RescanGuard)
-            .map_err(|_| "Another rescan is already in progress".to_string())
+            .map(|_| CacheMutationGuard)
+            .map_err(|_| "Another cache operation is already in progress".to_string())
     }
 }
 
-impl Drop for RescanGuard {
+impl Drop for CacheMutationGuard {
     fn drop(&mut self) {
-        RESCAN_IN_PROGRESS.store(false, Ordering::Release);
+        CACHE_MUTATION_IN_PROGRESS.store(false, Ordering::Release);
     }
 }
 
@@ -311,10 +316,12 @@ pub fn detect_font_cache_drift() -> Result<DriftReport, String> {
 pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
     // Block parallel `clear_font_cache` between Phase 1 and Phase 3 so
     // Clear can't drop+recreate the cache mid-rescan and have Phase 3's
-    // apply resurrect the cleared rows. RescanGuard's CAS-inside-new
-    // pattern makes "flag set but no guard yet" structurally impossible;
-    // Drop releases on every exit path (Ok / Err / panic-unwind).
-    let _rescan_guard = RescanGuard::try_acquire()?;
+    // apply resurrect the cleared rows. CacheMutationGuard's CAS-inside-
+    // new pattern makes "flag set but no guard yet" structurally
+    // impossible; Drop releases on every exit path (Ok / Err / panic-
+    // unwind). Same guard also blocks a concurrent rescan if clear is
+    // already running.
+    let _mutation_guard = CacheMutationGuard::try_acquire()?;
 
     // Phase 1 — under lock: list cached folders + compute the
     // filesystem-snapshot drift report. list_folders, the per-folder
@@ -354,12 +361,24 @@ pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
     // lookup_font_family / try_record_folder_in_gui_cache calls run in
     // parallel instead of waiting on a multi-second to multi-minute
     // scan that used to be inside the lock.
+    //
+    // Per-folder error catch (mirrors `run_refresh_fonts` in
+    // bin/cli/main.rs:609): one folder hitting MAX_CACHE_POPULATE_FACES
+    // or a transient I/O error must not abort the whole rescan — that
+    // would let one oversized font pack DoS the user's entire cache
+    // refresh. Log WARN with folder context, skip, continue.
     let mut scanned: Vec<(String, i64, Vec<FontMetadata>)> =
         Vec::with_capacity(report.modified.len());
     for folder in &report.modified {
         let folder_path = Path::new(folder);
         let folder_mtime = stat_mtime_or_zero(folder_path);
-        let entries = crate::fonts::scan_directory_collecting(folder_path)?;
+        let entries = match crate::fonts::scan_directory_collecting(folder_path) {
+            Ok(e) => e,
+            Err(err) => {
+                log::warn!("rescan: skipping {folder} — {err}");
+                continue;
+            }
+        };
         scanned.push((folder.clone(), folder_mtime, entries_to_metadata(entries)));
     }
 
@@ -420,14 +439,14 @@ pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
 /// rebuild path when `open_font_cache` reports `schema_mismatch`.
 #[tauri::command]
 pub fn clear_font_cache() -> Result<(), String> {
-    // Refuse mid-rescan: rescan_font_cache_drift's Phase 2 runs
-    // outside the cache mutex; if Clear succeeds during that window,
-    // Phase 3's apply re-creates rows the user just asked to wipe.
-    // The frontend modal already gates the buttons; this is the IPC-
-    // layer enforcement that out-of-band callers can't bypass.
-    if RESCAN_IN_PROGRESS.load(Ordering::Acquire) {
-        return Err("Cannot clear cache: rescan in progress".to_string());
-    }
+    // Refuse mid-rescan AND block a concurrent rescan from starting
+    // while clear is running. Acquiring the guard via CAS (not just
+    // a load) closes the rescan-after-load window: without the CAS,
+    // a rescan could start between our check and our slot-lock-take,
+    // then have Phase 3 apply rows on top of our freshly-recreated
+    // cache. The frontend modal already gates the buttons; this is
+    // the IPC-layer enforcement that out-of-band callers can't bypass.
+    let _mutation_guard = CacheMutationGuard::try_acquire()?;
     let path = GUI_FONT_CACHE_PATH
         .lock()
         .map_err(|_| "GUI cache path mutex poisoned".to_string())?
@@ -498,7 +517,7 @@ pub fn try_record_folder_in_gui_cache(
         }
         Err(std::sync::TryLockError::WouldBlock) => {
             log::warn!(
-                "GUI cache busy (rescan in progress); skipping populate \
+                "GUI cache busy (rescan or clear in progress); skipping populate \
                  for {} this scan — will populate on next add",
                 folder_path.display()
             );
@@ -588,7 +607,9 @@ pub fn try_remove_folder_from_gui_cache(folder_path: &str) {
             return;
         }
         Err(std::sync::TryLockError::WouldBlock) => {
-            log::warn!("GUI cache busy (rescan in progress); skipping evict for {folder_path}");
+            log::warn!(
+                "GUI cache busy (rescan or clear in progress); skipping evict for {folder_path}"
+            );
             return;
         }
     };
