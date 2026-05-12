@@ -158,6 +158,15 @@ describe("analyzeFonts — match priority", () => {
     const arialBold = infos.find((i) => i.key.family === "Arial" && i.key.bold);
     expect(arialBold?.source).toBe("local");
     expect(arialBold?.filePath).toBe("C:/user/ArialBold.ttf");
+    // Counter-assertion (N-R5-FECHAIN-10): the bold-variant key hit
+    // the user map, so findSystemFont was NOT consulted for Arial
+    // (only for FZLanTingHei). Pins the variant-keyed priority: a
+    // regression that dropped the bold bit from userFontKey would
+    // miss the map and fall through to findSystemFont here.
+    const arialSystemCalls = findSystemFontMock.mock.calls.filter(
+      ([family]: [string, boolean, boolean]) => family === "Arial"
+    );
+    expect(arialSystemCalls).toHaveLength(0);
   });
 });
 

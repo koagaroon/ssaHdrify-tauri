@@ -594,3 +594,32 @@ describe("isNoOpRename", () => {
     expect(isNoOpRename(nfc, nfd)).toBe(true);
   });
 });
+
+describe("buildPairings — Round 5 regression guards", () => {
+  it("ambiguous videos with no subtitles → source: 'unmatched', not 'warning'", () => {
+    // Two videos with identical episode keys (would normally be ambiguous)
+    // but ZERO subtitles — no decision to mark "debatable". Pre-Wave-5.2
+    // form returned source: "warning", confusingly yellow-flagging a row
+    // where nothing existed to argue about.
+    const videos = [
+      parseFilename("/v/[A] Show - 03.mkv", "[A] Show - 03.mkv"),
+      parseFilename("/v/[A] Show - 03.mp4", "[A] Show - 03.mp4"),
+    ];
+    const rows = buildPairings(videos, []);
+    expect(rows.length).toBe(2);
+    for (const r of rows) {
+      expect(r.source).toBe("unmatched");
+      expect(r.subtitle).toBeNull();
+    }
+  });
+
+  it("leading-dot subtitle filename produces output with extension preserved", () => {
+    // Crafted fan-sub pack: `.ass` filename (leading-dot Unix hidden
+    // convention). Pre-Wave-5.2 `subDot > 0` guard produced
+    // `<videoBase>` with NO extension — no player loads the result.
+    // The `>= 0` form keeps the full `.ass` as the extension.
+    const out = deriveRenameOutputPath("C:/v/Show.mkv", "C:/v/.ass", "rename", null);
+    expect(out.endsWith(".ass")).toBe(true);
+    expect(out).not.toBe("C:/v/Show");
+  });
+});

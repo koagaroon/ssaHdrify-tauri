@@ -243,3 +243,31 @@ describe("assertSafeOutputPath", () => {
     );
   });
 });
+
+describe("decomposeInputPath — Round 5 BiDi / zero-width hardening", () => {
+  it("rejects paths containing BiDi RLO (Trojan-Source class)", () => {
+    // EP01<U+202E>cssa.ass renders as EP01ssa.shifted.ass after the
+    // RLO flip but lands on disk verbatim. Pre-Wave-5.1 the helper's
+    // control-char regex was C0/DEL only and let BiDi through; the
+    // shared unicode-controls set now catches it (N-R5-FELIB-06 +
+    // A-R5-FELIB-01).
+    expect(() => decomposeInputPath("C:/subs/EP01‮cssa.ass")).toThrow(/invisible|bidi/i);
+  });
+
+  it("rejects paths containing zero-width space (U+200B)", () => {
+    expect(() => decomposeInputPath("C:/subs/EP​01.ass")).toThrow(/invisible|bidi/i);
+  });
+
+  it("rejects paths containing zero-width no-break space (U+FEFF / BOM-in-middle)", () => {
+    expect(() => decomposeInputPath("/home/u/sub﻿s/episode.ass")).toThrow(/invisible|bidi/i);
+  });
+
+  it("rejects paths containing LRI / PDI isolate marks", () => {
+    expect(() => decomposeInputPath("C:/subs/EP⁦01⁩.ass")).toThrow(/invisible|bidi/i);
+  });
+
+  it("accepts paths with no invisible / bidi characters", () => {
+    expect(() => decomposeInputPath("C:/subs/episode-with-emoji-😀.ass")).not.toThrow();
+    expect(() => decomposeInputPath("/home/u/CJK/字幕.ass")).not.toThrow();
+  });
+});

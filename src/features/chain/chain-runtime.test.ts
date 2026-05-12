@@ -39,7 +39,7 @@ const INPUT_PATH = "C:\\subs\\episode01.ass";
 // ── HDR-only chain ──────────────────────────────────────────
 
 describe("runChain — single HDR step", () => {
-  it("produces same content as direct processAssContent call", async () => {
+  it("produces same content as direct processAssContent call", () => {
     const plan: ChainPlan = {
       steps: [{ kind: "hdr", params: { eotf: "PQ", brightness: 1000 } }],
       outputTemplate: "{name}.hdr.ass",
@@ -49,7 +49,7 @@ describe("runChain — single HDR step", () => {
     expect(result.content).toBe(expected);
   });
 
-  it("HLG variant matches direct call", async () => {
+  it("HLG variant matches direct call", () => {
     const plan: ChainPlan = {
       steps: [{ kind: "hdr", params: { eotf: "HLG", brightness: 4000 } }],
       outputTemplate: "{name}.hdr.ass",
@@ -59,7 +59,7 @@ describe("runChain — single HDR step", () => {
     expect(result.content).toBe(expected);
   });
 
-  it("emits no notes for a single HDR step", async () => {
+  it("emits no notes for a single HDR step", () => {
     const plan: ChainPlan = {
       steps: [{ kind: "hdr", params: { eotf: "PQ", brightness: 203 } }],
       outputTemplate: "{name}.hdr.ass",
@@ -72,7 +72,7 @@ describe("runChain — single HDR step", () => {
 // ── Shift-only chain ────────────────────────────────────────
 
 describe("runChain — single shift step", () => {
-  it("produces same content as direct shiftSubtitles call", async () => {
+  it("produces same content as direct shiftSubtitles call", () => {
     const plan: ChainPlan = {
       steps: [{ kind: "shift", params: { offsetMs: 2000 } }],
       outputTemplate: "{name}.shifted.ass",
@@ -82,7 +82,7 @@ describe("runChain — single shift step", () => {
     expect(result.content).toBe(expected.content);
   });
 
-  it("threshold variant matches direct call", async () => {
+  it("threshold variant matches direct call", () => {
     const plan: ChainPlan = {
       steps: [{ kind: "shift", params: { offsetMs: -500, thresholdMs: 60000 } }],
       outputTemplate: "{name}.shifted.ass",
@@ -95,7 +95,7 @@ describe("runChain — single shift step", () => {
     expect(result.content).toBe(expected.content);
   });
 
-  it("emits a diagnostic note with shift counts and detected format", async () => {
+  it("emits a diagnostic note with shift counts and detected format", () => {
     const plan: ChainPlan = {
       steps: [{ kind: "shift", params: { offsetMs: 2000 } }],
       outputTemplate: "{name}.shifted.ass",
@@ -112,7 +112,7 @@ describe("runChain — single shift step", () => {
 // ── Multi-step chains: HDR + Shift in both orders ───────────
 
 describe("runChain — HDR + Shift composition", () => {
-  it("hdr then shift matches manual sequential calls", async () => {
+  it("hdr then shift matches manual sequential calls", () => {
     const plan: ChainPlan = {
       steps: [
         { kind: "hdr", params: { eotf: "PQ", brightness: 1000 } },
@@ -127,7 +127,7 @@ describe("runChain — HDR + Shift composition", () => {
     expect(result.content).toBe(afterShift.content);
   });
 
-  it("shift then hdr matches manual sequential calls (different order, different result)", async () => {
+  it("shift then hdr matches manual sequential calls (different order, different result)", () => {
     const plan: ChainPlan = {
       steps: [
         { kind: "shift", params: { offsetMs: 2000 } },
@@ -142,7 +142,7 @@ describe("runChain — HDR + Shift composition", () => {
     expect(result.content).toBe(afterHdr);
   });
 
-  it("collects notes from each step in order", async () => {
+  it("collects notes from each step in order", () => {
     const plan: ChainPlan = {
       steps: [
         { kind: "hdr", params: { eotf: "PQ", brightness: 1000 } },

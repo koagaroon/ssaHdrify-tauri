@@ -309,9 +309,13 @@ fn chain_overwrite_toggles_skip_vs_replace() {
         .expect("third run failed to spawn");
     assert!(third_output.status.success(), "third run should succeed");
     let stdout = String::from_utf8_lossy(&third_output.stdout);
+    // Strong assertion (N-R5-RUSTCLI-15): substring "1 written" matches
+    // "11 written" / "111 written" too. Pin the full
+    // "{written}, {skipped}, {failed}" tuple so a refactor that
+    // shifts the numbers can't silently pass.
     assert!(
-        stdout.contains("1 written"),
-        "expected 'written' in --overwrite stdout: {stdout}"
+        stdout.contains("1 written, 0 skipped, 0 failed"),
+        "expected '1 written, 0 skipped, 0 failed' tuple in --overwrite stdout: {stdout}"
     );
 
     let _ = fs::remove_dir_all(dir);

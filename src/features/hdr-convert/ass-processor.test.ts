@@ -198,3 +198,24 @@ describe("processAssContent — style lines", () => {
     );
   });
 });
+
+describe("processAssContent — Wave 5.1 pre-split line-count probe (A-R5-FEFEAT-03)", () => {
+  it("rejects pure-newline blob exceeding the line cap before .split allocates", () => {
+    // 600k newlines + 1 byte: well over the 500k LINE_CAP, and the
+    // content.length > 1 MB gate fires (600k bytes). The probe should
+    // throw BEFORE `.split(/\r?\n/)` allocates ~600k empty strings
+    // (~24 MB V8 heap). Without the probe, .split allocates first and
+    // the post-split line-count throw fires too late.
+    const blob = "\n".repeat(600_000) + "x";
+    expect(() => processAssContent(blob, 1000, "PQ")).toThrow(/too large.*lines/i);
+  });
+
+  it("accepts normal-size content (well under the 1 MB gate) without false-positive", () => {
+    // A typical subtitle is 5-200 KB. Pre-split probe should be skipped
+    // entirely (`content.length > 1_000_000` is false) and the file
+    // should process normally. Guard against regression where the
+    // probe runs unconditionally and slows the small-file fast path.
+    const small = ["[Script Info]", "ScriptType: v4.00+", "", "[Events]", ""].join("\n");
+    expect(() => processAssContent(small, 1000, "PQ")).not.toThrow();
+  });
+});

@@ -14,7 +14,10 @@ use std::time::{Duration, Instant};
 use crate::util::{validate_ipc_path, MAX_INPUT_PATHS};
 
 /// Allowed font file extensions (lowercase).
-const ALLOWED_FONT_EXTENSIONS: &[&str] = &["ttf", "otf", "ttc", "otc"];
+// Exposed `pub` so integration tests (test_scan.rs) can pattern-match
+// against the same canonical list instead of re-enumerating a sibling
+// literal that could drift (N-R5-RUSTCLI-13).
+pub const ALLOWED_FONT_EXTENSIONS: &[&str] = &["ttf", "otf", "ttc", "otc"];
 
 /// Defense-in-depth ceiling on faces emitted from a single scan. Not a UX
 /// limit — real font-collection users with thousands of files should never
