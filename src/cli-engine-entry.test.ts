@@ -62,6 +62,12 @@ describe("planRename", () => {
       "C:\\media\\[RawsX][Show Title][01][1080P][BDRip].ass",
       "C:\\media\\[RawsX][Show Title][01][1080P][BDRip].srt",
     ]);
+    // Pin per-row language values so a future pairing-engine
+    // refactor that merged the two rows into one (or duplicated a
+    // single language across rows) would surface here instead of
+    // sliding past the length + path-array checks above.
+    expect(plan.pairings.map((row) => row.language)).toEqual(["sc", "jp"]);
+    expect(plan.pairings.map((row) => row.inputPath)).toEqual([subSc, subJp]);
   });
 
   it("supports copy-to-chosen output directories", () => {

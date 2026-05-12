@@ -264,6 +264,26 @@ mod tests {
     }
 
     #[test]
+    fn validate_rejects_bidi_override_in_path() {
+        // U+202E RIGHT-TO-LEFT OVERRIDE (Trojan-Source class). `is_control()`
+        // is Cc-only; the explicit bidi enumeration in validate_ipc_path's
+        // matches! block is what catches this. A refactor that dropped the
+        // bidi arms while leaving the control-char arm would slip past every
+        // existing test until this pin.
+        let err = validate_ipc_path("evil\u{202E}.ass", "Test").unwrap_err();
+        assert!(err.to_lowercase().contains("invalid"));
+    }
+
+    #[test]
+    fn validate_rejects_line_separator_in_path() {
+        // U+2028 LINE SEPARATOR — Zl category, not Cc. validate_ipc_path
+        // calls them out explicitly because several Rust path libraries
+        // treat them ambiguously across platforms.
+        let err = validate_ipc_path("multi\u{2028}line.ass", "Test").unwrap_err();
+        assert!(err.to_lowercase().contains("invalid"));
+    }
+
+    #[test]
     fn validate_accepts_normal_path() {
         validate_ipc_path("C:\\fonts\\sample.ttf", "Test").expect("normal path should validate");
     }
