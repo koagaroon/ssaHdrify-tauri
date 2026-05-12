@@ -314,6 +314,28 @@ pub fn init_user_font_db(app_data_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Drop the cached path to the user-font DB so subsequent
+/// `open_user_font_db` calls fail-shut instead of returning
+/// SQLITE_CANTOPEN against a deleted file.
+///
+/// Round 2 N-R2-8: `init_cli_font_sources` wraps the import sequence
+/// in a `TempFontDbDir` guard whose Drop wipes the temp directory on
+/// failure — but the static `USER_FONT_DB_PATH` outlives the guard
+/// because `init_user_font_db` ran first and set it. Today's call
+/// graph has no caller that retries after a failed
+/// `init_cli_font_sources`, so the dangling state isn't reachable,
+/// but a future retry path would see the second `init_user_font_db`
+/// overwrite cleanly while any code that opened the DB between the
+/// failure and retry would hit the deleted file. Latent bug; this
+/// helper closes the latency window.
+pub fn clear_user_font_db_path() {
+    if let Ok(mut path_slot) = USER_FONT_DB_PATH.lock() {
+        *path_slot = None;
+    }
+    // Poison case: nothing to do; subsequent open will surface a
+    // distinct "corrupted" error already covered by `open_user_font_db`.
+}
+
 /// No frontend-created scan may use this id. Keeping zero reserved lets the
 /// Rust side distinguish "no active/cancelled scan" from real work.
 const NO_SCAN_ID: u64 = 0;
@@ -2071,6 +2093,12 @@ pub fn clear_font_sources() -> Result<(), String> {
         .map_err(|e| db_error("source clear failed", e))?;
     tx.commit()
         .map_err(|e| db_error("source clear commit failed", e))?;
+    // Mirror remove_font_source's symmetry: a session-DB clear must
+    // also evict the persistent cache, otherwise the next embed pass
+    // resolves to paths whose session-DB provenance was just cleared
+    // and subset_font rejects them with "Font path was not discovered
+    // by a scan command" (Round 2 N-R2-2).
+    crate::font_cache_commands::try_clear_all_folders_in_gui_cache();
     // Reset the per-process subset-fallback budget on user-visible
     // session boundaries. Without this, a long-running app that hit
     // the 50 MB ceiling once (e.g., on a single corrupt font) keeps

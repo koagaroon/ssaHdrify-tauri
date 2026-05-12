@@ -659,6 +659,61 @@ pub fn try_remove_folder_from_gui_cache(folder_path: &str) {
     }
 }
 
+/// Best-effort eviction of every folder from the GUI cache. Called
+/// from `fonts::clear_font_sources` so the persistent cache stays in
+/// step with the user's "Clear all sources" intent on the session-DB
+/// side (Round 2 N-R2-2). Without this, clear_font_sources wiped the
+/// session DB but left `cached_folders` / `cached_fonts` rows intact —
+/// the next embed pass resolved a family via the cache to a path
+/// whose session-DB provenance had been cleared, and `subset_font`
+/// rejected it with "Font path was not discovered by a scan command."
+///
+/// Same posture as `try_remove_folder_from_gui_cache`:
+/// - `try_lock` (not `lock`) so a long rescan doesn't stall the
+///   user-visible clear.
+/// - Cache unavailable → silent no-op (nothing to evict).
+/// - Per-folder `remove_folder` errors log WARN but don't abort the
+///   iteration; best-effort.
+///
+/// A concurrent `try_record_folder_in_gui_cache` that races between
+/// `list_folders` and the iteration's `remove_folder` would leave a
+/// fresh row behind — acceptable because the racing populate is
+/// post-intent ("Clear all" was issued before the new populate).
+pub fn try_clear_all_folders_in_gui_cache() {
+    let mut slot = match GUI_FONT_CACHE.try_lock() {
+        Ok(s) => s,
+        Err(std::sync::TryLockError::Poisoned(_)) => {
+            log::warn!("GUI cache mutex poisoned; skipping clear-all");
+            return;
+        }
+        Err(std::sync::TryLockError::WouldBlock) => {
+            log::warn!("GUI cache busy (rescan or clear in progress); skipping clear-all");
+            return;
+        }
+    };
+    let cache = match slot.as_mut() {
+        Some(c) => c,
+        None => return,
+    };
+    let folders = match cache.list_folders() {
+        Ok(fs) => fs,
+        Err(e) => {
+            log::warn!("GUI cache list_folders failed during clear-all: {e}");
+            return;
+        }
+    };
+    let total = folders.len();
+    for f in folders {
+        if let Err(e) = cache.remove_folder(&f.folder_path) {
+            log::warn!(
+                "GUI cache remove_folder({}) during clear-all: {e}",
+                f.folder_path
+            );
+        }
+    }
+    log::info!("GUI cache clear-all evicted {total} folder rows");
+}
+
 /// Look up a (family_name, bold, italic) tuple in the cache. Returns
 /// `Some(FontLookupResult)` matching the existing `find_system_font`
 /// shape (path + index) so the frontend can use one TS type across the

@@ -1787,28 +1787,45 @@ fn init_cli_font_sources(
     let guard = TempFontDbDir(create_cli_font_db_dir()?);
     app_lib::fonts::init_user_font_db(&guard.0)?;
 
-    for (index, dir) in args.font_dirs.iter().enumerate() {
-        let dir = absolute_path(dir)?;
-        let source_id = format!("cli-dir-{index}");
-        let summary = app_lib::fonts::import_font_directory_for_cli(&dir, &source_id)?;
-        emit_font_source_summary(globals, "font dir", "字体目录", Some(&dir), &summary);
-    }
+    // IIFE so a single `?` in any import step routes to the cleanup
+    // path below — the static `USER_FONT_DB_PATH` set by
+    // `init_user_font_db` must be cleared alongside the temp dir wipe,
+    // otherwise the slot points at a deleted file after the guard's
+    // Drop runs (Round 2 N-R2-8 — latent bug, no current caller
+    // retries, but the helper makes the cleanup explicit).
+    let import_result: Result<(), String> = (|| -> Result<(), String> {
+        for (index, dir) in args.font_dirs.iter().enumerate() {
+            let dir = absolute_path(dir)?;
+            let source_id = format!("cli-dir-{index}");
+            let summary = app_lib::fonts::import_font_directory_for_cli(&dir, &source_id)?;
+            emit_font_source_summary(globals, "font dir", "字体目录", Some(&dir), &summary);
+        }
 
-    if !args.font_files.is_empty() {
-        let paths: Result<Vec<String>, String> = args
-            .font_files
-            .iter()
-            .map(|path| absolute_path(path).map(|path| display_path(&path)))
-            .collect();
-        let summary = app_lib::fonts::import_font_files_for_cli(paths?, "cli-files")?;
-        // Funnel through emit_font_source_summary so ScanStopReason
-        // (UserCancel / CeilingHit) surfaces with the same suffix as
-        // font-dir summaries. Path is None — font files are a flat
-        // list without a single "source path."
-        emit_font_source_summary(globals, "font files", "字体文件", None, &summary);
-    }
+        if !args.font_files.is_empty() {
+            let paths: Result<Vec<String>, String> = args
+                .font_files
+                .iter()
+                .map(|path| absolute_path(path).map(|path| display_path(&path)))
+                .collect();
+            let summary = app_lib::fonts::import_font_files_for_cli(paths?, "cli-files")?;
+            // Funnel through emit_font_source_summary so ScanStopReason
+            // (UserCancel / CeilingHit) surfaces with the same suffix as
+            // font-dir summaries. Path is None — font files are a flat
+            // list without a single "source path."
+            emit_font_source_summary(globals, "font files", "字体文件", None, &summary);
+        }
+        Ok(())
+    })();
 
-    Ok(guard)
+    match import_result {
+        Ok(()) => Ok(guard),
+        Err(e) => {
+            app_lib::fonts::clear_user_font_db_path();
+            // `guard` drops here, wiping the temp dir alongside the
+            // path-slot reset above.
+            Err(e)
+        }
+    }
 }
 
 fn create_cli_font_db_dir() -> Result<PathBuf, String> {
