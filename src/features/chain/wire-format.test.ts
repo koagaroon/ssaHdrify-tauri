@@ -76,6 +76,18 @@ describe("FontSubsetPayload wire-format round-trip (Round 3 N-R3-13)", () => {
     // the consumer, not as a silent byte mismatch. Pin the contract.
     const arr = encodeAsNumberArray(SAMPLE);
     const b64 = encodeAsBase64(SAMPLE);
+
+    // Positive type assertions (Round 4 N-R4-07 / A-R4-05): typeof
+    // alone reads `object` vs `string`, which is fine but doesn't pin
+    // the array-ness of `arr` or the base64-alphabet of `b64`. Add
+    // structural checks so a refactor that serialized `arr` as
+    // `{0:0x00, 1:0x01, ...}` (still `typeof === "object"`) would
+    // fail loud.
+    expect(Array.isArray(arr)).toBe(true);
+    expect(arr.every((n) => Number.isInteger(n) && n >= 0 && n <= 255)).toBe(true);
+    expect(typeof b64).toBe("string");
+    expect(b64).toMatch(/^[A-Za-z0-9+/]*={0,2}$/);
+
     expect(typeof arr).not.toBe(typeof b64);
     // Verify the expansion ratios match the documented "why" — chain
     // form must be meaningfully smaller for the larger-payload case
@@ -89,6 +101,15 @@ describe("FontSubsetPayload wire-format round-trip (Round 3 N-R3-13)", () => {
     // ratio of at least 2x is conservative.
     expect(bigArrLen).toBeGreaterThan(bigB64Len * 2);
   });
+
+  // Note: deeper "real consumer round-trip" coverage (importing
+  // applyFontEmbed from cli-engine-entry.ts AND chain-runtime's
+  // applyEmbedStep) is blocked in this vitest env by the pre-existing
+  // js-base64 module-not-found issue on chain-runtime.ts. Once that's
+  // resolved, replace the inline encode/decode helpers above with
+  // imports from the real consumer modules so the test pins production
+  // decode behavior, not Node's `Buffer` semantics (Round 4 N-R4-07 /
+  // A-R4-05 deferred coverage).
 
   it("empty byte input round-trips through both forms", () => {
     const empty = new Uint8Array(0);

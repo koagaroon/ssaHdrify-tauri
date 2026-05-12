@@ -17,7 +17,13 @@ use crate::util::{is_reparse_point, MAX_INPUT_PATHS};
 use serde::Serialize;
 use std::path::Path;
 
-const MAX_RESULT_FILES: usize = 5000;
+/// Cap on the number of regular files `expand_dropped_paths` will
+/// return in a single call. Truncates beyond this point (with the
+/// `ExpandedPaths.truncated` flag set when there's known unprocessed
+/// input). `pub` so the CLI shell can interpolate the constant into
+/// its truncation warning without hardcoding a number that drifts
+/// out of sync (Round 4 N-R4-06).
+pub const MAX_RESULT_FILES: usize = 5000;
 
 /// Result of `expand_dropped_paths`. `truncated` surfaces when the
 /// expansion stopped at `MAX_RESULT_FILES` so the frontend can render
@@ -302,10 +308,7 @@ mod tests {
             "expected cap at MAX_RESULT_FILES, got {}",
             result.files.len()
         );
-        assert!(
-            result.truncated,
-            "truncated flag must be set when cap hits"
-        );
+        assert!(result.truncated, "truncated flag must be set when cap hits");
         let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -1381,6 +1381,21 @@ fn scan_directory_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
         if !canonical.starts_with(canonical_dir) {
             continue;
         }
+        // Gate the dedup `seen` set on font-eligible extensions BEFORE
+        // counting against the ceiling (Round 4 A-R4-02 / A-R4-03).
+        // Previously the dedup set filled on every regular file
+        // regardless of extension, and the extension check lived deeper
+        // inside `parse_local_font_file`. A directory of 200k non-font
+        // files (.txt / .png / etc.) would fill `seen` to the cap and
+        // trip `CeilingHit` with 0 faces — but
+        // `preflight_directory_inner` counts only font-extension files,
+        // so the XL-size confirmation modal never fires (P1b: hostile
+        // pack defeats the safety check). Aligning scan's accounting
+        // with preflight's means both speak about the same "directory
+        // size."
+        if !has_allowed_font_extension(&canonical) {
+            continue;
+        }
         if seen.len() >= MAX_PREFLIGHT_ENTRIES {
             log::warn!(
                 "font scan {} dedup set hit {MAX_PREFLIGHT_ENTRIES} entries in '{}'; \

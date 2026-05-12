@@ -6,6 +6,7 @@ import {
   type FontCacheSkippedFolder,
   type FontCacheStatus,
 } from "../../lib/tauri-api";
+import { sanitizeForDialog } from "../../lib/dedup-helpers";
 import { useI18n } from "../../i18n/useI18n";
 
 interface Props {
@@ -240,11 +241,23 @@ export default function FontCacheDriftModal({
                     {t("font_cache_drift_modified_label")}
                   </div>
                   <ul style={{ paddingLeft: "1rem", listStyle: "disc" }}>
-                    {drift!.modified.slice(0, 8).map((p) => (
-                      <li key={p} style={{ wordBreak: "break-all" }}>
-                        {p}
-                      </li>
-                    ))}
+                    {/* sanitizeForDialog scrubs U+202A-E / U+2066-9 / U+200E-F
+                        BiDi-override + zero-width controls before render —
+                        same Trojan-Source class fixed for FontSourceModal in
+                        Round 1 (F3.A-R1-8), parallel pin for the drift modal.
+                        Folder paths come from the persistent gui_font_cache
+                        which stores user-picked paths verbatim, so a fan-sub
+                        pack folder with a BiDi name reaches React intact.
+                        React doesn't render HTML but it DOES render BiDi
+                        controls and they visually reverse the path. */}
+                    {drift!.modified.slice(0, 8).map((p) => {
+                      const safe = sanitizeForDialog(p);
+                      return (
+                        <li key={safe} style={{ wordBreak: "break-all" }}>
+                          {safe}
+                        </li>
+                      );
+                    })}
                     {drift!.modified.length > 8 && <li>… +{drift!.modified.length - 8}</li>}
                   </ul>
                 </div>
@@ -256,11 +269,14 @@ export default function FontCacheDriftModal({
                     {t("font_cache_drift_removed_label")}
                   </div>
                   <ul style={{ paddingLeft: "1rem", listStyle: "disc" }}>
-                    {drift!.removed.slice(0, 8).map((p) => (
-                      <li key={p} style={{ wordBreak: "break-all" }}>
-                        {p}
-                      </li>
-                    ))}
+                    {drift!.removed.slice(0, 8).map((p) => {
+                      const safe = sanitizeForDialog(p);
+                      return (
+                        <li key={safe} style={{ wordBreak: "break-all" }}>
+                          {safe}
+                        </li>
+                      );
+                    })}
                     {drift!.removed.length > 8 && <li>… +{drift!.removed.length - 8}</li>}
                   </ul>
                 </div>
@@ -315,13 +331,21 @@ export default function FontCacheDriftModal({
               <ul
                 style={{ paddingLeft: "1rem", listStyle: "disc", color: "var(--text-secondary)" }}
               >
-                {skippedFolders.slice(0, 8).map((sk) => (
-                  <li key={sk.folder} style={{ wordBreak: "break-all" }}>
-                    <span style={{ color: "var(--text-primary)" }}>{sk.folder}</span>
-                    {" — "}
-                    {sk.reason}
-                  </li>
-                ))}
+                {skippedFolders.slice(0, 8).map((sk) => {
+                  // Same BiDi/zero-width scrub as the modified/removed
+                  // lists above — folder paths and reason strings can both
+                  // carry attacker-influenced bytes (reason is a Rust
+                  // error message that may interpolate the folder path).
+                  const safeFolder = sanitizeForDialog(sk.folder);
+                  const safeReason = sanitizeForDialog(sk.reason);
+                  return (
+                    <li key={safeFolder} style={{ wordBreak: "break-all" }}>
+                      <span style={{ color: "var(--text-primary)" }}>{safeFolder}</span>
+                      {" — "}
+                      {safeReason}
+                    </li>
+                  );
+                })}
                 {skippedFolders.length > 8 && <li>… +{skippedFolders.length - 8}</li>}
               </ul>
             </div>

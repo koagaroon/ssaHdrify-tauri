@@ -122,12 +122,28 @@ pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
 /// in find_system_font / resolve_user_font / lookup_font_family /
 /// parse_local_font_file before consolidation).
 ///
-/// Control-character class covers Unicode general category Cc:
-/// U+0000..=U+001F (C0 controls including NUL/CR/LF/HT) and
-/// U+007F..=U+009F (DEL + C1 controls including NEL U+0085).
-/// `is_control()` already matches all of these — the redundant
-/// `c == '\x7f'` clause in pre-consolidation sites was harmless
-/// but added no coverage.
+/// Rejected character classes (all flow to the same "invalid
+/// characters" error so the caller doesn't have to discriminate):
+///
+/// - Unicode category **Cc** (controls) via `is_control()`:
+///   U+0000..=U+001F (C0 + NUL/CR/LF/HT) and U+007F..=U+009F (DEL +
+///   C1 incl. NEL U+0085).
+/// - **Bidi-override format characters** (Trojan-Source class,
+///   CVE-2021-42574): U+200E..U+200F (LTR/RTL marks),
+///   U+202A..U+202E (LRE/RLE/PDF/LRO/RLO),
+///   U+2066..U+2069 (LRI/RLI/FSI/PDI). `is_control()` is Cc only and
+///   does NOT match these — Cf is a different category.
+/// - **Zero-width / invisible** chars that visually-identical strings
+///   can use to bypass dedup or impersonate names: U+200B..U+200D
+///   (ZWSP/ZWNJ/ZWJ), U+2060 (WORD JOINER), U+180E (Mongolian Vowel
+///   Separator), U+FEFF (ZWNBSP / BOM-in-middle).
+///
+/// Mirrors `validate_ipc_path`'s rejection set so family names
+/// originating from ASS \fn references (P1b: content-source
+/// attacker) OR font name-table entries (also P1b) can't smuggle
+/// these into the session DB / persistent cache and from there to
+/// status messages / log lines that don't sanitize at render
+/// (Round 4 N-R4-02 / A-R4-01).
 pub fn validate_font_family(family: &str) -> Result<(), String> {
     if family.is_empty() {
         return Err("Font family name is empty".to_string());
@@ -135,7 +151,21 @@ pub fn validate_font_family(family: &str) -> Result<(), String> {
     if family.chars().count() > 256 {
         return Err("Font family name exceeds 256 characters".to_string());
     }
-    if family.chars().any(|c| c.is_control()) {
+    if family.chars().any(|c| {
+        c.is_control()
+            || matches!(
+                c,
+                // Bidi controls (Trojan-Source class).
+                '\u{200E}' | '\u{200F}'
+                | '\u{202A}'..='\u{202E}'
+                | '\u{2066}'..='\u{2069}'
+                // Zero-width / invisible.
+                | '\u{200B}'..='\u{200D}'
+                | '\u{2060}'
+                | '\u{180E}'
+                | '\u{FEFF}'
+            )
+    }) {
         return Err("Font family name contains invalid characters".to_string());
     }
     Ok(())
@@ -330,6 +360,24 @@ mod tests {
     fn validate_font_family_rejects_c1_nel() {
         // NEL is in is_control()'s set.
         let err = validate_font_family("Ari\u{0085}al").unwrap_err();
+        assert!(err.contains("invalid"));
+    }
+
+    #[test]
+    fn validate_font_family_rejects_bidi_override() {
+        // U+202E RTL OVERRIDE — Trojan-Source class. `is_control()`
+        // (Cc) doesn't match this codepoint (Cf). Round 4 extension
+        // mirrors `validate_ipc_path`'s rejection set.
+        let err = validate_font_family("Ari\u{202E}al").unwrap_err();
+        assert!(err.contains("invalid"));
+    }
+
+    #[test]
+    fn validate_font_family_rejects_zero_width() {
+        // U+200B ZERO WIDTH SPACE — two visually-identical family
+        // names `Arial` and `Ari\u{200B}al` would resolve to distinct
+        // session-DB rows; the validator must reject upstream.
+        let err = validate_font_family("Ari\u{200B}al").unwrap_err();
         assert!(err.contains("invalid"));
     }
 }

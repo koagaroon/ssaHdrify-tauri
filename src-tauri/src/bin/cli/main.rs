@@ -1017,13 +1017,22 @@ fn process_one_chain_input(
     // when None, dedup falls back to OS-level create_new(true) at
     // write time which fails with AlreadyExists. Less friendly
     // message but no data loss.
-    if let Some(predicted) = predict_chain_output_path(
+    //
+    // Round 4 N-R4-10: also remember the predicted key so the post-V8
+    // path can reconcile against the ACTUAL output path. The Rust
+    // predictor only models `{name}` / `{ext}`; if a future template
+    // introduces a token the Rust side doesn't know about, prediction
+    // produces a different path than V8's resolver. Predict-time dedup
+    // would then miss "two inputs whose predictions differ but whose
+    // V8-resolutions coincide" — the second write would only fail at
+    // `create_new(true)` time, with a less friendly error.
+    let predicted_key: Option<String> = if let Some(predicted) = predict_chain_output_path(
         &input_abs,
         &plan.output_template,
         globals.output_dir.as_deref(),
     ) {
         let key = normalize_output_key(&predicted);
-        if !seen_outputs.insert(key) {
+        if !seen_outputs.insert(key.clone()) {
             return ChainFileOutcome::Failed(format!(
                 "{} duplicate output path in planned batch",
                 predicted.display()
@@ -1035,7 +1044,10 @@ fn process_one_chain_input(
                 predicted.display()
             ));
         }
-    }
+        Some(key)
+    } else {
+        None
+    };
 
     // Read input via existing encoding-aware path. Honors the same
     // size cap, BOM detection, and fallback-on-canonicalize-failure
@@ -1106,6 +1118,19 @@ fn process_one_chain_input(
         Ok(p) => p,
         Err(err) => return ChainFileOutcome::Failed(err),
     };
+
+    // Post-V8 dedup reconcile (Round 4 N-R4-10). If the actual output
+    // path differs from the prediction, insert the actual key now —
+    // catches predictor↔resolver divergence (e.g., a future template
+    // token Rust doesn't model). If predicted_key was None or matched
+    // exactly, skip the re-insert (would otherwise self-collide).
+    let output_key = normalize_output_key(&output_path);
+    if predicted_key.as_deref() != Some(output_key.as_str()) && !seen_outputs.insert(output_key) {
+        return ChainFileOutcome::Failed(format!(
+            "{} duplicate output path in planned batch (predictor / V8 resolver disagreed; reconciled post-V8)",
+            output_path.display()
+        ));
+    }
 
     // Skip-or-overwrite check matching existing per-feature behavior.
     if !globals.overwrite && output_path.exists() {
@@ -2400,11 +2425,13 @@ fn expand_rename_inputs(paths: &[PathBuf]) -> Result<Vec<String>, String> {
     // CLI surfaces truncation via stderr — the user's drop got
     // partially processed, and they should know before reviewing
     // the output. GUI side surfaces this through useFolderDrop's
-    // onError consumer (Round 3 N-R3-19).
+    // onError consumer (Round 3 N-R3-19). The cap value comes from
+    // the dropzone module so a future bump there flows here
+    // automatically (Round 4 N-R4-06).
     if expanded.truncated {
         eprintln!(
             "⚠ Dropped path expansion hit the {} file cap; remainder ignored. Drop fewer files per batch.",
-            5000
+            app_lib::dropzone::MAX_RESULT_FILES
         );
     }
     Ok(expanded.files)
