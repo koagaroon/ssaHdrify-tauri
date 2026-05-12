@@ -143,6 +143,32 @@ fn reject_reparse_source(path: &Path, label: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Reject when the destination resolves to the same on-disk file as
+/// the source. Canonicalize asks the OS to walk symlinks AND case-fold
+/// per the actual filesystem the file lives on — so on Linux with a
+/// case-insensitive mount (NTFS via ntfs-3g, exFAT, HFS+ on a removable
+/// drive) this still sees `Episode.ass` and `episode.ass` as the same
+/// file. That's a blind spot of process-level OS-gated heuristics like
+/// the TS-side `isCaseInsensitiveFs`, which derives from `process.platform`
+/// rather than the mount's behavior. Without this gate,
+/// `clear_existing_destination(dst, overwrite=true)` removes dst first
+/// — which IS src under FS-level case-fold — then `fs::rename` /
+/// `fs::copy` fails because src is gone, silently destroying the user's
+/// input (Codex a274852e). Both paths must canonicalize for the check
+/// to fire; a not-yet-existing dst (normal rename to a new name)
+/// returns Ok here and the downstream existence checks proceed.
+fn reject_same_canonical_path(src: &Path, dst: &Path) -> Result<(), String> {
+    if let (Ok(src_canon), Ok(dst_canon)) = (src.canonicalize(), dst.canonicalize()) {
+        if src_canon == dst_canon {
+            return Err(format!(
+                "Refusing to operate: source and destination resolve to the same file on disk: {}",
+                src.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Atomically create a new file at `path` and write `content` to it.
 /// `create_new(true)` is the OS-level guard against following a planted
 /// symlink between the prior existence check and the open call.
@@ -188,6 +214,7 @@ fn safe_copy_file_inner(
     check_scope_allows(&is_allowed, src_ref, "Source")?;
     check_scope_allows(&is_allowed, dst_ref, "Destination")?;
     reject_reparse_source(src_ref, "copy")?;
+    reject_same_canonical_path(src_ref, dst_ref)?;
     ensure_parent_dir(dst_ref)?;
     clear_existing_destination(dst_ref, overwrite)?;
 
@@ -217,6 +244,7 @@ fn safe_rename_file_inner(
     check_scope_allows(&is_allowed, src_ref, "Source")?;
     check_scope_allows(&is_allowed, dst_ref, "Destination")?;
     reject_reparse_source(src_ref, "rename")?;
+    reject_same_canonical_path(src_ref, dst_ref)?;
     ensure_parent_dir(dst_ref)?;
     clear_existing_destination(dst_ref, overwrite)?;
     fs::rename(src_ref, dst_ref).map_err(|e| format!("Failed to rename file: {e}"))
@@ -455,5 +483,47 @@ mod tests {
         .unwrap_err();
         assert!(err.contains("symlink"));
         assert!(!dst.exists());
+    }
+
+    // Case-only self-overwrite tests are gated to Windows because NTFS
+    // is case-insensitive by default — the OS reports the same canonical
+    // path for `Episode.ass` and `episode.ass`. On Linux ext4 these are
+    // distinct files, so the canonicalize check correctly does not fire
+    // and the test would not exercise the regression. macOS APFS would
+    // also fire the gate but there's no test machine available.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn rename_refuses_case_only_self_overwrite() {
+        let dir = temp_dir("rename_case_self");
+        let src = dir.join("Episode.ass");
+        let dst = dir.join("episode.ass");
+        fs::write(&src, b"payload").unwrap();
+        let err = safe_rename_file_inner(
+            &src.to_string_lossy(),
+            &dst.to_string_lossy(),
+            true,
+            allow_all,
+        )
+        .unwrap_err();
+        assert!(err.contains("same file"));
+        assert_eq!(fs::read(&src).unwrap(), b"payload");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn copy_refuses_case_only_self_overwrite() {
+        let dir = temp_dir("copy_case_self");
+        let src = dir.join("Episode.ass");
+        let dst = dir.join("episode.ass");
+        fs::write(&src, b"payload").unwrap();
+        let err = safe_copy_file_inner(
+            &src.to_string_lossy(),
+            &dst.to_string_lossy(),
+            true,
+            allow_all,
+        )
+        .unwrap_err();
+        assert!(err.contains("same file"));
+        assert_eq!(fs::read(&src).unwrap(), b"payload");
     }
 }
