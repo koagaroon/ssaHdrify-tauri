@@ -740,8 +740,24 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
     let mut written = 0usize;
     let mut failed = 0usize;
     let mut skipped = 0usize;
+    // First-input-wins dedup, mirroring run_hdr / run_shift / run_embed
+    // (Round 3 N-R3-1). Without this, `chain hdr ... cat.ass cat.ass`
+    // runs the chain twice and `--overwrite=true` silently clobbers
+    // the first output. Chain prediction is best-effort (None on
+    // path shapes V8 will reject), but the common case of repeated
+    // input → repeated predicted output catches the user-error class
+    // the other subcommands surface as "duplicate output path in
+    // planned batch".
+    let mut seen_outputs: HashSet<String> = HashSet::new();
     for input in &plan.input_files {
-        match process_one_chain_input(&mut engine, &plan, embed_step_index, input, globals) {
+        match process_one_chain_input(
+            &mut engine,
+            &plan,
+            embed_step_index,
+            input,
+            globals,
+            &mut seen_outputs,
+        ) {
             ChainFileOutcome::Written(out, warnings) => {
                 if !globals.quiet {
                     println!("✓ {} → {}", input.display(), out.display());
@@ -971,6 +987,7 @@ fn process_one_chain_input(
     embed_step_index: Option<usize>,
     input: &Path,
     globals: &GlobalOptions,
+    seen_outputs: &mut HashSet<String>,
 ) -> ChainFileOutcome {
     let input_abs = match absolute_path(input) {
         Ok(p) => p,
@@ -978,24 +995,35 @@ fn process_one_chain_input(
     };
     let input_str = display_path(&input_abs);
 
-    // Cheap-first skip: if the predicted output path already exists
-    // and --overwrite is off, return Skipped before any I/O or V8
-    // work. Mirrors the per-feature process_* paths' ordering. Path
-    // prediction is best-effort and may differ from TS-side
-    // resolution in template corner cases — the post-V8 existence
-    // check below catches anything prediction misses.
-    if !globals.overwrite {
-        if let Some(predicted) = predict_chain_output_path(
-            &input_abs,
-            &plan.output_template,
-            globals.output_dir.as_deref(),
-        ) {
-            if predicted.exists() {
-                return ChainFileOutcome::Skipped(format!(
-                    "{} already exists (use --overwrite to replace)",
-                    predicted.display()
-                ));
-            }
+    // Cheap-first checks via the predicted output path (Round 3
+    // N-R3-1). Two early returns share the prediction:
+    //   1. Duplicate-output-in-batch — if a prior input in this run
+    //      produced the same predicted output, fail before any I/O
+    //      or V8 work. Mirrors `dedup_and_exists_check` in the
+    //      per-feature dispatchers.
+    //   2. Already-exists — if --overwrite is off and the predicted
+    //      path exists, skip before V8.
+    // Prediction is best-effort (None on path shapes V8 will reject);
+    // when None, dedup falls back to OS-level create_new(true) at
+    // write time which fails with AlreadyExists. Less friendly
+    // message but no data loss.
+    if let Some(predicted) = predict_chain_output_path(
+        &input_abs,
+        &plan.output_template,
+        globals.output_dir.as_deref(),
+    ) {
+        let key = normalize_output_key(&predicted);
+        if !seen_outputs.insert(key) {
+            return ChainFileOutcome::Failed(format!(
+                "{} duplicate output path in planned batch",
+                predicted.display()
+            ));
+        }
+        if !globals.overwrite && predicted.exists() {
+            return ChainFileOutcome::Skipped(format!(
+                "{} already exists (use --overwrite to replace)",
+                predicted.display()
+            ));
         }
     }
 

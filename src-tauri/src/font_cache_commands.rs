@@ -212,19 +212,34 @@ pub struct DriftReport {
     pub removed: Vec<String>,
 }
 
-/// One folder whose Phase-2 scan failed in `rescan_font_cache_drift`.
-/// Surfaces what the user needs to know (which folder, why) so the
-/// drift modal can show a partial-success state instead of pretending
-/// rescan was a clean win.
+/// One folder that didn't make it through a clean rescan.
+/// `kind` distinguishes Phase-2 scan failure (couldn't read the folder)
+/// from Phase-3 apply failure (couldn't write the cache row); the
+/// frontend renders both kinds in the same partial-success block.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SkippedFolder {
     /// Cached folder path that triggered the skip.
     pub folder: String,
-    /// User-facing reason from the failing scan (already includes the
-    /// folder path in some cases; the frontend renders the pair as
-    /// `folder — reason`).
+    /// User-facing reason — the error message from the failing op
+    /// (already includes the folder path in some cases; the frontend
+    /// renders the pair as `folder — reason`).
     pub reason: String,
+    /// Which phase failed. ScanFailed: filesystem walk / name-table
+    /// read errored; cache rows for the folder were evicted as a
+    /// fall-through-to-fresh guard. ApplyFailed: SQLite write errored
+    /// mid-rescan; the cache row state for this folder is whatever
+    /// the previous successful operation left (Round 3 N-R3-2 — was
+    /// previously a hard Err return that wiped the partial-success
+    /// signal for ALL folders).
+    pub kind: SkipKind,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SkipKind {
+    ScanFailed,
+    ApplyFailed,
 }
 
 /// Outcome of a `rescan_font_cache_drift` call.
@@ -238,11 +253,11 @@ pub struct RescanResult {
     /// skipped folders whose stale rows are dropped — see
     /// `apply_rescan_to_cache`).
     pub removed_evicted: usize,
-    /// Folders whose Phase-2 scan failed. Their cache rows were evicted
-    /// (so later lookups fall through to fresh sources / system fonts
-    /// rather than returning stale data, closing Codex ccac42fe). The
+    /// Folders that didn't apply cleanly — both Phase-2 scan failures
+    /// (ScanFailed) and Phase-3 apply failures (ApplyFailed). The
     /// frontend keeps the drift modal in a partial-success state when
-    /// this is non-empty so the user knows which folders need attention.
+    /// this is non-empty so the user knows which folders need attention
+    /// (Codex ccac42fe + Round 3 N-R3-2).
     pub skipped: Vec<SkippedFolder>,
 }
 
@@ -404,14 +419,18 @@ pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
                 skipped.push(SkippedFolder {
                     folder: folder.clone(),
                     reason: err,
+                    kind: SkipKind::ScanFailed,
                 });
             }
         }
     }
 
     // Phase 3 — under lock: apply scan results + evict removed and
-    // skipped folders. Pure DB work, short hold time. See
-    // `apply_rescan_to_cache` for the per-list semantics.
+    // skipped folders. Pure DB work, short hold time. Per-folder
+    // ApplyFailed errors aggregate into `skipped` alongside the
+    // Phase-2 ScanFailed entries; the helper no longer short-circuits
+    // on the first SQLite error so an N-th folder failure doesn't
+    // hide the success of folders 0..N (Round 3 N-R3-2).
     let (modified_rescanned, removed_evicted) = {
         let mut slot = GUI_FONT_CACHE
             .lock()
@@ -419,7 +438,7 @@ pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
         let cache = slot
             .as_mut()
             .ok_or_else(|| "Cache became unavailable between drift detect and apply".to_string())?;
-        apply_rescan_to_cache(cache, &scanned, &report.removed, &skipped)?
+        apply_rescan_to_cache(cache, &scanned, &report.removed, &mut skipped)
     };
 
     Ok(RescanResult {
@@ -452,20 +471,38 @@ pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
 /// Returns `(modified_rescanned, removed_evicted)`. `removed_evicted`
 /// counts skipped-folder evictions too because they're the same DB
 /// operation; the caller's user-facing tally is just "rows we dropped".
+///
+/// Per-folder ApplyFailed errors push into `skipped` rather than
+/// short-circuiting via `?` (Round 3 N-R3-2). Each `replace_folder` /
+/// `remove_folder` is its own SQLite transaction, so committed rows
+/// 0..N stay committed even if row N+1 fails — propagating the
+/// failure as a hard Err to the frontend would discard that
+/// information and prompt the user to re-run the rescan, doing the
+/// same work twice. Aggregating into `skipped` lets the modal show
+/// "N folders refreshed, M failed to write — see list" partial-
+/// success state.
 fn apply_rescan_to_cache(
     cache: &mut FontCache,
     scanned: &[(String, i64, Vec<FontMetadata>)],
     removed: &[String],
-    skipped: &[SkippedFolder],
-) -> Result<(usize, usize), String> {
+    skipped: &mut Vec<SkippedFolder>,
+) -> (usize, usize) {
     let mut modified_rescanned = 0usize;
     let mut removed_evicted = 0usize;
 
     for (folder, folder_mtime, metadata) in scanned {
-        cache
-            .replace_folder(folder, *folder_mtime, metadata)
-            .map_err(|e| format!("replace_folder({folder}): {e}"))?;
-        modified_rescanned += 1;
+        match cache.replace_folder(folder, *folder_mtime, metadata) {
+            Ok(()) => modified_rescanned += 1,
+            Err(e) => {
+                let reason = format!("replace_folder failed: {e}");
+                log::warn!("apply_rescan_to_cache {folder} — {reason}");
+                skipped.push(SkippedFolder {
+                    folder: folder.clone(),
+                    reason,
+                    kind: SkipKind::ApplyFailed,
+                });
+            }
+        }
     }
     for folder in removed {
         // Same stat bar as Phase 1 / detect_drift: only treat the folder
@@ -480,18 +517,43 @@ fn apply_rescan_to_cache(
             );
             continue;
         }
-        cache
-            .remove_folder(folder)
-            .map_err(|e| format!("remove_folder({folder}): {e}"))?;
-        removed_evicted += 1;
+        match cache.remove_folder(folder) {
+            Ok(()) => removed_evicted += 1,
+            Err(e) => {
+                let reason = format!("remove_folder failed: {e}");
+                log::warn!("apply_rescan_to_cache {folder} — {reason}");
+                skipped.push(SkippedFolder {
+                    folder: folder.clone(),
+                    reason,
+                    kind: SkipKind::ApplyFailed,
+                });
+            }
+        }
     }
-    for sk in skipped {
-        cache
-            .remove_folder(&sk.folder)
-            .map_err(|e| format!("remove_folder({}): {e}", sk.folder))?;
-        removed_evicted += 1;
+    // Evict the Phase-2 scan failures. Iterate over a snapshot of
+    // current ScanFailed entries so we don't mutate `skipped` while
+    // borrowing it — also lets ApplyFailed entries from a Phase-2
+    // eviction failure get appended without re-evicting them.
+    let scan_failed_folders: Vec<String> = skipped
+        .iter()
+        .filter(|s| s.kind == SkipKind::ScanFailed)
+        .map(|s| s.folder.clone())
+        .collect();
+    for folder in scan_failed_folders {
+        match cache.remove_folder(&folder) {
+            Ok(()) => removed_evicted += 1,
+            Err(e) => {
+                let reason = format!("remove_folder (scan-failed eviction) failed: {e}");
+                log::warn!("apply_rescan_to_cache {folder} — {reason}");
+                skipped.push(SkippedFolder {
+                    folder: folder.clone(),
+                    reason,
+                    kind: SkipKind::ApplyFailed,
+                });
+            }
+        }
     }
-    Ok((modified_rescanned, removed_evicted))
+    (modified_rescanned, removed_evicted)
 }
 
 /// Drop the SQLite connection, delete the cache file (and its WAL
@@ -676,9 +738,17 @@ pub fn try_remove_folder_from_gui_cache(folder_path: &str) {
 /// whose session-DB provenance had been cleared, and `subset_font`
 /// rejected it with "Font path was not discovered by a scan command."
 ///
-/// Same posture as `try_remove_folder_from_gui_cache`:
-/// - `try_lock` (not `lock`) so a long rescan doesn't stall the
-///   user-visible clear.
+/// Mutation-guard discipline (Round 3 N-R3-3 / A-R3-1):
+/// - Acquires `CacheMutationGuard::try_acquire` to block / be blocked
+///   by `rescan_font_cache_drift`. Without this guard, a `clear` call
+///   landing between rescan's Phase 2 (long scan outside slot lock)
+///   and Phase 3 (apply scan results inside slot lock) would wipe
+///   rows just before Phase 3 re-inserts the freshly scanned ones —
+///   end state: cache holds rows whose session-DB provenance was
+///   just cleared, UI claim and DB state disagree.
+/// - `try_lock` on the SLOT mutex stays — that protects against
+///   handle drop in the clear_font_cache recovery path. The mutation
+///   guard sits above the slot lock; both are needed.
 /// - Cache unavailable → silent no-op (nothing to evict).
 /// - Per-folder `remove_folder` errors log WARN but don't abort the
 ///   iteration; best-effort.
@@ -688,6 +758,13 @@ pub fn try_remove_folder_from_gui_cache(folder_path: &str) {
 /// fresh row behind — acceptable because the racing populate is
 /// post-intent ("Clear all" was issued before the new populate).
 pub fn try_clear_all_folders_in_gui_cache() {
+    let _mutation_guard = match CacheMutationGuard::try_acquire() {
+        Ok(g) => g,
+        Err(_) => {
+            log::warn!("GUI cache mutation in progress; skipping clear-all");
+            return;
+        }
+    };
     let mut slot = match GUI_FONT_CACHE.try_lock() {
         Ok(s) => s,
         Err(std::sync::TryLockError::Poisoned(_)) => {
@@ -695,7 +772,7 @@ pub fn try_clear_all_folders_in_gui_cache() {
             return;
         }
         Err(std::sync::TryLockError::WouldBlock) => {
-            log::warn!("GUI cache busy (rescan or clear in progress); skipping clear-all");
+            log::warn!("GUI cache slot busy; skipping clear-all");
             return;
         }
     };
@@ -823,11 +900,12 @@ mod tests {
             "seed row missing"
         );
 
-        let skipped = vec![SkippedFolder {
+        let mut skipped = vec![SkippedFolder {
             folder: "/bogus/skipped/folder".to_string(),
             reason: "Not a directory".to_string(),
+            kind: SkipKind::ScanFailed,
         }];
-        let (modified, evicted) = apply_rescan_to_cache(&mut cache, &[], &[], &skipped).unwrap();
+        let (modified, evicted) = apply_rescan_to_cache(&mut cache, &[], &[], &mut skipped);
         assert_eq!(modified, 0);
         assert_eq!(evicted, 1);
         assert!(
@@ -838,6 +916,8 @@ mod tests {
                 .all(|f| f.folder_path != "/bogus/skipped/folder"),
             "stale row still present after skip eviction"
         );
+        // No new ApplyFailed entries when the eviction succeeded.
+        assert!(skipped.iter().all(|s| s.kind == SkipKind::ScanFailed));
     }
 
     #[test]
@@ -847,9 +927,11 @@ mod tests {
         cache.replace_folder("/folder/b", 200, &[]).unwrap();
 
         let scanned = vec![("/folder/a".to_string(), 999, vec![])];
-        let (modified, evicted) = apply_rescan_to_cache(&mut cache, &scanned, &[], &[]).unwrap();
+        let mut skipped: Vec<SkippedFolder> = Vec::new();
+        let (modified, evicted) = apply_rescan_to_cache(&mut cache, &scanned, &[], &mut skipped);
         assert_eq!(modified, 1);
         assert_eq!(evicted, 0);
+        assert!(skipped.is_empty(), "no errors expected");
 
         let folders = cache.list_folders().unwrap();
         let a = folders
@@ -874,8 +956,10 @@ mod tests {
         cache.replace_folder(&real_path, 100, &[]).unwrap();
 
         let removed = vec![real_path.clone()];
-        let (_, evicted) = apply_rescan_to_cache(&mut cache, &[], &removed, &[]).unwrap();
+        let mut skipped: Vec<SkippedFolder> = Vec::new();
+        let (_, evicted) = apply_rescan_to_cache(&mut cache, &[], &removed, &mut skipped);
         assert_eq!(evicted, 0, "reappeared folder should be left alone");
+        assert!(skipped.is_empty());
         assert!(
             cache
                 .list_folders()
@@ -924,12 +1008,41 @@ mod tests {
         let bogus = "/bogus/definitely-not-a-real-folder/round-2";
         cache.replace_folder(bogus, 100, &[]).unwrap();
         let removed = vec![bogus.to_string()];
-        let (_, evicted) = apply_rescan_to_cache(&mut cache, &[], &removed, &[]).unwrap();
+        let mut skipped: Vec<SkippedFolder> = Vec::new();
+        let (_, evicted) = apply_rescan_to_cache(&mut cache, &[], &removed, &mut skipped);
         assert_eq!(evicted, 1);
         assert!(cache
             .list_folders()
             .unwrap()
             .iter()
             .all(|f| f.folder_path != bogus));
+        assert!(skipped.is_empty());
+    }
+
+    #[test]
+    fn apply_rescan_continues_after_per_folder_failure() {
+        // Round 3 N-R3-2: a Phase-3 failure on one folder must NOT
+        // discard partial-success info for other folders. Forcing a
+        // realistic SQLite failure mid-flight is hard without injection,
+        // so this test exercises the happy-path layered with a
+        // synthetic ApplyFailed entry already in `skipped` to confirm
+        // it's preserved alongside any new entries the helper adds.
+        let (_guard, mut cache) = temp_cache("continues_after_failure");
+        cache.replace_folder("/folder/x", 100, &[]).unwrap();
+
+        let scanned = vec![("/folder/x".to_string(), 999, vec![])];
+        let mut skipped = vec![SkippedFolder {
+            folder: "/already/failed".to_string(),
+            reason: "previously failed".to_string(),
+            kind: SkipKind::ApplyFailed,
+        }];
+        let (modified, _evicted) = apply_rescan_to_cache(&mut cache, &scanned, &[], &mut skipped);
+        assert_eq!(modified, 1, "successful folder still counted");
+        assert!(
+            skipped
+                .iter()
+                .any(|s| s.folder == "/already/failed" && s.kind == SkipKind::ApplyFailed),
+            "pre-existing ApplyFailed entry preserved"
+        );
     }
 }

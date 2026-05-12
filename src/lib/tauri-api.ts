@@ -493,12 +493,17 @@ export interface FontCacheDriftReport {
   removed: string[];
 }
 
-/** One folder whose Phase-2 scan failed during rescanFontCacheDrift. The
- *  Rust side has already evicted its cache rows; this row is surfaced so
- *  the modal can show the user what couldn't be refreshed. */
+/** One folder that didn't make it through a clean rescan. `kind`
+ *  distinguishes Phase-2 scan failure (couldn't read the folder) from
+ *  Phase-3 apply failure (couldn't write the cache row). The modal
+ *  renders both kinds in the same partial-success block (Round 3
+ *  N-R3-2). */
+export type FontCacheSkipKind = "scanFailed" | "applyFailed";
+
 export interface FontCacheSkippedFolder {
   folder: string;
   reason: string;
+  kind: FontCacheSkipKind;
 }
 
 /** Outcome of rescanFontCacheDrift. `skipped` is non-empty when Phase 2
