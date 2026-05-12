@@ -153,6 +153,10 @@ export const strings: Record<string, StringEntry> = {
     en: "Conversion complete: {0}/{1} file(s) processed",
     zh: "转换完成：已处理 {0}/{1} 个文件",
   },
+  msg_all_failed: {
+    en: "Conversion failed: all {0} file(s) errored",
+    zh: "转换失败：{0} 个文件全部出错",
+  },
   msg_cancelled: { en: "Conversion cancelled.", zh: "转换已取消。" },
   msg_no_subtitle_in_drop: {
     en: "No supported subtitle files in the dropped items",
@@ -229,6 +233,10 @@ export const strings: Record<string, StringEntry> = {
   msg_timing_complete: {
     en: "Save complete: {0}/{1} file(s) processed",
     zh: "保存完成：已处理 {0}/{1} 个文件",
+  },
+  msg_timing_all_failed: {
+    en: "Save failed: all {0} file(s) errored",
+    zh: "保存失败：{0} 个文件全部出错",
   },
   msg_timing_cancelled: { en: "Save cancelled.", zh: "已取消保存。" },
   msg_timing_error: { en: "Error saving {0}: {1}", zh: "保存 {0} 出错：{1}" },
@@ -622,6 +630,10 @@ export const strings: Record<string, StringEntry> = {
   msg_rename_complete: {
     en: "Rename complete: {0}/{1} file(s) processed",
     zh: "重命名完成：已处理 {0}/{1} 个文件",
+  },
+  msg_rename_all_failed: {
+    en: "Rename failed: all {0} file(s) errored",
+    zh: "重命名失败：{0} 个文件全部出错",
   },
   msg_rename_already_named: {
     en: "Already correctly named: {0} (skipped no-op)",

@@ -233,18 +233,25 @@ export default function BatchRename() {
   const subtitleCount = subtitlePaths.length;
   const totalCount = videoCount + subtitleCount;
 
-  // Pairing seed — recomputed whenever the file lists change. Each
-  // row gets a fresh stable ID with a `b<n>` prefix (counter-local to
-  // this useMemo) so subsequent manual edits can reference rows by ID
-  // even when the row's subtitle changes. The engine's content-based
-  // IDs would shift the moment the user picks a different sub.
+  // Pairing seed — recomputed whenever the file lists change. Row IDs
+  // are anchored on the video path (or subtitle path for unmatched
+  // rows) so adding one video to the picker doesn't shift every
+  // existing row's ID (N-R5-FEFEAT-22). The old form used per-iteration
+  // counters (`b1`, `b2`, ...): adding one video at the top renumbered
+  // every row, React remounted every <select>, and any in-progress
+  // dropdown interaction was lost. Path-anchored IDs survive list
+  // mutations as long as the path itself is stable.
+  //
+  // Unmatched rows use `s|<sub>` because there's no video to anchor on.
+  // A `v|` / `s|` prefix prevents accidental collision between a video
+  // path that happens to equal a subtitle path (vanishingly unlikely
+  // with disjoint extension sets, but cheap insurance).
   const baseRows = useMemo<PairingRow[]>(() => {
     const parsedVideos = videoPaths.map((p, i) => parseFilename(p, videoNames[i] ?? ""));
     const parsedSubs = subtitlePaths.map((p, i) => parseFilename(p, subtitleNames[i] ?? ""));
-    let counter = 0;
     return buildPairings(parsedVideos, parsedSubs).map((r) => ({
       ...r,
-      id: `b${++counter}`,
+      id: r.video ? `v|${r.video.path}` : r.subtitle ? `s|${r.subtitle.path}` : `b|${r.key}`,
     }));
   }, [videoPaths, videoNames, subtitlePaths, subtitleNames]);
 
@@ -705,14 +712,21 @@ export default function BatchRename() {
           }
         }
 
-        if (!abortRef.current?.signal.aborted) {
-          addLog(t("msg_rename_complete", successCount, targets.length), "success");
-        }
-
-        if (abortRef.current?.signal.aborted) {
+        // Avoid the success-log vs error-footer contradiction
+        // (N-R5-FEFEAT-15): when every row failed, the
+        // "Rename complete: 0/N" success line and the red
+        // "Rename failed" footer fired together — visually inconsistent
+        // signal. Split so success-log fires only when at least one row
+        // landed; full-batch failure gets its own error-log line.
+        const aborted = !!abortRef.current?.signal.aborted;
+        if (aborted) {
           setLastActionResult("cancelled");
+        } else if (successCount > 0) {
+          addLog(t("msg_rename_complete", successCount, targets.length), "success");
+          setLastActionResult("success");
         } else {
-          setLastActionResult(successCount > 0 ? "success" : "error");
+          addLog(t("msg_rename_all_failed", targets.length), "error");
+          setLastActionResult("error");
         }
       } catch (e) {
         // The default-branch throw inside the switch above (and any other

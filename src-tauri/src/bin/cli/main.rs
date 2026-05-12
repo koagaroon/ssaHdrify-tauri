@@ -596,13 +596,30 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
         let folder_path_str = display_path(&canonical);
 
         // Stat the folder for mtime — drift detection on next run
-        // compares this against live stat.
-        let folder_mtime = std::fs::metadata(&canonical)
+        // compares this against live stat. None → skip the folder
+        // (matches the GUI `stat_mtime` behavior): a transient stat
+        // failure would otherwise write an epoch-zero row that the
+        // next drift-detect re-flags as `modified`, prompting an
+        // endless refresh loop (N-R5-RUSTCLI-07). Surface to stderr
+        // with the user-visible consequence (folder skipped, not "stat
+        // failed at line N") per vibe-coding no-silent-action.
+        let folder_mtime = match std::fs::metadata(&canonical)
             .and_then(|m| m.modified())
             .ok()
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
+        {
+            Some(m) => m,
+            None => {
+                if !globals.quiet {
+                    eprintln!(
+                        "  ⚠ {}: skipped — folder mtime unreadable (would cache as epoch-zero and re-trigger refresh next run)",
+                        folder_path_str
+                    );
+                }
+                continue;
+            }
+        };
 
         // Scan the folder. Non-recursive — matches `embed`'s
         // --font-dir semantics exactly. Per-source error (e.g. cache-

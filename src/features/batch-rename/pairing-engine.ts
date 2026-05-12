@@ -338,7 +338,12 @@ export function buildPairings(videos: ParsedFile[], subtitles: ParsedFile[]): Pa
         id: newId(v, sub),
         video: { path: v.path, name: v.name },
         subtitle: sub ? { path: sub.path, name: sub.name } : null,
-        source: ambiguous ? "warning" : sub ? "regex" : "unmatched",
+        // `warning` implies "debatable pairing" — only meaningful when
+        // there IS a sub to argue about. Ambiguous video with no sub
+        // is just unmatched (N-R5-FEFEAT-11). Old form pinned every
+        // ambiguous row to `warning` regardless, yielding yellow badges
+        // on rows where no decision was actually made.
+        source: ambiguous && sub ? "warning" : sub ? "regex" : "unmatched",
         selected: sub !== null,
         key,
       });
@@ -407,9 +412,15 @@ export function deriveRenameOutputPath(
   // Keep only the subtitle's file extension; the rest of the sub name
   // (including any `.zh` / `.sc` / `.tc` lang token) is discarded so
   // the output basename equals the video basename verbatim.
+  // `subDot >= 0` (not `> 0`) intentionally accepts the leading-dot
+  // edge case `.ass` (N-R5-FEFEAT-18, A-R5-FEFEAT-17): a fan-sub pack
+  // can deliver a leading-dot filename and the old `> 0` guard would
+  // produce `<videoBase>` with NO extension — no player loads the
+  // result. With `>= 0` the whole `.ass` becomes the extension and
+  // the output is `<videoBase>.ass`.
   const subFull = baseName(subtitlePath);
   const subDot = subFull.lastIndexOf(".");
-  const subExt = subDot > 0 ? subFull.slice(subDot) : ""; // ".ass" / ".srt" / etc.
+  const subExt = subDot >= 0 ? subFull.slice(subDot) : ""; // ".ass" / ".srt" / etc.
 
   const outName = `${videoBase}${subExt}`;
 

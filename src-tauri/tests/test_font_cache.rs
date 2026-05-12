@@ -222,8 +222,10 @@ fn refresh_fonts_with_no_cache_errors() {
 #[test]
 fn embed_with_no_cache_does_not_touch_cache_file() {
     if let Some(reason) = engine_bundle_missing() {
-        eprintln!("SKIP: {reason}");
-        return;
+        // Hard-fail instead of skip-and-return (N-R5-RUSTCLI-12): see
+        // test_chain.rs for the WHY — green-when-broken is the failure
+        // mode this guards against.
+        panic!("engine bundle missing — run `npm run build:engine` first ({reason})");
     }
     let work = temp_dir("nocache_embed");
     let font_dir = make_font_dir(&work);
@@ -280,8 +282,10 @@ fn embed_with_no_cache_does_not_touch_cache_file() {
 #[test]
 fn embed_reports_drift_when_folder_mtime_changes() {
     if let Some(reason) = engine_bundle_missing() {
-        eprintln!("SKIP: {reason}");
-        return;
+        // Hard-fail instead of skip-and-return (N-R5-RUSTCLI-12): see
+        // test_chain.rs for the WHY — green-when-broken is the failure
+        // mode this guards against.
+        panic!("engine bundle missing — run `npm run build:engine` first ({reason})");
     }
     let work = temp_dir("drift");
     let font_dir = make_font_dir(&work);

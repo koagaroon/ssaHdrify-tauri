@@ -107,6 +107,7 @@ function App() {
         if (status.schemaMismatch) {
           // Empty drift: cache file is unreadable, modal renders the
           // rebuild-required path (Clear cache button only).
+          if (cancelled) return;
           setCacheDrift({ added: [], modified: [], removed: [] });
           setShowCacheModal(true);
           return;
@@ -120,6 +121,12 @@ function App() {
         if (cancelled) return;
         setCacheDrift(drift);
         if (drift.modified.length > 0 || drift.removed.length > 0) {
+          // Re-check after the setCacheDrift state-set above flushes —
+          // tiny window between the post-await guard at line above and
+          // this setShowCacheModal call; an unmount mid-flush would
+          // otherwise stage the modal for a vanished component
+          // (N-R5-FEFEAT-13).
+          if (cancelled) return;
           setShowCacheModal(true);
         }
       } catch (e) {

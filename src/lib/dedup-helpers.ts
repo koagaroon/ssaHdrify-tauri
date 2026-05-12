@@ -55,7 +55,14 @@ export function buildConflictMessage(
   // Single-tab path keeps the existing message exactly so callers /
   // tests anchored on it stay green.
   if (conflictsByTab.size === 1) {
-    const [tab, count] = conflictsByTab.entries().next().value!;
+    // Defensive destructure (N-R5-FELIB-13): the `size === 1` guard
+    // above proves the iterator yields one entry, so the old
+    // `.next().value!` non-null assertion was sound — but a future
+    // refactor that merges the size-1 branch into the multi-tab path
+    // would silently produce `undefined` here. Array.from spread keeps
+    // the destructure unambiguous and crashes loudly on the impossible
+    // case instead of returning `t("msg_dedup_blocked", undefined, ...)`.
+    const [tab, count] = Array.from(conflictsByTab.entries())[0];
     return t("msg_dedup_blocked", count, t(TAB_LABEL_KEYS[tab]));
   }
   // Multi-tab: list each "{count} in {tab}" segment, joined by "/".

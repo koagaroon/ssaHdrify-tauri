@@ -217,7 +217,12 @@ export default function HdrConvert() {
       });
 
       if (subtitlePaths.length === 0) {
-        addLog(t("msg_no_subtitle_in_drop"), "error");
+        // Surface through both the log AND the standard DropErrorBanner
+        // (N-R5-FEFEAT-09 mirror). Users with collapsed log panels see
+        // nothing from log-only — banner is the always-visible feedback.
+        const msg = t("msg_no_subtitle_in_drop");
+        addLog(msg, "error");
+        setDropError(msg);
         return;
       }
 
@@ -231,7 +236,7 @@ export default function HdrConvert() {
       const names = subtitlePaths.map(fileNameFromPath);
       setHdrFiles({ filePaths: subtitlePaths, fileNames: names });
     },
-    [isFileInUse, setHdrFiles, addLog, t]
+    [isFileInUse, setHdrFiles, setDropError, addLog, t]
   );
 
   useFolderDrop({
@@ -431,18 +436,25 @@ export default function HdrConvert() {
           }
         }
 
-        if (!abortRef.current?.signal.aborted) {
-          addLog(t("msg_complete", successCount, paths.length), "success");
-        }
         // Record outcome for the footer status. Order matters: a cancel
         // takes precedence over partial success/error counts, because the
         // user explicitly stepped back — surfacing "Conversion complete"
         // when they cancelled mid-batch would be a lie. Only treat the
         // outcome as success/error when the loop ran to completion.
-        if (abortRef.current?.signal.aborted) {
+        // Avoid success-log vs error-footer contradiction
+        // (N-R5-FEFEAT-16): when every file failed, the previous form
+        // fired both "complete: 0/N" + red "failed" footer. Split so
+        // success-log fires only when at least one file landed;
+        // full-batch failure gets its own error line.
+        const aborted = !!abortRef.current?.signal.aborted;
+        if (aborted) {
           setLastActionResult("cancelled");
+        } else if (successCount > 0) {
+          addLog(t("msg_complete", successCount, paths.length), "success");
+          setLastActionResult("success");
         } else {
-          setLastActionResult(successCount > 0 ? "success" : "error");
+          addLog(t("msg_all_failed", paths.length), "error");
+          setLastActionResult("error");
         }
       } finally {
         setProcessing(false);
@@ -764,9 +776,17 @@ export default function HdrConvert() {
               <select
                 value={COMMON_FONTS_SET.has(style.fontName) ? style.fontName : "__custom"}
                 onChange={(e) => {
-                  if (e.target.value !== "__custom") {
-                    setStyle({ ...style, fontName: e.target.value });
-                  }
+                  // When the user picks "Custom", drop fontName to ""
+                  // so `!COMMON_FONTS_SET.has(style.fontName)` flips
+                  // true and the custom <input> below mounts. Without
+                  // this drop the select's `value=` re-derives from
+                  // the unchanged fontName ("Arial" etc.) and the
+                  // dropdown visually snaps back to the previous font
+                  // — the custom input never appears (N-R5-FEFEAT-20).
+                  setStyle({
+                    ...style,
+                    fontName: e.target.value === "__custom" ? "" : e.target.value,
+                  });
                 }}
                 disabled={processing}
                 className="w-full px-2 py-1.5 rounded text-sm"

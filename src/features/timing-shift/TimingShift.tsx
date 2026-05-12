@@ -268,6 +268,11 @@ export default function TimingShift() {
       try {
         firstContent = await readText(paths[0]);
       } catch (e) {
+        // Stale-pick guard BEFORE the log emit (N-R5-FEFEAT-06): an
+        // earlier pick that errors after the user has already moved on
+        // would otherwise emit a confusing log line tied to the
+        // abandoned selection. Drop silently when superseded.
+        if (gen !== pickGenRef.current) return;
         addLog(t("error_prefix", e instanceof Error ? e.message : String(e)), "error");
         return;
       }
@@ -295,7 +300,12 @@ export default function TimingShift() {
     async (paths: string[]) => {
       const subtitlePaths = paths.filter((p) => fileNameHasSubtitleExt(fileNameFromPath(p)));
       if (subtitlePaths.length === 0) {
-        addLog(t("msg_no_subtitle_in_drop"), "error");
+        // Surface through both the log AND the standard DropErrorBanner
+        // (N-R5-FEFEAT-09). Users with collapsed log panels see nothing
+        // from log-only — the banner is the always-visible feedback.
+        const msg = t("msg_no_subtitle_in_drop");
+        addLog(msg, "error");
+        setDropError(msg);
         return;
       }
       const gen = (pickGenRef.current = pickGenRef.current + 1);
@@ -447,16 +457,21 @@ export default function TimingShift() {
           }
         }
 
-        if (!abortRef.current?.signal.aborted) {
-          addLog(t("msg_timing_complete", successCount, paths.length), "success");
-        }
-
         // Cancel takes precedence over success/error — surfacing
         // "complete" when the user cancelled mid-batch would lie.
-        if (abortRef.current?.signal.aborted) {
+        // Avoid success-log vs error-footer contradiction
+        // (N-R5-FEFEAT-17): when every file failed, the previous form
+        // fired both "complete: 0/N" + red "failed" footer. Split so
+        // success-log fires only when at least one file landed.
+        const aborted = !!abortRef.current?.signal.aborted;
+        if (aborted) {
           setLastActionResult("cancelled");
+        } else if (successCount > 0) {
+          addLog(t("msg_timing_complete", successCount, paths.length), "success");
+          setLastActionResult("success");
         } else {
-          setLastActionResult(successCount > 0 ? "success" : "error");
+          addLog(t("msg_timing_all_failed", paths.length), "error");
+          setLastActionResult("error");
         }
       } finally {
         setBusy(false);

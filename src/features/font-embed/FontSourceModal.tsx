@@ -355,8 +355,17 @@ export default function FontSourceModal(props: Props) {
     if (busyRef.current) return false;
     busyRef.current = true;
     setBusy(true);
+    // Notify the parent IMMEDIATELY so its sourceLocked = sourceBusy ||
+    // modalScanning evaluates true across the entire pick/preflight/
+    // confirm window. Previously setScanningWithParent fired only after
+    // confirmLargeFontScan returned (post-OS-picker), leaving a real
+    // hole where the parent ✕ Clear button stayed enabled while the OS
+    // picker was up — a user clicking Add Folder then ✕ Clear could
+    // fire clearFontSources against state the modal was about to
+    // mutate (N-R5-FECHAIN-01). Mirrored in releaseScanFlow.
+    setScanningWithParent(true);
     return true;
-  }, []);
+  }, [setScanningWithParent]);
 
   const releaseScanFlow = useCallback(() => {
     // Ordering note: clearing busyRef synchronously while setBusy(false)
@@ -370,7 +379,8 @@ export default function FontSourceModal(props: Props) {
     // assume it's a defect.
     busyRef.current = false;
     setBusy(false);
-  }, []);
+    setScanningWithParent(false);
+  }, [setScanningWithParent]);
 
   const confirmLargeFontScan = useCallback(
     async (preflight: FontScanPreflight): Promise<boolean> => {
@@ -428,7 +438,9 @@ export default function FontSourceModal(props: Props) {
         const sourceId = newSourceId();
         activeScanIdRef.current = scanId;
         resetScanProgress();
-        setScanningWithParent(true);
+        // setScanningWithParent(true) already fired inside claimScanFlow
+        // — the parent lock spans the full pick/preflight/confirm/scan
+        // arc, not just from-here-down.
         const scan = await opts.scan(input, sourceId, scanId, (total) =>
           scheduleScanProgress(total)
         );
@@ -465,7 +477,10 @@ export default function FontSourceModal(props: Props) {
         if (scanId !== null && activeScanIdRef.current === scanId) {
           activeScanIdRef.current = null;
         }
-        setScanningWithParent(false);
+        // setScanningWithParent(false) is owned by releaseScanFlow now —
+        // pairing it 1:1 with claimScanFlow keeps both lock transitions
+        // in one place, so the parent unlock cannot be skipped on an
+        // early `return` path above (e.g. picker cancelled).
         releaseScanFlow();
       }
     },

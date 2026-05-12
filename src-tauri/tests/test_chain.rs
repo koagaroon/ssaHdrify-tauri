@@ -102,8 +102,12 @@ fn engine_bundle_missing() -> Option<String> {
 #[test]
 fn chain_hdr_shift_byte_equals_sequential_runs() {
     if let Some(reason) = engine_bundle_missing() {
-        eprintln!("SKIP: {reason}");
-        return;
+        // Hard-fail instead of skip-and-return (N-R5-RUSTCLI-12): a
+        // skip records PASS in Cargo, so a forgotten
+        // `npm run build:engine` ships CI clean while every chain
+        // integration test is actually a no-op. Panicking surfaces the
+        // build gap as a red CI signal that maps to a one-line fix.
+        panic!("engine bundle missing — run `npm run build:engine` first ({reason})");
     }
 
     let chain_dir = temp_dir("chain");
@@ -153,8 +157,12 @@ fn chain_hdr_shift_byte_equals_sequential_runs() {
 #[test]
 fn chain_dry_run_prints_plan_without_writing() {
     if let Some(reason) = engine_bundle_missing() {
-        eprintln!("SKIP: {reason}");
-        return;
+        // Hard-fail instead of skip-and-return (N-R5-RUSTCLI-12): a
+        // skip records PASS in Cargo, so a forgotten
+        // `npm run build:engine` ships CI clean while every chain
+        // integration test is actually a no-op. Panicking surfaces the
+        // build gap as a red CI signal that maps to a one-line fix.
+        panic!("engine bundle missing — run `npm run build:engine` first ({reason})");
     }
 
     let dir = temp_dir("dryrun");
@@ -197,8 +205,12 @@ fn chain_dry_run_prints_plan_without_writing() {
 #[test]
 fn chain_multi_file_batch_processes_all_inputs() {
     if let Some(reason) = engine_bundle_missing() {
-        eprintln!("SKIP: {reason}");
-        return;
+        // Hard-fail instead of skip-and-return (N-R5-RUSTCLI-12): a
+        // skip records PASS in Cargo, so a forgotten
+        // `npm run build:engine` ships CI clean while every chain
+        // integration test is actually a no-op. Panicking surfaces the
+        // build gap as a red CI signal that maps to a one-line fix.
+        panic!("engine bundle missing — run `npm run build:engine` first ({reason})");
     }
 
     let dir = temp_dir("multi");
@@ -224,8 +236,12 @@ fn chain_multi_file_batch_processes_all_inputs() {
 #[test]
 fn chain_overwrite_toggles_skip_vs_replace() {
     if let Some(reason) = engine_bundle_missing() {
-        eprintln!("SKIP: {reason}");
-        return;
+        // Hard-fail instead of skip-and-return (N-R5-RUSTCLI-12): a
+        // skip records PASS in Cargo, so a forgotten
+        // `npm run build:engine` ships CI clean while every chain
+        // integration test is actually a no-op. Panicking surfaces the
+        // build gap as a red CI signal that maps to a one-line fix.
+        panic!("engine bundle missing — run `npm run build:engine` first ({reason})");
     }
 
     let dir = temp_dir("overwrite");

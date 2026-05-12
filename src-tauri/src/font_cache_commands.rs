@@ -156,10 +156,16 @@ pub fn init_gui_font_cache(app_data_dir: &Path) -> Result<(), String> {
 use crate::font_cache::try_modified_at;
 
 /// Convenience for callers that want a "best-effort" mtime with a
-/// zero fallback (Phase 2's scanned-folder mtime recorded into cache).
-/// Composes on `try_modified_at` so all stat semantics agree.
-fn stat_mtime_or_zero(path: &Path) -> i64 {
-    try_modified_at(path).unwrap_or(0)
+/// Returns the folder's modified-at unix-seconds, OR `None` when stat
+/// fails. The previous form silently substituted 0 on failure, which
+/// marked the cache row with the Unix epoch; the next drift-detect
+/// then compared 0 vs the live folder's real positive mtime and
+/// reported `modified`, prompting another doomed rescan that hit the
+/// same failure mode — a loop bug (N-R5-RUSTGUI-03). Callers MUST
+/// handle `None` by skipping the populate/replace for that folder so
+/// no row gets a bogus epoch stamp.
+fn stat_mtime(path: &Path) -> Option<i64> {
+    try_modified_at(path)
 }
 
 // `entries_to_cache_metadata` (in `crate::fonts`) is the shared helper —
@@ -404,7 +410,18 @@ pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
     let mut skipped: Vec<SkippedFolder> = Vec::new();
     for folder in &report.modified {
         let folder_path = Path::new(folder);
-        let folder_mtime = stat_mtime_or_zero(folder_path);
+        // None → skip the populate (see `stat_mtime` doc): without
+        // this, a transient stat failure would write an epoch-zero
+        // mtime that drift-detect re-flags forever.
+        let Some(folder_mtime) = stat_mtime(folder_path) else {
+            log::warn!("rescan: skipping {folder} — folder mtime unreadable");
+            skipped.push(SkippedFolder {
+                folder: folder.clone(),
+                reason: "folder mtime unreadable".to_string(),
+                kind: SkipKind::ScanFailed,
+            });
+            continue;
+        };
         match crate::fonts::scan_directory_collecting(folder_path) {
             Ok(entries) => {
                 scanned.push((
@@ -660,7 +677,16 @@ pub fn try_record_folder_in_gui_cache(
             return;
         }
     };
-    let folder_mtime = stat_mtime_or_zero(folder_path);
+    // None → skip the populate so the cache doesn't acquire an
+    // epoch-zero row that drift-detect re-flags forever (see
+    // `stat_mtime` doc).
+    let Some(folder_mtime) = stat_mtime(folder_path) else {
+        log::warn!(
+            "GUI cache populate skipped (folder mtime unreadable): {}",
+            folder_path.display()
+        );
+        return;
+    };
     let metadata: Vec<FontMetadata> = entries_to_cache_metadata(entries);
     // Normalize the canonical path BEFORE storing it as the cache key.
     // `font_faces.path` (session DB, source for the eviction key in
