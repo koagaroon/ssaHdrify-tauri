@@ -25,11 +25,14 @@
  *       accidentally swaps which IPC path uses which won't silently
  *       pass).
  *
- * Test deliberately uses Node `Buffer` for base64 — `js-base64` (the
- * production decoder in chain-runtime) is unavailable in the current
- * vitest env on this machine; the round-trip semantics are identical.
+ * Uses `js-base64` directly (same package the production decoder in
+ * chain-runtime.ts uses) so the test runs in any vitest env without
+ * requiring Node's `Buffer` global — the prior `Buffer.from()` form
+ * broke `tsc -b` because the project tsconfig intentionally omits
+ * @types/node.
  */
 import { describe, it, expect } from "vitest";
+import { Base64 } from "js-base64";
 
 function encodeAsNumberArray(bytes: Uint8Array): number[] {
   return Array.from(bytes);
@@ -39,12 +42,16 @@ function decodeFromNumberArray(json: number[]): Uint8Array {
   return new Uint8Array(json);
 }
 
+// Use js-base64 (already a runtime dep, cross-environment) instead of
+// Node's Buffer — the project's tsconfig doesn't include @types/node,
+// and the test runs through Vite/Vitest's browser-shaped env where
+// Buffer isn't a global.
 function encodeAsBase64(bytes: Uint8Array): string {
-  return Buffer.from(bytes).toString("base64");
+  return Base64.fromUint8Array(bytes);
 }
 
 function decodeFromBase64(b64: string): Uint8Array {
-  return new Uint8Array(Buffer.from(b64, "base64"));
+  return Base64.toUint8Array(b64);
 }
 
 describe("FontSubsetPayload wire-format round-trip (Round 3 N-R3-13)", () => {

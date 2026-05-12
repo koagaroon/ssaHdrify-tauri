@@ -163,8 +163,11 @@ describe("analyzeFonts — match priority", () => {
     // (only for FZLanTingHei). Pins the variant-keyed priority: a
     // regression that dropped the bold bit from userFontKey would
     // miss the map and fall through to findSystemFont here.
+    // `mock.calls` is typed as `any[][]` (vitest doesn't narrow the
+    // arg shape); index-access instead of tuple-destructure to keep
+    // tsc happy under noUncheckedIndexedAccess.
     const arialSystemCalls = findSystemFontMock.mock.calls.filter(
-      ([family]: [string, boolean, boolean]) => family === "Arial"
+      (call: unknown[]) => call[0] === "Arial"
     );
     expect(arialSystemCalls).toHaveLength(0);
   });

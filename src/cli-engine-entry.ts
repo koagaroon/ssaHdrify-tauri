@@ -24,11 +24,7 @@ import {
   buildFontFileName,
   insertFontsSection,
 } from "./features/font-embed/font-embedder";
-import {
-  collectFontsWithParser,
-  fontKeyLabel,
-  type FontKey,
-} from "./features/font-embed/font-collector";
+import { collectFontsWithParser, fontKeyLabel } from "./features/font-embed/font-collector";
 import { deriveShiftedPath, shiftSubtitles } from "./features/timing-shift/timing-engine";
 import { extractLangFromBaseName, LANG_TAGS } from "./lib/lang-detection";
 import {
