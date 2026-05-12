@@ -403,8 +403,14 @@ pub enum ScanStopReason {
     Natural,
     /// User pressed Cancel during the scan.
     UserCancel,
-    /// MAX_FONTS_PER_SCAN defense-in-depth ceiling fired. Partial
-    /// results are preserved on the way out.
+    /// A defense-in-depth ceiling fired. Two ceilings collapse into
+    /// this variant — the per-scan log line distinguishes which:
+    /// - `MAX_FONTS_PER_SCAN` face ceiling
+    /// - `MAX_PREFLIGHT_ENTRIES` dedup-set ceiling (Round 2 N-R2-1:
+    ///   previously the dedup break reported `Natural`, silently
+    ///   truncating to the user)
+    ///
+    /// Partial results are preserved on the way out in both cases.
     CeilingHit,
 }
 
@@ -1273,6 +1279,10 @@ fn scan_directory_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
     // `MAX_PREFLIGHT_ENTRIES` so the directory scan can't outrun the
     // preflight ceiling on memory pressure.
     let mut seen: HashSet<String> = HashSet::new();
+    // Tracks whether the dedup-cap break fired so the post-loop reason
+    // routes to `CeilingHit` instead of falling through to `Natural`
+    // (Round 2 N-R2-1 — previously the cap was silent to the UI).
+    let mut dedup_ceiling_hit = false;
 
     for entry in read {
         if font_scan_cancelled(scan_id) {
@@ -1335,10 +1345,11 @@ fn scan_directory_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
         if seen.len() >= MAX_PREFLIGHT_ENTRIES {
             log::warn!(
                 "font scan {} dedup set hit {MAX_PREFLIGHT_ENTRIES} entries in '{}'; \
-                 stopping early to bound memory",
+                 stopping early to bound memory (partial results preserved)",
                 scan_id,
                 canonical_dir.display()
             );
+            dedup_ceiling_hit = true;
             break;
         }
         if !seen.insert(normalize_canonical_path(&canonical.to_string_lossy())) {
@@ -1383,9 +1394,14 @@ fn scan_directory_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
     // `parse_local_font_file`'s per-face cancel poll fires inside the
     // FINAL directory entry / file, the loop exits naturally and the
     // outer reason would otherwise read as Natural — UI sees "completed
-    // normally" while the partial buffer is silently kept.
+    // normally" while the partial buffer is silently kept. Cancel
+    // wins over `dedup_ceiling_hit` because the cap-triggered break
+    // and a subsequent user cancel are both "stopped early"; reporting
+    // UserCancel matches what the user expects to see.
     let reason = if font_scan_cancelled(scan_id) {
         ScanStopReason::UserCancel
+    } else if dedup_ceiling_hit {
+        ScanStopReason::CeilingHit
     } else {
         ScanStopReason::Natural
     };
@@ -1417,12 +1433,15 @@ fn run_streaming_scan_command<S>(
     // scan path uses this to feed `try_record_folder_in_gui_cache`
     // after commit; the file-list scan path passes `None` because it
     // has no folder anchor for the cache's drift model. Bounded by
-    // MAX_CACHE_POPULATE_FACES — exceeding the cap clears the Vec and
-    // signals via the returned `populate_cache` bool that the caller
-    // must skip the cache-populate call (Codex 13b4e2c0 OOM defense).
+    // MAX_CACHE_POPULATE_FACES — exceeding the cap truncates the Vec
+    // to the cap (Round 2 N-R2-4: truncated cache acceleration is
+    // strictly better than the prior "drop everything and skip
+    // populate" behavior) and the surfaced WARN log tells the user
+    // the cache is partial. Codex 13b4e2c0 OOM defense still holds:
+    // peak memory is bounded by the cap.
     mut collected_for_cache: Option<&mut Vec<LocalFontEntry>>,
     scan_body: S,
-) -> Result<StreamingScanResult, String>
+) -> Result<(), String>
 where
     S: FnOnce(
         u64,
@@ -1436,10 +1455,12 @@ where
     let source_order = create_user_font_source_tx(&tx, source_id)?;
     let mut import = ImportOutcome::default();
     let mut progress_total = 0usize;
-    // Track whether the cache populate cap was hit mid-scan. Set inside
-    // the closure; consumed by the caller after the scan completes to
-    // decide whether to write the persistent cache for this source.
-    let mut cache_cap_exceeded = false;
+    // Tracks whether the cap was hit mid-scan and the collected Vec
+    // was truncated to fit. Reported back to the caller via
+    // `StreamingScanResult.cache_truncated` (informational; the cache
+    // is still populated with the truncated set — see the WHY in the
+    // collected_for_cache parameter doc and the take/extend branch).
+    let mut cache_truncated = false;
     let outcome = scan_body(scan_id, &mut |batch| {
         let batch_size = batch.len();
         // For directory scans, snapshot the batch before it's consumed
@@ -1450,20 +1471,34 @@ where
         // .as_mut() (not .as_deref_mut) so we hold &mut Vec<T>, not the
         // &mut [T] slice that as_deref_mut would yield — slices can't
         // grow, so .extend wouldn't compile against them.
-        if !cache_cap_exceeded {
+        //
+        // Cache cap: take what fits instead of dropping everything
+        // (Round 2 N-R2-4). Previously a 19_999-entry batch followed
+        // by a 2-entry batch would clear all 20_001 because the cap
+        // tripped on the second batch, losing the well-under-cap work
+        // already done. Now: take MAX_CACHE_POPULATE_FACES - c.len()
+        // slots from the overflowing batch, mark the cache as
+        // truncated, and let the caller populate the partial set.
+        // Partial cache acceleration beats none; queries that miss the
+        // truncated set fall through to session DB / system fonts via
+        // the existing lookup-tier order. `cache_truncated` short-
+        // circuits subsequent batches because they can't add more
+        // without re-exceeding the cap.
+        if !cache_truncated {
             if let Some(c) = collected_for_cache.as_mut() {
-                if c.len() + batch.len() > MAX_CACHE_POPULATE_FACES {
+                let remaining = MAX_CACHE_POPULATE_FACES.saturating_sub(c.len());
+                if batch.len() > remaining {
                     log::warn!(
-                        "Persistent font cache populate skipped: scan size exceeds {} faces \
-                         (defense-in-depth cap against malicious or abnormally large font \
-                         packs). Session-DB import for this scan is unaffected.",
+                        "Persistent font cache populate truncated at {} faces: scan exceeded \
+                         the defense-in-depth cap (malicious or abnormally large font packs). \
+                         Cache will accelerate the first {} faces; queries for later faces \
+                         fall through to session DB / system fonts. Session-DB import for \
+                         this scan is unaffected.",
+                        MAX_CACHE_POPULATE_FACES,
                         MAX_CACHE_POPULATE_FACES
                     );
-                    // Drop accumulated entries to release the peak memory
-                    // — caller signal is via the returned bool, the Vec
-                    // itself is no longer trustworthy.
-                    c.clear();
-                    cache_cap_exceeded = true;
+                    c.extend(batch.iter().take(remaining).cloned());
+                    cache_truncated = true;
                 } else {
                     c.extend(batch.iter().cloned());
                 }
@@ -1510,20 +1545,14 @@ where
             ScanStopReason::CeilingHit => " (ceiling hit)",
         }
     );
-    Ok(StreamingScanResult {
-        populate_cache: !cache_cap_exceeded,
-    })
-}
-
-/// Outcome of `run_streaming_scan_command` from the caller's
-/// perspective. Currently a single bool — the cache-populate gate. New
-/// post-scan signals (e.g. drift hints, partial-import counts) can be
-/// added as fields here without breaking call sites.
-struct StreamingScanResult {
-    /// `true` when `collected_for_cache` (if provided) is safe to pass
-    /// to `try_record_folder_in_gui_cache`. `false` when the cap was
-    /// exceeded mid-scan and the Vec has been cleared.
-    populate_cache: bool,
+    // `cache_truncated` is intentionally consumed only via the WARN log
+    // above. The caller always populates `collected_for_cache` (when
+    // provided) — truncated or not, the Vec is a valid scan snapshot
+    // from the cache writer's perspective. If a future caller needs
+    // to react to truncation (e.g., surface a UI toast), promote this
+    // local back into a returned struct.
+    let _ = cache_truncated;
+    Ok(())
 }
 
 fn run_blocking_scan_import<S>(
@@ -1682,7 +1711,7 @@ pub async fn scan_font_directory(
         // folder with no faces (consistent with the cache's data
         // model).
         let mut entries_for_cache: Vec<LocalFontEntry> = Vec::new();
-        let result = run_streaming_scan_command(
+        run_streaming_scan_command(
             scan_id,
             &source_id,
             progress,
@@ -1690,12 +1719,17 @@ pub async fn scan_font_directory(
             Some(&mut entries_for_cache),
             |scan_id, emit_batch| scan_directory_inner(&canonical_dir, scan_id, emit_batch),
         )?;
-        if result.populate_cache {
-            crate::font_cache_commands::try_record_folder_in_gui_cache(
-                &canonical_dir,
-                &entries_for_cache,
-            );
-        }
+        // Always populate; entries_for_cache may be empty (no faces
+        // found), full (under cap), or truncated to MAX_CACHE_POPULATE_FACES
+        // (Round 2 N-R2-4). All three are valid records of "what this
+        // scan saw" and the cache writer's contract handles each
+        // identically — folder row + 0..=N face metadata rows. Faces
+        // not in the truncated set fall through to session DB / system
+        // fonts via the existing lookup-tier order on later queries.
+        crate::font_cache_commands::try_record_folder_in_gui_cache(
+            &canonical_dir,
+            &entries_for_cache,
+        );
         Ok(())
     })
     .await
@@ -1837,7 +1871,6 @@ pub async fn scan_font_files(
             None,
             |scan_id, emit_batch| scan_files_inner(paths, scan_id, emit_batch),
         )
-        .map(|_result| ())
     })
     .await
     .map_err(|e| format!("Font scan worker failed: {e}"))?
