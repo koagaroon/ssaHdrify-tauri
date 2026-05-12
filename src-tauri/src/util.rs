@@ -94,14 +94,41 @@ pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
     // \\?\UNC\server\share\…) remain allowed since they map onto
     // ordinary filesystem paths and font scanning + drag-drop both
     // produce them through canonicalize().
-    let lowered = path.to_ascii_lowercase();
-    let is_dos_device = lowered.starts_with("\\\\.\\") || lowered.starts_with("//./");
-    let is_globalroot =
-        lowered.starts_with("\\\\?\\globalroot\\") || lowered.starts_with("//?/globalroot/");
+    //
+    // Byte-prefix check on raw `path.as_bytes()` (Round 2 A-R2-4) —
+    // the previous `path.to_ascii_lowercase()` allocated a fresh
+    // String just to compare a ≤16-byte prefix, wasting ~4 KiB on a
+    // pathological 4096-byte IPC path. `eq_ignore_ascii_case` runs
+    // ASCII case folding in place. Lossless: every prefix listed below
+    // is pure ASCII, so byte-level case folding is byte-equivalent to
+    // the prior char-level fold.
+    let bytes = path.as_bytes();
+    let starts_ci = |needle: &[u8]| {
+        bytes.len() >= needle.len() && bytes[..needle.len()].eq_ignore_ascii_case(needle)
+    };
+    let is_dos_device = starts_ci(br"\\.\") || starts_ci(b"//./");
+    let is_globalroot = starts_ci(br"\\?\globalroot\") || starts_ci(b"//?/globalroot/");
     if is_dos_device || is_globalroot {
         return Err(format!("{label} path uses a reserved device namespace"));
     }
     Ok(())
+}
+
+/// Replace every "visual line break" character with a separator so a
+/// string can be safely embedded in a single-line context (terminal
+/// stderr, rfd dialog body, log line). Strips:
+///
+/// - ASCII CR / LF (`\r`, `\n`)
+/// - C1 NEL (`U+0085`) — historical newline on EBCDIC; some terminals
+///   honor it
+/// - Unicode line / paragraph separators (`U+2028` / `U+2029`)
+///
+/// Bidi-override controls (`U+202A..U+202E`, `U+2066..U+2069`) are NOT
+/// stripped — those are a separate Trojan-source class. If a path
+/// containing a bidi override becomes a credible threat, extend this
+/// helper and apply at every untrusted-output boundary.
+pub fn strip_visual_line_breaks(s: &str) -> String {
+    s.replace(['\r', '\n', '\u{0085}', '\u{2028}', '\u{2029}'], " — ")
 }
 
 /// Detect symlinks AND Windows junctions / OneDrive placeholders.
@@ -136,4 +163,60 @@ pub fn is_reparse_point(path: &Path) -> bool {
     std::fs::symlink_metadata(path)
         .map(|m| m.file_type().is_symlink())
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── validate_ipc_path: byte-prefix DOS-device check (A-R2-4) ──
+
+    #[test]
+    fn validate_rejects_dos_device_lowercase() {
+        let err = validate_ipc_path(r"\\.\PhysicalDrive0", "Test").unwrap_err();
+        assert!(err.contains("reserved device namespace"));
+    }
+
+    #[test]
+    fn validate_rejects_dos_device_mixed_case() {
+        // Windows is case-insensitive for device names; the byte-prefix
+        // helper must fold case without allocating a lowered string.
+        let err = validate_ipc_path(r"\\.\PHYSICALDRIVE0", "Test").unwrap_err();
+        assert!(err.contains("reserved device namespace"));
+    }
+
+    #[test]
+    fn validate_rejects_globalroot_mixed_case() {
+        let err = validate_ipc_path(r"\\?\GlobalRoot\Device\Boot", "Test").unwrap_err();
+        assert!(err.contains("reserved device namespace"));
+    }
+
+    #[test]
+    fn validate_accepts_long_path_prefix() {
+        // \\?\C:\… is the legitimate long-path form, NOT in the deny set.
+        validate_ipc_path(r"\\?\C:\fonts\sample.ttf", "Test").expect("long path should be allowed");
+    }
+
+    // ── strip_visual_line_breaks (N-R2-11) ──
+
+    #[test]
+    fn strip_replaces_all_documented_breaks() {
+        let input = "line1\rline2\nline3\u{0085}line4\u{2028}line5\u{2029}line6";
+        let out = strip_visual_line_breaks(input);
+        assert!(!out.contains('\r'));
+        assert!(!out.contains('\n'));
+        assert!(!out.contains('\u{0085}'));
+        assert!(!out.contains('\u{2028}'));
+        assert!(!out.contains('\u{2029}'));
+        // All breaks collapse to the same separator; line tokens
+        // remain visible.
+        assert!(out.contains("line1"));
+        assert!(out.contains("line6"));
+    }
+
+    #[test]
+    fn strip_passes_through_normal_text() {
+        let input = "C:\\Users\\me\\subtitle.ass";
+        assert_eq!(strip_visual_line_breaks(input), input);
+    }
 }

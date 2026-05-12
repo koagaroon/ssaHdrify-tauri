@@ -72,11 +72,9 @@ pub fn run() {
                 // possible on locale-mangled Windows profiles or
                 // OS-resolved env-var rewrites) could otherwise sneak
                 // wide line breaks through the path slot.
-                fn one_line(s: &str) -> String {
-                    s.replace(['\r', '\n', '\u{0085}', '\u{2028}', '\u{2029}'], " — ")
-                }
-                let error_one_line = one_line(&e);
-                let path_one_line = one_line(&app_data_dir.display().to_string());
+                use crate::util::strip_visual_line_breaks;
+                let error_one_line = strip_visual_line_breaks(&e);
+                let path_one_line = strip_visual_line_breaks(&app_data_dir.display().to_string());
                 rfd::MessageDialog::new()
                     .set_level(rfd::MessageLevel::Error)
                     .set_title("SSA HDRify — startup failure")

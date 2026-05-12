@@ -262,9 +262,7 @@ pub fn read_text_detect_encoding_inner(
             "Refusing to read possible symlink / junction at stat-time: {}",
             read_path.display()
         );
-        return Err(
-            "Refusing to read symlink / junction (race-time detection)".to_string(),
-        );
+        return Err("Refusing to read symlink / junction (race-time detection)".to_string());
     }
 
     // Size check.

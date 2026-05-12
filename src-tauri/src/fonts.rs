@@ -1550,11 +1550,23 @@ where
     // the Err path — the IPC rejection handles that signal, and
     // runStreamingScan never reaches the donePromise await when invoke
     // rejects.
-    let _ = progress.send(ScanProgress::Done {
+    //
+    // Batch-send failures stay swallowed (UX progress is informational —
+    // missing a few batches is harmless), but the Done send is load-
+    // bearing: `runStreamingScan` on the JS side awaits a donePromise
+    // that only resolves when this event arrives. A dropped receiver
+    // (Channel.onmessage cleared, page unloaded) would otherwise leave
+    // that promise hanging silently. Log WARN so the asymmetric failure
+    // mode is visible in diagnostics (Round 2 N-R2-7).
+    if let Err(e) = progress.send(ScanProgress::Done {
         reason: outcome.reason,
         added: import.added,
         duplicated: import.duplicated,
-    });
+    }) {
+        log::warn!(
+            "scan {scan_id}: Done sentinel send failed — frontend may be hanging on donePromise ({e})"
+        );
+    }
 
     log::info!(
         "{log_label} with scan {scan_id}: {} faces total, {} added, {} duplicate{}",

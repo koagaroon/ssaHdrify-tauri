@@ -67,9 +67,9 @@ struct GlobalOptions {
     no_cache: bool,
 
     /// Override the default font cache file path. Default location
-    /// follows each OS's user-data convention: `%APPDATA%/ssaHdrify/`
-    /// on Windows, `$XDG_DATA_HOME/ssaHdrify/` or `~/.local/share/ssaHdrify/`
-    /// on Linux, `~/Library/Application Support/ssaHdrify/` on macOS,
+    /// follows each OS's user-data convention: `%APPDATA%/ssahdrify/`
+    /// on Windows, `$XDG_DATA_HOME/ssahdrify/` or `~/.local/share/ssahdrify/`
+    /// on Linux, `~/Library/Application Support/ssahdrify/` on macOS,
     /// always named `cli_font_cache.sqlite3`. Useful for testing or
     /// non-default layouts. 覆盖字体缓存文件路径。
     #[arg(long, global = true, value_name = "PATH")]
@@ -2696,15 +2696,22 @@ fn output_path_exists(globals: &GlobalOptions, path: &Path) -> bool {
             // diagnostics-free run and this warning fired even then,
             // breaking the "no stderr noise when --quiet" contract.
             if !globals.quiet {
-                let display = path.display();
+                // Scrub the path and error through `strip_visual_line_breaks`
+                // before printing — a Windows filename containing CR/LF,
+                // NEL, or U+2028/U+2029 would otherwise wrap the warning
+                // across multiple lines (Round 2 N-R2-11). Same defense
+                // the rfd startup dialog already applies; mirroring for
+                // CLI stderr keeps the posture symmetric.
+                let display = app_lib::util::strip_visual_line_breaks(&path.display().to_string());
+                let err_one_line = app_lib::util::strip_visual_line_breaks(&err.to_string());
                 eprintln!(
                     "{}",
                     localize(
                         globals,
                         format!(
-                            "warning: stat({display}) failed: {err}; treating as 'output exists'"
+                            "warning: stat({display}) failed: {err_one_line}; treating as 'output exists'"
                         ),
-                        format!("警告：stat({display}) 失败：{err}；按「输出存在」处理"),
+                        format!("警告：stat({display}) 失败：{err_one_line}；按「输出存在」处理"),
                     )
                 );
             }

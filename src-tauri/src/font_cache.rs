@@ -27,16 +27,24 @@ use std::path::{Path, PathBuf};
 use rusqlite::{params, Connection};
 
 /// Default cache file path for the CLI binary, OS-specific:
-/// - Windows: `%APPDATA%/ssaHdrify/cli_font_cache.sqlite3`
-/// - macOS:   `$HOME/Library/Application Support/ssaHdrify/cli_font_cache.sqlite3`
-/// - Linux:   `${XDG_DATA_HOME:-$HOME/.local/share}/ssaHdrify/cli_font_cache.sqlite3`
+/// - Windows: `%APPDATA%/ssahdrify/cli_font_cache.sqlite3`
+/// - macOS:   `$HOME/Library/Application Support/ssahdrify/cli_font_cache.sqlite3`
+/// - Linux:   `${XDG_DATA_HOME:-$HOME/.local/share}/ssahdrify/cli_font_cache.sqlite3`
 ///
 /// Returns an `Err` when the platform's environment for the canonical
 /// per-user data directory isn't set (broken environment). Caller can
 /// override via `--cache-file <PATH>`.
+///
+/// Lowercase `ssahdrify` matches the Cargo package name and the
+/// `com.koagaroon.ssahdrify` bundle identifier, and aligns with the
+/// lowercase no-space binary naming convention locked in v1.4.1
+/// (Round 2 N-R2-9). On Linux the mixed-case `ssaHdrify` would not
+/// collide with a sibling lowercase `ssahdrify/` directory created
+/// by some other build path; on Windows / macOS the FS is case-
+/// insensitive so the rename has no migration cost.
 pub fn default_cli_cache_path() -> Result<PathBuf, String> {
     let base = platform_data_dir()?;
-    Ok(base.join("ssaHdrify").join("cli_font_cache.sqlite3"))
+    Ok(base.join("ssahdrify").join("cli_font_cache.sqlite3"))
 }
 
 /// Per-user data directory, resolved per-OS without pulling in the
@@ -275,7 +283,7 @@ impl FontCache {
     /// returns `SchemaVersionMismatch`; the caller decides recovery.
     pub fn open_or_create(cache_path: &Path) -> Result<Self, CacheError> {
         // Ensure the parent directory exists. If the caller passed a
-        // path under a not-yet-created folder (e.g., %APPDATA%/ssaHdrify
+        // path under a not-yet-created folder (e.g., %APPDATA%/ssahdrify
         // on a fresh user profile), this avoids a confusing
         // SQLITE_CANTOPEN error in favor of a clear filesystem error.
         if let Some(parent) = cache_path.parent() {
