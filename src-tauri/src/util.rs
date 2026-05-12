@@ -196,6 +196,46 @@ pub fn is_reparse_point(path: &Path) -> bool {
 mod tests {
     use super::*;
 
+    // ── validate_ipc_path: per-guard pins (Round 3 N-R3-12) ──
+    //
+    // The integration test in fonts.rs feeds an array of 4 invalid
+    // paths and asserts the streaming scan skips them all silently.
+    // That's good coverage of the streaming contract but doesn't pin
+    // WHICH guard rejects each shape — a refactor that moves the
+    // length check elsewhere OR raises MAX_IPC_PATH_LEN would still
+    // see that test pass while breaking the per-guard contract. The
+    // per-guard tests below name each rejection reason in the test
+    // title so a future refactor can't conflate them. Empty +
+    // oversized share one guard (single if-branch with `||`), so they
+    // get one combined test that asserts the rejection message
+    // mentions the byte range constraint.
+
+    #[test]
+    fn validate_rejects_empty_path() {
+        let err = validate_ipc_path("", "Test").unwrap_err();
+        // Empty hits the same guard as oversized — the message names
+        // the byte range (1-MAX_IPC_PATH_LEN).
+        assert!(err.contains(&MAX_IPC_PATH_LEN.to_string()));
+    }
+
+    #[test]
+    fn validate_rejects_oversized_path() {
+        let err = validate_ipc_path(&"x".repeat(MAX_IPC_PATH_LEN + 1), "Test").unwrap_err();
+        assert!(err.contains(&MAX_IPC_PATH_LEN.to_string()));
+    }
+
+    #[test]
+    fn validate_rejects_control_char_in_path() {
+        let err = validate_ipc_path("has\u{0000}control.ass", "Test").unwrap_err();
+        // Different guard than length — uses "invalid characters" wording.
+        assert!(err.to_lowercase().contains("invalid"));
+    }
+
+    #[test]
+    fn validate_accepts_normal_path() {
+        validate_ipc_path("C:\\fonts\\sample.ttf", "Test").expect("normal path should validate");
+    }
+
     // ── validate_ipc_path: byte-prefix DOS-device check (A-R2-4) ──
 
     #[test]

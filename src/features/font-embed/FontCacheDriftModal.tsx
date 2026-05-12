@@ -102,6 +102,17 @@ export default function FontCacheDriftModal({
     if (open) closeButtonRef.current?.focus();
   }, [open]);
 
+  // INVARIANT (Round 3 N-R3-14): `requestClose` MUST NOT call onClose
+  // while `working !== null`. The component's open=false→true effect
+  // (further down) resets transient state on mount/unmount, but
+  // App.tsx currently mounts/unmounts the modal — so a future
+  // refactor that keeps it mounted would expose stale state on next
+  // open ONLY IF `requestClose` permits mid-op close. This single
+  // gate is the contract; the rest of the modal (Esc handler, close
+  // button disabled state) all funnels through here. Test coverage
+  // for this invariant is deferred until the repo adds React Testing
+  // Library + happy-dom — no existing infrastructure to render the
+  // modal in vitest.
   const requestClose = useCallback(() => {
     if (working !== null) return;
     onClose();
