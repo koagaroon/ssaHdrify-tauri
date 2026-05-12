@@ -5,6 +5,7 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { Base64 } from "js-base64";
+import { strings } from "../i18n/strings";
 import { stripUnicodeControls } from "./unicode-controls";
 
 // ── File Dialogs ──────────────────────────────────────────
@@ -16,27 +17,12 @@ export interface FileFilter {
 
 export type DialogTranslator = (key: string, ...args: (string | number)[]) => string;
 
-const dialogFallbacks: Record<string, string> = {
-  dialog_filter_ass_ssa_subtitles: "ASS/SSA Subtitles",
-  dialog_filter_srt_subtitles: "SRT Subtitles",
-  dialog_filter_sub_subtitles: "SUB (MicroDVD)",
-  dialog_filter_webvtt: "WebVTT",
-  dialog_filter_all_subtitle_formats: "All Subtitle Formats",
-  dialog_filter_all_files: "All Files",
-  dialog_filter_font_files: "Font Files",
-  dialog_filter_video_subtitle_files: "Video & Subtitle Files",
-  dialog_filter_video_files: "Video Files",
-  dialog_filter_subtitle_files: "Subtitle Files",
-  dialog_pick_subtitle_files_title: "Select subtitle files",
-  dialog_pick_ass_files_title: "Select ASS/SSA files",
-  dialog_pick_rename_inputs_title: "Select videos and subtitles",
-  dialog_pick_output_directory_title: "Choose output directory",
-  dialog_pick_font_directory_title: "Select font folder",
-  dialog_pick_font_files_title: "Select font files",
-};
-
+// `dt` returns the active translator's value when present, else derives
+// the English fallback from `strings[key].en` so the two never drift
+// (N-R5-FELIB-28). Previously a hardcoded shadow copy of strings.ts
+// entries lived here; any strings.ts edit silently left stale fallbacks.
 function dt(t: DialogTranslator | undefined, key: string): string {
-  return t ? t(key) : (dialogFallbacks[key] ?? key);
+  return t ? t(key) : (strings[key]?.en ?? key);
 }
 
 function subtitleFilters(t?: DialogTranslator): FileFilter[] {

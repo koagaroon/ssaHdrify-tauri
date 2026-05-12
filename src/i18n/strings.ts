@@ -222,7 +222,6 @@ export const strings: Record<string, StringEntry> = {
     en: "Threshold is past the last caption — nothing will shift",
     zh: "阈值超过最后一条字幕 — 不会发生偏移",
   },
-  btn_save_as: { en: "Save As…", zh: "另存为…" },
   btn_save: { en: "Save", zh: "保存" },
   btn_save_all: { en: "Save All ({0})", zh: "全部保存（{0}）" },
   msg_saved: { en: "Saved: {0} ({1} captions)", zh: "已保存：{0}（{1} 条字幕）" },
@@ -458,16 +457,7 @@ export const strings: Record<string, StringEntry> = {
   },
 
   // ── Shared ──────────────────────────────────────────────
-  btn_select_file: { en: "Select Subtitle File", zh: "选择字幕文件" },
   btn_clear_file: { en: "Clear", zh: "清除" },
-  msg_file_in_use: {
-    en: "This file is already loaded in the {0} tab. Clear it there first.",
-    zh: "此文件已在「{0}」标签页中加载，请先在该标签页清除。",
-  },
-  msg_files_skipped_in_use: {
-    en: "Skipped {0} file(s) already loaded in other tabs",
-    zh: "已跳过 {0} 个在其他标签页中已加载的文件",
-  },
   msg_dedup_blocked: {
     en: "Can't load — {0} file(s) already loaded in the {1} tab. Clear them there first.",
     zh: "无法加载 — {0} 个文件已在「{1}」标签页中。请先在该标签页中清除。",

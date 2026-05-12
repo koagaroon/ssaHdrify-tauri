@@ -116,7 +116,13 @@ const MAX_PROVENANCE_CACHE_SIZE: usize = 100_000;
 
 /// AppData filename for the session-only user font index. It is cleared at
 /// app startup; persistence across restarts is intentionally deferred.
-const USER_FONT_DB_FILENAME: &str = "user-font-sources.session.sqlite3";
+///
+/// Exposed `pub` so the CLI bin (a separate crate from the lib) can
+/// reuse the same literal in its TempFontDbDir cleanup
+/// (N-R5-RUSTCLI-02). Previously the CLI re-declared
+/// `CLI_FONT_DB_FILENAME` as a sibling literal; if either drifted the
+/// CLI's TempFontDbDir::drop would leave SQLite + sidecar files on disk.
+pub const USER_FONT_DB_FILENAME: &str = "user-font-sources.session.sqlite3";
 
 /// Cap on directory entries the preflight pass will canonicalize before
 /// bailing out. Real font folders top out around 20–30k entries even in

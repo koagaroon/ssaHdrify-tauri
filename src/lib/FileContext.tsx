@@ -80,16 +80,6 @@ interface FileContextValue {
    * Returns the tab ID if in use, or null if free.
    */
   isFileInUse: (path: string, excludeTab?: TabId) => TabId | null;
-
-  /**
-   * Filter an array of paths, returning only those NOT already loaded
-   * in other tabs. Used by HDR multi-select to skip duplicates.
-   * Returns { allowed: string[], skippedCount: number }.
-   */
-  filterAvailablePaths: (
-    paths: string[],
-    currentTab: TabId
-  ) => { allowed: string[]; skippedCount: number };
 }
 
 const FileContext = createContext<FileContextValue | null>(null);
@@ -138,31 +128,6 @@ export function FileProvider({ children }: { children: ReactNode }) {
     [hdrFiles, timingFiles, fontsFiles, renameFiles]
   );
 
-  // INTENTIONALLY UNUSED — kept as a partial-skip alternative to the
-  // strict-reject pattern in `isFileInUse` + per-tab `checkConflicts`.
-  // Tabs currently reject the entire selection on any cross-tab conflict
-  // (so the user sees a single visible banner naming the conflicting
-  // tab) — but a future flow that wants "load what you can, skip the
-  // rest" semantics (a Tab-4 batch-rename multi-source merge, for
-  // example) can adopt this without re-deriving the loop logic. Do not
-  // delete as dead code: the strict-vs-skip choice belongs to the
-  // consumer, not the FileContext layer.
-  const filterAvailablePaths = useCallback(
-    (paths: string[], currentTab: TabId) => {
-      const allowed: string[] = [];
-      let skippedCount = 0;
-      for (const p of paths) {
-        if (isFileInUse(p, currentTab) !== null) {
-          skippedCount += 1;
-        } else {
-          allowed.push(p);
-        }
-      }
-      return { allowed, skippedCount };
-    },
-    [isFileInUse]
-  );
-
   const clearFile = useCallback((tab: TabId) => {
     switch (tab) {
       case "hdr":
@@ -195,9 +160,8 @@ export function FileProvider({ children }: { children: ReactNode }) {
       setRenameFiles,
       clearFile,
       isFileInUse,
-      filterAvailablePaths,
     }),
-    [hdrFiles, timingFiles, fontsFiles, renameFiles, clearFile, isFileInUse, filterAvailablePaths]
+    [hdrFiles, timingFiles, fontsFiles, renameFiles, clearFile, isFileInUse]
   );
 
   return <FileContext.Provider value={value}>{children}</FileContext.Provider>;

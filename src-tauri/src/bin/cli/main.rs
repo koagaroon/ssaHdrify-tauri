@@ -15,7 +15,11 @@ mod engine;
 
 const MAX_SHIFT_OFFSET_MS: i64 = 365 * 24 * 60 * 60 * 1000;
 const CLI_FONT_DB_DIR_PREFIX: &str = "ssahdrify-cli-font-db";
-const CLI_FONT_DB_FILENAME: &str = "user-font-sources.session.sqlite3";
+// Single source of truth in `app_lib::fonts::USER_FONT_DB_FILENAME`
+// (N-R5-RUSTCLI-02): if the CLI ever needs to reference the literal
+// again (the post-5.3a TempFontDbDir::drop uses remove_dir_all so it
+// doesn't), import it from app_lib::fonts directly — do NOT re-declare
+// the literal locally.
 
 /// Command-line interface for SSA HDRify subtitle workflows.
 ///
@@ -455,10 +459,13 @@ struct TempFontDbDir(PathBuf);
 
 impl Drop for TempFontDbDir {
     fn drop(&mut self) {
-        for suffix in ["", "-journal", "-wal", "-shm"] {
-            let _ = fs::remove_file(self.0.join(format!("{CLI_FONT_DB_FILENAME}{suffix}")));
-        }
-        let _ = fs::remove_dir(&self.0);
+        // Pattern-over-enumeration (N-R5-RUSTCLI-19): a future SQLite
+        // version adding a new sidecar suffix would leak files past
+        // the suffix list. The dir is owned exclusively by this temp
+        // (CLI_FONT_DB_DIR_PREFIX + random suffix), so `remove_dir_all`
+        // is strictly more correct than the per-suffix enumeration and
+        // cleans up any unexpected sidecar in one go.
+        let _ = fs::remove_dir_all(&self.0);
     }
 }
 
@@ -557,7 +564,7 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
         eprintln!(
             "ℹ Refreshing cache. Scanning {} source root{}:",
             args.font_dirs.len(),
-            if args.font_dirs.len() == 1 { "" } else { "s" }
+            s_if(args.font_dirs.len())
         );
         for dir in &args.font_dirs {
             eprintln!("    {}", dir.display());
@@ -652,7 +659,7 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
                 "  ✓ {}: indexed {} font face{}",
                 folder_path_str,
                 font_count,
-                if font_count == 1 { "" } else { "s" }
+                s_if(font_count)
             );
         }
         total_fonts += font_count;
@@ -662,8 +669,8 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
     if !globals.quiet {
         eprintln!(
             "✓ Cache updated: {total_fonts} font face{} indexed across {total_folders} folder{}.",
-            if total_fonts == 1 { "" } else { "s" },
-            if total_folders == 1 { "" } else { "s" }
+            s_if(total_fonts),
+            s_if(total_folders)
         );
         eprintln!("  Cache file: {}", cache_path.display());
     }
@@ -2730,15 +2737,23 @@ fn absolute_path(path: &Path) -> Result<PathBuf, String> {
         .map_err(|err| format!("failed to resolve current directory: {err}"))
 }
 
-// Cap on the relocated output path — same 259-char buffer-fitting
-// limit the JS validators apply (per the GUI design doc's path-
-// validation extraction). A user-supplied --output-dir that's longer
-// than the input dir can push the relocated path past MAX_PATH even
-// if the JS resolver's pre-relocation path was within bounds.
-// Long-local paths (`\\?\C:\...`) get the extended cap. UNC long
-// paths keep the standard cap because the server side may not.
+// Cap on the relocated output path — Windows MAX_PATH minus one.
+// Windows-only: POSIX has PATH_MAX 4096 (Linux) / 1024 (macOS), so
+// applying 259 there over-restricts legitimate long paths
+// (N-R5-RUSTCLI-05). Long-local paths (`\\?\C:\...`) get the extended
+// cap on Windows. UNC long paths keep the standard cap because the
+// server side may not honor the extended namespace.
+#[cfg(target_os = "windows")]
 const RELOCATED_PATH_MAX_LEN: usize = 259;
+#[cfg(target_os = "windows")]
 const RELOCATED_LONG_PATH_MAX_LEN: usize = 32766;
+// POSIX: use PATH_MAX 4096 (Linux's value). macOS PATH_MAX is 1024
+// but most modern macOS filesystems tolerate paths past that —
+// matching Linux's 4096 keeps the cap permissive enough for both.
+#[cfg(not(target_os = "windows"))]
+const RELOCATED_PATH_MAX_LEN: usize = 4096;
+#[cfg(not(target_os = "windows"))]
+const RELOCATED_LONG_PATH_MAX_LEN: usize = 4096;
 
 fn relocate_output_path(path: &str, output_dir: Option<&Path>) -> Result<PathBuf, String> {
     let path = PathBuf::from(path);
@@ -2844,11 +2859,13 @@ fn write_output(
     content: &str,
     overwrite: bool,
 ) -> Result<(), String> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| "output path has no parent directory".to_string())?;
-    fs::create_dir_all(parent)
-        .map_err(|err| format!("failed to create output directory: {err}"))?;
+    // Route through the shared parent-dir helper (N-R5-RUSTCLI-06) —
+    // copy_file_output and rename_file_output both go through
+    // `ensure_output_parent`, and inlining the create_dir_all here was
+    // the only divergence. A future change to parent-dir semantics
+    // (e.g., umask on POSIX, hidden-dir detection) now flows to all
+    // three writers from one site.
+    ensure_output_parent(path)?;
     if overwrite && output_path_exists(globals, path) {
         fs::remove_file(path)
             .map_err(|err| format!("failed to remove existing output before write: {err}"))?;
@@ -2907,6 +2924,18 @@ fn ensure_output_parent(path: &Path) -> Result<(), String> {
         .parent()
         .ok_or_else(|| "output path has no parent directory".to_string())?;
     fs::create_dir_all(parent).map_err(|err| format!("failed to create output directory: {err}"))
+}
+
+/// English pluralization helper. `s_if(n)` returns "" for n == 1, "s"
+/// otherwise. Replaces 6+ inline `if n == 1 { "" } else { "s" }`
+/// repeats across stderr formatting (N-R5-RUSTCLI-20). Only handles
+/// the simple s-suffix case; irregular plurals stay inline.
+fn s_if(n: usize) -> &'static str {
+    if n == 1 {
+        ""
+    } else {
+        "s"
+    }
 }
 
 fn display_path(path: &Path) -> String {
@@ -3179,8 +3208,12 @@ mod tests {
         classify_locale, copy_file_output, create_cli_font_db_dir, duplicate_rename_output_keys,
         engine, normalize_output_key, parse_duration_ms, parse_timestamp_ms,
         predict_chain_output_path, relocate_output_path, substitute_template, write_output,
-        GlobalOptions, OutputLang, TempFontDbDir, CLI_FONT_DB_FILENAME,
+        GlobalOptions, OutputLang, TempFontDbDir,
     };
+    // Import the canonical filename literal directly from app_lib so the
+    // test pins the same name `TempFontDbDir::drop`'s remove_dir_all
+    // sees on disk (N-R5-RUSTCLI-02).
+    use app_lib::fonts::USER_FONT_DB_FILENAME as CLI_FONT_DB_FILENAME;
     use std::fs;
     use std::path::{Path, PathBuf};
 

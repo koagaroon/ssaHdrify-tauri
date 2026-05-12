@@ -1,7 +1,6 @@
 import { parse as parseAss } from "ass-compiler";
 import { isWindowsRuntime } from "./lib/platform";
 import { processAssContent } from "./features/hdr-convert/ass-processor";
-import { SECTION_HEADER_RE } from "./features/hdr-convert/ass-processor";
 import {
   DEFAULT_STYLE,
   buildAssDocument,
@@ -21,6 +20,10 @@ import {
   type ParsedFile,
 } from "./features/batch-rename/pairing-engine";
 import { buildFontEntry } from "./features/font-embed/ass-uuencode";
+import {
+  buildFontFileName,
+  insertFontsSection,
+} from "./features/font-embed/font-embedder";
 import {
   collectFontsWithParser,
   fontKeyLabel,
@@ -391,96 +394,11 @@ function resolveEmbedOutputPathInternal(inputPath: string, template = "{name}.em
   return usedBackslash ? outputPath.replace(/\//g, "\\") : outputPath;
 }
 
-function buildFontFileName(key: FontKey): string {
-  let name = key.family
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]/g, "_")
-    .replace(/_+/g, "_")
-    .replace(/^_|_$/g, "");
-  if (!name) name = `font_${familyStableHash(key.family)}`;
-  if (key.bold) name += "_bold";
-  if (key.italic) name += "_italic";
-  return `${name}.ttf`;
-}
-
-function familyStableHash(family: string): string {
-  let h = 0x811c9dc5;
-  for (const ch of family) {
-    const cp = ch.codePointAt(0) ?? 0;
-    h ^= cp & 0xff;
-    h = Math.imul(h, 0x01000193);
-    h ^= (cp >>> 8) & 0xff;
-    h = Math.imul(h, 0x01000193);
-    h ^= (cp >>> 16) & 0xff;
-    h = Math.imul(h, 0x01000193);
-  }
-  return (h >>> 0).toString(16).padStart(8, "0");
-}
-
-function insertFontsSection(content: string, fontsSection: string): string {
-  const lineEnding = content.includes("\r\n") ? "\r\n" : "\n";
-  const normalized = content.replace(/[\u2028\u2029]/g, "\n");
-  const lines = normalized.split(/\r?\n/);
-  const adaptedFontsSection = fontsSection.replace(/\n/g, lineEnding);
-  const headerFontsRe = /^\[[Ff][Oo][Nn][Tt][Ss]\][ \t]*$/;
-  // Reject malformed input with multiple [Fonts] sections. The replace
-  // path below only rewrites the first occurrence; silently leaving
-  // additional sections in place would produce a corrupted ASS with
-  // conflicting font data.
-  const fontsHeaderIndices: number[] = [];
-  for (let i = 0; i < lines.length; i += 1) {
-    if (headerFontsRe.test(lines[i])) fontsHeaderIndices.push(i);
-  }
-  if (fontsHeaderIndices.length > 1) {
-    throw new Error(
-      `Cannot embed: input ASS has ${fontsHeaderIndices.length} [Fonts] sections; expected at most one`
-    );
-  }
-  const existingFontsIdx = fontsHeaderIndices[0] ?? -1;
-
-  const buildBefore = (endIdx: number): { text: string; sep: string } => {
-    const slice = lines.slice(0, endIdx);
-    while (slice.length > 0 && slice[slice.length - 1].trim() === "") {
-      slice.pop();
-    }
-    const text = slice.join(lineEnding);
-    const sep = slice.length > 0 ? lineEnding + lineEnding : "";
-    return { text, sep };
-  };
-
-  const buildAfter = (startIdx: number): string => {
-    const slice = lines.slice(startIdx);
-    while (slice.length > 0 && slice[0].trim() === "") {
-      slice.shift();
-    }
-    return slice.join(lineEnding);
-  };
-
-  const isSectionHeader = (line: string) => SECTION_HEADER_RE.test(line.trim().toLowerCase());
-
-  if (existingFontsIdx >= 0) {
-    let endIdx = existingFontsIdx + 1;
-    while (endIdx < lines.length && !isSectionHeader(lines[endIdx])) {
-      endIdx += 1;
-    }
-
-    const { text: before, sep } = buildBefore(existingFontsIdx);
-    const after = buildAfter(endIdx);
-    const afterSep = after.length > 0 ? lineEnding : "";
-    return `${before}${sep}${adaptedFontsSection}${afterSep}${after}`;
-  }
-
-  const headerEventsRe = /^\[[Ee][Vv][Ee][Nn][Tt][Ss]\][ \t]*$/;
-  const eventsIdx = lines.findIndex((line) => headerEventsRe.test(line));
-  if (eventsIdx >= 0) {
-    const { text: before, sep } = buildBefore(eventsIdx);
-    const after = lines.slice(eventsIdx).join(lineEnding);
-    return `${before}${sep}${adaptedFontsSection}${lineEnding}${after}`;
-  }
-
-  const trimmedContent = content.replace(/(\r\n|\n)+$/, "");
-  return `${trimmedContent}${lineEnding}${lineEnding}${adaptedFontsSection}`;
-}
+// buildFontFileName / familyStableHash / insertFontsSection are
+// re-exported from font-embedder so the GUI and CLI paths share one
+// canonical implementation. Previously they were duplicated verbatim
+// here; the duplicates have been removed (N-R5-FECHAIN-12 /
+// N-R5-FECHAIN-13).
 
 const VIDEO_EXTS = new Set([
   "mp4",

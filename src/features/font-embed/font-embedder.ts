@@ -291,7 +291,7 @@ export async function analyzeFonts(
 // UTF-8 bytes of the same string. The function's only contract is
 // "stable, distinct outputs for distinct inputs"; the name is
 // `familyStableHash` to avoid promising a wire-compatible FNV-1a.
-function familyStableHash(family: string): string {
+export function familyStableHash(family: string): string {
   let h = 0x811c9dc5;
   for (const ch of family) {
     const cp = ch.codePointAt(0) ?? 0;
@@ -317,7 +317,7 @@ function familyStableHash(family: string): string {
  * branching and a future maintainer "fixing" the literal to track the
  * source extension would produce noise for zero behavior change.
  */
-function buildFontFileName(key: FontKey): string {
+export function buildFontFileName(key: FontKey): string {
   let name = key.family
     .toLowerCase()
     .replace(/[^a-z0-9_-]/g, "_") // strip everything except safe chars

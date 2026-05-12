@@ -95,7 +95,13 @@ export function useFolderDrop({
           // cost and a race window).
           if (disabledRef.current) return;
           const rect = ref.current.getBoundingClientRect();
-          const dpr = window.devicePixelRatio || 1;
+          // Same symmetric defensiveness this file applies to
+          // getCurrentWebview() up-stack: cheap-and-safe guard for
+          // non-browser execution contexts (Node-side tests, future
+          // SSR snapshot) where `window` may be unbound
+          // (N-R5-FELIB-15).
+          const dpr =
+            (typeof window !== "undefined" && window.devicePixelRatio) || 1;
 
           // Tauri reports the cursor position in physical pixels relative
           // to the webview's top-left. getBoundingClientRect is in CSS
