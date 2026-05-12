@@ -575,8 +575,7 @@ pub struct LocalFontEntry {
 pub fn entries_to_cache_metadata(
     entries: &[LocalFontEntry],
 ) -> Vec<crate::font_cache::FontMetadata> {
-    let mut mtime_cache: std::collections::HashMap<&str, i64> =
-        std::collections::HashMap::new();
+    let mut mtime_cache: std::collections::HashMap<&str, i64> = std::collections::HashMap::new();
     entries
         .iter()
         .map(|e| {
@@ -780,10 +779,7 @@ fn remove_empty_user_font_source_tx(
 // `Lazy<Mutex<Connection>>` shared cache. Note that `journal_mode = WAL`
 // no longer runs per-connection (hoisted to init), which already
 // removed the bulk of the per-call cost.
-fn is_user_font_face_registered(
-    canonical_path: &str,
-    face_index: u32,
-) -> Result<bool, String> {
+fn is_user_font_face_registered(canonical_path: &str, face_index: u32) -> Result<bool, String> {
     let conn = open_user_font_db()?;
     // Face-index narrowed: TTC files carry multiple faces under one path
     // (e.g. Source Han Serif Regular = face 0, Bold = face 1). Checking

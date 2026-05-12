@@ -232,8 +232,7 @@ impl CliEngine {
             "isWindows": cfg!(target_os = "windows"),
             "isCaseInsensitiveFs": cfg!(target_os = "windows") || cfg!(target_os = "macos"),
         });
-        let platform_bootstrap =
-            format!("globalThis.__ssahdrifyPlatform = {platform_json};");
+        let platform_bootstrap = format!("globalThis.__ssahdrifyPlatform = {platform_json};");
         runtime
             .execute_script("ssahdrify-cli-platform-bootstrap.js", platform_bootstrap)
             .map_err(|err| format!("failed to bootstrap CLI engine platform globals: {err}"))?;

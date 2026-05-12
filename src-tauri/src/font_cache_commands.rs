@@ -748,8 +748,7 @@ mod tests {
             folder: "/bogus/skipped/folder".to_string(),
             reason: "Not a directory".to_string(),
         }];
-        let (modified, evicted) =
-            apply_rescan_to_cache(&mut cache, &[], &[], &skipped).unwrap();
+        let (modified, evicted) = apply_rescan_to_cache(&mut cache, &[], &[], &skipped).unwrap();
         assert_eq!(modified, 0);
         assert_eq!(evicted, 1);
         assert!(
@@ -769,8 +768,7 @@ mod tests {
         cache.replace_folder("/folder/b", 200, &[]).unwrap();
 
         let scanned = vec![("/folder/a".to_string(), 999, vec![])];
-        let (modified, evicted) =
-            apply_rescan_to_cache(&mut cache, &scanned, &[], &[]).unwrap();
+        let (modified, evicted) = apply_rescan_to_cache(&mut cache, &scanned, &[], &[]).unwrap();
         assert_eq!(modified, 1);
         assert_eq!(evicted, 0);
 
@@ -797,8 +795,7 @@ mod tests {
         cache.replace_folder(&real_path, 100, &[]).unwrap();
 
         let removed = vec![real_path.clone()];
-        let (_, evicted) =
-            apply_rescan_to_cache(&mut cache, &[], &removed, &[]).unwrap();
+        let (_, evicted) = apply_rescan_to_cache(&mut cache, &[], &removed, &[]).unwrap();
         assert_eq!(evicted, 0, "reappeared folder should be left alone");
         assert!(
             cache

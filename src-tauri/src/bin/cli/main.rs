@@ -794,6 +794,100 @@ fn find_embed_step_index(plan: &chain::ChainPlan) -> Option<usize> {
         .position(|s| matches!(s, chain::ParsedStep::Embed(_)))
 }
 
+/// Port of TS `substituteTemplate` (`src/lib/path-validation.ts`).
+/// Segment-based: tokens substitute literally, `..` runs INSIDE
+/// template literals collapse to `.`, and at literal/value boundaries
+/// at most one dot is dropped — so user-content `..` in stems
+/// (`Show..special`) survives intact. The pre-Round-1.5 implementation
+/// here used a blanket `replace("..", ".")` post-pass that mangled
+/// such filenames, diverging from the TS resolver and causing the
+/// cheap-first existence check to short-circuit to "Skipped" against
+/// a path V8 would actually produce differently (Codex bd782f90).
+///
+/// Token shape `[a-z_][a-z0-9_]*` matches the TS regex. Unknown tokens
+/// substitute to "". Caller supplies a slice of `(name, value)` pairs;
+/// linear scan is fine — chain templates have 2-3 tokens at most.
+fn substitute_template(template: &str, vars: &[(&str, &str)]) -> String {
+    enum Seg {
+        Literal(String),
+        Value(String),
+    }
+    let bytes = template.as_bytes();
+    let mut segments: Vec<Seg> = Vec::new();
+    let mut i = 0usize;
+    let mut last_lit_start = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b'{' {
+            let name_start = i + 1;
+            if name_start < bytes.len()
+                && (bytes[name_start].is_ascii_lowercase() || bytes[name_start] == b'_')
+            {
+                let mut j = name_start;
+                while j < bytes.len()
+                    && (bytes[j].is_ascii_lowercase()
+                        || bytes[j].is_ascii_digit()
+                        || bytes[j] == b'_')
+                {
+                    j += 1;
+                }
+                if j < bytes.len() && bytes[j] == b'}' && j > name_start {
+                    let name = &template[name_start..j];
+                    if i > last_lit_start {
+                        let lit_text = &template[last_lit_start..i];
+                        segments.push(Seg::Literal(collapse_internal_double_dots(lit_text)));
+                    }
+                    let value = vars
+                        .iter()
+                        .find(|(k, _)| *k == name)
+                        .map(|(_, v)| *v)
+                        .unwrap_or("");
+                    segments.push(Seg::Value(value.to_string()));
+                    i = j + 1;
+                    last_lit_start = i;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+    if last_lit_start < bytes.len() {
+        let lit_text = &template[last_lit_start..];
+        segments.push(Seg::Literal(collapse_internal_double_dots(lit_text)));
+    }
+
+    let mut out = String::with_capacity(template.len());
+    for seg in &segments {
+        let chunk: &str = match seg {
+            Seg::Literal(s) | Seg::Value(s) => s.as_str(),
+        };
+        if chunk.starts_with('.') && out.ends_with('.') {
+            out.push_str(&chunk[1..]);
+        } else {
+            out.push_str(chunk);
+        }
+    }
+    out
+}
+
+/// Collapse any run of 2+ dots to a single dot. ASCII-only fast path —
+/// `.` is U+002E, single byte in UTF-8, so byte iteration is safe.
+fn collapse_internal_double_dots(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut prev_was_dot = false;
+    for c in s.chars() {
+        if c == '.' {
+            if !prev_was_dot {
+                out.push(c);
+            }
+            prev_was_dot = true;
+        } else {
+            out.push(c);
+            prev_was_dot = false;
+        }
+    }
+    out
+}
+
 /// Best-effort prediction of the chain output path for the cheap-first
 /// skip-on-exists check. Mirrors `resolveChainOutputPath` in
 /// chain-runtime.ts for the common template tokens (`{name}`, `{ext}`)
@@ -820,12 +914,7 @@ fn predict_chain_output_path(
         .and_then(|e| e.to_str())
         .map(|e| format!(".{e}"))
         .unwrap_or_default();
-    let mut output_name = output_template
-        .replace("{name}", stem)
-        .replace("{ext}", &ext);
-    while output_name.contains("..") {
-        output_name = output_name.replace("..", ".");
-    }
+    let output_name = substitute_template(output_template, &[("name", stem), ("ext", &ext)]);
     // Reject shapes TS-side `assertSafeOutputFilename` would reject:
     // path separators (chain output is a single filename in input's
     // dir, never a relative or absolute path), drive-letter prefixes,
@@ -908,7 +997,8 @@ fn process_one_chain_input(
     // Read input via existing encoding-aware path. Honors the same
     // size cap, BOM detection, and fallback-on-canonicalize-failure
     // semantics every other CLI subcommand uses.
-    let read_result = match app_lib::encoding::read_text_detect_encoding_inner(&input_str, |_| true) {
+    let read_result = match app_lib::encoding::read_text_detect_encoding_inner(&input_str, |_| true)
+    {
         Ok(r) => r,
         Err(err) => return ChainFileOutcome::Failed(err),
     };
@@ -2968,8 +3058,9 @@ fn parse_timestamp_part(part: &str, label: &str) -> Result<i64, String> {
 mod tests {
     use super::{
         classify_locale, copy_file_output, create_cli_font_db_dir, duplicate_rename_output_keys,
-        engine, normalize_output_key, parse_duration_ms, parse_timestamp_ms, relocate_output_path,
-        write_output, GlobalOptions, OutputLang, TempFontDbDir, CLI_FONT_DB_FILENAME,
+        engine, normalize_output_key, parse_duration_ms, parse_timestamp_ms,
+        predict_chain_output_path, relocate_output_path, substitute_template, write_output,
+        GlobalOptions, OutputLang, TempFontDbDir, CLI_FONT_DB_FILENAME,
     };
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -3281,5 +3372,72 @@ mod tests {
         drop(guard);
 
         assert!(!dir.exists());
+    }
+
+    // ── substitute_template — Codex bd782f90 regression coverage ──
+
+    #[test]
+    fn substitute_template_preserves_double_dots_inside_user_content() {
+        // Old blanket `replace("..", ".")` mangled this — Codex bd782f90.
+        let got = substitute_template(
+            "{name}.shifted{ext}",
+            &[("name", "Show..special"), ("ext", ".ass")],
+        );
+        assert_eq!(got, "Show..special.shifted.ass");
+    }
+
+    #[test]
+    fn substitute_template_collapses_boundary_double_dots() {
+        // Template-side dot + ext-leading dot at the seam → drop one.
+        let got = substitute_template("{name}.{ext}", &[("name", "Show"), ("ext", ".ass")]);
+        assert_eq!(got, "Show.ass");
+    }
+
+    #[test]
+    fn substitute_template_collapses_template_literal_dot_runs() {
+        // `..` inside the user-typed template (typo) collapses, but
+        // user-content `..` would not (covered by the preserve test).
+        let got = substitute_template("{name}..shifted{ext}", &[("name", "Show"), ("ext", ".ass")]);
+        assert_eq!(got, "Show.shifted.ass");
+    }
+
+    #[test]
+    fn substitute_template_dollar_in_value_is_literal() {
+        // Rust's str::replace is already literal (the TS bug was JS-
+        // specific regex backreferences), but pin parity so a future
+        // refactor that uses regex-based substitution doesn't regress.
+        let got = substitute_template(
+            "{name}.shifted{ext}",
+            &[("name", "Show$1$&"), ("ext", ".ass")],
+        );
+        assert_eq!(got, "Show$1$&.shifted.ass");
+    }
+
+    #[test]
+    fn substitute_template_missing_token_becomes_empty() {
+        let got = substitute_template("{name}.{lang}{ext}", &[("name", "Show"), ("ext", ".ass")]);
+        // Empty {lang} between two dots → boundary collapse leaves "Show.ass".
+        assert_eq!(got, "Show.ass");
+    }
+
+    #[test]
+    fn substitute_template_leaves_unknown_braces_intact() {
+        // Token shape doesn't match (uppercase) → kept as literal text.
+        let got = substitute_template("{NAME}.{ext}", &[("name", "Show"), ("ext", ".ass")]);
+        assert_eq!(got, "{NAME}.ass");
+    }
+
+    // ── predict_chain_output_path — end-to-end with the fix ──
+
+    #[test]
+    fn predict_chain_output_path_preserves_double_dots() {
+        let input = PathBuf::from("/subs/Show..special.ass");
+        let predicted = predict_chain_output_path(&input, "{name}.shifted{ext}", None)
+            .expect("prediction should produce a path");
+        let file_name = predicted
+            .file_name()
+            .and_then(|n| n.to_str())
+            .expect("file_name str");
+        assert_eq!(file_name, "Show..special.shifted.ass");
     }
 }
