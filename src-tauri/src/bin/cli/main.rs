@@ -2362,7 +2362,7 @@ fn run_rename(globals: &GlobalOptions, args: RenameArgs) -> Result<ExitCode, Str
         (RenameMode::CopyToChosen, Some(_)) => {}
     }
 
-    let expanded_paths = expand_rename_inputs(&args.paths)?;
+    let expanded_paths = expand_rename_inputs(globals, &args.paths)?;
     let mut engine = engine::CliEngine::new()?;
     let request = engine::RenamePlanRequest {
         paths: expanded_paths,
@@ -2412,7 +2412,7 @@ fn run_rename(globals: &GlobalOptions, args: RenameArgs) -> Result<ExitCode, Str
     Ok(report.exit_code())
 }
 
-fn expand_rename_inputs(paths: &[PathBuf]) -> Result<Vec<String>, String> {
+fn expand_rename_inputs(globals: &GlobalOptions, paths: &[PathBuf]) -> Result<Vec<String>, String> {
     let absolute_paths: Result<Vec<String>, String> = paths
         .iter()
         .map(|path| absolute_path(path).map(|path| display_path(&path)))
@@ -2427,8 +2427,11 @@ fn expand_rename_inputs(paths: &[PathBuf]) -> Result<Vec<String>, String> {
     // the output. GUI side surfaces this through useFolderDrop's
     // onError consumer (Round 3 N-R3-19). The cap value comes from
     // the dropzone module so a future bump there flows here
-    // automatically (Round 4 N-R4-06).
-    if expanded.truncated {
+    // automatically (Round 4 N-R4-06). Gate on --quiet (Round 4
+    // N-R4-16) so the user who opted into a diagnostics-free run
+    // doesn't get this stderr line — same posture as every other
+    // informational stderr in the CLI.
+    if expanded.truncated && !globals.quiet {
         eprintln!(
             "⚠ Dropped path expansion hit the {} file cap; remainder ignored. Drop fewer files per batch.",
             app_lib::dropzone::MAX_RESULT_FILES

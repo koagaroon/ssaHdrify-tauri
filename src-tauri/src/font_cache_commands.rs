@@ -271,8 +271,13 @@ pub fn open_font_cache() -> Result<CacheStatus, String> {
         .lock()
         .map_err(|_| "GUI cache mutex poisoned".to_string())?
         .is_some();
-    // schema_mismatch ⇔ path published but handle absent. init_gui_font_cache
-    // only leaves the slot empty in that specific recovery state.
+    // schema_mismatch ⇔ path published but handle absent. Two states
+    // leave the slot None: (1) `init_gui_font_cache` on
+    // SchemaVersionMismatch, and (2) `clear_font_cache` transiently
+    // between dropping the old handle and re-creating. Clear holds
+    // the slot lock throughout step (2), so `path.exists()` is false
+    // in that window and `schema_mismatch` stays false — only state
+    // (1) actually surfaces as schema_mismatch=true.
     let schema_mismatch = !available && path.exists();
     Ok(CacheStatus {
         available,
@@ -1018,14 +1023,19 @@ mod tests {
     }
 
     #[test]
-    fn apply_rescan_continues_after_per_folder_failure() {
-        // Round 3 N-R3-2: a Phase-3 failure on one folder must NOT
-        // discard partial-success info for other folders. Forcing a
-        // realistic SQLite failure mid-flight is hard without injection,
-        // so this test exercises the happy-path layered with a
-        // synthetic ApplyFailed entry already in `skipped` to confirm
-        // it's preserved alongside any new entries the helper adds.
-        let (_guard, mut cache) = temp_cache("continues_after_failure");
+    fn apply_rescan_preserves_pre_existing_failed_entry_alongside_success() {
+        // Round 3 N-R3-2 partial coverage: the Phase-3 ApplyFailed
+        // push path (Err arm of `cache.replace_folder` /
+        // `remove_folder`) requires real SQLite-write injection to
+        // exercise and is not covered by this test. What we DO pin
+        // here: a pre-existing `SkippedFolder { kind: ApplyFailed }`
+        // in the input vec survives alongside successful operations —
+        // i.e., the helper doesn't accidentally wipe or rewrite the
+        // input vec. Real mid-loop failure coverage deferred until
+        // the repo gains a FontCache fault-injection seam (Round 4
+        // N-R4-05 — original title "continues_after_per_folder_failure"
+        // over-promised).
+        let (_guard, mut cache) = temp_cache("preserves_pre_existing_apply_failed");
         cache.replace_folder("/folder/x", 100, &[]).unwrap();
 
         let scanned = vec![("/folder/x".to_string(), 999, vec![])];

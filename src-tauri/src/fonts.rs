@@ -816,13 +816,15 @@ fn remove_empty_user_font_source_tx(
 // removed the bulk of the per-call cost.
 fn is_user_font_face_registered(canonical_path: &str, face_index: u32) -> Result<bool, String> {
     let conn = open_user_font_db()?;
-    // Face-index narrowed: TTC files carry multiple faces under one path
-    // (e.g. Source Han Serif Regular = face 0, Bold = face 1). Checking
-    // only `path` lets a request for an un-scanned face (an attacker-
-    // chosen index, or a face not present in the file) pass the
-    // provenance gate — subsetting then reads the raw font bytes via
-    // the fall-through fallback. UNIQUE(path, face_index) in the schema
-    // already supports this lookup shape.
+    // Face-index narrowed: TTC files carry multiple faces under one
+    // path (e.g. Source Han Serif Regular = face 0, Bold = face 1).
+    // BOTH `path` AND `face_index` must be present in `font_faces`;
+    // an attacker-chosen face index that was never observed by a
+    // scan fails the gate even if the path itself was scanned.
+    // UNIQUE(path, face_index) in the schema makes the (path,
+    // face_index) lookup a single index probe (Round 4 A-R4-04 —
+    // earlier comment inverted the contract, claiming the gate
+    // checked only path; the SQL has always been path+face_index).
     conn.query_row(
         "SELECT 1 FROM font_faces WHERE path = ?1 AND face_index = ?2 LIMIT 1",
         params![canonical_path, face_index as i64],
@@ -966,9 +968,11 @@ fn bounded_font_family_name(chars: impl Iterator<Item = char>) -> Option<String>
 /// TTC can demand by giving cancellation a chance to land between face
 /// parses.
 ///
-/// `NO_SCAN_ID` is the no-cancellation sentinel; today every caller is a
-/// scan worker with a real id, but the parameter keeps the contract
-/// explicit for any future caller that doesn't participate in cancel.
+/// `NO_SCAN_ID` is the no-cancellation sentinel. `scan_directory_collecting`
+/// passes it on the cache-populate path (CLI `refresh-fonts` + GUI
+/// post-commit cache populate, neither of which participates in the
+/// scan-cancel system). Interactive scan workers pass a positive id
+/// minted by `begin_font_scan`.
 fn parse_local_font_file(canonical: &Path, scan_id: u64) -> Vec<LocalFontEntry> {
     use fontcull_skrifa::string::StringId;
     use fontcull_skrifa::{FontRef, MetadataProvider};
@@ -1526,10 +1530,11 @@ where
     let mut import = ImportOutcome::default();
     let mut progress_total = 0usize;
     // Tracks whether the cap was hit mid-scan and the collected Vec
-    // was truncated to fit. Reported back to the caller via
-    // `StreamingScanResult.cache_truncated` (informational; the cache
-    // is still populated with the truncated set — see the WHY in the
-    // collected_for_cache parameter doc and the take/extend branch).
+    // was truncated to fit. Returned to the caller — when true the
+    // caller MUST skip persistent cache populate (a truncated row
+    // would be indistinguishable from a full row to drift detection,
+    // cornering the user; see the collected_for_cache parameter doc
+    // for the full Round 3 / Codex 536c60c7 reasoning).
     let mut cache_truncated = false;
     let outcome = scan_body(scan_id, &mut |batch| {
         let batch_size = batch.len();

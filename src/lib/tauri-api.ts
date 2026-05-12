@@ -656,12 +656,6 @@ async function runStreamingScan(
   return result;
 }
 
-/**
- * Expand a list of paths from a drag-drop event into a flat list of file
- * paths. Folders are walked one level deep; files pass through unchanged.
- * Hidden entries, symlinks, and reparse points are skipped on the Rust
- * side. Returns an empty array when nothing usable was dropped.
- */
 /** Result of `expand_dropped_paths`. `truncated` surfaces when the
  *  expansion stopped at MAX_RESULT_FILES (=5000) so the consumer can
  *  render a banner instead of silently presenting an incomplete list
@@ -671,6 +665,13 @@ export interface ExpandedPaths {
   truncated: boolean;
 }
 
+/**
+ * Expand a list of paths from a drag-drop event into a flat list of file
+ * paths. Folders are walked one level deep; files pass through unchanged.
+ * Hidden entries, symlinks, and reparse points are skipped on the Rust
+ * side. Returns `{ files: [], truncated: false }` when nothing usable
+ * was dropped.
+ */
 export async function expandDroppedPaths(paths: string[]): Promise<ExpandedPaths> {
   return invoke<ExpandedPaths>("expand_dropped_paths", { paths });
 }

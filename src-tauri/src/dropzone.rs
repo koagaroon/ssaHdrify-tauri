@@ -174,6 +174,14 @@ fn walk_one_level(dir: &Path, out: &mut Vec<String>) -> bool {
         if is_reparse_point(&entry_path) {
             continue;
         }
+        // Note: `is_reparse_point` calls `symlink_metadata` and
+        // `entry.file_type()` does its own type lookup. On Windows
+        // `DirEntry` caches the file_type so the second call is
+        // negligible; on Unix the second call goes through the
+        // already-fetched d_type when the FS reports it. Combining
+        // into one stat would save a few syscalls on slow FS at the
+        // cost of a cross-cfg branch on the reparse-point detection.
+        // Round 4 N-R4-09 — accepted as-is for readability.
         let ft = match entry.file_type() {
             Ok(f) => f,
             Err(_) => continue,

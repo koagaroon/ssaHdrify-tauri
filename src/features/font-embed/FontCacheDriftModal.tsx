@@ -77,6 +77,13 @@ export default function FontCacheDriftModal({
   useEffect(() => {
     workingRef.current = working;
   }, [working]);
+  // Order matters: the workingRef-update effect above MUST stay declared
+  // before this keydown-handler effect. React runs effects in declaration
+  // order within a single component, so the handler always reads the
+  // freshly-synced `workingRef.current`. Reordering or extracting the
+  // two effects across files would break the invariant silently (no
+  // build error, just a stale-closure race when the user presses Esc
+  // mid-rescan) — Round 4 N-R4-08.
   useEffect(() => {
     if (!open) return;
     const handler = (e: KeyboardEvent) => {

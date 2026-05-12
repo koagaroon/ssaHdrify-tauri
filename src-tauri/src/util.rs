@@ -95,8 +95,8 @@ pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
     // ordinary filesystem paths and font scanning + drag-drop both
     // produce them through canonicalize().
     //
-    // Byte-prefix check on raw `path.as_bytes()` (Round 2 A-R2-4) —
-    // the previous `path.to_ascii_lowercase()` allocated a fresh
+    // Byte-prefix check on raw `path.as_bytes()`. The previous form
+    // called `path.to_ascii_lowercase()` which allocated a fresh
     // String just to compare a ≤16-byte prefix, wasting ~4 KiB on a
     // pathological 4096-byte IPC path. `eq_ignore_ascii_case` runs
     // ASCII case folding in place. Lossless: every prefix listed below
@@ -118,9 +118,9 @@ pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
 /// from upstream collection. Rejects empty / over-length / control-
 /// character names. Codepoint-counted (not byte-counted) so CJK
 /// names (3 bytes per char in UTF-8) that fit the 256-codepoint
-/// intent stay valid (Round 3 N-R3-20 — was four duplicated copies
-/// in find_system_font / resolve_user_font / lookup_font_family /
-/// parse_local_font_file before consolidation).
+/// intent stay valid. Consolidated from four inline copies in
+/// `find_system_font` / `resolve_user_font` / `lookup_font_family`
+/// / `parse_local_font_file` to a single shared helper.
 ///
 /// Rejected character classes (all flow to the same "invalid
 /// characters" error so the caller doesn't have to discriminate):
@@ -142,8 +142,10 @@ pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
 /// originating from ASS \fn references (P1b: content-source
 /// attacker) OR font name-table entries (also P1b) can't smuggle
 /// these into the session DB / persistent cache and from there to
-/// status messages / log lines that don't sanitize at render
-/// (Round 4 N-R4-02 / A-R4-01).
+/// status messages / log lines that don't sanitize at render. The
+/// drift modal's separate `sanitizeForDialog` wrap is the
+/// belt-and-suspenders render-time defense for paths that pre-date
+/// this entry-time filter.
 pub fn validate_font_family(family: &str) -> Result<(), String> {
     if family.is_empty() {
         return Err("Font family name is empty".to_string());
@@ -226,19 +228,19 @@ pub fn is_reparse_point(path: &Path) -> bool {
 mod tests {
     use super::*;
 
-    // ── validate_ipc_path: per-guard pins (Round 3 N-R3-12) ──
+    // ── validate_ipc_path: per-guard pins ──
     //
-    // The integration test in fonts.rs feeds an array of 4 invalid
-    // paths and asserts the streaming scan skips them all silently.
-    // That's good coverage of the streaming contract but doesn't pin
-    // WHICH guard rejects each shape — a refactor that moves the
-    // length check elsewhere OR raises MAX_IPC_PATH_LEN would still
-    // see that test pass while breaking the per-guard contract. The
-    // per-guard tests below name each rejection reason in the test
-    // title so a future refactor can't conflate them. Empty +
-    // oversized share one guard (single if-branch with `||`), so they
-    // get one combined test that asserts the rejection message
-    // mentions the byte range constraint.
+    // The integration test in fonts.rs feeds an array of invalid paths
+    // and asserts the streaming scan skips them all silently. That's
+    // good coverage of the streaming contract but doesn't pin WHICH
+    // guard rejects each shape — a refactor that moves the length
+    // check elsewhere OR raises MAX_IPC_PATH_LEN would still see that
+    // test pass while breaking the per-guard contract. The per-guard
+    // tests below name each rejection reason in the test title so a
+    // future refactor can't conflate them. Empty + oversized share
+    // one guard (single if-branch with `||`), so they get one combined
+    // test that asserts the rejection message mentions the byte range
+    // constraint.
 
     #[test]
     fn validate_rejects_empty_path() {
@@ -266,7 +268,10 @@ mod tests {
         validate_ipc_path("C:\\fonts\\sample.ttf", "Test").expect("normal path should validate");
     }
 
-    // ── validate_ipc_path: byte-prefix DOS-device check (A-R2-4) ──
+    // ── validate_ipc_path: byte-prefix DOS-device check ──
+    // (Byte-level eq_ignore_ascii_case avoids per-call String alloc;
+    // pre-consolidation form called to_ascii_lowercase on the full
+    // path string just to compare ≤16-byte prefixes.)
 
     #[test]
     fn validate_rejects_dos_device_lowercase() {
@@ -294,7 +299,7 @@ mod tests {
         validate_ipc_path(r"\\?\C:\fonts\sample.ttf", "Test").expect("long path should be allowed");
     }
 
-    // ── strip_visual_line_breaks (N-R2-11) ──
+    // ── strip_visual_line_breaks ──
 
     #[test]
     fn strip_replaces_all_documented_breaks() {
@@ -317,7 +322,7 @@ mod tests {
         assert_eq!(strip_visual_line_breaks(input), input);
     }
 
-    // ── validate_font_family (N-R3-20) ──
+    // ── validate_font_family ──
 
     #[test]
     fn validate_font_family_accepts_normal_name() {
