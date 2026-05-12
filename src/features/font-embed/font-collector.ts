@@ -265,19 +265,23 @@ function processDialogueText(
       //     rejected (Codex 52379e14: subsequent visible text was
       //     attributed to the wrong override font, causing missing
       //     glyphs in embed output).
-      // ASS `\p<scale>` is bounded 0-9 by spec, but a malformed
-      // override like `\p10` or `\p07` (with leading zero) would slip
-      // past `\\p[1-9]` and `\\p0` respectively because neither anchors
-      // the trailing digit boundary (Round 2 N-R2-13). `(?![0-9])`
-      // pins each pattern to a single-digit token: `\p1` matches but
-      // `\p10` does not — libass clamps at 9 anyway, so anything
-      // beyond a single digit is malformed and should not toggle
-      // drawing mode either way.
-      if (/\\p0(?![0-9])/.test(block) || /\\r(?=\\|\}|$|[\p{L}_])/u.test(block)) {
+      // ASS `\p<scale>`: libass parses the full numeric value and
+      // treats any positive scale as drawing-on, zero as drawing-off
+      // (Round 3 / Codex c94844c3). Round 2 N-R2-13's regex tightening
+      // to `\\p[1-9](?![0-9])` and `\\p0(?![0-9])` went the wrong
+      // direction — it correctly rejected `\p10` from matching the
+      // ON-tag pattern but ALSO meant `\p10` didn't enter drawing
+      // mode at all, breaking parity with libass. Capture-and-parse
+      // is libass-correct for all variants (`\p0`, `\p00`, `\p1`,
+      // `\p07`, `\p10`, `\p99`). `\r` reset still independently
+      // flips drawing mode off because it resets the style which
+      // includes drawing state.
+      if (/\\r(?=\\|\}|$|[\p{L}_])/u.test(block)) {
         isDrawing = false;
       }
-      if (/\\p[1-9](?![0-9])/.test(block)) {
-        isDrawing = true;
+      const pMatch = block.match(/\\p(\d+)/);
+      if (pMatch) {
+        isDrawing = parseInt(pMatch[1], 10) > 0;
       }
       i = closeIdx + 1;
     } else {

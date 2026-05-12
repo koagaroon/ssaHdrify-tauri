@@ -1470,15 +1470,31 @@ fn run_streaming_scan_command<S>(
     // scan path uses this to feed `try_record_folder_in_gui_cache`
     // after commit; the file-list scan path passes `None` because it
     // has no folder anchor for the cache's drift model. Bounded by
-    // MAX_CACHE_POPULATE_FACES — exceeding the cap truncates the Vec
-    // to the cap (Round 2 N-R2-4: truncated cache acceleration is
-    // strictly better than the prior "drop everything and skip
-    // populate" behavior) and the surfaced WARN log tells the user
-    // the cache is partial. Codex 13b4e2c0 OOM defense still holds:
-    // peak memory is bounded by the cap.
+    // MAX_CACHE_POPULATE_FACES.
+    //
+    // Cap-hit policy (Round 3 / Codex 536c60c7): when the cap fires
+    // mid-scan, the function returns `Ok(true)` to signal the caller
+    // that the persistent cache populate MUST be skipped. The Vec is
+    // truncated to fit (in-session memory bound) but the caller does
+    // not write a row to the persistent cache. Wave 2.2 originally
+    // routed the truncated Vec through `try_record_folder_in_gui_cache`
+    // on the theory that partial cache acceleration beats none, but
+    // persistent cache rows are folder-anchored by mtime — a truncated
+    // folder whose mtime doesn't change later is indistinguishable
+    // from a fully cached folder, and drift detection considers it
+    // valid forever. Cache lookups for fonts NOT in the truncated set
+    // miss → fall through cleanly; cache lookups for fonts WITH a
+    // (lookup-key-colliding) early-index face return that face's path,
+    // which subset_font then rejects via the session-DB provenance
+    // gate. Net: persistent skipped/wrong-font behavior until the
+    // user manually clears the cache. Better to never persist the
+    // truncated state than to corner the user.
+    //
+    // Codex 13b4e2c0 OOM defense still holds: peak memory is bounded
+    // by the cap.
     mut collected_for_cache: Option<&mut Vec<LocalFontEntry>>,
     scan_body: S,
-) -> Result<(), String>
+) -> Result<bool /* cache_truncated */, String>
 where
     S: FnOnce(
         u64,
@@ -1514,23 +1530,25 @@ where
         // by a 2-entry batch would clear all 20_001 because the cap
         // tripped on the second batch, losing the well-under-cap work
         // already done. Now: take MAX_CACHE_POPULATE_FACES - c.len()
-        // slots from the overflowing batch, mark the cache as
-        // truncated, and let the caller populate the partial set.
-        // Partial cache acceleration beats none; queries that miss the
-        // truncated set fall through to session DB / system fonts via
-        // the existing lookup-tier order. `cache_truncated` short-
-        // circuits subsequent batches because they can't add more
-        // without re-exceeding the cap.
+        // slots from the overflowing batch and mark the cache as
+        // truncated. The truncated Vec keeps in-session memory
+        // bounded, but the returned `cache_truncated` flag tells the
+        // caller to SKIP the persistent cache write entirely (Codex
+        // 536c60c7 — persisting a truncated row would make drift
+        // detection consider the folder valid forever and the user
+        // would be cornered into "Clear cache" to recover).
+        // `cache_truncated` also short-circuits subsequent batches
+        // because they can't add more without re-exceeding the cap.
         if !cache_truncated {
             if let Some(c) = collected_for_cache.as_mut() {
                 let remaining = MAX_CACHE_POPULATE_FACES.saturating_sub(c.len());
                 if batch.len() > remaining {
                     log::warn!(
-                        "Persistent font cache populate truncated at {} faces: scan exceeded \
-                         the defense-in-depth cap (malicious or abnormally large font packs). \
-                         Cache will accelerate the first {} faces; queries for later faces \
-                         fall through to session DB / system fonts. Session-DB import for \
-                         this scan is unaffected.",
+                        "Persistent font cache populate skipped: scan exceeded the {}-face \
+                         defense-in-depth cap (malicious or abnormally large font packs). \
+                         In-session session-DB lookups are unaffected and will return all \
+                         {} faces (or more) discovered by this scan. To enable persistent \
+                         cache acceleration, reduce the folder size and rescan.",
                         MAX_CACHE_POPULATE_FACES,
                         MAX_CACHE_POPULATE_FACES
                     );
@@ -1594,14 +1612,7 @@ where
             ScanStopReason::CeilingHit => " (ceiling hit)",
         }
     );
-    // `cache_truncated` is intentionally consumed only via the WARN log
-    // above. The caller always populates `collected_for_cache` (when
-    // provided) — truncated or not, the Vec is a valid scan snapshot
-    // from the cache writer's perspective. If a future caller needs
-    // to react to truncation (e.g., surface a UI toast), promote this
-    // local back into a returned struct.
-    let _ = cache_truncated;
-    Ok(())
+    Ok(cache_truncated)
 }
 
 fn run_blocking_scan_import<S>(
@@ -1760,7 +1771,7 @@ pub async fn scan_font_directory(
         // folder with no faces (consistent with the cache's data
         // model).
         let mut entries_for_cache: Vec<LocalFontEntry> = Vec::new();
-        run_streaming_scan_command(
+        let cache_truncated = run_streaming_scan_command(
             scan_id,
             &source_id,
             progress,
@@ -1768,17 +1779,20 @@ pub async fn scan_font_directory(
             Some(&mut entries_for_cache),
             |scan_id, emit_batch| scan_directory_inner(&canonical_dir, scan_id, emit_batch),
         )?;
-        // Always populate; entries_for_cache may be empty (no faces
-        // found), full (under cap), or truncated to MAX_CACHE_POPULATE_FACES
-        // (Round 2 N-R2-4). All three are valid records of "what this
-        // scan saw" and the cache writer's contract handles each
-        // identically — folder row + 0..=N face metadata rows. Faces
-        // not in the truncated set fall through to session DB / system
-        // fonts via the existing lookup-tier order on later queries.
-        crate::font_cache_commands::try_record_folder_in_gui_cache(
-            &canonical_dir,
-            &entries_for_cache,
-        );
+        // Skip persistent cache populate when the scan was truncated
+        // (Round 3 / Codex 536c60c7). A truncated row would be
+        // indistinguishable from a full row to mtime-based drift
+        // detection, leaving the user cornered into "Clear cache"
+        // recovery for cache-rejected font lookups. Session-DB still
+        // has the full scan and is the tier-1 lookup, so in-session
+        // embeds aren't affected. Across launches the user needs to
+        // re-scan a smaller folder (or accept session-DB-only).
+        if !cache_truncated {
+            crate::font_cache_commands::try_record_folder_in_gui_cache(
+                &canonical_dir,
+                &entries_for_cache,
+            );
+        }
         Ok(())
     })
     .await
@@ -1920,6 +1934,9 @@ pub async fn scan_font_files(
             None,
             |scan_id, emit_batch| scan_files_inner(paths, scan_id, emit_batch),
         )
+        // File-list scans pass `None` for the collected Vec, so
+        // cache_truncated is always false here. Discard the bool.
+        .map(|_truncated| ())
     })
     .await
     .map_err(|e| format!("Font scan worker failed: {e}"))?
