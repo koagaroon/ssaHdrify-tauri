@@ -1315,19 +1315,27 @@ fn scan_directory_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
     // symlink `Bar.ttf` → `Foo.ttf`) would otherwise re-parse the
     // bytes twice and rely on SQLite's `UNIQUE(path, face_index)` to
     // surface them as `duplicated`. Wastes IO/parse cost.
-    //
-    // Bound on the dedup set: a directory of 1M empty / non-font
-    // entries would otherwise inflate `seen` to ~100 MB before
-    // `MAX_FONTS_PER_SCAN` (which counts faces) fires. Cap at
-    // `MAX_PREFLIGHT_ENTRIES` so the directory scan can't outrun the
-    // preflight ceiling on memory pressure.
     let mut seen: HashSet<String> = HashSet::new();
-    // Tracks whether the dedup-cap break fired so the post-loop reason
-    // routes to `CeilingHit` instead of falling through to `Natural`
-    // (Round 2 N-R2-1 — previously the cap was silent to the UI).
+    // Tracks whether the visited-entry cap fired so the post-loop
+    // reason routes to `CeilingHit` instead of falling through to
+    // `Natural` (Round 2 N-R2-1 — previously the cap was silent to
+    // the UI).
     let mut dedup_ceiling_hit = false;
 
-    for entry in read {
+    // `visited` (via `read.enumerate()`) bounds the iteration cost at
+    // `MAX_PREFLIGHT_ENTRIES`. Round 4 A-R4-02 / A-R4-03 deliberately
+    // moved the dedup gate behind `has_allowed_font_extension` so
+    // non-font files no longer fill `seen` and falsely report a
+    // ceiling hit — but that left CLI paths (`scan_directory_collecting`,
+    // `import_font_directory_for_cli`, `refresh-fonts`) without any
+    // bound on a directory of millions of non-font files (GUI runs
+    // preflight first; CLI does not). Counting every entry here closes
+    // the gap and mirrors `preflight_directory_inner`'s
+    // `visited >= MAX_PREFLIGHT_ENTRIES` contract, so scan and preflight
+    // speak about the same directory size. The cap also indirectly
+    // bounds `seen` memory: `seen.insert` happens at most once per
+    // visited entry, so `seen.len() <= visited <= MAX_PREFLIGHT_ENTRIES`.
+    for (visited, entry) in read.enumerate() {
         if font_scan_cancelled(scan_id) {
             // Flush any in-flight batch before returning so the frontend
             // sees every face parsed before cancellation. Cancellation is
@@ -1346,6 +1354,20 @@ fn scan_directory_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
                 total,
                 reason: ScanStopReason::UserCancel,
             });
+        }
+
+        // Cap fires BEFORE we touch the entry (canonicalize / metadata),
+        // so the worst-case CPU cost is bounded at `MAX_PREFLIGHT_ENTRIES`
+        // canonicalize calls — not MAX+1.
+        if visited >= MAX_PREFLIGHT_ENTRIES {
+            log::warn!(
+                "font scan {} visited {MAX_PREFLIGHT_ENTRIES} entries in '{}'; \
+                 stopping early to bound iteration cost (partial results preserved)",
+                scan_id,
+                canonical_dir.display()
+            );
+            dedup_ceiling_hit = true;
+            break;
         }
 
         let entry = match entry {
@@ -1399,16 +1421,6 @@ fn scan_directory_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
         // size."
         if !has_allowed_font_extension(&canonical) {
             continue;
-        }
-        if seen.len() >= MAX_PREFLIGHT_ENTRIES {
-            log::warn!(
-                "font scan {} dedup set hit {MAX_PREFLIGHT_ENTRIES} entries in '{}'; \
-                 stopping early to bound memory (partial results preserved)",
-                scan_id,
-                canonical_dir.display()
-            );
-            dedup_ceiling_hit = true;
-            break;
         }
         if !seen.insert(normalize_canonical_path(&canonical.to_string_lossy())) {
             continue;
@@ -2950,6 +2962,56 @@ mod tests {
         });
         assert!(result.is_err());
         assert!(emitted.is_empty());
+    }
+
+    /// `scan_directory_inner` walks a directory of non-font files to
+    /// natural completion without emitting batches or producing faces.
+    /// Pins two related contracts: `has_allowed_font_extension` filters
+    /// non-font files, and the visited-entry cap does not false-fire on
+    /// normal-size directories (CeilingHit only on real overflow). A
+    /// future refactor that drops or shifts either guard would either
+    /// eat budget on dirs full of `.txt` / `.png` / `.log` files
+    /// (the original gap this test guards against) or false-report
+    /// `CeilingHit` here.
+    #[test]
+    fn directory_inner_skips_non_font_files_without_emitting() {
+        use std::io::Write as _;
+        let mut dir = std::env::temp_dir();
+        dir.push("ssahdrify_fonts_test_non_font_skip");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for n in [
+            "a.txt",
+            "b.png",
+            "c.log",
+            "d.json",
+            "e.md",
+            "f.csv",
+            "g.bin",
+            "h.gitignore",
+        ] {
+            let p = dir.join(n);
+            std::fs::File::create(&p)
+                .unwrap()
+                .write_all(b"not-a-font")
+                .unwrap();
+        }
+
+        let mut emitted: Vec<Vec<LocalFontEntry>> = Vec::new();
+        let outcome = scan_directory_inner(&dir, NO_SCAN_ID, |batch| {
+            emitted.push(batch);
+            Ok(())
+        })
+        .expect("non-font directory should complete naturally");
+        assert_eq!(outcome.total, 0);
+        assert_eq!(outcome.reason, ScanStopReason::Natural);
+        assert!(
+            emitted.is_empty(),
+            "no batches expected; got {} batch(es)",
+            emitted.len()
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// `scan_files_inner` skips invalid entries (empty / oversized / control
