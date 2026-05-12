@@ -487,11 +487,23 @@ export function deriveRenameOutputPath(
   // Rename mode's legitimate no-op (subtitle already matches the
   // video name) makes outputPath === subtitlePath, which would trip
   // assertSafeOutputPath's self-overwrite-guards-against-source-loss
-  // check (Codex 30c18b79). Skip the full path validator for that
-  // case — the traversal / MAX_PATH / dir-escape checks would all
-  // pass trivially (output equals input, which was validated
-  // upstream), and the rename loop later treats noOp rows as
-  // Skipped before any I/O attempt. Other modes (copy_to_video,
+  // check (Codex 30c18b79).
+  //
+  // The bypass skips assertSafeOutputPath's FOUR checks (A-R5-FEFEAT-07
+  // — comment previously named only the self-overwrite reason):
+  //   1. Self-overwrite — trivially OK because output === source by
+  //      definition of isNoOpRename.
+  //   2. Path traversal (`..` segments) — outputPath equals
+  //      subtitlePath which was validated by decomposeInputPath
+  //      upstream; if it lacked `..` then, it lacks `..` now.
+  //   3. Dir escape (output outside validatorRef's dir) — same
+  //      reasoning: output equals input, which is inside its own dir.
+  //   4. MAX_PATH overflow — input passed length checks; output is
+  //      byte-equal to input, same length.
+  //
+  // The rename loop later treats noOp rows as Skipped before any I/O
+  // attempt, so even the partial check elided here would have no
+  // effect on what reaches the filesystem. Other modes (copy_to_video,
   // copy_to_chosen) always have outputPath in a different directory
   // and need the full validator.
   if (!(mode === "rename" && isNoOpRename(subtitlePath, outputPath))) {

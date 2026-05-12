@@ -39,13 +39,17 @@ fn missing_engine_stub() -> String {
     const MESSAGE: &str =
         "CLI engine bundle is missing. Run `npm run build:engine` before building ssahdrify-cli.";
     // Every function on globalThis.ssaHdrifyCliEngine that the Rust
-    // shell calls. The CLI's cheap-first ordering reaches the
+    // shell might call OR might be visible from a call path (CliEngine
+    // wraps some functions that are reachable but not directly invoked
+    // — N-R5-RUSTCLI-03). The CLI's cheap-first ordering reaches the
     // resolveX*OutputPath functions FIRST per file; if those aren't
     // stubbed, a missing engine.js produces an inscrutable
     // "ssaHdrifyCliEngine.resolveHdrOutputPath is not a function"
     // V8 error instead of the friendly "Run `npm run build:engine`"
-    // message this stub exists to surface. Keep this list in sync
-    // with the methods on `CliEngine` in `bin/cli/engine.rs`.
+    // message this stub exists to surface. Keep this list a superset
+    // of the methods on `CliEngine` in `bin/cli/engine.rs` —
+    // over-stubbing one function costs ~30 bytes; under-stubbing leaks
+    // the inscrutable V8 error.
     const FUNCTIONS: &[&str] = &[
         "convertHdr",
         "resolveHdrOutputPath",
@@ -56,6 +60,11 @@ fn missing_engine_stub() -> String {
         "resolveEmbedOutputPath",
         "applyFontEmbed",
         "runChain",
+        // resolveChainOutputPath is currently unused — chain output
+        // prediction lives Rust-side in `predict_chain_output_path`.
+        // Kept here in case a future refactor delegates back to JS
+        // (cheap to keep, prevents the V8 inscrutable-error
+        // regression class).
         "resolveChainOutputPath",
     ];
 

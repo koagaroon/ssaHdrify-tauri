@@ -86,9 +86,12 @@ function fallbackUuidV4(): string {
     Math.floor(Math.random() * 16 ** n)
       .toString(16)
       .padStart(n, "0");
-  // Set the version (4) and variant (10xx) bits per RFC 4122.
-  const version = (8 + Math.floor(Math.random() * 4)).toString(16); // 8/9/a/b
-  return `${hex(8)}-${hex(4)}-4${hex(3)}-${version}${hex(3)}-${hex(12)}`;
+  // Per RFC 4122: version 4 is the literal "4" preceding the third
+  // group; the VARIANT bits (10xx) live in the high nibble of the
+  // fourth group (N-R5-FECHAIN-04 rename — old name was `version`
+  // which conflicted with the literal "4" that's the actual version).
+  const variant = (8 + Math.floor(Math.random() * 4)).toString(16); // 8/9/a/b
+  return `${hex(8)}-${hex(4)}-4${hex(3)}-${variant}${hex(3)}-${hex(12)}`;
 }
 
 // Module-level singleton by design — the modal only ever mounts once

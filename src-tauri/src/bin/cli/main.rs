@@ -67,6 +67,15 @@ struct GlobalOptions {
     /// Skip the persistent font cache for this run. Cache file is left
     /// untouched. Use when you want a fresh scan without affecting
     /// the cached state. 本次运行跳过持久化字体缓存；缓存文件保持不变。
+    ///
+    /// `global = true` is intentional even though only `embed` /
+    /// `refresh-fonts` / `chain` consume the flag (N-R5-RUSTCLI-04).
+    /// The clap idiom for cross-subcommand flags is one declaration
+    /// here; per-subcommand declaration would mean N duplicates +
+    /// drift surface. Subcommands that don't read the flag (hdr /
+    /// shift / rename) silently ignore it — standard clap behavior,
+    /// not a no-silent-action violation: the flag has no observable
+    /// effect anywhere it isn't read, so there's nothing to surface.
     #[arg(long, global = true)]
     no_cache: bool,
 
@@ -76,6 +85,10 @@ struct GlobalOptions {
     /// on Linux, `~/Library/Application Support/ssahdrify/` on macOS,
     /// always named `cli_font_cache.sqlite3`. Useful for testing or
     /// non-default layouts. 覆盖字体缓存文件路径。
+    ///
+    /// Same `global = true` rationale as `no_cache` above
+    /// (N-R5-RUSTCLI-04): one declaration, cross-subcommand visible,
+    /// ignored where unread.
     #[arg(long, global = true, value_name = "PATH")]
     cache_file: Option<PathBuf>,
 }
@@ -847,6 +860,13 @@ fn find_embed_step_index(plan: &chain::ChainPlan) -> Option<usize> {
 /// Token shape `[a-z_][a-z0-9_]*` matches the TS regex. Unknown tokens
 /// substitute to "". Caller supplies a slice of `(name, value)` pairs;
 /// linear scan is fine — chain templates have 2-3 tokens at most.
+///
+/// Non-recursive by design (A-R5-RUSTCLI-01): substitution scans the
+/// TEMPLATE for `{...}` placeholders, not the substituted VALUES, so
+/// a malicious filename like `{name}.ass` substituted into a `{name}`
+/// template lands as the literal string `{name}.ass`, not as an
+/// infinite-expansion or second-pass substitution. Keep it that way —
+/// a recursive form would expose template-injection via filenames.
 fn substitute_template(template: &str, vars: &[(&str, &str)]) -> String {
     enum Seg {
         Literal(String),
@@ -962,8 +982,18 @@ fn predict_chain_output_path(
     // (CON, PRN, AUX, NUL, COM[0-9], LPT[0-9]) — Win32 treats these
     // as device paths regardless of extension, and a template like
     // `CON.{ext}` would predict a path that creates a console handle
-    // not a file. Any of these means "Rust prediction and TS
-    // resolution will diverge" → defer to V8 + TS for the precise
+    // not a file.
+    //
+    // Microsoft's reserved-name docs spec COM1-COM9 / LPT1-LPT9 only,
+    // but we deliberately over-reject COM0 + LPT0 too (N-R5-RUSTCLI-08):
+    // some Win32 reparse layers treat the 0 variants as device aliases
+    // depending on driver state, and the cost of one extra rejection
+    // (template authors don't use device names by accident) is much
+    // smaller than the cost of a silent device-handle-write surprise.
+    // The TS-side `assertSafeOutputFilename` mirrors this widened set.
+    //
+    // Any of these means "Rust prediction and TS resolution will
+    // diverge" → defer to V8 + TS for the precise
     // rejection error.
     //
     // Reserved-name coverage scope (Round 3 N-R3-7 + A-R3-4): the
@@ -1063,6 +1093,15 @@ fn process_one_chain_input(
             ));
         }
         if !globals.overwrite && predicted.exists() {
+            // `Path::exists()` follows symlinks (metadata-follow),
+            // so a planted symlink at `predicted` whose target exists
+            // would short-circuit to Skipped (A-R5-RUSTCLI-07). The
+            // harm is bounded: this is a cheap-first skip-check
+            // before V8; `write_output` later uses `create_new(true)`
+            // which is symlink-aware and atomic, so the authoritative
+            // gate against through-symlink writes is at write time.
+            // Worst case the planted symlink turns a Written into a
+            // Skipped — wasted V8 work, no data damage.
             return ChainFileOutcome::Skipped(format!(
                 "{} already exists (use --overwrite to replace)",
                 predicted.display()
@@ -1146,8 +1185,13 @@ fn process_one_chain_input(
     // Post-V8 dedup reconcile (Round 4 N-R4-10). If the actual output
     // path differs from the prediction, insert the actual key now —
     // catches predictor↔resolver divergence (e.g., a future template
-    // token Rust doesn't model). If predicted_key was None or matched
-    // exactly, skip the re-insert (would otherwise self-collide).
+    // token Rust doesn't model). When predicted_key was Some AND
+    // matches exactly, skip the re-insert (already inserted upstream;
+    // would self-collide). When predicted_key was None we DO insert —
+    // the predictor abstained (template too dynamic), so this is the
+    // first insertion of the actual key (N-R5-RUSTCLI-01: comment
+    // previously said "skip when None" but the `!= Some` condition
+    // actually re-inserts in that case, which is correct).
     let output_key = normalize_output_key(&output_path);
     if predicted_key.as_deref() != Some(output_key.as_str()) && !seen_outputs.insert(output_key) {
         return ChainFileOutcome::Failed(format!(
@@ -2761,6 +2805,15 @@ fn relocate_output_path(path: &str, output_dir: Option<&Path>) -> Result<PathBuf
         return Ok(path);
     };
 
+    // `path.file_name()` strips ALL path components from the
+    // engine-returned output path, keeping only the final segment.
+    // Contract (A-R5-RUSTCLI-03): the engine's TS-side
+    // `assertSafeOutputFilename` guarantees the returned `path` is a
+    // flat filename — no path separators, no `..`, no drive letters.
+    // If a future engine change relaxes that invariant, the
+    // file_name() flattening here would silently mask the violation
+    // (we'd just drop the directory prefix instead of erroring). Keep
+    // assertSafeOutputFilename strict.
     let file_name = path
         .file_name()
         .ok_or_else(|| "engine returned an output path without a filename".to_string())?;

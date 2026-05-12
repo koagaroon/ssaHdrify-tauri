@@ -560,11 +560,14 @@ export default function BatchRename() {
       // NSAlert the line wraps cleanly. We accept the cosmetic
       // unevenness rather than escaping `\n` in samples — escaping
       // would mis-represent the literal name the user is about to act on.
-      // Track whether the user has already seen the skipped-derive count.
-      // The in-place rename confirm + the overwrite-existing confirm can
-      // both fire in the same run (rename mode + outputs already exist),
-      // so dedupe the suffix to surface "(N skipped)" exactly once.
-      let skippedSuffixShown = false;
+      // Suffix for the skipped-derive count. The in-place rename confirm
+      // + the overwrite-existing confirm can both fire in the same run
+      // (rename mode + outputs already exist), so the overwrite branch
+      // suppresses the suffix only when the rename branch above already
+      // showed it (N-R5-FEFEAT-03: previously a mutable
+      // `skippedSuffixShown` flag tracked this — collapsed to a derived
+      // const at the overwrite-branch callsite since the only consumer
+      // computes the answer locally).
       const skippedSuffix =
         skippedDeriveCount > 0 ? "\n\n" + t("msg_rename_skipped_count", skippedDeriveCount) : "";
 
@@ -592,7 +595,6 @@ export default function BatchRename() {
             skippedSuffix,
           { title: t("dialog_rename_inplace_title"), kind: "warning" }
         );
-        if (skippedSuffix.length > 0) skippedSuffixShown = true;
         if (!confirmed) {
           addLog(t("msg_rename_cancelled"), "info");
           setLastActionResult("cancelled");
@@ -613,7 +615,11 @@ export default function BatchRename() {
       try {
         const existingCount = await countExistingFiles(projectedOutputs);
         if (existingCount > 0) {
-          const overwriteSuffix = skippedSuffixShown ? "" : skippedSuffix;
+          // Show the skipped-count once per run: the rename-mode confirm
+          // above already includes `skippedSuffix`, so suppress it here
+          // in rename mode. Copy modes skip the rename confirm entirely
+          // and need this dialog to surface the count.
+          const overwriteSuffix = outputMode === "rename" ? "" : skippedSuffix;
           const confirmed = await ask(
             t("msg_overwrite_confirm", existingCount, targets.length) + overwriteSuffix,
             {

@@ -168,6 +168,17 @@ export default function HdrConvert() {
     }
   };
 
+  // Derived: brightnessText parses cleanly but lands outside the
+  // [MIN_BRIGHTNESS, MAX_BRIGHTNESS] window. Used to drive the input's
+  // visible-error border (N-R5-FEFEAT-25). Without this signal, a user
+  // typing "99999" sees no validation feedback and the Convert button
+  // proceeds with the prior in-range value silently — the kind of
+  // surprise vibe-coding.md no-silent-action exists to prevent.
+  const brightnessOutOfRange = (() => {
+    const num = parseInt(brightnessText, 10);
+    return !Number.isNaN(num) && (num < MIN_BRIGHTNESS || num > MAX_BRIGHTNESS);
+  })();
+
   // Slider / preset paths emit a validated number — keep both state slots in sync.
   const handleBrightnessFromNits = useCallback((nits: number) => {
     setBrightness(nits);
@@ -691,6 +702,7 @@ export default function HdrConvert() {
             min={MIN_BRIGHTNESS}
             max={MAX_BRIGHTNESS}
             disabled={processing}
+            invalid={brightnessOutOfRange}
             className="w-36"
           />
           <p className="text-xs" style={{ color: "var(--text-muted)" }}>

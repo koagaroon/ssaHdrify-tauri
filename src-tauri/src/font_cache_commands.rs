@@ -279,11 +279,21 @@ pub fn open_font_cache() -> Result<CacheStatus, String> {
         .is_some();
     // schema_mismatch ⇔ path published but handle absent. Two states
     // leave the slot None: (1) `init_gui_font_cache` on
-    // SchemaVersionMismatch, and (2) `clear_font_cache` transiently
-    // between dropping the old handle and re-creating. Clear holds
-    // the slot lock throughout step (2), so `path.exists()` is false
-    // in that window and `schema_mismatch` stays false — only state
-    // (1) actually surfaces as schema_mismatch=true.
+    // SchemaVersionMismatch (see `init_gui_font_cache` in this same
+    // file for the symmetric slot-cleanup that publishes this state),
+    // and (2) `clear_font_cache` transiently between dropping the old
+    // handle and re-creating. Clear holds the slot lock throughout
+    // step (2), so `path.exists()` is false in that window and
+    // `schema_mismatch` stays false — only state (1) actually surfaces
+    // as schema_mismatch=true.
+    //
+    // `Path::exists()` returns false on permission-denied as well as
+    // NotFound (N-R5-RUSTGUI-12), so a chmod-000 cache file would
+    // misclassify here. Realistically unreachable on a single-user
+    // desktop tool (user owns their own AppData), but the consequence
+    // is that schema_mismatch would silently report false and the
+    // user would see no clear-cache prompt. If this ever bites,
+    // switch to `try_exists()` which distinguishes the two.
     let schema_mismatch = !available && path.exists();
     Ok(CacheStatus {
         available,
@@ -754,26 +764,36 @@ pub fn try_remove_folder_from_gui_cache(folder_path: &str) {
     }
 }
 
-/// Best-effort eviction of every folder from the GUI cache. Called
-/// from `fonts::clear_font_sources` so the persistent cache stays in
-/// step with the user's "Clear all sources" intent on the session-DB
-/// side (Round 2 N-R2-2). Without this, clear_font_sources wiped the
+/// Eviction of every folder from the GUI cache, called from
+/// `fonts::clear_font_sources` so the persistent cache stays in step
+/// with the user's "Clear all sources" intent on the session-DB side
+/// (Round 2 N-R2-2). Without this, clear_font_sources wiped the
 /// session DB but left `cached_folders` / `cached_fonts` rows intact —
 /// the next embed pass resolved a family via the cache to a path
 /// whose session-DB provenance had been cleared, and `subset_font`
 /// rejected it with "Font path was not discovered by a scan command."
 ///
-/// Mutation-guard discipline (Round 3 N-R3-3 / A-R3-1):
-/// - Acquires `CacheMutationGuard::try_acquire` to block / be blocked
-///   by `rescan_font_cache_drift`. Without this guard, a `clear` call
-///   landing between rescan's Phase 2 (long scan outside slot lock)
-///   and Phase 3 (apply scan results inside slot lock) would wipe
-///   rows just before Phase 3 re-inserts the freshly scanned ones —
-///   end state: cache holds rows whose session-DB provenance was
-///   just cleared, UI claim and DB state disagree.
+/// CALLER MUST already hold `CacheMutationGuard` (Round 4 Codex
+/// finding 3): `clear_font_sources` clears the session DB AND evicts
+/// the persistent cache as one atomic mutation, so the guard wraps
+/// both steps. Re-acquiring inside this fn would either deadlock
+/// (reentrancy-unsafe CAS) or fail and silently skip the eviction.
+///
+/// (A prior `try_clear_all_folders_in_gui_cache` wrapper that
+/// acquired the guard itself was removed in Wave 5.3b N-R5-RUSTGUI-02
+/// — every caller already held the guard for atomic-mutation reasons,
+/// the wrapper was dead.)
+///
+/// Mutation-guard + slot-lock interaction (Round 3 N-R3-3 / A-R3-1):
+/// - The `&CacheMutationGuard` arg proves the caller blocked /
+///   blocks `rescan_font_cache_drift`. Without it, a clear landing
+///   between rescan's Phase 2 (long scan outside slot lock) and
+///   Phase 3 (apply scan results inside slot lock) would wipe rows
+///   just before Phase 3 re-inserts the freshly scanned ones — end
+///   state: cache holds rows whose session-DB provenance was just
+///   cleared, UI claim and DB state disagree.
 /// - `try_lock` on the SLOT mutex stays — that protects against
-///   handle drop in the clear_font_cache recovery path. The mutation
-///   guard sits above the slot lock; both are needed.
+///   handle drop in the clear_font_cache recovery path.
 /// - Cache unavailable → silent no-op (nothing to evict).
 /// - Per-folder `remove_folder` errors log WARN but don't abort the
 ///   iteration; best-effort.
@@ -782,26 +802,6 @@ pub fn try_remove_folder_from_gui_cache(folder_path: &str) {
 /// `list_folders` and the iteration's `remove_folder` would leave a
 /// fresh row behind — acceptable because the racing populate is
 /// post-intent ("Clear all" was issued before the new populate).
-pub fn try_clear_all_folders_in_gui_cache() {
-    let mutation_guard = match CacheMutationGuard::try_acquire() {
-        Ok(g) => g,
-        Err(_) => {
-            log::warn!("GUI cache mutation in progress; skipping clear-all");
-            return;
-        }
-    };
-    clear_all_folders_in_gui_cache_locked(&mutation_guard);
-}
-
-/// Same eviction logic as `try_clear_all_folders_in_gui_cache` but
-/// the caller is responsible for holding `CacheMutationGuard`. Used
-/// when the caller needs to keep the guard live across additional
-/// session-level state changes (e.g., `clear_font_sources` clearing
-/// the session DB AND then evicting the persistent cache as one
-/// atomic mutation — Round 4 Codex finding 3). Re-acquiring the
-/// guard inside this fn would either deadlock (reentrancy-unsafe
-/// CAS) or fail and silently skip the eviction, exactly the bug
-/// we're closing.
 pub(crate) fn clear_all_folders_in_gui_cache_locked(_guard: &CacheMutationGuard) {
     let mut slot = match GUI_FONT_CACHE.try_lock() {
         Ok(s) => s,

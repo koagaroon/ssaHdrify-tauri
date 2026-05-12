@@ -167,6 +167,14 @@ function decodeBase64(b64: string, name: string): Uint8Array {
     return Base64.toUint8Array(b64);
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
+    // `name` is sanitized: it comes from `s.fontName` which is
+    // produced by buildFontFileName (font-embedder.ts) — that helper
+    // already strips everything but `[a-z0-9_-]` and falls back to a
+    // pure-ASCII hash for empty results. BiDi / zero-width chars
+    // can't survive that pipeline, so this interpolation is safe even
+    // for P1b hostile font packs (N-R5-FECHAIN-17). If a future
+    // refactor lets the original family name flow through here
+    // unsanitized, gate it through `stripUnicodeControls`.
     throw new Error(`base64 decode failed for font subset '${name}': ${message}`, {
       cause: e,
     });

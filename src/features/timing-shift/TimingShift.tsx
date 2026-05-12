@@ -689,6 +689,16 @@ export default function TimingShift() {
           >
             {t("offset_label")}
           </label>
+          {/* Raw <input type="number"> instead of the shared NumberInput
+              (N-R5-FEFEAT-24): TimingShift owns offsetValue as a number,
+              not as a string-shadow + derived number like HdrConvert
+              brightnessText does. Switching to NumberInput requires
+              that string-shadow refactor across the line-136 offset
+              math callsite — deferred as out of scope for the hygiene
+              wave. Until then this input's clear-then-retype behavior
+              differs subtly from HdrConvert's (NaN keystrokes here
+              snap the visible value back to the prior valid number;
+              HdrConvert preserves what the user typed). */}
           <input
             id="timing-offset-input"
             name="offset"
@@ -758,6 +768,12 @@ export default function TimingShift() {
         </button>
       </div>
 
+      {/* The -0.25rem / -0.5rem negative marginTop pulls these hint
+          lines tighter under their controls (N-R5-FEFEAT-28). Negative
+          margins are usually a footgun; pinned here as deliberate
+          density tuning, not an oversight. Switch to a parent `gap`
+          adjustment if the surrounding flex container gains explicit
+          gap control later. */}
       <p className="text-xs" style={{ color: "var(--text-muted)", marginTop: "-0.25rem" }}>
         {t("offset_hint")}
       </p>

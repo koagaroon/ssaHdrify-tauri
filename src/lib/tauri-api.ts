@@ -610,14 +610,12 @@ async function runStreamingScan(
       // Defense-in-depth: TypeScript narrows the union exhaustively at
       // compile time, but a Rust enum variant rename without updating
       // RawScanProgress would silently fall through here. Surface in
-      // dev so future drift is visible. Guard the cast — a future
-      // Rust-side serde change to a non-object payload (untagged enum,
-      // bare value) would otherwise throw on `.kind` access here.
-      const tag =
-        typeof msg === "object" && msg !== null && "kind" in msg
-          ? (msg as { kind: unknown }).kind
-          : msg;
-      console.warn("unknown ScanProgress payload:", tag);
+      // dev so future drift is visible. Log the FULL payload, not just
+      // the kind tag (N-R5-FELIB-22): an object payload without a
+      // `.kind` field used to log as "[object Object]" which leaked
+      // no diagnostic info — the full payload reveals the actual
+      // serde-emitted shape.
+      console.warn("unknown ScanProgress payload:", msg);
     }
   };
   try {

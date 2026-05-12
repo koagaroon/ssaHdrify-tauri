@@ -12,6 +12,11 @@
 
 import type { ParsedASS } from "ass-compiler";
 
+// Hoisted to module scope (A-R5-FECHAIN-12) so the `\p{L}` Unicode
+// property regex compiles once instead of per override block. Used by
+// the `\r<style>` reset detector inside `walkText`.
+const R_RESET_RE = /\\r(?=\\|$|[\p{L}_])/u;
+
 // Lazy dynamic import — only triggers when ensureLoaded() is first called.
 // Previously this ran at module load time, which blocked startup after the
 // CSS visibility refactor made all tabs mount immediately.
@@ -251,7 +256,13 @@ function processDialogueText(
         // "unmatched-brace means literal" semantics and finishes in O(n).
         if (!isDrawing) {
           const tail = text.slice(i);
-          if (tail.length > 0) recordChars(current, tail);
+          // Strip ASS drawing commands (\N, \n, \h) just like the
+          // plain-text branch below (N-R5-FECHAIN-03). Without this,
+          // input like `Hello{World\Nfoo` would record literal `\` + `N`
+          // codepoints against the per-variant + total caps even
+          // though libass treats them as line/space tags, not text.
+          const cleanTail = tail.replace(/\\N/g, "").replace(/\\n/g, "").replace(/\\h/g, "");
+          if (cleanTail.length > 0) recordChars(current, cleanTail);
         }
         return;
       }
@@ -285,7 +296,13 @@ function processDialogueText(
       //
       // `matchAll` + `.at(-1)` gives the LAST occurrence in the block.
       // Round 4 A-R4-07 / Codex 1 follow-up to Round 3 / Codex c94844c3.
-      if (/\\r(?=\\|\}|$|[\p{L}_])/u.test(block)) {
+      // Regex hoisted to module-level constant `R_RESET_RE` (A-R5-FECHAIN-12)
+      // to avoid re-compiling per iteration. The `\}` alternative was
+      // also dropped (A-R5-FECHAIN-03): `block` is `text.slice(i + 1,
+      // closeIdx)` — the open brace is at i and the close brace is at
+      // closeIdx, so `block` never contains `}` and the alternative
+      // was dead.
+      if (R_RESET_RE.test(block)) {
         isDrawing = false;
       }
       const pTags = [...block.matchAll(/\\p(\d+)/g)];

@@ -12,6 +12,13 @@ interface NumberInputProps {
   className?: string;
   /** id forwarded to the inner <input> so a sibling <label htmlFor> works */
   id?: string;
+  /**
+   * Caller-derived invalid signal (N-R5-FEFEAT-25). When true, the
+   * border switches to var(--accent-danger) so the user sees the
+   * out-of-range / unparseable input instead of the silent fallback
+   * to the prior valid value.
+   */
+  invalid?: boolean;
 }
 
 export default function NumberInput({
@@ -23,6 +30,7 @@ export default function NumberInput({
   disabled = false,
   className = "",
   id,
+  invalid = false,
 }: NumberInputProps) {
   const numStep = typeof step === "string" ? parseFloat(step) : step;
   const inputClass = `num-input w-full pl-3 pr-7 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]${
@@ -53,10 +61,16 @@ export default function NumberInput({
         className={inputClass}
         style={{
           background: "var(--bg-input)",
-          // template wraps a literal-branched ternary; both branches are
+          // template wraps a literal-branched ternary; all branches are
           // static var(--token) strings — safe by inspection.
           // eslint-disable-next-line no-restricted-syntax
-          border: `1px solid ${disabled ? "var(--border-light)" : "var(--border)"}`,
+          border: `1px solid ${
+            invalid
+              ? "var(--accent-danger)"
+              : disabled
+                ? "var(--border-light)"
+                : "var(--border)"
+          }`,
           color: "var(--text-primary)",
         }}
       />

@@ -154,6 +154,13 @@ fn walk_one_level(dir: &Path, out: &mut Vec<String>) -> bool {
     // permissions or stale-NFS-handle situations).
     for entry_result in entries {
         if out.len() >= MAX_RESULT_FILES {
+            // Shared cap with `expand_dropped_paths` outer loop
+            // (N-R5-RUSTGUI-09): both layers read the same constant so
+            // the per-folder check here participates in the same total
+            // budget as the cross-input check there. Splitting them
+            // into separate constants would let one layer truncate
+            // before the other could even start.
+            //
             // Truncated mid-folder — there are more entries in this
             // dir that we'd have appended if there were room.
             return true;

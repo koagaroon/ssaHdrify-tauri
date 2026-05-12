@@ -146,6 +146,13 @@ export function useFolderDrop({
                     // `onTruncated` would force every consumer to wire
                     // a new path.
                     if (expanded.truncated) {
+                      // Hardcoded English string (N-R5-FELIB-11):
+                      // proper i18n requires threading `t` through
+                      // the useFolderDrop options surface, which
+                      // every consumer would have to update. Deferred
+                      // to a follow-up wave; meanwhile the wording
+                      // matches the conservative tone the rest of
+                      // the app uses in onError banners.
                       onErrorRef.current?.(
                         new Error(
                           "Drop too large — first 5000 files accepted, the rest were ignored. Retry with a smaller batch."
@@ -158,7 +165,8 @@ export function useFolderDrop({
                     // the call, and yet we'd silently do nothing without
                     // this signal (Round 1 F1.N-R1-17). Surface as an
                     // error so the consumer banner reads "no usable
-                    // files in this drop" instead of nothing.
+                    // files in this drop" instead of nothing. Same
+                    // N-R5-FELIB-11 deferral applies to the wording.
                     onErrorRef.current?.(new Error("Drop expanded to zero usable paths"));
                   }
                 }

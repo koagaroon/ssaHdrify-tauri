@@ -893,7 +893,11 @@ pub fn find_system_font(
             let ext = path
                 .extension()
                 .and_then(|e| e.to_str())
-                .map(|e| e.to_lowercase())
+                // Use ascii-only fold for consistency with
+                // `has_allowed_font_extension` and `parse_local_font_file`
+                // (N-R5-RUSTGUI-01) — all font extensions are pure ASCII,
+                // so locale-aware `to_lowercase()` is unnecessary alloc.
+                .map(|e| e.to_ascii_lowercase())
                 .unwrap_or_default();
 
             // OTF/OTC warning: libass/VSFilter don't support OTF bold rendering.
@@ -1413,10 +1417,16 @@ fn scan_directory_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
         if !canonical.starts_with(canonical_dir) {
             continue;
         }
-        // Gate the dedup `seen` set on font-eligible extensions BEFORE
-        // counting against the ceiling (Round 4 A-R4-02 / A-R4-03).
-        // Previously the dedup set filled on every regular file
-        // regardless of extension, and the extension check lived deeper
+        // The dedup `seen` set fills only on font-eligible extensions
+        // (see `has_allowed_font_extension` below). Counting only font
+        // files here, after the visited-cap above bounds total
+        // iteration cost, means the dedup set sizes track the user-
+        // visible font count rather than the directory's total entry
+        // count — `preflight_directory_inner` uses the same accounting
+        // so both speak about the same "directory size" when the XL-
+        // confirm dialog fires. The pre-Wave-4.1 form let the dedup
+        // set fill on every regular file regardless of extension, and
+        // the extension check lived deeper
         // inside `parse_local_font_file`. A directory of 200k non-font
         // files (.txt / .png / etc.) would fill `seen` to the cap and
         // trip `CeilingHit` with 0 faces — but
@@ -2094,14 +2104,15 @@ pub fn remove_font_source(source_id: String, kind: Option<String>) -> Result<(),
     let tx = conn
         .transaction()
         .map_err(|e| db_error("transaction start failed", e))?;
-    // Guard inside the transaction: a check-before-open-transaction
-    // race could let a scan start between the guard and the DELETE,
-    // causing the DELETE to block on the scan's tx then immediately
-    // remove rows the scan just inserted. Inside the transaction the
-    // ACTIVE_SCAN_ID load happens-after BEGIN, so any concurrent
-    // begin_font_scan either ran-before-us (guard catches it) or
-    // ran-after-our-BEGIN (its inserts wait on us via WAL +
-    // busy_timeout, then commit after our DELETE finishes).
+    // Acquire-load on ACTIVE_SCAN_ID pairs with begin_font_scan's
+    // SeqCst CAS publish: any concurrent begin_font_scan either
+    // ran-before-us (Acquire sees the non-NO_SCAN_ID value, guard
+    // returns Err) or ran-after-our-load (its inserts wait on us via
+    // WAL + 5s busy_timeout, then commit after our DELETE finishes).
+    // The surrounding SQLite transaction is an orthogonal serialization
+    // mechanism for the DB-state side; the cross-thread happens-before
+    // we need on the Rust side comes from the Acquire ordering
+    // (N-R5-RUSTGUI-11).
     reject_during_active_scan("Cannot remove font source while a scan is running")?;
     // Only dir-mode sources populate the persistent GUI cache
     // (try_record_folder_in_gui_cache is called from
@@ -2444,11 +2455,15 @@ pub fn subset_font(
         .and_then(|n| n.to_str())
         .unwrap_or("<unknown>");
 
-    // Validate file extension against allowed font types
+    // Validate file extension against allowed font types.
+    // ASCII-only fold matches `has_allowed_font_extension` /
+    // `parse_local_font_file` / `find_system_font::Handle::Path` arms
+    // (N-R5-RUSTGUI-01) — every entry in ALLOWED_FONT_EXTENSIONS is
+    // pure ASCII so locale-aware lowercase is unnecessary alloc.
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
+        .map(|e| e.to_ascii_lowercase())
         .unwrap_or_default();
     if !ALLOWED_FONT_EXTENSIONS.contains(&ext.as_str()) {
         return Err(format!(

@@ -286,7 +286,11 @@ export function processAssContent(
       result.push(line);
     }
 
-    if (onProgress && i % 100 === 0) {
+    // Skip the i === 0 fire (N-R5-FEFEAT-01): `0 % 100 === 0` would
+    // emit a 0% update on every call, which for small files makes the
+    // UI jump 0% → 100% with no intermediate ticks. Starting at the
+    // first real boundary keeps the progress bar smooth.
+    if (onProgress && i > 0 && i % 100 === 0) {
       onProgress(i, lines.length);
     }
   }

@@ -500,7 +500,8 @@ export async function embedFonts(
       // `console.warn`-only path left the user with no feedback. Reuses
       // the existing `msg_font_skipped` i18n key for consistency with
       // the subsetting-failure path below.
-      const label = fontKeyLabel(info.key);
+      // (Reuses `label` from the outer scope; N-R5-FECHAIN-02 removed
+      // a redundant inner re-declaration.)
       console.warn(`[ssaHdrify] embedFonts: no usage entry for ${label}`);
       onProgress?.({
         stage:

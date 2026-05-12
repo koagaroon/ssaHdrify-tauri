@@ -1091,8 +1091,14 @@ export default function FontEmbed() {
               style={{
                 background: "var(--progress-fill)",
                 // numeric ratio of internal counts; safe by inspection.
+                // `progress.total || 1` guards against a future refactor
+                // that publishes a progress event before computing total
+                // (N-R5-FECHAIN-09 belt-and-braces) — current loop
+                // short-circuits before the embed call so total is
+                // always > 0, but the divide-by-zero NaN would render
+                // `NaN%` and CSS-fail silently.
                 // eslint-disable-next-line no-restricted-syntax
-                width: `${(progress.current / progress.total) * 100}%`,
+                width: `${(progress.current / (progress.total || 1)) * 100}%`,
               }}
             />
           </div>
