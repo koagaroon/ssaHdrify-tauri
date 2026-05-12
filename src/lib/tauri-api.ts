@@ -493,10 +493,22 @@ export interface FontCacheDriftReport {
   removed: string[];
 }
 
-/** Outcome of rescanFontCacheDrift. */
+/** One folder whose Phase-2 scan failed during rescanFontCacheDrift. The
+ *  Rust side has already evicted its cache rows; this row is surfaced so
+ *  the modal can show the user what couldn't be refreshed. */
+export interface FontCacheSkippedFolder {
+  folder: string;
+  reason: string;
+}
+
+/** Outcome of rescanFontCacheDrift. `skipped` is non-empty when Phase 2
+ *  scan errors out for some folders — the stale rows have been evicted
+ *  (so font lookups fall through cleanly) but the user should know which
+ *  folders need attention. */
 export interface FontCacheRescanResult {
   modifiedRescanned: number;
   removedEvicted: number;
+  skipped: FontCacheSkippedFolder[];
 }
 
 /** Probe the cache state. Idempotent; safe to call multiple times. */

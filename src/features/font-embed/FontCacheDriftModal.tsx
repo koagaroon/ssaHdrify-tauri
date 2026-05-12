@@ -3,6 +3,7 @@ import {
   clearFontCache,
   rescanFontCacheDrift,
   type FontCacheDriftReport,
+  type FontCacheSkippedFolder,
   type FontCacheStatus,
 } from "../../lib/tauri-api";
 import { useI18n } from "../../i18n/useI18n";
@@ -56,6 +57,10 @@ export default function FontCacheDriftModal({
   // font_cache_cleared exist precisely so the user sees what happened.
   // null while the modal is in pre-op or working state.
   const [doneMessage, setDoneMessage] = useState<string | null>(null);
+  // Phase-2 skipped folders from the last rescan. Rendered as a
+  // partial-success block beneath the doneMessage so the user knows
+  // which folders couldn't be refreshed (rows already evicted Rust-side).
+  const [skippedFolders, setSkippedFolders] = useState<FontCacheSkippedFolder[]>([]);
 
   // Esc closes only when not working — closing mid-rescan would orphan
   // the in-flight Tauri command. The close button's disabled state
@@ -85,17 +90,18 @@ export default function FontCacheDriftModal({
   }, [working, onClose]);
 
   const handleRescan = useCallback(async () => {
-    // Reset both transient states at entry — `doneMessage` from a
-    // prior op (e.g., user clicks Rescan after Clear succeeded)
-    // would otherwise visibly persist next to the in-progress
+    // Reset transient states at entry — a prior op's doneMessage or
+    // skipped list would otherwise persist next to the in-progress
     // "Rescanning…" banner until rescan finishes.
     setError(null);
     setDoneMessage(null);
+    setSkippedFolders([]);
     setWorking("rescanning");
     try {
       const result = await rescanFontCacheDrift();
       setWorking(null);
       setDoneMessage(t("font_cache_rescan_done", result.modifiedRescanned, result.removedEvicted));
+      setSkippedFolders(result.skipped);
       onRescanComplete();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -106,6 +112,7 @@ export default function FontCacheDriftModal({
   const handleClear = useCallback(async () => {
     setError(null);
     setDoneMessage(null);
+    setSkippedFolders([]);
     setWorking("clearing");
     try {
       await clearFontCache();
@@ -126,6 +133,7 @@ export default function FontCacheDriftModal({
     if (open) {
       setError(null);
       setDoneMessage(null);
+      setSkippedFolders([]);
       setWorking(null);
     }
   }, [open]);
@@ -263,6 +271,31 @@ export default function FontCacheDriftModal({
             >
               {doneMessage}
             </p>
+          )}
+
+          {skippedFolders.length > 0 && (
+            <div
+              className="text-xs"
+              role="status"
+              aria-live="polite"
+              style={{ marginTop: "0.5rem", color: "var(--text-primary)" }}
+            >
+              <div style={{ marginBottom: "0.25rem" }}>
+                {t("font_cache_rescan_skipped_label", skippedFolders.length)}
+              </div>
+              <ul
+                style={{ paddingLeft: "1rem", listStyle: "disc", color: "var(--text-secondary)" }}
+              >
+                {skippedFolders.slice(0, 8).map((sk) => (
+                  <li key={sk.folder} style={{ wordBreak: "break-all" }}>
+                    <span style={{ color: "var(--text-primary)" }}>{sk.folder}</span>
+                    {" — "}
+                    {sk.reason}
+                  </li>
+                ))}
+                {skippedFolders.length > 8 && <li>… +{skippedFolders.length - 8}</li>}
+              </ul>
+            </div>
           )}
 
           {error !== null && (

@@ -189,14 +189,38 @@ pub struct DriftReport {
     pub removed: Vec<String>,
 }
 
+/// One folder whose Phase-2 scan failed in `rescan_font_cache_drift`.
+/// Surfaces what the user needs to know (which folder, why) so the
+/// drift modal can show a partial-success state instead of pretending
+/// rescan was a clean win.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkippedFolder {
+    /// Cached folder path that triggered the skip.
+    pub folder: String,
+    /// User-facing reason from the failing scan (already includes the
+    /// folder path in some cases; the frontend renders the pair as
+    /// `folder — reason`).
+    pub reason: String,
+}
+
 /// Outcome of a `rescan_font_cache_drift` call.
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RescanResult {
     /// Count of folders successfully re-scanned and replaced in cache.
     pub modified_rescanned: usize,
-    /// Count of folders evicted from cache (no longer on disk).
+    /// Count of folders evicted from cache (includes both the
+    /// `report.removed` folders that truly disappeared AND the Phase-2-
+    /// skipped folders whose stale rows are dropped — see
+    /// `apply_rescan_to_cache`).
     pub removed_evicted: usize,
+    /// Folders whose Phase-2 scan failed. Their cache rows were evicted
+    /// (so later lookups fall through to fresh sources / system fonts
+    /// rather than returning stale data, closing Codex ccac42fe). The
+    /// frontend keeps the drift modal in a partial-success state when
+    /// this is non-empty so the user knows which folders need attention.
+    pub skipped: Vec<SkippedFolder>,
 }
 
 // ---- Tauri commands ----------------------------------------------------
@@ -340,68 +364,110 @@ pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
     // bin/cli/main.rs:609): one folder hitting MAX_CACHE_POPULATE_FACES
     // or a transient I/O error must not abort the whole rescan — that
     // would let one oversized font pack DoS the user's entire cache
-    // refresh. Log WARN with folder context, skip, continue.
+    // refresh. Log WARN with folder context, push to `skipped`, continue.
+    // Phase 3's eviction of skipped folders' stale rows closes the
+    // silent-stale-cache shortcut Codex ccac42fe flagged.
     let mut scanned: Vec<(String, i64, Vec<FontMetadata>)> =
         Vec::with_capacity(report.modified.len());
+    let mut skipped: Vec<SkippedFolder> = Vec::new();
     for folder in &report.modified {
         let folder_path = Path::new(folder);
         let folder_mtime = stat_mtime_or_zero(folder_path);
-        let entries = match crate::fonts::scan_directory_collecting(folder_path) {
-            Ok(e) => e,
+        match crate::fonts::scan_directory_collecting(folder_path) {
+            Ok(entries) => {
+                scanned.push((
+                    folder.clone(),
+                    folder_mtime,
+                    entries_to_cache_metadata(&entries),
+                ));
+            }
             Err(err) => {
                 log::warn!("rescan: skipping {folder} — {err}");
-                continue;
+                skipped.push(SkippedFolder {
+                    folder: folder.clone(),
+                    reason: err,
+                });
             }
-        };
-        scanned.push((folder.clone(), folder_mtime, entries_to_cache_metadata(&entries)));
+        }
     }
 
-    // Phase 3 — under lock: apply the scan results + evict removed
-    // folders. Pure DB work, short hold time.
-    //
-    // Removed-list re-stat: Phase 1's `report.removed` is a snapshot
-    // from before Phase 2's I/O. Between Phase 1 and Phase 3, another
-    // command can have called `try_record_folder_in_gui_cache` for X,
-    // freshly populating it (or the user can have re-added the source
-    // through the source modal). Blindly applying `remove_folder("X")`
-    // would clobber that fresh write. Re-stat each `removed` folder
-    // here; if it now exists on disk, skip — the drift report was
-    // stale. Modified-list doesn't need this dance: Phase 2's scan
-    // captured a snapshot strictly newer than any concurrent populate,
-    // so replace_folder's idempotent overwrite is safe.
-    let mut modified_rescanned = 0usize;
-    let mut removed_evicted = 0usize;
-    {
+    // Phase 3 — under lock: apply scan results + evict removed and
+    // skipped folders. Pure DB work, short hold time. See
+    // `apply_rescan_to_cache` for the per-list semantics.
+    let (modified_rescanned, removed_evicted) = {
         let mut slot = GUI_FONT_CACHE
             .lock()
             .map_err(|_| "GUI cache mutex poisoned".to_string())?;
         let cache = slot
             .as_mut()
             .ok_or_else(|| "Cache became unavailable between drift detect and apply".to_string())?;
-        for (folder, folder_mtime, metadata) in &scanned {
-            cache
-                .replace_folder(folder, *folder_mtime, metadata)
-                .map_err(|e| format!("replace_folder({folder}): {e}"))?;
-            modified_rescanned += 1;
-        }
-        for folder in &report.removed {
-            if std::fs::metadata(folder).is_ok() {
-                log::info!(
-                    "Skipping cache eviction for {folder}: folder reappeared between drift detect and apply"
-                );
-                continue;
-            }
-            cache
-                .remove_folder(folder)
-                .map_err(|e| format!("remove_folder({folder}): {e}"))?;
-            removed_evicted += 1;
-        }
-    }
+        apply_rescan_to_cache(cache, &scanned, &report.removed, &skipped)?
+    };
 
     Ok(RescanResult {
         modified_rescanned,
         removed_evicted,
+        skipped,
     })
+}
+
+/// Apply Phase-2 scan outcomes to the cache. Three input lists, three
+/// behaviors:
+///
+/// - `scanned` — folders whose Phase-2 scan succeeded. Each gets its
+///   row replaced with the fresh face metadata + new mtime.
+/// - `removed` — folders Phase 1 reported as gone. Re-stat first: if
+///   the folder is back on disk (another command populated it between
+///   Phase 1 and Phase 3, or the user re-added the source), skip the
+///   eviction so we don't clobber a concurrent populate. The Phase-2
+///   snapshot is older than any such write so replace_folder above is
+///   safe without this dance, but eviction isn't.
+/// - `skipped` — folders whose Phase-2 scan failed. Their stale cache
+///   rows MUST go: without this, a failed-scan folder kept old rows
+///   while `rescan_font_cache_drift` still returned `Ok` and the
+///   frontend cleared drift state, leaving `lookup_font_family` to
+///   serve wrong-font results silently (Codex ccac42fe). Eviction is
+///   the structural defense; UI handling of `RescanResult.skipped` is
+///   the user-visible defense on top. No re-stat dance — a folder we
+///   couldn't scan is a folder we can't trust.
+///
+/// Returns `(modified_rescanned, removed_evicted)`. `removed_evicted`
+/// counts skipped-folder evictions too because they're the same DB
+/// operation; the caller's user-facing tally is just "rows we dropped".
+fn apply_rescan_to_cache(
+    cache: &mut FontCache,
+    scanned: &[(String, i64, Vec<FontMetadata>)],
+    removed: &[String],
+    skipped: &[SkippedFolder],
+) -> Result<(usize, usize), String> {
+    let mut modified_rescanned = 0usize;
+    let mut removed_evicted = 0usize;
+
+    for (folder, folder_mtime, metadata) in scanned {
+        cache
+            .replace_folder(folder, *folder_mtime, metadata)
+            .map_err(|e| format!("replace_folder({folder}): {e}"))?;
+        modified_rescanned += 1;
+    }
+    for folder in removed {
+        if std::fs::metadata(folder).is_ok() {
+            log::info!(
+                "Skipping cache eviction for {folder}: folder reappeared between drift detect and apply"
+            );
+            continue;
+        }
+        cache
+            .remove_folder(folder)
+            .map_err(|e| format!("remove_folder({folder}): {e}"))?;
+        removed_evicted += 1;
+    }
+    for sk in skipped {
+        cache
+            .remove_folder(&sk.folder)
+            .map_err(|e| format!("remove_folder({}): {e}", sk.folder))?;
+        removed_evicted += 1;
+    }
+    Ok((modified_rescanned, removed_evicted))
 }
 
 /// Drop the SQLite connection, delete the cache file (and its WAL
@@ -620,4 +686,127 @@ pub fn lookup_font_family(
         path: r.font_path,
         index: r.face_index as u32,
     }))
+}
+
+// ── Tests ────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    struct TempCacheDir(std::path::PathBuf);
+
+    impl TempCacheDir {
+        fn new(name: &str) -> Self {
+            let mut dir = std::env::temp_dir();
+            dir.push(format!(
+                "ssahdrify_font_cache_cmds_test_{}_{}",
+                name,
+                std::process::id()
+            ));
+            let _ = fs::remove_dir_all(&dir);
+            fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+    }
+
+    impl Drop for TempCacheDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn temp_cache(name: &str) -> (TempCacheDir, FontCache) {
+        let guard = TempCacheDir::new(name);
+        let cache_path = guard.0.join("cache.sqlite3");
+        let cache = FontCache::open_or_create(&cache_path).expect("open cache");
+        (guard, cache)
+    }
+
+    #[test]
+    fn apply_rescan_evicts_skipped_folder_rows() {
+        // Codex ccac42fe regression: a Phase-2 scan failure must drop
+        // the stale rows so later lookup_font_family can't short-circuit
+        // through them. Without this fix, `skipped` was silent and the
+        // command returned Ok; the rows lingered for the rest of the
+        // session.
+        let (_guard, mut cache) = temp_cache("skipped_evict");
+        cache
+            .replace_folder("/bogus/skipped/folder", 12345, &[])
+            .unwrap();
+        assert!(
+            cache
+                .list_folders()
+                .unwrap()
+                .iter()
+                .any(|f| f.folder_path == "/bogus/skipped/folder"),
+            "seed row missing"
+        );
+
+        let skipped = vec![SkippedFolder {
+            folder: "/bogus/skipped/folder".to_string(),
+            reason: "Not a directory".to_string(),
+        }];
+        let (modified, evicted) =
+            apply_rescan_to_cache(&mut cache, &[], &[], &skipped).unwrap();
+        assert_eq!(modified, 0);
+        assert_eq!(evicted, 1);
+        assert!(
+            cache
+                .list_folders()
+                .unwrap()
+                .iter()
+                .all(|f| f.folder_path != "/bogus/skipped/folder"),
+            "stale row still present after skip eviction"
+        );
+    }
+
+    #[test]
+    fn apply_rescan_replaces_modified_and_leaves_others() {
+        let (_guard, mut cache) = temp_cache("replace_keep");
+        cache.replace_folder("/folder/a", 100, &[]).unwrap();
+        cache.replace_folder("/folder/b", 200, &[]).unwrap();
+
+        let scanned = vec![("/folder/a".to_string(), 999, vec![])];
+        let (modified, evicted) =
+            apply_rescan_to_cache(&mut cache, &scanned, &[], &[]).unwrap();
+        assert_eq!(modified, 1);
+        assert_eq!(evicted, 0);
+
+        let folders = cache.list_folders().unwrap();
+        let a = folders
+            .iter()
+            .find(|f| f.folder_path == "/folder/a")
+            .expect("a present");
+        assert_eq!(a.folder_mtime, 999, "a's mtime not updated");
+        assert!(
+            folders.iter().any(|f| f.folder_path == "/folder/b"),
+            "b should not be touched"
+        );
+    }
+
+    #[test]
+    fn apply_rescan_does_not_evict_removed_that_reappeared() {
+        // Existing re-stat dance: a folder reported as removed in
+        // Phase 1 may have been re-populated by a concurrent command
+        // by the time Phase 3 runs. Eviction must skip when the
+        // folder is back on disk.
+        let (guard, mut cache) = temp_cache("removed_reappeared");
+        let real_path = guard.0.to_string_lossy().to_string();
+        cache.replace_folder(&real_path, 100, &[]).unwrap();
+
+        let removed = vec![real_path.clone()];
+        let (_, evicted) =
+            apply_rescan_to_cache(&mut cache, &[], &removed, &[]).unwrap();
+        assert_eq!(evicted, 0, "reappeared folder should be left alone");
+        assert!(
+            cache
+                .list_folders()
+                .unwrap()
+                .iter()
+                .any(|f| f.folder_path == real_path),
+            "row dropped despite re-stat"
+        );
+    }
 }

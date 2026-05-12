@@ -431,6 +431,10 @@ export const strings: Record<string, StringEntry> = {
     en: "Rescanned {0} folder(s); evicted {1}.",
     zh: "已重新扫描 {0} 个文件夹；移除 {1} 个。",
   },
+  font_cache_rescan_skipped_label: {
+    en: "{0} folder(s) could not be re-scanned — their cached entries have been dropped:",
+    zh: "{0} 个文件夹无法重新扫描 —— 其缓存条目已移除：",
+  },
   font_cache_cleared: { en: "Font cache cleared.", zh: "字体缓存已清除。" },
   font_cache_unavailable_banner: {
     en: "Font cache unavailable — embed will use system fonts only.",
