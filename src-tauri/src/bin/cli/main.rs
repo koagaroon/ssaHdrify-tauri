@@ -927,14 +927,19 @@ fn predict_chain_output_path(
     // rejection error.
     //
     // Reserved-name coverage scope: ASCII digit variants only
-    // (COM0-COM9 / LPT0-LPT9). TS-side `assertSafeOutputFilename`
+    // (COM0-COM9 / LPT0-LPT9), and the bare-stem form (no trailing
+    // whitespace stripping). TS-side `assertSafeOutputFilename`
     // additionally rejects Unicode superscript variants (COM¹/²/³,
-    // LPT¹/²/³). Those slip past this Rust pre-check, but Windows
-    // refuses to create files with reserved names, so the predicted
-    // path can never exist on disk — `predicted.exists()` returns
-    // false, prediction returns Some, V8 runs, TS rejects
-    // authoritatively. Harmless slip; the comment is the contract,
-    // not the regex.
+    // LPT¹/²/³) AND strips trailing whitespace / dots before the
+    // reserved-name check (so `CON ` and `CON.` resolve to the device
+    // too). The Rust pre-check intentionally omits both — Windows
+    // refuses to create files with any of these names, so the
+    // predicted path can never exist on disk → `predicted.exists()`
+    // returns false → prediction returns Some → V8 runs → TS rejects
+    // authoritatively. The harmless-slip set is closed-form because
+    // the Win32 device-namespace gate at the OS layer is the final
+    // arbiter (Round 2 A-R2-6 / N-R2-10). The comment is the
+    // contract, not the regex.
     if output_name.is_empty()
         || output_name.contains('/')
         || output_name.contains('\\')

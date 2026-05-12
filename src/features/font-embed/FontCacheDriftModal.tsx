@@ -68,8 +68,15 @@ export default function FontCacheDriftModal({
   useEffect(() => {
     if (!open) return;
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && working === null) {
-        e.stopPropagation();
+      if (e.key !== "Escape") return;
+      // Intercept Escape on every press while this modal is open.
+      // When idle, close; when a rescan/clear is in flight, swallow
+      // silently so a future global Esc handler (popover dismissal,
+      // etc.) can't mis-fire and break the working state (Round 2
+      // N-R2-15). The disabled close button at the top mirrors this
+      // — no path closes mid-op.
+      e.stopPropagation();
+      if (working === null) {
         onClose();
       }
     };

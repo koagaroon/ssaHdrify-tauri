@@ -81,8 +81,13 @@ function normalizeFamily(raw: string): string {
  *  with `ass-uuencode.ts::safeName` (Round 1 F3.N-R1-14). The [Fonts]
  *  header layer was already stripping U+2028/U+2029, but the same name
  *  flowed verbatim into log lines and chain warning text where these
- *  separators could break line-oriented output. */
-function sanitizeFamily(raw: string): string {
+ *  separators could break line-oriented output.
+ *
+ *  Exported for the cross-helper symmetry pin test (Round 2 N-R2-17):
+ *  the parity claim between this helper and `ass-uuencode::buildFontEntry`'s
+ *  inline `safeName` is enforced by a test that exercises both sides on
+ *  the same input range. */
+export function sanitizeFamily(raw: string): string {
   return (
     raw
       // eslint-disable-next-line no-control-regex -- intentional: sanitize control chars from subtitle font names
@@ -260,10 +265,18 @@ function processDialogueText(
       //     rejected (Codex 52379e14: subsequent visible text was
       //     attributed to the wrong override font, causing missing
       //     glyphs in embed output).
-      if (/\\p0/.test(block) || /\\r(?=\\|\}|$|[\p{L}_])/u.test(block)) {
+      // ASS `\p<scale>` is bounded 0-9 by spec, but a malformed
+      // override like `\p10` or `\p07` (with leading zero) would slip
+      // past `\\p[1-9]` and `\\p0` respectively because neither anchors
+      // the trailing digit boundary (Round 2 N-R2-13). `(?![0-9])`
+      // pins each pattern to a single-digit token: `\p1` matches but
+      // `\p10` does not — libass clamps at 9 anyway, so anything
+      // beyond a single digit is malformed and should not toggle
+      // drawing mode either way.
+      if (/\\p0(?![0-9])/.test(block) || /\\r(?=\\|\}|$|[\p{L}_])/u.test(block)) {
         isDrawing = false;
       }
-      if (/\\p[1-9]/.test(block)) {
+      if (/\\p[1-9](?![0-9])/.test(block)) {
         isDrawing = true;
       }
       i = closeIdx + 1;
@@ -340,7 +353,14 @@ function applyOverrideTags(
     }
   }
 
-  // \b<0|1|weight> — bold
+  // \b<0|1|weight> — bold. The pattern relies on `\b` being followed
+  // strictly by a digit (the bold-weight value). ASS-spec tags like
+  // `\blur<n>` and `\bord<n>` start with `\b` but follow with a letter,
+  // so this regex won't false-match them. If a future ASS extension
+  // adds a `\b<word>` style tag (e.g. `\bx`), tighten this to
+  // `/\\b(\d+)(?![0-9])/` or an explicit word-boundary anchor on the
+  // tag name (Round 2 N-R2-12). Currently safe by spec; comment is
+  // the contract.
   const bMatch = block.match(/\\b(\d+)/);
   if (bMatch) {
     const val = parseInt(bMatch[1], 10);

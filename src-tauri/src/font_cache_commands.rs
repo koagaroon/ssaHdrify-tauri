@@ -283,6 +283,14 @@ pub fn open_font_cache() -> Result<CacheStatus, String> {
 /// or schema mismatch); the frontend treats empty + unavailable as
 /// "no modal needed" while `open_font_cache` separately surfaces the
 /// schema-mismatch state for the rebuild path.
+///
+/// Does NOT take `CacheMutationGuard` (Round 2 N-R2-16): this is a
+/// read-only command and the slot mutex is held throughout the
+/// `cached_folders` enumeration + `diff_against` call, so a parallel
+/// `clear_font_cache` can't drop the slot mid-iteration. The guard is
+/// load-bearing only when a command both reads AND writes the cache
+/// across multiple lock acquisitions (rescan's Phase 1 / Phase 3
+/// split; clear's drop + recreate); detect_drift does neither.
 #[tauri::command]
 pub fn detect_font_cache_drift() -> Result<DriftReport, String> {
     let slot = GUI_FONT_CACHE

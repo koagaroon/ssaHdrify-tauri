@@ -1275,6 +1275,21 @@ pub async fn preflight_font_files(paths: Vec<String>) -> Result<FontScanPrefligh
 /// Does NOT recurse — the `Fonts/` convention is flat by tradition, and
 /// limiting recursion keeps the "only files under the picked directory"
 /// security reasoning straightforward.
+///
+/// Bytes-cap posture (Round 2 A-R2-5): per-file size is capped at
+/// `MAX_FONT_DATA_SIZE` (50 MB) and face count at `MAX_FONTS_PER_SCAN`
+/// (100k). There is NO cumulative-bytes ceiling on the scan as a
+/// whole. Peak memory stays bounded because each file's bytes are
+/// dropped before the next iteration (fs::read + parse run in
+/// sequence, not in parallel), AND the user-facing
+/// `preflight_font_directory` reports total bytes BEFORE the scan
+/// starts so an XL-confirmation modal can warn the user. P1b
+/// (subtitle / font CONTENT SOURCE threat) is bounded by the
+/// preflight gate; adding a cumulative cap would be
+/// defensive-complexity for a scenario the preflight already covers.
+/// Revisit if a future flow bypasses preflight (e.g., direct
+/// drag-drop into the scan command without going through the source
+/// modal's XL confirmation).
 fn scan_directory_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
     canonical_dir: &Path,
     scan_id: u64,
