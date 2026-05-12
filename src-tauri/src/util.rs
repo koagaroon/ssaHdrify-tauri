@@ -114,6 +114,33 @@ pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Validate a font family name received from the IPC boundary or
+/// from upstream collection. Rejects empty / over-length / control-
+/// character names. Codepoint-counted (not byte-counted) so CJK
+/// names (3 bytes per char in UTF-8) that fit the 256-codepoint
+/// intent stay valid (Round 3 N-R3-20 — was four duplicated copies
+/// in find_system_font / resolve_user_font / lookup_font_family /
+/// parse_local_font_file before consolidation).
+///
+/// Control-character class covers Unicode general category Cc:
+/// U+0000..=U+001F (C0 controls including NUL/CR/LF/HT) and
+/// U+007F..=U+009F (DEL + C1 controls including NEL U+0085).
+/// `is_control()` already matches all of these — the redundant
+/// `c == '\x7f'` clause in pre-consolidation sites was harmless
+/// but added no coverage.
+pub fn validate_font_family(family: &str) -> Result<(), String> {
+    if family.is_empty() {
+        return Err("Font family name is empty".to_string());
+    }
+    if family.chars().count() > 256 {
+        return Err("Font family name exceeds 256 characters".to_string());
+    }
+    if family.chars().any(|c| c.is_control()) {
+        return Err("Font family name contains invalid characters".to_string());
+    }
+    Ok(())
+}
+
 /// Replace every "visual line break" character with a separator so a
 /// string can be safely embedded in a single-line context (terminal
 /// stderr, rfd dialog body, log line). Strips:
@@ -218,5 +245,51 @@ mod tests {
     fn strip_passes_through_normal_text() {
         let input = "C:\\Users\\me\\subtitle.ass";
         assert_eq!(strip_visual_line_breaks(input), input);
+    }
+
+    // ── validate_font_family (N-R3-20) ──
+
+    #[test]
+    fn validate_font_family_accepts_normal_name() {
+        validate_font_family("Arial").expect("Arial should validate");
+        validate_font_family("微软雅黑").expect("CJK name should validate");
+        // 256 codepoint boundary — exactly 256 chars is OK.
+        let exactly_256 = "x".repeat(256);
+        validate_font_family(&exactly_256).expect("256 chars boundary OK");
+    }
+
+    #[test]
+    fn validate_font_family_rejects_empty() {
+        let err = validate_font_family("").unwrap_err();
+        assert!(err.contains("empty"));
+    }
+
+    #[test]
+    fn validate_font_family_rejects_overlong() {
+        let err = validate_font_family(&"x".repeat(257)).unwrap_err();
+        assert!(err.contains("exceeds 256"));
+    }
+
+    #[test]
+    fn validate_font_family_rejects_c0_control() {
+        let err = validate_font_family("Ari\x01al").unwrap_err();
+        assert!(err.contains("invalid"));
+    }
+
+    #[test]
+    fn validate_font_family_rejects_del() {
+        // U+007F is in is_control()'s set; the previous duplicated
+        // `c == '\x7f'` clause was redundant. Pin that fact here so
+        // a future "just use a regex" refactor doesn't lose the
+        // coverage.
+        let err = validate_font_family("Ari\x7fal").unwrap_err();
+        assert!(err.contains("invalid"));
+    }
+
+    #[test]
+    fn validate_font_family_rejects_c1_nel() {
+        // NEL is in is_control()'s set.
+        let err = validate_font_family("Ari\u{0085}al").unwrap_err();
+        assert!(err.contains("invalid"));
     }
 }

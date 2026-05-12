@@ -26,6 +26,29 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection};
 
+/// Read a folder's mtime as Unix seconds, returning None when either
+/// the metadata stat or the `modified()` call fails. Shared between
+/// GUI `font_cache_commands::detect_font_cache_drift` / rescan flow
+/// and CLI `bin/cli/main.rs::check_cache_drift` so drift detection
+/// uses identical stat semantics on both sides (Round 3 N-R3-15).
+///
+/// Failure modes route to None: folder gone (NotFound), permission
+/// denied, network share offline, no-mtime FS. Callers treat None as
+/// "omit from snapshot" → `diff_against` reports the folder as
+/// `removed`. A folder whose `metadata().is_ok()` but whose
+/// `modified()` fails is consistently classified as "not statable"
+/// here, matching the symmetry contract that Round 2 N-R2-3 / N-R2-14
+/// fixed for the GUI rescan flow.
+pub fn try_modified_at(path: &Path) -> Option<i64> {
+    let modified = std::fs::metadata(path).ok()?.modified().ok()?;
+    Some(
+        modified
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0),
+    )
+}
+
 /// Default cache file path for the CLI binary, OS-specific:
 /// - Windows: `%APPDATA%/ssahdrify/cli_font_cache.sqlite3`
 /// - macOS:   `$HOME/Library/Application Support/ssahdrify/cli_font_cache.sqlite3`

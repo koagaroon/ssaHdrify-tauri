@@ -1785,22 +1785,17 @@ fn check_cache_drift(
         .map_err(|e| format!("list cached folders: {e}"))?;
     let mut snapshot: Vec<(String, i64)> = Vec::with_capacity(cached_folders.len());
     for folder in &cached_folders {
-        let folder_path_buf = std::path::Path::new(&folder.folder_path);
-        // Both metadata() and modified() can fail (folder gone,
-        // permission denied, etc.). We treat "can't stat" the same
-        // as "doesn't exist" — the folder won't appear in the
-        // snapshot and `diff_against` flags it as removed. For
-        // permission errors specifically, this is a slight false-
-        // positive (folder exists but we can't see it), but the
-        // user likely wants to know either way.
-        if let Ok(metadata) = std::fs::metadata(folder_path_buf) {
-            if let Ok(modified) = metadata.modified() {
-                let mtime = modified
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs() as i64)
-                    .unwrap_or(0);
-                snapshot.push((folder.folder_path.clone(), mtime));
-            }
+        // Round 3 N-R3-15: route through the shared `try_modified_at`
+        // helper so CLI and GUI drift detection use identical stat
+        // semantics. A future fix to the metadata-or-modified
+        // failure-mode handling automatically flows to both sides.
+        // None → omit from snapshot → `diff_against` reports as
+        // `removed` (slight false-positive for permission-denied
+        // folders, but the user wants to know either way).
+        if let Some(mtime) =
+            app_lib::font_cache::try_modified_at(std::path::Path::new(&folder.folder_path))
+        {
+            snapshot.push((folder.folder_path.clone(), mtime));
         }
     }
     cache

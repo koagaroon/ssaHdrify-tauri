@@ -141,30 +141,10 @@ pub fn init_gui_font_cache(app_data_dir: &Path) -> Result<(), String> {
 
 // ---- Helpers -----------------------------------------------------------
 
-/// Read a folder's mtime as Unix seconds, returning None when either
-/// the metadata stat or the `modified()` call fails. Single decision
-/// point for the rescan flow: `detect_font_cache_drift`, rescan
-/// Phase 1's snapshot build, and rescan Phase 3's re-stat all gate on
-/// this so a folder is classified consistently regardless of which
-/// failure mode it hits (truly gone vs. permission-denied vs. network
-/// share offline vs. filesystem with no mtime support).
-///
-/// Without this symmetry (Codex round-2 N-R2-3 / N-R2-14): Phase 1
-/// used `metadata().and_then(modified())` while Phase 3 used only
-/// `metadata().is_ok()`. A folder whose metadata stat succeeded but
-/// whose `modified()` call failed would be omitted from Phase 1's
-/// snapshot (reported as `removed`) yet Phase 3's re-stat would still
-/// see `is_ok()` and skip the eviction as "reappeared" — UI claims
-/// eviction happened, DB still has the stale rows.
-fn try_modified_at(path: &Path) -> Option<i64> {
-    let modified = std::fs::metadata(path).ok()?.modified().ok()?;
-    Some(
-        modified
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0),
-    )
-}
+// Re-export so test code can reach it via this module without a
+// crate-path qualifier. The canonical home is `font_cache.rs` so the
+// CLI binary can use the same helper — Round 3 N-R3-15 consolidation.
+use crate::font_cache::try_modified_at;
 
 /// Convenience for callers that want a "best-effort" mtime with a
 /// zero fallback (Phase 2's scanned-folder mtime recorded into cache).
@@ -815,19 +795,10 @@ pub fn lookup_font_family(
     bold: bool,
     italic: bool,
 ) -> Result<Option<crate::fonts::FontLookupResult>, String> {
-    // IPC boundary validation matching find_system_font / resolve_user_font:
-    // bound family length and reject control characters before the SQL
-    // bind. Without this, a misbehaving frontend could pin a multi-MB
-    // string in a transient allocation per query.
-    if family.is_empty() {
-        return Err("Font family name is empty".to_string());
-    }
-    if family.chars().count() > 256 {
-        return Err("Font family name exceeds 256 characters".to_string());
-    }
-    if family.chars().any(|c| c.is_control()) {
-        return Err("Font family name contains control characters".to_string());
-    }
+    // Shared `validate_font_family` (Round 3 N-R3-20): bounds family
+    // length + rejects control characters before the SQL bind, same
+    // as find_system_font and resolve_user_font.
+    crate::util::validate_font_family(&family)?;
     let slot = GUI_FONT_CACHE
         .lock()
         .map_err(|_| "GUI cache mutex poisoned".to_string())?;

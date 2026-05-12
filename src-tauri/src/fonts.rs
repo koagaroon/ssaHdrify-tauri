@@ -841,12 +841,7 @@ pub fn find_system_font(
     // `parse_local_font_file` already counts codepoints when ingesting
     // names; the lookup gate must agree, otherwise a font that scans into
     // the index successfully gets rejected at lookup time.
-    if family.is_empty() || family.chars().count() > 256 {
-        return Err("Font family name must be 1-256 characters".to_string());
-    }
-    if family.chars().any(|c| c.is_control() || c == '\x7f') {
-        return Err("Font family name contains invalid characters".to_string());
-    }
+    crate::util::validate_font_family(&family)?;
 
     let source = SystemSource::new();
 
@@ -2019,16 +2014,10 @@ pub fn resolve_user_font(
     bold: bool,
     italic: bool,
 ) -> Result<Option<FontLookupResult>, String> {
-    // Codepoint-count gate, mirrors `find_system_font` and
-    // `parse_local_font_file`. Byte-length gating would silently reject
-    // valid CJK family names (3 bytes/char) that fit the 256-codepoint
-    // intent.
-    if family.is_empty() || family.chars().count() > 256 {
-        return Err("Font family name must be 1-256 characters".to_string());
-    }
-    if family.chars().any(|c| c.is_control() || c == '\x7f') {
-        return Err("Font family name contains invalid characters".to_string());
-    }
+    // Shared `validate_font_family` mirrors find_system_font and
+    // parse_local_font_file; codepoint-counted so CJK family names
+    // (3 bytes/char) fit the 256-codepoint intent.
+    crate::util::validate_font_family(&family)?;
 
     let key = user_font_key(&family, bold, italic);
     let conn = open_user_font_db()?;
