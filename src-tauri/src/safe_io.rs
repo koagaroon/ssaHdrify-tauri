@@ -157,6 +157,18 @@ fn reject_reparse_source(path: &Path, label: &str) -> Result<(), String> {
 /// input (Codex a274852e). Both paths must canonicalize for the check
 /// to fire; a not-yet-existing dst (normal rename to a new name)
 /// returns Ok here and the downstream existence checks proceed.
+///
+/// Hardlinks are intentionally out of scope (Round 2 N-R2-5): two
+/// hardlinks to the same inode canonicalize to distinct paths because
+/// canonicalize() only resolves symlinks, not hardlink aliases. A
+/// rename through one hardlink to another succeeds — net data loss
+/// is zero (the file remains accessible via the original hardlink)
+/// but the in-place rename semantics break in a way this gate doesn't
+/// catch. Detecting hardlinks would require platform-specific
+/// `MetadataExt::dev()/ino()` (Unix) and `GetFileInformationByHandle`
+/// (Windows). P1a-bounded — fan-sub subtitle workflows don't use
+/// hardlinks; revisit if the threat model shifts to multi-tool
+/// pipelines that pre-link files.
 fn reject_same_canonical_path(src: &Path, dst: &Path) -> Result<(), String> {
     if let (Ok(src_canon), Ok(dst_canon)) = (src.canonicalize(), dst.canonicalize()) {
         if src_canon == dst_canon {

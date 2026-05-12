@@ -248,6 +248,25 @@ pub fn read_text_detect_encoding_inner(
         }
     };
 
+    // Re-check `is_reparse_point` on the resolved `read_path` right
+    // before the stat. The arms above checked the pre-canonicalize
+    // `path_ref`; on attacker-controlled local filesystems a swap
+    // between that check and the stat below would slip a reparse
+    // point past the upstream gate (Round 2 N-R2-6). Bounded by the
+    // same single-user trust model as the size-check TOCTOU note
+    // below, but the re-check is cheap (one syscall) and parallels
+    // the symmetric scrub `lib.rs::one_line` already does for the
+    // rfd dialog path.
+    if is_reparse_point(&read_path) {
+        log::warn!(
+            "Refusing to read possible symlink / junction at stat-time: {}",
+            read_path.display()
+        );
+        return Err(
+            "Refusing to read symlink / junction (race-time detection)".to_string(),
+        );
+    }
+
     // Size check.
     //
     // TOCTOU note: there's a small window between this stat and the
