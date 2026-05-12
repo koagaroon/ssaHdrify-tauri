@@ -18,6 +18,7 @@
  */
 import type { TabId } from "./FileContext";
 import { TAB_LABEL_KEYS } from "./tab-labels";
+import { BIDI_AND_ZERO_WIDTH_GLOBAL_RE } from "./unicode-controls";
 import { isCaseInsensitiveFs } from "./platform";
 
 /** Translator signature used by `buildConflictMessage`. Matches the
@@ -86,33 +87,17 @@ export function normalizeOutputKey(path: string): string {
   return isCaseInsensitiveFs ? normalized.toLowerCase() : normalized;
 }
 
-/** Bidirectional controls + line/paragraph separators whose visual
- *  effect bypasses the "OS-native dialog renders text plainly"
- *  assumption. Listed individually so the intent is grep-able:
- *  - U+061C — Arabic Letter Mark (Trojan-Source vector per Unicode TR9)
- *  - U+200E / U+200F — LRM / RLM marks
- *  - U+202A..U+202E — LRE / RLE / PDF / LRO / RLO embeddings + overrides
- *    (CVE-2021-42574 core vector)
- *  - U+2028 / U+2029 — LINE SEPARATOR / PARAGRAPH SEPARATOR (honored as
- *    real line breaks by macOS NSAlert, which would split a single
- *    sample row across multiple visible lines)
- *  - U+2066..U+2069 — LRI / RLI / FSI / PDI isolates
- */
-// Use \u escapes for every entry rather than literal characters:
-// U+2028 LINE SEPARATOR is treated as a line terminator by the
-// TypeScript regex parser, which would close the regex literal
-// mid-pattern if it appeared in the source verbatim. \u escapes
-// keep the parser happy and the intent grep-able.
-const DIALOG_BIDI_CONTROLS_RE = /[\u061C\u200E\u200F\u202A-\u202E\u2028\u2029\u2066-\u2069]/g;
-
-/** Strip bidirectional control characters and stray line separators
- *  before rendering an untrusted string inside a native `ask()` dialog
- *  body. Without this, a malicious filename containing U+202E
- *  (RIGHT-TO-LEFT OVERRIDE) can visually reverse the rename arrow +
- *  filename in the OS-native dialog and trick the user into confirming
- *  an unintended rename (CVE-2021-42574 class). Apply at any callsite
- *  that interpolates an untrusted name / path / error into an `ask()`
- *  body.
+/** Strip BiDi controls, line/paragraph separators, AND zero-width
+ *  characters before rendering an untrusted string inside a native
+ *  `ask()` dialog body. Without this, a malicious filename containing
+ *  U+202E (RIGHT-TO-LEFT OVERRIDE) can visually reverse the rename
+ *  arrow + filename in the OS-native dialog and trick the user into
+ *  confirming an unintended rename (CVE-2021-42574 class). Zero-width
+ *  chars (U+200B-U+200D, U+FEFF) are also scrubbed: a filename like
+ *  `EP<U+200B>01.ass` renders identically to `EP01.ass` while matching
+ *  a different on-disk path. Codepoint enumeration is shared with the
+ *  Rust-side `validate_font_family` / `validate_ipc_path` rejection
+ *  sets via `unicode-controls.ts`.
  *
  *  Audit (2026-05-04): the only `ask()` callsite in the codebase that
  *  interpolates untrusted text is the BatchRename in-place-rename
@@ -122,5 +107,5 @@ const DIALOG_BIDI_CONTROLS_RE = /[\u061C\u200E\u200F\u202A-\u202E\u2028\u2029\u2
  *  `ask()` body, sanitize it here. Counts and other non-name strings
  *  are unaffected. */
 export function sanitizeForDialog(name: string): string {
-  return name.replace(DIALOG_BIDI_CONTROLS_RE, "");
+  return name.replace(BIDI_AND_ZERO_WIDTH_GLOBAL_RE, "");
 }

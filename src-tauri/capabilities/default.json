@@ -67,6 +67,7 @@
         { "path": "$LOCALDATA/com.koagaroon.ssahdrify/**" },
         { "path": "$HOME/.bash_history" },
         { "path": "$HOME/.zsh_history" },
+        { "path": "$LOCALDATA/Microsoft/Windows/PowerShell/PSReadLine/**" },
         { "path": "$HOME/.local/share/fish/fish_history" },
         { "path": "$HOME/.viminfo" },
         { "path": "$HOME/.lesshst" },

@@ -1,4 +1,5 @@
 import { isCaseInsensitiveFs, isWindowsRuntime } from "./platform";
+import { hasUnicodeControls } from "./unicode-controls";
 
 /**
  * Shared output-path validation helpers.
@@ -152,11 +153,20 @@ export function decomposeInputPath(inputPath: string): InputPathParts {
 
   // Reject control / NUL chars early. Windows would silently truncate
   // at NUL — `evil\0.exe.ass` becomes `evil`, bypassing the trailing
-  // `.ass` extension allow-list. DEL / bidi controls slip past naive
-  // validators too.
+  // `.ass` extension allow-list.
   // eslint-disable-next-line no-control-regex -- intentional: reject control chars
   if (/[\x00-\x1f\x7f]/.test(normalized)) {
     throw new Error("Input path contains control characters");
+  }
+  // Reject BiDi / zero-width controls. These slip past the C0/DEL
+  // class above (which is Cc-only) and are the Trojan-Source class
+  // (CVE-2021-42574): a filename like `EP01<U+202E>cssa.ass` displays
+  // as `EP01ssa.shifted.ass` after the RLO flip but lands on disk
+  // verbatim. Symmetric with Rust-side `validate_font_family` /
+  // `validate_ipc_path` rejection sets — see `unicode-controls.ts`
+  // for the codepoint enumeration.
+  if (hasUnicodeControls(normalized)) {
+    throw new Error("Input path contains invisible or bidi-control characters");
   }
 
   // Absolute = (a) starts with `/` (POSIX root or UNC after backslash

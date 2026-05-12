@@ -8,6 +8,8 @@
  * Uses subsrt for multi-format parsing and ass-compiler for ASS generation.
  */
 
+import { BIDI_AND_ZERO_WIDTH_CHARS } from "../../lib/unicode-controls";
+
 // ── SRT Color Preprocessing ──────────────────────────────
 
 /**
@@ -142,14 +144,24 @@ export function buildAssDocument(
     "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding"
   );
   // Sanitize fontName: strip C0 + C1 control characters, commas (CSV
-  // corruption), Unicode line/paragraph separators, and ASS override-tag
-  // meta characters (`{`, `}`, `\`, `:`). A user-typed name like
-  // `Arial{\fn...}` or `Arial\u2028evil` would otherwise smuggle markup /
-  // line-break semantics into the generated Style line. Fall back to
+  // corruption), BiDi + zero-width + line/paragraph separators (shared
+  // unicode-controls set), and ASS override-tag meta characters (`{`,
+  // `}`, `\`, `:`). A user-typed name like `Arial{\fn...}`,
+  // `Arial\u2028evil`, or `Arial<U+202E>evil` would otherwise smuggle
+  // markup / line-break / visual-reversal semantics into the generated
+  // Style line. Fall back to
   // "Arial" if sanitization empties the string — an empty Fontname field
   // produces a malformed Style CSV that ASS renderers treat unpredictably.
   // eslint-disable-next-line no-control-regex -- intentional: sanitize control chars from subtitle font names
-  const fontNameSanitizer = /[\x00-\x1f\x7f-\x9f\u2028\u2029,{}\\:]/g;
+  const fontNameSanitizer = new RegExp(
+    // Bidi + zero-width chars come from the shared rejection set
+    // (mirrors Rust-side validate_font_family + sanitizeForDialog).
+    // `Arial<U+202E>evil` would otherwise render visually reversed in
+    // editor previews. U+2028/2029 are included in the shared set so
+    // the prior explicit \u2028\u2029 enumeration here is now covered.
+    `[\\x00-\\x1f\\x7f-\\x9f${BIDI_AND_ZERO_WIDTH_CHARS},{}\\\\:]`,
+    "gu",
+  );
   const safeFontName = style.fontName.replace(fontNameSanitizer, "") || "Arial";
   lines.push(
     `Style: Default,${safeFontName},${style.fontSize},${style.primaryColor},&H000000FF,${style.outlineColor},&H00000000,0,0,0,0,100,100,0,0,1,${style.outlineWidth},${style.shadowDepth},2,10,10,10,1`

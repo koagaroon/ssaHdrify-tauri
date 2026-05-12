@@ -111,6 +111,29 @@ pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
     if is_dos_device || is_globalroot {
         return Err(format!("{label} path uses a reserved device namespace"));
     }
+    // Reject `..` path components (Round 5 A-R5-RUSTGUI-02). A raw IPC
+    // path like `C:\Allowed\..\Denied\file.ass` matches an
+    // `allow=**` fs:scope rule literally (the deny patterns like
+    // `$HOME/.ssh/**` don't string-match a `..`-bearing path), so the
+    // upstream `is_allowed` check passes. The OS then resolves the
+    // `..` at read time and lands on the deny-listed target. The
+    // encoding.rs canonicalize-success branch re-checks `is_allowed`
+    // against the canonical form and catches this, but the
+    // canonicalize-FAILS branch falls back to the raw path with
+    // `..` intact and reads it — bypassing the scope policy.
+    // Rejecting `..` at the IPC entry kills the attack vector for
+    // every callsite (encoding.rs / fonts.rs / safe_io.rs / dropzone.rs)
+    // in one place. CLI paths don't use validate_ipc_path; they have
+    // their own argv normalization. All current GUI callers receive
+    // absolute paths from pickers / drag-drop, which never contain
+    // `..` segments — so this rejection has no legitimate-traffic cost.
+    //
+    // Detect `..` as a path COMPONENT (between separators or at the
+    // ends), not a substring — `foo..bar.txt` is a legitimate filename.
+    let has_dotdot_component = path.split(['/', '\\']).any(|seg| seg == "..");
+    if has_dotdot_component {
+        return Err(format!("{label} path contains parent-directory segments"));
+    }
     Ok(())
 }
 
@@ -286,6 +309,31 @@ mod tests {
     #[test]
     fn validate_accepts_normal_path() {
         validate_ipc_path("C:\\fonts\\sample.ttf", "Test").expect("normal path should validate");
+    }
+
+    #[test]
+    fn validate_rejects_dotdot_segment_in_path() {
+        // Closes a fs:scope bypass: a raw `C:\Allowed\..\Denied\file.ass`
+        // could pass an `allow=**` literal match and let the OS resolve the
+        // `..` at read time inside encoding.rs's canonicalize-fails branch.
+        // Rejecting `..` segments at IPC entry kills the vector for every
+        // callsite (encoding / fonts / safe_io / dropzone).
+        let err = validate_ipc_path(r"C:\Allowed\..\Denied\file.ass", "Test").unwrap_err();
+        assert!(err.to_lowercase().contains("parent-directory"));
+        // Forward-slash form (POSIX + Windows mixed paths) also rejected.
+        let err2 = validate_ipc_path("/home/u/../etc/passwd", "Test").unwrap_err();
+        assert!(err2.to_lowercase().contains("parent-directory"));
+    }
+
+    #[test]
+    fn validate_accepts_dotdot_inside_filename() {
+        // Substring `..` inside a filename component is legitimate
+        // (`foo..bar.txt`), not a parent-dir traversal. The component-
+        // level split-and-compare distinguishes them.
+        validate_ipc_path("C:\\fonts\\foo..bar.ttf", "Test")
+            .expect("dotdot inside a name segment should pass");
+        validate_ipc_path("/home/u/file..name.ass", "Test")
+            .expect("dotdot inside a name segment should pass on POSIX shape too");
     }
 
     // ── validate_ipc_path: byte-prefix DOS-device check ──

@@ -175,6 +175,16 @@ pub fn read_text_detect_encoding_inner(
     // First pass checks the RAW path so a directly-typed deny-listed
     // path fails fast. A second pass after canonicalize (below) catches
     // symlink redirection that resolves into a deny-listed location.
+    //
+    // A previously-leaked path was `C:\Allowed\..\Denied\file.ass`:
+    // `is_allowed` string-matched the `..`-bearing form (passed
+    // allow=**), then the canonicalize-fails fallback at the bottom of
+    // the match below read via the raw path, so the OS resolved the
+    // `..` into a deny-listed target. Closed at the IPC entry by
+    // `validate_ipc_path` (called above), which now rejects `..` as a
+    // path component. The fs_scope re-check on the canonical form
+    // below remains as defense-in-depth for symlink-redirect cases
+    // that don't involve `..`.
     if !is_allowed(path_ref) {
         return Err(format!(
             "Subtitle path is denied by the application's filesystem scope \

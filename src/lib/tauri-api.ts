@@ -5,6 +5,7 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { Base64 } from "js-base64";
+import { stripUnicodeControls } from "./unicode-controls";
 
 // ── File Dialogs ──────────────────────────────────────────
 
@@ -275,9 +276,18 @@ export async function copyPath(from: string, to: string): Promise<void> {
 
 // ── Path Utilities ───────────────────────────────────────
 
-/** Extract the filename from a full file path (handles both / and \ separators). */
+/** Extract the filename from a full file path (handles both / and \
+ *  separators) and strip BiDi / zero-width controls. Callers feed the
+ *  result into addLog / status messages / dropError banners; without
+ *  sanitization, a hostile filename like `EP01<U+202E>cssa.ass`
+ *  (Trojan-Source class) would render with the RLO flip in the log
+ *  panel even though React text-renders so no XSS. Sanitizing at the
+ *  source covers every callsite in one place instead of relying on
+ *  each log site to remember.
+ */
 export function fileNameFromPath(path: string): string {
-  return path.replace(/\\/g, "/").split("/").pop() ?? path;
+  const raw = path.replace(/\\/g, "/").split("/").pop() ?? path;
+  return stripUnicodeControls(raw);
 }
 
 // ── Rust Commands ─────────────────────────────────────────

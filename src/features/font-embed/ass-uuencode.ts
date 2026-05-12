@@ -1,3 +1,5 @@
+import { BIDI_AND_ZERO_WIDTH_CHARS } from "../../lib/unicode-controls";
+
 /**
  * ASS-specific UUEncode implementation.
  *
@@ -81,7 +83,15 @@ export function buildFontEntry(fontName: string, data: Uint8Array): string {
   // [Fonts] section. Defense-in-depth: font-embedder.buildFontFileName
   // already sanitizes upstream, but this keeps the encoder self-contained.
   // eslint-disable-next-line no-control-regex -- sanitize control chars from filenames
-  const safeName = fontName.replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029:]/g, "_");
+  // BiDi + zero-width + line/paragraph separators come from the shared
+  // unicode-controls set (mirrors validate_font_family + safeFontName +
+  // sanitizeForDialog). Slashes/backslashes are added beyond the
+  // upstream buildFontFileName output as a self-contained defense at
+  // the encoder boundary (A-R5-FECHAIN-09).
+  const safeName = fontName.replace(
+    new RegExp(`[\\x00-\\x1f\\x7f-\\x9f${BIDI_AND_ZERO_WIDTH_CHARS}:/\\\\]`, "gu"),
+    "_",
+  );
   const encodedLines = assUuencode(data);
   return `fontname: ${safeName}\n${encodedLines.join("\n")}`;
 }

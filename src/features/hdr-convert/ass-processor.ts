@@ -214,12 +214,35 @@ export function processAssContent(
     throw new Error(`File too large: ${(content.length / 1_000_000).toFixed(1)} MB (max 100 MB)`);
   }
 
+  // Pre-split line-count probe (A-R5-FEFEAT-03). 50 MB of pure '\n'
+  // passes the byte-size guard above, but `.split(/\r?\n/)` then
+  // allocates ~50M empty strings (~2 GB V8 heap) BEFORE the post-split
+  // throw at line 221 can fire. A small content+pure-newline blob
+  // crafted via a hostile subtitle file is reachable (P1b: subtitle
+  // content from public release channels). Probe the count manually
+  // and throw before the split allocates. Gated on content.length to
+  // keep the small-file fast path zero-overhead. The 1 MB gate is well
+  // above any realistic small subtitle (5-200 KB) and well below the
+  // attack threshold (tens of MB).
+  const LINE_CAP = 500_000;
+  if (content.length > 1_000_000) {
+    let nl = 1;
+    for (let i = 0; i < content.length; i++) {
+      if (content.charCodeAt(i) === 10 /* '\n' */) {
+        nl++;
+        if (nl > LINE_CAP) {
+          throw new Error(`File too large: >${LINE_CAP} lines`);
+        }
+      }
+    }
+  }
+
   // Preserve the original line ending style
   const lineEnding = content.includes("\r\n") ? "\r\n" : "\n";
   const lines = content.split(/\r?\n/);
 
-  if (lines.length > 500000) {
-    throw new Error(`File too large: ${lines.length} lines (max 500,000)`);
+  if (lines.length > LINE_CAP) {
+    throw new Error(`File too large: ${lines.length} lines (max ${LINE_CAP})`);
   }
 
   let currentSection: AssSection = "info";
