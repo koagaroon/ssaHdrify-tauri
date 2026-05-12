@@ -141,13 +141,36 @@ pub fn init_gui_font_cache(app_data_dir: &Path) -> Result<(), String> {
 
 // ---- Helpers -----------------------------------------------------------
 
+/// Read a folder's mtime as Unix seconds, returning None when either
+/// the metadata stat or the `modified()` call fails. Single decision
+/// point for the rescan flow: `detect_font_cache_drift`, rescan
+/// Phase 1's snapshot build, and rescan Phase 3's re-stat all gate on
+/// this so a folder is classified consistently regardless of which
+/// failure mode it hits (truly gone vs. permission-denied vs. network
+/// share offline vs. filesystem with no mtime support).
+///
+/// Without this symmetry (Codex round-2 N-R2-3 / N-R2-14): Phase 1
+/// used `metadata().and_then(modified())` while Phase 3 used only
+/// `metadata().is_ok()`. A folder whose metadata stat succeeded but
+/// whose `modified()` call failed would be omitted from Phase 1's
+/// snapshot (reported as `removed`) yet Phase 3's re-stat would still
+/// see `is_ok()` and skip the eviction as "reappeared" — UI claims
+/// eviction happened, DB still has the stale rows.
+fn try_modified_at(path: &Path) -> Option<i64> {
+    let modified = std::fs::metadata(path).ok()?.modified().ok()?;
+    Some(
+        modified
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0),
+    )
+}
+
+/// Convenience for callers that want a "best-effort" mtime with a
+/// zero fallback (Phase 2's scanned-folder mtime recorded into cache).
+/// Composes on `try_modified_at` so all stat semantics agree.
 fn stat_mtime_or_zero(path: &Path) -> i64 {
-    std::fs::metadata(path)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
+    try_modified_at(path).unwrap_or(0)
 }
 
 // `entries_to_cache_metadata` (in `crate::fonts`) is the shared helper —
@@ -274,21 +297,14 @@ pub fn detect_font_cache_drift() -> Result<DriftReport, String> {
         .map_err(|e| format!("list cached folders: {e}"))?;
     let mut snapshot: Vec<(String, i64)> = Vec::with_capacity(cached_folders.len());
     for folder in &cached_folders {
-        let folder_path = Path::new(&folder.folder_path);
-        // metadata() / modified() can fail for many reasons (folder
-        // gone, permission denied, network share offline). All route
-        // to "omit from snapshot" → diff_against reports the folder
-        // as removed. Permission-denied is a slight false positive
-        // (folder exists, we just can't see it) but the user wants
-        // to know either way — the cache rows are about-to-be-stale.
-        if let Ok(meta) = std::fs::metadata(folder_path) {
-            if let Ok(modified) = meta.modified() {
-                let mtime = modified
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs() as i64)
-                    .unwrap_or(0);
-                snapshot.push((folder.folder_path.clone(), mtime));
-            }
+        // `try_modified_at` failures (folder gone, permission denied,
+        // network share offline, no-mtime FS) all route to "omit from
+        // snapshot" → diff_against reports the folder as removed.
+        // Permission-denied is a slight false positive (folder exists,
+        // we just can't see it) but the user wants to know either way —
+        // the cache rows are about-to-be-stale.
+        if let Some(mtime) = try_modified_at(Path::new(&folder.folder_path)) {
+            snapshot.push((folder.folder_path.clone(), mtime));
         }
     }
     let report = cache
@@ -339,14 +355,8 @@ pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
             .map_err(|e| format!("list cached folders: {e}"))?;
         let mut snapshot: Vec<(String, i64)> = Vec::with_capacity(cached_folders.len());
         for folder in &cached_folders {
-            if let Ok(meta) = std::fs::metadata(&folder.folder_path) {
-                if let Ok(modified) = meta.modified() {
-                    let mtime = modified
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_secs() as i64)
-                        .unwrap_or(0);
-                    snapshot.push((folder.folder_path.clone(), mtime));
-                }
+            if let Some(mtime) = try_modified_at(Path::new(&folder.folder_path)) {
+                snapshot.push((folder.folder_path.clone(), mtime));
             }
         }
         cache
@@ -450,7 +460,13 @@ fn apply_rescan_to_cache(
         modified_rescanned += 1;
     }
     for folder in removed {
-        if std::fs::metadata(folder).is_ok() {
+        // Same stat bar as Phase 1 / detect_drift: only treat the folder
+        // as "reappeared" when it gives us a real mtime now. A folder
+        // whose `metadata().is_ok()` but whose `modified()` still fails
+        // matches the same "barely visible" state Phase 1 omitted from
+        // the snapshot — proceed with eviction so the UI claim and DB
+        // state stay aligned (N-R2-3 / N-R2-14).
+        if try_modified_at(Path::new(folder)).is_some() {
             log::info!(
                 "Skipping cache eviction for {folder}: folder reappeared between drift detect and apply"
             );
@@ -805,5 +821,52 @@ mod tests {
                 .any(|f| f.folder_path == real_path),
             "row dropped despite re-stat"
         );
+    }
+
+    #[test]
+    fn try_modified_at_returns_none_for_missing_path() {
+        // Symmetry contract: Phase 1 / Phase 3 / detect_drift all
+        // gate on this helper, so a missing path must consistently
+        // produce "not statable" (None) across every site.
+        let mut dir = std::env::temp_dir();
+        dir.push(format!(
+            "ssahdrify_try_modified_missing_{}",
+            std::process::id()
+        ));
+        // Don't create dir — we want a definitely-absent path.
+        assert!(try_modified_at(&dir).is_none());
+    }
+
+    #[test]
+    fn try_modified_at_returns_some_for_existing_folder() {
+        let (_guard, _) = temp_cache("try_modified_exists");
+        let mut dir = std::env::temp_dir();
+        dir.push(format!(
+            "ssahdrify_try_modified_present_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let mtime = try_modified_at(&dir);
+        assert!(mtime.is_some(), "existing folder should yield a Some mtime");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn apply_rescan_evicts_removed_that_no_longer_resolves() {
+        // Pinning the N-R2-3 fix: a folder that doesn't pass the same
+        // stat bar Phase 1 used (no real mtime now) must still be
+        // evicted — Phase 3 must NOT short-circuit to "reappeared".
+        let (_guard, mut cache) = temp_cache("removed_actually_gone");
+        let bogus = "/bogus/definitely-not-a-real-folder/round-2";
+        cache.replace_folder(bogus, 100, &[]).unwrap();
+        let removed = vec![bogus.to_string()];
+        let (_, evicted) = apply_rescan_to_cache(&mut cache, &[], &removed, &[]).unwrap();
+        assert_eq!(evicted, 1);
+        assert!(cache
+            .list_folders()
+            .unwrap()
+            .iter()
+            .all(|f| f.folder_path != bogus));
     }
 }
