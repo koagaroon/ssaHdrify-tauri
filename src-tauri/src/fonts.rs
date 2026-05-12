@@ -98,6 +98,13 @@ const MAX_FONT_FALLBACK_SIZE: usize = 10 * 1024 * 1024;
 /// 5 = 50 MB is a generous ceiling for any legitimate workflow; a single-
 /// user desktop session that hits this almost certainly has a corrupt
 /// font source and should restart + investigate.
+///
+/// Reset asymmetry (Round 3 A-R3-2): GUI side resets this counter on
+/// `clear_font_sources` (user signaled a fresh slate). CLI flow doesn't
+/// reset — but the CLI binary exits at the end of every invocation, so
+/// the counter naturally resets via process restart. Documented here
+/// so a future reviewer doesn't re-file the asymmetry as a missing
+/// reset.
 const MAX_CUMULATIVE_FALLBACK_BYTES: usize = 50 * 1024 * 1024;
 static CUMULATIVE_FALLBACK_BYTES: AtomicUsize = AtomicUsize::new(0);
 
@@ -2228,7 +2235,7 @@ fn path_under_dir(path: &str, dir: &str, sep: &str) -> bool {
 static WINDOWS_SYSTEM_FONTS_DIR: Lazy<String> = Lazy::new(|| {
     let sys_root = std::env::var("SYSTEMROOT")
         .unwrap_or_else(|_| "C:\\Windows".to_string())
-        .to_lowercase()
+        .to_ascii_lowercase()
         .replace("/", "\\");
     format!("{sys_root}\\fonts")
 });
@@ -2241,7 +2248,7 @@ static WINDOWS_USER_FONTS_DIR: Lazy<Option<String>> = Lazy::new(|| {
     std::env::var("LOCALAPPDATA").ok().map(|p| {
         format!(
             "{}\\microsoft\\windows\\fonts",
-            p.to_lowercase().replace("/", "\\")
+            p.to_ascii_lowercase().replace("/", "\\")
         )
     })
 });
@@ -2264,7 +2271,14 @@ fn is_in_system_fonts_dir(canonical: &Path) -> bool {
     if cfg!(windows) {
         #[cfg(windows)]
         {
-            let lower = canonical_str.to_lowercase().replace("/", "\\");
+            // ASCII-fold only (Round 3 N-R3-6): NTFS uses simple case
+            // fold which diverges from Unicode case fold for a handful
+            // of non-ASCII codepoints (German ß folds to "ss" under
+            // Unicode but stays ß under NTFS; Greek final sigma ς).
+            // Mixed-case LOCALAPPDATA containing such a glyph would
+            // otherwise produce a runtime form that doesn't byte-match
+            // the eagerly-cached form.
+            let lower = canonical_str.to_ascii_lowercase().replace("/", "\\");
             let under = |dir: &str| path_under_dir(&lower, dir, "\\");
 
             if under(&WINDOWS_SYSTEM_FONTS_DIR) {
@@ -2288,13 +2302,14 @@ fn is_in_system_fonts_dir(canonical: &Path) -> bool {
         let lower = canonical_str.to_lowercase();
         let under = |dir: &str| path_under_dir(&lower, &dir.to_lowercase(), "/");
         const MAC_DIRS: &[&str] = &[
-            "/Library/Fonts",
-            "/System/Library/Fonts",
-            "/System/Library/AssetsV2",
-            // Narrow to Adobe/Fonts — the wider /Library/Application Support
-            // tree holds every app's data, not just fonts, so allowing the
-            // whole tree weakens the "system font directory" gate.
+            // Alphabetized (N-R3-9). Narrow to Adobe/Fonts — the
+            // wider /Library/Application Support tree holds every
+            // app's data, not just fonts, so allowing the whole tree
+            // weakens the "system font directory" gate.
             "/Library/Application Support/Adobe/Fonts",
+            "/Library/Fonts",
+            "/System/Library/AssetsV2",
+            "/System/Library/Fonts",
             "/opt/homebrew/share/fonts",
             "/usr/local/share/fonts",
         ];

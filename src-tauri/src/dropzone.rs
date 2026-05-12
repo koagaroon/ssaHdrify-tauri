@@ -14,15 +14,29 @@
 //! a path leak here can't be turned into an arbitrary read.
 
 use crate::util::{is_reparse_point, MAX_INPUT_PATHS};
+use serde::Serialize;
 use std::path::Path;
 
 const MAX_RESULT_FILES: usize = 5000;
 
+/// Result of `expand_dropped_paths`. `truncated` surfaces when the
+/// expansion stopped at `MAX_RESULT_FILES` so the frontend can render
+/// a banner instead of silently presenting an incomplete list (Round 3
+/// N-R3-19 — was a bare `Vec<String>` return with a `log::warn` the
+/// frontend couldn't see, in violation of `~/.claude/rules/vibe-coding.md`
+/// "no silent action").
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpandedPaths {
+    pub files: Vec<String>,
+    pub truncated: bool,
+}
+
 /// Expand dropped paths into a flat list of file paths.
 #[tauri::command]
-pub fn expand_dropped_paths(paths: Vec<String>) -> Result<Vec<String>, String> {
+pub fn expand_dropped_paths(paths: Vec<String>) -> Result<ExpandedPaths, String> {
     if paths.is_empty() {
-        return Ok(Vec::new());
+        return Ok(ExpandedPaths::default());
     }
     if paths.len() > MAX_INPUT_PATHS {
         return Err(format!(
@@ -32,6 +46,7 @@ pub fn expand_dropped_paths(paths: Vec<String>) -> Result<Vec<String>, String> {
     }
 
     let mut result: Vec<String> = Vec::new();
+    let mut truncated = false;
     let mut rejected = 0usize;
     for raw in &paths {
         // Skip silently rather than fail — native drag-drop shouldn't
@@ -64,12 +79,13 @@ pub fn expand_dropped_paths(paths: Vec<String>) -> Result<Vec<String>, String> {
             walk_one_level(p, &mut result);
         }
         if result.len() >= MAX_RESULT_FILES {
-            // "Truncating" is loose — we actually stop adding more, the
-            // already-added entries pass through unchanged. The user-
-            // visible effect is "the rest of your drop got dropped on
-            // the floor"; consumers can compare drop count vs result
-            // count if they want to detect this.
+            // Already-added entries pass through unchanged; the rest
+            // of the drop is silently dropped on the floor from the
+            // path-walk perspective. The `truncated` flag surfaces
+            // this to the frontend so a banner can prompt the user
+            // to retry with a smaller drop.
             log::warn!("dropzone: result cap {MAX_RESULT_FILES} reached, dropping remainder");
+            truncated = true;
             break;
         }
     }
@@ -83,7 +99,10 @@ pub fn expand_dropped_paths(paths: Vec<String>) -> Result<Vec<String>, String> {
             paths.len()
         );
     }
-    Ok(result)
+    Ok(ExpandedPaths {
+        files: result,
+        truncated,
+    })
 }
 
 /// Read a directory one level deep, appending regular files. Hidden
@@ -159,7 +178,8 @@ mod tests {
         let p = dir.join("a.ass");
         fs::File::create(&p).unwrap().write_all(b"x").unwrap();
         let result = expand_dropped_paths(vec![p.to_str().unwrap().to_string()]).unwrap();
-        assert_eq!(result.len(), 1);
+        assert_eq!(result.files.len(), 1);
+        assert!(!result.truncated);
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -180,13 +200,15 @@ mod tests {
 
         let result = expand_dropped_paths(vec![dir.to_str().unwrap().to_string()]).unwrap();
         assert_eq!(
-            result.len(),
+            result.files.len(),
             3,
-            "expected 3 top-level files, got {result:?}"
+            "expected 3 top-level files, got {:?}",
+            result.files
         );
-        for s in &result {
+        for s in &result.files {
             assert!(!s.contains("ignored.ass"), "nested file leaked: {s}");
         }
+        assert!(!result.truncated);
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -202,8 +224,8 @@ mod tests {
             .write_all(b"x")
             .unwrap();
         let result = expand_dropped_paths(vec![dir.to_str().unwrap().to_string()]).unwrap();
-        assert_eq!(result.len(), 1);
-        assert!(result[0].ends_with("visible.ass"));
+        assert_eq!(result.files.len(), 1);
+        assert!(result.files[0].ends_with("visible.ass"));
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -219,13 +241,15 @@ mod tests {
     fn rejects_control_chars_in_path() {
         let result = expand_dropped_paths(vec!["/tmp/foo\u{0000}bar.ass".to_string()]).unwrap();
         // Silently skipped, not errored.
-        assert!(result.is_empty());
+        assert!(result.files.is_empty());
+        assert!(!result.truncated);
     }
 
     #[test]
     fn empty_input_returns_empty() {
         let result = expand_dropped_paths(Vec::new()).unwrap();
-        assert!(result.is_empty());
+        assert!(result.files.is_empty());
+        assert!(!result.truncated);
     }
 
     #[test]
@@ -250,18 +274,20 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(
-            result.len(),
+            result.files.len(),
             3,
-            "expected 2 from folder + 1 standalone, got {result:?}"
+            "expected 2 from folder + 1 standalone, got {:?}",
+            result.files
         );
         let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn caps_result_at_max_result_files() {
+    fn caps_result_at_max_result_files_and_sets_truncated_flag() {
         let dir = make_tempdir("cap");
         // Create MAX_RESULT_FILES + 100 files in one folder; expanding the
-        // folder must stop at the cap, not silently overflow.
+        // folder must stop at the cap AND set `truncated=true` so the
+        // frontend can surface a banner (Round 3 N-R3-19).
         let count = MAX_RESULT_FILES + 100;
         for i in 0..count {
             fs::File::create(dir.join(format!("f{i}.ass")))
@@ -271,10 +297,14 @@ mod tests {
         }
         let result = expand_dropped_paths(vec![dir.to_str().unwrap().to_string()]).unwrap();
         assert_eq!(
-            result.len(),
+            result.files.len(),
             MAX_RESULT_FILES,
             "expected cap at MAX_RESULT_FILES, got {}",
-            result.len()
+            result.files.len()
+        );
+        assert!(
+            result.truncated,
+            "truncated flag must be set when cap hits"
         );
         let _ = fs::remove_dir_all(&dir);
     }

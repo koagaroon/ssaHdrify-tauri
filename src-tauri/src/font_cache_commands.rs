@@ -199,7 +199,12 @@ pub struct DriftReport {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SkippedFolder {
-    /// Cached folder path that triggered the skip.
+    /// Cached folder path that triggered the skip. Field name
+    /// `folder` (not `folder_path`) is intentional and paired with
+    /// TS `FontCacheSkippedFolder.folder` in `tauri-api.ts`; the
+    /// shorter form jars against `FolderRecord.folder_path` in
+    /// `font_cache.rs` but the trade is "shorter UI-facing field
+    /// name vs internal-storage descriptor" — keep the TS pairing.
     pub folder: String,
     /// User-facing reason — the error message from the failing op
     /// (already includes the folder path in some cases; the frontend
@@ -374,7 +379,7 @@ pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
     // scan that used to be inside the lock.
     //
     // Per-folder error catch (mirrors `run_refresh_fonts` in
-    // bin/cli/main.rs:609): one folder hitting MAX_CACHE_POPULATE_FACES
+    // `bin/cli/main.rs`): one folder hitting MAX_CACHE_POPULATE_FACES
     // or a transient I/O error must not abort the whole rescan — that
     // would let one oversized font pack DoS the user's entire cache
     // refresh. Log WARN with folder context, push to `skipped`, continue.

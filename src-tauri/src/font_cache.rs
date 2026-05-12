@@ -134,6 +134,16 @@ fn platform_data_dir() -> Result<PathBuf, String> {
 /// lookup hit rate matches the session DB's user_font_key contract.
 /// Without it, CJK fonts whose name-table form differs from the
 /// ASS \fn / Style Fontname spelling missed every cache lookup.
+///
+/// BUMP this constant when the `family_name_key` normalization or
+/// any other on-disk shape changes — even if no DDL changes
+/// (Round 3 A-R3-3). The verifier only checks numeric equality, so
+/// a stale cache with subtly-different keys would silently produce
+/// "font not found" regressions until manual clear/rebuild. If a
+/// future migration touches `family_lookup_key`, NFC normalization
+/// rules, or face-index encoding, bump first. Long-term: persist a
+/// git-describe-derived build_id in cache_meta alongside the
+/// version number to catch unbumped semantic shifts.
 pub const SCHEMA_VERSION: i32 = 2;
 
 /// Normalize a family-name string into the lookup key used by

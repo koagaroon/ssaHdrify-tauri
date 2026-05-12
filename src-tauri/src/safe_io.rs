@@ -169,6 +169,16 @@ fn reject_reparse_source(path: &Path, label: &str) -> Result<(), String> {
 /// (Windows). P1a-bounded — fan-sub subtitle workflows don't use
 /// hardlinks; revisit if the threat model shifts to multi-tool
 /// pipelines that pre-link files.
+///
+/// Mixed canonicalize-result cases (Round 3 N-R3-11): when EITHER src
+/// OR dst canonicalize-fails (e.g., dst doesn't yet exist, which is
+/// the common "rename to a new name" case), this helper returns Ok
+/// and the downstream `clear_existing_destination` + `fs::rename` /
+/// `fs::copy` chain takes over. Mixed-Ok-Err is symmetric with
+/// both-Err: the gate only fires when both sides resolve. The
+/// `fs::rename` /  `fs::copy` calls will surface a focused error if
+/// the side that canonicalize-failed turns out to be the problem,
+/// so the predictable downstream failure is the contract.
 fn reject_same_canonical_path(src: &Path, dst: &Path) -> Result<(), String> {
     if let (Ok(src_canon), Ok(dst_canon)) = (src.canonicalize(), dst.canonicalize()) {
         if src_canon == dst_canon {

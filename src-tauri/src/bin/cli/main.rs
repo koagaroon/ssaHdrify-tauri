@@ -942,20 +942,28 @@ fn predict_chain_output_path(
     // resolution will diverge" → defer to V8 + TS for the precise
     // rejection error.
     //
-    // Reserved-name coverage scope: ASCII digit variants only
-    // (COM0-COM9 / LPT0-LPT9), and the bare-stem form (no trailing
-    // whitespace stripping). TS-side `assertSafeOutputFilename`
-    // additionally rejects Unicode superscript variants (COM¹/²/³,
-    // LPT¹/²/³) AND strips trailing whitespace / dots before the
-    // reserved-name check (so `CON ` and `CON.` resolve to the device
-    // too). The Rust pre-check intentionally omits both — Windows
-    // refuses to create files with any of these names, so the
-    // predicted path can never exist on disk → `predicted.exists()`
-    // returns false → prediction returns Some → V8 runs → TS rejects
-    // authoritatively. The harmless-slip set is closed-form because
-    // the Win32 device-namespace gate at the OS layer is the final
-    // arbiter (Round 2 A-R2-6 / N-R2-10). The comment is the
-    // contract, not the regex.
+    // Reserved-name coverage scope (Round 3 N-R3-7 + A-R3-4): the
+    // matches! arm covers CON, PRN, AUX, NUL, CONIN$, CONOUT$, plus
+    // ASCII digit variants COM0-COM9 / LPT0-LPT9. The bare-stem form
+    // (no trailing whitespace stripping) is intentional — TS-side
+    // `assertSafeOutputFilename` additionally rejects Unicode
+    // superscript variants (COM¹/²/³, LPT¹/²/³) AND strips trailing
+    // whitespace / dots before the reserved-name check (so `CON ` and
+    // `CON.` resolve to the device too). The Rust pre-check
+    // intentionally omits both — Windows refuses to create files with
+    // any of these names, so the predicted path can never exist on
+    // disk → `predicted.exists()` returns false → prediction returns
+    // Some → V8 runs → TS rejects authoritatively. The harmless-slip
+    // set is closed-form because the Win32 device-namespace gate at
+    // the OS layer is the final arbiter (Round 2 A-R2-6 / N-R2-10).
+    //
+    // Cross-platform asymmetry note (Round 3 A-R3-4): on Linux/macOS
+    // the TS-side reserved-name check still rejects `COM¹.ass` etc.,
+    // even though those names are perfectly valid on POSIX. This is
+    // a Windows-first project; the asymmetry doesn't bite today.
+    // Revisit if a future build targets POSIX as a first-class
+    // platform (gate `WINDOWS_RESERVED_NAMES` in TS on
+    // `isWindowsRuntime`).
     if output_name.is_empty()
         || output_name.contains('/')
         || output_name.contains('\\')
@@ -970,10 +978,12 @@ fn predict_chain_output_path(
         .next()
         .unwrap_or("")
         .to_ascii_uppercase();
-    let is_reserved = matches!(stem_upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
-        || (stem_upper.len() == 4
-            && (stem_upper.starts_with("COM") || stem_upper.starts_with("LPT"))
-            && stem_upper.as_bytes()[3].is_ascii_digit());
+    let is_reserved = matches!(
+        stem_upper.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) || (stem_upper.len() == 4
+        && (stem_upper.starts_with("COM") || stem_upper.starts_with("LPT"))
+        && stem_upper.as_bytes()[3].is_ascii_digit());
     if is_reserved {
         return None;
     }
@@ -2384,10 +2394,20 @@ fn expand_rename_inputs(paths: &[PathBuf]) -> Result<Vec<String>, String> {
         .collect();
     let expanded = app_lib::dropzone::expand_dropped_paths(absolute_paths?)?;
 
-    if expanded.is_empty() {
+    if expanded.files.is_empty() {
         return Err("no regular files found in rename input paths".to_string());
     }
-    Ok(expanded)
+    // CLI surfaces truncation via stderr — the user's drop got
+    // partially processed, and they should know before reviewing
+    // the output. GUI side surfaces this through useFolderDrop's
+    // onError consumer (Round 3 N-R3-19).
+    if expanded.truncated {
+        eprintln!(
+            "⚠ Dropped path expansion hit the {} file cap; remainder ignored. Drop fewer files per batch.",
+            5000
+        );
+    }
+    Ok(expanded.files)
 }
 
 fn process_rename_pair(

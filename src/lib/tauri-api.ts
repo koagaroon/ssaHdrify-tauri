@@ -662,6 +662,15 @@ async function runStreamingScan(
  * Hidden entries, symlinks, and reparse points are skipped on the Rust
  * side. Returns an empty array when nothing usable was dropped.
  */
-export async function expandDroppedPaths(paths: string[]): Promise<string[]> {
-  return invoke<string[]>("expand_dropped_paths", { paths });
+/** Result of `expand_dropped_paths`. `truncated` surfaces when the
+ *  expansion stopped at MAX_RESULT_FILES (=5000) so the consumer can
+ *  render a banner instead of silently presenting an incomplete list
+ *  (Round 3 N-R3-19). */
+export interface ExpandedPaths {
+  files: string[];
+  truncated: boolean;
+}
+
+export async function expandDroppedPaths(paths: string[]): Promise<ExpandedPaths> {
+  return invoke<ExpandedPaths>("expand_dropped_paths", { paths });
 }

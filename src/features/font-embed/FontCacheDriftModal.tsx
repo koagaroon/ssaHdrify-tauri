@@ -65,6 +65,17 @@ export default function FontCacheDriftModal({
   // Esc closes only when not working — closing mid-rescan would orphan
   // the in-flight Tauri command. The close button's disabled state
   // matches.
+  //
+  // `working` is read via a ref inside the handler instead of being a
+  // dep on the effect (Round 3 N-R3-10): the prior `[open, working,
+  // onClose]` dep array tore down and re-attached the keydown listener
+  // on every working-state flip, matching `useFolderDrop`'s explicit
+  // anti-pattern note. Stable handler now mounts once per `open=true`
+  // cycle and reads the latest `working` via the ref each press.
+  const workingRef = useRef(working);
+  useEffect(() => {
+    workingRef.current = working;
+  }, [working]);
   useEffect(() => {
     if (!open) return;
     const handler = (e: KeyboardEvent) => {
@@ -76,13 +87,13 @@ export default function FontCacheDriftModal({
       // N-R2-15). The disabled close button at the top mirrors this
       // — no path closes mid-op.
       e.stopPropagation();
-      if (working === null) {
+      if (workingRef.current === null) {
         onClose();
       }
     };
     window.addEventListener("keydown", handler, true);
     return () => window.removeEventListener("keydown", handler, true);
-  }, [open, working, onClose]);
+  }, [open, onClose]);
 
   // Land focus on the close button on mount so keyboard users can
   // tab from a known anchor. Predictable initial focus matches

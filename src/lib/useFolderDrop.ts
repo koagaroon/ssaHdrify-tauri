@@ -130,8 +130,22 @@ export function useFolderDrop({
                 // arrives when already busy" case — not "drop arrives
                 // when idle, becomes busy mid-await."
                 if (mounted && !disabledRef.current) {
-                  if (expanded.length > 0) {
-                    onPathsRef.current(expanded);
+                  if (expanded.files.length > 0) {
+                    onPathsRef.current(expanded.files);
+                    // Surface truncation alongside the partial result so
+                    // the consumer banner can prompt the user to retry
+                    // with a smaller drop (Round 3 N-R3-19). Routed
+                    // through onError because consumers already render
+                    // an error banner from that callback; a dedicated
+                    // `onTruncated` would force every consumer to wire
+                    // a new path.
+                    if (expanded.truncated) {
+                      onErrorRef.current?.(
+                        new Error(
+                          "Drop too large — first 5000 files accepted, the rest were ignored. Retry with a smaller batch."
+                        )
+                      );
+                    }
                   } else if (event.payload.paths.length > 0) {
                     // Non-empty input that expanded to zero paths — the
                     // user dropped *something*, the Rust side accepted
@@ -139,9 +153,7 @@ export function useFolderDrop({
                     // this signal (Round 1 F1.N-R1-17). Surface as an
                     // error so the consumer banner reads "no usable
                     // files in this drop" instead of nothing.
-                    onErrorRef.current?.(
-                      new Error("Drop expanded to zero usable paths")
-                    );
+                    onErrorRef.current?.(new Error("Drop expanded to zero usable paths"));
                   }
                 }
               } catch (e) {

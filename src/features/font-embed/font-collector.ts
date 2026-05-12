@@ -172,6 +172,11 @@ export function collectFontsWithParser(assContent: string, parser: AssParseFunct
       // codepoints. Space is dropped here because the Rust subset always
       // pads the full ASCII printable range (0x20–0x7E), so counting it
       // would double-bill what the subset already includes for free.
+      // C1 controls (U+0080..U+009F) and other Unicode control characters
+      // pass through this filter — Rust's subset_font emits `.notdef`
+      // for them harmlessly, so the leak (1 extra codepoint per C1 char
+      // in MAX_CODEPOINTS_PER_VARIANT accounting) is bounded and benign
+      // (Round 3 A-R3-8).
       if (cp !== undefined && cp > 32 && cp !== 0x7f && cp <= 0x10ffff) {
         const before = usage.codepoints.size;
         usage.codepoints.add(cp);
