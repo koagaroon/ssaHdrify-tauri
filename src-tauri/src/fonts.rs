@@ -2138,6 +2138,19 @@ pub fn remove_font_source(source_id: String, kind: Option<String>) -> Result<(),
 
 #[tauri::command]
 pub fn clear_font_sources() -> Result<(), String> {
+    // Acquire CacheMutationGuard upfront (Round 4 Codex finding 3) so
+    // session-DB clear and persistent-cache eviction commit atomically.
+    // Previously, helper-side `try_acquire` could fail silently if a
+    // rescan was in progress — session DB cleared, cache rows survived,
+    // wrong-font silent until next clear or rebuild. Refusing the whole
+    // call here lets the user retry once rescan completes; the frontend
+    // already surfaces returned Err strings in the FontSourceModal
+    // banner so the retry message reaches the user.
+    let _mutation_guard =
+        crate::font_cache_commands::CacheMutationGuard::try_acquire().map_err(|_| {
+            "Cache rescan in progress — wait for it to finish, then retry Clear all sources."
+                .to_string()
+        })?;
     let mut conn = open_user_font_db()?;
     let tx = conn
         .transaction()
@@ -2152,8 +2165,10 @@ pub fn clear_font_sources() -> Result<(), String> {
     // also evict the persistent cache, otherwise the next embed pass
     // resolves to paths whose session-DB provenance was just cleared
     // and subset_font rejects them with "Font path was not discovered
-    // by a scan command" (Round 2 N-R2-2).
-    crate::font_cache_commands::try_clear_all_folders_in_gui_cache();
+    // by a scan command" (Round 2 N-R2-2). Use the locked variant —
+    // we hold the guard already from this fn's top, so re-acquiring
+    // would CAS-fail / silently skip (the original Codex 3 bug).
+    crate::font_cache_commands::clear_all_folders_in_gui_cache_locked(&_mutation_guard);
     // Reset the per-process subset-fallback budget on user-visible
     // session boundaries. Without this, a long-running app that hit
     // the 50 MB ceiling once (e.g., on a single corrupt font) keeps

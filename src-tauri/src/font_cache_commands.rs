@@ -37,10 +37,19 @@ static CACHE_MUTATION_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 /// `try_acquire` and the flag is only set when the guard is
 /// constructed — there's no "flag set but guard not yet bound" window
 /// for a panic to leak the flag.
-struct CacheMutationGuard;
+///
+/// `pub(crate)` since Round 4 Codex finding 3: `clear_font_sources`
+/// in `fonts.rs` now acquires the guard upfront so its session-DB
+/// clear and persistent-cache clear commit atomically. The earlier
+/// scheme (helper acquires guard internally) silently no-op'd cache
+/// clear when a concurrent rescan held the guard — leaving session-
+/// DB cleared but cache rows behind. Atomic acquire + pass-by-
+/// reference to `clear_all_folders_in_gui_cache_locked` ties the
+/// two halves to the same guard token.
+pub(crate) struct CacheMutationGuard;
 
 impl CacheMutationGuard {
-    fn try_acquire() -> Result<Self, String> {
+    pub(crate) fn try_acquire() -> Result<Self, String> {
         CACHE_MUTATION_IN_PROGRESS
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .map(|_| CacheMutationGuard)
@@ -743,13 +752,26 @@ pub fn try_remove_folder_from_gui_cache(folder_path: &str) {
 /// fresh row behind — acceptable because the racing populate is
 /// post-intent ("Clear all" was issued before the new populate).
 pub fn try_clear_all_folders_in_gui_cache() {
-    let _mutation_guard = match CacheMutationGuard::try_acquire() {
+    let mutation_guard = match CacheMutationGuard::try_acquire() {
         Ok(g) => g,
         Err(_) => {
             log::warn!("GUI cache mutation in progress; skipping clear-all");
             return;
         }
     };
+    clear_all_folders_in_gui_cache_locked(&mutation_guard);
+}
+
+/// Same eviction logic as `try_clear_all_folders_in_gui_cache` but
+/// the caller is responsible for holding `CacheMutationGuard`. Used
+/// when the caller needs to keep the guard live across additional
+/// session-level state changes (e.g., `clear_font_sources` clearing
+/// the session DB AND then evicting the persistent cache as one
+/// atomic mutation — Round 4 Codex finding 3). Re-acquiring the
+/// guard inside this fn would either deadlock (reentrancy-unsafe
+/// CAS) or fail and silently skip the eviction, exactly the bug
+/// we're closing.
+pub(crate) fn clear_all_folders_in_gui_cache_locked(_guard: &CacheMutationGuard) {
     let mut slot = match GUI_FONT_CACHE.try_lock() {
         Ok(s) => s,
         Err(std::sync::TryLockError::Poisoned(_)) => {

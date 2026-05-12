@@ -54,7 +54,8 @@ pub fn expand_dropped_paths(paths: Vec<String>) -> Result<ExpandedPaths, String>
     let mut result: Vec<String> = Vec::new();
     let mut truncated = false;
     let mut rejected = 0usize;
-    for raw in &paths {
+    let total_inputs = paths.len();
+    for (idx, raw) in paths.iter().enumerate() {
         // Skip silently rather than fail — native drag-drop shouldn't
         // produce empty / oversize / control-char paths, but the IPC
         // boundary trusts no caller, and dropping ONE bad path should
@@ -82,16 +83,28 @@ pub fn expand_dropped_paths(paths: Vec<String>) -> Result<ExpandedPaths, String>
         if meta.file_type().is_file() {
             result.push(raw.clone());
         } else if meta.file_type().is_dir() {
-            walk_one_level(p, &mut result);
+            // walk_one_level returns true only when it stopped
+            // mid-folder with more entries pending — that's the
+            // intra-folder truncation signal.
+            if walk_one_level(p, &mut result) {
+                truncated = true;
+            }
         }
         if result.len() >= MAX_RESULT_FILES {
             // Already-added entries pass through unchanged; the rest
             // of the drop is silently dropped on the floor from the
-            // path-walk perspective. The `truncated` flag surfaces
-            // this to the frontend so a banner can prompt the user
-            // to retry with a smaller drop.
+            // path-walk perspective. Set `truncated` for the
+            // cross-input case (`idx + 1 < total_inputs`) — Codex
+            // finding 2 (Round 4): exactly hitting the cap with no
+            // remainder ("exactly 5000 files in one folder, no more
+            // inputs") would otherwise produce a false-positive
+            // banner / stderr warning. Intra-folder mid-walk
+            // truncation is signaled by walk_one_level's return
+            // value above.
             log::warn!("dropzone: result cap {MAX_RESULT_FILES} reached, dropping remainder");
-            truncated = true;
+            if idx + 1 < total_inputs {
+                truncated = true;
+            }
             break;
         }
     }
@@ -120,12 +133,20 @@ pub fn expand_dropped_paths(paths: Vec<String>) -> Result<ExpandedPaths, String>
 /// will be silently dropped; that's accepted scope. Adversarially this
 /// is not exploitable as a read-extension surface — caller already
 /// validates extensions downstream.
-fn walk_one_level(dir: &Path, out: &mut Vec<String>) {
+/// Returns `true` if the walk stopped at MAX_RESULT_FILES mid-folder
+/// — used by the outer caller to distinguish "exactly hit the cap"
+/// (no truncation) from "would have appended more but capped" (real
+/// truncation). The cap could be hit by either an in-walk break OR
+/// the very last entry pushing `out` exactly to the cap; in the
+/// latter case we report `false` because no remainder existed in
+/// this folder. The caller still independently checks `idx + 1 <
+/// total_inputs` for the cross-input case.
+fn walk_one_level(dir: &Path, out: &mut Vec<String>) -> bool {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(e) => {
             log::warn!("dropzone: read_dir failed for {dir:?}: {e}");
-            return;
+            return false;
         }
     };
     // Use match-on-Result so per-entry I/O errors are at least logged
@@ -133,7 +154,9 @@ fn walk_one_level(dir: &Path, out: &mut Vec<String>) {
     // permissions or stale-NFS-handle situations).
     for entry_result in entries {
         if out.len() >= MAX_RESULT_FILES {
-            break;
+            // Truncated mid-folder — there are more entries in this
+            // dir that we'd have appended if there were room.
+            return true;
         }
         let entry = match entry_result {
             Ok(e) => e,
@@ -162,6 +185,7 @@ fn walk_one_level(dir: &Path, out: &mut Vec<String>) {
         }
         // Single-level walk by design — see module doc.
     }
+    false
 }
 
 #[cfg(test)]
@@ -309,6 +333,29 @@ mod tests {
             result.files.len()
         );
         assert!(result.truncated, "truncated flag must be set when cap hits");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn exact_cap_with_no_remainder_does_not_set_truncated() {
+        // Codex finding 2 (Round 4): a single folder containing
+        // EXACTLY MAX_RESULT_FILES regular files, no more inputs to
+        // process — nothing was dropped on the floor, so `truncated`
+        // must stay false. Pre-fix, the `>= cap` check fired on
+        // every cap-hit regardless of remainder presence.
+        let dir = make_tempdir("exact_cap");
+        for i in 0..MAX_RESULT_FILES {
+            fs::File::create(dir.join(format!("f{i}.ass")))
+                .unwrap()
+                .write_all(b"x")
+                .unwrap();
+        }
+        let result = expand_dropped_paths(vec![dir.to_str().unwrap().to_string()]).unwrap();
+        assert_eq!(result.files.len(), MAX_RESULT_FILES);
+        assert!(
+            !result.truncated,
+            "truncated must NOT be set when exact cap was reached with no remainder"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 }
