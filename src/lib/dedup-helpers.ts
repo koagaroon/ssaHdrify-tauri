@@ -68,11 +68,15 @@ export function buildConflictMessage(
   // Multi-tab: list each "{count} in {tab}" segment, joined by "/".
   // Total count is the sum so the leading "{N} blocked" claim still
   // matches the user's actual selection size.
+  //
+  // Round 6 Wave 6.5 #19: uses `msg_dedup_blocked_multi` (no "in the
+  // ... tab" suffix) so the compound "3 HDR / 2 Shift" reads
+  // naturally instead of "... in the 3 HDR / 2 Shift tab".
   const totalCount = Array.from(conflictsByTab.values()).reduce((a, b) => a + b, 0);
   const tabs = Array.from(conflictsByTab.entries())
     .map(([tab, count]) => `${count} ${t(TAB_LABEL_KEYS[tab])}`)
     .join(" / ");
-  return t("msg_dedup_blocked", totalCount, tabs);
+  return t("msg_dedup_blocked_multi", totalCount, tabs);
 }
 
 /**

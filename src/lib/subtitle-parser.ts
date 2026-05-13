@@ -171,9 +171,6 @@ function parseSrt(content: string): Caption[] {
   const captions: Caption[] = [];
   // Normalize first so mixed CRLF/LF files still split into cue blocks.
   const blocks = splitCueBlocks(content);
-  if (blocks.length > MAX_PARSED_ENTRIES) {
-    throw new Error(`Too many subtitle blocks: ${blocks.length} (max ${MAX_PARSED_ENTRIES})`);
-  }
   // Regex defined inside function — no shared lastIndex state.
   // Hours bounded to 12 digits — accepts the single-digit form some
   // tools emit (`0:00:01,000`), matching detectFormat's SRT_TIMING,
@@ -181,6 +178,13 @@ function parseSrt(content: string): Caption[] {
   // parseInt to Infinity.
   const timingRe = /^(\d{1,12}:\d{2}:\d{2},\d{3})\s*-->\s*(\d{1,12}:\d{2}:\d{2},\d{3})/;
 
+  // Round 6 Wave 6.5 #18: cap parsed CAPTIONS not raw blocks. A
+  // legitimate 100k-line SRT with stray blank-line padding (some
+  // transcription tools double-blank between blocks) would have
+  // `blocks.length` close to 200k while only ~100k yielded valid
+  // captions — a pre-loop block-count cap fired false positives. The
+  // ASS / SUB parsers below already use the per-entry-count pattern;
+  // SRT + VTT now match.
   for (const block of blocks) {
     const lines = block.replace(/^\n/, "").split("\n");
     // Find the timing line (skip the numeric index line)
@@ -195,6 +199,12 @@ function parseSrt(content: string): Caption[] {
 
     const timingMatch = lines[timingIdx].match(timingRe);
     if (!timingMatch) continue;
+
+    if (captions.length >= MAX_PARSED_ENTRIES) {
+      throw new Error(
+        `Too many subtitle entries: ${captions.length}+ (max ${MAX_PARSED_ENTRIES})`
+      );
+    }
 
     const text = lines
       .slice(timingIdx + 1)
@@ -225,13 +235,12 @@ function parseVtt(content: string): Caption[] {
   const body = normalizeLineEndings(content).replace(/^WEBVTT[^\n]*\n/, "");
   // Normalize first so mixed CRLF/LF files still split into cue blocks.
   const blocks = splitCueBlocks(body);
-  if (blocks.length > MAX_PARSED_ENTRIES) {
-    throw new Error(`Too many subtitle blocks: ${blocks.length} (max ${MAX_PARSED_ENTRIES})`);
-  }
   // VTT timing: supports both HH:MM:SS.mmm and MM:SS.mmm
   const timingRe =
     /^(\d{2,}:\d{2}:\d{2}\.\d{3}|\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{2,}:\d{2}:\d{2}\.\d{3}|\d{2}:\d{2}\.\d{3})/;
 
+  // Per-entry cap (Round 6 Wave 6.5 #18) — see parseSrt for the
+  // block-vs-entry rationale.
   for (const block of blocks) {
     const lines = block.replace(/^\n/, "").split("\n");
     // Find the timing line — a cue ID is any line that does NOT contain "-->"
@@ -246,6 +255,12 @@ function parseVtt(content: string): Caption[] {
 
     const timingMatch = lines[timingIdx].match(timingRe);
     if (!timingMatch) continue;
+
+    if (captions.length >= MAX_PARSED_ENTRIES) {
+      throw new Error(
+        `Too many subtitle entries: ${captions.length}+ (max ${MAX_PARSED_ENTRIES})`
+      );
+    }
 
     const cueId = timingIdx > 0 ? lines.slice(0, timingIdx).join("\n").trim() : undefined;
     const text = lines

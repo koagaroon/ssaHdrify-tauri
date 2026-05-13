@@ -287,14 +287,17 @@ pub fn open_font_cache() -> Result<CacheStatus, String> {
     // `schema_mismatch` stays false — only state (1) actually surfaces
     // as schema_mismatch=true.
     //
-    // `Path::exists()` returns false on permission-denied as well as
-    // NotFound (N-R5-RUSTGUI-12), so a chmod-000 cache file would
-    // misclassify here. Realistically unreachable on a single-user
-    // desktop tool (user owns their own AppData), but the consequence
-    // is that schema_mismatch would silently report false and the
-    // user would see no clear-cache prompt. If this ever bites,
-    // switch to `try_exists()` which distinguishes the two.
-    let schema_mismatch = !available && path.exists();
+    // Round 6 Wave 6.5 #22: switched to `try_exists()` to distinguish
+    // NotFound from permission-denied. Pre-W6.5 the comment here
+    // recommended this switch (chmod-000 cache misclassifying as "no
+    // file"); the loop is now closed. `try_exists()` returns Err on
+    // genuine IO failure (we propagate via `?`) and Ok(false) only on
+    // confirmed NotFound. The Ok(true) branch is the same "path
+    // present but handle absent → schema mismatch" signal as before.
+    let schema_mismatch = !available
+        && path
+            .try_exists()
+            .map_err(|e| format!("Failed to stat cache path: {e}"))?;
     Ok(CacheStatus {
         available,
         schema_mismatch,
@@ -900,11 +903,21 @@ mod tests {
 
     impl TempCacheDir {
         fn new(name: &str) -> Self {
+            // PID + nanos (Round 6 Wave 6.5 #21) — `font_cache.rs`'s
+            // equivalent TempCacheDir uses the same shape. PID alone
+            // collides when two tests with the same `name` argument
+            // run in the same process (parallel test threads or a
+            // future test that reuses the same fixture name).
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos())
+                .unwrap_or(0);
             let mut dir = std::env::temp_dir();
             dir.push(format!(
-                "ssahdrify_font_cache_cmds_test_{}_{}",
+                "ssahdrify_font_cache_cmds_test_{}_{}_{}",
                 name,
-                std::process::id()
+                std::process::id(),
+                nanos
             ));
             let _ = fs::remove_dir_all(&dir);
             fs::create_dir_all(&dir).unwrap();

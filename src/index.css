@@ -116,9 +116,14 @@
      --font-sans    → app UI body (Inter-first, CJK fallback via MS YaHei)
      --font-display → hero title (Inter in EN, Smiley Sans in ZH via :lang(zh))
      --font-mono    → numbers, timecodes, tab index chips
-     Inter covers Latin/Greek/Cyrillic; CJK fallback is the OS font. */
-  --font-sans: "Inter", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
-  --font-display: "Inter", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+     Inter covers Latin/Greek/Cyrillic; CJK fallback is the OS font.
+     Round 6 Wave 6.5 #27: appended "Noto Sans CJK SC" so Linux
+     installs without Microsoft YaHei / PingFang SC (both Windows /
+     macOS proprietary) still get a CJK-capable font before falling
+     to system-ui (which often lacks CJK on minimal Linux distros).
+     ~/.claude/rules/cross-platform.md mandates a CJK terminator. */
+  --font-sans: "Inter", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif;
+  --font-display: "Inter", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif;
   --font-mono: ui-monospace, "SF Mono", consolas, "Cascadia Mono", "Liberation Mono", monospace;
 
   /* Type scale */

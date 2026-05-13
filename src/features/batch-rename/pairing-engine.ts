@@ -365,6 +365,13 @@ export function buildPairings(videos: ParsedFile[], subtitles: ParsedFile[]): Pa
 }
 
 function compareKeys(a: string, b: string): number {
+  // Called only on matched-video keys (`${season}|${episode}` shape)
+  // — Round 6 Wave 6.5 #20. Unmatched videos take a separate branch
+  // above (`unmatchedVideos.push(v)` + dedicated row at the end) and
+  // never reach this comparator. The `|| 0` floor below is for
+  // truly-malformed key strings (shouldn't happen by construction),
+  // not for the unmatched-row case.
+  //
   // `|| 0` floors NaN to 0 so a malformed key (shouldn't happen — keys are
   // always integer pairs constructed by buildPairings) sorts deterministically
   // rather than producing NaN comparisons that violate sort transitivity.

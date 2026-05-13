@@ -466,6 +466,16 @@ export const strings: Record<string, StringEntry> = {
     en: "Can't load — {0} file(s) already loaded in the {1} tab. Clear them there first.",
     zh: "无法加载 — {0} 个文件已在「{1}」标签页中。请先在该标签页中清除。",
   },
+  // Round 6 Wave 6.5 #19: multi-tab variant. The single-tab message
+  // reads "in the {N} tab" with `{N}` being a single tab name; that
+  // wording breaks for the multi-tab case where `{1}` becomes a
+  // compound "3 HDR / 2 Shift" string, producing "in the 3 HDR / 2
+  // Shift tab". The plural form drops the article + "tab" suffix
+  // and lets the compound speak for itself.
+  msg_dedup_blocked_multi: {
+    en: "Can't load — {0} file(s) already loaded ({1}). Clear them there first.",
+    zh: "无法加载 — {0} 个文件已在其他标签页中（{1}）。请先在相应标签页中清除。",
+  },
   error_prefix: { en: "Error: {0}", zh: "错误：{0}" },
 
   // ── Batch Rename (Tab 4) ────────────────────────────────

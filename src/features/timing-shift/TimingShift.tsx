@@ -738,11 +738,15 @@ export default function TimingShift() {
 
       {/* Direction picker — two big buttons with arrow glyphs */}
       <div className="dir-picker" role="radiogroup" aria-label={t("offset_label")}>
+        {/* Round 6 Wave 6.5 #23: role="radio" elements use aria-checked
+            per the ARIA spec; aria-pressed is for role="button" toggles.
+            Carrying both confused screen readers (some read "pressed"
+            and "checked" twice for the same button); dropping
+            aria-pressed leaves the spec-canonical attribute alone. */}
         <button
           type="button"
           className="dir-btn"
           role="radio"
-          aria-pressed={direction === "faster"}
           aria-checked={direction === "faster"}
           onClick={() => setDirection("faster")}
           disabled={busy}
@@ -756,7 +760,6 @@ export default function TimingShift() {
           type="button"
           className="dir-btn"
           role="radio"
-          aria-pressed={direction === "slower"}
           aria-checked={direction === "slower"}
           onClick={() => setDirection("slower")}
           disabled={busy}
