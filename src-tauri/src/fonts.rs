@@ -989,11 +989,25 @@ fn bounded_font_family_name(chars: impl Iterator<Item = char>) -> Option<String>
     // Guard counts CODEPOINTS, not bytes — a 100-char CJK family name
     // (300+ UTF-8 bytes) is perfectly legitimate.
     let char_count = trimmed.chars().count();
-    if !trimmed.is_empty() && char_count <= 256 {
-        Some(trimmed.to_string())
-    } else {
-        None
+    if trimmed.is_empty() || char_count > 256 {
+        return None;
     }
+    // Round 7 Wave 7.2: fold validate_font_family into this helper so
+    // every call from `parse_local_font_file` (3 sites: family /
+    // typographic-family / full-name+postscript fallback) automatically
+    // rejects BiDi / zero-width-bearing names. Pre-W7.2 a crafted font
+    // pack with U+202E in its name table could land a row in the
+    // session DB / persistent cache, then surface in detection-grid
+    // labels and log lines with the reversal undisturbed (the
+    // unicode-controls sweep covers TS-side ASS \fn references but
+    // name-table entries come in via this Rust path). Single-source
+    // semantics — `validate_font_family` is the canonical rejection
+    // predicate used elsewhere, calling it here means callers don't
+    // each have to remember to revalidate.
+    if crate::util::validate_font_family(trimmed).is_err() {
+        return None;
+    }
+    Some(trimmed.to_string())
 }
 
 /// Parse one font file (TTF/OTF/TTC/OTC) and return a `LocalFontEntry` per
@@ -2987,6 +3001,32 @@ mod tests {
         );
         assert!(bounded_font_family_name("x".repeat(257).chars()).is_none());
         assert!(bounded_font_family_name("   ".chars()).is_none());
+    }
+
+    #[test]
+    fn bounded_font_family_name_rejects_bidi_and_zero_width() {
+        // Round 7 Wave 7.2: bounded_font_family_name now delegates to
+        // validate_font_family for the BiDi / zero-width / line-sep /
+        // U+061C rejection set. Without this pin, a future refactor
+        // that drops the validate call (or replaces it with a partial
+        // re-check) would let a U+202E-bearing name-table entry land
+        // in the session DB and propagate into the UI / log layer.
+        // Codepoints chosen to cover the major rejection classes:
+        // bidi override, zero-width, line separator, Arabic Letter Mark.
+        assert!(bounded_font_family_name("Ari\u{202E}al".chars()).is_none());
+        assert!(bounded_font_family_name("Ari\u{200B}al".chars()).is_none());
+        assert!(bounded_font_family_name("Ari\u{2028}al".chars()).is_none());
+        assert!(bounded_font_family_name("Ari\u{061C}al".chars()).is_none());
+        // Counter-assertion: ordinary Unicode (CJK, accented Latin)
+        // continues to pass — the rejection is targeted, not over-broad.
+        assert_eq!(
+            bounded_font_family_name("微软雅黑".chars()),
+            Some("微软雅黑".to_string())
+        );
+        assert_eq!(
+            bounded_font_family_name("Demo Sans Pro".chars()),
+            Some("Demo Sans Pro".to_string())
+        );
     }
 
     fn commit_entries(source_id: &str, entries: Vec<LocalFontEntry>) -> ImportOutcome {
