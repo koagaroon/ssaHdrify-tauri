@@ -509,7 +509,12 @@ export default function FontSourceModal(props: Props) {
       reportSourceAdded,
       resetScanProgress,
       scheduleScanProgress,
-      setScanningWithParent,
+      // Round 7 Wave 7.7 (lint): setScanningWithParent is referenced
+      // ONLY in comments inside runScanFlow's body — actual calls
+      // happen via claimScanFlow / releaseScanFlow, which are already
+      // in the dep array. eslint react-hooks/exhaustive-deps flagged
+      // the explicit entry as unnecessary; removing it closes the
+      // baseline warning carried since Round 5.
     ]
   );
 

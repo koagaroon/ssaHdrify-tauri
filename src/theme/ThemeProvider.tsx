@@ -68,10 +68,7 @@ export default function ThemeProvider({ children }: { children: ReactNode }) {
     document.documentElement.setAttribute("data-theme", appearance);
   }, [appearance]);
 
-  const contextValue = useMemo(
-    () => ({ mode, appearance, setMode }),
-    [mode, appearance, setMode]
-  );
+  const contextValue = useMemo(() => ({ mode, appearance, setMode }), [mode, appearance, setMode]);
 
   return <ThemeContext.Provider value={contextValue}>{children}</ThemeContext.Provider>;
 }

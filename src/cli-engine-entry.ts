@@ -20,10 +20,7 @@ import {
   type ParsedFile,
 } from "./features/batch-rename/pairing-engine";
 import { buildFontEntry } from "./features/font-embed/ass-uuencode";
-import {
-  buildFontFileName,
-  insertFontsSection,
-} from "./features/font-embed/font-embedder";
+import { buildFontFileName, insertFontsSection } from "./features/font-embed/font-embedder";
 import { collectFontsWithParser, fontKeyLabel } from "./features/font-embed/font-collector";
 import { deriveShiftedPath, shiftSubtitles } from "./features/timing-shift/timing-engine";
 import { extractLangFromBaseName, LANG_TAGS } from "./lib/lang-detection";

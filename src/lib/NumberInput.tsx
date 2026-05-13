@@ -65,11 +65,7 @@ export default function NumberInput({
           // static var(--token) strings — safe by inspection.
           // eslint-disable-next-line no-restricted-syntax
           border: `1px solid ${
-            invalid
-              ? "var(--accent-danger)"
-              : disabled
-                ? "var(--border-light)"
-                : "var(--border)"
+            invalid ? "var(--accent-danger)" : disabled ? "var(--border-light)" : "var(--border)"
           }`,
           color: "var(--text-primary)",
         }}

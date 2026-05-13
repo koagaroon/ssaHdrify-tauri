@@ -372,10 +372,7 @@ export default function HdrConvert() {
             try {
               outputPath = resolveOutputPath(filePath, activeTemplate, eotf);
             } catch (e) {
-              addLog(
-                t("msg_skipped", fileName, sanitizeError(e)),
-                "error"
-              );
+              addLog(t("msg_skipped", fileName, sanitizeError(e)), "error");
               continue;
             }
 
@@ -393,10 +390,7 @@ export default function HdrConvert() {
             try {
               content = await readText(filePath);
             } catch (e) {
-              addLog(
-                t("msg_read_error", fileName, sanitizeError(e)),
-                "error"
-              );
+              addLog(t("msg_read_error", fileName, sanitizeError(e)), "error");
               continue;
             }
 
@@ -442,10 +436,7 @@ export default function HdrConvert() {
             addLog(t("msg_done", outName), "success");
             successCount++;
           } catch (e) {
-            addLog(
-              t("msg_convert_error", fileName, sanitizeError(e)),
-              "error"
-            );
+            addLog(t("msg_convert_error", fileName, sanitizeError(e)), "error");
           } finally {
             // Bump the N-of-M counter once per iteration regardless of
             // outcome (success / skip / error). If cancel is seen at the

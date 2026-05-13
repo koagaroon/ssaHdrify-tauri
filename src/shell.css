@@ -355,6 +355,7 @@
   align-items: center;
   gap: 10px;
   font-size: 11px;
+
   /* Round 7 Wave 7.6 (N4-R7-1): bumped from --text-muted to
      --text-secondary. Footer is an active status surface (shows
      current tab state, progress N/M, error/success dots) — keeping

@@ -82,15 +82,19 @@ export function buildFontEntry(fontName: string, data: Uint8Array): string {
   // break line parsing, and a `\u2028` could smuggle a line break into the
   // [Fonts] section. Defense-in-depth: font-embedder.buildFontFileName
   // already sanitizes upstream, but this keeps the encoder self-contained.
-  // eslint-disable-next-line no-control-regex -- sanitize control chars from filenames
   // BiDi + zero-width + line/paragraph separators come from the shared
   // unicode-controls set (mirrors validate_font_family + safeFontName +
   // sanitizeForDialog). Slashes/backslashes are added beyond the
   // upstream buildFontFileName output as a self-contained defense at
   // the encoder boundary (A-R5-FECHAIN-09).
+  //
+  // Round 7 Wave 7.7 (N4-R7-2 / N4-R7-3 followup): `no-control-regex`
+  // eslint-disable directive removed \u2014 the rule only inspects regex
+  // literals, and this regex is built via `new RegExp(...)` from a
+  // string interpolation, so the rule was never going to fire.
   const safeName = fontName.replace(
     new RegExp(`[\\x00-\\x1f\\x7f-\\x9f${BIDI_AND_ZERO_WIDTH_CHARS}:/\\\\]`, "gu"),
-    "_",
+    "_"
   );
   const encodedLines = assUuencode(data);
   return `fontname: ${safeName}\n${encodedLines.join("\n")}`;

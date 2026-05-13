@@ -436,10 +436,7 @@ export default function TimingShift() {
             try {
               content = await readText(filePath);
             } catch (e) {
-              addLog(
-                t("msg_read_error", fileName, sanitizeError(e)),
-                "error"
-              );
+              addLog(t("msg_read_error", fileName, sanitizeError(e)), "error");
               continue;
             }
 
@@ -457,10 +454,7 @@ export default function TimingShift() {
             addLog(t("msg_saved", outName, result.captionCount), "success");
             successCount++;
           } catch (e) {
-            addLog(
-              t("msg_timing_error", fileName, sanitizeError(e)),
-              "error"
-            );
+            addLog(t("msg_timing_error", fileName, sanitizeError(e)), "error");
           } finally {
             processedCount++;
             setProgress({ processed: processedCount, total: paths.length });

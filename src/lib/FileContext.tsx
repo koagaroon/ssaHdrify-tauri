@@ -102,10 +102,7 @@ export function FileProvider({ children }: { children: ReactNode }) {
       if (excludeTab !== "hdr" && hdrFiles?.filePaths.some((p) => pathsEqualOnFs(p, path))) {
         return "hdr";
       }
-      if (
-        excludeTab !== "timing" &&
-        timingFiles?.filePaths.some((p) => pathsEqualOnFs(p, path))
-      ) {
+      if (excludeTab !== "timing" && timingFiles?.filePaths.some((p) => pathsEqualOnFs(p, path))) {
         return "timing";
       }
       if (excludeTab !== "fonts" && fontsFiles?.filePaths.some((p) => pathsEqualOnFs(p, path))) {

@@ -506,9 +506,9 @@ export default function FontEmbed() {
           await reanalyzeWithSources();
         } catch (e) {
           addLog(
-          t("error_prefix", sanitizeForDialog(e instanceof Error ? e.message : String(e))),
-          "error"
-        );
+            t("error_prefix", sanitizeForDialog(e instanceof Error ? e.message : String(e))),
+            "error"
+          );
         } finally {
           setSourceBusy(false);
         }

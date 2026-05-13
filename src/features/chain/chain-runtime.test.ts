@@ -305,9 +305,9 @@ describe("resolveChainOutputPath", () => {
     // with `$` are rare but legal (Windows admin shares like `c$`,
     // batch scripts named `build_$1.ass`, etc.). substituteTemplate
     // routes values through split-join so `$&` stays literal.
-    expect(
-      resolveChainOutputPath("C:\\subs\\build_$&_v2.ass", "{name}.shifted{ext}")
-    ).toBe("C:\\subs\\build_$&_v2.shifted.ass");
+    expect(resolveChainOutputPath("C:\\subs\\build_$&_v2.ass", "{name}.shifted{ext}")).toBe(
+      "C:\\subs\\build_$&_v2.shifted.ass"
+    );
   });
 
   it("rejects relative-path inputs (must be absolute)", () => {

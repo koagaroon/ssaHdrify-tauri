@@ -35,16 +35,10 @@ const BIDI_AND_ZERO_WIDTH_PATTERN =
 export const BIDI_AND_ZERO_WIDTH_CHARS = BIDI_AND_ZERO_WIDTH_PATTERN;
 
 /** Standalone matcher; use `.test(s)` for reject-on-match validation. */
-export const BIDI_AND_ZERO_WIDTH_RE = new RegExp(
-  `[${BIDI_AND_ZERO_WIDTH_PATTERN}]`,
-  "u",
-);
+export const BIDI_AND_ZERO_WIDTH_RE = new RegExp(`[${BIDI_AND_ZERO_WIDTH_PATTERN}]`, "u");
 
 /** Global matcher; use with `.replace(GLOBAL_RE, "")` for scrubbing. */
-export const BIDI_AND_ZERO_WIDTH_GLOBAL_RE = new RegExp(
-  `[${BIDI_AND_ZERO_WIDTH_PATTERN}]`,
-  "gu",
-);
+export const BIDI_AND_ZERO_WIDTH_GLOBAL_RE = new RegExp(`[${BIDI_AND_ZERO_WIDTH_PATTERN}]`, "gu");
 
 /** True if `s` contains any character in the rejection set. */
 export function hasUnicodeControls(s: string): boolean {
