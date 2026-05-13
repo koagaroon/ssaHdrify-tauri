@@ -100,6 +100,14 @@ function transformColorString(assColor: string, targetBrightness: number, eotf: 
 // regex per line.
 const COLOR_TAG_RE = /(\\[0-9]?c&H)([0-9a-fA-F]{6}|[0-9a-fA-F]{8})(?=[&}),\\\r\n]|$)/g;
 
+// Round 7 Wave 7.6 (A4-R7-13): hoisted from inside transformStyleLine
+// to match COLOR_TAG_RE's module-scope precedent. Previously the
+// regex literal compiled per style-line; with thousands of styled
+// dialogues a per-call recompile is wasted work, and `no-misleading-
+// character-class` / consistency reads better when the two regexes
+// sit side by side.
+const COLOR_FIELD_RE = /^&H(?:[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$/;
+
 /**
  * Transform inline color tags in a dialogue event text.
  * e.g., {\1c&H0000FF} → {\1c&H002D45}
@@ -145,7 +153,8 @@ function transformStyleLine(
   // `\cN&Hxxxxxx` tag regex (`COLOR_TAG_RE`, line 101) correctly
   // rejected — the asymmetry let a malformed Style field through that
   // wouldn't have been transformed if inlined as `\c&H...`.
-  const COLOR_FIELD_RE = /^&H(?:[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$/;
+  // (Round 7 Wave 7.6: regex now lives at module scope — see
+  // `COLOR_FIELD_RE` definition.)
   for (const idx of styleColorIndices) {
     if (idx < fields.length && fields[idx]) {
       const trimmed = fields[idx].trim();

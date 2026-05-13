@@ -835,7 +835,12 @@ export default function TimingShift() {
           </span>
         )}
         {!thresholdInvalid && thresholdExceedsFile && (
-          <span className="text-xs" style={{ color: "var(--error)" }}>
+          // Round 7 Wave 7.6 (N4-R7-6): threshold-exceeds-file is a
+          // warning (the shift will still run, but the threshold gate
+          // is moot), not a save-blocker — use --warning, not --error.
+          // thresholdInvalid above stays at --error because that path
+          // genuinely blocks the run (NaN / negative threshold).
+          <span className="text-xs" style={{ color: "var(--warning)" }}>
             {t("threshold_exceeds_file")}
           </span>
         )}

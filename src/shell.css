@@ -355,7 +355,16 @@
   align-items: center;
   gap: 10px;
   font-size: 11px;
-  color: var(--text-muted);
+  /* Round 7 Wave 7.6 (N4-R7-1): bumped from --text-muted to
+     --text-secondary. Footer is an active status surface (shows
+     current tab state, progress N/M, error/success dots) — keeping
+     the body text at --text-muted made the message itself fade
+     when surrounding controls were active, violating the project
+     "status text must not fade" principle (~/.claude/rules/
+     frontend-ui.md "Visibility is the top UI priority"). The
+     state-color cues (dot background, busy/done/error tint) stay
+     where they were; only the inline message moves up one tier. */
+  color: var(--text-secondary);
   font-family: var(--font-mono);
   letter-spacing: 0.02em;
 }

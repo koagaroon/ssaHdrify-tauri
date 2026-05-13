@@ -2916,6 +2916,13 @@ fn relocate_output_path(path: &str, output_dir: Option<&Path>) -> Result<PathBuf
     Ok(relocated)
 }
 
+// Round 7 Wave 7.6 (N2-R7-9): stat-failure-treated-as-exists is the
+// fail-safe (never silently overwrite a file we couldn't stat under
+// restrictive ACLs / network share metadata-read denied). The CLI
+// surfaces a stderr WARN so the user sees the underlying cause
+// rather than a "skipped: output exists" misdirection. See design
+// doc § Cross-cutting 行为 (overwrite default) for why the fail-safe
+// is the design-locked direction.
 fn output_path_exists(globals: &GlobalOptions, path: &Path) -> bool {
     match fs::metadata(path) {
         Ok(_) => true,
@@ -3336,8 +3343,12 @@ mod tests {
     };
     // Import the canonical filename literal directly from app_lib so the
     // test pins the same name `TempFontDbDir::drop`'s remove_dir_all
-    // sees on disk (N-R5-RUSTCLI-02).
-    use app_lib::fonts::USER_FONT_DB_FILENAME as CLI_FONT_DB_FILENAME;
+    // sees on disk (N-R5-RUSTCLI-02). Round 7 Wave 7.6 (N2-R7-4):
+    // dropped the `as USER_FONT_DB_FILENAME` alias — the test no longer
+    // pretends to have its own filename literal; `USER_FONT_DB_FILENAME`
+    // is the canonical name everywhere, and the alias only added
+    // indirection.
+    use app_lib::fonts::USER_FONT_DB_FILENAME;
     use std::fs;
     use std::path::{Path, PathBuf};
 
@@ -3642,8 +3653,8 @@ mod tests {
             .and_then(|name| name.to_str())
             .is_some_and(|name| name.starts_with(super::CLI_FONT_DB_DIR_PREFIX)));
 
-        fs::write(dir.join(CLI_FONT_DB_FILENAME), b"db").unwrap();
-        fs::write(dir.join(format!("{CLI_FONT_DB_FILENAME}-wal")), b"wal").unwrap();
+        fs::write(dir.join(USER_FONT_DB_FILENAME), b"db").unwrap();
+        fs::write(dir.join(format!("{USER_FONT_DB_FILENAME}-wal")), b"wal").unwrap();
         let guard = TempFontDbDir(dir.clone());
         drop(guard);
 

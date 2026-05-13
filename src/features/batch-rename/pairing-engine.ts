@@ -588,9 +588,12 @@ export function assignSubtitleToRow(
  *  paired video — running rename/copy on it has no effect (or fails,
  *  for copyFile(src, src) on Windows) and must be filtered out before
  *  the overwrite-confirm dialog so the user doesn't see a spurious
- *  warning. Case folding is OK on Windows (case-insensitive FS) and
- *  acceptable on Linux/macOS too — file-management UI on those
- *  platforms typically discourages case-only renames anyway. */
+ *  warning. Case folding is delegated to `normalizeOutputKey`, which
+ *  is FS-aware (Round 7 Wave 7.6 N3-R7-7 doc fix — earlier text said
+ *  "OK on Windows ... acceptable on Linux/macOS" which was inaccurate:
+ *  normalizeOutputKey gates lowercasing on `isCaseInsensitiveFs`, so
+ *  Linux ext4 / btrfs / xfs preserves case distinction and `EP01.ass`
+ *  vs `ep01.ass` are NOT no-op there). */
 export function isNoOpRename(subtitlePath: string, outputPath: string): boolean {
   return normalizeOutputKey(subtitlePath) === normalizeOutputKey(outputPath);
 }

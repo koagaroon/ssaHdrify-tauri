@@ -214,12 +214,8 @@ fn split_into_step_segments(argv: &[String]) -> Result<Vec<Vec<String>>, String>
     let mut segments: Vec<Vec<String>> = vec![Vec::new()];
     for tok in argv {
         if tok == STEP_SEPARATOR {
-            // `map_or(true, ...)` covers both "None" and "empty Vec";
-            // `is_none_or` would read better but requires MSRV >= 1.82.
-            // The current form is durable wayfinding for the next reader
-            // (N-R5-RUSTCLI-09 false-alarm note): keep it as inline
-            // context. Swap to `is_none_or` only after `rust-version`
-            // in Cargo.toml advances past 1.82 — no automated nudge.
+            // `map_or(true, ...)` covers None + empty Vec. Swap to
+            // `is_none_or` only after Cargo.toml `rust-version` ≥ 1.82.
             if segments.last().map_or(true, Vec::is_empty) {
                 return Err(
                     "empty step segment around `+` (chain requires `<step1> + <step2>...` form)"

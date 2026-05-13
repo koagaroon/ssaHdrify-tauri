@@ -21,6 +21,21 @@ fn copy_cli_engine_bundle() {
     // build still succeeds, but a non-NotFound error gets a
     // cargo:warning so the developer notices the underlying cause.
     let source = match std::fs::read_to_string(&source_path) {
+        Ok(content) if content.is_empty() => {
+            // Round 7 Wave 7.6 (A2-R7-1): 0-byte engine.js is the
+            // signature of a partial-write from a still-running
+            // `npm run build:engine`, or a manually-truncated bundle
+            // from a botched edit. Pre-W7.6 we'd embed the empty
+            // string and let V8 fail at runtime with an inscrutable
+            // "ssaHdrifyCliEngine is undefined" — the cargo:warning
+            // surfaces the underlying cause at build time. Fall
+            // through to the stub so the build still succeeds.
+            println!(
+                "cargo:warning=CLI engine bundle at {} is 0 bytes (partial write or truncation?); falling back to stub",
+                source_path.display()
+            );
+            missing_engine_stub()
+        }
         Ok(content) => content,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => missing_engine_stub(),
         Err(error) => {

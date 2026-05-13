@@ -785,6 +785,12 @@ export default function FontSourceModal(props: Props) {
                 </p>
                 {missing.length > 0 && (
                   <>
+                    {/* Round 7 Wave 7.6 (N3-R7-9): `missing` entries
+                        come from `fontKeyLabel(u.key)` where `u.key.family`
+                        was sanitized via `sanitizeFamily` upstream
+                        (font-collector.ts), so the BiDi / zero-width
+                        scrub already happened — no second wrap needed
+                        at this render site. */}
                     <p className="text-xs" style={{ color: "var(--text-secondary)" }}>
                       {t("font_coverage_missing", missing.join(", "))}
                     </p>

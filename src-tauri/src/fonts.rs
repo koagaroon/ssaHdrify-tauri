@@ -98,10 +98,16 @@ const MAX_FONT_DATA_SIZE: u64 = 50 * 1024 * 1024;
 // subset layer obviates the per-file and cumulative caps. See
 // `subset_font` for the W6.9 commentary on the trade-off.
 
-/// Cap on the system-font provenance cache, as a defense against a
-/// pathological long-running session. User-picked font provenance is stored
-/// in the session SQLite index instead of an in-memory set, so XL source
-/// folders do not pin tens of gigabytes of path/name metadata.
+/// Cap on each in-memory font-provenance cache (`ALLOWED_FONT_PATHS`
+/// and `ALLOWED_CACHE_FONT_PATHS`), as a defense against a pathological
+/// long-running session. User-picked font provenance is stored in the
+/// session SQLite index instead of an in-memory set, so XL source folders
+/// do not pin tens of gigabytes of path/name metadata.
+///
+/// Round 7 Wave 7.6 (A1-R7-3): doc-comment names both consumers — pre-W7.6
+/// it only mentioned "system-font" provenance, but W6.3 D1 added the
+/// separate cache-provenance set sharing the same cap via `insert_with_cap`.
+/// Cap applies per-set (each can hold up to 100k entries independently).
 const MAX_PROVENANCE_CACHE_SIZE: usize = 100_000;
 
 /// AppData filename for the session-only user font index. It is cleared at
@@ -2375,7 +2381,7 @@ fn register_font_path(path: &Path, font_index: u32) -> Result<FontLookupResult, 
         "Cannot resolve font path".to_string()
     })?;
     let canonical_string = normalize_canonical_path(&canonical.to_string_lossy());
-    insert_with_cap(&ALLOWED_FONT_PATHS, canonical_string.clone(), font_index)?;
+    insert_with_cap(&ALLOWED_FONT_PATHS, "system", canonical_string.clone(), font_index)?;
     Ok(FontLookupResult {
         path: canonical_string,
         index: font_index,
@@ -2384,10 +2390,14 @@ fn register_font_path(path: &Path, font_index: u32) -> Result<FontLookupResult, 
 
 /// Shared (path, face_index) insertion helper used by both provenance
 /// sets. `cache` is the target set; `canonical_string` and `face_index`
-/// are the entry. Enforces `MAX_PROVENANCE_CACHE_SIZE` per-set as a
-/// rollback-on-overflow contract.
+/// are the entry. `label` distinguishes the set in error messages so
+/// a future "Too many registered font paths" report can be attributed
+/// to system fonts vs cache hits — pre-W7.6 both reported the same
+/// text and triage had to dig into the caller (N1-R7-5). Enforces
+/// `MAX_PROVENANCE_CACHE_SIZE` per-set as a rollback-on-overflow contract.
 fn insert_with_cap(
     cache: &Lazy<Mutex<HashSet<(String, u32)>>>,
+    label: &str,
     canonical_string: String,
     face_index: u32,
 ) -> Result<(), String> {
@@ -2405,7 +2415,7 @@ fn insert_with_cap(
         // Roll back the speculative insert so the cap is firm.
         set.remove(&entry);
         return Err(format!(
-            "Too many registered font paths (> {MAX_PROVENANCE_CACHE_SIZE}). \
+            "Too many registered font paths in {label} set (> {MAX_PROVENANCE_CACHE_SIZE}). \
              Restart the app to clear the cache."
         ));
     }
@@ -2438,7 +2448,12 @@ fn insert_with_cap(
 /// path string — cache lookup paths come from `cached_fonts.font_path`
 /// which `replace_folder` stores after canonicalization upstream.
 pub fn register_cache_provenance(canonical_path: &str, face_index: u32) -> Result<(), String> {
-    insert_with_cap(&ALLOWED_CACHE_FONT_PATHS, canonical_path.to_string(), face_index)
+    insert_with_cap(
+        &ALLOWED_CACHE_FONT_PATHS,
+        "cache",
+        canonical_path.to_string(),
+        face_index,
+    )
 }
 
 /// True when `path` equals `dir` or lives under it (using `sep` as the
