@@ -1018,13 +1018,56 @@ fn predict_chain_output_path(
     // Revisit if a future build targets POSIX as a first-class
     // platform (gate `WINDOWS_RESERVED_NAMES` in TS on
     // `isWindowsRuntime`).
+    // Round 7 Wave 7.4 (N2-R7-1): rejection set tightened to match
+    // TS-side `assertSafeOutputFilename`. Previously Rust rejected
+    // /\\\0 + starts_with('.') + drive-letter prefix only; TS rejected
+    // a superset including NTFS punctuation (<>:"|?*{}) + control chars
+    // + BiDi/zero-width. The asymmetry meant Rust's prediction said
+    // "OK, this path will round-trip" for filenames that TS would then
+    // reject inside V8 — letting V8 work on doomed paths wastes work
+    // AND surfaces a worse error message (the V8-side rejection text
+    // arrives buried in a chain step error rather than at the
+    // predictor's clearer "this template will not work" gate).
+    //
+    // Dropped `starts_with('.')` reject — TS doesn't reject leading
+    // dots (".hidden.ass" is a legitimate POSIX dotfile shape).
+    //
+    // Per-char loop covers control chars + NTFS punctuation + BiDi/zw
+    // in one pass; mirrors `util::validate_ipc_path` but for the
+    // narrower "single filename, no separators" shape.
     if output_name.is_empty()
-        || output_name.contains('/')
-        || output_name.contains('\\')
-        || output_name.contains('\0')
-        || output_name.starts_with('.')
         || (output_name.len() >= 2 && output_name.as_bytes()[1] == b':')
     {
+        return None;
+    }
+    let illegal_in_filename = output_name.chars().any(|c| {
+        // NTFS-illegal punctuation + path separators + null.
+        matches!(
+            c,
+            '<' | '>' | ':' | '"' | '|' | '?' | '*' | '{' | '}' | '/' | '\\' | '\0'
+        )
+        // Control characters (C0 + DEL + C1) — `is_control()` covers
+        // both Cc ranges. Aligns with assertSafeOutputFilename's
+        // ILLEGAL_FILENAME_CHARS regex.
+        || c.is_control()
+        // BiDi format chars + zero-width — same codepoint set as
+        // validate_ipc_path + Round 6 Wave 6.2 unicode-controls. A
+        // U+202E-bearing filename would otherwise predict OK here
+        // and trip on TS-side hasUnicodeControls inside V8.
+        || matches!(
+            c,
+            '\u{200E}' | '\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{200B}'..='\u{200D}'
+            | '\u{2060}'
+            | '\u{180E}'
+            | '\u{FEFF}'
+            | '\u{2028}' | '\u{2029}'
+            | '\u{061C}'
+        )
+    });
+    if illegal_in_filename {
         return None;
     }
     let stem_upper = output_name
@@ -1182,22 +1225,33 @@ fn process_one_chain_input(
         Err(err) => return ChainFileOutcome::Failed(err),
     };
 
-    // Post-V8 dedup reconcile (Round 4 N-R4-10). If the actual output
-    // path differs from the prediction, insert the actual key now —
-    // catches predictor↔resolver divergence (e.g., a future template
-    // token Rust doesn't model). When predicted_key was Some AND
-    // matches exactly, skip the re-insert (already inserted upstream;
-    // would self-collide). When predicted_key was None we DO insert —
-    // the predictor abstained (template too dynamic), so this is the
-    // first insertion of the actual key (N-R5-RUSTCLI-01: comment
-    // previously said "skip when None" but the `!= Some` condition
-    // actually re-inserts in that case, which is correct).
+    // Post-V8 dedup reconcile (Round 4 N-R4-10, Round 7 W7.4 N2-R7-2).
+    // If the actual output path differs from the prediction, REMOVE
+    // the stale predicted_key from seen_outputs before inserting the
+    // actual one. Pre-W7.4 the stale key was left in the set — harmless
+    // when the same template ran on every input (next input's
+    // predicted_key matched and naturally re-collided), but pathological
+    // when one input's predictor ran but a later input collided with
+    // that stale key while its OWN predicted_key was None or
+    // different. Removing the stale entry makes seen_outputs always
+    // reflect the actual set of files this run will write.
+    //
+    // When predicted_key was Some AND matches the actual output_key,
+    // skip the re-insert (already inserted upstream; would self-
+    // collide). When predicted_key was None we DO insert — the
+    // predictor abstained (template too dynamic), so this is the
+    // first insertion of the actual key.
     let output_key = normalize_output_key(&output_path);
-    if predicted_key.as_deref() != Some(output_key.as_str()) && !seen_outputs.insert(output_key) {
-        return ChainFileOutcome::Failed(format!(
-            "{} duplicate output path in planned batch (predictor / V8 resolver disagreed; reconciled post-V8)",
-            output_path.display()
-        ));
+    if predicted_key.as_deref() != Some(output_key.as_str()) {
+        if let Some(stale) = predicted_key.as_deref() {
+            seen_outputs.remove(stale);
+        }
+        if !seen_outputs.insert(output_key) {
+            return ChainFileOutcome::Failed(format!(
+                "{} duplicate output path in planned batch (predictor / V8 resolver disagreed; reconciled post-V8)",
+                output_path.display()
+            ));
+        }
     }
 
     // Skip-or-overwrite check matching existing per-feature behavior.
