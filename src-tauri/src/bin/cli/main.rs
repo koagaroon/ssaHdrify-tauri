@@ -623,12 +623,12 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
         // endless refresh loop (N-R5-RUSTCLI-07). Surface to stderr
         // with the user-visible consequence (folder skipped, not "stat
         // failed at line N") per vibe-coding no-silent-action.
-        let folder_mtime = match std::fs::metadata(&canonical)
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs() as i64)
-        {
+        //
+        // Routed through `font_cache::try_modified_at` (Round 6 Wave
+        // 6.3 #14 consolidation) — the helper was promoted to pub fn
+        // in Round 3 Wave 3.3 for exactly this kind of cross-binary
+        // reuse, and the inline duplicate would drift over time.
+        let folder_mtime = match app_lib::font_cache::try_modified_at(&canonical) {
             Some(m) => m,
             None => {
                 if !globals.quiet {
@@ -2370,6 +2370,23 @@ fn resolve_embed_font(
     if let Some(c) = cache {
         match c.lookup_family(&font.family, font.bold, font.italic) {
             Ok(Some(result)) => {
+                // Round 6 Wave 6.3 D1: register the cache hit in the
+                // in-process provenance set so subset_font's gate
+                // accepts the returned path. Without this, Situation B
+                // breaks: cache returns the path, subset_font rejects
+                // as "Font path was not discovered by a scan command".
+                // Failing to register is non-fatal (cap hit on the
+                // provenance set is extremely unlikely under realistic
+                // font counts) — log and fall through, the embed will
+                // then fail at subset with a clearer error.
+                if let Err(e) =
+                    app_lib::fonts::register_cache_provenance(&result.font_path, result.face_index as u32)
+                {
+                    log::warn!(
+                        "cache provenance registration failed for {}: {e}",
+                        font.family
+                    );
+                }
                 return Ok(Some((result.font_path, result.face_index as u32)));
             }
             Ok(None) => {

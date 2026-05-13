@@ -152,12 +152,48 @@ pub(crate) fn normalize_canonical_path(canonical_str: &str) -> String {
     }
 }
 
-/// Provenance cache: tracks font paths returned by `find_system_font`.
-/// Only paths that were discovered through the font lookup API are allowed
-/// to be read by `subset_font`, preventing arbitrary file reads via IPC.
-/// Never evicted — the set is bounded by the number of unique system fonts
-/// (typically < 1000), and eviction would introduce TOCTOU windows.
-static ALLOWED_FONT_PATHS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
+/// Provenance cache: tracks (font path, face index) pairs returned by
+/// `find_system_font`. Only entries here are allowed to be read by
+/// `subset_font`'s system-font branch — together with the system-fonts-
+/// dir restriction below, this is two layers of defense against
+/// arbitrary-file-read via IPC.
+///
+/// Round 6 Wave 6.3 #12: key changed from `String` to `(String, u32)`.
+/// The path-only key let an attacker-influenced subtitle request a
+/// system-font path with an arbitrary face index — TTC files contain
+/// multiple faces, so `subset_font(arial.ttc, 5, ...)` against a path
+/// registered for face 0 would silently read face 5. Keying by
+/// (path, face_index) makes the gate check both dimensions of the
+/// caller's claim against the actual registration.
+///
+/// Never evicted — the set is bounded by the number of unique system
+/// fonts (typically < 1000), and eviction would introduce TOCTOU
+/// windows.
+static ALLOWED_FONT_PATHS: Lazy<Mutex<HashSet<(String, u32)>>> =
+    Lazy::new(|| Mutex::new(HashSet::new()));
+
+/// Separate provenance set for persistent-cache lookups (Round 6 Wave
+/// 6.3 D1). When `lookup_family` returns a hit, the (path, face_index)
+/// pair is registered here so `subset_font` can accept it. Kept apart
+/// from `ALLOWED_FONT_PATHS` because:
+///
+/// 1. The dir restriction that applies to system fonts MUST NOT apply
+///    to cache hits — cached paths point at user-picked folders, not
+///    system dirs, and folding them into one set would either drop the
+///    dir defense for system fonts (bad) or break cache lookups (worse).
+/// 2. The threat-model classification is different: system fonts are
+///    discovered via font-kit which guarantees the path lives under a
+///    known dir; cache hits are trusted on the strength of the
+///    in-process lookup having succeeded against an opened SQLite file
+///    (P1a — single-user, AppData-local).
+///
+/// D1 path (a): trusting cache hits in-process restores the
+/// design-locked CLI Situation B ("no --font-dir + cache exists →
+/// implicit cache use") and the GUI's lookup tier 2 that were broken
+/// post-Codex 7a34374f (which rejected all cache rows as untrusted).
+/// See `register_cache_provenance` for the entry point.
+static ALLOWED_CACHE_FONT_PATHS: Lazy<Mutex<HashSet<(String, u32)>>> =
+    Lazy::new(|| Mutex::new(HashSet::new()));
 
 /// Session SQLite path for user-picked font sources. Commands open short-lived
 /// connections to this path instead of sharing a global Connection, which keeps
@@ -1943,6 +1979,19 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
     // FINAL directory entry / file, the loop exits naturally and the
     // outer reason would otherwise read as Natural — UI sees "completed
     // normally" while the partial buffer is silently kept.
+    //
+    // Round 6 Wave 6.3 #13: the post-loop classification is intentionally
+    // 2-way (cancel / natural) rather than the 3-way (cancel / ceiling /
+    // natural) in `scan_directory_inner`. The reason is structural —
+    // scan_directory_inner has a `visited >= MAX_PREFLIGHT_ENTRIES`
+    // bound that sets `dedup_ceiling_hit = true` and `break`s, falling
+    // through to the post-loop where the flag selects `CeilingHit`. This
+    // function takes a pre-validated `paths` vector (`MAX_INPUT_PATHS`
+    // bound checked by the caller), so there is no analogous visited
+    // cap. The MAX_FONTS_PER_SCAN ceiling above returns `CeilingHit`
+    // eagerly via early return, never reaching this point. If a future
+    // refactor adds a visited-style bound here, mirror the
+    // `dedup_ceiling_hit` flag and add the third arm.
     let reason = if font_scan_cancelled(scan_id) {
         ScanStopReason::UserCancel
     } else {
@@ -2252,7 +2301,23 @@ fn register_font_path(path: &Path, font_index: u32) -> Result<FontLookupResult, 
         "Cannot resolve font path".to_string()
     })?;
     let canonical_string = normalize_canonical_path(&canonical.to_string_lossy());
-    let mut cache = ALLOWED_FONT_PATHS
+    insert_with_cap(&ALLOWED_FONT_PATHS, canonical_string.clone(), font_index)?;
+    Ok(FontLookupResult {
+        path: canonical_string,
+        index: font_index,
+    })
+}
+
+/// Shared (path, face_index) insertion helper used by both provenance
+/// sets. `cache` is the target set; `canonical_string` and `face_index`
+/// are the entry. Enforces `MAX_PROVENANCE_CACHE_SIZE` per-set as a
+/// rollback-on-overflow contract.
+fn insert_with_cap(
+    cache: &Lazy<Mutex<HashSet<(String, u32)>>>,
+    canonical_string: String,
+    face_index: u32,
+) -> Result<(), String> {
+    let mut set = cache
         .lock()
         .map_err(|_| "Internal error: font path cache corrupted".to_string())?;
     // Single HashSet hit via `insert` (returns true if newly added).
@@ -2260,20 +2325,46 @@ fn register_font_path(path: &Path, font_index: u32) -> Result<FontLookupResult, 
     // common case. `insert` returning true means the slot was free
     // before; cache.len() now reflects the post-insert count, so the
     // cap check uses `>` (strictly above the pre-insert size limit).
-    let newly_added = cache.insert(canonical_string.clone());
-    if newly_added && cache.len() > MAX_PROVENANCE_CACHE_SIZE {
+    let entry = (canonical_string, face_index);
+    let newly_added = set.insert(entry.clone());
+    if newly_added && set.len() > MAX_PROVENANCE_CACHE_SIZE {
         // Roll back the speculative insert so the cap is firm.
-        cache.remove(&canonical_string);
+        set.remove(&entry);
         return Err(format!(
             "Too many registered font paths (> {MAX_PROVENANCE_CACHE_SIZE}). \
              Restart the app to clear the cache."
         ));
     }
+    Ok(())
+}
 
-    Ok(FontLookupResult {
-        path: canonical_string,
-        index: font_index,
-    })
+/// Register a (canonical path, face index) pair into the cache
+/// provenance set after a persistent-cache lookup hit. CLI's
+/// `resolve_embed_font` and the GUI's `lookup_font_family` call this
+/// so a path returned by the persistent cache passes `subset_font`'s
+/// gate, closing the design-vs-implementation conflict locked as
+/// Round 6 D1:
+///
+/// - CLI Situation B (no `--font-dir` + cache exists → implicit cache
+///   use) and the GUI's lookup tier 2 both depended on cache-returned
+///   paths being subsequently subsettable. The post-Codex-7a34374f gate
+///   rejected them as untrusted, breaking the documented behavior.
+///
+/// - Per project P1a (single-user desktop, AppData-local SQLite, no
+///   hostile-local-process model), trusting cache rows opened by THIS
+///   process is the right tradeoff for the project's actual threat
+///   surface. If the project later ships a server / multi-user mode,
+///   revisit per the design doc's "Revisit triggers" section.
+///
+/// Routes to `ALLOWED_CACHE_FONT_PATHS` — kept apart from the system-
+/// font set so the system-fonts-dir defense still applies to
+/// `find_system_font` registrations.
+///
+/// The caller is responsible for already having NORMALIZED + CANONICAL
+/// path string — cache lookup paths come from `cached_fonts.font_path`
+/// which `replace_folder` stores after canonicalization upstream.
+pub fn register_cache_provenance(canonical_path: &str, face_index: u32) -> Result<(), String> {
+    insert_with_cap(&ALLOWED_CACHE_FONT_PATHS, canonical_path.to_string(), face_index)
 }
 
 /// True when `path` equals `dir` or lives under it (using `sep` as the
@@ -2483,42 +2574,62 @@ pub fn subset_font(
         "Cannot resolve font path".to_string()
     })?;
 
-    // Provenance guard: the path must have been discovered by one of
-    // the scan commands run in THIS session (find_system_font OR
-    // scan_font_directory / scan_font_files). System paths use the
-    // small in-memory provenance set; user-picked paths are checked
-    // against the session SQLite source index so XL folders do not pin
-    // a huge path HashSet in RAM.
+    // Provenance guard: the (path, face_index) pair must have been
+    // discovered by one of three trusted entry points in THIS process:
     //
-    // Persistent GUI cache rows are NOT a provenance source — Codex
-    // 7a34374f: cache rows carry no signature that they were produced
-    // by a trusted scan, and the cache file on disk only checks schema
-    // version. An attacker who can preplant or tamper with the SQLite
-    // file can name any local path as a "cached font" and have subset
-    // read it as bytes (fall-through fallback returns the file's raw
-    // bytes when font parsing fails). Cost: a cached folder still
-    // needs a session-time scan (re-add the source in the GUI, or one
-    // run of refresh-fonts then a normal embed in the CLI) before its
-    // fonts can be embedded — same UX as the pre-#5 baseline.
+    //   1. `find_system_font` → registers in ALLOWED_FONT_PATHS
+    //      (system fonts; also subject to system-fonts-dir restriction
+    //      below for defense-in-depth).
+    //   2. `scan_font_directory` / `scan_font_files` → records in the
+    //      session SQLite (user-picked paths from THIS session's scan).
+    //   3. `lookup_family` cache hit (CLI's resolve_embed_font or
+    //      GUI's lookup_font_family) → registers in
+    //      ALLOWED_CACHE_FONT_PATHS via `register_cache_provenance`.
+    //
+    // Round 6 Wave 6.3 #12: keying by (path, face_index) instead of
+    // path alone closes a face-index injection where attacker-influenced
+    // ASS would request `subset_font(arial.ttc, 5, ...)` against a path
+    // registered for face 0. TTC files contain multiple faces, and the
+    // gate used to pass on path alone, letting the wrong face's bytes
+    // ship in the [Fonts] section.
+    //
+    // Round 6 Wave 6.3 D1: persistent cache rows ARE now a provenance
+    // source — but ONLY for entries `lookup_family` returned during THIS
+    // process (the second set, ALLOWED_CACHE_FONT_PATHS). Nothing
+    // accepts a path that merely appears in the SQLite file but was
+    // not actually looked up this run. Pre-D1 the gate rejected all
+    // cache rows (Codex 7a34374f), which broke the design-locked CLI
+    // Situation B and GUI lookup tier 2. P1a accepts the in-process
+    // trust under the project's single-user-desktop threat model.
     let canonical_string = normalize_canonical_path(&canonical.to_string_lossy());
+    let registered_key = (canonical_string.clone(), font_index);
     let is_system = ALLOWED_FONT_PATHS
         .lock()
         .map_err(|_| "Internal error: font path cache corrupted".to_string())?
-        .contains(&canonical_string);
-    let is_user = if is_system {
+        .contains(&registered_key);
+    let is_cache = if is_system {
+        false
+    } else {
+        ALLOWED_CACHE_FONT_PATHS
+            .lock()
+            .map_err(|_| "Internal error: font path cache corrupted".to_string())?
+            .contains(&registered_key)
+    };
+    let is_user = if is_system || is_cache {
         false
     } else {
         is_user_font_face_registered(&canonical_string, font_index)?
     };
-    if !is_system && !is_user {
+    if !is_system && !is_cache && !is_user {
         return Err("Font path was not discovered by a scan command".to_string());
     }
 
     // Defense-in-depth: system-discovered paths must live under a known
-    // system fonts directory. User-picked paths skip this check by design
-    // — the whole point is to accept a user-chosen directory — but they
-    // still had to pass the DB-backed provenance check above, so random
-    // file reads via IPC are still blocked.
+    // system fonts directory. User-picked paths (session DB) and cache
+    // hits skip this check — the whole point of those tiers is to
+    // accept user-chosen directories — but they had to pass their own
+    // provenance step above, so random file reads via IPC are still
+    // blocked.
     if is_system && !is_in_system_fonts_dir(&canonical) {
         return Err("System font path is not in a system fonts directory".to_string());
     }

@@ -240,6 +240,23 @@ fn safe_copy_file_inner(
     ensure_parent_dir(dst_ref)?;
     clear_existing_destination(dst_ref, overwrite)?;
 
+    // Round 6 Wave 6.3 #11: re-check `is_reparse_point` immediately
+    // before `File::open` to close the TOCTOU window where an
+    // attacker could swap the source for a symlink between
+    // `reject_reparse_source` (above) and the open below. Mirrors the
+    // pattern `encoding.rs::read_text_detect_encoding` already
+    // applies (stat-time re-check after canonicalize) — same race,
+    // same fix shape. Bounded by the same single-user trust model;
+    // re-check is cheap (one syscall) and parallels the symmetric
+    // scrub already enforced on the read side.
+    if is_reparse_point(src_ref) {
+        log::warn!(
+            "Refusing to copy possible symlink / junction at open-time: {}",
+            src_ref.display()
+        );
+        return Err("Refusing to copy symlink / junction (race-time detection)".to_string());
+    }
+
     let mut source = fs::File::open(src_ref).map_err(|e| format!("Failed to open source: {e}"))?;
     let mut destination = fs::OpenOptions::new()
         .write(true)

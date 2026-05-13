@@ -867,6 +867,22 @@ pub fn lookup_font_family(
     let result = cache
         .lookup_family(&family, bold, italic)
         .map_err(|e| format!("lookup_family: {e}"))?;
+    // Round 6 Wave 6.3 D1: register the cache hit in the in-process
+    // provenance set so `subset_font`'s gate accepts the returned
+    // path. Without this, the GUI's lookup tier 2 (embed-time cache
+    // hit) goes through the IPC roundtrip and then trips the gate
+    // as "Font path was not discovered by a scan command". Failing
+    // to register is non-fatal — log and surface the lookup result
+    // anyway; if the subsequent subset call fails on the same path,
+    // the user sees the gate error with full context. See
+    // `register_cache_provenance` for the threat-model rationale.
+    if let Some(ref r) = result {
+        if let Err(e) =
+            crate::fonts::register_cache_provenance(&r.font_path, r.face_index as u32)
+        {
+            log::warn!("cache provenance registration failed for {family}: {e}");
+        }
+    }
     Ok(result.map(|r| crate::fonts::FontLookupResult {
         path: r.font_path,
         index: r.face_index as u32,
