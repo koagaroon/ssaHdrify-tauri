@@ -1121,49 +1121,79 @@ fn parse_local_font_file(canonical: &Path, scan_id: u64) -> Vec<LocalFontEntry> 
         };
         consecutive_failures = 0;
 
-        let attrs = font_ref.attributes();
-        let bold = attrs.weight.value() >= 600.0;
-        let italic = !matches!(attrs.style, fontcull_skrifa::attribute::Style::Normal);
+        // Round 7 Wave 7.3 (A1-R7-1): catch_unwind around the per-face
+        // skrifa name-table walk + entry construction. Mirrors the
+        // existing wrap around fontcull::subset_font_data_unicode
+        // below: skrifa is in active development and crafted TTC /
+        // OTC inputs can trigger panics on bad face counts, malformed
+        // CFF, or out-of-range name-table records (P1b
+        // attacker-influenced content sources). Without catch_unwind
+        // here, a single panicking face would unwind through the
+        // whole `parse_local_font_file` and abort the surrounding
+        // scan — instead of the documented "skip this face, continue
+        // with the next" behavior the MAX_CONSECUTIVE_FAILURES tolerance
+        // already provides for non-panic errors. AssertUnwindSafe is
+        // sound: `data` is &Vec<u8> read-only, the inner mutations
+        // are on local HashSet / Vec / Option that get dropped on
+        // unwind; the only escape is `entries.push` which happens at
+        // the tail, so a panic before push leaves entries unchanged.
+        let face_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let attrs = font_ref.attributes();
+            let bold = attrs.weight.value() >= 600.0;
+            let italic = !matches!(attrs.style, fontcull_skrifa::attribute::Style::Normal);
 
-        let mut family_variants: HashSet<String> = HashSet::new();
-        let mut primary_hint: Option<String> = None;
-        for id in [StringId::FAMILY_NAME, StringId::TYPOGRAPHIC_FAMILY_NAME] {
-            if primary_hint.is_none() {
-                primary_hint = font_ref
-                    .localized_strings(id)
-                    .english_or_first()
-                    .and_then(|localized| bounded_font_family_name(localized.chars()));
+            let mut family_variants: HashSet<String> = HashSet::new();
+            let mut primary_hint: Option<String> = None;
+            for id in [StringId::FAMILY_NAME, StringId::TYPOGRAPHIC_FAMILY_NAME] {
+                if primary_hint.is_none() {
+                    primary_hint = font_ref
+                        .localized_strings(id)
+                        .english_or_first()
+                        .and_then(|localized| bounded_font_family_name(localized.chars()));
+                }
+
+                for localized in font_ref.localized_strings(id) {
+                    if let Some(name) = bounded_font_family_name(localized.chars()) {
+                        family_variants.insert(name);
+                        if family_variants.len() >= MAX_FAMILY_VARIANTS_PER_FACE {
+                            break;
+                        }
+                    }
+                }
+                if family_variants.len() >= MAX_FAMILY_VARIANTS_PER_FACE {
+                    break;
+                }
             }
 
-            for localized in font_ref.localized_strings(id) {
-                if let Some(name) = bounded_font_family_name(localized.chars()) {
-                    family_variants.insert(name);
-                    if family_variants.len() >= MAX_FAMILY_VARIANTS_PER_FACE {
+            // Last-resort fallback: malformed fonts may have no family IDs but
+            // still have a full name. Indexing that is better than silently
+            // dropping the face, and it avoids re-entering font-kit/DirectWrite.
+            if family_variants.is_empty() {
+                for id in [StringId::FULL_NAME, StringId::POSTSCRIPT_NAME] {
+                    if let Some(name) = font_ref
+                        .localized_strings(id)
+                        .english_or_first()
+                        .and_then(|localized| bounded_font_family_name(localized.chars()))
+                    {
+                        primary_hint = Some(name.clone());
+                        family_variants.insert(name);
                         break;
                     }
                 }
             }
-            if family_variants.len() >= MAX_FAMILY_VARIANTS_PER_FACE {
-                break;
-            }
-        }
 
-        // Last-resort fallback: malformed fonts may have no family IDs but
-        // still have a full name. Indexing that is better than silently
-        // dropping the face, and it avoids re-entering font-kit/DirectWrite.
-        if family_variants.is_empty() {
-            for id in [StringId::FULL_NAME, StringId::POSTSCRIPT_NAME] {
-                if let Some(name) = font_ref
-                    .localized_strings(id)
-                    .english_or_first()
-                    .and_then(|localized| bounded_font_family_name(localized.chars()))
-                {
-                    primary_hint = Some(name.clone());
-                    family_variants.insert(name);
-                    break;
-                }
+            (family_variants, primary_hint, bold, italic)
+        }));
+        let (family_variants, primary_hint, bold, italic) = match face_result {
+            Ok(t) => t,
+            Err(_) => {
+                log::warn!(
+                    "skrifa panicked while parsing face {i} in '{}' — skipping face",
+                    canonical.display()
+                );
+                continue;
             }
-        }
+        };
 
         if family_variants.is_empty() {
             continue;
@@ -2290,6 +2320,18 @@ pub fn clear_font_sources() -> Result<(), String> {
     // we hold the guard already from this fn's top, so re-acquiring
     // would CAS-fail / silently skip (the original Codex 3 bug).
     crate::font_cache_commands::clear_all_folders_in_gui_cache_locked(&_mutation_guard);
+    // Round 7 Wave 7.3: also drop the in-process cache-provenance
+    // set (W6.3 D1). Without this, paths registered earlier in the
+    // session via `lookup_family` cache hits would survive
+    // `clear_font_sources` and still pass subset_font's gate on
+    // their next use, undercutting the user's "fresh slate" signal.
+    // ALLOWED_FONT_PATHS (system fonts) intentionally NOT cleared —
+    // system fonts don't depend on user-source state and re-clearing
+    // them would force expensive re-discovery via font-kit on the
+    // next embed.
+    if let Ok(mut cache) = ALLOWED_CACHE_FONT_PATHS.lock() {
+        cache.clear();
+    }
     // Round 6 Wave 6.9: the `CUMULATIVE_FALLBACK_BYTES` reset that
     // used to live here was deleted along with the subset-fallback
     // path. No per-session budget to reset; nothing left to do on
