@@ -379,6 +379,13 @@ export default function FontEmbed() {
     const cache = perFileAnalysisRef.current;
     if (cache.size === 0) return;
     const gen = (pickGenRef.current = pickGenRef.current + 1);
+    // Round 6 Wave 6.4 #17: set analyzing=true during the sequential
+    // per-file IPC sequence. Without this, the Embed button remains
+    // enabled while reanalyzeWithSources walks the cache against
+    // (changed) sources — clicking Embed mid-reanalyze would consume
+    // the stale `selected` set and skip fonts that the user just
+    // unlocked by adding a source. Symmetric with ingestPaths above.
+    setAnalyzing(true);
     try {
       const newCache = new Map<string, FileAnalysis>();
       // Same batch-shared caches as ingestPaths — one round of
@@ -414,6 +421,12 @@ export default function FontEmbed() {
     } catch (e) {
       if (gen !== pickGenRef.current) return;
       addLog(t("error_prefix", e instanceof Error ? e.message : String(e)), "error");
+    } finally {
+      // Generation-gated unlock (same pattern as ingestPaths): only
+      // the latest reanalyze flips analyzing back off, so an in-flight
+      // older run completing late doesn't briefly un-lock the UI
+      // while a newer reanalyze is still mid-IPC.
+      if (gen === pickGenRef.current) setAnalyzing(false);
     }
   }, [addLog, t]);
 
@@ -526,7 +539,16 @@ export default function FontEmbed() {
       // sanitizeForDialog strips BiDi / zero-width controls so a
       // U+202E in a path can't visually reverse the surrounding log
       // line (Round 6 Wave 6.2 parity sweep).
+      //
+      // Round 6 Wave 6.4 #16 — collect-and-continue: one bad template
+      // / unsafe filename in a batch shouldn't abort the entire run.
+      // HDR + Timing already collect failures and continue with the
+      // remaining files; FontEmbed previously returned on the first
+      // pre-flight error, leaving a 10-file batch entirely unprocessed
+      // because file #3 had an unusual filename. We surface each
+      // failure in the log and only abort when EVERY file failed.
       const projectedOutputs: string[] = [];
+      const skippedPaths = new Set<string>();
       for (const p of filePaths) {
         try {
           projectedOutputs.push(deriveEmbeddedPath(p));
@@ -534,9 +556,13 @@ export default function FontEmbed() {
           const safePath = sanitizeForDialog(fileNameFromPath(p));
           const safeErr = sanitizeForDialog(e instanceof Error ? e.message : String(e));
           addLog(t("msg_fonts_error", safePath, safeErr), "error");
-          setLastActionResult("error");
-          return;
+          skippedPaths.add(p);
         }
+      }
+      if (skippedPaths.size === filePaths.length) {
+        // Every file failed pre-flight — nothing left to process.
+        setLastActionResult("error");
+        return;
       }
       try {
         const existingCount = await countExistingFiles(projectedOutputs);
@@ -579,6 +605,16 @@ export default function FontEmbed() {
           if (abortRef.current?.signal.aborted) {
             addLog(t("msg_fonts_cancelled"), "info");
             break;
+          }
+
+          // Skip files that failed pre-flight collect-and-continue
+          // (Wave 6.4 #16). Their error was already logged above; here
+          // we just need to not process them so processedCount still
+          // climbs to filePaths.length and the footer chip is accurate.
+          if (skippedPaths.has(filePath)) {
+            processedCount++;
+            setBatchProgress({ processed: processedCount, total: filePaths.length });
+            continue;
           }
 
           const fileName = fileNameFromPath(filePath);
@@ -673,15 +709,22 @@ export default function FontEmbed() {
           }
         }
 
-        if (!abortRef.current?.signal.aborted) {
-          addLog(t("msg_fonts_complete", successCount, filePaths.length), "success");
-        }
-
-        // Cancel takes precedence over success/error.
-        if (abortRef.current?.signal.aborted) {
+        // W6.4 #15 — match HDR/Timing post-loop pattern: gate the
+        // success log on `successCount > 0`, route 0-success batches
+        // to a distinct `msg_fonts_all_failed` line. Pre-W6.4 the
+        // success log fired even on all-failure batches ("Embed
+        // complete: 0/N processed" alongside a red error footer),
+        // contradicting itself. HDR + Timing already correctly split
+        // these two cases — bringing FontEmbed in line.
+        const aborted = !!abortRef.current?.signal.aborted;
+        if (aborted) {
           setLastActionResult("cancelled");
+        } else if (successCount > 0) {
+          addLog(t("msg_fonts_complete", successCount, filePaths.length), "success");
+          setLastActionResult("success");
         } else {
-          setLastActionResult(successCount > 0 ? "success" : "error");
+          addLog(t("msg_fonts_all_failed", filePaths.length), "error");
+          setLastActionResult("error");
         }
       } finally {
         setEmbedding(false);

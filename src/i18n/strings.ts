@@ -279,6 +279,10 @@ export const strings: Record<string, StringEntry> = {
     en: "Embed complete: {0}/{1} file(s) processed",
     zh: "嵌入完成：已处理 {0}/{1} 个文件",
   },
+  msg_fonts_all_failed: {
+    en: "Embed failed on all {0} file(s); see errors above",
+    zh: "全部 {0} 个文件嵌入失败，详见上方错误",
+  },
   msg_fonts_cancelled: { en: "Embed cancelled.", zh: "已取消嵌入。" },
   msg_fonts_error: { en: "Error embedding {0}: {1}", zh: "嵌入 {0} 出错：{1}" },
   fonts_drop_hint: {
