@@ -786,6 +786,19 @@ fn import_user_font_batch_tx(
             ",
         )
         .map_err(|e| db_error("face insert prepare failed", e))?;
+    // W6.7 Round 6 — WHY plain INSERT (not OR IGNORE) for the
+    // family_keys table: the schema (line ~284) has NO UNIQUE
+    // constraint on (key, face_id, source_order), so there is
+    // nothing for an IGNORE clause to suppress. A font with multiple
+    // localized family names legitimately produces multiple rows
+    // sharing the same `face_id` — that's the normal case. Any
+    // genuine SQLite error from this INSERT (disk full, table
+    // dropped mid-tx) is a real failure we want to surface via
+    // db_error, not silently swallow. `insert_face` above uses
+    // INSERT OR IGNORE because font_faces DOES have a UNIQUE
+    // constraint on (path, face_index) for cross-source dedup —
+    // the IGNORE there short-circuits the duplicate-source case,
+    // which is intentional. The asymmetry is by design.
     let mut insert_key = tx
         .prepare(
             "
@@ -1158,6 +1171,17 @@ fn parse_local_font_file(canonical: &Path, scan_id: u64) -> Vec<LocalFontEntry> 
         // Stabilize the primary-name pick: prefer the best available English
         // family name if it is among the variants, else fall back to sorted
         // order so UI listings stay deterministic across runs.
+        //
+        // W6.7 Round 6 — WHY HashSet→sort here: `family_variants` is a
+        // HashSet for cheap dedup during the per-name-record walk above
+        // (a font's name table can list the same family string multiple
+        // times across (platform, language) tuples). HashSet iteration
+        // order is non-deterministic across runs, so directly using
+        // `family_variants.into_iter().collect()` would surface different
+        // primary names on different launches even for the same font
+        // file. Sorting the Vec stabilizes the unwrap_or path before
+        // the rotate_right() rotation places the English variant at
+        // index 0. Test pin: `db_lookup_prefers_newer_source_for_same_family_key`.
         let mut families: Vec<String> = family_variants.into_iter().collect();
         families.sort();
         if let Some(pos) = primary_hint
@@ -1850,6 +1874,16 @@ pub async fn scan_font_directory(
         if !canonical_dir.is_dir() {
             return Err("Not a directory".to_string());
         }
+        // W6.7 Round 6 — WHY full path in log_label (vs sanitized /
+        // truncated): log::info! is INTERNAL telemetry consumed by
+        // `RUST_LOG=info` dev runs and tauri-plugin-log files written
+        // under app-data-dir (user-local, no cross-user reach). The
+        // path is provided BY the user via picker / drag-drop, so it
+        // is content the user already saw. P1a (single-user desktop)
+        // does not consider local-file disclosure a leak. If this
+        // app later ships a remote-log shipper or a public crash
+        // reporter, sanitize at the shipper boundary, not here — the
+        // local INFO line is the right diagnostic granularity.
         let log_label = format!("Scanned font directory '{}'", canonical_dir.display());
         // Collect entries for the GUI persistent cache.
         // Best-effort: if the cache populate later fails or the cache

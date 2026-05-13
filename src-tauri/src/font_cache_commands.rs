@@ -608,6 +608,24 @@ pub fn clear_font_cache() -> Result<(), String> {
         .clone()
         .ok_or_else(|| "Cache path not initialized; setup did not run".to_string())?;
 
+    // Two-lock pattern (W6.7 Round 6): the slot lock is taken,
+    // released, then re-taken — bracketed by the CacheMutationGuard
+    // above. The interleaved drop is intentional so the SQLite file
+    // handle is released before `std::fs::remove_file` runs (Windows
+    // file locks prevent removing an open file). During the brief
+    // window between the two lock acquisitions, observers see
+    // `slot.is_some() == false` AND the file may or may not exist
+    // depending on which remove_file calls have completed — `open_font_cache`
+    // would derive `schema_mismatch = !available && path.try_exists()`,
+    // which is the same wire-shape it would emit during legitimate
+    // schema-mismatch state. User-visible consequence in the
+    // sub-millisecond window: the cache status reads as "unavailable"
+    // (correct) and possibly transiently "schema_mismatch=true"
+    // (acceptable — the next `open_font_cache` poll after recreate
+    // settles to the correct state). The CacheMutationGuard above
+    // serializes the whole clear vs any concurrent rescan, so the
+    // window is locked against the operation that would matter most.
+    //
     // Drop handle first so SQLite releases the file lock before we
     // try to delete. Holding the slot lock through the close is fine —
     // it's the SQLite-level file handle drop we care about.
