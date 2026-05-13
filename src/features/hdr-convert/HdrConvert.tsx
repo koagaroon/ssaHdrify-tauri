@@ -26,7 +26,12 @@ import { useClickOutside } from "../../lib/useClickOutside";
 import { useLogPanel } from "../../lib/useLogPanel";
 import { LogPanel } from "../../lib/LogPanel";
 import { DropErrorBanner } from "../../lib/DropErrorBanner";
-import { buildConflictMessage, normalizeOutputKey } from "../../lib/dedup-helpers";
+import {
+  buildConflictMessage,
+  normalizeOutputKey,
+  sanitizeError,
+  sanitizeForDialog,
+} from "../../lib/dedup-helpers";
 
 /** Convert ASS color "&H00BBGGRR" to HTML "#RRGGBB" */
 function assColorToHex(assColor: string): string {
@@ -254,7 +259,7 @@ export default function HdrConvert() {
     ref: dropZoneRef,
     onPaths: handleDroppedPaths,
     onActiveChange: setDropActive,
-    onError: (e) => setDropError(e instanceof Error ? e.message : String(e)),
+    onError: (e) => setDropError(sanitizeError(e)),
     disabled: processing,
   });
 
@@ -309,7 +314,7 @@ export default function HdrConvert() {
           }
         }
       } catch (e) {
-        addLog(t("error_prefix", e instanceof Error ? e.message : String(e)), "error");
+        addLog(t("error_prefix", sanitizeError(e)), "error");
         setLastActionResult("error");
         return;
       }
@@ -341,9 +346,14 @@ export default function HdrConvert() {
           // the loop would lose `fileName` (Round 1 F2.N-R1-1 brittle
           // TDZ shape). `let` + initial = filePath gives the catch a
           // usable identifier in every code path.
-          let fileName = filePath;
+          //
+          // Wave 7.1 BiDi parity: fileName flows into ~8 addLog calls
+          // below; sanitize once at source so every downstream
+          // interpolation is automatically BiDi-scrubbed without each
+          // callsite remembering to wrap. Same pattern as FontEmbed.
+          let fileName = sanitizeForDialog(filePath);
           try {
-            fileName = fileNameFromPath(filePath);
+            fileName = sanitizeForDialog(fileNameFromPath(filePath));
           } catch {
             // Keep the raw path — better than no attribution.
           }
@@ -363,7 +373,7 @@ export default function HdrConvert() {
               outputPath = resolveOutputPath(filePath, activeTemplate, eotf);
             } catch (e) {
               addLog(
-                t("msg_skipped", fileName, e instanceof Error ? e.message : String(e)),
+                t("msg_skipped", fileName, sanitizeError(e)),
                 "error"
               );
               continue;
@@ -384,7 +394,7 @@ export default function HdrConvert() {
               content = await readText(filePath);
             } catch (e) {
               addLog(
-                t("msg_read_error", fileName, e instanceof Error ? e.message : String(e)),
+                t("msg_read_error", fileName, sanitizeError(e)),
                 "error"
               );
               continue;
@@ -433,7 +443,7 @@ export default function HdrConvert() {
             successCount++;
           } catch (e) {
             addLog(
-              t("msg_convert_error", fileName, e instanceof Error ? e.message : String(e)),
+              t("msg_convert_error", fileName, sanitizeError(e)),
               "error"
             );
           } finally {

@@ -39,6 +39,7 @@ import { DropErrorBanner } from "../../lib/DropErrorBanner";
 import {
   buildConflictMessage,
   normalizeOutputKey,
+  sanitizeError,
   sanitizeForDialog,
 } from "../../lib/dedup-helpers";
 import {
@@ -336,7 +337,15 @@ export default function BatchRename() {
         width: "1fr",
         render: (row) =>
           row.video ? (
-            <span title={row.video.name}>{row.video.name}</span>
+            // Wave 7.1: sanitize the visible video filename. Design
+            // doc § Stage 5d positioned the destructive-rename ask()
+            // dialog as the safety net, but a BiDi-reversed display
+            // in the grid undermines the visual-confirm value the
+            // user relies on BEFORE the dialog appears (they pick
+            // which row to rename from this grid, not the dialog).
+            <span title={sanitizeForDialog(row.video.name)}>
+              {sanitizeForDialog(row.video.name)}
+            </span>
           ) : (
             <span style={{ color: "var(--text-muted)", fontStyle: "italic" }}>—</span>
           ),
@@ -371,12 +380,12 @@ export default function BatchRename() {
               }}
               className={`rename-row-picker${row.subtitle ? " is-paired" : ""}`}
               aria-label={t("rename_pick_subtitle")}
-              title={row.subtitle?.name}
+              title={row.subtitle ? sanitizeForDialog(row.subtitle.name) : undefined}
             >
               <option value="">{t("rename_pick_subtitle_none")}</option>
               {availableSubtitles.map((s) => (
                 <option key={s.path} value={s.path}>
-                  {s.name}
+                  {sanitizeForDialog(s.name)}
                 </option>
               ))}
             </select>
@@ -460,7 +469,7 @@ export default function BatchRename() {
     ref: dropZoneRef,
     onPaths: handleDroppedPaths,
     onActiveChange: setDropActive,
-    onError: (e) => setDropError(e instanceof Error ? e.message : String(e)),
+    onError: (e) => setDropError(sanitizeError(e)),
     disabled: busy,
   });
 
@@ -506,7 +515,7 @@ export default function BatchRename() {
           );
           derivedTargets.push({ row, outputPath });
         } catch (e) {
-          const reason = e instanceof Error ? e.message : String(e);
+          const reason = sanitizeError(e);
           addLog(t("msg_rename_skipped", row.subtitle!.name, reason), "error");
           skippedDeriveCount += 1;
         }
@@ -634,7 +643,7 @@ export default function BatchRename() {
           }
         }
       } catch (e) {
-        addLog(t("error_prefix", e instanceof Error ? e.message : String(e)), "error");
+        addLog(t("error_prefix", sanitizeError(e)), "error");
         setLastActionResult("error");
         return;
       }
@@ -710,7 +719,7 @@ export default function BatchRename() {
             addLog(t("msg_rename_done", subName, outName), "success");
             successCount++;
           } catch (e) {
-            const reason = e instanceof Error ? e.message : String(e);
+            const reason = sanitizeError(e);
             addLog(t("msg_rename_error", subName, reason), "error");
           } finally {
             processedCount++;
@@ -741,7 +750,7 @@ export default function BatchRename() {
         // an unhandled rejection — the Run button's spinner ends with no
         // log line, no toast, no banner. Surface it through the same log
         // path the per-row errors use.
-        const reason = e instanceof Error ? e.message : String(e);
+        const reason = sanitizeError(e);
         addLog(t("error_prefix", reason), "error");
         setLastActionResult("error");
       } finally {
@@ -995,9 +1004,9 @@ export default function BatchRename() {
                   <span
                     className="text-xs truncate flex-1"
                     style={{ color: "var(--text-secondary)" }}
-                    title={chosenDir}
+                    title={sanitizeForDialog(chosenDir)}
                   >
-                    {chosenDir}
+                    {sanitizeForDialog(chosenDir)}
                   </span>
                 ) : (
                   <span className="text-xs italic" style={{ color: "var(--text-muted)" }}>

@@ -120,3 +120,14 @@ export function normalizeOutputKey(path: string): string {
 export function sanitizeForDialog(name: string): string {
   return name.replace(BIDI_AND_ZERO_WIDTH_GLOBAL_RE, "");
 }
+
+/** Round 7 Wave 7.1 — shared catch-arm helper. Normalizes the
+ *  `e: unknown` thrown by IPC / async code to a string and scrubs
+ *  BiDi / zero-width controls in one call. Adopted across all four
+ *  tab handlers + FontCacheDriftModal so every render of an error
+ *  message into the log panel / dialog body / status banner goes
+ *  through the same sanitizer — eliminates the per-callsite "did
+ *  I remember to wrap?" question. */
+export function sanitizeError(e: unknown): string {
+  return sanitizeForDialog(e instanceof Error ? e.message : String(e));
+}

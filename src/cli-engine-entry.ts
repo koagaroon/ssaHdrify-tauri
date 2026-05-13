@@ -34,6 +34,7 @@ import {
   substituteTemplate,
 } from "./lib/path-validation";
 import { parseSubtitle } from "./lib/subtitle-parser";
+import { stripUnicodeControls } from "./lib/unicode-controls";
 
 // Chain feature — runtime + types re-exported so the Rust shell can
 // reach them via the bundled engine.js. Adding the chain entry here
@@ -610,7 +611,17 @@ function fileNameFromPath(path: string): string {
   // Conditional separator normalization: `\` is a valid filename char on
   // POSIX (Codex edb0e74f / 8850ede7). Unconditional conversion turned
   // single Linux filenames containing `\` into path components.
+  //
+  // Round 7 Wave 7.1: matches the BiDi scrubbing the tauri-api.ts
+  // `fileNameFromPath` does via stripUnicodeControls — without this
+  // a U+202E in a CLI-supplied path could reverse downstream log
+  // lines and stderr output. The two implementations diverge on
+  // separator handling intentionally (this one is POSIX-correct;
+  // the tauri-api.ts one unconditionally converts \ → / which is
+  // wrong on POSIX) — sharing the BiDi scrub keeps the security
+  // primitive uniform across both runtimes.
   const normalized = isWindowsRuntime ? path.replace(/\\/g, "/") : path;
   const slash = normalized.lastIndexOf("/");
-  return slash >= 0 ? normalized.slice(slash + 1) : normalized;
+  const raw = slash >= 0 ? normalized.slice(slash + 1) : normalized;
+  return stripUnicodeControls(raw);
 }

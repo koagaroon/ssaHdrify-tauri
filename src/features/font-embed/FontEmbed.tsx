@@ -274,8 +274,11 @@ export default function FontEmbed() {
           try {
             content = await readText(path);
           } catch (e) {
-            const reason = e instanceof Error ? e.message : String(e);
-            addLog(t("msg_read_error", fileNameFromPath(path), reason), "error");
+            // Wave 7.1 BiDi parity: read errors carry the file path
+            // (often the user-picked path including filename), and
+            // the Rust IPC error can interpolate that path again.
+            const reason = sanitizeForDialog(e instanceof Error ? e.message : String(e));
+            addLog(t("msg_read_error", sanitizeForDialog(fileNameFromPath(path)), reason), "error");
             continue;
           }
           if (gen !== pickGenRef.current) return;
@@ -328,7 +331,10 @@ export default function FontEmbed() {
         });
       } catch (e) {
         if (gen !== pickGenRef.current) return;
-        addLog(t("error_prefix", e instanceof Error ? e.message : String(e)), "error");
+        addLog(
+          t("error_prefix", sanitizeForDialog(e instanceof Error ? e.message : String(e))),
+          "error"
+        );
       } finally {
         if (gen === pickGenRef.current) setAnalyzing(false);
       }
@@ -361,7 +367,7 @@ export default function FontEmbed() {
     ref: dropZoneRef,
     onPaths: handleDroppedPaths,
     onActiveChange: setDropActive,
-    onError: (e) => setDropError(e instanceof Error ? e.message : String(e)),
+    onError: (e) => setDropError(sanitizeForDialog(e instanceof Error ? e.message : String(e))),
     // Match the Pick-Files / Pick-Folder button gates which already
     // include `analyzing`. Drops accepted during analyze waste the
     // first analysis pass (gen counter saves correctness but the work
@@ -420,7 +426,10 @@ export default function FontEmbed() {
       });
     } catch (e) {
       if (gen !== pickGenRef.current) return;
-      addLog(t("error_prefix", e instanceof Error ? e.message : String(e)), "error");
+      addLog(
+        t("error_prefix", sanitizeForDialog(e instanceof Error ? e.message : String(e))),
+        "error"
+      );
     } finally {
       // Generation-gated unlock (same pattern as ingestPaths): only
       // the latest reanalyze flips analyzing back off, so an in-flight
@@ -442,7 +451,10 @@ export default function FontEmbed() {
         setFontSources([]);
         await reanalyzeWithSources();
       } catch (e) {
-        addLog(t("error_prefix", e instanceof Error ? e.message : String(e)), "error");
+        addLog(
+          t("error_prefix", sanitizeForDialog(e instanceof Error ? e.message : String(e))),
+          "error"
+        );
       } finally {
         setSourceBusy(false);
       }
@@ -493,7 +505,10 @@ export default function FontEmbed() {
           setFontSources(nextSources);
           await reanalyzeWithSources();
         } catch (e) {
-          addLog(t("error_prefix", e instanceof Error ? e.message : String(e)), "error");
+          addLog(
+          t("error_prefix", sanitizeForDialog(e instanceof Error ? e.message : String(e))),
+          "error"
+        );
         } finally {
           setSourceBusy(false);
         }
@@ -617,14 +632,19 @@ export default function FontEmbed() {
             continue;
           }
 
-          const fileName = fileNameFromPath(filePath);
-          addLog(t("msg_processing", fileName));
+          // Round 7 Wave 7.1 BiDi parity — fileName / outName below
+          // flow into many addLog calls. Compute the sanitized form
+          // once at source so every downstream interpolation site
+          // automatically gets BiDi-scrubbed display text without
+          // each callsite having to remember to wrap.
+          const safeFileName = sanitizeForDialog(fileNameFromPath(filePath));
+          addLog(t("msg_processing", safeFileName));
 
           try {
             const outputPath = deriveEmbeddedPath(filePath);
             const normalizedOut = normalizeOutputKey(outputPath);
             if (seenOutputs.has(normalizedOut)) {
-              addLog(t("msg_skipped_duplicate", fileName), "error");
+              addLog(t("msg_skipped_duplicate", safeFileName), "error");
               continue;
             }
             seenOutputs.add(normalizedOut);
@@ -639,7 +659,7 @@ export default function FontEmbed() {
             // outside the ingest guards.
             const cached = perFileAnalysisRef.current.get(filePath);
             if (!cached) {
-              addLog(t("msg_fonts_error", fileName, "analysis cache miss"), "error");
+              addLog(t("msg_fonts_error", safeFileName, "analysis cache miss"), "error");
               continue;
             }
             if (abortRef.current?.signal.aborted) break;
@@ -685,22 +705,30 @@ export default function FontEmbed() {
             }
             if (abortRef.current?.signal.aborted) break;
 
-            const outName = fileNameFromPath(outputPath);
+            // Round 7 Wave 7.1 — outName goes through addLog twice
+            // below; sanitize once at derivation. fileNameFromPath
+            // result is from a user-derived path that may carry P1b
+            // attacker-influenced segments.
+            const safeOutName = sanitizeForDialog(fileNameFromPath(outputPath));
             if (result.embeddedCount === 0) {
               // Nothing was actually embedded — skip the write so we
               // don't produce a `.embedded.ass` that's identical to the
               // input and log "saved" for a no-op. Surface as a warning
               // so the user knows the file was processed but the output
               // would have been a copy of the source.
-              addLog(t("msg_embed_no_change", outName), "info");
+              addLog(t("msg_embed_no_change", safeOutName), "info");
               continue;
             }
             await writeText(outputPath, result.content);
-            addLog(t("msg_embed_saved", outName, result.embeddedCount), "success");
+            addLog(t("msg_embed_saved", safeOutName, result.embeddedCount), "success");
             successCount++;
           } catch (e) {
             addLog(
-              t("msg_fonts_error", fileName, e instanceof Error ? e.message : String(e)),
+              t(
+                "msg_fonts_error",
+                safeFileName,
+                sanitizeForDialog(e instanceof Error ? e.message : String(e))
+              ),
               "error"
             );
           } finally {

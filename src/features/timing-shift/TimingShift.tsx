@@ -19,7 +19,12 @@ import { useClickOutside } from "../../lib/useClickOutside";
 import { useLogPanel } from "../../lib/useLogPanel";
 import { LogPanel } from "../../lib/LogPanel";
 import { DropErrorBanner } from "../../lib/DropErrorBanner";
-import { buildConflictMessage, normalizeOutputKey } from "../../lib/dedup-helpers";
+import {
+  buildConflictMessage,
+  normalizeOutputKey,
+  sanitizeError,
+  sanitizeForDialog,
+} from "../../lib/dedup-helpers";
 
 type Unit = "ms" | "s";
 type Direction = "slower" | "faster";
@@ -273,7 +278,7 @@ export default function TimingShift() {
         // would otherwise emit a confusing log line tied to the
         // abandoned selection. Drop silently when superseded.
         if (gen !== pickGenRef.current) return;
-        addLog(t("error_prefix", e instanceof Error ? e.message : String(e)), "error");
+        addLog(t("error_prefix", sanitizeError(e)), "error");
         return;
       }
       if (gen !== pickGenRef.current) return;
@@ -318,7 +323,7 @@ export default function TimingShift() {
     ref: dropZoneRef,
     onPaths: handleDroppedPaths,
     onActiveChange: setDropActive,
-    onError: (e) => setDropError(e instanceof Error ? e.message : String(e)),
+    onError: (e) => setDropError(sanitizeError(e)),
     disabled: busy,
   });
 
@@ -370,7 +375,7 @@ export default function TimingShift() {
           }
         }
       } catch (e) {
-        addLog(t("error_prefix", e instanceof Error ? e.message : String(e)), "error");
+        addLog(t("error_prefix", sanitizeError(e)), "error");
         setLastActionResult("error");
         return;
       }
@@ -399,9 +404,14 @@ export default function TimingShift() {
           // entire iteration so the catch block can attribute errors
           // even if a future `fileNameFromPath` refactor starts throwing
           // (Round 1 F2.N-R1-1).
-          let fileName = filePath;
+          //
+          // Wave 7.1 BiDi parity: same per-iteration sanitization as
+          // HdrConvert / FontEmbed — every addLog interpolating fileName
+          // gets BiDi-scrubbed display text from a single sanitize-at-
+          // source.
+          let fileName = sanitizeForDialog(filePath);
           try {
-            fileName = fileNameFromPath(filePath);
+            fileName = sanitizeForDialog(fileNameFromPath(filePath));
           } catch {
             // Keep the raw path — better than no attribution.
           }
@@ -427,7 +437,7 @@ export default function TimingShift() {
               content = await readText(filePath);
             } catch (e) {
               addLog(
-                t("msg_read_error", fileName, e instanceof Error ? e.message : String(e)),
+                t("msg_read_error", fileName, sanitizeError(e)),
                 "error"
               );
               continue;
@@ -448,7 +458,7 @@ export default function TimingShift() {
             successCount++;
           } catch (e) {
             addLog(
-              t("msg_timing_error", fileName, e instanceof Error ? e.message : String(e)),
+              t("msg_timing_error", fileName, sanitizeError(e)),
               "error"
             );
           } finally {

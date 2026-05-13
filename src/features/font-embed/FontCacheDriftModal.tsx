@@ -141,7 +141,12 @@ export default function FontCacheDriftModal({
       setSkippedFolders(result.skipped);
       onRescanComplete();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      // Round 7 Wave 7.1 BiDi parity sweep — Rust IPC errors can
+      // interpolate folder paths (P1b attacker-influenced content).
+      // sanitizeForDialog strips BiDi / zero-width controls so a
+      // U+202E in a drifted folder path can't reverse the surrounding
+      // error banner text.
+      setError(sanitizeForDialog(e instanceof Error ? e.message : String(e)));
       setWorking(null);
     }
   }, [onRescanComplete, t]);
@@ -157,7 +162,8 @@ export default function FontCacheDriftModal({
       setDoneMessage(t("font_cache_cleared"));
       onClearComplete();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      // Same Wave 7.1 reason as handleRescan above.
+      setError(sanitizeForDialog(e instanceof Error ? e.message : String(e)));
       setWorking(null);
     }
   }, [onClearComplete, t]);
