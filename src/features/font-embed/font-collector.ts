@@ -11,6 +11,7 @@
  */
 
 import type { ParsedASS } from "ass-compiler";
+import { BIDI_AND_ZERO_WIDTH_CHARS } from "../../lib/unicode-controls";
 
 // Hoisted to module scope (A-R5-FECHAIN-12) so the `\p{L}` Unicode
 // property regex compiles once instead of per override block. Used by
@@ -81,24 +82,29 @@ function normalizeFamily(raw: string): string {
 
 /** Strip control characters and cap length — applied to every family name
  *  captured from a subtitle file before it flows into matching or output.
- *  Range covers C0 (0x00-0x1F), DEL (0x7F), C1 (0x80-0x9F), and the
- *  Unicode line/paragraph separators (U+2028 / U+2029) — full parity
- *  with `ass-uuencode.ts::safeName` (Round 1 F3.N-R1-14). The [Fonts]
- *  header layer was already stripping U+2028/U+2029, but the same name
- *  flowed verbatim into log lines and chain warning text where these
- *  separators could break line-oriented output.
+ *  Range covers C0 (0x00-0x1F), DEL (0x7F), C1 (0x80-0x9F), the Unicode
+ *  line/paragraph separators (U+2028 / U+2029), AND the full
+ *  BiDi / zero-width control set from `unicode-controls.ts` (Round 6
+ *  Wave 6.2 parity sweep — previously a family name carrying U+202E
+ *  could flow through `sanitizeFamily` into detection-grid labels, log
+ *  lines, and chain progress text where the visual-reversal attack
+ *  re-surfaced after `safeName` had already scrubbed it on the [Fonts]
+ *  header path). Full parity with `ass-uuencode.ts::safeName` on the
+ *  shared codepoints — see `sanitization.test.ts` for the pin.
  *
  *  Exported for the cross-helper symmetry pin test (Round 2 N-R2-17):
  *  the parity claim between this helper and `ass-uuencode::buildFontEntry`'s
  *  inline `safeName` is enforced by a test that exercises both sides on
  *  the same input range. */
 export function sanitizeFamily(raw: string): string {
-  return (
-    raw
-      // eslint-disable-next-line no-control-regex -- intentional: sanitize control chars from subtitle font names
-      .replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029]/g, "")
-      .slice(0, 128)
-  );
+  // Control characters reach the regex via the dynamically-built
+  // `new RegExp(...)` form rather than a regex literal — eslint's
+  // `no-control-regex` only inspects literals, so no inline disable
+  // directive is needed. Behavior is identical to a literal regex
+  // (codepoint classes are evaluated at the same runtime stage).
+  return raw
+    .replace(new RegExp(`[\\x00-\\x1f\\x7f-\\x9f${BIDI_AND_ZERO_WIDTH_CHARS}]`, "gu"), "")
+    .slice(0, 128);
 }
 
 /**
@@ -374,7 +380,13 @@ function applyOverrideTags(
   // Cap the capture at 128 chars: `sanitizeFamily` will also slice to 128,
   // but bounding the match keeps allocator cost low against crafted ASS
   // with absurdly long names inside an override block.
-  const fnMatch = block.match(/\\fn([^\\}]{0,128})/);
+  //
+  // Exclusion `[^\\}{]` (Round 6 Wave 6.2): `{` is also a stop char so
+  // crafted ASS like `\fn{Evil}` doesn't capture `{Evil` as a font name —
+  // libass stops the family at any brace boundary and so do we, otherwise
+  // the captured "family" carries a literal `{` into matching / output
+  // and silently misses the user's intended font.
+  const fnMatch = block.match(/\\fn([^\\}{]{0,128})/);
   if (fnMatch) {
     const rawFamily = normalizeFamily(fnMatch[1]);
     if (!rawFamily) {

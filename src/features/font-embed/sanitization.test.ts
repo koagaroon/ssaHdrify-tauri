@@ -76,4 +76,43 @@ describe("font-name sanitization symmetry (Round 2 N-R2-17)", () => {
     expect(sanitizeFamily(input)).toBe(input);
     expect(buildFontEntryName(input)).toBe(input);
   });
+
+  // ── Round 6 Wave 6.2 — BiDi / zero-width parity pin ──
+  // Pre-Round-6 sanitizeFamily only stripped C0 + DEL + C1 + line
+  // separators while safeName (via BIDI_AND_ZERO_WIDTH_CHARS import)
+  // also stripped the bidi-control / zero-width set. The asymmetry
+  // let a U+202E-bearing family name flow through sanitizeFamily
+  // into detection-grid labels, log lines, and chain progress text —
+  // sites that don't post-process with sanitizeForDialog. These
+  // tests pin BOTH helpers strip the same BiDi / zero-width range so
+  // a future "consolidate the regexes" pass can't re-introduce the
+  // gap. \u escapes (same convention as LINE_SEP / PARA_SEP above)
+  // keep the source readable — literal chars would render as
+  // invisible / reversed text in editors.
+  const BIDI_SAMPLE = "\u202E\u202D\u202A\u200E\u200F"; // RLO LRO LRE LRM RLM
+  const ZERO_WIDTH_SAMPLE = "\u200B\u200C\u200D\u2060\uFEFF"; // ZWSP ZWNJ ZWJ WJ BOM
+  const ARABIC_LETTER_MARK = "\u061C";
+
+  it("sanitizeFamily strips BiDi controls (parity with safeName)", () => {
+    const input = `Arial${BIDI_SAMPLE}Bold`;
+    expect(sanitizeFamily(input)).toBe("ArialBold");
+  });
+
+  it("sanitizeFamily strips zero-width controls (parity with safeName)", () => {
+    const input = `Arial${ZERO_WIDTH_SAMPLE}Bold`;
+    expect(sanitizeFamily(input)).toBe("ArialBold");
+  });
+
+  it("sanitizeFamily strips U+061C Arabic Letter Mark (parity with safeName)", () => {
+    const input = `Arial${ARABIC_LETTER_MARK}Bold`;
+    expect(sanitizeFamily(input)).toBe("ArialBold");
+  });
+
+  it("buildFontEntry's safeName also strips BiDi + zero-width (parity counter-pin)", () => {
+    const input = `Arial${BIDI_SAMPLE}${ZERO_WIDTH_SAMPLE}${ARABIC_LETTER_MARK}Bold`;
+    const out = buildFontEntryName(input);
+    // safeName replaces (vs delete) — each stripped codepoint becomes `_`.
+    const stripped = BIDI_SAMPLE.length + ZERO_WIDTH_SAMPLE.length + ARABIC_LETTER_MARK.length;
+    expect(out).toBe("Arial" + "_".repeat(stripped) + "Bold");
+  });
 });

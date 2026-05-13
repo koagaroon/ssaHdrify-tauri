@@ -81,6 +81,17 @@ describe("assertSafeOutputFilename", () => {
     expect(() => assertSafeOutputFilename("a{b.ass")).toThrow(/illegal/);
     expect(() => assertSafeOutputFilename("a}b.ass")).toThrow(/illegal/);
   });
+
+  it("rejects BiDi / zero-width controls (Round 6 Wave 6.2 parity)", () => {
+    // ILLEGAL_FILENAME_CHARS is C0 + DEL + NTFS punctuation only — Cf
+    // codepoints slip through and land on disk verbatim. The Rust
+    // backstop catches them at IPC entry, but a future direct-write
+    // path (e.g., new Tauri dialog plugin) would bypass that. Reject
+    // here as defense-in-depth, symmetric with decomposeInputPath.
+    expect(() => assertSafeOutputFilename("evil\u{202E}txt.ass")).toThrow(/invisible|bidi/);
+    expect(() => assertSafeOutputFilename("EP\u{200B}01.ass")).toThrow(/invisible|bidi/);
+    expect(() => assertSafeOutputFilename("ar\u{061C}b.ass")).toThrow(/invisible|bidi/);
+  });
 });
 
 describe("decomposeInputPath", () => {
@@ -178,6 +189,29 @@ describe("decomposeInputPath", () => {
     const parts = decomposeInputPath("/etc/.hidden.ass");
     expect(parts.baseName).toBe(".hidden");
     expect(parts.ext).toBe(".ass");
+  });
+
+  it("rejects `..` path components (Round 6 Wave 6.2 parity)", () => {
+    // The Rust validate_ipc_path rejects parent-directory segments at
+    // IPC entry (Round 5 Wave 5.1), but TS-side template derivation
+    // consumes decomposeInputPath results BEFORE the round-trip. A
+    // raw `C:/Allowed/../Denied/file.ass` would derive an output
+    // under `C:/Denied/` and only get caught when that output path
+    // itself round-trips. Reject at TS entry as defense-in-depth,
+    // symmetric with the Rust backstop.
+    expect(() => decomposeInputPath("C:\\Allowed\\..\\Denied\\file.ass")).toThrow(
+      /parent-directory/
+    );
+    expect(() => decomposeInputPath("/home/u/../etc/passwd")).toThrow(/parent-directory/);
+  });
+
+  it("accepts `..` inside a filename segment (not a parent-dir segment)", () => {
+    // Substring `..` inside a filename component is legitimate
+    // (`foo..bar.ass`), not a traversal. The component-level split
+    // distinguishes them — mirrors the Rust-side
+    // `validate_accepts_dotdot_inside_filename` pin.
+    expect(() => decomposeInputPath("C:\\subs\\foo..bar.ass")).not.toThrow();
+    expect(() => decomposeInputPath("/home/u/file..name.ass")).not.toThrow();
   });
 });
 

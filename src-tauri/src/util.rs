@@ -83,6 +83,11 @@ pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
                 | '\u{200E}' | '\u{200F}'
                 | '\u{202A}' | '\u{202B}' | '\u{202C}' | '\u{202D}' | '\u{202E}'
                 | '\u{2066}' | '\u{2067}' | '\u{2068}' | '\u{2069}'
+                // U+061C Arabic Letter Mark — Cf, bidi format
+                // character. The TS unicode-controls set includes
+                // it (Round 5 Wave 5.1); Round 6 Wave 6.2 parity sweep
+                // adds the same here so the two sides match.
+                | '\u{061C}'
             )
     }) {
         return Err(format!("{label} path contains invalid characters"));
@@ -189,6 +194,19 @@ pub fn validate_font_family(family: &str) -> Result<(), String> {
                 | '\u{2060}'
                 | '\u{180E}'
                 | '\u{FEFF}'
+                // Round 6 Wave 6.2 parity sweep — these three were
+                // present in `validate_ipc_path` and the TS
+                // `unicode-controls` set but missing here, leaving a
+                // gap where a family name carrying any of them would
+                // be accepted by validate_font_family then fail
+                // validate_ipc_path downstream (or worse: never reach
+                // ipc validation if the family flows only to UI / log
+                // sites). U+2028 / U+2029 are line / paragraph
+                // separators (Zl / Zp — `is_control()` is Cc only and
+                // misses them); U+061C is the Arabic Letter Mark, a
+                // Cf bidi format char.
+                | '\u{2028}' | '\u{2029}'
+                | '\u{061C}'
             )
     }) {
         return Err("Font family name contains invalid characters".to_string());
@@ -303,6 +321,18 @@ mod tests {
         // calls them out explicitly because several Rust path libraries
         // treat them ambiguously across platforms.
         let err = validate_ipc_path("multi\u{2028}line.ass", "Test").unwrap_err();
+        assert!(err.to_lowercase().contains("invalid"));
+    }
+
+    #[test]
+    fn validate_rejects_arabic_letter_mark_in_path() {
+        // U+061C ARABIC LETTER MARK — Cf bidi format char. Not in
+        // is_control() (Cc) and was originally absent from the
+        // explicit matches! list, leaving a gap with the TS
+        // unicode-controls set and `validate_font_family` (which also
+        // missed it pre-Round-6). Round 6 Wave 6.2 parity sweep
+        // closed both sides.
+        let err = validate_ipc_path("evil\u{061C}.ass", "Test").unwrap_err();
         assert!(err.to_lowercase().contains("invalid"));
     }
 
@@ -451,6 +481,28 @@ mod tests {
         // names `Arial` and `Ari\u{200B}al` would resolve to distinct
         // session-DB rows; the validator must reject upstream.
         let err = validate_font_family("Ari\u{200B}al").unwrap_err();
+        assert!(err.contains("invalid"));
+    }
+
+    #[test]
+    fn validate_font_family_rejects_line_paragraph_separators() {
+        // U+2028 / U+2029 are Zl / Zp, not Cc — pre-Round-6 the
+        // matches! list omitted them, so a family name carrying
+        // either would slip past validate_font_family and then trip
+        // validate_ipc_path on the path side. Round 6 Wave 6.2 sweep
+        // closes the asymmetry.
+        let err1 = validate_font_family("Ari\u{2028}al").unwrap_err();
+        assert!(err1.contains("invalid"));
+        let err2 = validate_font_family("Ari\u{2029}al").unwrap_err();
+        assert!(err2.contains("invalid"));
+    }
+
+    #[test]
+    fn validate_font_family_rejects_arabic_letter_mark() {
+        // U+061C — Cf bidi format char; same parity rationale as
+        // above. The TS unicode-controls set has had it since Round 5
+        // Wave 5.1.
+        let err = validate_font_family("Ari\u{061C}al").unwrap_err();
         assert!(err.contains("invalid"));
     }
 }

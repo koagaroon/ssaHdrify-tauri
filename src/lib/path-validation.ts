@@ -169,6 +169,22 @@ export function decomposeInputPath(inputPath: string): InputPathParts {
     throw new Error("Input path contains invisible or bidi-control characters");
   }
 
+  // Reject `..` path components (Round 6 Wave 6.2 parity sweep).
+  // The Rust `validate_ipc_path` already rejects parent-directory
+  // segments at IPC entry (Round 5 Wave 5.1 fix), so any path that
+  // round-trips through the backend is bounded. But the TS engine
+  // path consumes `decomposeInputPath` results directly for output-
+  // template derivation BEFORE round-tripping — a raw
+  // `C:/Allowed/../Denied/file.ass` would derive an output under
+  // `C:/Denied/` and only get caught when that output path itself
+  // round-trips. Reject at TS entry as defense-in-depth, symmetric
+  // with the Rust backstop. Detect `..` as a path COMPONENT, not as
+  // a substring — `foo..bar.ass` is a legitimate filename.
+  const hasDotDotSegment = normalized.split("/").some((seg) => seg === "..");
+  if (hasDotDotSegment) {
+    throw new Error("Input path contains parent-directory segments");
+  }
+
   // Absolute = (a) starts with `/` (POSIX root or UNC after backslash
   // conversion), or (b) drive letter + separator. Drive-relative
   // `C:foo.ass` (no separator after colon) fails this check —
@@ -318,6 +334,19 @@ export function assertSafeOutputFilename(filename: string): void {
   }
   if (ILLEGAL_FILENAME_CHARS.test(filename)) {
     throw new Error(`Output filename contains illegal characters: ${filename}`);
+  }
+  // Reject BiDi / zero-width controls (Round 6 Wave 6.2 parity sweep).
+  // ILLEGAL_FILENAME_CHARS covers C0 + DEL + NTFS punctuation but NOT
+  // the Cf bidi format codepoints (U+200E..U+202E, U+2066..U+2069,
+  // U+061C) or zero-width joiners — those flow through the regex and
+  // land on disk. The Rust validate_ipc_path catches them at IPC entry
+  // for paths that round-trip through the backend, but a template
+  // resolved entirely on the TS side and used by a future Tauri
+  // dialog plugin (or any future direct write) would bypass that
+  // backstop. Reject here as defense-in-depth, symmetric with
+  // `decomposeInputPath`'s hasUnicodeControls check on inputs.
+  if (hasUnicodeControls(filename)) {
+    throw new Error(`Output filename contains invisible or bidi-control characters: ${filename}`);
   }
   // Windows reserves these names regardless of extension: per
   // Microsoft, "NUL.txt" and "NUL.tar.gz" both resolve to the NUL

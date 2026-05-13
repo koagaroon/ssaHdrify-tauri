@@ -203,7 +203,13 @@ export default function FontSourceModal(props: Props) {
         // Surface the IPC failure inside the modal so the user understands
         // why the dismiss didn't take effect; without this they're stuck
         // with no feedback. Console line stays for dev diagnostics.
-        const message = e instanceof Error ? e.message : String(e);
+        // sanitizeForDialog scrubs BiDi / zero-width controls — Rust IPC
+        // error strings can interpolate font-pack paths (P1b
+        // attacker-influenced content), and React renders the result
+        // directly into the modal banner without the BiDi reversal
+        // protection that `validate_ipc_path` would have applied
+        // upstream (Round 6 Wave 6.2 parity sweep).
+        const message = sanitizeForDialog(e instanceof Error ? e.message : String(e));
         console.warn("cancelFontScan failed:", e);
         setError(t("font_scan_cancel_failed", message));
       });
@@ -348,7 +354,10 @@ export default function FontSourceModal(props: Props) {
     // otherwise be invisible to the user (UI keeps spinning). Surface
     // through the modal's error banner so they see the IPC failed.
     cancelFontScan(scanId).catch((e: unknown) => {
-      const message = e instanceof Error ? e.message : String(e);
+      // sanitizeForDialog: same Round 6 Wave 6.2 parity reason as the
+      // requestClose cancel path above — Rust IPC errors can carry
+      // attacker-influenced path strings.
+      const message = sanitizeForDialog(e instanceof Error ? e.message : String(e));
       console.warn("cancelFontScan failed:", e);
       setError(t("font_scan_cancel_failed", message));
     });
@@ -475,7 +484,11 @@ export default function FontSourceModal(props: Props) {
         const result = { added: scan.added, duplicated: scan.duplicated };
         reportSourceAdded(result, scan.reason);
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        // sanitizeForDialog: the catch covers the full scan pipeline
+        // (picker / preflight / streaming scan), so the error message
+        // can carry font-pack path strings or font-file names which
+        // are attacker-influenced (P1b). Round 6 Wave 6.2.
+        setError(sanitizeForDialog(e instanceof Error ? e.message : String(e)));
       } finally {
         if (scanId !== null && activeScanIdRef.current === scanId) {
           activeScanIdRef.current = null;

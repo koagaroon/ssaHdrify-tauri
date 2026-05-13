@@ -32,7 +32,11 @@ import { useClickOutside } from "../../lib/useClickOutside";
 import { useLogPanel } from "../../lib/useLogPanel";
 import { LogPanel } from "../../lib/LogPanel";
 import { DropErrorBanner } from "../../lib/DropErrorBanner";
-import { buildConflictMessage, normalizeOutputKey } from "../../lib/dedup-helpers";
+import {
+  buildConflictMessage,
+  normalizeOutputKey,
+  sanitizeForDialog,
+} from "../../lib/dedup-helpers";
 
 /** Stable selection key — survives `fonts[]` reorders (e.g. after adding a
  *  new font source triggers a reanalyze with a different ordering). Using
@@ -516,15 +520,20 @@ export default function FontEmbed() {
       // try wraps `deriveEmbeddedPath` so a single bad path surfaces with
       // filename context instead of aborting the whole batch with a
       // template-error string and no attribution (Round 1 F3.N-R1-20).
+      // Pre-flight errors below render into the log panel via addLog;
+      // the per-file path comes from the user's filePaths array which
+      // can carry attacker-influenced content (fan-sub drops, P1b).
+      // sanitizeForDialog strips BiDi / zero-width controls so a
+      // U+202E in a path can't visually reverse the surrounding log
+      // line (Round 6 Wave 6.2 parity sweep).
       const projectedOutputs: string[] = [];
       for (const p of filePaths) {
         try {
           projectedOutputs.push(deriveEmbeddedPath(p));
         } catch (e) {
-          addLog(
-            t("msg_fonts_error", fileNameFromPath(p), e instanceof Error ? e.message : String(e)),
-            "error"
-          );
+          const safePath = sanitizeForDialog(fileNameFromPath(p));
+          const safeErr = sanitizeForDialog(e instanceof Error ? e.message : String(e));
+          addLog(t("msg_fonts_error", safePath, safeErr), "error");
           setLastActionResult("error");
           return;
         }
@@ -543,7 +552,10 @@ export default function FontEmbed() {
           }
         }
       } catch (e) {
-        addLog(t("error_prefix", e instanceof Error ? e.message : String(e)), "error");
+        addLog(
+          t("error_prefix", sanitizeForDialog(e instanceof Error ? e.message : String(e))),
+          "error"
+        );
         setLastActionResult("error");
         return;
       }
