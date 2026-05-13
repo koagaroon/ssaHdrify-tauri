@@ -201,9 +201,7 @@ function parseSrt(content: string): Caption[] {
     if (!timingMatch) continue;
 
     if (captions.length >= MAX_PARSED_ENTRIES) {
-      throw new Error(
-        `Too many subtitle entries: ${captions.length}+ (max ${MAX_PARSED_ENTRIES})`
-      );
+      throw new Error(`Too many subtitle entries: ${captions.length}+ (max ${MAX_PARSED_ENTRIES})`);
     }
 
     const text = lines
@@ -257,9 +255,7 @@ function parseVtt(content: string): Caption[] {
     if (!timingMatch) continue;
 
     if (captions.length >= MAX_PARSED_ENTRIES) {
-      throw new Error(
-        `Too many subtitle entries: ${captions.length}+ (max ${MAX_PARSED_ENTRIES})`
-      );
+      throw new Error(`Too many subtitle entries: ${captions.length}+ (max ${MAX_PARSED_ENTRIES})`);
     }
 
     const cueId = timingIdx > 0 ? lines.slice(0, timingIdx).join("\n").trim() : undefined;

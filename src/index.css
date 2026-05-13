@@ -123,7 +123,8 @@
      to system-ui (which often lacks CJK on minimal Linux distros).
      ~/.claude/rules/cross-platform.md mandates a CJK terminator. */
   --font-sans: "Inter", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif;
-  --font-display: "Inter", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif;
+  --font-display:
+    "Inter", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif;
   --font-mono: ui-monospace, "SF Mono", consolas, "Cascadia Mono", "Liberation Mono", monospace;
 
   /* Type scale */
