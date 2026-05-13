@@ -7,7 +7,7 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -89,27 +89,14 @@ const MAX_TTC_FACES: u32 = 16;
 /// fonts and mirrors the front-end guard in `ass-uuencode.ts`.
 const MAX_FONT_DATA_SIZE: u64 = 50 * 1024 * 1024;
 
-/// Cap on the unmodified font emitted by the subset fallback path. Lower
-/// than `MAX_FONT_DATA_SIZE` because the fallback sends the full font through
-/// IPC → JS heap → ASS string.
-const MAX_FONT_FALLBACK_SIZE: usize = 10 * 1024 * 1024;
-
-/// Cumulative cap across all fallback emissions in a single app session.
-/// Bounds the total bytes flowing through the subset-failure path so a
-/// subtitle referencing many corrupt fonts cannot stack-feed the JS heap
-/// with N × MAX_FONT_FALLBACK_SIZE worth of full fonts. Per-file 10 MB ×
-/// 5 = 50 MB is a generous ceiling for any legitimate workflow; a single-
-/// user desktop session that hits this almost certainly has a corrupt
-/// font source and should restart + investigate.
-///
-/// Reset asymmetry (Round 3 A-R3-2): GUI side resets this counter on
-/// `clear_font_sources` (user signaled a fresh slate). CLI flow doesn't
-/// reset — but the CLI binary exits at the end of every invocation, so
-/// the counter naturally resets via process restart. Documented here
-/// so a future reviewer doesn't re-file the asymmetry as a missing
-/// reset.
-const MAX_CUMULATIVE_FALLBACK_BYTES: usize = 50 * 1024 * 1024;
-static CUMULATIVE_FALLBACK_BYTES: AtomicUsize = AtomicUsize::new(0);
+// Round 6 Wave 6.9 (Codex Finding 2 fix): MAX_FONT_FALLBACK_SIZE,
+// MAX_CUMULATIVE_FALLBACK_BYTES, and CUMULATIVE_FALLBACK_BYTES were
+// deleted along with the subset-failure raw-bytes fallback they
+// bounded. The fallback path turned every readable local file with
+// an allowed font extension into a data-disclosure primitive when
+// paired with the D1 cache provenance trust — closing it at the
+// subset layer obviates the per-file and cumulative caps. See
+// `subset_font` for the W6.9 commentary on the trade-off.
 
 /// Cap on the system-font provenance cache, as a defense against a
 /// pathological long-running session. User-picked font provenance is stored
@@ -2289,14 +2276,11 @@ pub fn clear_font_sources() -> Result<(), String> {
     // we hold the guard already from this fn's top, so re-acquiring
     // would CAS-fail / silently skip (the original Codex 3 bug).
     crate::font_cache_commands::clear_all_folders_in_gui_cache_locked(&_mutation_guard);
-    // Reset the per-process subset-fallback budget on user-visible
-    // session boundaries. Without this, a long-running app that hit
-    // the 50 MB ceiling once (e.g., on a single corrupt font) keeps
-    // rejecting every fallback for the rest of the lifetime — even
-    // after the user has cleared sources and switched to an entirely
-    // different font set. The user just signaled "fresh slate"; honor
-    // it.
-    CUMULATIVE_FALLBACK_BYTES.store(0, Ordering::Release);
+    // Round 6 Wave 6.9: the `CUMULATIVE_FALLBACK_BYTES` reset that
+    // used to live here was deleted along with the subset-fallback
+    // path. No per-session budget to reset; nothing left to do on
+    // session boundaries beyond what the calls above already
+    // performed.
     Ok(())
 }
 
@@ -2775,49 +2759,34 @@ pub fn subset_font(
             Ok(subsetted)
         }
         Err(e) => {
-            // Cap per-file fallback size first — full font goes through IPC →
-            // JS heap → ASS string, so a single 50 MB font would already pin
-            // ~70 MB after UUEncode expansion.
-            if font_data.len() > MAX_FONT_FALLBACK_SIZE {
-                return Err(format!(
-                    "Subsetting failed and full font too large ({:.1} MB, max {} MB for fallback)",
-                    font_data.len() as f64 / (1024.0 * 1024.0),
-                    MAX_FONT_FALLBACK_SIZE / 1024 / 1024
-                ));
-            }
-            // Cumulative session cap — a subtitle referencing N corrupt fonts
-            // could otherwise stack-feed the JS heap with N × per-file
-            // fallbacks. CAS loop (not fetch_add + rollback) so concurrent
-            // fallback emissions can't each observe a stale `prior` and
-            // collectively overshoot the budget — fetch_update succeeds only
-            // when the CAS sees the live value, so the cap is firm at every
-            // moment, not just eventually. Counter only resets on app
-            // restart; a session that accumulates 50 MB of fallback has
-            // corrupt font sources and should restart anyway.
-            let total_after = CUMULATIVE_FALLBACK_BYTES
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |cur| {
-                    let next = cur.checked_add(font_data.len())?;
-                    if next > MAX_CUMULATIVE_FALLBACK_BYTES {
-                        None
-                    } else {
-                        Some(next)
-                    }
-                })
-                .map_err(|_| {
-                    format!(
-                        "Cumulative font fallback exceeded {} MB this session — restart the app and check your font sources",
-                        MAX_CUMULATIVE_FALLBACK_BYTES / 1024 / 1024
-                    )
-                })?
-                + font_data.len();
+            // Round 6 Wave 6.9 (Codex Finding 2 fix): on subsetting
+            // failure, return Err instead of falling back to raw
+            // `font_data`. The fallback path was a corner-case
+            // accommodation for "corrupt fonts in user-trusted dirs"
+            // — but it also turned every readable local file with
+            // an allowed font extension into a data-disclosure
+            // primitive when paired with the W6.3 D1 cache provenance
+            // trust. An attacker-supplied `--cache-file` (or a
+            // tampered SQLite cache pointing `arial.ttf` at
+            // `/etc/passwd.ttf`) could read arbitrary local files
+            // and embed the raw bytes into the output ASS via this
+            // fallback. Closing the disclosure primitive at the
+            // subset layer is simpler than authenticating cache
+            // rows on every lookup, and the cost is small: a font
+            // that fontcull cannot subset is reported as failed-
+            // to-embed in the log, and the user re-picks (the same
+            // outcome as a missing font, which is already a known
+            // workflow). The per-file `MAX_FONT_FALLBACK_SIZE` and
+            // cumulative `CUMULATIVE_FALLBACK_BYTES` budgets that
+            // used to bound this path are also gone — see the
+            // module-top constants block for the W6.9 record.
             log::warn!(
-                "Subsetting failed for '{}' (face {}): {}, falling back to full font ({:.1} MB cumulative)",
+                "Subsetting failed for '{}' (face {}): {} — embed will skip this font (fallback removed in Round 6 W6.9 for data-disclosure safety)",
                 filename,
                 font_index,
                 e,
-                total_after as f64 / (1024.0 * 1024.0),
             );
-            Ok(font_data)
+            Err(format!("Subsetting failed: {e}"))
         }
     }
 }
