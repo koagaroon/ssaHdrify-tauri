@@ -278,18 +278,67 @@ describe("localized native file dialogs", () => {
     openMock.mockResolvedValue(["D:/Show.mkv", "D:/Show.ass"]);
     await pickRenameInputs(zh);
 
-    expect(openMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        multiple: true,
-        title: "选择视频和字幕",
-        filters: expect.arrayContaining([
-          expect.objectContaining({ name: "视频和字幕文件" }),
-          expect.objectContaining({ name: "视频文件" }),
-          expect.objectContaining({ name: "字幕文件" }),
-          expect.objectContaining({ name: "所有文件" }),
-        ]),
-      })
-    );
+    // Round 6 Wave 6.6 #26 — exact toHaveBeenCalledWith (was
+    // objectContaining + arrayContaining). Partial match would pass
+    // an extra unintended filter, missing filter order, or wrong
+    // extension list inside any filter; the other picker tests in
+    // this suite already use exact matching so the asymmetry was a
+    // coverage gap, not a deliberate looser contract. Filter shape
+    // tracks `videoAndSubtitleFilters` in tauri-api.ts — any change
+    // there must update this fixture (the test pins both the
+    // i18n-resolved names AND the per-filter extension set).
+    expect(openMock).toHaveBeenCalledWith({
+      multiple: true,
+      title: "选择视频和字幕",
+      filters: [
+        {
+          name: "视频和字幕文件",
+          extensions: [
+            "mp4",
+            "mkv",
+            "avi",
+            "mov",
+            "ts",
+            "m2ts",
+            "webm",
+            "flv",
+            "wmv",
+            "mpg",
+            "mpeg",
+            "m4v",
+            "ass",
+            "ssa",
+            "srt",
+            "sub",
+            "vtt",
+            "sbv",
+            "lrc",
+          ],
+        },
+        {
+          name: "视频文件",
+          extensions: [
+            "mp4",
+            "mkv",
+            "avi",
+            "mov",
+            "ts",
+            "m2ts",
+            "webm",
+            "flv",
+            "wmv",
+            "mpg",
+            "mpeg",
+            "m4v",
+          ],
+        },
+        {
+          name: "字幕文件",
+          extensions: ["ass", "ssa", "srt", "sub", "vtt", "sbv", "lrc"],
+        },
+        { name: "所有文件", extensions: ["*"] },
+      ],
+    });
   });
 });
 

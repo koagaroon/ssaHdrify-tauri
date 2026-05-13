@@ -201,12 +201,14 @@ describe("processAssContent — style lines", () => {
 
 describe("processAssContent — Wave 5.1 pre-split line-count probe (A-R5-FEFEAT-03)", () => {
   it("rejects pure-newline blob exceeding the line cap before .split allocates", () => {
-    // 600k newlines + 1 byte: well over the 500k LINE_CAP, and the
-    // content.length > 1 MB gate fires (600k bytes). The probe should
-    // throw BEFORE `.split(/\r?\n/)` allocates ~600k empty strings
-    // (~24 MB V8 heap). Without the probe, .split allocates first and
-    // the post-split line-count throw fires too late.
-    const blob = "\n".repeat(600_000) + "x";
+    // Round 6 Wave 6.6 #24 — fixture must EXCEED the > 1_000_000 byte
+    // probe gate; pre-W6.6 the test used 600k newlines (600k bytes)
+    // which falls BELOW the gate, so the probe code path was never
+    // actually exercised and the test passed via the post-split
+    // line-count throw at the end of processAssContent. 1.1 MB of
+    // pure newlines now lands above the gate AND above LINE_CAP, so
+    // the probe path is the actual code path the test pins.
+    const blob = "\n".repeat(1_100_000) + "x";
     expect(() => processAssContent(blob, 1000, "PQ")).toThrow(/too large.*lines/i);
   });
 

@@ -351,9 +351,17 @@ describe("analyzeFonts — useRustUserFonts production path", () => {
     // Without the anchor, a future refactor that flipped the
     // short-circuit order would silently change the priority.
     findSystemFontMock.mockResolvedValue({ path: "C:/Windows/Fonts/sys.ttf", index: 0 });
-    resolveUserFontMock.mockResolvedValue({
-      path: "C:/rust-side/FZ.ttf",
-      index: 0,
+    // Scoped mock (Round 6 Wave 6.6 #25): return FZ only for the FZ
+    // family, null for Arial. Pre-W6.6 the mock returned the same FZ
+    // value for ANY family — Arial would then resolve via the Rust
+    // user-font tier with the wrong path, masking a regression where
+    // userFontMap accidentally short-circuited Arial too. With scoped
+    // mocks the Arial counter-assertion below pins source="system".
+    resolveUserFontMock.mockImplementation((family: string, bold: boolean, italic: boolean) => {
+      if (family === "FZLanTingHei" && !bold && !italic) {
+        return Promise.resolve({ path: "C:/rust-side/FZ.ttf", index: 0 });
+      }
+      return Promise.resolve(null);
     });
     const userFontMap = new Map<string, LocalFontEntry>();
     userFontMap.set(
@@ -370,6 +378,16 @@ describe("analyzeFonts — useRustUserFonts production path", () => {
     // already short-circuited the lookup.
     const fzRustCalls = resolveUserFontMock.mock.calls.filter((c) => c[0] === "FZLanTingHei");
     expect(fzRustCalls.length).toBe(0);
+
+    // Round 6 Wave 6.6 #25 — counter-assertion on Arial. MINIMAL_ASS
+    // declares two styles (FZLanTingHei + Arial); without this pin, a
+    // future regression that fed BOTH families through userFontMap
+    // (silently dropping Arial because the map has no entry for it)
+    // would still pass the FZ assertions above. Arial must resolve
+    // via findSystemFont (system tier) and land with source="system".
+    const arial = infos.find((i) => i.key.family === "Arial");
+    expect(arial?.source).toBe("system");
+    expect(arial?.filePath).toBe("C:/Windows/Fonts/sys.ttf");
   });
 
   // Round 1 F3.N-R1-21: positive coverage for the persistent-cache
