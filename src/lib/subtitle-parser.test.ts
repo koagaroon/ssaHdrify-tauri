@@ -125,3 +125,58 @@ describe("parseSubtitle", () => {
     expect(result.captions).toHaveLength(100);
   });
 });
+
+// ── Round 6 Wave 6.8 — Codex Finding 1 regression pin ──
+//
+// Junk-flood SRT/VTT — millions of non-cue blocks separated by blank
+// lines — must trip the raw-block ceiling and abort the parse, NOT
+// silently scan every block until the per-caption cap somehow fires
+// (it never does; junk blocks skip the cap check via timingIdx === -1).
+// W6.5 #18 introduced the regression; W6.8 added MAX_RAW_BLOCKS as
+// defense-in-depth alongside MAX_PARSED_ENTRIES.
+describe("parseSubtitle — Wave 6.8 raw-block junk-flood ceiling (Codex Finding 1)", () => {
+  it("rejects SRT with > MAX_RAW_BLOCKS junk blocks before the parse loop scans them", () => {
+    // One valid cue at the head so format detection fires SRT, followed
+    // by junk blocks that have no timing line. Pre-W6.8 the parser
+    // would scan every junk block via `if (timingIdx === -1) continue`
+    // without counting them against MAX_PARSED_ENTRIES.
+    //
+    // splitCueBlocks splits on `\n[ \t]*\n` (blank line), so junk blocks
+    // need DOUBLE newlines between them, not single. `"... block\n\n"`
+    // repeated 2_000_001 times → 2_000_001 junk blocks + 1 valid =
+    // crosses MAX_RAW_BLOCKS = 2_000_000.
+    //
+    // Construction is O(N) in memory; 2M tiny blocks = ~42 MB string —
+    // acceptable for a single test, well below the 50 MB Rust read cap.
+    const validCue = "1\n00:00:00,000 --> 00:00:01,000\nintro\n\n";
+    const junk = "NOTE junk-only block\n\n";
+    const blocks = validCue + junk.repeat(2_000_001);
+    expect(() => parseSubtitle(blocks)).toThrow(/Too many subtitle blocks/);
+  });
+
+  it("rejects VTT with > MAX_RAW_BLOCKS junk blocks before the parse loop scans them", () => {
+    // WEBVTT header for format detection, one real cue, then junk.
+    // Same blank-line separator requirement as the SRT test.
+    const head = "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nintro\n\n";
+    const junk = "NOTE junk-only block\n\n";
+    const blocks = head + junk.repeat(2_000_001);
+    expect(() => parseSubtitle(blocks)).toThrow(/Too many subtitle blocks/);
+  });
+
+  it("accepts SRT with stray blank-line padding well below the raw-block ceiling", () => {
+    // 100 valid cues + 100 blank padding blocks = 200 raw blocks, far
+    // below the 2M ceiling — must not false-fail. Guards the regression
+    // direction (W6.5 #18 was trying to fix exactly this shape).
+    const pad = (n: number) => n.toString().padStart(2, "0");
+    const cues = Array.from({ length: 100 }, (_, i) => {
+      const start = `00:${pad(Math.floor(i / 60))}:${pad(i % 60)},000`;
+      const end = `00:${pad(Math.floor((i + 1) / 60))}:${pad((i + 1) % 60)},000`;
+      return `${i + 1}\n${start} --> ${end}\nline ${i}\n`;
+    });
+    // Double-blank between cues so splitCueBlocks reports padding-blocks.
+    const withPadding = cues.join("\n\n");
+    const result = parseSubtitle(withPadding);
+    expect(result.format).toBe("srt");
+    expect(result.captions).toHaveLength(100);
+  });
+});

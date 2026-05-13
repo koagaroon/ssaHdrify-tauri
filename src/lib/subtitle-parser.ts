@@ -167,10 +167,37 @@ export function parseDisplayTime(ts: string): number | null {
 // Rust side as a unified "defensive ceiling."
 const MAX_PARSED_ENTRIES = 500_000;
 
+// Round 6 Wave 6.8 (Codex Finding 1 fix): raw-block cap restored as
+// defense-in-depth alongside the per-caption cap. W6.5 #18 removed
+// the raw block cap on the rationale that "ASS/SUB count entries
+// not blocks", but `splitCueBlocks` materializes ALL raw blocks
+// before the parse loop and the per-caption cap only fires AFTER
+// `if (timingIdx === -1) continue` skips junk — so a 50 MB SRT/VTT
+// with millions of NOTE-like cue blocks could force the parser to
+// scan every one of them without ever incrementing the caption
+// counter (~7s + ~774 MB RSS in Codex's PoC; constrained-heap V8
+// OOM with `--max-old-space-size=128` and a 24 MB payload). The
+// 2M ceiling here is 4× MAX_PARSED_ENTRIES, leaving ample headroom
+// for legitimate files with stray blank-line padding while keeping
+// pathological junk-flood input bounded. Per-caption cap below
+// still owns the semantic limit (and its error message); this is
+// a hard ceiling on iteration cost.
+const MAX_RAW_BLOCKS = 2_000_000;
+
 function parseSrt(content: string): Caption[] {
   const captions: Caption[] = [];
   // Normalize first so mixed CRLF/LF files still split into cue blocks.
   const blocks = splitCueBlocks(content);
+  // W6.8 raw-block ceiling — see MAX_RAW_BLOCKS docblock for the
+  // Codex Finding 1 rationale (junk-flood DoS bypass of the
+  // per-caption cap). Hard ceiling on iteration cost; the
+  // per-caption cap below owns the semantic limit.
+  if (blocks.length > MAX_RAW_BLOCKS) {
+    throw new Error(
+      `Too many subtitle blocks: ${blocks.length} (max ${MAX_RAW_BLOCKS}). ` +
+        `Per-caption parse cap is ${MAX_PARSED_ENTRIES}; raw-block ceiling guards iteration cost.`
+    );
+  }
   // Regex defined inside function — no shared lastIndex state.
   // Hours bounded to 12 digits — accepts the single-digit form some
   // tools emit (`0:00:01,000`), matching detectFormat's SRT_TIMING,
@@ -178,13 +205,9 @@ function parseSrt(content: string): Caption[] {
   // parseInt to Infinity.
   const timingRe = /^(\d{1,12}:\d{2}:\d{2},\d{3})\s*-->\s*(\d{1,12}:\d{2}:\d{2},\d{3})/;
 
-  // Round 6 Wave 6.5 #18: cap parsed CAPTIONS not raw blocks. A
-  // legitimate 100k-line SRT with stray blank-line padding (some
-  // transcription tools double-blank between blocks) would have
-  // `blocks.length` close to 200k while only ~100k yielded valid
-  // captions — a pre-loop block-count cap fired false positives. The
-  // ASS / SUB parsers below already use the per-entry-count pattern;
-  // SRT + VTT now match.
+  // Round 6 Wave 6.5 #18 / Wave 6.8: per-caption cap below guards the
+  // semantic ceiling (`MAX_PARSED_ENTRIES`); the W6.8 raw-block cap
+  // above is the iteration-cost guard.
   for (const block of blocks) {
     const lines = block.replace(/^\n/, "").split("\n");
     // Find the timing line (skip the numeric index line)
@@ -233,6 +256,13 @@ function parseVtt(content: string): Caption[] {
   const body = normalizeLineEndings(content).replace(/^WEBVTT[^\n]*\n/, "");
   // Normalize first so mixed CRLF/LF files still split into cue blocks.
   const blocks = splitCueBlocks(body);
+  // W6.8 raw-block ceiling — same Codex Finding 1 rationale as parseSrt.
+  if (blocks.length > MAX_RAW_BLOCKS) {
+    throw new Error(
+      `Too many subtitle blocks: ${blocks.length} (max ${MAX_RAW_BLOCKS}). ` +
+        `Per-caption parse cap is ${MAX_PARSED_ENTRIES}; raw-block ceiling guards iteration cost.`
+    );
+  }
   // VTT timing: supports both HH:MM:SS.mmm and MM:SS.mmm
   const timingRe =
     /^(\d{2,}:\d{2}:\d{2}\.\d{3}|\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{2,}:\d{2}:\d{2}\.\d{3}|\d{2}:\d{2}\.\d{3})/;
