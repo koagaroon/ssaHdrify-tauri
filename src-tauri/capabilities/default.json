@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default permissions for the desktop window. fs:scope is allow=** + deny-list for sensitive locations (credentials, browser profiles, shell history, app's own session DB); the scope policy applies to both plugin-fs (frontend-initiated) AND the Rust-side safe_io commands which reuse app.fs_scope().is_allowed(...). Full rationale + threat model + Codex finding history: CC_General/docs/architecture/ssahdrify_tauri_design.md § 'fs:scope policy'.",
+  "description": "Default permissions for the desktop window. fs:scope is allow=** + deny-list for sensitive locations (credentials, browser profiles, shell history, app's own session DB); the scope policy applies to both plugin-fs (frontend-initiated) AND the Rust-side safe_io commands which reuse app.fs_scope().is_allowed(...). Full rationale + threat model + finding history: see the project design doc § 'fs:scope policy'.",
   "windows": ["main"],
   "permissions": [
     "core:default",
