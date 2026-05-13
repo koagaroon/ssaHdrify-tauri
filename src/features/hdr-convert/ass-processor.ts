@@ -7,7 +7,7 @@
  *
  * ASS color format: &H[AA]BBGGRR (BGR byte order, optional alpha prefix)
  */
-import { sRgbToHdr, type Eotf, DEFAULT_BRIGHTNESS } from "./color-engine";
+import { sRgbToHdr, type Eotf, DEFAULT_BRIGHTNESS, MIN_BRIGHTNESS } from "./color-engine";
 
 // ── Style color fields in ASS [V4+ Styles] section ────────
 // Format line: "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, ..."
@@ -204,6 +204,13 @@ export function processAssContent(
   eotf: Eotf = "PQ",
   onProgress?: (current: number, total: number) => void
 ): string {
+  // Round 7 Wave 7.5 (A4-R7-2): same targetBrightness guard as
+  // sRgbToHdr (defense-in-depth at the outer entry — if a future
+  // caller bypasses sRgbToHdr's guard, e.g. via direct color-math
+  // utility import, the file-level config still gets normalized).
+  if (!Number.isFinite(targetBrightness) || targetBrightness < MIN_BRIGHTNESS) {
+    targetBrightness = DEFAULT_BRIGHTNESS;
+  }
   // Pre-split byte-size guard — catches giant inputs BEFORE we allocate the
   // per-line array. Without this, a 500 MB blob splits into a huge array
   // (freeing memory only after the line-count throw fires). The Rust IPC

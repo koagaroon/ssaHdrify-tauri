@@ -130,6 +130,20 @@ export function sRgbToHdr(
     return [0, 0, 0];
   }
 
+  // Round 7 Wave 7.5 (A4-R7-1): guard against NaN / Infinity / sub-1
+  // targetBrightness. NaN propagates through all subsequent math
+  // (scale = NaN / 203 = NaN, every pixel → 0 or undefined behavior).
+  // Negative or zero produces nonsense output without erroring out.
+  // Sub-1 is rejected because PQ + HLG transfer functions assume
+  // ≥1 nit reference; out of that range the math still runs but the
+  // result is meaningless. Snap silently to DEFAULT_BRIGHTNESS rather
+  // than throwing — the conversion pipeline runs against many
+  // user-influenced inputs and a hard throw here would abort entire
+  // subtitle conversion for one bad config value.
+  if (!Number.isFinite(targetBrightness) || targetBrightness < MIN_BRIGHTNESS) {
+    targetBrightness = DEFAULT_BRIGHTNESS;
+  }
+
   try {
     // HLG uses a dedicated path with manual OOTF + OETF
     if (eotf === "HLG") {

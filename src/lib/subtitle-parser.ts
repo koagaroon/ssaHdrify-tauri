@@ -332,12 +332,26 @@ function buildVtt(captions: Caption[], header: string = "WEBVTT"): string {
 // trips it exactly. A factory (not a shared instance) is used so each call
 // gets a fresh `lastIndex` — guarding against pollution if a previous
 // parseAss call threw mid-loop.
-const DIALOGUE_PATTERN = String.raw`^([\t ]*Dialogue:[\t ]*\d+,)(\d+:\d{2}:\d{2}\.\d{2}),( *)(\d+:\d{2}:\d{2}\.\d{2}),(.*)$`;
+// Round 7 Wave 7.5 (A4-R7-4): hour fields bounded to {1,12} digits,
+// matching `parseAssTime`. Unbounded `\d+` would let pathological
+// `999…9:00:00.00` (100+ hour digits) saturate parseInt to Infinity
+// before the time-math even runs. 12 digits is identical to the SRT /
+// VTT / display-time bound used elsewhere in this file.
+const DIALOGUE_PATTERN = String.raw`^([\t ]*Dialogue:[\t ]*\d+,)(\d{1,12}:\d{2}:\d{2}\.\d{2}),( *)(\d{1,12}:\d{2}:\d{2}\.\d{2}),(.*)$`;
 const DIALOGUE_FLAGS = "gim";
 
 function createDialogueRe(): RegExp {
   return new RegExp(DIALOGUE_PATTERN, DIALOGUE_FLAGS);
 }
+
+// Round 7 Wave 7.5 (A4-R7-4): per-caption text cap. Real-world ASS
+// dialogue lines are < 1 KB even for elaborate styled karaoke. 64 KB
+// is generous — guards against a crafted file with a single dialogue
+// containing a multi-MB text body (P1b attacker-influenced content).
+// Captions exceeding the cap are skipped, not throwing, so the rest
+// of the file still parses. Matches parseSub's per-text guard added
+// alongside.
+const MAX_CAPTION_TEXT_LEN = 64_000;
 
 function parseAss(content: string): Caption[] {
   const captions: Caption[] = [];
@@ -352,11 +366,18 @@ function parseAss(content: string): Caption[] {
       // iteration, and that's the bound we just refused to cross).
       throw new Error(`Too many subtitle entries: ${captions.length}+ (max ${MAX_PARSED_ENTRIES})`);
     }
+    const text = match[5];
+    if (text.length > MAX_CAPTION_TEXT_LEN) {
+      // Skip this single oversized line; the rest of the file is
+      // still useful. Bounded read above (Rust 50 MB cap) means we
+      // can't be flooded with these.
+      continue;
+    }
     captions.push({
       raw: match[0],
       start: parseAssTime(match[2]),
       end: parseAssTime(match[4]),
-      text: match[5],
+      text,
     });
   }
   return captions;
@@ -419,15 +440,26 @@ function parseSub(content: string, fps: number = DEFAULT_FPS): Caption[] {
   let match;
   let count = 0;
   while ((match = subLineRe.exec(content)) !== null) {
-    count += 1;
-    if (count > MAX_PARSED_ENTRIES) {
-      throw new Error(`Too many subtitle entries: ${count} (max ${MAX_PARSED_ENTRIES})`);
+    // Round 7 Wave 7.5 (N4-R7-8 / A4-R7-14): per-caption count cap
+    // moved BEFORE the push so the throw fires WHEN refusing the
+    // entry, matching the SRT/VTT/ASS pattern. Pre-W7.5 the cap was
+    // `count += 1; if (count > MAX) throw;` which surfaces "count =
+    // MAX + 1" — an off-by-one that misled triage when reading the
+    // error message against the documented cap (505000 vs 500000).
+    if (count >= MAX_PARSED_ENTRIES) {
+      throw new Error(`Too many subtitle entries: ${count}+ (max ${MAX_PARSED_ENTRIES})`);
     }
+    // Per-caption text cap (A4-R7-5) — same rationale as parseAss.
+    const text = match[3];
+    if (text.length > MAX_CAPTION_TEXT_LEN) {
+      continue;
+    }
+    count += 1;
     captions.push({
       raw: match[0],
       start: Math.round((parseInt(match[1], 10) / fps) * 1000),
       end: Math.round((parseInt(match[2], 10) / fps) * 1000),
-      text: match[3].replace(/\|/g, "\n"),
+      text: text.replace(/\|/g, "\n"),
     });
   }
   return captions;

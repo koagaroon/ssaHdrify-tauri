@@ -363,7 +363,19 @@ function applyOverrideTags(
   // in [V4+ Styles] would shadow the dialogue's initial style — by
   // convention `\rdefault` means "the dialogue's initial style", not
   // "the style literally named 'default'").
-  const rMatch = block.match(/\\r([\p{L}_][\p{L}\p{N}_-]*)?/u);
+  // Round 7 Wave 7.5 (N3-R7-5): `matchAll().at(-1)` for left-to-right
+  // libass parity. Round 4 A-R4-07 fixed this for `\p<scale>` (the
+  // drawing-mode toggle); the same first-match-vs-last-match
+  // asymmetry applies to `\r` `\fn` `\b` `\i` when a block contains
+  // multiple of the same tag. libass / xy-VSFilter process override
+  // tags left-to-right, so a block like `{\fnArial\fnTimes}` ends
+  // with the family Times, not Arial. block.match() returns the
+  // FIRST match — silently picks Arial here, attacker-influenced
+  // ASS (P1b) can use this to make the embedded font set diverge
+  // from what libass actually renders. matchAll + .at(-1) gives the
+  // LAST occurrence per libass semantics.
+  const rMatches = [...block.matchAll(/\\r([\p{L}_][\p{L}\p{N}_-]*)?/gu)];
+  const rMatch = rMatches.at(-1);
   if (rMatch) {
     const styleName = rMatch[1];
     if (styleName && styleName.toLowerCase() !== "default" && styleMap.has(styleName)) {
@@ -386,7 +398,9 @@ function applyOverrideTags(
   // libass stops the family at any brace boundary and so do we, otherwise
   // the captured "family" carries a literal `{` into matching / output
   // and silently misses the user's intended font.
-  const fnMatch = block.match(/\\fn([^\\}{]{0,128})/);
+  // W7.5: matchAll().at(-1) for libass parity — see \r above.
+  const fnMatches = [...block.matchAll(/\\fn([^\\}{]{0,128})/g)];
+  const fnMatch = fnMatches.at(-1);
   if (fnMatch) {
     const rawFamily = normalizeFamily(fnMatch[1]);
     if (!rawFamily) {
@@ -404,15 +418,18 @@ function applyOverrideTags(
   // `/\\b(\d+)(?![0-9])/` or an explicit word-boundary anchor on the
   // tag name (Round 2 N-R2-12). Currently safe by spec; comment is
   // the contract.
-  const bMatch = block.match(/\\b(\d+)/);
+  // W7.5: matchAll().at(-1) for libass parity — see \r above.
+  const bMatches = [...block.matchAll(/\\b(\d+)/g)];
+  const bMatch = bMatches.at(-1);
   if (bMatch) {
     const val = parseInt(bMatch[1], 10);
     // \b0 = not bold, \b1 = bold, \b700+ = bold by weight
     result.bold = val === 1 || val >= 700;
   }
 
-  // \i<0|1> — italic
-  const iMatch = block.match(/\\i(\d+)/);
+  // \i<0|1> — italic. W7.5: matchAll().at(-1) for libass parity.
+  const iMatches = [...block.matchAll(/\\i(\d+)/g)];
+  const iMatch = iMatches.at(-1);
   if (iMatch) {
     result.italic = parseInt(iMatch[1], 10) !== 0;
   }

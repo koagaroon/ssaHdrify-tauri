@@ -60,9 +60,23 @@ describe("sRgbToHdr — HLG mode", () => {
 });
 
 describe("sRgbToHdr — edge cases", () => {
-  it("returns [0,0,0] for zero brightness (graceful — Python reference throws)", () => {
-    const result = sRgbToHdr(128, 128, 128, 0, "PQ");
-    expect(result).toEqual([0, 0, 0]);
+  it("snaps zero / negative / NaN brightness to DEFAULT_BRIGHTNESS (W7.5 boundary guard)", () => {
+    // Pre-W7.5 returned [0,0,0] graceful (Python reference threw on
+    // zero). W7.5 introduces a Number.isFinite + < MIN_BRIGHTNESS
+    // guard at the sRgbToHdr entry that snaps invalid values to
+    // DEFAULT_BRIGHTNESS=203, so the conversion still runs against
+    // the BT.2408 reference white instead of producing pure black.
+    // This is more useful for the chain runtime where a bad config
+    // value mid-batch should not silently flatten every pixel to
+    // black — the user sees the conversion happen at the standard
+    // reference and can diagnose the config separately.
+    const zeroResult = sRgbToHdr(128, 128, 128, 0, "PQ");
+    const defaultResult = sRgbToHdr(128, 128, 128, 203, "PQ");
+    expect(zeroResult).toEqual(defaultResult);
+    // Other invalid inputs likewise snap to default.
+    expect(sRgbToHdr(128, 128, 128, -10, "PQ")).toEqual(defaultResult);
+    expect(sRgbToHdr(128, 128, 128, NaN, "PQ")).toEqual(defaultResult);
+    expect(sRgbToHdr(128, 128, 128, Infinity, "PQ")).toEqual(defaultResult);
   });
 
   it("returns integer values (no fractional RGB)", () => {
