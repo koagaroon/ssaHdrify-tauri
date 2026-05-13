@@ -440,4 +440,22 @@ describe("userFontKey", () => {
     const both = userFontKey("Arial", true, true);
     expect(new Set([plain, bold, italic, both]).size).toBe(4);
   });
+
+  it("pins exact byte shape of bold/italic flag positions (Wave 7.8 / N3-R7-6)", () => {
+    // Pre-W7.8 the only assertion was distinctness via Set size. A
+    // refactor that swapped bold and italic positions (or used a
+    // different separator) would still keep the 4 keys distinct but
+    // would break the cross-layer pin with the Rust side's
+    // `user_font_key` which uses `family|0|0`-shape encoding. The
+    // exact-shape assertions below catch position swaps + separator
+    // drift in one test. Aligned with the Rust counterpart at
+    // `fonts.rs::user_font_key_separator_pin` (which pins
+    // `arial\u{001F}0\u{001F}0`).
+    // Separator is U+001F (Unit Separator), matching the Rust side's
+    // exact-shape pin at `fonts.rs::user_font_key_separator_pin`.
+    expect(userFontKey("Arial", false, false)).toBe("arial\u001f0\u001f0");
+    expect(userFontKey("Arial", true, false)).toBe("arial\u001f1\u001f0");
+    expect(userFontKey("Arial", false, true)).toBe("arial\u001f0\u001f1");
+    expect(userFontKey("Arial", true, true)).toBe("arial\u001f1\u001f1");
+  });
 });

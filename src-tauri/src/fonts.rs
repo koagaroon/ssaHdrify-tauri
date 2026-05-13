@@ -3139,6 +3139,109 @@ mod tests {
         assert!(!is_user_font_face_registered("C:\\Fonts\\A.ttf", 1).unwrap());
     }
 
+    // ── Round 7 Wave 7.8 (N1-R7-4) — cache provenance gate pins ──
+    //
+    // W6.3 D1 added ALLOWED_CACHE_FONT_PATHS as a SECOND trusted set
+    // (alongside ALLOWED_FONT_PATHS for system fonts) so cache lookup
+    // hits can pass subset_font's gate. These three tests pin the
+    // gate's three documented states: rejects unregistered, accepts
+    // registered, and refuses to grow past MAX_PROVENANCE_CACHE_SIZE.
+    // Without these pins, a refactor that drops the (path, face_index)
+    // pair-keying (Round 6 W6.3 #12) or accidentally widens the gate
+    // to trust EVERY path that ever entered the SQLite cache (the
+    // anti-pattern the W7.8 design explicitly rejects) would still
+    // compile and pass higher-level integration tests.
+    //
+    // Tests acquire SCAN_TEST_LOCK because they mutate
+    // ALLOWED_CACHE_FONT_PATHS, a process-global mutex. Clean up
+    // after themselves so the assertion order doesn't matter and
+    // the suite stays parallel-safe.
+
+    #[test]
+    fn cache_provenance_gate_rejects_unregistered_path() {
+        let _guard = SCAN_TEST_LOCK.lock().unwrap();
+        // Snapshot the set so we restore it post-test (other tests
+        // in the same binary process may have registered paths).
+        let snapshot: HashSet<(String, u32)> = ALLOWED_CACHE_FONT_PATHS.lock().unwrap().clone();
+        ALLOWED_CACHE_FONT_PATHS.lock().unwrap().clear();
+
+        let path = "C:\\Fonts\\NotRegistered.ttf".to_string();
+        let key = (path, 0);
+        assert!(
+            !ALLOWED_CACHE_FONT_PATHS.lock().unwrap().contains(&key),
+            "unregistered cache path must NOT be in the provenance set"
+        );
+
+        *ALLOWED_CACHE_FONT_PATHS.lock().unwrap() = snapshot;
+    }
+
+    #[test]
+    fn cache_provenance_gate_accepts_registered_path() {
+        let _guard = SCAN_TEST_LOCK.lock().unwrap();
+        let snapshot: HashSet<(String, u32)> = ALLOWED_CACHE_FONT_PATHS.lock().unwrap().clone();
+        ALLOWED_CACHE_FONT_PATHS.lock().unwrap().clear();
+
+        let path = "C:\\Fonts\\Registered.ttf";
+        register_cache_provenance(path, 2).expect("register should succeed under cap");
+        let key = (path.to_string(), 2);
+        assert!(
+            ALLOWED_CACHE_FONT_PATHS.lock().unwrap().contains(&key),
+            "registered (path, face_index) must be in the provenance set"
+        );
+        // Different face_index for the same path must NOT pass — the
+        // pair-keying is the W6.3 #12 defense against face-index
+        // injection on TTC files.
+        let wrong_face = (path.to_string(), 5);
+        assert!(
+            !ALLOWED_CACHE_FONT_PATHS.lock().unwrap().contains(&wrong_face),
+            "different face_index on same path must not slip through pair-keyed gate"
+        );
+
+        *ALLOWED_CACHE_FONT_PATHS.lock().unwrap() = snapshot;
+    }
+
+    #[test]
+    fn cache_provenance_gate_is_capped_at_max_provenance() {
+        let _guard = SCAN_TEST_LOCK.lock().unwrap();
+        let snapshot: HashSet<(String, u32)> = ALLOWED_CACHE_FONT_PATHS.lock().unwrap().clone();
+        ALLOWED_CACHE_FONT_PATHS.lock().unwrap().clear();
+
+        // Fill to the cap, then attempt one more insert. Using
+        // distinct paths so HashSet doesn't dedup. The cap check
+        // happens inside insert_with_cap after the speculative
+        // insert + rollback; a successful pre-cap insert + a
+        // failing past-cap insert pin the contract.
+        for i in 0..MAX_PROVENANCE_CACHE_SIZE {
+            // Format path with index so each insert is unique.
+            register_cache_provenance(&format!("C:\\Fonts\\Cap{i}.ttf"), 0)
+                .expect("pre-cap insert should succeed");
+        }
+        assert_eq!(
+            ALLOWED_CACHE_FONT_PATHS.lock().unwrap().len(),
+            MAX_PROVENANCE_CACHE_SIZE,
+            "set should sit exactly at the cap"
+        );
+        let overflow = register_cache_provenance("C:\\Fonts\\Overflow.ttf", 0);
+        assert!(
+            overflow.is_err(),
+            "past-cap insert must return Err (rolled back)"
+        );
+        let err_msg = overflow.unwrap_err();
+        assert!(
+            err_msg.contains("cache"),
+            "error message must name the cache set (W7.6 N1-R7-5 label distinguishability), got: {err_msg}"
+        );
+        // The speculative insert must have been rolled back — set
+        // size unchanged.
+        assert_eq!(
+            ALLOWED_CACHE_FONT_PATHS.lock().unwrap().len(),
+            MAX_PROVENANCE_CACHE_SIZE,
+            "rollback should leave the set at exactly the cap, not cap+1"
+        );
+
+        *ALLOWED_CACHE_FONT_PATHS.lock().unwrap() = snapshot;
+    }
+
     #[test]
     fn db_lookup_prefers_newer_source_for_same_family_key() {
         let _guard = SCAN_TEST_LOCK.lock().unwrap();
@@ -3278,7 +3381,8 @@ mod tests {
     #[test]
     fn files_inner_honors_targeted_cancel_before_first_file() {
         let _guard = SCAN_TEST_LOCK.lock().unwrap();
-        let scan_id = CANCEL_SCAN_ID.load(Ordering::Relaxed).saturating_add(1);
+        let prior_cancel_id = CANCEL_SCAN_ID.load(Ordering::Relaxed);
+        let scan_id = prior_cancel_id.saturating_add(1);
         CANCEL_SCAN_ID.fetch_max(scan_id, Ordering::Relaxed);
         let mut emitted: Vec<Vec<LocalFontEntry>> = Vec::new();
         let outcome = scan_files_inner(vec!["irrelevant.ttf".to_string()], scan_id, |batch| {
@@ -3289,6 +3393,23 @@ mod tests {
         assert_eq!(outcome.total, 0);
         assert_eq!(outcome.reason, ScanStopReason::UserCancel);
         assert!(emitted.is_empty());
+        // Round 7 Wave 7.8 (N1-R7-3): reset CANCEL_SCAN_ID via
+        // `compare_exchange` to its pre-test value so subsequent tests
+        // sharing the binary process don't inherit the elevated cancel
+        // id. SCAN_TEST_LOCK serializes the tests but `CANCEL_SCAN_ID`
+        // is a process-global AtomicU64 — without explicit cleanup,
+        // a later test that does `CANCEL_SCAN_ID.load() + 1` and then
+        // expects a fresh scan to NOT be cancelled would see the prior
+        // value and silently regress to UserCancel. The compare_exchange
+        // is no-op if some other path raised the field between our
+        // fetch_max and the reset (extremely unlikely under SCAN_TEST_LOCK,
+        // but the fail-safe pattern is cheap).
+        let _ = CANCEL_SCAN_ID.compare_exchange(
+            scan_id,
+            prior_cancel_id,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        );
     }
 
     /// `cancel_font_scan` records the requested id and stale lower ids do not
