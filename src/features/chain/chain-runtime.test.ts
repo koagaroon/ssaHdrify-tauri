@@ -321,4 +321,31 @@ describe("resolveChainOutputPath", () => {
       /reserved name/
     );
   });
+
+  // ── Round 8 Wave 8.3 — chain template + shape pins ──
+
+  it("rejects unknown template tokens (chain-level allowlist)", () => {
+    // N-R8-N1-2: chain-level templates support only {name} / {ext}.
+    // Per-step tokens like {eotf} / {format} previously substituted
+    // to "" silently; now they throw at resolve time so users see the
+    // mismatch instead of getting a path with collapsed dots.
+    expect(() => resolveChainOutputPath(INPUT_PATH, "{name}.{eotf}.ass")).toThrow(/unknown token/);
+    expect(() => resolveChainOutputPath(INPUT_PATH, "{name}.{format}.ass")).toThrow(
+      /unknown token/
+    );
+  });
+
+  it("hdr step rejects non-ASS input with an actionable message", () => {
+    // A-R8-A1-7: feeding raw SRT to a chain HDR step previously
+    // produced garbage output silently. The shape guard now throws
+    // with guidance pointing at standalone `hdr` first.
+    const plan: ChainPlan = {
+      steps: [{ kind: "hdr", params: { eotf: "PQ", brightness: 1000 } }],
+      outputTemplate: "{name}.hdr.ass",
+    };
+    const srt = "1\n00:00:01,000 --> 00:00:02,000\nHello\n";
+    expect(() => runChain({ plan, inputPath: INPUT_PATH, content: srt })).toThrow(
+      /requires ASS .* SSA content/
+    );
+  });
 });

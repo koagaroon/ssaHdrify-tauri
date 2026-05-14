@@ -898,10 +898,16 @@ pub fn lookup_font_family(
     // the user sees the gate error with full context. See
     // `register_cache_provenance` for the threat-model rationale.
     if let Some(ref r) = result {
-        if let Err(e) =
-            crate::fonts::register_cache_provenance(&r.font_path, r.face_index as u32)
-        {
-            log::warn!("cache provenance registration failed for {family}: {e}");
+        if let Err(e) = crate::fonts::register_cache_provenance(&r.font_path, r.face_index as u32) {
+            // Round 8 N-R8-N3-4: WARN names the user-visible consequence
+            // per vibe-coding.md log-level discipline. The previous
+            // "cache provenance registration failed" wording leaked the
+            // internal helper name; users care about whether the embed
+            // will succeed, not which function returned Err.
+            log::warn!(
+                "Font '{family}' may fail to embed: cache lookup hit but the path could not be \
+                 registered for this run (subset will refuse): {e}"
+            );
         }
     }
     Ok(result.map(|r| crate::fonts::FontLookupResult {

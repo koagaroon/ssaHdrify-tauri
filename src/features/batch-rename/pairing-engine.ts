@@ -451,7 +451,14 @@ export function deriveRenameOutputPath(
   // `\`, producing a relative path rooted at the cwd instead of the
   // intended directory.
   const usedBackslash = isWindowsRuntime && subtitlePath.includes("\\");
-  const normTargetDir = targetDir.replace(/\\/g, "/").replace(/\/$/, "");
+  // Backslash → forward only on Windows (Round 8 A-R8-N4-14 — POSIX-
+  // correctness gate). On POSIX `\` is a valid filename character; a
+  // user-chosen directory whose name contains `\` would otherwise be
+  // split mid-segment and produce a wrong output path.
+  const normTargetDir = (isWindowsRuntime ? targetDir.replace(/\\/g, "/") : targetDir).replace(
+    /\/$/,
+    ""
+  );
   const outputPath = normTargetDir ? `${normTargetDir}/${outName}` : outName;
 
   // Apply the shared path validators (Windows reserved name / path
@@ -599,7 +606,12 @@ export function isNoOpRename(subtitlePath: string, outputPath: string): boolean 
 }
 
 function baseName(path: string): string {
-  const norm = path.replace(/\\/g, "/");
+  // Backslash → forward only on Windows (Round 8 N-R8-N4-3 — POSIX-
+  // correctness gate, parity with `dirname` below and `pathsEqualOnFs`).
+  // On POSIX a file literally named `foo\bar.ass` must return the full
+  // name; unconditional rewriting truncates it to `bar.ass`.
+  const windowsPath = isWindowsRuntime && path.includes("\\");
+  const norm = windowsPath ? path.replace(/\\/g, "/") : path;
   const lastSlash = norm.lastIndexOf("/");
   return lastSlash >= 0 ? norm.slice(lastSlash + 1) : norm;
 }

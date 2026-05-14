@@ -133,7 +133,11 @@ function App() {
         // Don't block app launch on cache probe failures — the user
         // can still use the app, embed just falls through to system
         // fonts. Log so devs see it during tauri dev.
-        console.warn("font cache launch check failed:", e);
+        // Round 8 N-R8-N4-5: WARN names the user-visible consequence
+        // (embed falls back to system fonts) per vibe-coding.md
+        // log-level discipline, instead of leaking the internal
+        // function name.
+        console.warn("Font cache unavailable at launch; embed will use system fonts only:", e);
       }
     })();
     return () => {
@@ -155,7 +159,12 @@ function App() {
       const status = await openFontCache();
       setCacheStatus(status);
     } catch (e) {
-      console.warn("openFontCache re-probe failed:", e);
+      // Round 8 N-R8-N4-5: WARN names the user-visible consequence.
+      // A failed re-probe means the launch-time `cacheStatus` is now
+      // stale relative to the user's just-performed action (Rescan /
+      // Clear); the drift modal won't auto-re-pop and embed continues
+      // to use whatever the prior probe captured.
+      console.warn("Font cache status re-probe failed; UI may show stale cache state:", e);
     }
   }, []);
 

@@ -599,6 +599,14 @@ function canonicalLanguage(language: string): string {
       return "jp";
     case "eng":
       return "en";
+    // Round 8 N-R8-N1-4: `ko` / `kor` reconcile. Without this branch,
+    // a CLI invocation with `--langs kor` could not match subtitle
+    // filenames carrying the `.ko.ass` suffix (and vice versa),
+    // silently filtering the row. Mirrors the sc / tc / jp / en
+    // reconciliation already in place.
+    case "ko":
+    case "kor":
+      return "ko";
     default:
       return language.toLowerCase();
   }

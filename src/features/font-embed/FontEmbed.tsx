@@ -35,6 +35,7 @@ import { DropErrorBanner } from "../../lib/DropErrorBanner";
 import {
   buildConflictMessage,
   normalizeOutputKey,
+  sanitizeError,
   sanitizeForDialog,
 } from "../../lib/dedup-helpers";
 
@@ -277,7 +278,7 @@ export default function FontEmbed() {
             // Wave 7.1 BiDi parity: read errors carry the file path
             // (often the user-picked path including filename), and
             // the Rust IPC error can interpolate that path again.
-            const reason = sanitizeForDialog(e instanceof Error ? e.message : String(e));
+            const reason = sanitizeError(e);
             addLog(t("msg_read_error", sanitizeForDialog(fileNameFromPath(path)), reason), "error");
             continue;
           }
@@ -331,10 +332,7 @@ export default function FontEmbed() {
         });
       } catch (e) {
         if (gen !== pickGenRef.current) return;
-        addLog(
-          t("error_prefix", sanitizeForDialog(e instanceof Error ? e.message : String(e))),
-          "error"
-        );
+        addLog(t("error_prefix", sanitizeError(e)), "error");
       } finally {
         if (gen === pickGenRef.current) setAnalyzing(false);
       }
@@ -367,13 +365,14 @@ export default function FontEmbed() {
     ref: dropZoneRef,
     onPaths: handleDroppedPaths,
     onActiveChange: setDropActive,
-    onError: (e) => setDropError(sanitizeForDialog(e instanceof Error ? e.message : String(e))),
+    onError: (e) => setDropError(sanitizeError(e)),
     // Match the Pick-Files / Pick-Folder button gates which already
     // include `analyzing`. Drops accepted during analyze waste the
     // first analysis pass (gen counter saves correctness but the work
     // is thrown away) and produce a confusing "pick disabled, drop
     // accepted" UX.
     disabled: embedding || analyzing,
+    t,
   });
 
   // ── Font source management ──────────────────────────────────────
@@ -426,10 +425,7 @@ export default function FontEmbed() {
       });
     } catch (e) {
       if (gen !== pickGenRef.current) return;
-      addLog(
-        t("error_prefix", sanitizeForDialog(e instanceof Error ? e.message : String(e))),
-        "error"
-      );
+      addLog(t("error_prefix", sanitizeError(e)), "error");
     } finally {
       // Generation-gated unlock (same pattern as ingestPaths): only
       // the latest reanalyze flips analyzing back off, so an in-flight
@@ -451,10 +447,7 @@ export default function FontEmbed() {
         setFontSources([]);
         await reanalyzeWithSources();
       } catch (e) {
-        addLog(
-          t("error_prefix", sanitizeForDialog(e instanceof Error ? e.message : String(e))),
-          "error"
-        );
+        addLog(t("error_prefix", sanitizeError(e)), "error");
       } finally {
         setSourceBusy(false);
       }
@@ -476,12 +469,20 @@ export default function FontEmbed() {
         setSourceBusy(true);
         try {
           await reanalyzeWithSources();
+        } catch (e) {
+          // Round 8 N-R8-N2-11: parity with handleRemoveFontSource —
+          // reanalyzeWithSources can throw (font_cache_commands /
+          // analyzeFonts internal errors); without an outer catch the
+          // rejection becomes an unhandled-promise warning and the user
+          // sees no log entry explaining why the newly-added source
+          // didn't update the detection grid.
+          addLog(t("error_prefix", sanitizeError(e)), "error");
         } finally {
           setSourceBusy(false);
         }
       })();
     },
-    [fontSources, reanalyzeWithSources]
+    [fontSources, reanalyzeWithSources, addLog, t]
   );
 
   const handleRemoveFontSource = useCallback(
@@ -505,10 +506,7 @@ export default function FontEmbed() {
           setFontSources(nextSources);
           await reanalyzeWithSources();
         } catch (e) {
-          addLog(
-            t("error_prefix", sanitizeForDialog(e instanceof Error ? e.message : String(e))),
-            "error"
-          );
+          addLog(t("error_prefix", sanitizeError(e)), "error");
         } finally {
           setSourceBusy(false);
         }
@@ -569,7 +567,7 @@ export default function FontEmbed() {
           projectedOutputs.push(deriveEmbeddedPath(p));
         } catch (e) {
           const safePath = sanitizeForDialog(fileNameFromPath(p));
-          const safeErr = sanitizeForDialog(e instanceof Error ? e.message : String(e));
+          const safeErr = sanitizeError(e);
           addLog(t("msg_fonts_error", safePath, safeErr), "error");
           skippedPaths.add(p);
         }
@@ -593,10 +591,7 @@ export default function FontEmbed() {
           }
         }
       } catch (e) {
-        addLog(
-          t("error_prefix", sanitizeForDialog(e instanceof Error ? e.message : String(e))),
-          "error"
-        );
+        addLog(t("error_prefix", sanitizeError(e)), "error");
         setLastActionResult("error");
         return;
       }
@@ -681,7 +676,14 @@ export default function FontEmbed() {
             );
 
             if (selectedFonts.length === 0) {
-              addLog(t("msg_no_fonts_selected"), "error");
+              // Round 8 N-R8-N2-17: misattributed message correction.
+              // The outer "Embed" button is gated on `selected.size > 0`,
+              // so the global-zero case never reaches this loop body.
+              // The remaining 0-fonts case here is "this file references
+              // no fonts that the user kept checked" — a per-file,
+              // per-batch shape that needs its own message naming the
+              // file. `safeFileName` is already sanitized just above.
+              addLog(t("msg_no_fonts_for_file", safeFileName), "error");
               continue;
             }
 
@@ -723,14 +725,7 @@ export default function FontEmbed() {
             addLog(t("msg_embed_saved", safeOutName, result.embeddedCount), "success");
             successCount++;
           } catch (e) {
-            addLog(
-              t(
-                "msg_fonts_error",
-                safeFileName,
-                sanitizeForDialog(e instanceof Error ? e.message : String(e))
-              ),
-              "error"
-            );
+            addLog(t("msg_fonts_error", safeFileName, sanitizeError(e)), "error");
           } finally {
             processedCount++;
             setBatchProgress({ processed: processedCount, total: filePaths.length });

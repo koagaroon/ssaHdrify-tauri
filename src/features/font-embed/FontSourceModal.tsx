@@ -12,7 +12,8 @@ import {
   type FontScanResult,
 } from "../../lib/tauri-api";
 import { ask } from "@tauri-apps/plugin-dialog";
-import { sanitizeForDialog } from "../../lib/dedup-helpers";
+import { sanitizeError, sanitizeForDialog } from "../../lib/dedup-helpers";
+import { isWindowsRuntime } from "../../lib/platform";
 import { useI18n } from "../../i18n/useI18n";
 import type { FontUsage } from "./font-collector";
 import { fontKeyLabel } from "./font-collector";
@@ -58,7 +59,12 @@ interface Props {
 }
 
 function basename(path: string): string {
-  return path.replace(/\\/g, "/").split("/").filter(Boolean).pop() ?? path;
+  // Backslash → forward only on Windows (Round 8 POSIX-correctness gate,
+  // parity with the four sibling helpers fixed in Wave 8.1). On POSIX
+  // `\` is a valid filename character; a folder literally named `a\b`
+  // must display as `a\b`, not as `b`.
+  const norm = isWindowsRuntime ? path.replace(/\\/g, "/") : path;
+  return norm.split("/").filter(Boolean).pop() ?? path;
 }
 
 function newSourceId(): string {
@@ -209,7 +215,7 @@ export default function FontSourceModal(props: Props) {
         // directly into the modal banner without the BiDi reversal
         // protection that `validate_ipc_path` would have applied
         // upstream (Round 6 Wave 6.2 parity sweep).
-        const message = sanitizeForDialog(e instanceof Error ? e.message : String(e));
+        const message = sanitizeError(e);
         console.warn("cancelFontScan failed:", e);
         setError(t("font_scan_cancel_failed", message));
       });
@@ -357,7 +363,7 @@ export default function FontSourceModal(props: Props) {
       // sanitizeForDialog: same Round 6 Wave 6.2 parity reason as the
       // requestClose cancel path above — Rust IPC errors can carry
       // attacker-influenced path strings.
-      const message = sanitizeForDialog(e instanceof Error ? e.message : String(e));
+      const message = sanitizeError(e);
       console.warn("cancelFontScan failed:", e);
       setError(t("font_scan_cancel_failed", message));
     });
@@ -488,7 +494,7 @@ export default function FontSourceModal(props: Props) {
         // (picker / preflight / streaming scan), so the error message
         // can carry font-pack path strings or font-file names which
         // are attacker-influenced (P1b). Round 6 Wave 6.2.
-        setError(sanitizeForDialog(e instanceof Error ? e.message : String(e)));
+        setError(sanitizeError(e));
       } finally {
         if (scanId !== null && activeScanIdRef.current === scanId) {
           activeScanIdRef.current = null;

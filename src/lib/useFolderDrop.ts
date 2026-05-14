@@ -37,6 +37,12 @@ export interface UseFolderDropOptions {
   /** When true, the hook skips subscribing — useful while the consumer is
    *  busy processing a previous drop and wants to ignore further drops. */
   disabled?: boolean;
+  /** Translator for hook-emitted error wording (truncated drop,
+   *  zero-usable-paths). Round 8 Wave 8.6 — previously the hook's
+   *  error messages were hardcoded English (N-R5-FELIB-11). Optional
+   *  so consumers in non-i18n contexts (tests, future internal
+   *  callers) still work; falls back to English when omitted. */
+  t?: (key: string, ...args: (string | number)[]) => string;
 }
 
 /** Subscribe to drag-drop events scoped to a ref'd drop zone element. */
@@ -46,6 +52,7 @@ export function useFolderDrop({
   onActiveChange,
   onError,
   disabled,
+  t,
 }: UseFolderDropOptions): void {
   // Stabilize the consumer callbacks AND the disabled flag so the
   // listener-attaching effect doesn't re-subscribe on every parent
@@ -58,6 +65,7 @@ export function useFolderDrop({
   const onActiveChangeRef = useRef(onActiveChange);
   const onErrorRef = useRef(onError);
   const disabledRef = useRef(disabled);
+  const tRef = useRef(t);
   // No deps array — refresh refs every render so the listener-attaching
   // effect below can keep its closures stable while still reading the
   // latest values. Not a missing-dep bug.
@@ -66,6 +74,7 @@ export function useFolderDrop({
     onActiveChangeRef.current = onActiveChange;
     onErrorRef.current = onError;
     disabledRef.current = disabled;
+    tRef.current = t;
   });
 
   useEffect(() => {
@@ -145,18 +154,19 @@ export function useFolderDrop({
                     // `onTruncated` would force every consumer to wire
                     // a new path.
                     if (expanded.truncated) {
-                      // Hardcoded English string (N-R5-FELIB-11):
-                      // proper i18n requires threading `t` through
-                      // the useFolderDrop options surface, which
-                      // every consumer would have to update. Deferred
-                      // to a follow-up wave; meanwhile the wording
-                      // matches the conservative tone the rest of
-                      // the app uses in onError banners.
-                      onErrorRef.current?.(
-                        new Error(
-                          "Drop too large — first 5000 files accepted, the rest were ignored. Retry with a smaller batch."
-                        )
-                      );
+                      // Round 8 Wave 8.6 — closes N-R5-FELIB-11 by
+                      // threading the optional `t` translator through
+                      // the options surface. Falls back to English
+                      // when consumers don't pass `t` (tests, future
+                      // internal callers). The "5000" literal here
+                      // matches `MAX_RESULT_FILES` on the Rust side
+                      // (`dropzone.rs`); kept inline so the wording
+                      // doesn't depend on a round-trip lookup.
+                      const tr = tRef.current;
+                      const msg = tr
+                        ? tr("msg_drop_truncated", 5000)
+                        : "Drop too large — first 5000 files accepted, the rest were ignored. Retry with a smaller batch.";
+                      onErrorRef.current?.(new Error(msg));
                     }
                   } else if (event.payload.paths.length > 0) {
                     // Non-empty input that expanded to zero paths — the
@@ -164,9 +174,12 @@ export function useFolderDrop({
                     // the call, and yet we'd silently do nothing without
                     // this signal (Round 1 F1.N-R1-17). Surface as an
                     // error so the consumer banner reads "no usable
-                    // files in this drop" instead of nothing. Same
-                    // N-R5-FELIB-11 deferral applies to the wording.
-                    onErrorRef.current?.(new Error("Drop expanded to zero usable paths"));
+                    // files in this drop" instead of nothing.
+                    const tr = tRef.current;
+                    const msg = tr
+                      ? tr("msg_drop_no_usable")
+                      : "Drop expanded to zero usable paths";
+                    onErrorRef.current?.(new Error(msg));
                   }
                 }
               } catch (e) {

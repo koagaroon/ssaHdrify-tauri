@@ -253,4 +253,27 @@ describe("parseSubtitle / shiftSubtitle — oversized-ASS-Dialogue placeholder a
     expect(output).toContain(`Dialogue: 0,0:00:30.00,0:00:31.00,Default,${big}`);
     expect(output).toContain("Dialogue: 0,0:00:40.50,0:00:41.50,Default,LAST");
   });
+
+  // ── Round 8 Wave 8.3 — parser boundary pins ──
+
+  it("parses single-digit-hour VTT timing as zero (bounded-hour regex)", () => {
+    // Round 8 A-R8-A1-2 / N-R8-N1-1: the VTT hour group is bounded
+    // `\d{2,12}` now, so a stray single-digit hour like "1:00:00.000"
+    // doesn't satisfy the HH:MM:SS form. The MM:SS arm still matches
+    // ("1:00.000" is allowed by that arm), but a 3-component "1:00:00"
+    // must NOT match HH:MM:SS. Pin the rejection.
+    const content =
+      "WEBVTT\r\n\r\n" + "1:00:00.000 --> 1:00:02.000\r\n" + "this should not match HH:MM:SS\r\n";
+    const result = parseSubtitle(content);
+    expect(result.format).toBe("vtt");
+    // The cue's timing line failed to match → block skipped → zero captions.
+    expect(result.captions).toHaveLength(0);
+  });
+
+  it("parses 12-digit-hour VTT timing (upper bound)", () => {
+    // 12-digit hour is the cap; this should still parse.
+    const content = "WEBVTT\r\n\r\n00:00:01.000 --> 00:00:02.000\r\nLine\r\n";
+    const result = parseSubtitle(content);
+    expect(result.captions).toHaveLength(1);
+  });
 });

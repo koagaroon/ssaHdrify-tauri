@@ -19,7 +19,7 @@
 import type { TabId } from "./FileContext";
 import { TAB_LABEL_KEYS } from "./tab-labels";
 import { BIDI_AND_ZERO_WIDTH_GLOBAL_RE } from "./unicode-controls";
-import { isCaseInsensitiveFs } from "./platform";
+import { isCaseInsensitiveFs, isWindowsRuntime } from "./platform";
 
 /** Translator signature used by `buildConflictMessage`. Matches the
  *  `t` callback returned from `useI18n`. */
@@ -94,7 +94,13 @@ export function buildConflictMessage(
  * dd2d9554).
  */
 export function normalizeOutputKey(path: string): string {
-  const normalized = path.normalize("NFC").replace(/\\/g, "/");
+  // Backslash → forward only on Windows (Round 8 N-R8-N4-3). On POSIX
+  // `\` is a valid filename character, so unconditional rewriting
+  // false-collapses two distinct on-disk files (`dir\foo.ass` and
+  // `dir/foo.ass`) into one dedup bucket — same gating reasoning as
+  // `pathsEqualOnFs` in path-validation.ts.
+  const nfc = path.normalize("NFC");
+  const normalized = isWindowsRuntime ? nfc.replace(/\\/g, "/") : nfc;
   return isCaseInsensitiveFs ? normalized.toLowerCase() : normalized;
 }
 
@@ -118,7 +124,12 @@ export function normalizeOutputKey(path: string): string {
  *  `ask()` body, sanitize it here. Counts and other non-name strings
  *  are unaffected. */
 export function sanitizeForDialog(name: string): string {
-  return name.replace(BIDI_AND_ZERO_WIDTH_GLOBAL_RE, "");
+  // Also strip ASCII \n / \r (Round 8 A-R8-A4-24). A fan-sub filename
+  // with an embedded newline could fake additional confirm lines in
+  // the OS-native `ask()` dialog body, smuggling a fake question past
+  // the user (P1b). U+2028 / U+2029 are already covered by the BiDi
+  // set above; this closes the ASCII line-break gap.
+  return name.replace(BIDI_AND_ZERO_WIDTH_GLOBAL_RE, "").replace(/[\r\n]/g, "");
 }
 
 /** Round 7 Wave 7.1 — shared catch-arm helper. Normalizes the

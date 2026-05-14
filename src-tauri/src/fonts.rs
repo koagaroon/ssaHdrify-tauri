@@ -1088,6 +1088,17 @@ fn parse_local_font_file(canonical: &Path, scan_id: u64) -> Vec<LocalFontEntry> 
         Err(_) => return Vec::new(),
     };
 
+    // Post-read size re-check (Round 8 A-R8-A2-7 — parity with
+    // `encoding.rs::read_text_detect_encoding` and `subset_font` below).
+    // The pre-read stat gate above can be raced — a font swapped between
+    // stat and read can balloon past `MAX_FONT_DATA_SIZE` before we
+    // notice. Silent-skip pattern matches the rest of this function
+    // (return `Vec::new()` instead of Err); per-face errors here are
+    // all consumed by the scan loop the same way.
+    if data.len() as u64 > MAX_FONT_DATA_SIZE {
+        return Vec::new();
+    }
+
     let mut entries = Vec::new();
     // Permit a single consecutive parse failure before giving up. In practice
     // FontRef::from_index returns an error once `i` exceeds the real face
@@ -2381,7 +2392,12 @@ fn register_font_path(path: &Path, font_index: u32) -> Result<FontLookupResult, 
         "Cannot resolve font path".to_string()
     })?;
     let canonical_string = normalize_canonical_path(&canonical.to_string_lossy());
-    insert_with_cap(&ALLOWED_FONT_PATHS, "system", canonical_string.clone(), font_index)?;
+    insert_with_cap(
+        &ALLOWED_FONT_PATHS,
+        "system",
+        canonical_string.clone(),
+        font_index,
+    )?;
     Ok(FontLookupResult {
         path: canonical_string,
         index: font_index,
@@ -2448,6 +2464,19 @@ fn insert_with_cap(
 /// path string — cache lookup paths come from `cached_fonts.font_path`
 /// which `replace_folder` stores after canonicalization upstream.
 pub fn register_cache_provenance(canonical_path: &str, face_index: u32) -> Result<(), String> {
+    // Round 8 A-R8-A2-2: re-validate the canonical path through the
+    // IPC validator before insertion. Callers pass paths originating
+    // from `cached_fonts.font_path` rows, which on the trusted-cache
+    // path were canonicalized by `replace_folder` upstream — but a
+    // hostile cache file supplied via `--cache-file` (P1b) could
+    // contain crafted rows carrying control chars, BiDi, parent-
+    // directory segments, or DOS device prefixes. Without this gate,
+    // those values flow into `ALLOWED_CACHE_FONT_PATHS` and from
+    // there back to the frontend (via `lookup_font_family`) for
+    // display before any IPC re-validation. Catching at insert time
+    // keeps the trust set itself clean and short-circuits the
+    // disclosure path.
+    crate::util::validate_ipc_path(canonical_path, "Cache font")?;
     insert_with_cap(
         &ALLOWED_CACHE_FONT_PATHS,
         "cache",
@@ -2500,6 +2529,35 @@ static WINDOWS_USER_FONTS_DIR: Lazy<Option<String>> = Lazy::new(|| {
     })
 });
 
+/// Cached, lowercase macOS per-user fonts dir. `None` if `$HOME` was
+/// unset at startup. Round 8 A-R8-A3-1 — same caching rationale as
+/// `WINDOWS_USER_FONTS_DIR`: take an early snapshot so a runtime
+/// `set_var("HOME", ...)` can't redirect the system-fonts-dir gate.
+/// Lowercased here because the macOS arm of `is_in_system_fonts_dir`
+/// compares lowercased canonical paths (APFS is case-insensitive by
+/// default).
+#[cfg(target_os = "macos")]
+static MACOS_USER_FONTS_DIR: Lazy<Option<String>> = Lazy::new(|| {
+    std::env::var_os("HOME")
+        .map(|p| format!("{}/library/fonts", p.to_string_lossy().to_lowercase()))
+});
+
+/// Cached Linux per-user fonts dirs (`~/.fonts` + `~/.local/share/fonts`).
+/// Empty vector if `$HOME` was unset at startup. Same eager-snapshot
+/// reason as `MACOS_USER_FONTS_DIR` (Round 8 A-R8-A3-1).
+#[cfg(all(unix, not(target_os = "macos")))]
+static LINUX_USER_FONT_DIRS: Lazy<Vec<String>> = Lazy::new(|| {
+    if let Some(home) = std::env::var_os("HOME") {
+        let home_str = home.to_string_lossy();
+        vec![
+            format!("{home_str}/.fonts"),
+            format!("{home_str}/.local/share/fonts"),
+        ]
+    } else {
+        Vec::new()
+    }
+});
+
 /// Force-initialize the cached system-fonts directory paths. Called from
 /// `lib.rs::run` at app startup so the env-var snapshot is taken before
 /// any user action could indirectly mutate the process environment.
@@ -2508,6 +2566,14 @@ pub fn init_system_dirs() {
     {
         Lazy::force(&WINDOWS_SYSTEM_FONTS_DIR);
         Lazy::force(&WINDOWS_USER_FONTS_DIR);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Lazy::force(&MACOS_USER_FONTS_DIR);
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        Lazy::force(&LINUX_USER_FONT_DIRS);
     }
 }
 
@@ -2563,25 +2629,27 @@ fn is_in_system_fonts_dir(canonical: &Path) -> bool {
         if MAC_DIRS.iter().any(|d| under(d)) {
             return true;
         }
-        // Per-user fonts: ~/Library/Fonts/
-        if let Some(home) = std::env::var_os("HOME") {
-            let user_font_dir = format!("{}/Library/Fonts", home.to_string_lossy());
-            if under(&user_font_dir) {
+        // Per-user fonts: ~/Library/Fonts/, from the eager startup snapshot.
+        // Pre-lowercased so we compare directly against `lower` without
+        // re-folding inside `under`.
+        #[cfg(target_os = "macos")]
+        if let Some(user_dir) = MACOS_USER_FONTS_DIR.as_ref() {
+            if path_under_dir(&lower, user_dir, "/") {
                 return true;
             }
         }
         false
     } else {
-        // Linux
+        // Linux — same eager-snapshot pattern as macOS / Windows
+        // (Round 8 A-R8-A3-1). The static is populated at startup;
+        // here we only read it.
         let under = |dir: &str| path_under_dir(&canonical_str, dir, "/");
         if under("/usr/share/fonts") || under("/usr/local/share/fonts") {
             return true;
         }
-        if let Some(home) = std::env::var_os("HOME") {
-            let home_str = home.to_string_lossy();
-            if under(&format!("{home_str}/.fonts"))
-                || under(&format!("{home_str}/.local/share/fonts"))
-            {
+        #[cfg(all(unix, not(target_os = "macos")))]
+        for user_dir in LINUX_USER_FONT_DIRS.iter() {
+            if under(user_dir) {
                 return true;
             }
         }
@@ -2734,6 +2802,49 @@ pub fn subset_font(
             metadata.len() as f64 / (1024.0 * 1024.0),
             MAX_FONT_DATA_SIZE / 1024 / 1024
         ));
+    }
+
+    // Round 8 A-R8-A2-1: magic-byte sniff for non-system tiers as a
+    // defense-in-depth gate before the full file read. The extension
+    // check above rejects `/etc/passwd` (no `.ttf` extension), but
+    // attacker-crafted cache rows pointing at `/etc/passwd.ttf` (or
+    // any non-font local file renamed / symlinked to a font extension)
+    // would otherwise pass extension + provenance + size gates and
+    // reach `fs::read` for a 50 MB buffer copy. W6.9 already closes
+    // the byte-exfil layer (subset returns Err on fontcull failure
+    // with no fallback), but reading arbitrary local files into
+    // process memory is itself a primitive worth closing at the
+    // source — especially for `--cache-file`-supplied paths (P1b).
+    //
+    // System fonts (`is_system=true`) skip this sniff: they already
+    // passed the stricter `is_in_system_fonts_dir` gate above, and
+    // OS font directories are guaranteed to contain real fonts.
+    // Cache + user tiers go through the sniff.
+    if !is_system {
+        use std::io::Read;
+        let mut header = [0u8; 4];
+        let mut probe = fs::File::open(&canonical).map_err(|e| {
+            log::warn!("open font for sniff failed for '{filename}': {e}");
+            format!("Cannot open font file '{filename}'")
+        })?;
+        probe.read_exact(&mut header).map_err(|e| {
+            log::warn!("read font header failed for '{filename}': {e}");
+            format!("Cannot read font header for '{filename}'")
+        })?;
+        // Recognized font magic numbers per the OpenType / TrueType
+        // specs: `\0\1\0\0` (sfnt-flavored TrueType), `OTTO` (sfnt
+        // with CFF outlines), `ttcf` (collection), `true` (Apple
+        // TrueType). `typ1` (PostScript Type 1) intentionally omitted —
+        // not supported by fontcull / skrifa, would fail parse anyway,
+        // and is so rare that the false-reject cost is bounded to
+        // archive-only fonts.
+        let is_font = matches!(&header, b"\x00\x01\x00\x00" | b"OTTO" | b"ttcf" | b"true");
+        if !is_font {
+            return Err(format!(
+                "Font file '{filename}' has no recognized font signature"
+            ));
+        }
+        drop(probe);
     }
 
     let font_data = fs::read(&canonical).map_err(|e| {
@@ -3193,7 +3304,10 @@ mod tests {
         // injection on TTC files.
         let wrong_face = (path.to_string(), 5);
         assert!(
-            !ALLOWED_CACHE_FONT_PATHS.lock().unwrap().contains(&wrong_face),
+            !ALLOWED_CACHE_FONT_PATHS
+                .lock()
+                .unwrap()
+                .contains(&wrong_face),
             "different face_index on same path must not slip through pair-keyed gate"
         );
 

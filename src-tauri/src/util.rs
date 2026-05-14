@@ -139,6 +139,35 @@ pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
     if has_dotdot_component {
         return Err(format!("{label} path contains parent-directory segments"));
     }
+    // Reject Windows reserved device names in any path segment (Round 8
+    // A-R8-A3-8). The TS-side `assertSafeOutputFilename` already
+    // rejects these for templated outputs; here we mirror the check for
+    // any IPC path so a non-TS caller (CLI argv, future deno_core
+    // engine entry) can't slip `C:\foo\CON.ass` through. Win32 routes
+    // device names regardless of extension (`NUL.txt` opens NUL too),
+    // so write commands like `safe_write_text_file_inner` would
+    // otherwise open the device handle.
+    //
+    // Per-segment + first-dot stem so `NUL.ass` and `CON.txt` both
+    // reject; trailing whitespace / dots are stripped because
+    // `CON ` and `CON.` resolve to the device as well.
+    let has_reserved_segment = path.split(['/', '\\']).any(|seg| {
+        let first_dot = seg.find('.').unwrap_or(seg.len());
+        let stem = seg[..first_dot]
+            .trim_end_matches(|c: char| c.is_whitespace() || c == '.')
+            .to_ascii_uppercase();
+        matches!(
+            stem.as_str(),
+            "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+        ) || (stem.len() == 4
+            && (stem.starts_with("COM") || stem.starts_with("LPT"))
+            && stem.as_bytes()[3].is_ascii_digit())
+    });
+    if has_reserved_segment {
+        return Err(format!(
+            "{label} path contains a Windows reserved device name"
+        ));
+    }
     Ok(())
 }
 
@@ -353,6 +382,51 @@ mod tests {
         // Forward-slash form (POSIX + Windows mixed paths) also rejected.
         let err2 = validate_ipc_path("/home/u/../etc/passwd", "Test").unwrap_err();
         assert!(err2.to_lowercase().contains("parent-directory"));
+    }
+
+    // Round 8 A-R8-A3-8 — Windows reserved-device-name reject (per
+    // segment, case-insensitive, pre-first-dot stem, trailing-ws/dot
+    // strip). The TS-side `assertSafeOutputFilename` already rejects
+    // these; this pins parity for non-TS callers (CLI argv, future
+    // engine).
+    #[test]
+    fn validate_rejects_reserved_segment_anywhere_in_path() {
+        let err = validate_ipc_path(r"C:\foo\CON.ass", "Test").unwrap_err();
+        assert!(err.to_lowercase().contains("reserved"));
+        let err2 = validate_ipc_path(r"C:\NUL.txt", "Test").unwrap_err();
+        assert!(err2.to_lowercase().contains("reserved"));
+    }
+
+    #[test]
+    fn validate_rejects_reserved_with_trailing_space_or_dot() {
+        // `CON ` and `CON.` both resolve to the device on Win32; the
+        // trailing-whitespace + trailing-dot strip catches them.
+        let err1 = validate_ipc_path(r"C:\foo\CON .ass", "Test").unwrap_err();
+        assert!(err1.to_lowercase().contains("reserved"));
+        let err2 = validate_ipc_path(r"C:\foo\CON..ass", "Test").unwrap_err();
+        assert!(err2.to_lowercase().contains("reserved"));
+    }
+
+    #[test]
+    fn validate_rejects_com_and_lpt_digit_variants() {
+        for name in ["COM1", "COM9", "LPT0", "LPT5"] {
+            let path = format!(r"C:\foo\{name}.ass");
+            let err = validate_ipc_path(&path, "Test").unwrap_err();
+            assert!(
+                err.to_lowercase().contains("reserved"),
+                "{path} should reject as reserved"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_accepts_non_reserved_lookalikes() {
+        // Names that LOOK reserved but aren't (CON has 3 chars; CONS is
+        // 4; COMA isn't COM+digit; LPTX isn't LPT+digit). Pin so a
+        // future refactor doesn't widen the match accidentally.
+        validate_ipc_path(r"C:\foo\CONS.ass", "Test").expect("CONS is not reserved");
+        validate_ipc_path(r"C:\foo\COMA.ass", "Test").expect("COMA is not reserved");
+        validate_ipc_path(r"C:\foo\LPTX.ass", "Test").expect("LPTX is not reserved");
     }
 
     #[test]

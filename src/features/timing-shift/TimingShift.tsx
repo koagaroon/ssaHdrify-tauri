@@ -19,6 +19,7 @@ import { useClickOutside } from "../../lib/useClickOutside";
 import { useLogPanel } from "../../lib/useLogPanel";
 import { LogPanel } from "../../lib/LogPanel";
 import { DropErrorBanner } from "../../lib/DropErrorBanner";
+import NumberInput from "../../lib/NumberInput";
 import {
   buildConflictMessage,
   normalizeOutputKey,
@@ -104,7 +105,15 @@ export default function TimingShift() {
   const { timingFiles, setTimingFiles, clearFile, isFileInUse } = useFileContext();
 
   const [detectedFormat, setDetectedFormat] = useState<string>("");
+  // Round 8 Wave 8.6 — closes N-R5-FEFEAT-24. Two-slot shadow mirroring
+  // HdrConvert's `brightness` / `brightnessText`: `offsetValue` is the
+  // validated integer used by `effectiveOffsetMs` math; `offsetText` is
+  // the raw input string the user is typing. The pair lets NumberInput
+  // own clear-then-retype semantics (mid-type NaN states don't snap the
+  // visible field back to a stale number) while keeping the math path
+  // typed.
   const [offsetValue, setOffsetValue] = useState(200);
+  const [offsetText, setOffsetText] = useState("200");
   const [unit, setUnit] = useState<Unit>("ms");
   const [direction, setDirection] = useState<Direction>("slower");
   const [useThreshold, setUseThreshold] = useState(false);
@@ -142,6 +151,28 @@ export default function TimingShift() {
     const clamped = Math.max(-MAX_OFFSET_MS, Math.min(MAX_OFFSET_MS, base));
     return direction === "faster" ? -clamped : clamped;
   }, [unit, offsetValue, direction]);
+
+  // Per-unit absolute bound used by NumberInput's min/max attributes and
+  // the out-of-range derived signal below. In ms-unit the cap is the full
+  // MAX_OFFSET_MS literal; in s-unit it scales down by 1000 so the same
+  // visible value range stays user-friendly.
+  const offsetMax = unit === "s" ? MAX_OFFSET_MS / 1000 : MAX_OFFSET_MS;
+  const handleOffsetChange = (value: string) => {
+    setOffsetText(value);
+    const n = parseInt(value, 10);
+    if (!Number.isNaN(n) && Math.abs(n) <= offsetMax) {
+      setOffsetValue(n);
+    }
+  };
+  // Derived: text parses cleanly but the magnitude exceeds the per-unit
+  // cap. Without this, the math layer silently clamps in effectiveOffsetMs
+  // and the user sees no feedback on their out-of-range input — the
+  // same no-silent-action class HdrConvert's brightnessOutOfRange
+  // addresses (N-R5-FEFEAT-25).
+  const offsetOutOfRange = (() => {
+    const n = parseInt(offsetText, 10);
+    return !Number.isNaN(n) && Math.abs(n) > offsetMax;
+  })();
 
   const thresholdMs = useMemo(
     () => (useThreshold ? parseDisplayTime(thresholdText) : null),
@@ -325,6 +356,7 @@ export default function TimingShift() {
     onActiveChange: setDropActive,
     onError: (e) => setDropError(sanitizeError(e)),
     disabled: busy,
+    t,
   });
 
   const handleClearFiles = useCallback(() => {
@@ -693,32 +725,21 @@ export default function TimingShift() {
           >
             {t("offset_label")}
           </label>
-          {/* Raw <input type="number"> instead of the shared NumberInput
-              (N-R5-FEFEAT-24): TimingShift owns offsetValue as a number,
-              not as a string-shadow + derived number like HdrConvert
-              brightnessText does. Switching to NumberInput requires
-              that string-shadow refactor across the line-136 offset
-              math callsite — deferred as out of scope for the hygiene
-              wave. Until then this input's clear-then-retype behavior
-              differs subtly from HdrConvert's (NaN keystrokes here
-              snap the visible value back to the prior valid number;
-              HdrConvert preserves what the user typed). */}
-          <input
+          {/* Round 8 Wave 8.6 — closes N-R5-FEFEAT-24 by migrating to the
+              shared NumberInput. The string-shadow refactor (offsetText)
+              is in place at the top of this component, so this matches
+              HdrConvert's clear-then-retype semantics and inherits the
+              invalid-border feedback for out-of-range typing instead of
+              silently clamping in `effectiveOffsetMs`. */}
+          <NumberInput
             id="timing-offset-input"
-            name="offset"
-            type="number"
-            value={offsetValue}
-            onChange={(e) => {
-              const n = parseInt(e.target.value, 10);
-              if (!Number.isNaN(n)) setOffsetValue(n);
-            }}
+            value={offsetText}
+            onChange={handleOffsetChange}
+            min={-offsetMax}
+            max={offsetMax}
             disabled={busy}
-            className="w-28 px-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            style={{
-              background: "var(--bg-input)",
-              border: "1px solid var(--border)",
-              color: "var(--text-primary)",
-            }}
+            invalid={offsetOutOfRange}
+            className="w-28"
           />
         </div>
         <select

@@ -545,6 +545,21 @@ fn init_logger() {
 fn run() -> Result<ExitCode, String> {
     let Cli { globals, command } = Cli::parse();
 
+    // Round 8 A-R8-A1-6: validate `--cache-file` through the IPC
+    // validator before any consumer (`run_refresh_fonts`,
+    // `prepare_embed_cache`) opens / stat's the file. The cache file
+    // is user-supplied argv and explicitly P1b per the design doc —
+    // without validation, a value like `\\.\PhysicalDrive0` (DOS
+    // device) or `C:\dir\..\elsewhere\cache.sqlite3` (traversal)
+    // would reach SQLite open. The stderr drift report also
+    // interpolates this path; rejecting BiDi / line-break chars at
+    // the entry point closes the smuggling vector symmetrically with
+    // every other IPC path.
+    if let Some(ref cache_file) = globals.cache_file {
+        let cache_str = cache_file.to_string_lossy();
+        app_lib::util::validate_ipc_path(&cache_str, "--cache-file")?;
+    }
+
     match command {
         Command::Hdr(args) => run_hdr(&globals, args),
         Command::Shift(args) => run_shift(&globals, args),
@@ -1035,9 +1050,18 @@ fn predict_chain_output_path(
     // Per-char loop covers control chars + NTFS punctuation + BiDi/zw
     // in one pass; mirrors `util::validate_ipc_path` but for the
     // narrower "single filename, no separators" shape.
-    if output_name.is_empty()
-        || (output_name.len() >= 2 && output_name.as_bytes()[1] == b':')
-    {
+    if output_name.is_empty() || (output_name.len() >= 2 && output_name.as_bytes()[1] == b':') {
+        return None;
+    }
+    // Round 8 A-R8-A1-1: `.` and `..` as the WHOLE output_name resolve
+    // to the input's parent dir itself, which always exists. Without
+    // this reject, the cheap-first short-circuit below would either
+    // dedup-block every file in the batch (seen_outputs collision on
+    // the same predicted key) or emit `Skipped: '…/..' already exists`
+    // for each input, never reaching V8 / TS for the proper rejection
+    // message. TS-side `assertSafeOutputFilename` rejects them via the
+    // empty-stem and traversal gates; mirror at the prediction layer.
+    if output_name == "." || output_name == ".." {
         return None;
     }
     let illegal_in_filename = output_name.chars().any(|c| {
@@ -2433,11 +2457,17 @@ fn resolve_embed_font(
                 // provenance set is extremely unlikely under realistic
                 // font counts) — log and fall through, the embed will
                 // then fail at subset with a clearer error.
-                if let Err(e) =
-                    app_lib::fonts::register_cache_provenance(&result.font_path, result.face_index as u32)
-                {
+                if let Err(e) = app_lib::fonts::register_cache_provenance(
+                    &result.font_path,
+                    result.face_index as u32,
+                ) {
+                    // Round 8 N-R8-N3-4: WARN names the user-visible
+                    // consequence (this font may fail to embed) per
+                    // vibe-coding.md log-level discipline, instead of
+                    // leaking the internal helper name.
                     log::warn!(
-                        "cache provenance registration failed for {}: {e}",
+                        "Font '{}' may fail to embed: cache lookup hit but the path could not be \
+                         registered for this run (subset will refuse): {e}",
                         font.family
                     );
                 }

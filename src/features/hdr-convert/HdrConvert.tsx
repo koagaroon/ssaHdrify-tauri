@@ -261,6 +261,7 @@ export default function HdrConvert() {
     onActiveChange: setDropActive,
     onError: (e) => setDropError(sanitizeError(e)),
     disabled: processing,
+    t,
   });
 
   // ── Conversion (uses already-selected files) ───────────

@@ -409,7 +409,16 @@ export default function BatchRename() {
   const actionableCount = actionableRows.length;
 
   const ingestPaths = useCallback(
-    (paths: string[], gen: number) => {
+    (paths: string[]) => {
+      // Round 8 N-R8-N4-6: gen-guard removed. The previous form took a
+      // `gen` parameter and short-circuited via `gen !== pickGenRef.current`
+      // for shape consistency with HDR / Timing / FontEmbed's async
+      // ingest. Here the handler is synchronous — no `await` suspension
+      // exists where `pickGenRef.current` could advance — so the guard
+      // was structurally dead. Callers still bump `pickGenRef.current`
+      // before calling so any concurrent async work (from a future
+      // refactor that adds an await inside this handler) gets its
+      // invalidation signal at the bump site.
       const { videos, subtitles, unknown } = categorizePaths(paths);
 
       // Conflict check applies only to subtitles — videos can't collide
@@ -423,17 +432,16 @@ export default function BatchRename() {
       setDropError(null);
 
       if (videos.length === 0 && subtitles.length === 0) {
+        // Round 8 N-R8-N4-2: reset the unknown-count chip on this early
+        // return too. Without it, a drop of only unknown / ignored files
+        // after a prior drop with unknowns leaves the stale chip count
+        // visible even though the current state shows zero videos +
+        // zero subtitles. Mirrors the explicit `setUnknownCount(unknown.length)`
+        // on the happy path below.
+        setUnknownCount(unknown.length);
         addLog(t("msg_no_rename_inputs_in_drop"), "error");
         return;
       }
-
-      // gen-guard is defensive in this synchronous handler — without an
-      // `await` suspension, pickGenRef.current can't advance mid-function,
-      // so the early returns above won't see a stale generation. The
-      // check is kept for shape consistency with the async ingestion
-      // paths in HDR/Timing/FontEmbed, which DO need it after their
-      // readText / scanFontFiles awaits.
-      if (gen !== pickGenRef.current) return;
 
       setRenameFiles({
         videoPaths: videos,
@@ -454,13 +462,13 @@ export default function BatchRename() {
     const paths = await pickRenameInputs(t);
     if (gen !== pickGenRef.current) return;
     if (!paths || paths.length === 0) return;
-    ingestPaths(paths, gen);
+    ingestPaths(paths);
   }, [ingestPaths, t]);
 
   const handleDroppedPaths = useCallback(
     (paths: string[]) => {
-      const gen = (pickGenRef.current = pickGenRef.current + 1);
-      ingestPaths(paths, gen);
+      pickGenRef.current = pickGenRef.current + 1;
+      ingestPaths(paths);
     },
     [ingestPaths]
   );
@@ -471,6 +479,7 @@ export default function BatchRename() {
     onActiveChange: setDropActive,
     onError: (e) => setDropError(sanitizeError(e)),
     disabled: busy,
+    t,
   });
 
   const handleClearFiles = useCallback(() => {

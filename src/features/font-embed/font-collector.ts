@@ -399,7 +399,20 @@ function applyOverrideTags(
   // the captured "family" carries a literal `{` into matching / output
   // and silently misses the user's intended font.
   // W7.5: matchAll().at(-1) for libass parity — see \r above.
-  const fnMatches = [...block.matchAll(/\\fn([^\\}{]{0,128})/g)];
+  // Round 8 A-R8-A1-3: also stop at C0 (`\x00-\x1f`) / DEL+C1
+  // (`\x7f-\x9f`) / BiDi+zero-width controls. `sanitizeFamily` already
+  // strips these AFTER capture, but that lets the capture continue past
+  // a hostile `\fn<U+202E>evil` and produce a family-key for matching
+  // that diverges from what libass renders (libass keeps the BiDi char
+  // in the name → font lookup fails → fallback; our embed strips →
+  // matches a real font named `evil` → embed picks a font libass would
+  // never render). Stopping the capture at the first control char
+  // collapses both paths to "no match → fallback".
+  const fnMatches = [
+    ...block.matchAll(
+      new RegExp(`\\\\fn([^\\\\}{\\x00-\\x1f\\x7f-\\x9f${BIDI_AND_ZERO_WIDTH_CHARS}]{0,128})`, "gu")
+    ),
+  ];
   const fnMatch = fnMatches.at(-1);
   if (fnMatch) {
     const rawFamily = normalizeFamily(fnMatch[1]);

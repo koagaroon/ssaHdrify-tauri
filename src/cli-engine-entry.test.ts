@@ -212,6 +212,34 @@ Dialogue: 0,0:00:00.00,0:00:01.00,Default,Hi
     ).toThrow(/2 \[Fonts\] sections/);
   });
 
+  it("applyFontEmbed rejects malformed ASS containing multiple [Events] sections (Round 8 N-R8-N2-6)", () => {
+    // Parity with the duplicate-[Fonts] reject above. libass reads only
+    // the first [Events]; other consumers (Aegisub, mpv) may pick the
+    // second; silently inserting [Fonts] before the first leaves the
+    // second's dialogues intact downstream → corrupted ASS.
+    const twoEvents = `[Script Info]
+Title: Two Events
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, Bold, Italic
+Style: Default,Arial,20,0,0
+
+[Events]
+Format: Layer, Start, End, Style, Text
+Dialogue: 0,0:00:00.00,0:00:01.00,Default,A
+
+[Events]
+Format: Layer, Start, End, Style, Text
+Dialogue: 0,0:00:02.00,0:00:03.00,Default,B
+`;
+    expect(() =>
+      applyFontEmbed({
+        content: twoEvents,
+        fonts: [{ fontName: "arial.ttf", data: [0, 1, 2] }],
+      })
+    ).toThrow(/2 \[Events\] sections/);
+  });
+
   it("applyFontEmbed replaces existing [Fonts] section even when [Events] is absent", () => {
     const noEventsAss = `[Script Info]
 Title: No Events

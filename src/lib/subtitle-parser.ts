@@ -270,9 +270,15 @@ function parseVtt(content: string): Caption[] {
         `Per-caption parse cap is ${MAX_PARSED_ENTRIES}; raw-block ceiling guards iteration cost.`
     );
   }
-  // VTT timing: supports both HH:MM:SS.mmm and MM:SS.mmm
+  // VTT timing: supports both HH:MM:SS.mmm and MM:SS.mmm.
+  // Hour group bounded `\d{2,12}` (Round 8 A-R8-A1-2 / N-R8-N1-1) for
+  // parity with parseSrt + parseAss — the unbounded `\d{2,}` form let a
+  // crafted single-line input scan O(N) before silent-fallback to zero,
+  // and diverged from the rest of the parser family. 12 digits caps the
+  // hours at ~1e12, well past any plausible timecode and aligned with
+  // ASS DIALOGUE_PATTERN's `\d{1,12}` bound.
   const timingRe =
-    /^(\d{2,}:\d{2}:\d{2}\.\d{3}|\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{2,}:\d{2}:\d{2}\.\d{3}|\d{2}:\d{2}\.\d{3})/;
+    /^(\d{2,12}:\d{2}:\d{2}\.\d{3}|\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{2,12}:\d{2}:\d{2}\.\d{3}|\d{2}:\d{2}\.\d{3})/;
 
   // Per-entry cap (Round 6 Wave 6.5 #18) — see parseSrt for the
   // block-vs-entry rationale.
@@ -498,8 +504,17 @@ function buildSub(captions: Caption[], fps: number = DEFAULT_FPS): string {
   return (
     captions
       .map((c) => {
-        const startFrame = Math.round((c.start / 1000) * fps);
-        const endFrame = Math.round((c.end / 1000) * fps);
+        // Round 8 N-R8-N1-3: clamp non-finite / negative timestamps to 0
+        // for parity with formatSrtTime / formatAssTime / msToAssTime.
+        // After a Time Shift with `--offset` large enough to push captions
+        // before t=0, c.start / c.end can land negative; without clamping
+        // they produce negative frame counts (`{-23}{15}`) that downstream
+        // SUB consumers reject. Same defensive shape the SRT / ASS / VTT
+        // builders already use; buildSub was the lone outlier.
+        const start = Number.isFinite(c.start) ? Math.max(0, c.start) : 0;
+        const end = Number.isFinite(c.end) ? Math.max(0, c.end) : 0;
+        const startFrame = Math.round((start / 1000) * fps);
+        const endFrame = Math.round((end / 1000) * fps);
         return `{${startFrame}}{${endFrame}}${c.text.replace(/\n/g, "|")}`;
       })
       .join("\n") + "\n"

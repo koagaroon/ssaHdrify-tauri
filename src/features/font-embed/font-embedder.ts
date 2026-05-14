@@ -27,7 +27,7 @@ import {
   assertSafeOutputPath,
   decomposeInputPath,
 } from "../../lib/path-validation";
-import { sanitizeForDialog } from "../../lib/dedup-helpers";
+import { sanitizeError, sanitizeForDialog } from "../../lib/dedup-helpers";
 
 // ── Types ─────────────────────────────────────────────────
 
@@ -253,7 +253,10 @@ export async function analyzeFonts(
       systemFontCache?.set(key, resolution);
       infos.push({ ...base, ...resolution });
     } catch (e) {
-      const reason = e instanceof Error ? e.message : String(e);
+      // Round 8 N2 — sanitizeError so a BiDi/zero-width char carried
+      // by a Rust IPC error message can't surface in the UI through
+      // `SystemFontResolution.error` (which the detection grid renders).
+      const reason = sanitizeError(e);
       if (isDev) {
         console.debug(`[ssaHdrify] '${usage.key.family}' → MISS (key='${key}', reason=${reason})`);
       }
@@ -659,7 +662,23 @@ export function insertFontsSection(content: string, fontsSection: string): strin
   // trailing match as above for the same UUEncode-false-positive +
   // Unicode-line-sep smuggling reason.
   const HEADER_EVENTS_RE = /^\[[Ee][Vv][Ee][Nn][Tt][Ss]\][ \t]*$/;
-  const eventsIdx = lines.findIndex((l) => HEADER_EVENTS_RE.test(l));
+  const eventsHeaderIndices: number[] = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    if (HEADER_EVENTS_RE.test(lines[i])) eventsHeaderIndices.push(i);
+  }
+  // Round 8 N-R8-N2-6: parity with the [Fonts]-duplicate reject above.
+  // A single ASS with two [Events] sections produces a corrupted file
+  // either way — libass reads only the first, every other consumer
+  // (Aegisub / mpv) may pick the second — and inserting [Fonts] before
+  // the FIRST [Events] silently leaves the second's dialogues intact
+  // downstream. Surface the malformed input the same way [Fonts]
+  // duplicates are surfaced.
+  if (eventsHeaderIndices.length > 1) {
+    throw new Error(
+      `Cannot embed: input ASS has ${eventsHeaderIndices.length} [Events] sections; expected at most one`
+    );
+  }
+  const eventsIdx = eventsHeaderIndices[0] ?? -1;
 
   if (eventsIdx >= 0) {
     const { text: before, sep } = buildBefore(eventsIdx);

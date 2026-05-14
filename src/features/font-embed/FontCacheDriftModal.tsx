@@ -6,7 +6,7 @@ import {
   type FontCacheSkippedFolder,
   type FontCacheStatus,
 } from "../../lib/tauri-api";
-import { sanitizeForDialog } from "../../lib/dedup-helpers";
+import { sanitizeError, sanitizeForDialog } from "../../lib/dedup-helpers";
 import { useI18n } from "../../i18n/useI18n";
 
 interface Props {
@@ -146,7 +146,7 @@ export default function FontCacheDriftModal({
       // sanitizeForDialog strips BiDi / zero-width controls so a
       // U+202E in a drifted folder path can't reverse the surrounding
       // error banner text.
-      setError(sanitizeForDialog(e instanceof Error ? e.message : String(e)));
+      setError(sanitizeError(e));
       setWorking(null);
     }
   }, [onRescanComplete, t]);
@@ -163,7 +163,7 @@ export default function FontCacheDriftModal({
       onClearComplete();
     } catch (e) {
       // Same Wave 7.1 reason as handleRescan above.
-      setError(sanitizeForDialog(e instanceof Error ? e.message : String(e)));
+      setError(sanitizeError(e));
       setWorking(null);
     }
   }, [onClearComplete, t]);
@@ -368,7 +368,7 @@ export default function FontCacheDriftModal({
             <p
               className="text-xs"
               role="alert"
-              style={{ marginTop: "0.5rem", color: "var(--text-danger)" }}
+              style={{ marginTop: "0.5rem", color: "var(--error)" }}
             >
               {error}
             </p>

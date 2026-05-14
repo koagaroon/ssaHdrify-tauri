@@ -25,6 +25,7 @@ import {
   decomposeInputPath,
   substituteTemplate,
 } from "../../lib/path-validation";
+import { sanitizeError } from "../../lib/dedup-helpers";
 import type {
   ChainResult,
   ChainRunRequest,
@@ -90,6 +91,23 @@ function hdrTransform(ctx: TransformContext, params: HdrStepParams): TransformRe
   // chain (only the chain-global terminal output path matters).
   // For v1, chain assumes ASS content; SRT inputs that need HDR
   // conversion should run `hdr` standalone first.
+  //
+  // Round 8 A-R8-A1-7: explicit ASS-shape guard. Without it, a raw SRT
+  // fed into `chain hdr ...` runs processAssContent on text that has
+  // no `[V4+ Styles]` / `[Events]` sections, producing garbage output
+  // that's neither ASS nor SRT. Violates no-silent-action: chain
+  // either succeeds with the documented contract or surfaces the
+  // mismatch. The probe is shape-only — any line starting with
+  // `[Script Info]` or `[V4+ Styles]` qualifies; both real ASS files
+  // open with at least one of those headers (allowing leading BOM /
+  // whitespace / comments).
+  if (!/^\s*\[\s*(Script Info|V4\+? Styles)\s*\]/im.test(ctx.content)) {
+    throw new Error(
+      "hdr step requires ASS / SSA content (no [Script Info] or " +
+        "[V4+ Styles] header found). Run `hdr` standalone first to " +
+        "convert SRT / VTT / SUB to ASS, then chain on the result."
+    );
+  }
   const content = processAssContent(ctx.content, params.brightness, params.eotf);
   return { content };
 }
@@ -166,8 +184,12 @@ function decodeBase64(b64: string, name: string): Uint8Array {
   try {
     return Base64.toUint8Array(b64);
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    // `name` is sanitized: it comes from `s.fontName` which is
+    // `message` is BiDi-scrubbed via sanitizeError (Round 8 N2 catch-arm
+    // sweep): even though Base64.toUint8Array's error message is library-
+    // controlled today, the message ends up in a re-thrown Error that
+    // surfaces in the chain log panel. Scrubbing at the extraction site
+    // keeps the catch-arm contract uniform with the rest of the project.
+    // `name` is separately sanitized: it comes from `s.fontName` which is
     // produced by buildFontFileName (font-embedder.ts) — that helper
     // already strips everything but `[a-z0-9_-]` and falls back to a
     // pure-ASCII hash for empty results. BiDi / zero-width chars
@@ -175,6 +197,7 @@ function decodeBase64(b64: string, name: string): Uint8Array {
     // for P1b hostile font packs (N-R5-FECHAIN-17). If a future
     // refactor lets the original family name flow through here
     // unsanitized, gate it through `stripUnicodeControls`.
+    const message = sanitizeError(e);
     throw new Error(`base64 decode failed for font subset '${name}': ${message}`, {
       cause: e,
     });
@@ -245,6 +268,26 @@ export function runChain(request: ChainRunRequest): ChainResult {
  * uses neither, so the most-common path doesn't need them.
  */
 export function resolveChainOutputPath(inputPath: string, template: string): string {
+  // Round 8 N-R8-N1-2: explicit unknown-token reject. substituteTemplate
+  // silently substitutes unknown tokens to ""; without this check, a
+  // template like `{name}.{eotf}.ass` (using a per-step token at the
+  // chain level) would collapse to `{name}.ass` after the empty
+  // substitution + boundary-dot trim, with no signal to the user that
+  // `{eotf}` was dropped. No-silent-action: surface the bad token at
+  // resolution time. The doc comment above already calls out the
+  // {eotf} / {format} restriction; this matches it with a runtime
+  // gate.
+  const CHAIN_ALLOWED_TOKENS = new Set(["name", "ext"]);
+  for (const match of template.matchAll(/\{([a-z_][a-z0-9_]*)\}/g)) {
+    if (!CHAIN_ALLOWED_TOKENS.has(match[1])) {
+      throw new Error(
+        `chain output template references unknown token '{${match[1]}}'; ` +
+          `chain-level templates support {name} and {ext} only (per-step tokens ` +
+          `like {eotf} / {format} are not chain-resolvable)`
+      );
+    }
+  }
+
   const { dir, baseName, ext, normalized, usedBackslash } = decomposeInputPath(inputPath);
 
   const outputName = substituteTemplate(template, { name: baseName, ext });

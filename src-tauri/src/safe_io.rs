@@ -286,6 +286,24 @@ fn safe_rename_file_inner(
     reject_same_canonical_path(src_ref, dst_ref)?;
     ensure_parent_dir(dst_ref)?;
     clear_existing_destination(dst_ref, overwrite)?;
+
+    // Round 8 N-R8-N3-1: re-check `is_reparse_point` immediately before
+    // `fs::rename` for parity with `safe_copy_file_inner`'s open-time
+    // re-check (Round 6 Wave 6.3 #11). `fs::rename` on POSIX moves the
+    // symlink itself (doesn't chase the target) and Windows behaves
+    // similarly for same-volume renames — but cross-volume `rename`
+    // falls back to copy-then-delete (std semantics), which DOES
+    // follow the link. Closing the TOCTOU window symmetrically with
+    // the copy path eliminates the "rename across volumes after
+    // swap" edge case at near-zero cost (one syscall).
+    if is_reparse_point(src_ref) {
+        log::warn!(
+            "Refusing to rename possible symlink / junction at rename-time: {}",
+            src_ref.display()
+        );
+        return Err("Refusing to rename symlink / junction (race-time detection)".to_string());
+    }
+
     fs::rename(src_ref, dst_ref).map_err(|e| format!("Failed to rename file: {e}"))
 }
 

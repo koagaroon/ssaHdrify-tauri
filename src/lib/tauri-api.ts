@@ -7,6 +7,7 @@ import { invoke, Channel } from "@tauri-apps/api/core";
 import { Base64 } from "js-base64";
 import { strings } from "../i18n/strings";
 import { stripUnicodeControls } from "./unicode-controls";
+import { isWindowsRuntime } from "./platform";
 
 // ── File Dialogs ──────────────────────────────────────────
 
@@ -262,8 +263,12 @@ export async function copyPath(from: string, to: string): Promise<void> {
 
 // ── Path Utilities ───────────────────────────────────────
 
-/** Extract the filename from a full file path (handles both / and \
- *  separators) and strip BiDi / zero-width controls. Callers feed the
+/** Extract the filename from a full file path and strip BiDi / zero-
+ *  width controls. Backslash is treated as a separator only on Windows
+ *  (Round 8 A-R8-N4-12 — POSIX-correctness gate, parity with
+ *  `decomposeInputPath` / `pathsEqualOnFs`); on POSIX `\` is a valid
+ *  filename character, so a file literally named `foo\bar.ass` returns
+ *  the full name instead of mis-extracting `bar.ass`. Callers feed the
  *  result into addLog / status messages / dropError banners; without
  *  sanitization, a hostile filename like `EP01<U+202E>cssa.ass`
  *  (Trojan-Source class) would render with the RLO flip in the log
@@ -272,7 +277,8 @@ export async function copyPath(from: string, to: string): Promise<void> {
  *  each log site to remember.
  */
 export function fileNameFromPath(path: string): string {
-  const raw = path.replace(/\\/g, "/").split("/").pop() ?? path;
+  const normalized = isWindowsRuntime ? path.replace(/\\/g, "/") : path;
+  const raw = normalized.split("/").pop() ?? path;
   return stripUnicodeControls(raw);
 }
 
@@ -606,6 +612,12 @@ async function runStreamingScan(
       result.added = msg.added;
       result.duplicated = msg.duplicated;
       resolveDone();
+      // Round 8 A-R8-A4-4: detach onmessage after Done, parity with the
+      // error branch below. Tauri drops the channel sender on Rust-side
+      // completion today, but a late-arriving Batch from a lifecycle
+      // refactor would otherwise call `onBatch` on a settled UI
+      // (count regression after the final `result.added` displays).
+      channel.onmessage = () => {};
     } else {
       // Defense-in-depth: TypeScript narrows the union exhaustively at
       // compile time, but a Rust enum variant rename without updating
@@ -633,14 +645,17 @@ async function runStreamingScan(
     // catch already resolved the UI to the error state, producing a
     // confusing 5, 7, 0, 12 sequence.
     //
-    // Intentional: do NOT resolve `donePromise` here. The rejection
-    // propagates out of this function before the `await donePromise`
-    // line below, which is correct. A future refactor wrapping this
-    // invoke in retry logic without explicitly rejecting/resolving
-    // donePromise on the no-retry-left branch would cause a permanent
-    // hang.
+    // Round 8 N-R8-N4-10: resolve `donePromise` defensively before the
+    // throw. The thrown `err` propagates out of this function before
+    // the `await donePromise` line below, so today the promise's
+    // unresolved state is harmless — but a future refactor that wraps
+    // this invoke in retry logic (catch → log → re-invoke) or moves
+    // the await earlier would otherwise hang forever. Resolving here
+    // is a no-op on the current control flow and closes the latent
+    // hang vector documented previously as a punchlist comment.
     onBatch?.(0);
     channel.onmessage = () => {};
+    resolveDone();
     throw err;
   }
   // Rust always emits Done on the Ok path. Channel guarantees in-order

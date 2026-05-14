@@ -36,6 +36,15 @@ describe("assertSafeOutputFilename", () => {
     expect(() => assertSafeOutputFilename("x\x7fy.ass")).toThrow(/illegal/);
   });
 
+  it("rejects C1 controls (U+0080–U+009F) — Round 8 A-R8-N4-4 parity with Rust", () => {
+    // Pre-Round-8 ILLEGAL_FILENAME_CHARS covered C0 + DEL only (Cc minus
+    // C1). Rust's `is_control()` matches the full Cc category; expanding
+    // `\x7f-\x9f` closes the TS↔Rust gap.
+    expect(() => assertSafeOutputFilename("x\x80y.ass")).toThrow(/illegal/);
+    expect(() => assertSafeOutputFilename("x\x85y.ass")).toThrow(/illegal/); // NEL
+    expect(() => assertSafeOutputFilename("x\x9fy.ass")).toThrow(/illegal/);
+  });
+
   it("rejects every Windows reserved name regardless of extension", () => {
     for (const name of WINDOWS_RESERVED_NAMES) {
       expect(() => assertSafeOutputFilename(`${name}.ass`)).toThrow(/reserved name/);
@@ -163,6 +172,15 @@ describe("decomposeInputPath", () => {
   it("rejects control characters in the path", () => {
     expect(() => decomposeInputPath("C:\\subs\\evil\x00.ass")).toThrow(/control characters/);
     expect(() => decomposeInputPath("C:\\sub\x1fs\\episode.ass")).toThrow(/control characters/);
+  });
+
+  it("rejects C1 controls in the path (Round 8 A-R8-N4-4)", () => {
+    // Same gap as in assertSafeOutputFilename: pre-Round-8 the regex
+    // covered C0 + DEL only. C1 (U+0080–U+009F) now rejects too,
+    // matching Rust's `is_control()` Cc coverage.
+    expect(() => decomposeInputPath("C:\\subs\\evil\x80.ass")).toThrow(/control characters/);
+    expect(() => decomposeInputPath("C:\\subs\\evil\x85.ass")).toThrow(/control characters/); // NEL
+    expect(() => decomposeInputPath("C:\\subs\\evil\x9f.ass")).toThrow(/control characters/);
   });
 
   it("rejects empty filename component (trailing slash)", () => {

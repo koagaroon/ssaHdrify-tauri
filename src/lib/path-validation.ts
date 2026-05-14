@@ -72,6 +72,11 @@ export const WINDOWS_RESERVED_NAMES = new Set([
  * reserved punctuation and path separators (so a "filename" with a
  * separator can't sneak through).
  *
+ * Control range `\x00-\x1f` covers C0; `\x7f-\x9f` covers DEL and C1.
+ * Rust-side `char::is_control()` (used by `validate_ipc_path` and
+ * `validate_font_family`) rejects all of Cc; matching the same span
+ * here keeps TS↔Rust parity (Round 8 A-R8-N4-4 / N4-5).
+ *
  * Cross-platform note: `:` is technically valid on macOS / Linux but
  * we reject it everywhere — this app's primary platform is Windows
  * and outputs cross machines, so the strictest filesystem's rules win.
@@ -82,7 +87,7 @@ export const WINDOWS_RESERVED_NAMES = new Set([
 // literal `episode.{Format}.ass` file. The substitution path is
 // case-sensitive; rejecting brace literals turns typos into errors.
 // eslint-disable-next-line no-control-regex -- intentional: reject control chars in filenames
-export const ILLEGAL_FILENAME_CHARS = /[\x00-\x1f\x7f<>:"|?*\\/{}]/;
+export const ILLEGAL_FILENAME_CHARS = /[\x00-\x1f\x7f-\x9f<>:"|?*\\/{}]/;
 
 /**
  * Decomposed parts of a validated input path.
@@ -153,9 +158,11 @@ export function decomposeInputPath(inputPath: string): InputPathParts {
 
   // Reject control / NUL chars early. Windows would silently truncate
   // at NUL — `evil\0.exe.ass` becomes `evil`, bypassing the trailing
-  // `.ass` extension allow-list.
+  // `.ass` extension allow-list. Range covers C0 (`\x00-\x1f`), DEL
+  // and C1 (`\x7f-\x9f`); Rust's `char::is_control()` rejects the same
+  // span so the gate stays TS↔Rust symmetric (Round 8 A-R8-N4-4).
   // eslint-disable-next-line no-control-regex -- intentional: reject control chars
-  if (/[\x00-\x1f\x7f]/.test(normalized)) {
+  if (/[\x00-\x1f\x7f-\x9f]/.test(normalized)) {
     throw new Error("Input path contains control characters");
   }
   // Reject BiDi / zero-width controls. These slip past the C0/DEL
@@ -372,8 +379,13 @@ export function assertSafeOutputFilename(filename: string): void {
  * to forward slashes internally before comparing.
  */
 export function assertSafeOutputPath(outputPath: string, inputPath: string): void {
-  const normalizedOutput = outputPath.replace(/\\/g, "/");
-  const normalizedInput = inputPath.replace(/\\/g, "/");
+  // Backslash → forward only on Windows (Round 8 A-R8-N4-7 — POSIX-
+  // correctness gate, parity with `pathsEqualOnFs` and
+  // `decomposeInputPath`). On POSIX `\` is a valid filename character;
+  // unconditional rewriting would mangle directory-escape and
+  // self-overwrite checks on legitimate POSIX paths containing `\`.
+  const normalizedOutput = isWindowsRuntime ? outputPath.replace(/\\/g, "/") : outputPath;
+  const normalizedInput = isWindowsRuntime ? inputPath.replace(/\\/g, "/") : inputPath;
   const inputDirEnd = normalizedInput.lastIndexOf("/");
   if (inputDirEnd < 0) {
     throw new Error("Input path has no directory component");
