@@ -344,8 +344,14 @@ describe("resolveChainOutputPath", () => {
       outputTemplate: "{name}.hdr.ass",
     };
     const srt = "1\n00:00:01,000 --> 00:00:02,000\nHello\n";
+    // Round 9 N-R9-N1-2: pin the FULL actionable message, not just the
+    // "requires ASS ... SSA content" prefix. The guidance "Run hdr
+    // standalone first" is the action-taking half of the message; a
+    // refactor that drops it would leave users with "ASS required" but
+    // no idea what to do. `[\s\S]*?` (lazy) crosses the newline between
+    // sentence one and the guidance.
     expect(() => runChain({ plan, inputPath: INPUT_PATH, content: srt })).toThrow(
-      /requires ASS .* SSA content/
+      /requires ASS.*SSA content[\s\S]*?Run `hdr` standalone first/
     );
   });
 });

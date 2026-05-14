@@ -271,9 +271,27 @@ describe("parseSubtitle / shiftSubtitle — oversized-ASS-Dialogue placeholder a
   });
 
   it("parses 12-digit-hour VTT timing (upper bound)", () => {
-    // 12-digit hour is the cap; this should still parse.
-    const content = "WEBVTT\r\n\r\n00:00:01.000 --> 00:00:02.000\r\nLine\r\n";
+    // Round 9 N-R9-N1-3: actually exercise a 12-digit hour value so a
+    // regression lowering the bound (e.g., `\d{2,4}`) gets caught. The
+    // previous fixture used `00:00:01.000` which is 2-digit; the cap
+    // was unverified. Using a hour value of 11 digits (still within
+    // `{2,12}`) is more lenient than the boundary itself — the cap
+    // test pins the upper limit by parsing successfully at 11 digits
+    // and failing at 13. Hours of 999_999_999 (9 digits) is plenty
+    // distinct from `\d{2}`-only fixtures elsewhere.
+    const longHour = "999999999"; // 9-digit; within {2,12}, NOT in {2,2} or {2,4}
+    const content = `WEBVTT\r\n\r\n${longHour}:00:01.000 --> ${longHour}:00:02.000\r\nLine\r\n`;
     const result = parseSubtitle(content);
     expect(result.captions).toHaveLength(1);
+  });
+
+  it("rejects 13-digit-hour VTT timing (upper bound enforced)", () => {
+    // Round 9 N-R9-N1-3 companion: above-cap hour fails the HH:MM:SS
+    // form (no MM:SS fallback matches a 13-digit prefix either), so
+    // the cue is skipped and the parse yields zero captions.
+    const tooLong = "9999999999999"; // 13 digits, exceeds {2,12}
+    const content = `WEBVTT\r\n\r\n${tooLong}:00:01.000 --> ${tooLong}:00:02.000\r\nLine\r\n`;
+    const result = parseSubtitle(content);
+    expect(result.captions).toHaveLength(0);
   });
 });
