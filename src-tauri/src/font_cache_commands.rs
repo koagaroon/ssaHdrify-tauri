@@ -915,7 +915,7 @@ pub fn lookup_font_family(
     // caller into the next lookup tier (system fonts) and keeps the
     // crafted path off the wire.
     if let Some(ref r) = result {
-        if let Err(e) = crate::fonts::register_cache_provenance(&r.font_path, r.face_index as u32) {
+        if let Err(e) = crate::fonts::register_cache_provenance(r) {
             log::warn!(
                 "Font '{family}' cache lookup hit a path that failed provenance validation; \
                  treating as miss: {e}"

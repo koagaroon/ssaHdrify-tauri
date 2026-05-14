@@ -652,13 +652,15 @@ pub fn entries_to_cache_metadata(
     entries
         .iter()
         .map(|e| {
+            // Round 10 N-R10-009: route through the shared
+            // `try_modified_at` helper (promoted to `font_cache.rs` pub
+            // fn in Round 3 / Round 6.3) so every stat-time extraction
+            // site stays single-source. Pre-R10 this branch reproduced
+            // the helper body inline; a future change to the helper
+            // (e.g., Wave 10.4 N-R10-008's `.ok()?` for pre-epoch mtime
+            // safety) would have left this site behind.
             let mtime = *mtime_cache.entry(e.path.as_str()).or_insert_with(|| {
-                std::fs::metadata(&e.path)
-                    .and_then(|m| m.modified())
-                    .ok()
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs() as i64)
-                    .unwrap_or(0)
+                crate::font_cache::try_modified_at(Path::new(e.path.as_str())).unwrap_or(0)
             });
             crate::font_cache::FontMetadata {
                 file_path: e.path.clone(),
@@ -2441,31 +2443,6 @@ fn insert_with_cap(
     Ok(())
 }
 
-/// Register a (canonical path, face index) pair into the cache
-/// provenance set after a persistent-cache lookup hit. CLI's
-/// `resolve_embed_font` and the GUI's `lookup_font_family` call this
-/// so a path returned by the persistent cache passes `subset_font`'s
-/// gate, closing the design-vs-implementation conflict locked as
-/// Round 6 D1:
-///
-/// - CLI Situation B (no `--font-dir` + cache exists → implicit cache
-///   use) and the GUI's lookup tier 2 both depended on cache-returned
-///   paths being subsequently subsettable. The post-Codex-7a34374f gate
-///   rejected them as untrusted, breaking the documented behavior.
-///
-/// - Per project P1a (single-user desktop, AppData-local SQLite, no
-///   hostile-local-process model), trusting cache rows opened by THIS
-///   process is the right tradeoff for the project's actual threat
-///   surface. If the project later ships a server / multi-user mode,
-///   revisit per the design doc's "Revisit triggers" section.
-///
-/// Routes to `ALLOWED_CACHE_FONT_PATHS` — kept apart from the system-
-/// font set so the system-fonts-dir defense still applies to
-/// `find_system_font` registrations.
-///
-/// The caller is responsible for already having NORMALIZED + CANONICAL
-/// path string — cache lookup paths come from `cached_fonts.font_path`
-/// which `replace_folder` stores after canonicalization upstream.
 /// Drop every entry from `ALLOWED_CACHE_FONT_PATHS`. Called when a
 /// cache-wide reset happens (Round 10 N-R10-002: `clear_font_cache`
 /// rebuilds the SQLite file but previously left in-process provenance
@@ -2483,24 +2460,62 @@ pub fn clear_cache_provenance() {
     }
 }
 
-pub fn register_cache_provenance(canonical_path: &str, face_index: u32) -> Result<(), String> {
+/// Register a persistent-cache lookup hit into the cache provenance
+/// set. CLI's `resolve_embed_font` and the GUI's `lookup_font_family`
+/// call this so a path returned by the persistent cache passes
+/// `subset_font`'s gate, closing the design-vs-implementation conflict
+/// locked as Round 6 D1:
+///
+/// - CLI Situation B (no `--font-dir` + cache exists → implicit cache
+///   use) and the GUI's lookup tier 2 both depended on cache-returned
+///   paths being subsequently subsettable. The post-Codex-7a34374f gate
+///   rejected them as untrusted, breaking the documented behavior.
+///
+/// - Per project P1a (single-user desktop, AppData-local SQLite, no
+///   hostile-local-process model), trusting cache rows opened by THIS
+///   process is the right tradeoff for the project's actual threat
+///   surface. If the project later ships a server / multi-user mode,
+///   revisit per the design doc's "Revisit triggers" section.
+///
+/// Routes to `ALLOWED_CACHE_FONT_PATHS` — kept apart from the system-
+/// font set so the system-fonts-dir defense still applies to
+/// `find_system_font` registrations.
+///
+/// Round 10 A-R10-001: signature accepts `&font_cache::FontLookupResult`
+/// directly, replacing the prior `(canonical_path: &str, face_index:
+/// u32)` shape. `FontLookupResult` has `pub(crate)` fields, so external
+/// callers (CLI bin, future external consumers) cannot construct one
+/// outside of `FontCache::lookup_family`. The W6.3 D1 invariant
+/// "only lookup_family hits register in `ALLOWED_CACHE_FONT_PATHS`"
+/// is now enforced at the type layer rather than by review discipline
+/// — comments and review notes decay across refactors; types don't.
+///
+/// Cache row paths are canonicalized upstream by `replace_folder`;
+/// this function re-validates via `validate_ipc_path` anyway so a
+/// hostile `--cache-file` swap can't smuggle crafted bytes past the
+/// trust set.
+pub fn register_cache_provenance(
+    hit: &crate::font_cache::FontLookupResult,
+) -> Result<(), String> {
     // Round 8 A-R8-A2-2: re-validate the canonical path through the
-    // IPC validator before insertion. Callers pass paths originating
-    // from `cached_fonts.font_path` rows, which on the trusted-cache
-    // path were canonicalized by `replace_folder` upstream — but a
-    // hostile cache file supplied via `--cache-file` (P1b) could
-    // contain crafted rows carrying control chars, BiDi, parent-
-    // directory segments, or DOS device prefixes. Without this gate,
-    // those values flow into `ALLOWED_CACHE_FONT_PATHS` and from
-    // there back to the frontend (via `lookup_font_family`) for
-    // display before any IPC re-validation. Catching at insert time
-    // keeps the trust set itself clean and short-circuits the
-    // disclosure path.
-    crate::util::validate_ipc_path(canonical_path, "Cache font")?;
+    // IPC validator before insertion. A hostile cache file supplied
+    // via `--cache-file` (P1b) could carry crafted rows with control
+    // chars, BiDi, parent-directory segments, or DOS device prefixes;
+    // catching at insert time keeps the trust set clean.
+    crate::util::validate_ipc_path(hit.font_path(), "Cache font")?;
+    // Round 10 A-R10-001: face_index is stored as i32; reject
+    // negative values explicitly rather than reinterpreting the bit
+    // pattern into a huge u32.
+    let face_index = u32::try_from(hit.face_index()).map_err(|_| {
+        format!(
+            "Cache lookup has invalid negative face_index: {}",
+            hit.face_index()
+        )
+    })?;
     insert_with_cap(
         &ALLOWED_CACHE_FONT_PATHS,
         "cache",
-        canonical_path.to_string(),
+        hit.font_path().to_string(),
         face_index,
     )
 }
@@ -3333,7 +3348,14 @@ mod tests {
         ALLOWED_CACHE_FONT_PATHS.lock().unwrap().clear();
 
         let path = "C:\\Fonts\\Registered.ttf";
-        register_cache_provenance(path, 2).expect("register should succeed under cap");
+        // Round 10 A-R10-001: register_cache_provenance now takes
+        // `&FontLookupResult`. Tests in this module are in-crate, so
+        // pub(crate) construction is permitted.
+        let hit = crate::font_cache::FontLookupResult {
+            font_path: path.to_string(),
+            face_index: 2,
+        };
+        register_cache_provenance(&hit).expect("register should succeed under cap");
         let key = (path.to_string(), 2);
         assert!(
             ALLOWED_CACHE_FONT_PATHS.lock().unwrap().contains(&key),
@@ -3367,15 +3389,21 @@ mod tests {
         // failing past-cap insert pin the contract.
         for i in 0..MAX_PROVENANCE_CACHE_SIZE {
             // Format path with index so each insert is unique.
-            register_cache_provenance(&format!("C:\\Fonts\\Cap{i}.ttf"), 0)
-                .expect("pre-cap insert should succeed");
+            let hit = crate::font_cache::FontLookupResult {
+                font_path: format!("C:\\Fonts\\Cap{i}.ttf"),
+                face_index: 0,
+            };
+            register_cache_provenance(&hit).expect("pre-cap insert should succeed");
         }
         assert_eq!(
             ALLOWED_CACHE_FONT_PATHS.lock().unwrap().len(),
             MAX_PROVENANCE_CACHE_SIZE,
             "set should sit exactly at the cap"
         );
-        let overflow = register_cache_provenance("C:\\Fonts\\Overflow.ttf", 0);
+        let overflow = register_cache_provenance(&crate::font_cache::FontLookupResult {
+            font_path: "C:\\Fonts\\Overflow.ttf".to_string(),
+            face_index: 0,
+        });
         assert!(
             overflow.is_err(),
             "past-cap insert must return Err (rolled back)"

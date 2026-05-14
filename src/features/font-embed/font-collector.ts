@@ -82,6 +82,29 @@ function normalizeFamily(raw: string): string {
 
 /** Strip control characters and cap length — applied to every family name
  *  captured from a subtitle file before it flows into matching or output.
+ *
+ *  Round 10 A-R10-010 note on naming: despite the `sanitize` prefix,
+ *  this helper performs NORMALIZATION (strip + truncate) — it never
+ *  rejects, only transforms. Compare to Rust-side `validate_font_family`
+ *  which throws on the same codepoint set. The two roles are
+ *  intentionally different:
+ *
+ *  - TS `sanitizeFamily` runs at the TS engine layer (parse a subtitle
+ *    → collect font usages → present in detection grid). The family
+ *    name is the user's content; we want to display it (possibly
+ *    truncated and scrubbed) rather than refuse the whole subtitle.
+ *
+ *  - Rust `validate_font_family` runs at IPC entry and SQL-bind
+ *    boundaries. Hostile inputs reaching the trust set / persistence
+ *    layer SHOULD be rejected, not silently normalized into a
+ *    different family name (which could shadow a legitimate font row).
+ *
+ *  A future "fix the asymmetry" refactor that tightens TS to reject
+ *  would break legitimate inputs (a subtitle with a BiDi-bearing font
+ *  name would refuse to render); a refactor that loosens Rust to
+ *  normalize would smuggle hostile content past the trust gate. The
+ *  asymmetry is load-bearing — keep both.
+ *
  *  Range covers C0 (0x00-0x1F), DEL (0x7F), C1 (0x80-0x9F), the Unicode
  *  line/paragraph separators (U+2028 / U+2029), AND the full
  *  BiDi / zero-width control set from `unicode-controls.ts` (Round 6

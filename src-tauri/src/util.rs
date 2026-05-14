@@ -227,6 +227,18 @@ pub fn validate_font_family(family: &str) -> Result<(), String> {
     if family.is_empty() {
         return Err("Font family name is empty".to_string());
     }
+    // Round 10 N-R10-010: whitespace-only family names are rejected
+    // for parity with `bounded_font_family_name` (fonts.rs), which
+    // calls `.trim()` then `is_empty()` to reject names that would
+    // round-trip to nothing useful (a font-name table containing only
+    // spaces, or an inadvertently quote-stripped empty argument).
+    // Without this check the family flowed into SQLite as a row keyed
+    // by `"   "` — a real-world ASS Style line could then list `   `
+    // as a font and produce a confusing "Font not found:    " error
+    // instead of a clear "empty family name" rejection.
+    if family.trim().is_empty() {
+        return Err("Font family name is whitespace-only".to_string());
+    }
     if family.chars().count() > 256 {
         return Err("Font family name exceeds 256 characters".to_string());
     }

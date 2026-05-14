@@ -253,18 +253,6 @@ function pairingKeyTuple(season: number, episode: number): string {
   return `${season}|${episode}`;
 }
 
-/** Compose a stable row ID from the file paths. Survives reorders and
- *  reanalysis as long as the same (video, subtitle) pair is still
- *  produced — required so user-driven per-row overrides (the selection
- *  checkbox and manual subtitle picks) don't get orphaned when files
- *  come and go. */
-export function makeRowId(
-  videoPath: string | null | undefined,
-  subtitlePath: string | null | undefined
-): string {
-  return `${videoPath ?? "_"}|||${subtitlePath ?? "_"}`;
-}
-
 /**
  * Build pairing rows from the input file lists. Video-centric:
  *
@@ -288,7 +276,16 @@ export function makeRowId(
  */
 export function buildPairings(videos: ParsedFile[], subtitles: ParsedFile[]): PairingRow[] {
   const rows: PairingRow[] = [];
-  const newId = (v: ParsedFile, s: ParsedFile | null) => makeRowId(v.path, s?.path);
+  // Round 10 N-R10-018: previously a `makeRowId(v.path, s?.path)`
+  // helper produced `${v}|||${s}` ids that BatchRename.tsx immediately
+  // overwrote with the v|/s|/b| keying below. That double-derivation
+  // was confusing — the engine's output was discarded. Move the
+  // BatchRename-shape keying into the engine so the row arrives with
+  // its final id; BatchRename's earlier `.map(r => ({...r, id: ...}))`
+  // is gone. The id is video-centric here because buildPairings only
+  // emits rows that have a video (subtitle-only / both-null rows are
+  // intentionally not produced — see the video-centric docblock above).
+  const newId = (v: ParsedFile) => `v|${v.path}`;
 
   // Bucket matched subs by key. Unmatched subs are intentionally
   // dropped from the row set per the video-centric model — they
@@ -335,7 +332,7 @@ export function buildPairings(videos: ParsedFile[], subtitles: ParsedFile[]): Pa
       // bucketing would silently break this — tests assert it.
       const sub = ambiguous ? (ss[i] ?? null) : (ss[0] ?? null);
       rows.push({
-        id: newId(v, sub),
+        id: newId(v),
         video: { path: v.path, name: v.name },
         subtitle: sub ? { path: sub.path, name: sub.name } : null,
         // `warning` implies "debatable pairing" — only meaningful when
@@ -352,7 +349,7 @@ export function buildPairings(videos: ParsedFile[], subtitles: ParsedFile[]): Pa
 
   for (const v of unmatchedVideos) {
     rows.push({
-      id: newId(v, null),
+      id: newId(v),
       video: { path: v.path, name: v.name },
       subtitle: null,
       source: "unmatched",

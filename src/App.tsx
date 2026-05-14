@@ -10,6 +10,7 @@ import { useTheme } from "./theme/useTheme";
 import type { ThemeMode } from "./theme/useTheme";
 import { useStatus, type StatusTab } from "./lib/StatusContext";
 import { useClickOutside } from "./lib/useClickOutside";
+import { TAB_LABEL_KEYS } from "./lib/tab-labels";
 import {
   openFontCache,
   detectFontCacheDrift,
@@ -21,19 +22,10 @@ import "./shell.css";
 // Tab ids also serve as StatusTab keys — single source of truth.
 type Tab = StatusTab;
 
-// Source of truth for tab labels — the Record<Tab, ...> type forces
-// every Tab variant to have an entry, so adding a new tab to the
-// StatusTab union without adding a label here fails at compile time.
-// Visual tab-strip order is the declaration order below (JS guarantees
-// insertion-order iteration for string keys). Mirrors THEME_LABEL_KEYS
-// below and TAB_LABEL_KEYS in lib/tab-labels.ts.
-const TAB_LABEL_KEYS: Record<Tab, string> = {
-  hdr: "tab_hdr",
-  timing: "tab_timing",
-  fonts: "tab_fonts",
-  rename: "tab_rename",
-};
-
+// Round 10 N-R10-016: TAB_LABEL_KEYS is imported from lib/tab-labels.ts
+// as the project-wide single source. Visual tab-strip order is the
+// declaration order in that map (JS guarantees insertion-order
+// iteration for string keys).
 const TAB_IDS: { id: Tab; labelKey: string }[] = (Object.keys(TAB_LABEL_KEYS) as Tab[]).map(
   (id) => ({ id, labelKey: TAB_LABEL_KEYS[id] })
 );

@@ -1053,6 +1053,16 @@ fn predict_chain_output_path(
     if output_name.is_empty() || (output_name.len() >= 2 && output_name.as_bytes()[1] == b':') {
         return None;
     }
+    // Round 10 N-R10-012: whitespace-only output_name is rejected for
+    // parity with TS `assertSafeOutputFilename`'s `!filename.trim()`
+    // gate (path-validation.ts). Pre-R10 the predictor accepted
+    // `"   "` and `"\t\t"` while V8/TS would have refused them inside
+    // the chain step, surfacing as a buried chain-step error rather
+    // than the clearer predictor-layer rejection. Same shape as the
+    // `.` / `..` reject below.
+    if output_name.trim().is_empty() {
+        return None;
+    }
     // Round 8 A-R8-A1-1: `.` and `..` as the WHOLE output_name resolve
     // to the input's parent dir itself, which always exists. Without
     // this reject, the cheap-first short-circuit below would either
@@ -2482,13 +2492,24 @@ fn resolve_embed_font(
                 // injection surface) before subset_font's re-validation
                 // could refuse it. Same shape as the GUI fix at
                 // font_cache_commands::lookup_font_family.
-                match app_lib::fonts::register_cache_provenance(
-                    &result.font_path,
-                    result.face_index as u32,
-                ) {
-                    Ok(()) => {
-                        return Ok(Some((result.font_path, result.face_index as u32)));
-                    }
+                // Round 10 A-R10-001: register takes `&FontLookupResult`
+                // directly — the type's pub(crate) fields restrict
+                // construction to `FontCache::lookup_family`, so this
+                // call enforces "only lookup hits register" at the
+                // type layer. `into_parts` extracts the owned tuple
+                // for the return value and rejects negative
+                // face_index via try_from.
+                match app_lib::fonts::register_cache_provenance(&result) {
+                    Ok(()) => match result.into_parts() {
+                        Ok(parts) => return Ok(Some(parts)),
+                        Err(e) => {
+                            log::warn!(
+                                "Font '{}' cache lookup returned a malformed result; \
+                                 falling back to system fonts: {e}",
+                                font.family
+                            );
+                        }
+                    },
                     Err(e) => {
                         log::warn!(
                             "Font '{}' cache lookup hit a path that failed provenance \

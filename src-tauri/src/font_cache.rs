@@ -236,10 +236,54 @@ impl DriftReport {
 /// font face (`font_path` + `face_index`) — both pieces are needed
 /// for subsetting since TTC files require the face index alongside
 /// the file path.
+///
+/// Round 10 A-R10-001: fields are `pub(crate)` so callers outside
+/// app_lib (the CLI binary compiles as a separate crate against
+/// app_lib) can't construct a `FontLookupResult` outside of
+/// `FontCache::lookup_family`. Combined with
+/// `fonts::register_cache_provenance` accepting `&FontLookupResult`
+/// instead of `(&str, u32)`, the W6.3 D1 invariant "only
+/// lookup_family hits register in ALLOWED_CACHE_FONT_PATHS" is now
+/// enforced at the type layer rather than by review discipline.
+/// Comments and review notes decay across refactors; types don't.
+/// Internal app_lib callers (`font_cache_commands.rs`) still read
+/// fields directly under pub(crate); outside callers go through the
+/// read-only getters / `into_parts`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FontLookupResult {
-    pub font_path: String,
-    pub face_index: i32,
+    pub(crate) font_path: String,
+    pub(crate) face_index: i32,
+}
+
+impl FontLookupResult {
+    /// Borrowed read access to the canonical font path.
+    pub fn font_path(&self) -> &str {
+        &self.font_path
+    }
+
+    /// Borrowed read access to the face index. Stored as i32 because
+    /// SQLite's `cached_fonts.face_index` column is INTEGER (i64 in
+    /// rusqlite) narrowed at insert time; runtime values are always
+    /// non-negative.
+    pub fn face_index(&self) -> i32 {
+        self.face_index
+    }
+
+    /// Consume the result and yield `(path, face_index_u32)` for
+    /// callers that need owned values (CLI's `resolve_embed_font`
+    /// returns the tuple after a successful provenance registration).
+    /// A negative i32 — which a hostile cache row could carry —
+    /// surfaces as an explicit error rather than silently
+    /// reinterpreting the bit pattern into a huge u32.
+    pub fn into_parts(self) -> Result<(String, u32), String> {
+        let face_index = u32::try_from(self.face_index).map_err(|_| {
+            format!(
+                "FontLookupResult has invalid negative face_index: {}",
+                self.face_index
+            )
+        })?;
+        Ok((self.font_path, face_index))
+    }
 }
 
 /// Persistent font cache backed by SQLite. One instance per binary

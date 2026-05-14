@@ -523,7 +523,6 @@ export async function embedFonts(
       subsetData = await subsetFont(info.filePath, info.fontIndex, Array.from(usage.codepoints));
       if (isCancelled?.()) return null;
     } catch (subsetErr) {
-      console.warn(`Font subsetting failed for ${usage.key.family}, skipping: ${subsetErr}`);
       // Round 9 N-R9-N2-1 — sanitizeError (Pattern 1 callsite census
       // closure from Wave 8.1, which missed this site). The Rust
       // subset_font error string can interpolate font-file paths
@@ -536,6 +535,15 @@ export async function embedFonts(
       // extraction (drops the "Error: " prefix String(e) prepends)
       // with the same scrub, keeping every catch arm uniform.
       const safeErr = sanitizeError(subsetErr);
+      // Round 10 N-R10-027 — dev-console warn must scrub too. Pre-R10
+      // this site interpolated raw `subsetErr` on the line immediately
+      // above the sanitized onProgress dispatch — the comment block
+      // motivating the scrub argued exactly the BiDi disclosure
+      // surface the dev-console line then re-introduced. WebView2's
+      // dev-tools surface is opt-in in production, so blast radius is
+      // small, but Pattern 1 single-source completion requires every
+      // sibling output to use the same helper.
+      console.warn(`Font subsetting failed for ${usage.key.family}, skipping: ${safeErr}`);
       onProgress?.({
         stage:
           t?.("msg_font_skipped", info.key.family, safeErr) ??

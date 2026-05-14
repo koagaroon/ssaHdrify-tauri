@@ -250,10 +250,13 @@ export default function BatchRename() {
   const baseRows = useMemo<PairingRow[]>(() => {
     const parsedVideos = videoPaths.map((p, i) => parseFilename(p, videoNames[i] ?? ""));
     const parsedSubs = subtitlePaths.map((p, i) => parseFilename(p, subtitleNames[i] ?? ""));
-    return buildPairings(parsedVideos, parsedSubs).map((r) => ({
-      ...r,
-      id: r.video ? `v|${r.video.path}` : r.subtitle ? `s|${r.subtitle.path}` : `b|${r.key}`,
-    }));
+    // Round 10 N-R10-018: buildPairings now owns row id derivation
+    // (v|<path> for every row — engine only emits video-bearing rows).
+    // Pre-R10 this site re-keyed every row with `s|...` / `b|...`
+    // branches that were unreachable in practice (subtitle-only or
+    // both-null rows are never produced by buildPairings), and the
+    // engine's `makeRowId` output was discarded one line later.
+    return buildPairings(parsedVideos, parsedSubs);
   }, [videoPaths, videoNames, subtitlePaths, subtitleNames]);
 
   // Reset edits when the input file lists change. baseRows only
