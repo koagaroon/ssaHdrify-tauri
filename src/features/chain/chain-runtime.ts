@@ -238,8 +238,12 @@ export function runChain(request: ChainRunRequest): ChainResult {
       // reporting can show "step 2 (shift) failed: ..." rather than
       // a bare engine error. `cause` preserves the original error
       // for downstream debugging without losing the annotated
-      // user-facing message.
-      const message = err instanceof Error ? err.message : String(err);
+      // user-facing message. Round 9 N-R9-N1-1 — `message` goes
+      // through sanitizeError (Pattern 1 callsite census miss from
+      // Wave 8.1): the re-thrown error flows to the chain log panel
+      // where any BiDi / line-break smuggling from a P1b transform-
+      // internal error would otherwise reach the UI un-scrubbed.
+      const message = sanitizeError(err);
       throw new Error(`step ${i + 1} (${step.kind}) failed: ${message}`, {
         cause: err,
       });

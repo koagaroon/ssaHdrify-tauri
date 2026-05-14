@@ -27,7 +27,7 @@ import {
   assertSafeOutputPath,
   decomposeInputPath,
 } from "../../lib/path-validation";
-import { sanitizeError, sanitizeForDialog } from "../../lib/dedup-helpers";
+import { sanitizeError } from "../../lib/dedup-helpers";
 
 // ── Types ─────────────────────────────────────────────────
 
@@ -524,14 +524,18 @@ export async function embedFonts(
       if (isCancelled?.()) return null;
     } catch (subsetErr) {
       console.warn(`Font subsetting failed for ${usage.key.family}, skipping: ${subsetErr}`);
-      // sanitizeForDialog: the Rust subset_font error string can
-      // interpolate font-file paths (P1b — fan-sub font packs are
-      // attacker-influenced content). The error flows into
-      // progress.stage which the log panel renders directly; without
-      // scrubbing, a font with a BiDi-bearing name or path can
-      // visually reverse adjacent text in the log line. Round 6
-      // Wave 6.2.
-      const safeErr = sanitizeForDialog(String(subsetErr));
+      // Round 9 N-R9-N2-1 — sanitizeError (Pattern 1 callsite census
+      // closure from Wave 8.1, which missed this site). The Rust
+      // subset_font error string can interpolate font-file paths
+      // (P1b — fan-sub font packs are attacker-influenced content).
+      // The error flows into progress.stage which the log panel
+      // renders directly; without scrubbing, a font with a BiDi-
+      // bearing name or path can visually reverse adjacent text in
+      // the log line. Round 6 Wave 6.2 originally added the
+      // sanitizeForDialog wrap here; sanitizeError combines message-
+      // extraction (drops the "Error: " prefix String(e) prepends)
+      // with the same scrub, keeping every catch arm uniform.
+      const safeErr = sanitizeError(subsetErr);
       onProgress?.({
         stage:
           t?.("msg_font_skipped", info.key.family, safeErr) ??
