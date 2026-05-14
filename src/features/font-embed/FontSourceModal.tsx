@@ -537,7 +537,15 @@ export default function FontSourceModal(props: Props) {
           label: basename(dir),
           count,
         }),
-        emptyError: (dir) => t("font_sources_no_fonts_in_folder", basename(dir)),
+        // Round 9 A-R9-A4-1: scrub the basename through sanitizeForDialog
+        // before interpolating into the error message. The error renders
+        // in the modal's <p> banner without React-level escaping for
+        // BiDi controls, so a P1b hostile folder name like
+        // `EP01<U+202E>cssa` would otherwise reverse the surrounding
+        // text. The source-list render path at line 652 already wraps
+        // src.label in sanitizeForDialog; this closes the lone gap on
+        // the empty-error branch.
+        emptyError: (dir) => t("font_sources_no_fonts_in_folder", sanitizeForDialog(basename(dir))),
       }),
     [runScanFlow, t]
   );

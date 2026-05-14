@@ -628,6 +628,14 @@ async function runStreamingScan(
       // no diagnostic info — the full payload reveals the actual
       // serde-emitted shape.
       console.warn("unknown ScanProgress payload:", msg);
+      // Round 9 A-R9-A4-2: forward-compat hang vector. If Rust adds a
+      // new ScanProgress variant (e.g., Skipped, Paused) without
+      // ALSO emitting Done at end-of-stream, the await donePromise
+      // below would hang forever and freeze the modal. Defensive
+      // resolveDone matches the error branch's pattern; on the
+      // current wire format only Batch + Done ever arrive, so the
+      // resolve is a no-op for well-formed traffic.
+      resolveDone();
     }
   };
   try {

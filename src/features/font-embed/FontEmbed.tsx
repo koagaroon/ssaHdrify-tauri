@@ -383,6 +383,15 @@ export default function FontEmbed() {
   const reanalyzeWithSources = useCallback(async () => {
     const cache = perFileAnalysisRef.current;
     if (cache.size === 0) return;
+    // Round 9 N-R9-N2-2: snapshot the set of fonts that were ALREADY
+    // resolved before this reanalyze. Below, the selection merge
+    // distinguishes "truly new resolution" (auto-check) from "resolved
+    // both before and after" (respect the user's prior selection
+    // including manual unchecks). Without this snapshot, a font the
+    // user manually unchecked gets auto-re-checked the next time
+    // any source mutation triggers reanalyze — explicit user intent
+    // silently overridden.
+    const prevResolved = keysOfResolvedFonts(aggregateFonts(cache).infos);
     const gen = (pickGenRef.current = pickGenRef.current + 1);
     // Round 6 Wave 6.4 #17: set analyzing=true during the sequential
     // per-file IPC sequence. Without this, the Embed button remains
@@ -411,7 +420,13 @@ export default function FontEmbed() {
       const { infos, usages } = aggregateFonts(newCache);
       setFontUsages(usages);
       setFonts(infos);
-      // Merge: keep manual unchecks; auto-check newly resolved fonts.
+      // Merge: keep manual unchecks; auto-check ONLY truly new resolutions.
+      // Round 9 N-R9-N2-2 — the auto-check loop now gates on
+      // `!prevResolved.has(key)` so a font that was resolved before AND
+      // manually unchecked stays unchecked. The two-set diff (was-resolved
+      // vs now-resolved) is the precise definition of "newly resolved";
+      // checking only `!prev.has(key)` (pre-fix) treated re-resolution
+      // identically to first-time resolution.
       setSelected((prev) => {
         const resolved = keysOfResolvedFonts(infos);
         const next = new Set<string>();
@@ -419,7 +434,7 @@ export default function FontEmbed() {
           if (resolved.has(key)) next.add(key);
         }
         for (const key of resolved) {
-          if (!prev.has(key)) next.add(key);
+          if (!prev.has(key) && !prevResolved.has(key)) next.add(key);
         }
         return next;
       });
