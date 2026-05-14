@@ -88,7 +88,15 @@ function sRgbToHlg(
   // Inverse: E_S = E_D * Y_D^((1-γ)/γ) / L_W^(1/γ)
   //   where Y_D = 0.2627*R_D + 0.6780*G_D + 0.0593*B_D
   const Y_D = REC2020_LUM_R * R_D + REC2020_LUM_G * G_D + REC2020_LUM_B * B_D;
-  if (Y_D <= 0) return [0, 0, 0];
+  // Round 10 A-R10-007: `!(y > 0)` catches both `y <= 0` AND `NaN`
+  // (which compares false against every relation). Pre-R10 a NaN
+  // Y_D propagated into `Math.pow` → `factor=NaN` → `hlgOetf(NaN)` →
+  // `[NaN, NaN, NaN]` → `hexByte(NaN)` → literal "NaN" in ASS output.
+  // Not currently reachable (inputs are byte-range bounded and
+  // brightness is range-guarded), but the cost is one character and
+  // it shuts the propagation surface for any future caller that
+  // pipes denormalized values in.
+  if (!(Y_D > 0)) return [0, 0, 0];
 
   const factor = Math.pow(Y_D, (1 - HLG_GAMMA) / HLG_GAMMA) / Math.pow(HLG_L_W, 1 / HLG_GAMMA);
   const R_S = R_D * factor;
@@ -155,7 +163,9 @@ export function sRgbToHdr(
     const xyz = srgb.to("xyz-d65");
 
     const y = xyz.coords[1] ?? 0;
-    if (y <= 0) return [0, 0, 0];
+    // Round 10 A-R10-007: `!(y > 0)` catches NaN propagation; same
+    // shape as the HLG path above. See that site for the WHY.
+    if (!(y > 0)) return [0, 0, 0];
 
     // Scale luminance by target brightness.
     // Color.js xyz-d65 Y is relative (1.0 = D65 white).

@@ -1206,19 +1206,42 @@ fn process_one_chain_input(
         None
     };
 
+    // Round 10 A-R10-014: Failed early-return paths between this
+    // point and the post-V8 dedup reconcile (below) must REMOVE the
+    // already-inserted predicted_key from seen_outputs. Pre-R10 the
+    // stale key lingered — a later input whose predicted_key
+    // legitimately equalled this one would falsely collide and
+    // surface as `duplicate output path` despite no file having
+    // been written. Helper closure (captures `&mut seen_outputs`
+    // via the function-local `seen_outputs` borrow) keeps the 5
+    // failure sites tidy. Successful path (post-V8 reconcile +
+    // write) keeps the key inserted, since a real output file
+    // landed under that name.
+    let evict_predicted = |seen: &mut std::collections::HashSet<String>| {
+        if let Some(ref k) = predicted_key {
+            seen.remove(k);
+        }
+    };
+
     // Read input via existing encoding-aware path. Honors the same
     // size cap, BOM detection, and fallback-on-canonicalize-failure
     // semantics every other CLI subcommand uses.
     let read_result = match app_lib::encoding::read_text_detect_encoding_inner(&input_str, |_| true)
     {
         Ok(r) => r,
-        Err(err) => return ChainFileOutcome::Failed(err),
+        Err(err) => {
+            evict_predicted(seen_outputs);
+            return ChainFileOutcome::Failed(err);
+        }
     };
 
     // Build the JSON payload matching the TS-side ChainRunRequest.
     let mut payload = match plan.to_runtime_payload(&input_str, &read_result.text) {
         Ok(p) => p,
-        Err(err) => return ChainFileOutcome::Failed(err),
+        Err(err) => {
+            evict_predicted(seen_outputs);
+            return ChainFileOutcome::Failed(err);
+        }
     };
 
     // Pre-resolve fonts for the embed step (if present) and inject
@@ -1239,7 +1262,10 @@ fn process_one_chain_input(
             &read_result.text,
         ) {
             Ok(s) => s,
-            Err(err) => return ChainFileOutcome::Failed(err),
+            Err(err) => {
+                evict_predicted(seen_outputs);
+                return ChainFileOutcome::Failed(err);
+            }
         };
         warnings = embed_warnings;
         // Encode subset bytes as base64 strings. The previous form
@@ -1263,7 +1289,10 @@ fn process_one_chain_input(
 
     let result = match engine.run_chain(&request) {
         Ok(r) => r,
-        Err(err) => return ChainFileOutcome::Failed(err),
+        Err(err) => {
+            evict_predicted(seen_outputs);
+            return ChainFileOutcome::Failed(err);
+        }
     };
 
     // Apply --output-dir relocation (chain-global, terminal step
@@ -1273,7 +1302,10 @@ fn process_one_chain_input(
     let output_path = match relocate_output_path(&result.output_path, globals.output_dir.as_deref())
     {
         Ok(p) => p,
-        Err(err) => return ChainFileOutcome::Failed(err),
+        Err(err) => {
+            evict_predicted(seen_outputs);
+            return ChainFileOutcome::Failed(err);
+        }
     };
 
     // Post-V8 dedup reconcile (Round 4 N-R4-10, Round 7 W7.4 N2-R7-2).
@@ -1297,7 +1329,9 @@ fn process_one_chain_input(
         if let Some(stale) = predicted_key.as_deref() {
             seen_outputs.remove(stale);
         }
-        if !seen_outputs.insert(output_key) {
+        // Round 10 A-R10-014: clone so the write-failure cleanup
+        // below can also reference output_key for eviction.
+        if !seen_outputs.insert(output_key.clone()) {
             return ChainFileOutcome::Failed(format!(
                 "{} duplicate output path in planned batch (predictor / V8 resolver disagreed; reconciled post-V8)",
                 output_path.display()
@@ -1318,7 +1352,14 @@ fn process_one_chain_input(
     // create through a pre-planted symlink/junction at the output path
     // — fs::write would follow it and clobber an attacker-chosen target
     // outside the intended output directory).
+    //
+    // Round 10 A-R10-014: write-failure cleanup removes `output_key`
+    // (the post-reconcile actual key) from `seen_outputs`. Without
+    // this a later input whose output legitimately resolves to the
+    // same path would falsely collide despite no file having
+    // landed.
     if let Err(err) = write_output(globals, &output_path, &result.content, globals.overwrite) {
+        seen_outputs.remove(&output_key);
         return ChainFileOutcome::Failed(err);
     }
 

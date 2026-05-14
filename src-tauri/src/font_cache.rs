@@ -41,12 +41,22 @@ use rusqlite::{params, Connection};
 /// fixed for the GUI rescan flow.
 pub fn try_modified_at(path: &Path) -> Option<i64> {
     let modified = std::fs::metadata(path).ok()?.modified().ok()?;
-    Some(
-        modified
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0),
-    )
+    // Round 10 N-R10-008: pre-epoch mtimes previously fell through
+    // `.unwrap_or(0)` and returned `Some(0)`, but the caller contract
+    // (every drift / Phase-1 / Phase-3 stat site) requires `None` for
+    // "stat failed" cases so the populate / replace path is skipped.
+    // Returning `Some(0)` wrote `folder_mtime=0` into the row; the
+    // next drift detect compared `0` against the OS's real positive
+    // value and flagged the folder as modified — exactly the
+    // empty-folder / pre-epoch loop bug try_modified_at was designed
+    // to prevent. `.ok()?` propagates SystemTimeError → None
+    // through the same `?` chain as the prior `metadata` / `modified`
+    // fail sites above.
+    let secs = modified
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    Some(secs as i64)
 }
 
 /// Default cache file path for the CLI binary, OS-specific:

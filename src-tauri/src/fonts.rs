@@ -804,8 +804,15 @@ fn import_user_font_batch_tx(
         .map_err(|e| db_error("family-key insert prepare failed", e))?;
 
     for entry in entries {
-        let size_bytes = i64::try_from(entry.size_bytes)
-            .map_err(|_| "Font file size is too large for the source index".to_string())?;
+        // Round 10 N-R10-011: saturate u64→i64 instead of aborting the
+        // batch. Companion `entries_to_cache_metadata` saturates via
+        // `unwrap_or(i64::MAX)` (Pattern 2 policy mismatch — same
+        // conversion, two opposite failure modes). u64 values above
+        // i64::MAX (8.4 EB) are mathematically impossible for a real
+        // font file size, but a hostile cache row crafted with a
+        // numeric overflow shouldn't have the power to abort an
+        // entire session's font batch import.
+        let size_bytes = i64::try_from(entry.size_bytes).unwrap_or(i64::MAX);
         let changed = insert_face
             .execute(params![
                 source_id,
@@ -1085,18 +1092,41 @@ fn parse_local_font_file(canonical: &Path, scan_id: u64) -> Vec<LocalFontEntry> 
     // Read the file once and parse it with fontcull/skrifa only. Avoid
     // font-kit here: on Windows its in-memory loader routes through
     // DirectWrite and can retain/copy whole font blobs across huge scans.
-    let data = match fs::read(canonical) {
-        Ok(d) => d,
-        Err(_) => return Vec::new(),
-    };
+    //
+    // Round 10 A-R10-002: bounded-read pattern closes the TOCTOU
+    // window between the pre-read stat gate (`metadata.len()` check
+    // above) and the unbounded `fs::read`. An attacker who can swap
+    // the file between stat and read (rare on single-user but
+    // non-zero on slow / network-mounted FS where the scan loop
+    // walks for seconds) could force a full-size allocation of a
+    // GB-scale impostor file before the post-read recheck fires.
+    // `File::open + take(MAX_FONT_DATA_SIZE + 1) + read_to_end`
+    // caps the buffer at the OS layer; the +1 byte lets us
+    // distinguish "exactly at cap" from "over cap" — if the read
+    // returns more than MAX_FONT_DATA_SIZE bytes, the file was over
+    // cap and we silent-skip.
+    use std::io::Read;
+    let mut data = Vec::new();
+    {
+        let file = match std::fs::File::open(canonical) {
+            Ok(f) => f,
+            Err(_) => return Vec::new(),
+        };
+        let mut limited = file.take(MAX_FONT_DATA_SIZE + 1);
+        if limited.read_to_end(&mut data).is_err() {
+            return Vec::new();
+        }
+    }
 
     // Post-read size re-check (Round 8 A-R8-A2-7 — parity with
     // `encoding.rs::read_text_detect_encoding` and `subset_font` below).
-    // The pre-read stat gate above can be raced — a font swapped between
-    // stat and read can balloon past `MAX_FONT_DATA_SIZE` before we
-    // notice. Silent-skip pattern matches the rest of this function
-    // (return `Vec::new()` instead of Err); per-face errors here are
-    // all consumed by the scan loop the same way.
+    // Round 10 A-R10-002 keeps this check as a belt-and-suspenders
+    // for the bounded-read above: the +1 byte trick means
+    // `data.len() > MAX_FONT_DATA_SIZE` cleanly identifies over-cap
+    // reads even if the OS short-reads. Silent-skip pattern matches
+    // the rest of this function (return `Vec::new()` instead of
+    // Err); per-face errors here are all consumed by the scan loop
+    // the same way.
     if data.len() as u64 > MAX_FONT_DATA_SIZE {
         return Vec::new();
     }
@@ -2920,12 +2950,32 @@ pub fn subset_font(
         drop(probe);
     }
 
-    let font_data = fs::read(&canonical).map_err(|e| {
-        log::warn!("read font file failed for '{filename}': {e}");
-        format!("Failed to read font file '{filename}'")
-    })?;
+    // Round 10 A-R10-002: bounded-read TOCTOU mitigation. Parity
+    // with the same change in `parse_local_font_file` above —
+    // `fs::read` is unbounded and a hostile file swap between the
+    // pre-read stat (line ~2854) and this read could force a
+    // multi-GB allocation before the post-read recheck below
+    // catches it. `File::open + take(MAX_FONT_DATA_SIZE + 1) +
+    // read_to_end` caps the buffer at the OS layer; the +1 byte
+    // disambiguates "at cap" from "over cap" so the recheck below
+    // cleanly identifies an over-cap read.
+    let font_data = {
+        use std::io::Read;
+        let file = std::fs::File::open(&canonical).map_err(|e| {
+            log::warn!("open font file failed for '{filename}': {e}");
+            format!("Failed to read font file '{filename}'")
+        })?;
+        let mut buf = Vec::new();
+        let mut limited = file.take(MAX_FONT_DATA_SIZE + 1);
+        limited.read_to_end(&mut buf).map_err(|e| {
+            log::warn!("read font file failed for '{filename}': {e}");
+            format!("Failed to read font file '{filename}'")
+        })?;
+        buf
+    };
 
-    // Post-read size check (TOCTOU mitigation — file could grow between stat and read)
+    // Post-read size check (TOCTOU mitigation — file could grow between stat and read).
+    // Round 10 A-R10-002: kept as belt-and-suspenders for the bounded-read above.
     if font_data.len() as u64 > MAX_FONT_DATA_SIZE {
         return Err(format!(
             "Font file too large after read ({:.1} MB, max {} MB)",

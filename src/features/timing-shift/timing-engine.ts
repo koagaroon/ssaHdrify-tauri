@@ -133,6 +133,18 @@ export function deriveShiftedPath(inputPath: string): string {
   if (baseName.toLowerCase().endsWith(".shifted")) {
     baseName = baseName.slice(0, -".shifted".length);
   }
+  // Round 10 N-R10-013: after the `.shifted` strip the baseName can
+  // be empty (or whitespace-/dot-only — POSIX dotfile shapes like
+  // `.shifted.srt` whose stem is just `.`). Without this re-check
+  // the output name resolves to `.shifted${ext}` — identical to the
+  // input on subsequent invocations and visually weird as a filename.
+  // `cli-engine-entry.ts::resolveShiftOutputPathInternal` has the same
+  // guard; mirror it here for the GUI path so error messages stay
+  // aligned across cheap (this function) and heavy (CLI engine)
+  // paths.
+  if (!baseName || !baseName.replace(/^\.+/, "").trim()) {
+    throw new Error("Input filename has no valid stem after stripping .shifted infix");
+  }
   const outputName = `${baseName}.shifted${ext}`;
   // Apply the shared safety checks (reserved names, traversal,
   // MAX_PATH, self-overwrite). Same helpers as HDR / Embed resolvers.
