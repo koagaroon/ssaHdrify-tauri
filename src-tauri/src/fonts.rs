@@ -2466,6 +2466,23 @@ fn insert_with_cap(
 /// The caller is responsible for already having NORMALIZED + CANONICAL
 /// path string — cache lookup paths come from `cached_fonts.font_path`
 /// which `replace_folder` stores after canonicalization upstream.
+/// Drop every entry from `ALLOWED_CACHE_FONT_PATHS`. Called when a
+/// cache-wide reset happens (Round 10 N-R10-002: `clear_font_cache`
+/// rebuilds the SQLite file but previously left in-process provenance
+/// rows behind — combined with a hostile `--cache-file` swap (P1b),
+/// stale trust entries would persist until app restart and let
+/// `subset_font` accept paths the freshly-cleared cache no longer
+/// references). `clear_font_sources` already does the same eviction at
+/// session-DB-clear time; this is the symmetric helper for the
+/// persistent-cache clear path. ALLOWED_FONT_PATHS (system fonts) is
+/// intentionally NOT touched here — system fonts don't depend on cache
+/// state.
+pub fn clear_cache_provenance() {
+    if let Ok(mut cache) = ALLOWED_CACHE_FONT_PATHS.lock() {
+        cache.clear();
+    }
+}
+
 pub fn register_cache_provenance(canonical_path: &str, face_index: u32) -> Result<(), String> {
     // Round 8 A-R8-A2-2: re-validate the canonical path through the
     // IPC validator before insertion. Callers pass paths originating

@@ -238,6 +238,18 @@ function parseSrt(content: string): Caption[] {
       .slice(timingIdx + 1)
       .join("\n")
       .trim();
+    // Round 10 N-R10-007: per-caption text cap parity with parseAss /
+    // parseSub. Pre-R10 a 50 MB SRT with one timing line followed by
+    // ~50 MB of caption text produced a single Caption with a 50 MB
+    // text payload, which then propagated through the HDR / Shift
+    // pipelines (~100 MB UTF-16 in JS memory) and into the downstream
+    // buildAss path. parseSrt rebuilds from the captions array (not by
+    // walking original content), so no positional-alignment placeholder
+    // is needed — drop the oversized entry silently. MAX_RAW_BLOCKS
+    // (above) bounds iteration cost.
+    if (text.length > MAX_CAPTION_TEXT_LEN) {
+      continue;
+    }
     captions.push({
       raw: block.trim(),
       start: parseSrtTime(timingMatch[1]),
@@ -306,6 +318,12 @@ function parseVtt(content: string): Caption[] {
       .slice(timingIdx + 1)
       .join("\n")
       .trim();
+    // Round 10 N-R10-007: per-caption text cap parity with parseSrt /
+    // parseAss / parseSub. buildVtt rebuilds from the captions array,
+    // so no placeholder needed — silently drop the oversized entry.
+    if (text.length > MAX_CAPTION_TEXT_LEN) {
+      continue;
+    }
     captions.push({
       raw: block.trim(),
       start: parseVttTime(timingMatch[1]),
@@ -484,8 +502,26 @@ function parseSub(content: string, fps: number = DEFAULT_FPS): Caption[] {
       throw new Error(`Too many subtitle entries: ${count}+ (max ${MAX_PARSED_ENTRIES})`);
     }
     // Per-caption text cap (A4-R7-5) — same rationale as parseAss.
+    //
+    // Round 10 N-R10-006: oversized text now pushes a skipped
+    // placeholder that DOES count toward MAX_PARSED_ENTRIES (option (b)
+    // — matching parseAss's treatment). Pre-R10 the bare `continue`
+    // didn't increment `count`, so iteration was unbounded by the
+    // per-caption cap; a crafted 50 MB MicroDVD file with millions of
+    // oversized entries could spin the `subLineRe.exec` loop without
+    // tripping any ceiling (the 50 MB upstream file cap was the only
+    // backstop). buildSub filters skipped placeholders out, so disk
+    // output is unchanged.
     const text = match[3];
     if (text.length > MAX_CAPTION_TEXT_LEN) {
+      count += 1;
+      captions.push({
+        raw: match[0],
+        start: Math.round((parseInt(match[1], 10) / fps) * 1000),
+        end: Math.round((parseInt(match[2], 10) / fps) * 1000),
+        text: "",
+        skipped: true,
+      });
       continue;
     }
     count += 1;
@@ -503,6 +539,12 @@ function buildSub(captions: Caption[], fps: number = DEFAULT_FPS): string {
   if (!Number.isFinite(fps) || fps <= 0) fps = DEFAULT_FPS;
   return (
     captions
+      // Round 10 N-R10-006: parseSub pushes a skipped placeholder for
+      // oversized text to bound iteration cost via MAX_PARSED_ENTRIES.
+      // Filter those out here so the disk output mirrors the legitimate
+      // captions only (placeholders carry empty text and would otherwise
+      // emit `{f}{f}` lines with no body, polluting the file).
+      .filter((c) => !c.skipped)
       .map((c) => {
         // Round 8 N-R8-N1-3: clamp non-finite / negative timestamps to 0
         // for parity with formatSrtTime / formatAssTime / msToAssTime.

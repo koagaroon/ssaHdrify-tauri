@@ -89,6 +89,18 @@ export const WINDOWS_RESERVED_NAMES = new Set([
 // eslint-disable-next-line no-control-regex -- intentional: reject control chars in filenames
 export const ILLEGAL_FILENAME_CHARS = /[\x00-\x1f\x7f-\x9f<>:"|?*\\/{}]/;
 
+// Round 10 N-R10-005: BatchRename's `deriveRenameOutputPath` builds
+// the output name from the user's verbatim video filename (no
+// template machinery in play), so legitimate fan-sub video names
+// like `[Group] Show {1080p}.mkv` would otherwise trip the brace
+// reject above and force the user to rename the source file by hand.
+// This sibling pattern omits `{` and `}` for the BatchRename
+// callsite; every other consumer (HDR/Shift/Embed/chain template
+// resolvers) keeps the strict variant so typo'd tokens surface as
+// errors instead of literal `{Format}` filenames.
+// eslint-disable-next-line no-control-regex -- intentional: reject control chars in filenames
+const ILLEGAL_FILENAME_CHARS_BRACES_OK = /[\x00-\x1f\x7f-\x9f<>:"|?*\\/]/;
+
 /**
  * Decomposed parts of a validated input path.
  */
@@ -334,12 +346,25 @@ export function substituteTemplate(template: string, vars: Record<string, string
  *   - illegal characters (control / NTFS-reserved / separators)
  *   - Windows reserved name (CON, PRN, etc., case-insensitive,
  *     applied to the stem with trailing whitespace + dots stripped)
+ *
+ * `options.allowBraces`: when true, `{` and `}` pass the illegal-char
+ * gate. Used by BatchRename where the output name is the user's
+ * verbatim video filename (no template substitution in play); the
+ * default strict mode keeps brace-literal output for HDR / Shift /
+ * Embed / chain so typo'd template tokens (`{Format}` vs `{format}`)
+ * surface as errors instead of producing a literal `{Format}` file.
  */
-export function assertSafeOutputFilename(filename: string): void {
+export function assertSafeOutputFilename(
+  filename: string,
+  options?: { allowBraces?: boolean }
+): void {
   if (!filename.trim()) {
     throw new Error("Template resolves to empty filename");
   }
-  if (ILLEGAL_FILENAME_CHARS.test(filename)) {
+  const illegalRe = options?.allowBraces
+    ? ILLEGAL_FILENAME_CHARS_BRACES_OK
+    : ILLEGAL_FILENAME_CHARS;
+  if (illegalRe.test(filename)) {
     throw new Error(`Output filename contains illegal characters: ${filename}`);
   }
   // Reject BiDi / zero-width controls (Round 6 Wave 6.2 parity sweep).

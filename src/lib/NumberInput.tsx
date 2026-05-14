@@ -14,7 +14,7 @@ interface NumberInputProps {
   id?: string;
   /**
    * Caller-derived invalid signal (N-R5-FEFEAT-25). When true, the
-   * border switches to var(--accent-danger) so the user sees the
+   * border switches to var(--error) so the user sees the
    * out-of-range / unparseable input instead of the silent fallback
    * to the prior valid value.
    */
@@ -65,7 +65,7 @@ export default function NumberInput({
           // static var(--token) strings — safe by inspection.
           // eslint-disable-next-line no-restricted-syntax
           border: `1px solid ${
-            invalid ? "var(--accent-danger)" : disabled ? "var(--border-light)" : "var(--border)"
+            invalid ? "var(--error)" : disabled ? "var(--border-light)" : "var(--border)"
           }`,
           color: "var(--text-primary)",
         }}

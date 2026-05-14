@@ -656,6 +656,14 @@ pub fn clear_font_cache() -> Result<(), String> {
         .lock()
         .map_err(|_| "GUI cache mutex poisoned".to_string())?;
     *slot = Some(fresh);
+    // Round 10 N-R10-002: symmetric with `clear_font_sources` —
+    // a cache rebuild must drop in-process provenance rows registered
+    // via earlier `lookup_family` hits, otherwise stale (path,
+    // face_index) tuples linger past the user's "fresh slate" signal
+    // and subset_font would accept paths the rebuilt cache no longer
+    // references. ALLOWED_FONT_PATHS (system fonts) stays — system
+    // discovery is cache-independent.
+    crate::fonts::clear_cache_provenance();
     Ok(())
 }
 
@@ -892,22 +900,27 @@ pub fn lookup_font_family(
     // provenance set so `subset_font`'s gate accepts the returned
     // path. Without this, the GUI's lookup tier 2 (embed-time cache
     // hit) goes through the IPC roundtrip and then trips the gate
-    // as "Font path was not discovered by a scan command". Failing
-    // to register is non-fatal — log and surface the lookup result
-    // anyway; if the subsequent subset call fails on the same path,
-    // the user sees the gate error with full context. See
+    // as "Font path was not discovered by a scan command". See
     // `register_cache_provenance` for the threat-model rationale.
+    //
+    // Round 10 N-R10-003: registration failure → treat as a cache
+    // miss (`Ok(None)`) rather than returning the unsafe path.
+    // `register_cache_provenance` calls `validate_ipc_path`, so a
+    // hostile cache row carrying BiDi / control / `..` segments
+    // surfaces here as Err. Previously this branch logged WARN but
+    // still returned `Ok(Some(result))` — the unscrubbed path then
+    // flowed into IPC response → frontend display surfaces (status
+    // panel, log lines) BEFORE `subset_font`'s re-validation could
+    // reject it (P1b disclosure surface). Returning None forces the
+    // caller into the next lookup tier (system fonts) and keeps the
+    // crafted path off the wire.
     if let Some(ref r) = result {
         if let Err(e) = crate::fonts::register_cache_provenance(&r.font_path, r.face_index as u32) {
-            // Round 8 N-R8-N3-4: WARN names the user-visible consequence
-            // per vibe-coding.md log-level discipline. The previous
-            // "cache provenance registration failed" wording leaked the
-            // internal helper name; users care about whether the embed
-            // will succeed, not which function returned Err.
             log::warn!(
-                "Font '{family}' may fail to embed: cache lookup hit but the path could not be \
-                 registered for this run (subset will refuse): {e}"
+                "Font '{family}' cache lookup hit a path that failed provenance validation; \
+                 treating as miss: {e}"
             );
+            return Ok(None);
         }
     }
     Ok(result.map(|r| crate::fonts::FontLookupResult {

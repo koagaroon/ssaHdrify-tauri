@@ -91,6 +91,29 @@ describe("assertSafeOutputFilename", () => {
     expect(() => assertSafeOutputFilename("a}b.ass")).toThrow(/illegal/);
   });
 
+  it("with allowBraces=true, permits `{}` but still rejects other illegal chars (Round 10 N-R10-005)", () => {
+    // BatchRename derives outName from the user's verbatim video
+    // filename, where `{}` are legitimate (NTFS / ext4 / APFS allow
+    // them, fan-sub naming routinely emits `[Group] Show {1080p}`).
+    // The default strict mode (used by HDR / Shift / Embed / chain
+    // template resolvers) is exercised by the sibling "rejects template
+    // token characters" test above.
+    expect(() =>
+      assertSafeOutputFilename("Show.{1080p}.ass", { allowBraces: true })
+    ).not.toThrow();
+    expect(() =>
+      assertSafeOutputFilename("a{b}c.ass", { allowBraces: true })
+    ).not.toThrow();
+    // Control / NTFS-reserved punctuation / separators still rejected
+    // under allowBraces=true — only `{` and `}` are relaxed.
+    expect(() => assertSafeOutputFilename("x\x00y.ass", { allowBraces: true })).toThrow(
+      /illegal/
+    );
+    expect(() => assertSafeOutputFilename("a/b.ass", { allowBraces: true })).toThrow(/illegal/);
+    expect(() => assertSafeOutputFilename('a"b.ass', { allowBraces: true })).toThrow(/illegal/);
+    expect(() => assertSafeOutputFilename("a|b.ass", { allowBraces: true })).toThrow(/illegal/);
+  });
+
   it("rejects BiDi / zero-width controls (Round 6 Wave 6.2 parity)", () => {
     // ILLEGAL_FILENAME_CHARS is C0 + DEL + NTFS punctuation only — Cf
     // codepoints slip through and land on disk verbatim. The Rust

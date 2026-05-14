@@ -2470,25 +2470,35 @@ fn resolve_embed_font(
                 // accepts the returned path. Without this, Situation B
                 // breaks: cache returns the path, subset_font rejects
                 // as "Font path was not discovered by a scan command".
-                // Failing to register is non-fatal (cap hit on the
-                // provenance set is extremely unlikely under realistic
-                // font counts) — log and fall through, the embed will
-                // then fail at subset with a clearer error.
-                if let Err(e) = app_lib::fonts::register_cache_provenance(
+                //
+                // Round 10 N-R10-004: registration failure (BiDi /
+                // control char / `..` in a hostile cache row) →
+                // fall through to system fonts rather than returning
+                // the unsafe path. `register_cache_provenance` runs
+                // `validate_ipc_path`; previously we returned
+                // `Ok(Some((font_path, face_index)))` after the WARN,
+                // letting the crafted path flow into verbose logs /
+                // FileReport.warnings / stderr (Trojan-Source dialog
+                // injection surface) before subset_font's re-validation
+                // could refuse it. Same shape as the GUI fix at
+                // font_cache_commands::lookup_font_family.
+                match app_lib::fonts::register_cache_provenance(
                     &result.font_path,
                     result.face_index as u32,
                 ) {
-                    // Round 8 N-R8-N3-4: WARN names the user-visible
-                    // consequence (this font may fail to embed) per
-                    // vibe-coding.md log-level discipline, instead of
-                    // leaking the internal helper name.
-                    log::warn!(
-                        "Font '{}' may fail to embed: cache lookup hit but the path could not be \
-                         registered for this run (subset will refuse): {e}",
-                        font.family
-                    );
+                    Ok(()) => {
+                        return Ok(Some((result.font_path, result.face_index as u32)));
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "Font '{}' cache lookup hit a path that failed provenance \
+                             validation; falling back to system fonts: {e}",
+                            font.family
+                        );
+                        // Intentional fall-through to the system-font
+                        // tier below.
+                    }
                 }
-                return Ok(Some((result.font_path, result.face_index as u32)));
             }
             Ok(None) => {
                 // Cache miss; fall through to system fonts.

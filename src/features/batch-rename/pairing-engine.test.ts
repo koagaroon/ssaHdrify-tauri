@@ -421,12 +421,29 @@ describe("deriveRenameOutputPath — path-validator integration", () => {
     expect(() => deriveRenameOutputPath(video, sub, "copy_to_video", null)).not.toThrow();
   });
 
-  it("rejects an output filename with an unsubstituted template token literal", () => {
-    // Indirect path: a video whose basename contains literal `{` would
-    // synthesize an output filename with `{` — the validator rejects
-    // template-token characters in output filenames as a guard against
-    // unsubstituted-template-leak.
+  it("accepts brace characters in video-derived output names (Round 10 N-R10-005)", () => {
+    // BatchRename's outName is built from the user's verbatim video
+    // filename + the subtitle's extension — there's no template
+    // substitution in play, so brace literals are legitimate (NTFS /
+    // ext4 / APFS all allow them, and fan-sub releases routinely use
+    // `[Group] Show {1080p}.mkv` style). Pre-R10 this case threw
+    // `illegal characters` because the shared assertSafeOutputFilename
+    // gate (designed for HDR / Shift / Embed / chain template
+    // resolvers, which DO need brace-literal rejection so typo'd
+    // `{Format}` tokens surface as errors) was applied uniformly.
+    // R10 splits the gate via `{ allowBraces: true }` for this
+    // callsite. Other illegal-char gates (control / NTFS-reserved /
+    // separators) still apply — covered by the sibling tests.
     const video = "C:\\media\\Show.{name}.mkv";
+    const sub = "C:\\media\\episode.ass";
+    expect(() => deriveRenameOutputPath(video, sub, "copy_to_video", null)).not.toThrow();
+  });
+
+  it("still rejects control characters in video-derived output names", () => {
+    // Counter-pin to the brace-accept relaxation: only `{}` are
+    // relaxed; the C0/DEL/C1 + NTFS-reserved punctuation rejects
+    // continue to apply.
+    const video = "C:\\media\\Show\x00name.mkv";
     const sub = "C:\\media\\episode.ass";
     expect(() => deriveRenameOutputPath(video, sub, "copy_to_video", null)).toThrow(/illegal/);
   });

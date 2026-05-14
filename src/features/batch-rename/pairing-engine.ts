@@ -497,7 +497,13 @@ export function deriveRenameOutputPath(
     }
     validatorRef = `${normTargetDir}/__validator_ref__`;
   }
-  assertSafeOutputFilename(outName);
+  // Round 10 N-R10-005: BatchRename's outName is `${videoBase}${subExt}`,
+  // i.e., the user's verbatim video filename with the subtitle's
+  // extension. Brace characters in legitimate fan-sub video names
+  // (`[Group] Show {1080p}.mkv`) must pass — they're not template
+  // tokens here, and the OS allows them. Other illegal-char gates
+  // (control / NTFS-reserved / separators) still apply.
+  assertSafeOutputFilename(outName, { allowBraces: true });
   // Rename mode's legitimate no-op (subtitle already matches the
   // video name) makes outputPath === subtitlePath, which would trip
   // assertSafeOutputPath's self-overwrite-guards-against-source-loss
