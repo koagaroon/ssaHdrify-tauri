@@ -1978,14 +1978,17 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
     scan_id: u64,
     mut emit_batch: F,
 ) -> Result<ScanOutcome, String> {
-    // Public command enforces MAX_INPUT_PATHS; debug-assert catches any
-    // future internal caller that bypasses that check.
-    debug_assert!(
-        paths.len() <= MAX_INPUT_PATHS,
-        "scan_files_inner: paths.len()={} exceeds MAX_INPUT_PATHS={}",
-        paths.len(),
-        MAX_INPUT_PATHS
-    );
+    // Round 9 A-R9-A2-2: hard cap inside the function instead of relying
+    // on caller-trust. Public commands already enforce MAX_INPUT_PATHS
+    // at IPC boundary, but this matches `scan_directory_inner`'s shape
+    // (visited-entry hard cap) so a future internal caller can't bypass
+    // by skipping the IPC layer. Cost: one branch per invocation.
+    if paths.len() > MAX_INPUT_PATHS {
+        return Err(format!(
+            "Too many file paths: {} (max {MAX_INPUT_PATHS})",
+            paths.len()
+        ));
+    }
     let mut buffer: Vec<LocalFontEntry> = Vec::new();
     let mut total: usize = 0;
     let mut last_emit = Instant::now();
@@ -2730,6 +2733,26 @@ pub fn subset_font(
         log::warn!("canonicalize font path failed for '{filename}': {e}");
         "Cannot resolve font path".to_string()
     })?;
+
+    // Round 9 A-R9-A2-1: post-canonicalize reparse-point reject.
+    // Parity with `encoding.rs::read_text_detect_encoding` and the
+    // dropzone / scan paths, which all run `is_reparse_point` after
+    // canonicalize. Without this, a crafted --cache-file row pointing
+    // at a symlinked `evil.ttf -> /etc/shadow` canonicalizes to the
+    // target, and W8.2's 4-byte magic-byte sniff opens the file just
+    // long enough to read 4 bytes of deny-listed content. The full-
+    // body read is already gated by the sniff (returns Err on
+    // non-font header) and W6.9 (no fallback on parse failure), but
+    // the 4-byte probe is a residual partial-content read. Closing
+    // it here keeps subset_font symmetric with every other file-read
+    // entry in the codebase.
+    if crate::util::is_reparse_point(&canonical) {
+        log::warn!(
+            "Refusing to subset font through symlink / junction: '{}'",
+            canonical.display()
+        );
+        return Err("Refusing to subset font through symlink / junction".to_string());
+    }
 
     // Provenance guard: the (path, face_index) pair must have been
     // discovered by one of three trusted entry points in THIS process:

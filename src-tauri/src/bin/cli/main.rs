@@ -1099,9 +1099,26 @@ fn predict_chain_output_path(
         .next()
         .unwrap_or("")
         .to_ascii_uppercase();
+    // Round 9 A-R9-A3-1: Unicode superscript COM/LPT variants
+    // (COM¹/²/³, LPT¹/²/³). TS-side WINDOWS_RESERVED_NAMES has had
+    // these since extraction; multi-byte UTF-8 superscripts don't
+    // satisfy `is_ascii_digit()` so the ASCII-digit branch below
+    // misses them. Parity with the TS check + util.rs's
+    // validate_ipc_path.
     let is_reserved = matches!(
         stem_upper.as_str(),
-        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "CONIN$"
+            | "CONOUT$"
+            | "COM\u{00B9}"
+            | "COM\u{00B2}"
+            | "COM\u{00B3}"
+            | "LPT\u{00B9}"
+            | "LPT\u{00B2}"
+            | "LPT\u{00B3}"
     ) || (stem_upper.len() == 4
         && (stem_upper.starts_with("COM") || stem_upper.starts_with("LPT"))
         && stem_upper.as_bytes()[3].is_ascii_digit());

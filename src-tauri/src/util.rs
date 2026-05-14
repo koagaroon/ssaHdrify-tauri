@@ -156,9 +156,29 @@ pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
         let stem = seg[..first_dot]
             .trim_end_matches(|c: char| c.is_whitespace() || c == '.')
             .to_ascii_uppercase();
+        // Round 9 A-R9-A3-1: include the Unicode superscript COM/LPT
+        // variants (COM¹/²/³, LPT¹/²/³). TS-side WINDOWS_RESERVED_NAMES
+        // has had these since the initial extraction; Rust's
+        // `is_ascii_digit()` fails for multi-byte UTF-8 superscripts
+        // (U+00B9 / U+00B2 / U+00B3), leaving a parity gap a P1b
+        // hostile path could pass through Rust IPC validation while
+        // the TS-side downstream check rejected it. The full-string
+        // match below covers all six in one shot, alongside the
+        // existing word-token reserved names.
         matches!(
             stem.as_str(),
-            "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+            "CON"
+                | "PRN"
+                | "AUX"
+                | "NUL"
+                | "CONIN$"
+                | "CONOUT$"
+                | "COM\u{00B9}"
+                | "COM\u{00B2}"
+                | "COM\u{00B3}"
+                | "LPT\u{00B9}"
+                | "LPT\u{00B2}"
+                | "LPT\u{00B3}"
         ) || (stem.len() == 4
             && (stem.starts_with("COM") || stem.starts_with("LPT"))
             && stem.as_bytes()[3].is_ascii_digit())
