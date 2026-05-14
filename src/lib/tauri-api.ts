@@ -279,7 +279,21 @@ export async function copyPath(from: string, to: string): Promise<void> {
 export function fileNameFromPath(path: string): string {
   const normalized = isWindowsRuntime ? path.replace(/\\/g, "/") : path;
   const raw = normalized.split("/").pop() ?? path;
-  return stripUnicodeControls(raw);
+  // Round 10 N-R10-025: also strip ASCII C0 + DEL + C1 (\x00-\x1f\x7f-\x9f).
+  // `stripUnicodeControls` covers BiDi / zero-width only; ASCII \0,
+  // \t, \r, \n, ESC etc. previously passed through into
+  // row.subtitle.name, dropdown <option> text, and addLog lines via
+  // `t("msg_processing", subName)`. React text-renders so no XSS,
+  // but `\r\n` produces multi-line log entries (each addLog line
+  // would visibly break across log rows), `\0` invisibly breaks
+  // `<option>` text (everything after the NUL is dropped by the
+  // OS-native dropdown widget on some platforms), and `\t` mangles
+  // tabular layout. The Rust IPC gate rejects all of these on
+  // input paths; this sanitizer protects every display site
+  // downstream from any input that bypassed the gate (rare but
+  // defense-in-depth).
+  // eslint-disable-next-line no-control-regex -- intentional: scrub C0 / DEL / C1
+  return stripUnicodeControls(raw).replace(/[\x00-\x1f\x7f-\x9f]/g, "");
 }
 
 // ── Rust Commands ─────────────────────────────────────────

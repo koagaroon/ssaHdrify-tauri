@@ -195,6 +195,29 @@ fn walk_one_level(dir: &Path, out: &mut Vec<String>) -> bool {
         };
         if ft.is_file() {
             if let Some(s) = entry_path.to_str() {
+                // Round 10 A-R10-004: validate the discovered path
+                // through `validate_ipc_path` before surfacing.
+                // `expand_dropped_paths`'s outer loop runs this gate
+                // on every TOP-LEVEL path the frontend hands in, but
+                // pre-R10 the per-folder children added here skipped
+                // it — a folder dropped at top-level whose entries
+                // happened to carry BiDi / zero-width / control
+                // chars in their filenames (P1b: a fan-sub pack
+                // could pre-author such files) would push the
+                // unscrubbed path into `out`, and the BatchRename
+                // pairing UI's `<option>` text / dropdown labels
+                // would render the visual-reversal glyph before any
+                // downstream IPC re-validation reached it. The path
+                // still re-validates on every read attempt (encoding
+                // / safe_io / fonts), but the displayed-path
+                // surface is the disclosure surface — close it
+                // here. Skip-with-log on reject keeps the rest of
+                // the folder walkable (a single hostile sibling
+                // doesn't poison the legitimate files).
+                if let Err(e) = crate::util::validate_ipc_path(s, "Dropzone entry") {
+                    log::warn!("dropzone: skipping entry in {dir:?}: {e}");
+                    continue;
+                }
                 out.push(s.to_string());
             }
         }

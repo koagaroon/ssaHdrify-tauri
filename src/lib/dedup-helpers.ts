@@ -124,12 +124,24 @@ export function normalizeOutputKey(path: string): string {
  *  `ask()` body, sanitize it here. Counts and other non-name strings
  *  are unaffected. */
 export function sanitizeForDialog(name: string): string {
-  // Also strip ASCII \n / \r (Round 8 A-R8-A4-24). A fan-sub filename
-  // with an embedded newline could fake additional confirm lines in
-  // the OS-native `ask()` dialog body, smuggling a fake question past
-  // the user (P1b). U+2028 / U+2029 are already covered by the BiDi
-  // set above; this closes the ASCII line-break gap.
-  return name.replace(BIDI_AND_ZERO_WIDTH_GLOBAL_RE, "").replace(/[\r\n]/g, "");
+  // Strip BiDi / zero-width controls (visual-reversal class) + ASCII
+  // C0 + DEL + C1 control range (Round 10 N-R10-026 — widened from
+  // the Round 8 A-R8-A4-24 \r\n-only scrub). A fan-sub filename with
+  // an embedded \r\n can fake additional confirm lines in OS-native
+  // `ask()` dialog bodies, smuggling a fake question past the user
+  // (P1b); the rest of the C0/C1 range carries the same surface —
+  // `\t` produces uneven dialog body indentation; \0 can truncate
+  // Win32 TaskDialog text at the NUL byte on certain code paths; ESC
+  // can manipulate terminal cursor state on stderr surfaces; C1
+  // chars (U+0080-U+009F) flow through the BiDi pattern (which
+  // covers U+061C / U+200x / U+202x / U+2028-2029 / U+2060-2069 /
+  // U+FEFF but NOT U+0080-U+009F). The path-validation regex set
+  // already rejects all of these on input paths — the dialog
+  // sanitizer now covers the same span on names that bypass the
+  // input gate (e.g., a sanitized-elsewhere error message
+  // interpolation reaching the dialog body).
+  // eslint-disable-next-line no-control-regex -- intentional: scrub C0 / DEL / C1
+  return name.replace(BIDI_AND_ZERO_WIDTH_GLOBAL_RE, "").replace(/[\x00-\x1f\x7f-\x9f]/g, "");
 }
 
 /** Round 7 Wave 7.1 — shared catch-arm helper. Normalizes the

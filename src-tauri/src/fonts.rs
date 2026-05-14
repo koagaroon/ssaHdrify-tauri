@@ -2760,24 +2760,42 @@ pub fn subset_font(
         ));
     }
 
+    // Round 10 A-R10-003: PRE-canonicalize reparse-point reject. On
+    // Windows, `Path::canonicalize` follows symlinks / junctions to
+    // resolve the target, so the POST-canonicalize check below sees
+    // the target (typically not a reparse point) — for the documented
+    // `evil.ttf -> /etc/shadow` attack class, the canonical IS the
+    // target and the post-check is a no-op. Adding the pre-check
+    // brings parity with `dropzone.rs` / scan paths, which all
+    // refuse early on `entry.path()` before canonicalize. The
+    // post-check below remains for reparse-point chains where the
+    // canonicalize step itself resolves through a reparse target.
+    if crate::util::is_reparse_point(path) {
+        log::warn!(
+            "Refusing to subset font through symlink / junction: '{}'",
+            path.display()
+        );
+        return Err("Refusing to subset font through symlink / junction".to_string());
+    }
+
     // Canonicalize to resolve symlinks, "..", and normalize the path
     let canonical = path.canonicalize().map_err(|e| {
         log::warn!("canonicalize font path failed for '{filename}': {e}");
         "Cannot resolve font path".to_string()
     })?;
 
-    // Round 9 A-R9-A2-1: post-canonicalize reparse-point reject.
-    // Parity with `encoding.rs::read_text_detect_encoding` and the
-    // dropzone / scan paths, which all run `is_reparse_point` after
-    // canonicalize. Without this, a crafted --cache-file row pointing
-    // at a symlinked `evil.ttf -> /etc/shadow` canonicalizes to the
-    // target, and W8.2's 4-byte magic-byte sniff opens the file just
-    // long enough to read 4 bytes of deny-listed content. The full-
-    // body read is already gated by the sniff (returns Err on
-    // non-font header) and W6.9 (no fallback on parse failure), but
-    // the 4-byte probe is a residual partial-content read. Closing
-    // it here keeps subset_font symmetric with every other file-read
-    // entry in the codebase.
+    // Round 9 A-R9-A2-1: post-canonicalize reparse-point reject —
+    // belt-and-suspenders with the Round 10 A-R10-003 pre-check
+    // above. Covers reparse-point chains (e.g., symlink → symlink →
+    // file) where the FIRST hop is canonicalize-resolved cleanly
+    // and the SECOND hop is a reparse point pointing at non-font
+    // content. Without this, W8.2's 4-byte magic-byte sniff opens
+    // the file just long enough to read 4 bytes of deny-listed
+    // content. The full-body read is already gated by the sniff
+    // (returns Err on non-font header) and W6.9 (no fallback on
+    // parse failure), but the 4-byte probe is a residual partial-
+    // content read. Closing it here keeps subset_font symmetric
+    // with every other file-read entry in the codebase.
     if crate::util::is_reparse_point(&canonical) {
         log::warn!(
             "Refusing to subset font through symlink / junction: '{}'",

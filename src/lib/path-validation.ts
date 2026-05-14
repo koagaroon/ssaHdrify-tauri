@@ -411,6 +411,21 @@ export function assertSafeOutputPath(outputPath: string, inputPath: string): voi
   // self-overwrite checks on legitimate POSIX paths containing `\`.
   const normalizedOutput = isWindowsRuntime ? outputPath.replace(/\\/g, "/") : outputPath;
   const normalizedInput = isWindowsRuntime ? inputPath.replace(/\\/g, "/") : inputPath;
+  // Round 10 N-R10-024: ASCII C0 + DEL + C1 control-char gate on the
+  // full path. `decomposeInputPath` already rejects these on inputs,
+  // and `assertSafeOutputFilename` covers the filename portion — but
+  // BatchRename's `deriveRenameOutputPath` builds the directory
+  // portion from `dirname(videoPath)` (rename mode), `dirname(videoPath)`
+  // (copy_to_video mode), or `chosenDir` directly (copy_to_chosen
+  // mode) without round-tripping the dir through `decomposeInputPath`.
+  // A control-char-bearing directory name would land in the output
+  // path and only get caught downstream at Rust's `validate_ipc_path`
+  // (or worse, if a future call bypassed Rust validation). Mirror
+  // `decomposeInputPath:165` here as defense-in-depth.
+  // eslint-disable-next-line no-control-regex -- intentional: reject control chars
+  if (/[\x00-\x1f\x7f-\x9f]/.test(normalizedOutput)) {
+    throw new Error(`Output path contains control characters: ${normalizedOutput}`);
+  }
   const inputDirEnd = normalizedInput.lastIndexOf("/");
   if (inputDirEnd < 0) {
     throw new Error("Input path has no directory component");
