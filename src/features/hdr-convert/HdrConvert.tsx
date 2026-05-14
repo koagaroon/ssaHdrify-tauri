@@ -291,14 +291,28 @@ export default function HdrConvert() {
       // path; if any already exist, surface a single ask() dialog before
       // entering the busy state. Failed-to-resolve paths skip pre-flight
       // (the main loop will log per-file errors as before).
+      // Round 10 A-R10-006: silent skip on resolve failure is
+      // intentional and bounded. The pre-flight's job is to count
+      // existing outputs for the overwrite-confirm dialog; an
+      // unresolvable path doesn't contribute to that count by
+      // construction (no projected output → can't possibly collide).
+      // The main processing loop below re-runs `resolveOutputPath`
+      // per file inside its own try/catch, surfacing the resolution
+      // error with full file context (which the dialog summary
+      // couldn't fit anyway). Collecting these errors here for a
+      // pre-dialog surface would mean a second display shape ("X
+      // files could not be resolved, Y files would be overwritten")
+      // that adds UI complexity without telling the user anything
+      // new — the unresolvable paths will surface as red error rows
+      // in the log panel once processing starts. Skip is the right
+      // failure mode at this layer.
       const projectedOutputs: string[] = [];
       for (const filePath of paths) {
         try {
           projectedOutputs.push(resolveOutputPath(filePath, activeTemplate, eotf));
         } catch {
-          // Resolution failure logged in the main loop with file context;
-          // pre-flight just skips so the existence check doesn't see an
-          // invalid path.
+          // See pre-loop WHY comment above: intentional silent skip,
+          // not an oversight. Main loop logs per-file with context.
         }
       }
       try {
@@ -413,12 +427,28 @@ export default function HdrConvert() {
               // Parse with our browser-compatible parser
               const { captions } = parseSubtitle(preprocessed, style.fps);
 
+              // Round 10 N-R10-032: surface skipped-placeholder count.
+              // parseAss / parseSub push `skipped: true` Captions for
+              // entries whose text exceeded MAX_CAPTION_TEXT_LEN
+              // (64 KB). Those placeholders carry empty text — the
+              // entries.map below would silently emit Dialogue lines
+              // with empty bodies, dropping the original oversized
+              // text without user notification. Log the count via
+              // addLog so the user sees the data loss rather than
+              // discovering it after the fact.
+              const skippedCount = captions.filter((c) => c.skipped).length;
+              if (skippedCount > 0) {
+                addLog(t("msg_hdr_oversized_skipped", skippedCount, fileName), "warn");
+              }
+
               // Build ASS document from parsed captions
-              const entries = captions.map((c) => ({
-                start: c.start,
-                end: c.end,
-                text: c.text,
-              }));
+              const entries = captions
+                .filter((c) => !c.skipped)
+                .map((c) => ({
+                  start: c.start,
+                  end: c.end,
+                  text: c.text,
+                }));
               const rawAss = buildAssDocument(entries, style);
 
               // Now transform the ASS colors to HDR

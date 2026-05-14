@@ -107,10 +107,24 @@ fn clear_existing_destination(path: &Path, overwrite: bool) -> Result<(), String
     // exact case Codex flagged (the chain CLI write path bypassed
     // this check the same way before commit b7d9d21).
     match fs::symlink_metadata(path) {
-        Ok(_) => {
+        Ok(meta) => {
             if is_reparse_point(path) {
                 return Err(format!(
                     "Refusing to overwrite a symlink / junction at the destination: {}",
+                    path.display()
+                ));
+            }
+            // Round 10 A-R10-005: explicit directory check before
+            // `fs::remove_file`. Pre-R10 a destination that happened
+            // to be a directory propagated through `remove_file` as
+            // an opaque "Failed to remove existing destination:
+            // Access is denied" (Windows) / EISDIR (POSIX) — users
+            // received a permission-shaped error for a structural
+            // mismatch. Surface it with a clearer message that
+            // names what the caller actually expected (a file).
+            if meta.is_dir() {
+                return Err(format!(
+                    "Destination is a directory; expected a file: {}",
                     path.display()
                 ));
             }

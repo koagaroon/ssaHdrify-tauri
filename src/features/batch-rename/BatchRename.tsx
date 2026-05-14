@@ -422,6 +422,18 @@ export default function BatchRename() {
       // before calling so any concurrent async work (from a future
       // refactor that adds an await inside this handler) gets its
       // invalidation signal at the bump site.
+      // Round 10 N-R10-029: clear the previous run's action result on
+      // EVERY new ingest, not just the happy path. Pre-R10 the
+      // conflict / empty-input early returns left `lastActionResult`
+      // set to whatever the last run produced ("success" / "error" /
+      // "cancelled" / "noop"), so the footer rendered the stale
+      // "Rename complete" or "Rename failed" message alongside the
+      // fresh red drop-error banner — contradictory user signals.
+      // Resetting at the top of ingest matches the natural mental
+      // model: a new selection means "start fresh", regardless of
+      // whether the ingest itself succeeds.
+      setLastActionResult(null);
+
       const { videos, subtitles, unknown } = categorizePaths(paths);
 
       // Conflict check applies only to subtitles — videos can't collide

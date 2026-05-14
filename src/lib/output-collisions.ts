@@ -25,9 +25,16 @@ const MAX_CONCURRENT_STAT = 32;
 /**
  * Count how many of the given paths already exist on disk. Stat checks
  * run in parallel (capped at `MAX_CONCURRENT_STAT`) so batch latency is
- * a small number of round-trips regardless of path count. Errors on
- * individual checks are treated as non-existent rather than propagated
- * — a path we can't stat is one we can't claim is colliding.
+ * a small number of round-trips regardless of path count.
+ *
+ * Round 10 A-R10-013: stat failures are now counted as EXISTING
+ * (fail-safe). Pre-R10 they were counted as non-existent, which meant
+ * a transient FS error during pre-flight could suppress the
+ * overwrite-confirm dialog and let the batch silently overwrite real
+ * files. The new behavior — bias toward showing the dialog — is the
+ * conservative one: a false-positive collision warning is annoying
+ * (user clicks "Yes, overwrite"), but a false-negative miss destroys
+ * data. `errorCount` continues to be logged for diagnosis.
  */
 export async function countExistingFiles(paths: string[]): Promise<number> {
   if (paths.length === 0) return 0;
@@ -46,7 +53,10 @@ export async function countExistingFiles(paths: string[]): Promise<number> {
           existingCount += 1;
         }
       } catch {
+        // Round 10 A-R10-013: count as existing (fail-safe). See
+        // function-level docblock for the WHY.
         errorCount += 1;
+        existingCount += 1;
       }
     }
   };
@@ -54,7 +64,7 @@ export async function countExistingFiles(paths: string[]): Promise<number> {
   await Promise.all(Array.from({ length: workerCount }, () => worker()));
   if (errorCount > 0) {
     console.warn(
-      `[ssaHdrify] countExistingFiles ignored ${errorCount} stat failure(s); treating them as non-existent.`
+      `[ssaHdrify] countExistingFiles: ${errorCount} stat failure(s) treated as existing (fail-safe overwrite-confirm bias).`
     );
   }
   return existingCount;

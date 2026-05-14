@@ -49,23 +49,26 @@ describe("countExistingFiles", () => {
     expect(count).toBe(2);
   });
 
-  it("treats a stat error as non-existent (never blocks the save flow)", async () => {
+  it("treats a stat error as existing (fail-safe overwrite-confirm bias, Round 10 A-R10-013)", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    // First exists() throws, the rest report true. The throwing path must
-    // not propagate — a transient stat failure should not flip the count.
+    // First exists() throws, the rest report true. Round 10 A-R10-013
+    // flipped the failure mode: stat errors now count as EXISTING
+    // (count == 3, not 2), so the overwrite-confirm dialog fires
+    // conservatively. Pre-R10 a transient EBUSY would suppress the
+    // dialog and let the batch silently overwrite real files.
     existsMock.mockImplementationOnce(async () => {
       throw new Error("EBUSY");
     });
     existsMock.mockResolvedValue(true);
     const count = await countExistingFiles(["a.ass", "b.ass", "c.ass"]);
-    expect(count).toBe(2);
+    expect(count).toBe(3);
     expect(warn).toHaveBeenCalledOnce();
-    // Pin both the count AND the noun. Pure noun-only matching would
-    // miss a regression where the errorCount interpolation breaks (e.g.,
-    // emits ${undefined}); pure count-only matching would miss a
-    // wording flip away from "stat failure/error". The combined
-    // anchor catches both classes.
+    // Pin both the count AND the failure-mode wording. Pure noun-only
+    // matching would miss a regression where errorCount interpolation
+    // breaks; pure count-only matching would miss a wording flip away
+    // from "stat failure/error" / "fail-safe".
     expect(warn.mock.calls[0][0]).toMatch(/\b1 stat (failure|error)/);
+    expect(warn.mock.calls[0][0]).toMatch(/fail-safe|treated as existing/);
   });
 
   it("runs stat checks in parallel up to MAX_CONCURRENT_STAT", async () => {

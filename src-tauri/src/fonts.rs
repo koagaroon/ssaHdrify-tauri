@@ -1736,14 +1736,24 @@ where
             if let Some(c) = collected_for_cache.as_mut() {
                 let remaining = MAX_CACHE_POPULATE_FACES.saturating_sub(c.len());
                 if batch.len() > remaining {
+                    // Round 10 N-R10-037 / N-R10-038: reworded to drop
+                    // "malicious or abnormally large font packs"
+                    // (false-positive framing for a legitimate XL
+                    // bucket — 17k+ fonts is a real fan-sub typesetting
+                    // collection size) and the inaccurate "all 20000
+                    // faces (or more)" anchor (session-DB import is
+                    // bounded by MAX_FONTS_PER_SCAN = 100_000, not by
+                    // MAX_CACHE_POPULATE_FACES). The new wording
+                    // states the operational fact (cache populate
+                    // skipped, session-DB lookups remain authoritative)
+                    // without scaring the user with attack framing.
                     log::warn!(
-                        "Persistent font cache populate skipped: scan exceeded the {}-face \
-                         defense-in-depth cap (malicious or abnormally large font packs). \
-                         In-session session-DB lookups are unaffected and will return all \
-                         {} faces (or more) discovered by this scan. To enable persistent \
-                         cache acceleration, reduce the folder size and rescan.",
+                        "Persistent font cache populate skipped: scan reached the {}-face \
+                         cache defense-in-depth cap. Session-DB lookups remain authoritative \
+                         for this scan (bounded by MAX_FONTS_PER_SCAN, not this cache cap). \
+                         To enable persistent-cache acceleration, split the folder into \
+                         smaller subdirectories and rescan.",
                         MAX_CACHE_POPULATE_FACES,
-                        MAX_CACHE_POPULATE_FACES
                     );
                     c.extend(batch.iter().take(remaining).cloned());
                     cache_truncated = true;
@@ -2302,7 +2312,34 @@ pub fn remove_font_source(source_id: String, kind: Option<String>) -> Result<(),
     // safe path (no eviction). The cost is a stale cache row that
     // next-launch drift detection picks up, vs the over-evict that
     // would silently break a different source's cache acceleration.
+    // Round 10 A-R10-009 (Defer P1a — frontend in-process trust):
+    // `kind` is the lone IPC argument here whose value flows from the
+    // frontend without server-side cross-check against SQL state.
+    // The rest of the validation pattern (e.g., source_id through
+    // `validate_font_source_id`, paths through `validate_ipc_path`)
+    // treats every input as untrusted; `kind` is the exception. The
+    // current threat model (single-user desktop, in-process frontend)
+    // doesn't cross the trust boundary at the IPC layer, so a buggy
+    // frontend passing the wrong kind would surface as user-visible
+    // misbehavior (stale cache rows for a removed dir source, or
+    // skipped cache eviction for a renamed files source) rather than
+    // as an exploit. If the project ships in a server / multi-tenant
+    // shape later, derive `is_dir_source` from a join against
+    // `gui_font_cache.cached_folders` instead of trusting `kind`.
     let is_dir_source = kind.as_deref() == Some("dir");
+    // Round 10 N-R10-035: `LIMIT 1` without `ORDER BY` returns an
+    // arbitrary row, which is correct UNDER the current one-level
+    // scan invariant — every face in a dir-mode source shares the
+    // same `parent()` directory (the user-picked folder), so any
+    // single face's parent is the right eviction key. If
+    // `scan_font_directory` ever grows recursive descent (multi-level
+    // walks into subdirectories), a single dir source could contain
+    // faces from multiple parents and this `LIMIT 1` would pick one
+    // arbitrarily — at that point switch the schema to store
+    // `folder_path` on `font_sources` directly so the eviction key
+    // is no longer inferred. A schema column is the deeper fix but
+    // requires a migration; this comment pins the invariant the
+    // current shape depends on.
     let evict_folder: Option<String> = if is_dir_source {
         tx.query_row(
             "SELECT path FROM font_faces WHERE source_id = ?1 LIMIT 1",

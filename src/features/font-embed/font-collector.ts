@@ -199,7 +199,20 @@ export function collectFontsWithParser(assContent: string, parser: AssParseFunct
     }
     for (const char of text) {
       if (usage.codepoints.size >= MAX_CODEPOINTS_PER_VARIANT) {
-        break;
+        // Round 10 N-R10-034: throw on per-variant cap for parity
+        // with MAX_FONT_VARIANTS (above) and MAX_TOTAL_CODEPOINTS
+        // (below). Pre-R10 this branch silently `break`ed,
+        // truncating the variant's glyph set without surfacing the
+        // limit — under adversarial input (a crafted ASS that
+        // sprays a million unique codepoints into one font) the
+        // user would receive a subsetted font missing characters
+        // they could see in the source. Aligning to throw makes
+        // the cap-hit a hard failure (visible error message) that
+        // the user can act on by splitting the input or excluding
+        // the offending file.
+        throw new Error(
+          `Too many codepoints for one font variant: ${usage.codepoints.size}+ (max ${MAX_CODEPOINTS_PER_VARIANT})`
+        );
       }
       const cp = char.codePointAt(0);
       // Skip control chars (incl. U+007F DEL), ASCII space, and invalid

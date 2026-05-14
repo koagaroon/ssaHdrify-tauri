@@ -99,7 +99,11 @@ function App() {
         if (status.schemaMismatch) {
           // Empty drift: cache file is unreadable, modal renders the
           // rebuild-required path (Clear cache button only).
-          if (cancelled) return;
+          // Round 10 N-R10-015: dropped a redundant `if (cancelled)
+          // return` here — JS is single-threaded and no await fires
+          // between the initial post-`openFontCache` cancel check
+          // (line above) and these setters. React's setState is
+          // synchronous-schedule; it doesn't yield mid-call.
           setCacheDrift({ added: [], modified: [], removed: [] });
           setShowCacheModal(true);
           return;
@@ -113,12 +117,13 @@ function App() {
         if (cancelled) return;
         setCacheDrift(drift);
         if (drift.modified.length > 0 || drift.removed.length > 0) {
-          // Re-check after the setCacheDrift state-set above flushes —
-          // tiny window between the post-await guard at line above and
-          // this setShowCacheModal call; an unmount mid-flush would
-          // otherwise stage the modal for a vanished component
-          // (N-R5-FEFEAT-13).
-          if (cancelled) return;
+          // Round 10 N-R10-015: dropped a redundant `if (cancelled)
+          // return` here for the same reason as the schemaMismatch
+          // branch above — no await fires between the post-
+          // `detectFontCacheDrift` cancel check (`if (cancelled)
+          // return` a few lines above) and this synchronous setter
+          // pair. The previous comment misstated React's flush
+          // semantics (setState does not yield mid-call).
           setShowCacheModal(true);
         }
       } catch (e) {

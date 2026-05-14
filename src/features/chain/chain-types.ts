@@ -35,6 +35,30 @@ export interface ShiftStepParams {
   thresholdMs?: number;
 }
 
+/**
+ * Embed step parameters carried in the chain runtime payload.
+ *
+ * Round 10 N-R10-017: `fontDirs`, `fontFiles`, `noSystemFonts`, and
+ * `onMissing` are populated by the Rust shell but NEVER read by the
+ * TS embed transform — Rust resolves all four upstream and bakes
+ * the result into `subsets` before invoking runChain, so the TS side
+ * sees only the pre-resolved bytes. The fields stay on the payload
+ * shape for two reasons:
+ *
+ * 1. Wire-format symmetry with `cli/chain.rs::ParsedStep::Embed` —
+ *    the Rust struct serializes all four; dropping them on the TS
+ *    side would force a divergent payload spec and complicate the
+ *    JSON-round-trip test.
+ * 2. Future GUI integration. When the chain runtime gets a GUI
+ *    surface (Shape A → Shape B/C per the CLI design doc), the GUI
+ *    may resolve fonts in TS rather than Rust — at that point the
+ *    TS embed transform will start reading these fields directly.
+ *
+ * Splitting into Rust-only / TS-only param shapes would force the
+ * payload type to switch by caller, adding wire-format branching for
+ * a future-but-unused symmetry. Keep the unified shape with this
+ * note instead.
+ */
 export interface EmbedStepParams {
   fontDirs: string[];
   fontFiles: string[];

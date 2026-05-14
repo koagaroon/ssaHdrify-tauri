@@ -172,7 +172,7 @@ export function parseDisplayTime(ts: string): number | null {
 // Original ASS-side cap was 100k which silently rejected legitimate
 // long-form transcripts; 500k matches the per-file face cap on the
 // Rust side as a unified "defensive ceiling."
-const MAX_PARSED_ENTRIES = 500_000;
+export const MAX_PARSED_ENTRIES = 500_000;
 
 // Round 6 Wave 6.8 (Codex Finding 1 fix): raw-block cap restored as
 // defense-in-depth alongside the per-caption cap. W6.5 #18 removed

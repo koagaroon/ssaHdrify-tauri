@@ -8,6 +8,20 @@
  * ASS color format: &H[AA]BBGGRR (BGR byte order, optional alpha prefix)
  */
 import { sRgbToHdr, type Eotf, DEFAULT_BRIGHTNESS, MIN_BRIGHTNESS } from "./color-engine";
+import { MAX_PARSED_ENTRIES } from "../../lib/subtitle-parser";
+
+// Round 10 N-R10-031: derive LINE_CAP from MAX_PARSED_ENTRIES plus
+// a header-overhead budget so the cap accommodates SRT→ASS upcasts.
+// Pre-R10 LINE_CAP was hardcoded to 500_000 (== MAX_PARSED_ENTRIES);
+// an SRT input near the parser cap then expanded through
+// buildAssDocument's ~11-line header would throw here on the
+// re-pass even though parseSrt had accepted the file. 1024-line
+// budget covers `[Script Info]` / `[V4+ Styles]` / Format / multiple
+// Style rows / `[Events]` / Format / Comment lines / blank
+// separators, well over the ~11-line minimum used by the standard
+// builder and any plausible authoring tool's preamble.
+const ASS_HEADER_LINE_BUDGET = 1024;
+const LINE_CAP = MAX_PARSED_ENTRIES + ASS_HEADER_LINE_BUDGET;
 
 // ── Style color fields in ASS [V4+ Styles] section ────────
 // Format line: "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, ..."
@@ -157,9 +171,22 @@ function transformStyleLine(
   // `COLOR_FIELD_RE` definition.)
   for (const idx of styleColorIndices) {
     if (idx < fields.length && fields[idx]) {
-      const trimmed = fields[idx].trim();
+      const raw = fields[idx];
+      const trimmed = raw.trim();
       if (COLOR_FIELD_RE.test(trimmed)) {
-        fields[idx] = transformColorString(trimmed, targetBrightness, eotf);
+        // Round 10 N-R10-030: preserve any leading/trailing whitespace
+        // padding from the original field so byte-for-byte file
+        // structure (excluding the color hex itself) survives the
+        // transform. Pre-R10 the replacement used `trimmed` directly,
+        // dropping the padding — ASS renderers tolerate it, but
+        // diff-tooling against the input would surface the
+        // whitespace shift as a spurious change.
+        const leadingLen = raw.length - raw.trimStart().length;
+        const trailingLen = raw.length - raw.trimEnd().length;
+        const leading = raw.slice(0, leadingLen);
+        const trailing = trailingLen > 0 ? raw.slice(raw.length - trailingLen) : "";
+        const transformed = transformColorString(trimmed, targetBrightness, eotf);
+        fields[idx] = `${leading}${transformed}${trailing}`;
       }
     }
   }
@@ -240,7 +267,6 @@ export function processAssContent(
   // keep the small-file fast path zero-overhead. The 1 MB gate is well
   // above any realistic small subtitle (5-200 KB) and well below the
   // attack threshold (tens of MB).
-  const LINE_CAP = 500_000;
   if (content.length > 1_000_000) {
     let nl = 1;
     for (let i = 0; i < content.length; i++) {

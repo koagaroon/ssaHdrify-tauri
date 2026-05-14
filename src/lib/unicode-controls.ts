@@ -27,6 +27,22 @@
  * through Rust, leaving sanitizeFamily / ass-uuencode safeName (both
  * pure TS) blind to the same codepoints the Rust validators
  * rejected.
+ *
+ * Round 10 A-R10-015 (Defer P3 — coverage scope is intentional):
+ * The set targets the well-known Trojan-Source CVE-2021-42574 +
+ * widely-deployed zero-width vectors. It does NOT include:
+ *
+ * - Tag block U+E0001..U+E007F — "language tags" superseded by the
+ *   IETF BCP 47 system; rarely deployed and not part of any current
+ *   filename-display impersonation CVE.
+ * - U+034F COMBINING GRAPHEME JOINER — invisible but normalization-
+ *   inert; theoretical impersonation surface only.
+ *
+ * Exhaustive coverage of "any invisible Unicode codepoint" is a
+ * moving target (Unicode adds new codepoints across versions); the
+ * current set captures known-deployed attack vectors at a stable
+ * boundary. Extend ONLY when a specific CVE / incident references
+ * the additional codepoints.
  */
 const BIDI_AND_ZERO_WIDTH_PATTERN =
   "\\u061C\\u180E\\u200B-\\u200F\\u202A-\\u202E\\u2028\\u2029\\u2060\\u2066-\\u2069\\uFEFF";

@@ -440,6 +440,18 @@ export function assertSafeOutputPath(outputPath: string, inputPath: string): voi
 
   // Output must stay inside the input directory. Comparing against
   // `inputDir + "/"` avoids the `/dir1` vs `/dir12` prefix collision.
+  //
+  // Round 10 A-R10-012 (Defer P3 — drive-root edge): for a
+  // drive-root input like `/file.ass`, `inputDir` is empty and this
+  // check degenerates to "output starts with `/`" — any absolute
+  // path passes the dir-escape gate. The `..` traversal regex above
+  // still fires, so output can't traverse OUT of the implied root,
+  // but it could land in any sibling directory of the drive root.
+  // Defense-in-depth gap accepted under P3: drive-root inputs are
+  // pathological (a user dropping `/file.ass` directly), and the
+  // attack surface (re-rooting output to `/etc/...` instead of `/`)
+  // is rejected by `assertSafeOutputFilename` upstream because
+  // `/etc/...` contains a separator.
   if (!normalizedOutput.startsWith(inputDir + "/")) {
     throw new Error(`Output path escapes input directory: ${normalizedOutput}`);
   }

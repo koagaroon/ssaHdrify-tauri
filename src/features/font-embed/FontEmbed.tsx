@@ -82,7 +82,19 @@ function fileNameHasAssExt(name: string): boolean {
 // covers any legitimate workflow (a typical fan-sub ASS is 30-200 KB,
 // even rich-typography ones rarely exceed 5 MB).
 const MAX_BATCH_FILES = 500;
-const MAX_BATCH_AGGREGATE_BYTES = 500 * 1024 * 1024;
+// Round 10 N-R10-033: lowered from 500 MB to 200 MB headroom. The
+// cap counts decoded UTF-16 string bytes (`content.length * 2`)
+// only — per-file `usages` Maps with up to MAX_CODEPOINTS_PER_VARIANT
+// entries × MAX_FONT_VARIANTS variants per file add another ~25-100
+// MB of JS Set memory PER FILE under adversarial inputs (a fan-sub
+// pack crafted to maximize codepoint diversity). At 500 MB
+// content-bytes + N×100 MB Set retention, a 5-file batch could
+// reach ~1 GB JS heap before the cap fires. 200 MB content-bytes
+// keeps total batch retention under ~700 MB even under the worst-
+// case Set inflation, comfortably inside V8's default heap. Real-
+// world batches (24 ASS at 30-200 KB each) consume single-digit MB,
+// so the lower cap is invisible to legitimate workflows.
+const MAX_BATCH_AGGREGATE_BYTES = 200 * 1024 * 1024;
 
 export default function FontEmbed() {
   const { t } = useI18n();

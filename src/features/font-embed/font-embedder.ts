@@ -582,6 +582,23 @@ export async function embedFonts(
  * If [Fonts] already exists, replace it.
  */
 export function insertFontsSection(content: string, fontsSection: string): string {
+  // Round 10 A-R10-011: reject input that lacks [Script Info]. A
+  // crafted ASS with zero recognized section headers would otherwise
+  // produce output like `\n\n[Fonts]\n…\n` — structurally invalid
+  // ASS (no [Script Info]) but the embed reports success and the
+  // user later discovers the file won't render. Most input paths
+  // reach here through `parseSubtitle` / `buildAssDocument` upstream
+  // (which always emit a [Script Info] header), so this guard
+  // catches the direct-passthrough path where a hostile ASS skipped
+  // the parser-rebuild route entirely (P1b: subtitle from public
+  // release channel). Check is case-insensitive + anchored to column
+  // 0 with `\s*` trailing to mirror common ASS-renderer lenience.
+  if (!/^\[Script Info\][ \t]*$/im.test(content)) {
+    throw new Error(
+      "Cannot embed: input ASS has no [Script Info] section header. " +
+        "Re-parse / rebuild the file before embedding fonts."
+    );
+  }
   const lineEnding = content.includes("\r\n") ? "\r\n" : "\n";
   // Normalize Unicode line separators (U+2028 LINE SEPARATOR,
   // U+2029 PARAGRAPH SEPARATOR) to ASCII newlines BEFORE the split.
