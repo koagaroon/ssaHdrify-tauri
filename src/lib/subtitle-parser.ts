@@ -19,6 +19,13 @@ export interface Caption {
   text: string;
   /** VTT cue identifier (lines before the timing line), if present */
   cueId?: string;
+  /**
+   * ASS-only: placeholder entry for a Dialogue line whose text exceeded
+   * MAX_CAPTION_TEXT_LEN. parseAss still emits one Caption per Dialogue
+   * line so the parse/build positional contract holds; buildAss returns
+   * the original line untouched for entries with `skipped: true`.
+   */
+  skipped?: boolean;
 }
 
 export interface ParseResult {
@@ -348,9 +355,13 @@ function createDialogueRe(): RegExp {
 // dialogue lines are < 1 KB even for elaborate styled karaoke. 64 KB
 // is generous — guards against a crafted file with a single dialogue
 // containing a multi-MB text body (P1b attacker-influenced content).
-// Captions exceeding the cap are skipped, not throwing, so the rest
-// of the file still parses. Matches parseSub's per-text guard added
-// alongside.
+// Captions exceeding the cap are skipped (text dropped), but for ASS
+// parseAss still emits a placeholder Caption with `skipped: true` so
+// that buildAss's positional consumption stays aligned with the
+// original Dialogue line order (see parseAss / buildAss WHY below).
+// Matches parseSub's per-text guard added alongside (parseSub doesn't
+// need the placeholder dance because buildSub rebuilds from the
+// captions array, not by walking original content).
 const MAX_CAPTION_TEXT_LEN = 64_000;
 
 function parseAss(content: string): Caption[] {
@@ -368,9 +379,21 @@ function parseAss(content: string): Caption[] {
     }
     const text = match[5];
     if (text.length > MAX_CAPTION_TEXT_LEN) {
-      // Skip this single oversized line; the rest of the file is
-      // still useful. Bounded read above (Rust 50 MB cap) means we
-      // can't be flooded with these.
+      // Emit a skipped placeholder rather than continuing past the
+      // match. buildAss walks the same `dialogueRe` over the original
+      // content and consumes captions sequentially; if parseAss
+      // silently dropped this entry the index would drift and every
+      // subsequent Dialogue line would receive the wrong timestamps.
+      // Keeping a placeholder (no text payload retained, so the
+      // multi-MB body doesn't linger) lets buildAss recognise the
+      // position and return the original line untouched.
+      captions.push({
+        raw: match[0],
+        start: parseAssTime(match[2]),
+        end: parseAssTime(match[4]),
+        text: "",
+        skipped: true,
+      });
       continue;
     }
     captions.push({
@@ -390,6 +413,11 @@ function buildAss(content: string, captions: Caption[]): string {
   const result = content.replace(dialogueRe, (original, prefix, _start, space, _end, rest) => {
     if (idx < captions.length) {
       const c = captions[idx++];
+      // Skipped placeholder (oversized text in parseAss): preserve the
+      // original Dialogue line verbatim. Advancing idx is what keeps
+      // the next non-skipped caption aligned with the next Dialogue
+      // match downstream.
+      if (c.skipped) return original;
       return `${prefix}${formatAssTime(c.start)},${space}${formatAssTime(c.end)},${rest}`;
     }
     return original;
@@ -532,6 +560,11 @@ export function shiftSubtitle(
   const { format, captions } = parseSubtitle(content, fps);
 
   const shifted = captions.map((c) => {
+    // Skipped placeholders (ASS-only, oversized Dialogue text) pass
+    // through unchanged — buildAss treats them as "preserve original
+    // line", so shifting their (synthetic) timestamps would be wasted
+    // work and would obscure the placeholder's intent.
+    if (c.skipped) return c;
     const shouldShift = thresholdMs === undefined || c.start >= thresholdMs;
     if (!shouldShift) return { ...c };
     return {

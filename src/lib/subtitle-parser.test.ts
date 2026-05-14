@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseSubtitle } from "./subtitle-parser";
+import { parseSubtitle, shiftSubtitle } from "./subtitle-parser";
 
 describe("parseSubtitle", () => {
   it("splits SRT cue blocks with mixed CRLF and LF endings", () => {
@@ -178,5 +178,79 @@ describe("parseSubtitle — Wave 6.8 raw-block junk-flood ceiling (Codex Finding
     const result = parseSubtitle(withPadding);
     expect(result.format).toBe("srt");
     expect(result.captions).toHaveLength(100);
+  });
+});
+
+// ── Round 7.5 follow-up — Codex finding (commit 7afe881) regression pin ──
+//
+// W7.5 A4-R7-4 introduced MAX_CAPTION_TEXT_LEN with a `continue` that
+// silently dropped oversized ASS Dialogue lines from `captions`.
+// buildAss still walked every original Dialogue regex match and
+// consumed captions sequentially, so the next normal line received the
+// oversized line's slot. Result for `shiftSubtitle` on a crafted ASS:
+// silent timestamp drift across every Dialogue after the first
+// oversized one. Fix: parseAss now emits a placeholder Caption with
+// `skipped: true` for oversized lines; buildAss returns the original
+// line untouched on that flag but still advances its index, keeping
+// positional alignment.
+describe("parseSubtitle / shiftSubtitle — oversized-ASS-Dialogue placeholder alignment", () => {
+  it("preserves Dialogue order when an oversized line precedes normal lines", () => {
+    const oversized = "X".repeat(65_000);
+    const ass =
+      "[Script Info]\nScriptType: v4.00+\n\n" +
+      "[V4+ Styles]\nFormat: Name, Fontname\nStyle: Default,Arial\n\n" +
+      "[Events]\nFormat: Layer, Start, End, Style, Text\n" +
+      `Dialogue: 0,0:00:01.00,0:00:02.00,Default,${oversized}\n` +
+      "Dialogue: 0,0:00:10.00,0:00:11.00,Default,SECOND\n" +
+      "Dialogue: 0,0:00:20.00,0:00:21.00,Default,THIRD\n";
+
+    const parsed = parseSubtitle(ass);
+    expect(parsed.format).toBe("ass");
+    // parseAss emits 3 captions (1 placeholder + 2 normal), preserving
+    // positional alignment with the 3 original Dialogue lines.
+    expect(parsed.captions).toHaveLength(3);
+    expect(parsed.captions[0].skipped).toBe(true);
+    expect(parsed.captions[0].text).toBe("");
+    expect(parsed.captions[1].skipped).toBeUndefined();
+    expect(parsed.captions[1].text).toContain("SECOND");
+    expect(parsed.captions[2].text).toContain("THIRD");
+
+    // Shift by +1s: the oversized original line must stay verbatim;
+    // the next two lines must move from 10/11s → 11/12s and 20/21s →
+    // 21/22s. A drift regression would write 11.00 onto the oversized
+    // line and shift SECOND / THIRD by one slot each.
+    const { output } = shiftSubtitle(ass, 1000);
+    expect(output).toContain(`Dialogue: 0,0:00:01.00,0:00:02.00,Default,${oversized}`);
+    expect(output).toContain("Dialogue: 0,0:00:11.00,0:00:12.00,Default,SECOND");
+    expect(output).toContain("Dialogue: 0,0:00:21.00,0:00:22.00,Default,THIRD");
+    // Negative counter-assertions against the prior drift pattern:
+    // SECOND must NOT carry the oversized line's pre-shift timestamps,
+    // and THIRD must NOT carry SECOND's pre-shift timestamps.
+    expect(output).not.toMatch(/Dialogue: 0,0:00:02\.00,0:00:03\.00,Default,SECOND/);
+    expect(output).not.toMatch(/Dialogue: 0,0:00:11\.00,0:00:12\.00,Default,THIRD/);
+  });
+
+  it("preserves Dialogue order with a normal line between two oversized lines", () => {
+    // Stress shape: oversized at the head AND in the middle. Without
+    // placeholders the captions array would be length-2 (just MIDDLE
+    // and LAST), buildAss would consume MIDDLE onto the first
+    // oversized slot and LAST onto MIDDLE's slot, leaving the second
+    // oversized slot untouched (idx exhausted). Drift surface: both
+    // surviving lines mis-attributed.
+    const big = "Y".repeat(65_000);
+    const ass =
+      "[Script Info]\nScriptType: v4.00+\n\n" +
+      "[V4+ Styles]\nFormat: Name, Fontname\nStyle: Default,Arial\n\n" +
+      "[Events]\nFormat: Layer, Start, End, Style, Text\n" +
+      `Dialogue: 0,0:00:01.00,0:00:02.00,Default,${big}\n` +
+      "Dialogue: 0,0:00:10.00,0:00:11.00,Default,MIDDLE\n" +
+      `Dialogue: 0,0:00:30.00,0:00:31.00,Default,${big}\n` +
+      "Dialogue: 0,0:00:40.00,0:00:41.00,Default,LAST\n";
+
+    const { output } = shiftSubtitle(ass, 500);
+    expect(output).toContain(`Dialogue: 0,0:00:01.00,0:00:02.00,Default,${big}`);
+    expect(output).toContain("Dialogue: 0,0:00:10.50,0:00:11.50,Default,MIDDLE");
+    expect(output).toContain(`Dialogue: 0,0:00:30.00,0:00:31.00,Default,${big}`);
+    expect(output).toContain("Dialogue: 0,0:00:40.50,0:00:41.50,Default,LAST");
   });
 });
