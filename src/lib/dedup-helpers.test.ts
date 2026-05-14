@@ -48,4 +48,18 @@ describe("sanitizeError", () => {
     expect(sanitizeError("bare string\n.danger")).toBe("bare string.danger");
     expect(sanitizeError(42)).toBe("42");
   });
+
+  it("scrubs BiDi codepoints on non-Error throws too (Round 10 N-R10-021)", () => {
+    // Pre-R10 the non-Error tests only covered ASCII payloads
+    // ("bare string\n.danger", 42), so a future refactor that
+    // bypassed sanitizeForDialog on the non-Error branch (e.g.,
+    // `return e instanceof Error ? sanitizeForDialog(e.message) :
+    // String(e)`) would have passed every assertion. The single
+    // BiDi-bearing string-throw pins the contract that both branches
+    // go through the scrub.
+    expect(sanitizeError("evil\u{202E}txt")).toBe("eviltxt");
+    // C0 control chars on non-Error throw — sanitizeForDialog's
+    // R10-widened scrub catches these too.
+    expect(sanitizeError("a\x00b\tc")).toBe("abc");
+  });
 });

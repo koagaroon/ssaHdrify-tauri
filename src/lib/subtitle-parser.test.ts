@@ -271,15 +271,16 @@ describe("parseSubtitle / shiftSubtitle — oversized-ASS-Dialogue placeholder a
   });
 
   it("parses 12-digit-hour VTT timing (upper bound)", () => {
-    // Round 9 N-R9-N1-3: actually exercise a 12-digit hour value so a
-    // regression lowering the bound (e.g., `\d{2,4}`) gets caught. The
-    // previous fixture used `00:00:01.000` which is 2-digit; the cap
-    // was unverified. Using a hour value of 11 digits (still within
-    // `{2,12}`) is more lenient than the boundary itself — the cap
-    // test pins the upper limit by parsing successfully at 11 digits
-    // and failing at 13. Hours of 999_999_999 (9 digits) is plenty
-    // distinct from `\d{2}`-only fixtures elsewhere.
-    const longHour = "999999999"; // 9-digit; within {2,12}, NOT in {2,2} or {2,4}
+    // Round 10 N-R10-019: actually use a 12-digit fixture so the
+    // at-limit test pins the boundary from the inside. The Round 9
+    // attempt used a 9-digit fixture and called it "upper bound";
+    // a regression lowering the bound to `\d{2,11}` would have left
+    // both tests green (9 digits passes, 13 fails) without
+    // exercising the actual 12-digit edge. The 12-digit fixture +
+    // the 13-digit over-bound counter-test (below) pin the boundary
+    // from both sides — code_review.md "boundary-named tests pair
+    // at-limit + over-limit".
+    const longHour = "999999999999"; // 12 digits, exactly at {2,12} upper bound
     const content = `WEBVTT\r\n\r\n${longHour}:00:01.000 --> ${longHour}:00:02.000\r\nLine\r\n`;
     const result = parseSubtitle(content);
     expect(result.captions).toHaveLength(1);

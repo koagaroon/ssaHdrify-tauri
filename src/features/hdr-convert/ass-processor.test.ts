@@ -114,10 +114,16 @@ describe("processAssContent — inline color tags", () => {
     expect(output).toContain("Hello");
     // White (FFFFFF) should be converted to a different HDR value
     expect(output).not.toMatch(/\\1c&H(?:00)?FFFFFF/);
-    // Tag structure preserved AND the replacement is a legal 6/8-digit
-    // hex sequence (not a malformed run that could survive through the
-    // pipeline as plain text).
-    expect(output).toMatch(/\\1c&H[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?&/);
+    // Round 10 N-R10-022: pin the exact transformed value rather than
+    // a 6/8-digit structural match. Pre-R10 a regression that
+    // produced wrong-but-still-6-digit hex would have silently
+    // passed; the structural match was too loose. White at 203 nits
+    // PQ is the reference BT.2408 white point — Color.js +
+    // sRgbToHdr's PQ path emit a deterministic value for it
+    // (&H949494& at the time of this pin; if Color.js or sRgbToHdr's
+    // math changes intentionally, update the expected value here
+    // along with the corresponding test in color-engine.test.ts).
+    expect(output).toContain("{\\1c&H949494&}Hello");
   });
 
   it("transforms 8-digit color tags (with alpha)", () => {

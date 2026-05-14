@@ -27,6 +27,24 @@ describe("large font source warning helpers", () => {
         totalBytes: LARGE_FONT_SCAN_BYTES_WARNING_THRESHOLD,
       })
     ).toBe(true);
+    // Round 10 N-R10-020: pair the at-threshold tests above with
+    // over-threshold counter-tests. The original triple covered
+    // (below-below, at-file, at-bytes) — a regression flipping the
+    // gate to `>` instead of `>=` would silently weaken the cap, and
+    // the at-threshold tests alone can't distinguish that direction.
+    // Over-threshold pins the inequality from the other side.
+    expect(
+      shouldWarnLargeFontScan({
+        fontFiles: LARGE_FONT_SCAN_FILE_WARNING_THRESHOLD + 1,
+        totalBytes: 1,
+      })
+    ).toBe(true);
+    expect(
+      shouldWarnLargeFontScan({
+        fontFiles: 1,
+        totalBytes: LARGE_FONT_SCAN_BYTES_WARNING_THRESHOLD + 1,
+      })
+    ).toBe(true);
   });
 
   it("formats byte counts with binary units for the confirmation dialog", () => {
