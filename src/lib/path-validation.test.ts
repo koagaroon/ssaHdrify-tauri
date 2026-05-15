@@ -289,10 +289,53 @@ describe("assertSafeOutputPath", () => {
     expect(() => assertSafeOutputPath(long, inputBackslash)).toThrow(/too long/);
   });
 
+  // Round 11 W11.6 (N3-R11-07): at-limit / over-limit pair for the
+  // 259 cap. The pre-R11 test above only had over-limit coverage; a
+  // regression that hard-coded 258 (or any lower value) wouldn't trip
+  // the >300 test. Pair both sides to pin the boundary.
+  it("accepts a path exactly at the 259-char practical MAX_PATH limit", () => {
+    // `C:/subs/` is 8 chars, ".ass" is 4 → fill the middle to total 259.
+    const stem = "a".repeat(259 - "C:/subs/".length - ".ass".length);
+    const atLimit = `C:/subs/${stem}.ass`;
+    expect(atLimit.length).toBe(259);
+    expect(() => assertSafeOutputPath(atLimit, inputBackslash)).not.toThrow();
+  });
+
+  it("rejects a path exactly one char over the 259 cap", () => {
+    const stem = "a".repeat(260 - "C:/subs/".length - ".ass".length);
+    const oneOver = `C:/subs/${stem}.ass`;
+    expect(oneOver.length).toBe(260);
+    expect(() => assertSafeOutputPath(oneOver, inputBackslash)).toThrow(/too long/);
+  });
+
   it("relaxes the cap to 32766 for `\\\\?\\` long-local paths", () => {
     const longInput = "\\\\?\\C:\\subs\\episode01.ass";
     const longButOk = "//?/C:/subs/" + "a".repeat(500) + ".ass";
     expect(() => assertSafeOutputPath(longButOk, longInput)).not.toThrow();
+  });
+
+  // Round 11 W11.6 (N3-R11-07): at-limit / over-limit pair for the
+  // long-local 32766 cap. Pre-R11 only the 500-char under-limit form
+  // was exercised; a regression that dropped the cap to e.g. 1024
+  // would have left both green.
+  it("accepts a long-local path exactly at the 32766-char limit", () => {
+    const longInput = "\\\\?\\C:\\subs\\episode01.ass";
+    const prefix = "//?/C:/subs/";
+    const ext = ".ass";
+    const stem = "a".repeat(32766 - prefix.length - ext.length);
+    const atLimit = `${prefix}${stem}${ext}`;
+    expect(atLimit.length).toBe(32766);
+    expect(() => assertSafeOutputPath(atLimit, longInput)).not.toThrow();
+  });
+
+  it("rejects a long-local path one char over the 32766 cap", () => {
+    const longInput = "\\\\?\\C:\\subs\\episode01.ass";
+    const prefix = "//?/C:/subs/";
+    const ext = ".ass";
+    const stem = "a".repeat(32767 - prefix.length - ext.length);
+    const oneOver = `${prefix}${stem}${ext}`;
+    expect(oneOver.length).toBe(32767);
+    expect(() => assertSafeOutputPath(oneOver, longInput)).toThrow(/too long/);
   });
 
   it("keeps the 259 cap for UNC long paths (server may not support long paths)", () => {

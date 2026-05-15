@@ -95,7 +95,16 @@ describe("FontSubsetPayload wire-format round-trip (Round 3 N-R3-13)", () => {
     expect(typeof b64).toBe("string");
     expect(b64).toMatch(/^[A-Za-z0-9+/]*={0,2}$/);
 
-    expect(typeof arr).not.toBe(typeof b64);
+    // Round 11 W11.6 (N1-R11-09): explicit positive typeof on each
+    // side. Pre-R11 this site asserted `typeof arr !== typeof b64`
+    // which passes for many trivial differences (`"object"` vs
+    // `"string"` here, but `"function"` vs `"string"` or even
+    // `"undefined"` vs `"string"` would also pass) — a refactor that
+    // accidentally returned a string array `"[1,2,3]"` instead of an
+    // actual array would slip past. Pin the concrete types so any
+    // shape change surfaces.
+    expect(typeof arr).toBe("object");
+    expect(typeof b64).toBe("string");
     // Verify the expansion ratios match the documented "why" — chain
     // form must be meaningfully smaller for the larger-payload case
     // (the entire reason base64 exists in this codebase).

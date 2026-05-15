@@ -295,4 +295,99 @@ describe("parseSubtitle / shiftSubtitle — oversized-ASS-Dialogue placeholder a
     const result = parseSubtitle(content);
     expect(result.captions).toHaveLength(0);
   });
+
+  // Round 11 W11.6 (N3-R11-07): boundary-pair parity for SRT and ASS
+  // hour fields. VTT already had at-limit + over-limit pairs; SRT and
+  // ASS share the same `\d{1,12}` bound but only had "smoke test"
+  // coverage. Code-review discipline requires both sides of a named
+  // boundary be pinned so a refactor that loosens the cap (`\d{1,13}`)
+  // or tightens it (`\d{1,11}`) trips a test.
+
+  it("parses 12-digit-hour SRT timing (upper bound)", () => {
+    const longHour = "999999999999"; // 12 digits
+    const content = `1\n${longHour}:00:01,000 --> ${longHour}:00:02,000\nLine\n`;
+    const result = parseSubtitle(content);
+    expect(result.format).toBe("srt");
+    expect(result.captions).toHaveLength(1);
+  });
+
+  it("rejects 13-digit-hour SRT timing (upper bound enforced)", () => {
+    const tooLong = "9999999999999"; // 13 digits
+    // detectFormat's SRT_TIMING uses an unbounded `\d+` for hours so
+    // the file is still classified as SRT, but parseSrt's per-block
+    // timingRe rejects the 13-digit form — block skipped, zero captions.
+    const content = `1\n${tooLong}:00:01,000 --> ${tooLong}:00:02,000\nLine\n`;
+    const result = parseSubtitle(content);
+    expect(result.format).toBe("srt");
+    expect(result.captions).toHaveLength(0);
+  });
+
+  it("parses 12-digit-hour ASS Dialogue (upper bound)", () => {
+    const longHour = "999999999999"; // 12 digits
+    const ass =
+      "[Script Info]\n\n[V4+ Styles]\nFormat: Name\nStyle: Default\n\n" +
+      "[Events]\nFormat: Layer, Start, End, Style, Text\n" +
+      `Dialogue: 0,${longHour}:00:01.00,${longHour}:00:02.00,Default,Hello\n`;
+    const result = parseSubtitle(ass);
+    expect(result.format).toBe("ass");
+    expect(result.captions).toHaveLength(1);
+    expect(result.captions[0].text).toContain("Hello");
+  });
+
+  it("rejects 13-digit-hour ASS Dialogue (upper bound enforced)", () => {
+    const tooLong = "9999999999999"; // 13 digits
+    const ass =
+      "[Script Info]\n\n[V4+ Styles]\nFormat: Name\nStyle: Default\n\n" +
+      "[Events]\nFormat: Layer, Start, End, Style, Text\n" +
+      `Dialogue: 0,${tooLong}:00:01.00,${tooLong}:00:02.00,Default,Hello\n`;
+    const result = parseSubtitle(ass);
+    expect(result.format).toBe("ass");
+    // DIALOGUE_PATTERN requires {1,12} hour digits, so the 13-digit
+    // form fails to match — parseAss yields zero captions.
+    expect(result.captions).toHaveLength(0);
+  });
+
+  // Round 11 W11.6 (N3-R11-08): direct pins on R10 N-R10-006 (parseSub
+  // skipped-placeholder) + N-R10-007 / Round 11 W11.1 N1-R11-01
+  // (parseSrt/parseVtt skipped-placeholder). Pre-W11.6 these contracts
+  // were exercised only via integration paths.
+
+  it("parseSub emits a skipped placeholder for oversized text (R10 N-R10-006)", () => {
+    const big = "Z".repeat(65_000); // > MAX_CAPTION_TEXT_LEN (64 KB)
+    const sub = `{0}{24}${big}\n{48}{72}NORMAL\n`;
+    const result = parseSubtitle(sub);
+    expect(result.format).toBe("sub");
+    expect(result.captions).toHaveLength(2);
+    expect(result.captions[0].skipped).toBe(true);
+    expect(result.captions[0].text).toBe("");
+    expect(result.captions[1].skipped).toBeUndefined();
+    expect(result.captions[1].text).toContain("NORMAL");
+  });
+
+  it("parseSrt emits a skipped placeholder for oversized text (W11.1 N1-R11-01)", () => {
+    const big = "Z".repeat(65_000);
+    const srt =
+      "1\n00:00:01,000 --> 00:00:02,000\n" + big + "\n\n2\n00:00:03,000 --> 00:00:04,000\nNORMAL\n";
+    const result = parseSubtitle(srt);
+    expect(result.format).toBe("srt");
+    expect(result.captions).toHaveLength(2);
+    expect(result.captions[0].skipped).toBe(true);
+    expect(result.captions[0].text).toBe("");
+    expect(result.captions[1].text).toBe("NORMAL");
+  });
+
+  it("parseVtt emits a skipped placeholder for oversized text (W11.1 N1-R11-01)", () => {
+    const big = "Z".repeat(65_000);
+    const vtt =
+      "WEBVTT\n\n" +
+      "00:00:01.000 --> 00:00:02.000\n" +
+      big +
+      "\n\n00:00:03.000 --> 00:00:04.000\nNORMAL\n";
+    const result = parseSubtitle(vtt);
+    expect(result.format).toBe("vtt");
+    expect(result.captions).toHaveLength(2);
+    expect(result.captions[0].skipped).toBe(true);
+    expect(result.captions[0].text).toBe("");
+    expect(result.captions[1].text).toBe("NORMAL");
+  });
 });

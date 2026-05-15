@@ -180,8 +180,15 @@ describe("runChain — embed step", () => {
       ],
       outputTemplate: "{name}.embed.ass",
     };
+    // Round 11 W11.6 (N1-R11-08): pin the FULL actionable message,
+    // not just the "requires pre-resolved font subsets" prefix. The
+    // tail "(params.subsets is undefined — likely a CLI/runtime
+    // version mismatch…)" is the diagnostic half of the message;
+    // dropping it would leave debug-readers without the
+    // CLI/runtime-mismatch hint that says where to look. Same shape
+    // as the Round 9 N-R9-N1-2 pin on the hdr-step error.
     expect(() => runChain({ plan, inputPath: INPUT_PATH, content: ASS_FIXTURE })).toThrow(
-      /step 1 \(embed\) failed: embed step in chain requires pre-resolved font subsets/
+      /step 1 \(embed\) failed: embed step in chain requires pre-resolved font subsets[\s\S]*?CLI\/runtime version mismatch/
     );
   });
 

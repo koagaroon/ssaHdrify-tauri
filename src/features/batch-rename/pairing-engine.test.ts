@@ -68,6 +68,17 @@ describe("extractEpisode — documented fan-sub samples", () => {
     expect(ep?.episode).toBe(2);
   });
 
+  it("Pattern A — episode 00 (pilot / OVA zero) is preserved (Round 11 W11.6 N2-R11-03)", () => {
+    // Pre-W11.6 the Pattern A coverage skipped the `episode 0` edge —
+    // OVA pilots and " - 00 [" prologue numbering are real-world
+    // fan-sub conventions. A regex regression that excluded zero
+    // (`\d+` → `[1-9]\d*`) would have left every prior at-limit pin
+    // green; this test pins it directly.
+    const name = "[SubA] Show - 00 [WebRip 1080p].mkv";
+    const ep = extractEpisode(name, bracketCleanup(name));
+    expect(ep?.episode).toBe(0);
+  });
+
   it("Pattern A — SubC&SubA Sample Show - 03", () => {
     const name = "[SubC&SubA] Sample Show Title - 03 [WebRip 1080p HEVC-10bit AAC ASSx2].mkv";
     const ep = extractEpisode(name, bracketCleanup(name));
@@ -308,6 +319,14 @@ describe("buildPairings — common shapes", () => {
     expect(rows[1].source).toBe("warning");
     expect(rows[1].video?.path).toBe(v2.path);
     expect(rows[1].subtitle?.path).toBe(s2.path);
+    // Round 11 W11.6 (N2-R11-04): pin `selected` too. A warning row
+    // has a real (debatable) pairing, so it defaults to selected=true
+    // — buildPairings's `selected: sub !== null` line. Pre-W11.6 the
+    // test didn't pin this; a regression flipping warning rows to
+    // selected=false would have left ambiguous pairings unchecked by
+    // default, silently dropping them from a "run all" batch.
+    expect(rows[0].selected).toBe(true);
+    expect(rows[1].selected).toBe(true);
   });
 
   it("videos without paired subtitles all show as unmatched", () => {

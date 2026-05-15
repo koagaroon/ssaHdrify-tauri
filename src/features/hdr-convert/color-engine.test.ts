@@ -20,10 +20,33 @@ describe("sRgbToHdr — PQ mode", () => {
     }
   });
 
-  it("is deterministic — same input always produces same output", () => {
-    const a = sRgbToHdr(128, 64, 200, 100, "PQ");
-    const b = sRgbToHdr(128, 64, 200, 100, "PQ");
-    expect(a).toEqual(b);
+  it("is deterministic — same input maps to specific golden output (Round 11 W11.6 N1-R11-07)", () => {
+    // Pre-R11 this test compared two output triples from the SAME
+    // call inputs to each other — tautological for any pure function.
+    // Now we pin against a golden triple so a regression in the
+    // underlying Color.js math (or its bundled coefficients) trips
+    // the test. The golden is captured from the current Color.js
+    // pipeline; intentional math changes regenerate via
+    // `npx vitest run -u src/features/hdr-convert/color-engine.test.ts`.
+    expect(sRgbToHdr(128, 64, 200, 100, "PQ")).toMatchInlineSnapshot(`
+      [
+        88,
+        69,
+        113,
+      ]
+    `);
+    expect(sRgbToHdr(200, 100, 50, 1000, "PQ")).toMatchInlineSnapshot(`
+      [
+        167,
+        141,
+        112,
+      ]
+    `);
+    // Determinism still pinned for the same call → byte-identical
+    // output on the second invocation.
+    const first = sRgbToHdr(50, 100, 200, 500, "PQ");
+    const second = sRgbToHdr(50, 100, 200, 500, "PQ");
+    expect(first).toEqual(second);
   });
 
   it("different brightness produces different output", () => {
