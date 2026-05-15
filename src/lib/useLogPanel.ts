@@ -17,7 +17,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 
-export type LogType = "info" | "error" | "success";
+export type LogType = "info" | "warn" | "error" | "success";
 
 export interface LogEntry {
   id: number;

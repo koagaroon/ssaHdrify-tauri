@@ -25,6 +25,7 @@ interface LogPanelProps {
 
 const LOG_COLOR: Record<LogEntry["type"], string> = {
   error: "var(--error)",
+  warn: "var(--warning)",
   success: "var(--success)",
   info: "var(--text-muted)",
 };
