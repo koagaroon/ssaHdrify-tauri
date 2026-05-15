@@ -629,11 +629,35 @@ pub fn clear_font_cache() -> Result<(), String> {
     // Drop handle first so SQLite releases the file lock before we
     // try to delete. Holding the slot lock through the close is fine —
     // it's the SQLite-level file handle drop we care about.
+    //
+    // Round 11 W11.4 (A4-R11-02): also clear provenance HERE, inside
+    // the same lock scope that sets slot=None. Pre-R11 the
+    // `clear_cache_provenance()` call sat at the END of this function
+    // — after the fresh empty cache had already been published to
+    // the slot. Between `*slot = Some(fresh)` and the trailing
+    // `clear_cache_provenance()`, subset_font on another thread (which
+    // locks ALLOWED_CACHE_FONT_PATHS only, NOT the slot) could pass
+    // its provenance check against a stale (path, face_index) entry
+    // registered by an earlier `lookup_family` hit — even though the
+    // newly-published cache no longer referenced that path. Hoisting
+    // the clear into the shutdown scope means the moment the old slot
+    // dies, the old trust set dies with it: any subset_font call
+    // arriving after this point either sees `slot = None` (cache
+    // unavailable, no work) or, once `*slot = Some(fresh)` lands
+    // below, the fresh empty cache + already-cleared trust set.
+    // Lock order slot → provenance matches the existing GUI
+    // lookup_font_family path (slot → register_cache_provenance).
+    //
+    // Round 10 N-R10-002: symmetric with `clear_font_sources` — the
+    // user's "fresh slate" signal must drop in-process provenance rows
+    // alongside the SQLite rebuild. ALLOWED_FONT_PATHS (system fonts)
+    // stays — system discovery is cache-independent.
     {
         let mut slot = GUI_FONT_CACHE
             .lock()
             .map_err(|_| "GUI cache mutex poisoned".to_string())?;
         *slot = None;
+        crate::fonts::clear_cache_provenance();
     }
 
     // Best-effort cleanup of main file + journal sidecars. Same suffix
@@ -656,14 +680,6 @@ pub fn clear_font_cache() -> Result<(), String> {
         .lock()
         .map_err(|_| "GUI cache mutex poisoned".to_string())?;
     *slot = Some(fresh);
-    // Round 10 N-R10-002: symmetric with `clear_font_sources` —
-    // a cache rebuild must drop in-process provenance rows registered
-    // via earlier `lookup_family` hits, otherwise stale (path,
-    // face_index) tuples linger past the user's "fresh slate" signal
-    // and subset_font would accept paths the rebuilt cache no longer
-    // references. ALLOWED_FONT_PATHS (system fonts) stays — system
-    // discovery is cache-independent.
-    crate::fonts::clear_cache_provenance();
     Ok(())
 }
 
