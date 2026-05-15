@@ -9,8 +9,9 @@
  * (recipe YAML, future). Both UIs produce a `ChainPlan`; the
  * runtime doesn't know which produced it.
  *
- * See `docs/architecture/ssahdrify_cli_design.md` § "v1.4.1 stable
- * 后续用户反馈" feature #4 for the locked architectural decisions.
+ * See `docs/architecture/ssahdrify_cli_design.md` § "Project design
+ * locks → chain feature" for the locked architectural decisions
+ * (Shape A / Shape C separation, embed-cap, step-order check, etc.).
  */
 
 import { Base64 } from "js-base64";

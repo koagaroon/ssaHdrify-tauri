@@ -4,8 +4,10 @@
  *
  * Mocks @tauri-apps/plugin-fs so the suite runs in pure Node. The behaviors
  * pinned here are the ones the consumer tabs depend on: empty input is 0,
- * mixed inputs return the correct count, and a stat error counts as
- * non-existent (we never want a transient stat failure to block a save).
+ * mixed inputs return the correct count, and (post-Round-10 A-R10-013)
+ * a stat error counts as EXISTING — fail-safe bias that errs toward
+ * surfacing the overwrite-confirm dialog rather than silently
+ * overwriting on a transient stat failure.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 

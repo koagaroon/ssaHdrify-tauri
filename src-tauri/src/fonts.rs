@@ -27,13 +27,15 @@ pub const ALLOWED_FONT_EXTENSIONS: &[&str] = &["ttf", "otf", "ttc", "otc"];
 ///
 /// Off-by-one note: the check `if total > MAX_FONTS_PER_SCAN` runs INSIDE
 /// the per-face inner loop, AFTER the entry was pushed and `total`
-/// incremented. A TTC iteration that begins right at `total ==
-/// MAX_FONTS_PER_SCAN` may emit up to `MAX_TTC_FACES - 1` more faces
-/// before the next post-push check fires, so the actual buffer ceiling
-/// is `MAX_FONTS_PER_SCAN + MAX_TTC_FACES - 1`. Kept this way
-/// deliberately so the final flush emits everything that was already
-/// parseable; the soft excess is bounded by `MAX_TTC_FACES = 16`, well
-/// inside the IPC/SQLite envelopes.
+/// incremented. The check fires on the very next iteration once `total`
+/// crosses the threshold, so the actual buffer ceiling is
+/// `MAX_FONTS_PER_SCAN + 1` — one over the cap by the per-push check.
+/// Kept this way deliberately so the final emit carries the entry that
+/// tripped the gate (rather than discarding it post-push). Round 11
+/// W11.5 (N4-R11-01): pre-R11 this paragraph claimed
+/// `MAX_FONTS_PER_SCAN + MAX_TTC_FACES - 1`, which would have been true
+/// if the check ran once per FILE; it runs once per FACE, so the
+/// `MAX_TTC_FACES` term doesn't apply.
 const MAX_FONTS_PER_SCAN: usize = 100_000;
 
 // MAX_INPUT_PATHS lives in `util` so dropzone and fonts share a single

@@ -20,15 +20,31 @@ describe("sanitizeForDialog", () => {
     expect(sanitizeForDialog("a\u{FEFF}b")).toBe("ab");
   });
 
-  it("strips ASCII line breaks \\n / \\r (Round 8 A-R8-A4-24)", () => {
-    // A fan-sub filename with an embedded newline could fake additional
-    // confirm lines in the OS-native dialog body. U+2028 / U+2029 are
-    // already covered by the BiDi set; this closes the ASCII gap.
+  it("strips C0 + DEL + C1 control range (Round 10 N-R10-026 widening, was Round 8 A-R8-A4-24 \\r\\n-only)", () => {
+    // Round 8 A-R8-A4-24 scrubbed only \n / \r; Round 10 N-R10-026
+    // widened the contract to the full C0 (\x00-\x1f) + DEL (\x7f) +
+    // C1 (\x80-\x9f) range so the test must exercise the wider span,
+    // not just the original \r\n smuggle.
+    //
+    // A fan-sub filename with an embedded newline can fake additional
+    // confirm lines in the OS-native dialog body (\r\n smuggle, the
+    // classic case). \t produces uneven indentation; \0 can truncate
+    // Win32 TaskDialog text at the NUL byte; ESC (\x1b) can drive
+    // terminal cursor manipulation on stderr surfaces; \x7f (DEL) and
+    // C1 codepoints round out the parity with the path-validation
+    // regex.
     expect(sanitizeForDialog("episode\n.ass")).toBe("episode.ass");
     expect(sanitizeForDialog("episode\r.ass")).toBe("episode.ass");
     expect(sanitizeForDialog("a\r\nb")).toBe("ab");
-    // The smuggling payload an attacker would actually craft.
     expect(sanitizeForDialog("safe.ass\nDelete C:\\* ?")).toBe("safe.assDelete C:\\* ?");
+    // Widened-range pins. Use escape forms to keep the test source
+    // readable against ESLint's no-irregular-whitespace rule.
+    expect(sanitizeForDialog("a\x00b")).toBe("ab");
+    expect(sanitizeForDialog("a\tb")).toBe("ab");
+    expect(sanitizeForDialog("a\x1bb")).toBe("ab");
+    expect(sanitizeForDialog("a\x7fb")).toBe("ab");
+    expect(sanitizeForDialog("a\x85b")).toBe("ab"); // NEL (C1)
+    expect(sanitizeForDialog("a\x9fb")).toBe("ab"); // C1 upper bound
   });
 
   it("preserves ordinary CJK and Latin text", () => {

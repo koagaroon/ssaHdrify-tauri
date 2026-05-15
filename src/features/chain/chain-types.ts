@@ -7,8 +7,8 @@
  * Future complexity (conditionals, sub-pipelines) can extend this
  * schema without breaking the v1 shape.
  *
- * See `docs/architecture/ssahdrify_cli_design.md` § "v1.4.1 stable
- * 后续用户反馈" feature #4 for the locked design decisions.
+ * See `docs/architecture/ssahdrify_cli_design.md` § "Project design
+ * locks → chain feature" for the locked design decisions.
  */
 
 import type { Eotf } from "../hdr-convert/color-engine";
