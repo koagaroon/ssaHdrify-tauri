@@ -31,11 +31,30 @@ pub const MAX_RESULT_FILES: usize = 5000;
 /// N-R3-19 — was a bare `Vec<String>` return with a `log::warn` the
 /// frontend couldn't see, in violation of `~/.claude/rules/vibe-coding.md`
 /// "no silent action").
-#[derive(Debug, Clone, Default, Serialize)]
+///
+/// `max_files` carries `MAX_RESULT_FILES` to the frontend so the
+/// truncation banner shows the correct number without a TS-side
+/// mirrored constant (Round 11 W11.4b / R10 N-R10-028). Pre-R11 the
+/// frontend hardcoded 5000 with a WHY comment pointing at this Rust
+/// const; a bump on this side would have silently drifted the user-
+/// facing wording. Threading the value matches workflow-design.md
+/// "automation over checklist items".
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExpandedPaths {
     pub files: Vec<String>,
     pub truncated: bool,
+    pub max_files: usize,
+}
+
+impl Default for ExpandedPaths {
+    fn default() -> Self {
+        Self {
+            files: Vec::new(),
+            truncated: false,
+            max_files: MAX_RESULT_FILES,
+        }
+    }
 }
 
 /// Expand dropped paths into a flat list of file paths.
@@ -121,6 +140,7 @@ pub fn expand_dropped_paths(paths: Vec<String>) -> Result<ExpandedPaths, String>
     Ok(ExpandedPaths {
         files: result,
         truncated,
+        max_files: MAX_RESULT_FILES,
     })
 }
 
@@ -248,6 +268,11 @@ mod tests {
         let result = expand_dropped_paths(vec![p.to_str().unwrap().to_string()]).unwrap();
         assert_eq!(result.files.len(), 1);
         assert!(!result.truncated);
+        // Round 11 W11.4c (R10 N-R10-028): the response carries the
+        // cap so the frontend banner doesn't mirror it as a TS const.
+        // Pin both the channel (field present) and the value
+        // (sourced from MAX_RESULT_FILES, not a literal).
+        assert_eq!(result.max_files, MAX_RESULT_FILES);
         let _ = fs::remove_dir_all(&dir);
     }
 

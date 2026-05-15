@@ -20,23 +20,6 @@ import type { RefObject } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { expandDroppedPaths } from "./tauri-api";
 
-/**
- * Display-only mirror of Rust-side `dropzone::MAX_RESULT_FILES`. Used
- * by the `msg_drop_truncated` i18n placeholder and the English-
- * fallback wording when `t` is unavailable.
- *
- * Round 10 N-R10-028 — mirrored constant rather than build-time
- * injection because the truncation event payload doesn't currently
- * carry the cap, and threading it through both the Rust → TS event
- * shape and the i18n string formatter for one display number is
- * disproportionate. A bump on the Rust side requires a sync edit
- * here; the constant's WHY comment makes the dependency visible
- * (workflow-design.md "prefer automation over checklist items"
- * applies in spirit — when the Rust event one day carries the cap,
- * thread it through here and drop this constant).
- */
-const MAX_RESULT_FILES_DISPLAY = 5000;
-
 export interface UseFolderDropOptions {
   /** Drop zone element. Drops outside this element's bounding rect are ignored. */
   ref: RefObject<HTMLElement | null>;
@@ -173,23 +156,19 @@ export function useFolderDrop({
                     if (expanded.truncated) {
                       // Round 8 Wave 8.6 — closes N-R5-FELIB-11 by
                       // threading the optional `t` translator through
-                      // the options surface. Falls back to English
-                      // Round 10 N-R10-028: `MAX_RESULT_FILES_DISPLAY`
-                      // mirrors Rust-side `dropzone::MAX_RESULT_FILES`
-                      // via the project's shared TS constant. Pre-R10
-                      // this site hardcoded `5000` in two places (call
-                      // site + English fallback string), violating
-                      // workflow-design.md's "automation over checklist
-                      // items" guidance — a future cap bump on the
-                      // Rust side would silently drift the user-facing
-                      // wording. The display constant lives next to a
-                      // WHY comment pointing back to the Rust source
-                      // of truth so a synchronized bump remains
-                      // necessary but documented at the call site.
+                      // the options surface. Falls back to English.
+                      //
+                      // Round 11 W11.4c (R10 N-R10-028): read the cap
+                      // from `expanded.maxFiles` (carried in the IPC
+                      // response) instead of a TS-side mirror of the
+                      // Rust constant. The cap is now structurally
+                      // sourced from `dropzone::MAX_RESULT_FILES`, so
+                      // a bump on the Rust side flows through to the
+                      // user-visible wording automatically.
                       const tr = tRef.current;
                       const msg = tr
-                        ? tr("msg_drop_truncated", MAX_RESULT_FILES_DISPLAY)
-                        : `Drop too large — first ${MAX_RESULT_FILES_DISPLAY} files accepted, the rest were ignored. Retry with a smaller batch.`;
+                        ? tr("msg_drop_truncated", expanded.maxFiles)
+                        : `Drop too large — first ${expanded.maxFiles} files accepted, the rest were ignored. Retry with a smaller batch.`;
                       onErrorRef.current?.(new Error(msg));
                     }
                   } else if (event.payload.paths.length > 0) {

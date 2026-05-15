@@ -688,12 +688,16 @@ async function runStreamingScan(
 }
 
 /** Result of `expand_dropped_paths`. `truncated` surfaces when the
- *  expansion stopped at MAX_RESULT_FILES (=5000) so the consumer can
- *  render a banner instead of silently presenting an incomplete list
- *  (Round 3 N-R3-19). */
+ *  expansion stopped at the Rust-side `MAX_RESULT_FILES` cap (5000
+ *  today) so the consumer can render a banner instead of silently
+ *  presenting an incomplete list (Round 3 N-R3-19). `maxFiles` carries
+ *  the cap value alongside so the consumer's truncation message stays
+ *  in sync with the Rust source of truth without a TS-side mirrored
+ *  constant (Round 11 W11.4c / R10 N-R10-028). */
 export interface ExpandedPaths {
   files: string[];
   truncated: boolean;
+  maxFiles: number;
 }
 
 /**
