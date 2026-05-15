@@ -37,6 +37,17 @@ export interface UseLogPanelResult {
 /** Maximum entries kept in the log buffer. Older entries are trimmed
  *  off the head so the array stays bounded during long batch runs. */
 const MAX_LOG_ENTRIES = 200;
+/**
+ * Per-entry text length cap. Round 11 W11.3 (A3-R11-01): pairs with
+ * MAX_LOG_ENTRIES. Without this, attacker-influenced inputs (P1b font /
+ * filename / error-message content) could push individual entries to
+ * arbitrary length — a 32 KB filename per row × 200 rows ≈ 6 MB
+ * retained in React state with the log panel rendering each row's
+ * full text. 4 KB / entry is generous (typical messages are 30-200
+ * chars; even a verbose multi-path stderr is well under 1 KB).
+ * Truncated entries get an ellipsis so the truncation is visible.
+ */
+const MAX_LOG_ENTRY_TEXT_LEN = 4_096;
 const TAIL_THRESHOLD_PX = 16;
 const SCROLL_DELAY_MS = 50;
 
@@ -78,8 +89,15 @@ export function useLogPanel(): UseLogPanelResult {
     (text: string, type: LogType = "info") => {
       const id = logIdRef.current++;
       const shouldFollowTail = isNearTail();
+      // Round 11 W11.3 (A3-R11-01): truncate over-long entries with an
+      // ellipsis so MAX_LOG_ENTRIES × per-entry length stays bounded.
+      // See MAX_LOG_ENTRY_TEXT_LEN docblock.
+      const safeText =
+        text.length > MAX_LOG_ENTRY_TEXT_LEN
+          ? text.slice(0, MAX_LOG_ENTRY_TEXT_LEN - 1) + "…"
+          : text;
       setLogs((prev) => {
-        const next = [...prev, { id, text, type }];
+        const next = [...prev, { id, text: safeText, type }];
         return next.length > MAX_LOG_ENTRIES ? next.slice(-MAX_LOG_ENTRIES) : next;
       });
       // Defer the scroll past the React commit so the new row is in the DOM

@@ -23,6 +23,23 @@ import { MAX_PARSED_ENTRIES } from "../../lib/subtitle-parser";
 const ASS_HEADER_LINE_BUDGET = 1024;
 const LINE_CAP = MAX_PARSED_ENTRIES + ASS_HEADER_LINE_BUDGET;
 
+// Round 11 W11.3 (A1-R11-02): per-line byte cap. File-level guards
+// (100 MB total, LINE_CAP entries) bound the aggregate but not a
+// single line's length. A crafted ASS with one 99 MB Dialogue line
+// (rest of file tiny) passes both guards yet saturates the UI thread
+// during regex matching + detectSection's trim/lowercase pass. 1 MB
+// per line mirrors font-collector's MAX_DIALOGUE_TEXT_LEN and is
+// generously above legit content (typical Dialogue: 50-2000 chars,
+// complex karaoke ~10 KB, UUEncode rows ~60 chars).
+const MAX_LINE_BYTES = 1_000_000;
+
+// Round 11 W11.3 (A1-R11-03): cap on field count in a Style line's
+// comma-split. ASS Style format defines ~24 fields; a hostile line
+// with millions of commas would otherwise allocate a multi-MB array
+// in transformStyleLine before any color-field index lookup runs.
+// 1024 is far above any plausible authoring tool's output.
+const MAX_STYLE_FIELDS = 1024;
+
 // ── Style color fields in ASS [V4+ Styles] section ────────
 // Format line: "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, ..."
 // Style line: "Style: Default,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,..."
@@ -155,6 +172,15 @@ function transformStyleLine(
   const prefix = line.slice(0, colonIdx + 1);
   const afterColon = line.slice(colonIdx + 1);
   const fields = afterColon.split(",");
+  // Round 11 W11.3 (A1-R11-03): bound the field-array size. See
+  // MAX_STYLE_FIELDS docblock for the threat shape. Per-line byte cap
+  // (MAX_LINE_BYTES) already bounds the comma count indirectly via
+  // line length; this check is the explicit pair so a future loosening
+  // of the per-line cap doesn't silently re-open the array-allocation
+  // attack surface.
+  if (fields.length > MAX_STYLE_FIELDS) {
+    throw new Error(`Style line has too many fields: ${fields.length} (max ${MAX_STYLE_FIELDS})`);
+  }
 
   // Only transform fields that actually look like ASS colors. A
   // crafted Format line with empty middle fields would shift the index
@@ -296,6 +322,14 @@ export function processAssContent(
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+
+    // Round 11 W11.3 (A1-R11-02): per-line byte cap fires BEFORE
+    // detectSection / transformStyleLine / transformEventText so a
+    // single pathological line can't burn 99 MB of trim/lowercase +
+    // regex work on the UI thread. See MAX_LINE_BYTES docblock.
+    if (line.length > MAX_LINE_BYTES) {
+      throw new Error(`Line ${i + 1} too long: ${line.length} chars (max ${MAX_LINE_BYTES})`);
+    }
 
     const newSection = detectSection(line);
     if (newSection !== null) {

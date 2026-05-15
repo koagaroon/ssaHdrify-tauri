@@ -512,12 +512,29 @@ function buildAss(content: string, captions: Caption[]): string {
 
 const DEFAULT_FPS = 23.976;
 
+/**
+ * Clamp MicroDVD fps to a real-world range.
+ *
+ * Real-world fps is 23.976 / 24 / 25 / 29.97 / 30 / 50 / 60, occasionally
+ * up to 120 for variable-frame content. Anything outside [1, 1000] is
+ * either parser noise (a crafted MicroDVD `{1}{1}<fps>` line) or
+ * hostile input — fall back to DEFAULT_FPS.
+ *
+ * Round 11 W11.3 (M4 / N3-R11-04): shared helper consumed by both
+ * parseSub and buildSub. Pre-R11 parseSub clamped to [1, 1000] while
+ * buildSub only rejected `<= 0`; a round-trip with parser-supplied
+ * fps=50 + caller-passed fps=2000 to buildSub silently drifted
+ * timestamps. Single source of validation keeps both halves of the
+ * round-trip aligned.
+ */
+function clampFps(fps: number | undefined): number {
+  if (fps === undefined) return DEFAULT_FPS;
+  if (!Number.isFinite(fps) || fps < 1 || fps > 1000) return DEFAULT_FPS;
+  return fps;
+}
+
 function parseSub(content: string, fps: number = DEFAULT_FPS): Caption[] {
-  // Reject pathological fps values from MicroDVD `{1}{1}<fps>` lines.
-  // Real-world fps is 23.976 / 24 / 25 / 29.97 / 30 / 50 / 60, occasionally
-  // up to 120 for variable-frame content. Anything outside [1, 1000] is
-  // either parser noise or hostile input — fall back to the default.
-  if (!Number.isFinite(fps) || fps < 1 || fps > 1000) fps = DEFAULT_FPS;
+  fps = clampFps(fps);
   const captions: Caption[] = [];
   // Frame numbers are bounded to 12 digits — 12 ASCII chars fits ~31000
   // years of milliseconds at 60 fps, far past anything legitimate, and
@@ -571,7 +588,9 @@ function parseSub(content: string, fps: number = DEFAULT_FPS): Caption[] {
 }
 
 function buildSub(captions: Caption[], fps: number = DEFAULT_FPS): string {
-  if (!Number.isFinite(fps) || fps <= 0) fps = DEFAULT_FPS;
+  // Round 11 W11.3 (M4 / N3-R11-04): shared clampFps — see helper
+  // docblock for the parse/build round-trip asymmetry rationale.
+  fps = clampFps(fps);
   return (
     captions
       // Round 10 N-R10-006: parseSub pushes a skipped placeholder for

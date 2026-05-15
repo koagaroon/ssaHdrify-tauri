@@ -222,6 +222,26 @@ export function runChain(request: ChainRunRequest): ChainResult {
   const notes: string[] = [];
   let current = content;
 
+  // Round 11 W11.3 (N1-R11-04): chain-level preflight for the strictest
+  // step's input requirement. hdrTransform accepts content with either
+  // [Script Info] OR [V4+ Styles] as the ASS-shape probe, but
+  // insertFontsSection (the embed step's terminal call) requires
+  // [Script Info] specifically. Without this preflight, a chain like
+  // `hdr + embed` on a [V4+ Styles]-only input runs hdrTransform's
+  // color transform first, only for embed to throw afterwards — wasted
+  // work and the error attribution names step 2 (embed) instead of
+  // surfacing "chain shape needs Script Info" upfront. Probe regex is
+  // identical to insertFontsSection's gate; keeping the two consistent
+  // means a future loosening must touch both sites.
+  if (plan.steps.some((s) => s.kind === "embed")) {
+    if (!/^\[Script Info\][ \t]*$/im.test(content)) {
+      throw new Error(
+        "Chain includes an embed step but input ASS has no [Script Info] " +
+          "section header. Re-parse / rebuild the file before chaining."
+      );
+    }
+  }
+
   for (let i = 0; i < plan.steps.length; i++) {
     const step = plan.steps[i];
     const transform = TRANSFORMS[step.kind];
