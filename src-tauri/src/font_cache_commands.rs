@@ -85,6 +85,94 @@ static GUI_FONT_CACHE: Lazy<Mutex<Option<FontCache>>> = Lazy::new(|| Mutex::new(
 /// when `GUI_FONT_CACHE` is `None` (schema-mismatch recovery path).
 static GUI_FONT_CACHE_PATH: Lazy<Mutex<Option<PathBuf>>> = Lazy::new(|| Mutex::new(None));
 
+/// One-shot migration of the legacy GUI font cache file from a prior
+/// Tauri-managed `app_data_dir` (typically the bundle-identifier path
+/// `%APPDATA%/com.koagaroon.ssahdrify/`) to the unified `ssahdrify/`
+/// data dir introduced in Round 11 W11.4b. Best-effort: every failure
+/// is logged at WARN and the function returns — the worst case is a
+/// stale ~4 KB orphan at the legacy location, and the GUI continues
+/// with a fresh empty cache (no different from a first-run user).
+///
+/// Migrates the main `gui_font_cache.sqlite3` file plus any SQLite
+/// sidecars (`-journal` / `-wal` / `-shm`) so a dirty-close state from
+/// a previous v1.4.x run carries over intact. Skips silently when:
+///   - legacy_dir == new_dir (already on unified path)
+///   - legacy main file is missing (nothing to migrate)
+///   - new main file already exists (user already on new path —
+///     overwriting would clobber their current state)
+///
+/// `fs::rename` is atomic on same-filesystem moves (both paths live
+/// under the same per-user data root, so this holds in practice).
+pub fn migrate_legacy_gui_cache(legacy_dir: &Path, new_dir: &Path) {
+    if legacy_dir == new_dir {
+        return;
+    }
+    let legacy_main = legacy_dir.join(GUI_CACHE_FILE_NAME);
+    let new_main = new_dir.join(GUI_CACHE_FILE_NAME);
+    if !legacy_main.exists() {
+        return;
+    }
+    if new_main.exists() {
+        log::debug!(
+            "Legacy GUI cache exists at {} but new location {} already has one; \
+             leaving legacy in place as orphan.",
+            legacy_main.display(),
+            new_main.display()
+        );
+        return;
+    }
+    if let Err(e) = std::fs::create_dir_all(new_dir) {
+        log::warn!(
+            "GUI cache migration: cannot create new dir {}: {e}. \
+             Skipping migration; cache will start fresh at new location.",
+            new_dir.display()
+        );
+        return;
+    }
+    // Migrate main file first; sidecars follow only if main rename
+    // succeeded. If sidecar rename fails after main succeeded, the
+    // sidecar is left at the legacy location — SQLite at the new
+    // location will treat the missing sidecar as a clean state, which
+    // is the right fallback (dirty-state recovery is best-effort).
+    match std::fs::rename(&legacy_main, &new_main) {
+        Ok(()) => {
+            log::info!(
+                "GUI font cache migrated: {} → {}",
+                legacy_main.display(),
+                new_main.display()
+            );
+        }
+        Err(e) => {
+            log::warn!(
+                "GUI cache migration: rename {} → {} failed: {e}. \
+                 Leaving legacy file in place; new location starts fresh.",
+                legacy_main.display(),
+                new_main.display()
+            );
+            return;
+        }
+    }
+    for suffix in ["-journal", "-wal", "-shm"] {
+        let mut legacy_side = legacy_main.clone().into_os_string();
+        legacy_side.push(suffix);
+        let legacy_side = PathBuf::from(legacy_side);
+        if !legacy_side.exists() {
+            continue;
+        }
+        let mut new_side = new_main.clone().into_os_string();
+        new_side.push(suffix);
+        let new_side = PathBuf::from(new_side);
+        if let Err(e) = std::fs::rename(&legacy_side, &new_side) {
+            log::warn!(
+                "GUI cache migration: sidecar rename {} → {} failed: {e}. \
+                 SQLite will treat the new location as a clean-close state.",
+                legacy_side.display(),
+                new_side.display()
+            );
+        }
+    }
+}
+
 /// Initialize the GUI font cache. Called once from Tauri's `setup`
 /// closure with the same `app_data_dir` used by `init_user_font_db`.
 ///
@@ -1160,5 +1248,84 @@ mod tests {
                 .any(|s| s.folder == "/already/failed" && s.kind == SkipKind::ApplyFailed),
             "pre-existing ApplyFailed entry preserved"
         );
+    }
+
+    // ── Round 11 W11.4b (R10 N-R10-036): migrate_legacy_gui_cache ──
+
+    fn make_legacy_pair(name: &str) -> (TempCacheDir, TempCacheDir) {
+        // Two disjoint tempdirs simulate the legacy (Tauri-given) and
+        // new (unified) data dirs. Each has its own cleanup guard so
+        // a panic mid-test still removes both.
+        (
+            TempCacheDir::new(&format!("{name}_legacy")),
+            TempCacheDir::new(&format!("{name}_new")),
+        )
+    }
+
+    #[test]
+    fn migrate_legacy_gui_cache_moves_main_file_and_sidecars() {
+        let (legacy, new) = make_legacy_pair("happy");
+        let legacy_main = legacy.0.join(GUI_CACHE_FILE_NAME);
+        fs::write(&legacy_main, b"sqlite-bytes").unwrap();
+        let legacy_wal = {
+            let mut p = legacy_main.clone().into_os_string();
+            p.push("-wal");
+            PathBuf::from(p)
+        };
+        fs::write(&legacy_wal, b"wal-bytes").unwrap();
+
+        migrate_legacy_gui_cache(&legacy.0, &new.0);
+
+        let new_main = new.0.join(GUI_CACHE_FILE_NAME);
+        let new_wal = {
+            let mut p = new_main.clone().into_os_string();
+            p.push("-wal");
+            PathBuf::from(p)
+        };
+        assert!(new_main.exists(), "main file should move to new location");
+        assert!(new_wal.exists(), "sidecar should follow main");
+        assert!(!legacy_main.exists(), "main file should leave legacy");
+        assert!(!legacy_wal.exists(), "sidecar should leave legacy");
+        assert_eq!(fs::read(&new_main).unwrap(), b"sqlite-bytes");
+    }
+
+    #[test]
+    fn migrate_legacy_gui_cache_skips_when_new_already_exists() {
+        // Don't clobber: if the user already has data at the new path,
+        // leave it alone and let the legacy file stay as orphan.
+        let (legacy, new) = make_legacy_pair("no_clobber");
+        let legacy_main = legacy.0.join(GUI_CACHE_FILE_NAME);
+        let new_main = new.0.join(GUI_CACHE_FILE_NAME);
+        fs::write(&legacy_main, b"legacy-bytes").unwrap();
+        fs::write(&new_main, b"new-bytes").unwrap();
+
+        migrate_legacy_gui_cache(&legacy.0, &new.0);
+
+        assert!(legacy_main.exists(), "legacy left in place");
+        assert_eq!(
+            fs::read(&new_main).unwrap(),
+            b"new-bytes",
+            "new file must NOT be overwritten"
+        );
+    }
+
+    #[test]
+    fn migrate_legacy_gui_cache_skips_when_legacy_missing() {
+        // No-op when nothing to migrate (fresh-install user case).
+        let (legacy, new) = make_legacy_pair("nothing_to_do");
+        let new_main = new.0.join(GUI_CACHE_FILE_NAME);
+        migrate_legacy_gui_cache(&legacy.0, &new.0);
+        assert!(!new_main.exists(), "no new file synthesized");
+    }
+
+    #[test]
+    fn migrate_legacy_gui_cache_skips_when_paths_equal() {
+        // Safety: callers shouldn't pass the same path on both sides,
+        // but if they do, the helper must not attempt a self-rename.
+        let dir = TempCacheDir::new("same_path");
+        let main = dir.0.join(GUI_CACHE_FILE_NAME);
+        fs::write(&main, b"x").unwrap();
+        migrate_legacy_gui_cache(&dir.0, &dir.0);
+        assert!(main.exists(), "self-rename must not destroy the file");
     }
 }

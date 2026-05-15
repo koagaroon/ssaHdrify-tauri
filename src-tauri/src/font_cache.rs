@@ -59,25 +59,35 @@ pub fn try_modified_at(path: &Path) -> Option<i64> {
     Some(secs as i64)
 }
 
-/// Default cache file path for the CLI binary, OS-specific:
-/// - Windows: `%APPDATA%/ssahdrify/cli_font_cache.sqlite3`
-/// - macOS:   `$HOME/Library/Application Support/ssahdrify/cli_font_cache.sqlite3`
-/// - Linux:   `${XDG_DATA_HOME:-$HOME/.local/share}/ssahdrify/cli_font_cache.sqlite3`
+/// Unified per-user data directory shared by both binaries
+/// (`ssahdrify` GUI + `ssahdrify-cli`). OS-specific:
+/// - Windows: `%APPDATA%/ssahdrify`
+/// - macOS:   `$HOME/Library/Application Support/ssahdrify`
+/// - Linux:   `${XDG_DATA_HOME:-$HOME/.local/share}/ssahdrify`
+///
+/// Round 11 W11.4b (R10 N-R10-036): the GUI side used to use Tauri's
+/// `app.path().app_data_dir()` which on Windows resolves to the bundle
+/// identifier path `%APPDATA%/com.koagaroon.ssahdrify/` — a separate
+/// folder from the CLI's `%APPDATA%/ssahdrify/`. Unifying under the
+/// short `ssahdrify` name gives users a single app folder to find on
+/// disk and lets per-binary cache filenames (`gui_font_cache.sqlite3`
+/// vs `cli_font_cache.sqlite3`) coexist there. SQLite lock isolation
+/// is preserved by the per-binary filenames; Tauri-managed internal
+/// state (plugin storage etc.) keeps using Tauri's own directory and
+/// is unaffected.
 ///
 /// Returns an `Err` when the platform's environment for the canonical
-/// per-user data directory isn't set (broken environment). Caller can
-/// override via `--cache-file <PATH>`.
-///
-/// Lowercase `ssahdrify` matches the Cargo package name and the
-/// `com.koagaroon.ssahdrify` bundle identifier, and aligns with the
-/// lowercase no-space binary naming convention locked in v1.4.1
-/// (Round 2 N-R2-9). On Linux the mixed-case `ssaHdrify` would not
-/// collide with a sibling lowercase `ssahdrify/` directory created
-/// by some other build path; on Windows / macOS the FS is case-
-/// insensitive so the rename has no migration cost.
-pub fn default_cli_cache_path() -> Result<PathBuf, String> {
+/// per-user data directory isn't set (broken environment).
+pub fn unified_app_data_dir() -> Result<PathBuf, String> {
     let base = platform_data_dir()?;
-    Ok(base.join("ssahdrify").join("cli_font_cache.sqlite3"))
+    Ok(base.join("ssahdrify"))
+}
+
+/// Default cache file path for the CLI binary. Composes the unified
+/// data dir + the per-binary cache filename. Caller can override via
+/// `--cache-file <PATH>`.
+pub fn default_cli_cache_path() -> Result<PathBuf, String> {
+    Ok(unified_app_data_dir()?.join("cli_font_cache.sqlite3"))
 }
 
 /// Per-user data directory, resolved per-OS without pulling in the

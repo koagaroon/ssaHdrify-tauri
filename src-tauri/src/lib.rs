@@ -44,7 +44,24 @@ pub fn run() {
             // user action can run. Defense-in-depth against post-launch
             // env-var manipulation; see fonts::init_system_dirs.
             fonts::init_system_dirs();
-            let app_data_dir = app.path().app_data_dir()?;
+
+            // Round 11 W11.4b (R10 N-R10-036): unify the GUI's data
+            // directory with the CLI's so both binaries' state lives
+            // under a single `ssahdrify` parent dir on disk. Pre-R11
+            // the GUI used Tauri's `app_data_dir()` (bundle-identifier
+            // path) while the CLI used `platform_data_dir()/ssahdrify`,
+            // splitting one app's state across two folders on Windows.
+            // The legacy Tauri-given dir is computed alongside so the
+            // migration helper below can move any existing
+            // `gui_font_cache.sqlite3` over before init_gui_font_cache
+            // opens at the new location.
+            let app_data_dir = font_cache::unified_app_data_dir()
+                .map_err(|e| std::io::Error::other(format!("unified app data dir: {e}")))?;
+            let legacy_app_data_dir = app.path().app_data_dir().ok();
+            if let Some(legacy) = legacy_app_data_dir.as_deref() {
+                font_cache_commands::migrate_legacy_gui_cache(legacy, &app_data_dir);
+            }
+
             if let Err(e) = fonts::init_user_font_db(&app_data_dir) {
                 // Windows GUI subsystem has no visible stderr — without
                 // a native dialog the app would exit silently and the
