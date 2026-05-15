@@ -148,7 +148,14 @@ export default function TimingShift() {
 
   const effectiveOffsetMs = useMemo(() => {
     const base = unit === "s" ? offsetValue * 1000 : offsetValue;
-    const clamped = Math.max(-MAX_OFFSET_MS, Math.min(MAX_OFFSET_MS, base));
+    // Round 11 W11.1 (N1-R11-02): Math.round at the math boundary so
+    // fractional s-unit inputs (e.g. "2.5s" → 2500 ms) accepted by
+    // parseFloat below don't propagate sub-ms fractions into
+    // formatSrtTime, whose `ms % 1000` produces non-integer
+    // milliseconds that padStart can't format cleanly. Integer-ms is
+    // the downstream contract.
+    const rounded = Math.round(base);
+    const clamped = Math.max(-MAX_OFFSET_MS, Math.min(MAX_OFFSET_MS, rounded));
     return direction === "faster" ? -clamped : clamped;
   }, [unit, offsetValue, direction]);
 
@@ -159,7 +166,12 @@ export default function TimingShift() {
   const offsetMax = unit === "s" ? MAX_OFFSET_MS / 1000 : MAX_OFFSET_MS;
   const handleOffsetChange = (value: string) => {
     setOffsetText(value);
-    const n = parseInt(value, 10);
+    // Round 11 W11.1 (N1-R11-02): parseFloat accepts fractional s-unit
+    // inputs ("2.5s" → 2.5 seconds). Pre-R11 parseInt silently dropped
+    // the decimal portion ("2.5" → 2), violating no-silent-action.
+    // effectiveOffsetMs rounds at the math boundary to keep integer-ms
+    // downstream.
+    const n = parseFloat(value);
     if (!Number.isNaN(n) && Math.abs(n) <= offsetMax) {
       setOffsetValue(n);
     }
@@ -170,7 +182,7 @@ export default function TimingShift() {
   // same no-silent-action class HdrConvert's brightnessOutOfRange
   // addresses (N-R5-FEFEAT-25).
   const offsetOutOfRange = (() => {
-    const n = parseInt(offsetText, 10);
+    const n = parseFloat(offsetText);
     return !Number.isNaN(n) && Math.abs(n) > offsetMax;
   })();
 
@@ -478,6 +490,17 @@ export default function TimingShift() {
               offsetMs: effectiveOffsetMs,
               thresholdMs: thresholdMs ?? undefined,
             });
+
+            // Round 11 W11.1 (N1-R11-01): surface oversized-text drop
+            // count to close the no-silent-action gap (parity with
+            // HdrConvert's R10 N-R10-032 path). All four parsers push
+            // skipped placeholders for entries exceeding
+            // MAX_CAPTION_TEXT_LEN; builders filter them out so disk
+            // output stays clean, but without this log the user has no
+            // signal that input was partially dropped.
+            if (result.skippedCount > 0) {
+              addLog(t("msg_oversized_skipped", result.skippedCount, fileName), "warn");
+            }
 
             if (abortRef.current?.signal.aborted) break;
 

@@ -427,18 +427,18 @@ export default function HdrConvert() {
               // Parse with our browser-compatible parser
               const { captions } = parseSubtitle(preprocessed, style.fps);
 
-              // Round 10 N-R10-032: surface skipped-placeholder count.
-              // parseAss / parseSub push `skipped: true` Captions for
-              // entries whose text exceeded MAX_CAPTION_TEXT_LEN
-              // (64 KB). Those placeholders carry empty text — the
-              // entries.map below would silently emit Dialogue lines
-              // with empty bodies, dropping the original oversized
-              // text without user notification. Log the count via
-              // addLog so the user sees the data loss rather than
-              // discovering it after the fact.
+              // Round 10 N-R10-032 + Round 11 W11.1 (N1-R11-01): surface
+              // skipped-placeholder count. All four parsers push
+              // `skipped: true` Captions for entries whose text exceeded
+              // MAX_CAPTION_TEXT_LEN (64 KB). Without surfacing the
+              // count, the data loss is invisible to the user (empty
+              // Dialogue lines on the ASS side; cues dropped from the
+              // captions array on the SRT/VTT side after R11). Log via
+              // addLog so the user sees it rather than discovering it
+              // after the fact.
               const skippedCount = captions.filter((c) => c.skipped).length;
               if (skippedCount > 0) {
-                addLog(t("msg_hdr_oversized_skipped", skippedCount, fileName), "warn");
+                addLog(t("msg_oversized_skipped", skippedCount, fileName), "warn");
               }
 
               // Build ASS document from parsed captions

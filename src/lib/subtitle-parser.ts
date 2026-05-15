@@ -20,10 +20,17 @@ export interface Caption {
   /** VTT cue identifier (lines before the timing line), if present */
   cueId?: string;
   /**
-   * ASS-only: placeholder entry for a Dialogue line whose text exceeded
-   * MAX_CAPTION_TEXT_LEN. parseAss still emits one Caption per Dialogue
-   * line so the parse/build positional contract holds; buildAss returns
-   * the original line untouched for entries with `skipped: true`.
+   * Placeholder entry for a caption whose text exceeded
+   * MAX_CAPTION_TEXT_LEN (64 KB). All four parsers (parseAss /
+   * parseSub / parseSrt / parseVtt) emit one Caption per logical entry
+   * so feature layers can count `captions.filter(c => c.skipped).length`
+   * and surface the drop to the user via msg_oversized_skipped
+   * (no-silent-action per vibe-coding.md). The placeholder counts
+   * toward MAX_PARSED_ENTRIES on every parser. buildAss returns the
+   * original Dialogue line untouched (so its positional alignment with
+   * the regex-walk over original content holds); buildSrt / buildVtt /
+   * buildSub filter placeholders out before serialization so disk
+   * output is unchanged.
    */
   skipped?: boolean;
 }
@@ -238,16 +245,24 @@ function parseSrt(content: string): Caption[] {
       .slice(timingIdx + 1)
       .join("\n")
       .trim();
-    // Round 10 N-R10-007: per-caption text cap parity with parseAss /
-    // parseSub. Pre-R10 a 50 MB SRT with one timing line followed by
-    // ~50 MB of caption text produced a single Caption with a 50 MB
-    // text payload, which then propagated through the HDR / Shift
-    // pipelines (~100 MB UTF-16 in JS memory) and into the downstream
-    // buildAss path. parseSrt rebuilds from the captions array (not by
-    // walking original content), so no positional-alignment placeholder
-    // is needed — drop the oversized entry silently. MAX_RAW_BLOCKS
-    // (above) bounds iteration cost.
+    // Round 11 W11.1 (N1-R11-01): oversized text now pushes a skipped
+    // placeholder rather than silently dropping the entry. Feature
+    // layers (HdrConvert / TimingShift) read
+    // `captions.filter(c => c.skipped).length` and surface a count via
+    // msg_oversized_skipped — closes the no-silent-action gap (the
+    // pre-R11 `continue` lost a 64 KB+ caption without any user signal).
+    // The placeholder counts toward MAX_PARSED_ENTRIES (same as
+    // parseAss / parseSub R10 N-R10-006), and buildSrt filters them
+    // out before serialization so disk output is unchanged. Iteration
+    // cost is still bounded by MAX_RAW_BLOCKS (above).
     if (text.length > MAX_CAPTION_TEXT_LEN) {
+      captions.push({
+        raw: block.trim(),
+        start: parseSrtTime(timingMatch[1]),
+        end: parseSrtTime(timingMatch[2]),
+        text: "",
+        skipped: true,
+      });
       continue;
     }
     captions.push({
@@ -261,8 +276,15 @@ function parseSrt(content: string): Caption[] {
 }
 
 function buildSrt(captions: Caption[]): string {
+  // Round 11 W11.1 (N1-R11-01): filter skipped placeholders before
+  // serialization. parseSrt now pushes them for oversized text so the
+  // feature layer can count and surface the drop; buildSrt rebuilds
+  // from the captions array, so filtering here keeps disk output
+  // pristine (no numbered cues with empty bodies). Cue numbering
+  // reflects legitimate captions only because we filter before map.
   return (
     captions
+      .filter((c) => !c.skipped)
       .map((c, i) => `${i + 1}\n${formatSrtTime(c.start)} --> ${formatSrtTime(c.end)}\n${c.text}`)
       .join("\n\n") + "\n"
   );
@@ -318,10 +340,19 @@ function parseVtt(content: string): Caption[] {
       .slice(timingIdx + 1)
       .join("\n")
       .trim();
-    // Round 10 N-R10-007: per-caption text cap parity with parseSrt /
-    // parseAss / parseSub. buildVtt rebuilds from the captions array,
-    // so no placeholder needed — silently drop the oversized entry.
+    // Round 11 W11.1 (N1-R11-01): oversized text → skipped placeholder
+    // (same rationale as parseSrt; see WHY block there). The
+    // placeholder retains cueId because buildVtt's filter respects the
+    // skipped flag, not the cueId presence.
     if (text.length > MAX_CAPTION_TEXT_LEN) {
+      captions.push({
+        raw: block.trim(),
+        start: parseVttTime(timingMatch[1]),
+        end: parseVttTime(timingMatch[2]),
+        text: "",
+        cueId,
+        skipped: true,
+      });
       continue;
     }
     captions.push({
@@ -338,6 +369,10 @@ function parseVtt(content: string): Caption[] {
 function buildVtt(captions: Caption[], header: string = "WEBVTT"): string {
   const lines = [header, ""];
   for (const c of captions) {
+    // Round 11 W11.1 (N1-R11-01): skip placeholders left by parseVtt
+    // for oversized text. The feature layer surfaces the drop via
+    // msg_oversized_skipped; disk output stays clean.
+    if (c.skipped) continue;
     if (c.cueId) {
       lines.push(c.cueId);
     }
@@ -617,10 +652,10 @@ export function shiftSubtitle(
   const { format, captions } = parseSubtitle(content, fps);
 
   const shifted = captions.map((c) => {
-    // Skipped placeholders (ASS-only, oversized Dialogue text) pass
-    // through unchanged — buildAss treats them as "preserve original
-    // line", so shifting their (synthetic) timestamps would be wasted
-    // work and would obscure the placeholder's intent.
+    // Skipped placeholders (all four parsers emit them for oversized
+    // text since Round 11 W11.1) pass through unchanged — buildAss
+    // returns the original line, buildSrt / buildVtt / buildSub filter
+    // them out. Shifting their timestamps would be wasted work.
     if (c.skipped) return c;
     const shouldShift = thresholdMs === undefined || c.start >= thresholdMs;
     if (!shouldShift) return { ...c };

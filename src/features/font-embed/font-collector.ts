@@ -278,7 +278,15 @@ function processDialogueText(
   recordChars: (key: FontKey, text: string) => void
 ) {
   if (text.length > MAX_DIALOGUE_TEXT_LEN) {
-    text = text.slice(0, MAX_DIALOGUE_TEXT_LEN);
+    // Round 11 W11.1 (A2-R11-01): throw rather than silently truncate
+    // — parity with MAX_FONT_VARIANTS / MAX_CODEPOINTS_PER_VARIANT /
+    // MAX_TOTAL_CODEPOINTS (the R10 N-R10-034 precedent). Pre-R11 the
+    // slice() form lost glyphs from the font analysis, producing a
+    // subsetted font that silently missed characters present in the
+    // source dialogue. The cap is 1 MB; legitimate ASS dialogues are
+    // 50-500 chars, so hitting it means hostile or corrupt input
+    // worth surfacing as a hard error the user can act on.
+    throw new Error(`Dialogue text too long: ${text.length}+ (max ${MAX_DIALOGUE_TEXT_LEN})`);
   }
   let current = { ...initialFont };
   let isDrawing = false;

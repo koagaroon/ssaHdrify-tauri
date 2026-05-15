@@ -147,12 +147,13 @@ export const strings: Record<string, StringEntry> = {
   },
   msg_read_error: { en: "Error reading {0}: {1}", zh: "读取 {0} 出错：{1}" },
   msg_unsupported: { en: "Skipped {0}: unsupported format", zh: "已跳过 {0}：不支持的格式" },
-  // Round 10 N-R10-032: HDR convert path surfaces a per-file count of
-  // oversized captions dropped by the subtitle parser
-  // (MAX_CAPTION_TEXT_LEN = 64 KB). Pre-R10 the placeholder Captions
-  // silently emitted empty Dialogue lines; users had no signal that
-  // their input had been partially dropped.
-  msg_hdr_oversized_skipped: {
+  // Round 10 N-R10-032 + Round 11 W11.1 (N1-R11-01): HDR Convert and
+  // Time Shift both surface a per-file count of oversized captions
+  // dropped by the subtitle parser (MAX_CAPTION_TEXT_LEN = 64 KB).
+  // Pre-R10 the placeholder Captions silently emitted empty Dialogue
+  // lines (HDR path) or were silently dropped (SRT/VTT in R11); users
+  // had no signal that their input had been partially dropped.
+  msg_oversized_skipped: {
     en: "Dropped {0} oversized caption(s) from {1}: text exceeded 64 KB per-caption cap",
     zh: "{1} 中有 {0} 条超大字幕（单条 64 KB 上限）已丢弃",
   },
