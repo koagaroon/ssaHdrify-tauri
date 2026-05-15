@@ -75,6 +75,8 @@
         { "path": "$APPDATA/yarn/**" },
         { "path": "$APPDATA/com.koagaroon.ssahdrify/**" },
         { "path": "$LOCALDATA/com.koagaroon.ssahdrify/**" },
+        { "path": "$APPDATA/ssahdrify/**" },
+        { "path": "$LOCALDATA/ssahdrify/**" },
         { "path": "$HOME/.bash_history" },
         { "path": "$HOME/.zsh_history" },
         { "path": "$LOCALDATA/Microsoft/Windows/PowerShell/PSReadLine/**" },
