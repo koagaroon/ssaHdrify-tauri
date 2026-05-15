@@ -203,7 +203,17 @@ export default function HdrConvert() {
     // resolves, only the most recent `gen` is allowed to commit. Mirrors
     // the pattern in TimingShift / FontEmbed / BatchRename.
     const gen = (pickGenRef.current = pickGenRef.current + 1);
-    const paths = await pickSubtitleFiles(t);
+    // Round 11 W11.7 (N1-R11-10): catch dialog IPC failures so a click
+    // that can't open the picker surfaces an error rather than reading
+    // as a silent no-op. Same shape across all four tabs.
+    let paths: string[] | null;
+    try {
+      paths = await pickSubtitleFiles(t);
+    } catch (e) {
+      if (gen !== pickGenRef.current) return;
+      addLog(t("error_prefix", sanitizeError(e)), "error");
+      return;
+    }
     if (gen !== pickGenRef.current) return;
     if (!paths || paths.length === 0) return;
 
@@ -217,7 +227,7 @@ export default function HdrConvert() {
     // Silent replace: see FileContext.tsx for design rationale
     const names = paths.map(fileNameFromPath);
     setHdrFiles({ filePaths: paths, fileNames: names });
-  }, [isFileInUse, setHdrFiles, t]);
+  }, [isFileInUse, setHdrFiles, addLog, t]);
 
   // ── Folder drag-drop ingestion ──────────────────────────
   // Dropped paths come back from Rust expansion already flat-listed (one

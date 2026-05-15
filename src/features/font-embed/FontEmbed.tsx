@@ -354,11 +354,21 @@ export default function FontEmbed() {
 
   const handlePickFiles = useCallback(async () => {
     const gen = (pickGenRef.current = pickGenRef.current + 1);
-    const paths = await pickAssFiles(t);
+    // Round 11 W11.7 (N1-R11-10): catch dialog IPC failures so a click
+    // that can't open the picker doesn't read as a silent no-op. See
+    // TimingShift.handlePickFiles for the full rationale.
+    let paths: string[] | null;
+    try {
+      paths = await pickAssFiles(t);
+    } catch (e) {
+      if (gen !== pickGenRef.current) return;
+      addLog(t("error_prefix", sanitizeError(e)), "error");
+      return;
+    }
     if (gen !== pickGenRef.current) return;
     if (!paths || paths.length === 0) return;
     await ingestPaths(paths, gen);
-  }, [ingestPaths, t]);
+  }, [ingestPaths, addLog, t]);
 
   const handleDroppedPaths = useCallback(
     async (paths: string[]) => {

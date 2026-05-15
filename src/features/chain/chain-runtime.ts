@@ -27,6 +27,7 @@ import {
   substituteTemplate,
 } from "../../lib/path-validation";
 import { sanitizeError } from "../../lib/dedup-helpers";
+import { stripUnicodeControls } from "../../lib/unicode-controls";
 import type {
   ChainResult,
   ChainRunRequest,
@@ -102,7 +103,14 @@ function hdrTransform(ctx: TransformContext, params: HdrStepParams): TransformRe
   // `[Script Info]` or `[V4+ Styles]` qualifies; both real ASS files
   // open with at least one of those headers (allowing leading BOM /
   // whitespace / comments).
-  if (!/^\s*\[\s*(Script Info|V4\+? Styles)\s*\]/im.test(ctx.content)) {
+  // Round 11 W11.7 (A1-R11-05): bound the whitespace runs explicitly.
+  // Real ASS headers carry no leading whitespace, and renderers
+  // tolerate at most a tab or two before / inside the bracket. {0,16}
+  // is generous past anything legitimate and keeps the regex out of
+  // catastrophic-backtracking territory for crafted inputs (per the
+  // chain `.replace(timingRe)` Codex ReDoS class). Same shape applies
+  // to the embed preflight regex above; both share this bound.
+  if (!/^\s{0,16}\[\s{0,16}(Script Info|V4\+? Styles)\s{0,16}\]/im.test(ctx.content)) {
     throw new Error(
       "hdr step requires ASS / SSA content (no [Script Info] or " +
         "[V4+ Styles] header found). Run `hdr` standalone first to " +
@@ -190,16 +198,17 @@ function decodeBase64(b64: string, name: string): Uint8Array {
     // controlled today, the message ends up in a re-thrown Error that
     // surfaces in the chain log panel. Scrubbing at the extraction site
     // keeps the catch-arm contract uniform with the rest of the project.
-    // `name` is separately sanitized: it comes from `s.fontName` which is
-    // produced by buildFontFileName (font-embedder.ts) — that helper
-    // already strips everything but `[a-z0-9_-]` and falls back to a
-    // pure-ASCII hash for empty results. BiDi / zero-width chars
-    // can't survive that pipeline, so this interpolation is safe even
-    // for P1b hostile font packs (N-R5-FECHAIN-17). If a future
-    // refactor lets the original family name flow through here
-    // unsanitized, gate it through `stripUnicodeControls`.
+    //
+    // Round 11 W11.7 (A1-R11-06): wrap `name` in stripUnicodeControls
+    // too. The N-R5-FECHAIN-17 analysis (buildFontFileName already
+    // strips everything but [a-z0-9_-]) is correct for the current
+    // call path, but the same "future refactor lets the original name
+    // flow through unsanitized" caveat was already documented in the
+    // prior comment — the cheap wrap closes the door instead of
+    // leaving a "if you ever do X, do Y" reminder.
     const message = sanitizeError(e);
-    throw new Error(`base64 decode failed for font subset '${name}': ${message}`, {
+    const safeName = stripUnicodeControls(name);
+    throw new Error(`base64 decode failed for font subset '${safeName}': ${message}`, {
       cause: e,
     });
   }
@@ -246,6 +255,19 @@ export function runChain(request: ChainRunRequest): ChainResult {
   for (let i = 0; i < plan.steps.length; i++) {
     const step = plan.steps[i];
     const transform = TRANSFORMS[step.kind];
+    // Round 11 W11.7 (A1-R11-07): runtime cross-check that the
+    // registry actually has a transform for this kind. The TS type
+    // system ensures `step.kind` is a `StepKind` union member, so the
+    // index access should never miss in well-typed code; but a malformed
+    // chain plan deserialized from the Rust shell (or a future
+    // StepKind addition that forgets to wire up TRANSFORMS) would slip
+    // through as `transform = undefined`, then trip a generic
+    // "transform is not a function" downstream. Surfacing the
+    // attribution here gives debuggers a chain-shape message instead
+    // of a JS-internal one.
+    if (!transform) {
+      throw new Error(`step ${i + 1} (${step.kind}) has no transform registered`);
+    }
     let result: TransformResult;
     try {
       // The cast is necessary because TypeScript can't statically
@@ -303,7 +325,21 @@ export function resolveChainOutputPath(inputPath: string, template: string): str
   // {eotf} / {format} restriction; this matches it with a runtime
   // gate.
   const CHAIN_ALLOWED_TOKENS = new Set(["name", "ext"]);
-  for (const match of template.matchAll(/\{([a-z_][a-z0-9_]*)\}/g)) {
+  // Round 11 W11.7 (N1-R11-06): widen the token-name regex to include
+  // uppercase + underscore-only starts so `{Format}` / `{NAME}` /
+  // `{Eotf}` hit the unknown-token error path here rather than slipping
+  // past silently. Pre-R11 the lowercase-only `[a-z_][a-z0-9_]*`
+  // refused to even match capitalized tokens; substituteTemplate
+  // downstream then either left them as literal text or matched only
+  // the lowercase variant, with no signal that the capitalized form
+  // was an unrecognized intent. The whitelist stays lowercase so a
+  // mixed-case input correctly hits this error path.
+  // Round 11 W11.7 (A1-R11-01): bound the identifier run to {0,31}
+  // (32 chars total including the leading char). Real tokens are short
+  // ("name", "ext", "eotf"); a multi-MB unbounded run inside `{...}`
+  // would burn iteration cost in matchAll's lexer without ever matching
+  // a real token. Defense-in-depth alongside the per-line size cap.
+  for (const match of template.matchAll(/\{([a-zA-Z_][a-zA-Z0-9_]{0,31})\}/g)) {
     if (!CHAIN_ALLOWED_TOKENS.has(match[1])) {
       throw new Error(
         `chain output template references unknown token '{${match[1]}}'; ` +

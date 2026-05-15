@@ -67,8 +67,17 @@ const EPISODE_PATTERNS: EpisodePattern[] = [
   },
   // Pattern B — `][NN][` — must run on raw (brackets are the cue).
   // Common in adjacent-bracket fan-sub naming styles.
+  //
+  // Round 11 W11.7 (N2-R11-02): cap episode digits at 1-3. Pre-R11 the
+  // unbounded `\d+` matched 4-digit year markers like `][2024][` in
+  // names that pack release year between brackets (e.g.
+  // `[Group][2024][Show][01][1080p].mkv` → first match wins → episode
+  // = 2024 instead of 1). Real fan-sub episode counts top out around
+  // 999 (anime/drama almost universally; the rare 1000+ shows
+  // typically use Pattern A's ` - NNNN` form anyway). Reject 4+ digit
+  // forms here and let Pattern A or LCS handle the long-running edge.
   {
-    regex: /\]\s*\[\s*0*(\d+)\s*\]/,
+    regex: /\]\s*\[\s*0*(\d{1,3})\s*\]/,
     useRaw: true,
     build: (m) => ({ episode: parseInt(m[1], 10) }),
   },
@@ -331,18 +340,28 @@ export function buildPairings(videos: ParsedFile[], subtitles: ParsedFile[]): Pa
       // user's pick order. A future migration to Object.entries-based
       // bucketing would silently break this — tests assert it.
       const sub = ambiguous ? (ss[i] ?? null) : (ss[0] ?? null);
+      // `warning` implies "debatable pairing" — only meaningful when
+      // there IS a sub to argue about. Ambiguous video with no sub
+      // is just unmatched (N-R5-FEFEAT-11). Old form pinned every
+      // ambiguous row to `warning` regardless, yielding yellow badges
+      // on rows where no decision was actually made.
+      const rowSource = ambiguous && sub ? "warning" : sub ? "regex" : "unmatched";
+      // Round 11 W11.7 (N2-R11-05): when the ambiguous-overflow path
+      // resolves to source="unmatched" (3 videos / 2 subs → vs[2]
+      // gets no sub), also flip key to "unmatched" so the row aligns
+      // with the trailing unmatchedVideos loop's key convention.
+      // Pre-R11 these overflow rows carried the real `<season>|<episode>`
+      // key while sourcing as "unmatched" — downstream UI sort grouped
+      // them by episode instead of clustering with the other unmatched
+      // entries at the tail of the list.
+      const rowKey = rowSource === "unmatched" ? "unmatched" : key;
       rows.push({
         id: newId(v),
         video: { path: v.path, name: v.name },
         subtitle: sub ? { path: sub.path, name: sub.name } : null,
-        // `warning` implies "debatable pairing" — only meaningful when
-        // there IS a sub to argue about. Ambiguous video with no sub
-        // is just unmatched (N-R5-FEFEAT-11). Old form pinned every
-        // ambiguous row to `warning` regardless, yielding yellow badges
-        // on rows where no decision was actually made.
-        source: ambiguous && sub ? "warning" : sub ? "regex" : "unmatched",
+        source: rowSource,
         selected: sub !== null,
-        key,
+        key: rowKey,
       });
     }
   }

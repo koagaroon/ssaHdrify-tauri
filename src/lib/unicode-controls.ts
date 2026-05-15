@@ -50,8 +50,12 @@ const BIDI_AND_ZERO_WIDTH_PATTERN =
 /** Inline character class fragment for splicing into composite regexes. */
 export const BIDI_AND_ZERO_WIDTH_CHARS = BIDI_AND_ZERO_WIDTH_PATTERN;
 
-/** Standalone matcher; use `.test(s)` for reject-on-match validation. */
-export const BIDI_AND_ZERO_WIDTH_RE = new RegExp(`[${BIDI_AND_ZERO_WIDTH_PATTERN}]`, "u");
+// Internal matcher consumed by `hasUnicodeControls` below. Round 11
+// W11.7 (N3-R11-05) — was exported pre-R11 but no external caller
+// imported it; `hasUnicodeControls` is the public surface, and external
+// callers needing the regex shape can splice the
+// `BIDI_AND_ZERO_WIDTH_CHARS` character-class fragment instead.
+const BIDI_AND_ZERO_WIDTH_RE = new RegExp(`[${BIDI_AND_ZERO_WIDTH_PATTERN}]`, "u");
 
 /** Global matcher; use with `.replace(GLOBAL_RE, "")` for scrubbing. */
 export const BIDI_AND_ZERO_WIDTH_GLOBAL_RE = new RegExp(`[${BIDI_AND_ZERO_WIDTH_PATTERN}]`, "gu");

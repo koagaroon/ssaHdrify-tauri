@@ -338,11 +338,26 @@ export default function TimingShift() {
 
   const handlePickFiles = useCallback(async () => {
     const gen = (pickGenRef.current = pickGenRef.current + 1);
-    const paths = await pickSubtitleFiles(t);
+    // Round 11 W11.7 (N1-R11-10): catch dialog IPC failures explicitly
+    // — pickSubtitleFiles can reject (Tauri plugin-dialog error, plugin
+    // not loaded, OS-level dialog refused, etc.) and the bare await
+    // form let those bubble as unhandled rejection → silent console
+    // error from the user's POV ("clicked Select, nothing happened").
+    // Surface via addLog so the user knows the click was received but
+    // the dialog couldn't open. Same shape for HDR / Embed / Rename
+    // siblings (project-wide pattern, fixed at each site).
+    let paths: string[] | null;
+    try {
+      paths = await pickSubtitleFiles(t);
+    } catch (e) {
+      if (gen !== pickGenRef.current) return;
+      addLog(t("error_prefix", sanitizeError(e)), "error");
+      return;
+    }
     if (gen !== pickGenRef.current) return;
     if (!paths || paths.length === 0) return;
     await ingestPaths(paths, gen);
-  }, [ingestPaths, t]);
+  }, [ingestPaths, addLog, t]);
 
   const handleDroppedPaths = useCallback(
     async (paths: string[]) => {

@@ -474,11 +474,20 @@ export default function BatchRename() {
 
   const handlePickFiles = useCallback(async () => {
     const gen = (pickGenRef.current = pickGenRef.current + 1);
-    const paths = await pickRenameInputs(t);
+    // Round 11 W11.7 (N1-R11-10): catch dialog IPC failures. See
+    // TimingShift.handlePickFiles for the project-wide rationale.
+    let paths: string[] | null;
+    try {
+      paths = await pickRenameInputs(t);
+    } catch (e) {
+      if (gen !== pickGenRef.current) return;
+      addLog(t("error_prefix", sanitizeError(e)), "error");
+      return;
+    }
     if (gen !== pickGenRef.current) return;
     if (!paths || paths.length === 0) return;
     ingestPaths(paths);
-  }, [ingestPaths, t]);
+  }, [ingestPaths, addLog, t]);
 
   const handleDroppedPaths = useCallback(
     (paths: string[]) => {
