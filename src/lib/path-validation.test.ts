@@ -98,17 +98,11 @@ describe("assertSafeOutputFilename", () => {
     // The default strict mode (used by HDR / Shift / Embed / chain
     // template resolvers) is exercised by the sibling "rejects template
     // token characters" test above.
-    expect(() =>
-      assertSafeOutputFilename("Show.{1080p}.ass", { allowBraces: true })
-    ).not.toThrow();
-    expect(() =>
-      assertSafeOutputFilename("a{b}c.ass", { allowBraces: true })
-    ).not.toThrow();
+    expect(() => assertSafeOutputFilename("Show.{1080p}.ass", { allowBraces: true })).not.toThrow();
+    expect(() => assertSafeOutputFilename("a{b}c.ass", { allowBraces: true })).not.toThrow();
     // Control / NTFS-reserved punctuation / separators still rejected
     // under allowBraces=true — only `{` and `}` are relaxed.
-    expect(() => assertSafeOutputFilename("x\x00y.ass", { allowBraces: true })).toThrow(
-      /illegal/
-    );
+    expect(() => assertSafeOutputFilename("x\x00y.ass", { allowBraces: true })).toThrow(/illegal/);
     expect(() => assertSafeOutputFilename("a/b.ass", { allowBraces: true })).toThrow(/illegal/);
     expect(() => assertSafeOutputFilename('a"b.ass', { allowBraces: true })).toThrow(/illegal/);
     expect(() => assertSafeOutputFilename("a|b.ass", { allowBraces: true })).toThrow(/illegal/);

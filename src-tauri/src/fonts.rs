@@ -2561,9 +2561,7 @@ pub fn clear_cache_provenance() {
 /// this function re-validates via `validate_ipc_path` anyway so a
 /// hostile `--cache-file` swap can't smuggle crafted bytes past the
 /// trust set.
-pub fn register_cache_provenance(
-    hit: &crate::font_cache::FontLookupResult,
-) -> Result<(), String> {
+pub fn register_cache_provenance(hit: &crate::font_cache::FontLookupResult) -> Result<(), String> {
     // Round 8 A-R8-A2-2: re-validate the canonical path through the
     // IPC validator before insertion. A hostile cache file supplied
     // via `--cache-file` (P1b) could carry crafted rows with control
