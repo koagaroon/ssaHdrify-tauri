@@ -2464,6 +2464,17 @@ fn register_font_path(path: &Path, font_index: u32) -> Result<FontLookupResult, 
         "Cannot resolve font path".to_string()
     })?;
     let canonical_string = normalize_canonical_path(&canonical.to_string_lossy());
+    // Round 11 W11.2 (A4-R11-01): validate the canonical path through
+    // `validate_ipc_path` for parity with `register_cache_provenance`
+    // (above). System-font paths come from font-kit's OS enumeration
+    // and pass through canonicalize() + the system-fonts-dir constraint
+    // — both stronger gates than cache rows have — but the symmetric
+    // validate call is cheap defense-in-depth that closes the asymmetry
+    // a reviewer flagged. If a future change to font-kit, the system
+    // font enumeration, or normalize_canonical_path lets through a
+    // path with control chars / BiDi / `..` segments, this is the
+    // final gate before the trust set commits.
+    crate::util::validate_ipc_path(&canonical_string, "System font")?;
     insert_with_cap(
         &ALLOWED_FONT_PATHS,
         "system",

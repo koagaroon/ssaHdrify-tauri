@@ -615,18 +615,26 @@ function canonicalLanguage(language: string): string {
 function fileNameFromPath(path: string): string {
   // Conditional separator normalization: `\` is a valid filename char on
   // POSIX (Codex edb0e74f / 8850ede7). Unconditional conversion turned
-  // single Linux filenames containing `\` into path components.
+  // single Linux filenames containing `\` into path components. Round 8
+  // A-R8-N4-12 gated `tauri-api.ts::fileNameFromPath` on `isWindowsRuntime`
+  // too, so the two siblings now share the same separator semantics.
   //
   // Round 7 Wave 7.1: matches the BiDi scrubbing the tauri-api.ts
-  // `fileNameFromPath` does via stripUnicodeControls — without this
-  // a U+202E in a CLI-supplied path could reverse downstream log
-  // lines and stderr output. The two implementations diverge on
-  // separator handling intentionally (this one is POSIX-correct;
-  // the tauri-api.ts one unconditionally converts \ → / which is
-  // wrong on POSIX) — sharing the BiDi scrub keeps the security
-  // primitive uniform across both runtimes.
+  // sibling does via stripUnicodeControls.
+  //
+  // Round 11 W11.2 (M3 / N3-R11-01): also strip ASCII C0 + DEL + C1
+  // (`\x00-\x1f\x7f-\x9f`) — parity with Round 10 N-R10-025 in
+  // tauri-api.ts. stripUnicodeControls only covers BiDi / zero-width;
+  // ASCII control bytes (\0, \t, \r, \n, ESC) previously passed through
+  // CLI-side fileNameFromPath into stderr log lines and JSON output.
+  // The CLI engine's input paths flow from clap's argv into
+  // chain/embed/hdr/shift filename derivation, then back through this
+  // helper for display — without the strip, a crafted argv would still
+  // break log row formatting on the CLI side even after the GUI side
+  // closed the same gap.
   const normalized = isWindowsRuntime ? path.replace(/\\/g, "/") : path;
   const slash = normalized.lastIndexOf("/");
   const raw = slash >= 0 ? normalized.slice(slash + 1) : normalized;
-  return stripUnicodeControls(raw);
+  // eslint-disable-next-line no-control-regex -- intentional: scrub C0 / DEL / C1
+  return stripUnicodeControls(raw).replace(/[\x00-\x1f\x7f-\x9f]/g, "");
 }

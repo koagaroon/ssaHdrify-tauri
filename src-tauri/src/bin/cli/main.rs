@@ -2496,6 +2496,21 @@ fn resolve_embed_font(
     cache: Option<&app_lib::font_cache::FontCache>,
     font: &engine::FontEmbedUsage,
 ) -> Result<Option<(String, u32)>, String> {
+    // Round 11 W11.2 (N4-R11-02): validate font.family once upfront.
+    // The GUI sibling `font_cache_commands::lookup_font_family`
+    // validates at the IPC boundary; the CLI's resolve_embed_font is
+    // the equivalent boundary on the CLI side (font.family flows from
+    // TS-engine V8-extracted ASS `\fn` content, which is P1b
+    // attacker-influenced). Pre-R11, tier-1 `resolve_user_font` and
+    // tier-3 `find_system_font` validated internally but tier-2
+    // `c.lookup_family` did not — a cache row keyed by a hostile name
+    // could resolve and flow into `register_cache_provenance` (which
+    // validates path but not family). Validating here keeps the trust
+    // boundary uniform across all three tiers; the tier-1 / tier-3
+    // internal validate calls become redundant but stay as
+    // defense-in-depth.
+    app_lib::util::validate_font_family(&font.family)?;
+
     // Lookup tier 1: session DB populated by --font-dir for THIS run
     // (Situation A's explicit "merge in these dirs" inputs).
     if use_user_fonts {

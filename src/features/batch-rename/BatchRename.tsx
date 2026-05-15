@@ -540,7 +540,12 @@ export default function BatchRename() {
           derivedTargets.push({ row, outputPath });
         } catch (e) {
           const reason = sanitizeError(e);
-          addLog(t("msg_rename_skipped", row.subtitle!.name, reason), "error");
+          // Round 11 W11.2 (M2 / N2-R11-01): sanitize the subtitle name
+          // before it flows into the log line. fan-sub subtitle
+          // filenames are P1b attacker-influenced; HDR / Timing / Embed
+          // already sanitize at every addLog site, BatchRename was the
+          // outlier.
+          addLog(t("msg_rename_skipped", sanitizeForDialog(row.subtitle!.name), reason), "error");
           skippedDeriveCount += 1;
         }
       }
@@ -566,7 +571,8 @@ export default function BatchRename() {
         }
       }
       for (const tgt of noopTargets) {
-        addLog(t("msg_rename_already_named", tgt.row.subtitle!.name), "info");
+        // W11.2 (M2 / N2-R11-01): sanitize attacker-influenced filename.
+        addLog(t("msg_rename_already_named", sanitizeForDialog(tgt.row.subtitle!.name)), "info");
       }
       if (targets.length === 0) {
         // Nothing was actually written. Logging this as success + green
@@ -717,8 +723,14 @@ export default function BatchRename() {
             break;
           }
 
-          const subName = row.subtitle!.name;
-          const outName = fileNameFromPath(outputPath);
+          // Round 11 W11.2 (M2 / N2-R11-01): hoist sanitized display
+          // names at top of per-row block. Same pattern HDR / Timing /
+          // FontEmbed adopted in Round 7 W7.1 — every addLog site below
+          // reuses these. row.subtitle!.path (used for the actual
+          // renamePath / copyPath calls) keeps the literal bytes; only
+          // the display path is sanitized.
+          const subName = sanitizeForDialog(row.subtitle!.name);
+          const outName = sanitizeForDialog(fileNameFromPath(outputPath));
           addLog(t("msg_processing", subName));
 
           try {
