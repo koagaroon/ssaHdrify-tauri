@@ -165,3 +165,43 @@ describe("resolveOutputPath — {video_name} and {lang} tokens", () => {
     expect(result).toBe(`${BASE}/Show.S01E01.1080p.zh.ass`);
   });
 });
+
+describe("resolveOutputPath — strict-throw on unknown tokens (R12 N-R12-2)", () => {
+  // Round 11 W11.7 introduced substituteTemplate strict-throw at the
+  // helper layer; chain-runtime's validator throws even earlier. HDR's
+  // resolveOutputPath is one of the three consumer entry points (Shift
+  // + Embed are the other two, pinned in cli-engine-roundtrip.test.ts).
+  // Without consumer-level pins, a future regression that re-loosens
+  // any one consumer would not surface — these tests close that gap.
+
+  it("throws on lowercase unknown token", () => {
+    expect(() => resolveOutputPath(`${BASE}/EP01.srt`, "{name}.{xyz}.ass", "PQ")).toThrow(
+      /unknown token/
+    );
+  });
+
+  it("throws on a 32-char unknown token (inclusive cap boundary)", () => {
+    const longToken = "a".repeat(32);
+    expect(() =>
+      resolveOutputPath(`${BASE}/EP01.srt`, `{name}.{${longToken}}.ass`, "PQ")
+    ).toThrow(/unknown token/);
+  });
+
+  it("rejects an over-cap unknown token via the downstream brace gate (33 chars)", () => {
+    // 33-char tokens exceed substituteTemplate's {0,31} lexer; they
+    // stay as literal `{aaa...}` text → assertSafeOutputFilename's
+    // brace gate catches the `{` / `}` characters. Different error
+    // message than the strict-throw path, same fail-loud outcome.
+    const longToken = "a".repeat(33);
+    expect(() =>
+      resolveOutputPath(`${BASE}/EP01.srt`, `{name}.{${longToken}}.ass`, "PQ")
+    ).toThrow(/illegal characters/);
+  });
+
+  it("accepts {video_name} and {lang} (known tokens with default empty values)", () => {
+    // Sanity counter-test: known tokens with default-empty vars must
+    // NOT throw. Pinning this confirms strict-throw only fires when
+    // the key is missing from `vars`, not when the value is "".
+    expect(() => resolveOutputPath(`${BASE}/EP01.srt`, "{name}.{lang}.ass", "PQ")).not.toThrow();
+  });
+});

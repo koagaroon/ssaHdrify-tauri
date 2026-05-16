@@ -146,6 +146,48 @@ describe("HDR convert — GUI ↔ CLI byte equivalence", () => {
 
     expect(cli.content).toBe(gui.content);
   });
+
+  it("oversized SRT caption produces byte-identical filtered output + non-zero skippedCount (R12 N-R12-4)", () => {
+    // Exercise the `.filter(c => !c.skipped)` introduced in dba6445.
+    // Without an oversized fixture, the byte-equivalence test runs
+    // through the filter on inputs that produce zero placeholders;
+    // a regression dropping the filter from production XOR mirror
+    // wouldn't fail. This fixture has one >64 KB caption + one
+    // ordinary caption, so the parser emits a skipped placeholder
+    // for the first and a real caption for the second. The filter
+    // drops the placeholder; both CLI and mirror must produce
+    // identical output AND the CLI must report skippedCount = 1.
+    const huge = "A".repeat(65_000); // > MAX_CAPTION_TEXT_LEN (64,000)
+    const oversizedSrt = [
+      "1",
+      "00:00:00,000 --> 00:00:01,000",
+      huge,
+      "",
+      "2",
+      "00:00:01,000 --> 00:00:02,000",
+      "Normal caption",
+      "",
+    ].join("\n");
+
+    const cli = convertHdr({
+      inputPath: inputSrt,
+      content: oversizedSrt,
+      eotf: "PQ",
+      brightness: 1000,
+      outputTemplate: DEFAULT_TEMPLATE,
+    });
+    const gui = guiHdrFlow(inputSrt, oversizedSrt, "PQ", 1000, DEFAULT_TEMPLATE);
+
+    expect(cli.outputPath).toBe(gui.outputPath);
+    expect(cli.content).toBe(gui.content);
+    expect(cli.skippedCount).toBe(1);
+    // The kept caption survives into the rendered ASS; the skipped
+    // one does not. Both halves matter — pinning only "skippedCount
+    // > 0" without checking the kept caption made it through would
+    // pass a buggy filter that dropped everything.
+    expect(cli.content).toContain("Normal caption");
+    expect(cli.content).not.toContain(huge);
+  });
 });
 
 describe("Time shift — GUI ↔ CLI byte equivalence", () => {
@@ -406,5 +448,40 @@ describe("Font embed plan — GUI ↔ CLI byte equivalence", () => {
     });
 
     expect(cli.outputPath).toBe(deriveEmbeddedPath(inputPath));
+  });
+});
+
+describe("Shift / Embed resolvers — strict-throw on unknown tokens (R12 N-R12-2)", () => {
+  // Companion to output-naming.test.ts's HDR coverage. Pins that the
+  // strict-throw introduced in path-validation.ts (R11 W11.7) surfaces
+  // through the CLI engine's Shift and Embed entry points, not just at
+  // the substituteTemplate helper level. A future regression that
+  // re-loosened either resolver wouldn't fail without this.
+  const INPUT = "C:\\subs\\episode01.ass";
+
+  it("resolveShiftOutputPath throws on unknown token", () => {
+    expect(() => resolveShiftOutputPath({ inputPath: INPUT, outputTemplate: "{xyz}.ass" })).toThrow(
+      /unknown token/
+    );
+  });
+
+  it("resolveEmbedOutputPath throws on unknown token", () => {
+    expect(() => resolveEmbedOutputPath({ inputPath: INPUT, outputTemplate: "{xyz}.ass" })).toThrow(
+      /unknown token/
+    );
+  });
+
+  it("resolveShiftOutputPath / resolveEmbedOutputPath accept their full known-token sets", () => {
+    // Sanity counter-tests: ensure strict-throw doesn't fire on the
+    // documented token sets (Shift: {name}, {ext}, {format}; Embed:
+    // {name}, {ext}). resolveShiftOutputPath flows through the cheap
+    // resolver which substitutes format="" — known-but-empty, not
+    // missing.
+    expect(() =>
+      resolveShiftOutputPath({ inputPath: INPUT, outputTemplate: "{name}.shifted{ext}" })
+    ).not.toThrow();
+    expect(() =>
+      resolveEmbedOutputPath({ inputPath: INPUT, outputTemplate: "{name}.embed.ass" })
+    ).not.toThrow();
   });
 });

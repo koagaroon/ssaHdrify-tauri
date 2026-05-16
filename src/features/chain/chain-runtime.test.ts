@@ -342,6 +342,23 @@ describe("resolveChainOutputPath", () => {
     );
   });
 
+  it("rejects uppercase / mixed-case unknown tokens (R12 N-R12-5)", () => {
+    // Round 11 W11.7 widened the chain validator's regex to
+    // [a-zA-Z_][a-zA-Z0-9_]{0,31} (case-insensitive) so capitalized
+    // typos like {Eotf} / {NAME} / {Format} hit the chain-level
+    // error path with a clear "unknown token 'X'" message, instead
+    // of falling through to substituteTemplate's lowercase-only
+    // lexer + brace-gate downstream. Pin this so a future refactor
+    // dropping the case-widening would surface here.
+    expect(() => resolveChainOutputPath(INPUT_PATH, "{name}.{Eotf}.ass")).toThrow(/unknown token/);
+    expect(() => resolveChainOutputPath(INPUT_PATH, "{NAME}.processed.ass")).toThrow(
+      /unknown token/
+    );
+    expect(() => resolveChainOutputPath(INPUT_PATH, "{name}.{Format}.ass")).toThrow(
+      /unknown token/
+    );
+  });
+
   it("rejects over-cap unknown tokens via the downstream brace gate", () => {
     // Codex 08c3a51c: 33-char lowercase tokens exceed both the chain
     // validator's {0,31} bound AND substituteTemplate's matching
