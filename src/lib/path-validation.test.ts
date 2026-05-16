@@ -5,6 +5,7 @@ import {
   assertSafeOutputFilename,
   assertSafeOutputPath,
   decomposeInputPath,
+  substituteTemplate,
 } from "./path-validation";
 
 describe("assertSafeOutputFilename", () => {
@@ -381,5 +382,71 @@ describe("decomposeInputPath — Round 5 BiDi / zero-width hardening", () => {
   it("accepts paths with no invisible / bidi characters", () => {
     expect(() => decomposeInputPath("C:/subs/episode-with-emoji-😀.ass")).not.toThrow();
     expect(() => decomposeInputPath("/home/u/CJK/字幕.ass")).not.toThrow();
+  });
+});
+
+describe("substituteTemplate — Codex 08c3a51c (identifier cap + strict)", () => {
+  // Three behaviors land together: 32-char identifier cap (closes the
+  // chain-validator-vs-substituter regex asymmetry); strict-throw on
+  // unknown tokens (no-silent-action); uppercase / non-lowercase
+  // identifiers fall through as literal text (preserves the
+  // assertSafeOutputFilename brace-gate handoff).
+
+  it("substitutes known lowercase tokens", () => {
+    expect(substituteTemplate("{name}.ass", { name: "show" })).toBe("show.ass");
+  });
+
+  it("throws on an unknown token (vars missing the key)", () => {
+    expect(() => substituteTemplate("{xyz}.ass", { name: "show" })).toThrow(/unknown token/);
+  });
+
+  it("an empty-string value for a known key substitutes empty (not unknown)", () => {
+    // `lang` is in vars with value "" — must substitute empty, NOT
+    // throw. Distinguishes "this caller doesn't support the token"
+    // (throw) from "this caller supports it but has no value right
+    // now" (substitute empty).
+    expect(substituteTemplate("{name}.{lang}.ass", { name: "show", lang: "" })).toBe("show.ass");
+  });
+
+  it("accepts a 32-char identifier (cap is inclusive)", () => {
+    const longName = "a".repeat(32);
+    const tpl = `{${longName}}.ass`;
+    expect(substituteTemplate(tpl, { [longName]: "value" })).toBe("value.ass");
+  });
+
+  it("throws on a 32-char unknown identifier", () => {
+    // Boundary-pin: 32 chars matches the lexer; strict-throw fires.
+    const longName = "a".repeat(32);
+    const tpl = `{${longName}}.ass`;
+    expect(() => substituteTemplate(tpl, { name: "show" })).toThrow(/unknown token/);
+  });
+
+  it("over-cap identifiers (33 chars) fall through as literal text", () => {
+    // Boundary-pin: 33 chars exceeds the lexer's {0,31} bound. The
+    // sequence is not matched as a token → stays as `{aaa...}` literal
+    // in the output. Closes Codex 08c3a51c: pre-fix, the unbounded
+    // lexer silently substituted "" here, bypassing the chain validator
+    // and producing a hidden filename.
+    const longName = "a".repeat(33);
+    const tpl = `{${longName}}.ass`;
+    expect(substituteTemplate(tpl, { name: "show" })).toBe(`{${longName}}.ass`);
+  });
+
+  it("uppercase tokens are not matched by the lexer (literal pass-through)", () => {
+    // Mixed-case `{NAME}` doesn't match `[a-z_]…` → stays as literal
+    // `{NAME}`. The assertSafeOutputFilename brace gate (default
+    // strict mode) catches this downstream.
+    expect(substituteTemplate("{NAME}.{ext}", { name: "show", ext: ".ass" })).toBe("{NAME}.ass");
+  });
+
+  it("preserves user-content `..` while collapsing template-literal `..` (regression)", () => {
+    // Pre-existing Round 1.5 invariant — pin alongside the new cap
+    // behavior so future refactors don't regress either dimension.
+    expect(substituteTemplate("{name}..shifted{ext}", { name: "Show", ext: ".ass" })).toBe(
+      "Show.shifted.ass"
+    );
+    expect(substituteTemplate("{name}.shifted{ext}", { name: "Show..special", ext: ".ass" })).toBe(
+      "Show..special.shifted.ass"
+    );
   });
 });

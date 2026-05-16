@@ -872,9 +872,13 @@ fn find_embed_step_index(plan: &chain::ChainPlan) -> Option<usize> {
 /// cheap-first existence check to short-circuit to "Skipped" against
 /// a path V8 would actually produce differently (Codex bd782f90).
 ///
-/// Token shape `[a-z_][a-z0-9_]*` matches the TS regex. Unknown tokens
-/// substitute to "". Caller supplies a slice of `(name, value)` pairs;
-/// linear scan is fine — chain templates have 2-3 tokens at most.
+/// Token shape `[a-z_][a-z0-9_]{0,31}` mirrors the TS regex
+/// (32-char identifier cap, Codex 08c3a51c). Returns `None` when a
+/// token's name is not present in `vars` — this matches the TS
+/// strict-throw behavior at the prediction layer: the caller
+/// (`predict_chain_output_path`) defers to V8 + TS for the
+/// authoritative `unknown token` error, avoiding a permissive
+/// silent-empty prediction that diverges from TS resolution.
 ///
 /// Non-recursive by design (A-R5-RUSTCLI-01): substitution scans the
 /// TEMPLATE for `{...}` placeholders, not the substituted VALUES, so
@@ -882,7 +886,7 @@ fn find_embed_step_index(plan: &chain::ChainPlan) -> Option<usize> {
 /// template lands as the literal string `{name}.ass`, not as an
 /// infinite-expansion or second-pass substitution. Keep it that way —
 /// a recursive form would expose template-injection via filenames.
-fn substitute_template(template: &str, vars: &[(&str, &str)]) -> String {
+fn substitute_template(template: &str, vars: &[(&str, &str)]) -> Option<String> {
     enum Seg {
         Literal(String),
         Value(String),
@@ -898,7 +902,15 @@ fn substitute_template(template: &str, vars: &[(&str, &str)]) -> String {
                 && (bytes[name_start].is_ascii_lowercase() || bytes[name_start] == b'_')
             {
                 let mut j = name_start;
+                // 32-char identifier cap (j - name_start <= 32). A
+                // longer run of lowercase/digit/underscore chars is
+                // NOT a token — the loop stops at the cap and the
+                // outer `bytes[j] == b'}'` check fails (since bytes[j]
+                // is still a token char, not `}`), so the segment is
+                // left as literal text. Same behavior as the TS
+                // lexer's `{0,31}` quantifier.
                 while j < bytes.len()
+                    && (j - name_start) < 32
                     && (bytes[j].is_ascii_lowercase()
                         || bytes[j].is_ascii_digit()
                         || bytes[j] == b'_')
@@ -911,11 +923,10 @@ fn substitute_template(template: &str, vars: &[(&str, &str)]) -> String {
                         let lit_text = &template[last_lit_start..i];
                         segments.push(Seg::Literal(collapse_internal_double_dots(lit_text)));
                     }
-                    let value = vars
-                        .iter()
-                        .find(|(k, _)| *k == name)
-                        .map(|(_, v)| *v)
-                        .unwrap_or("");
+                    // Unknown token → return None. The caller falls
+                    // back to V8 + TS for the authoritative error;
+                    // see fn-level doc comment.
+                    let value = vars.iter().find(|(k, _)| *k == name).map(|(_, v)| *v)?;
                     segments.push(Seg::Value(value.to_string()));
                     i = j + 1;
                     last_lit_start = i;
@@ -941,7 +952,7 @@ fn substitute_template(template: &str, vars: &[(&str, &str)]) -> String {
             out.push_str(chunk);
         }
     }
-    out
+    Some(out)
 }
 
 /// Collapse any run of 2+ dots to a single dot. ASCII-only fast path —
@@ -989,7 +1000,12 @@ fn predict_chain_output_path(
         .and_then(|e| e.to_str())
         .map(|e| format!(".{e}"))
         .unwrap_or_default();
-    let output_name = substitute_template(output_template, &[("name", stem), ("ext", &ext)]);
+    // `substitute_template` returns None for unknown tokens (Codex
+    // 08c3a51c). `?` propagates: predict returns None → caller falls
+    // back to V8 + TS, which throws the authoritative `unknown token`
+    // error. Matches the "defer to V8 on divergence" pattern used
+    // elsewhere in this function.
+    let output_name = substitute_template(output_template, &[("name", stem), ("ext", &ext)])?;
     // Reject shapes TS-side `assertSafeOutputFilename` would reject:
     // path separators (chain output is a single filename in input's
     // dir, never a relative or absolute path), drive-letter prefixes,
@@ -3804,14 +3820,14 @@ mod tests {
             "{name}.shifted{ext}",
             &[("name", "Show..special"), ("ext", ".ass")],
         );
-        assert_eq!(got, "Show..special.shifted.ass");
+        assert_eq!(got.as_deref(), Some("Show..special.shifted.ass"));
     }
 
     #[test]
     fn substitute_template_collapses_boundary_double_dots() {
         // Template-side dot + ext-leading dot at the seam → drop one.
         let got = substitute_template("{name}.{ext}", &[("name", "Show"), ("ext", ".ass")]);
-        assert_eq!(got, "Show.ass");
+        assert_eq!(got.as_deref(), Some("Show.ass"));
     }
 
     #[test]
@@ -3819,7 +3835,7 @@ mod tests {
         // `..` inside the user-typed template (typo) collapses, but
         // user-content `..` would not (covered by the preserve test).
         let got = substitute_template("{name}..shifted{ext}", &[("name", "Show"), ("ext", ".ass")]);
-        assert_eq!(got, "Show.shifted.ass");
+        assert_eq!(got.as_deref(), Some("Show.shifted.ass"));
     }
 
     #[test]
@@ -3831,21 +3847,64 @@ mod tests {
             "{name}.shifted{ext}",
             &[("name", "Show$1$&"), ("ext", ".ass")],
         );
-        assert_eq!(got, "Show$1$&.shifted.ass");
+        assert_eq!(got.as_deref(), Some("Show$1$&.shifted.ass"));
     }
 
     #[test]
-    fn substitute_template_missing_token_becomes_empty() {
+    fn substitute_template_unknown_token_returns_none() {
+        // Codex 08c3a51c: unknown token (vars has name + ext, template
+        // uses {lang}) returns None so the caller defers to V8 + TS for
+        // the authoritative `unknown token` error. Pre-fix this returned
+        // Some("Show.ass") via silent-empty substitution.
         let got = substitute_template("{name}.{lang}{ext}", &[("name", "Show"), ("ext", ".ass")]);
-        // Empty {lang} between two dots → boundary collapse leaves "Show.ass".
-        assert_eq!(got, "Show.ass");
+        assert!(got.is_none());
     }
 
     #[test]
     fn substitute_template_leaves_unknown_braces_intact() {
         // Token shape doesn't match (uppercase) → kept as literal text.
+        // Uppercase `{NAME}` falls through the lexer; downstream the
+        // brace gate in `assertSafeOutputFilename` (TS) /
+        // predict_chain_output_path's per-char reject (Rust) catches it.
         let got = substitute_template("{NAME}.{ext}", &[("name", "Show"), ("ext", ".ass")]);
-        assert_eq!(got, "{NAME}.ass");
+        assert_eq!(got.as_deref(), Some("{NAME}.ass"));
+    }
+
+    #[test]
+    fn substitute_template_token_at_32_char_cap_matches() {
+        // Boundary-pin pair (a): 32-char identifier matches the lexer
+        // (first char + 31 subsequent chars = 32 total = cap). Vars
+        // contain the token → substitutes normally. Pre-fix the lexer
+        // was unbounded; this pins the inclusive boundary.
+        let long_name = "a".repeat(32);
+        let template = format!("{{{long_name}}}.ass");
+        let got = substitute_template(&template, &[(long_name.as_str(), "value")]);
+        assert_eq!(got.as_deref(), Some("value.ass"));
+    }
+
+    #[test]
+    fn substitute_template_token_at_32_char_cap_unknown_returns_none() {
+        // Boundary-pin pair (b): 32-char identifier matches the lexer
+        // and is NOT in vars → unknown-token rejection fires.
+        let long_name = "a".repeat(32);
+        let template = format!("{{{long_name}}}.ass");
+        let got = substitute_template(&template, &[("name", "Show")]);
+        assert!(got.is_none());
+    }
+
+    #[test]
+    fn substitute_template_token_over_cap_falls_through_as_literal() {
+        // Boundary-pin pair (c): 33-char identifier exceeds the lexer
+        // bound → not matched as a token → stays as literal text.
+        // Closes the Codex 08c3a51c bypass: pre-fix this silently
+        // collapsed via the unbounded lexer; post-fix the literal
+        // `{aaa...}` survives so the downstream brace-reject path
+        // surfaces the failure.
+        let long_name = "a".repeat(33);
+        let template = format!("{{{long_name}}}.ass");
+        let expected = format!("{{{long_name}}}.ass");
+        let got = substitute_template(&template, &[("name", "Show")]);
+        assert_eq!(got.as_deref(), Some(expected.as_str()));
     }
 
     // ── predict_chain_output_path — end-to-end with the fix ──

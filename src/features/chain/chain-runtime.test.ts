@@ -342,6 +342,20 @@ describe("resolveChainOutputPath", () => {
     );
   });
 
+  it("rejects over-cap unknown tokens via the downstream brace gate", () => {
+    // Codex 08c3a51c: 33-char lowercase tokens exceed both the chain
+    // validator's {0,31} bound AND substituteTemplate's matching
+    // {0,31} bound — they fall through both lexers as literal text.
+    // assertSafeOutputFilename then catches the `{` / `}` characters
+    // and surfaces the failure. Pre-fix the substituter regex was
+    // unbounded, silently collapsing 33+ char tokens to "" and
+    // producing a hidden output filename.
+    const longToken = "a".repeat(33);
+    expect(() => resolveChainOutputPath(INPUT_PATH, `{name}.{${longToken}}.processed.ass`)).toThrow(
+      /illegal characters/
+    );
+  });
+
   it("hdr step rejects non-ASS input with an actionable message", () => {
     // A-R8-A1-7: feeding raw SRT to a chain HDR step previously
     // produced garbage output silently. The shape guard now throws

@@ -265,7 +265,7 @@ export function pathsEqualOnFs(a: string, b: string): boolean {
 /**
  * Substitute `{token}` placeholders in `template` with `vars` values.
  *
- * Two design choices, both responses to Round 1 findings:
+ * Three design choices, all responses to review findings:
  *
  * 1. **No `$`-interpretation on values.** A naïve
  *    `template.replace(/\{token\}/g, value)` interprets `$&`, `$'`,
@@ -286,22 +286,42 @@ export function pathsEqualOnFs(a: string, b: string): boolean {
  *    instead and trims at most one boundary dot — user content's
  *    internal dots stay intact.
  *
- * `vars` keys are token names without braces; tokens whose key is
- * missing substitute to "".
+ * 3. **Strict on unknown tokens + 32-char identifier cap** (Codex
+ *    finding 08c3a51c, post-Round-11). Tokens that match the lexer
+ *    but aren't in `vars` THROW instead of substituting to "" — the
+ *    silent-collapse path previously turned typos like `{namE}.hdr.ass`
+ *    into a hidden `.hdr.ass` filename. The 32-char identifier cap
+ *    aligns the lexer with the chain validator's bound
+ *    (`chain-runtime.ts::resolveChainOutputPath`); without the cap,
+ *    long lowercase unknown tokens (≥33 chars) bypassed the chain
+ *    validator and were silently consumed here. Lexer stays
+ *    lowercase-only by design — uppercase `{NAME}` typos fall through
+ *    as literal text and surface at `assertSafeOutputFilename`'s
+ *    brace gate.
  */
 export function substituteTemplate(template: string, vars: Record<string, string>): string {
   // Parse template into ordered segments — alternating literal text
   // (template structure) and value text (substituted token data).
   type Seg = { kind: "literal" | "value"; text: string };
   const segments: Seg[] = [];
-  const tokenRe = /\{([a-z_][a-z0-9_]*)\}/g;
+  // Identifier bound {0,31} (32 chars total): real tokens are short
+  // (`name`, `ext`, `eotf`, `format`, `video_name`, `lang`); long
+  // unknown identifiers were the Codex 08c3a51c bypass vector.
+  const tokenRe = /\{([a-z_][a-z0-9_]{0,31})\}/g;
   let cursor = 0;
   let m: RegExpExecArray | null;
   while ((m = tokenRe.exec(template)) !== null) {
     if (m.index > cursor) {
       segments.push({ kind: "literal", text: template.slice(cursor, m.index) });
     }
-    segments.push({ kind: "value", text: vars[m[1]] ?? "" });
+    const name = m[1];
+    if (!(name in vars)) {
+      throw new Error(
+        `output template references unknown token '{${name}}'; ` +
+          `known tokens: ${Object.keys(vars).join(", ") || "(none)"}`
+      );
+    }
+    segments.push({ kind: "value", text: vars[name] });
     cursor = m.index + m[0].length;
   }
   if (cursor < template.length) {
