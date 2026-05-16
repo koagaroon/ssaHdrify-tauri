@@ -394,6 +394,27 @@ impl FontCache {
             }
         }
 
+        // R14 W14.2 (Codex finding 4da5361a): refuse a reparse point
+        // at the cache file path. `Connection::open` follows symlinks,
+        // so a planted symlink (dangling or not) would otherwise be
+        // followed and SQLite would create / open a database at the
+        // attacker's chosen target. The R13 W13.4 fix to
+        // `migrate_legacy_gui_cache` made dangling-symlink handling
+        // worse: pre-W13.4 the migration's `fs::rename` would have
+        // replaced the symlink itself with the legacy cache; post-W13.4
+        // `symlink_metadata().is_ok()` treats the dangling symlink as
+        // "occupied" and skips migration, leaving the symlink for
+        // `open_or_create` to follow. Closing the gap here means
+        // ALL callers (migrate + direct startup + future) are defended
+        // at the SQLite open boundary, not just the migration helper.
+        if crate::util::is_reparse_point(cache_path) {
+            return Err(CacheError::Io(format!(
+                "refusing to open cache at a reparse point (symlink / junction): {}. \
+                 Inspect and remove the link manually before relaunching.",
+                cache_path.display()
+            )));
+        }
+
         let already_existed = cache_path.exists();
         let conn = Connection::open(cache_path)
             .map_err(|e| CacheError::Io(format!("opening {}: {e}", cache_path.display())))?;
