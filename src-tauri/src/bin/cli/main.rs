@@ -3281,11 +3281,54 @@ fn s_if(n: usize) -> &'static str {
 }
 
 fn display_path(path: &Path) -> String {
-    let path = path.to_string_lossy().into_owned();
+    let raw = path.to_string_lossy().into_owned();
+    // R13 A-R13-20: sanitize control + BiDi characters before
+    // anything reaches stderr / JSON output. CLI argv is a trust
+    // boundary; clap doesn't strip ANSI escapes or U+202E and so a
+    // crafted filename like `evil\u{1b}[2J.ass` (clear-screen
+    // escape) could otherwise blank a user's terminal as soon as
+    // its display_path representation lands in a `failed_report`
+    // stderr line — or worse, ANSI sequences that move the cursor
+    // could overwrite preceding lines in the summary. Same
+    // character set as `validate_ipc_path` rejects, but here we
+    // strip rather than refuse: argv-supplied paths might be
+    // legitimate filenames on Linux (where filenames can contain
+    // any byte except `/` and NUL), so the conservative choice is
+    // to launder them at display time rather than fail the
+    // whole batch.
+    let cleaned: String = raw
+        .chars()
+        .filter(|c| {
+            !c.is_control()
+                && !matches!(
+                    c,
+                    '\u{2028}'
+                        | '\u{2029}'
+                        | '\u{200B}'
+                        | '\u{200C}'
+                        | '\u{200D}'
+                        | '\u{2060}'
+                        | '\u{180E}'
+                        | '\u{FEFF}'
+                        | '\u{200E}'
+                        | '\u{200F}'
+                        | '\u{202A}'
+                        | '\u{202B}'
+                        | '\u{202C}'
+                        | '\u{202D}'
+                        | '\u{202E}'
+                        | '\u{2066}'
+                        | '\u{2067}'
+                        | '\u{2068}'
+                        | '\u{2069}'
+                        | '\u{061C}'
+                )
+        })
+        .collect();
     if cfg!(windows) {
-        path.replace('/', "\\")
+        cleaned.replace('/', "\\")
     } else {
-        path
+        cleaned
     }
 }
 

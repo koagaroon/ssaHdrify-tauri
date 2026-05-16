@@ -92,13 +92,32 @@ pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
     }) {
         return Err(format!("{label} path contains invalid characters"));
     }
-    // Reject Windows DOS device namespaces (\\.\<device>) and the
-    // \\?\GLOBALROOT\… kernel-object form. These open raw device
-    // handles or kernel-namespace paths — never legitimate user data
-    // targets. The legitimate Win32 long-path prefixes (\\?\C:\… and
-    // \\?\UNC\server\share\…) remain allowed since they map onto
-    // ordinary filesystem paths and font scanning + drag-drop both
-    // produce them through canonicalize().
+    // Reject Windows DOS device namespaces (\\.\<device>), the
+    // \\?\GLOBALROOT\… kernel-object form, AND the Win32 extended-
+    // length prefixes (\\?\C:\… / \\?\UNC\server\share\…). These open
+    // raw device handles, kernel-namespace paths, or filesystem paths
+    // in a verbatim form that bypasses Tauri's fs:scope deny patterns
+    // (R13 A-R13-19): Tauri's `is_allowed` calls
+    // `try_resolve_symlink_and_canonicalize`, which returns the input
+    // path unmodified when the path doesn't exist (typical for output
+    // files BEFORE write). The deny glob (e.g. `$DATA/ssahdrify/**`)
+    // resolves to `C:\Users\u\AppData\Roaming\ssahdrify\**` and does
+    // NOT match the verbatim `\\?\C:\Users\u\AppData\Roaming\ssahdrify\…`
+    // form — a compromised WebView could pass `\\?\C:\Users\u\.ssh\…`
+    // through `is_allowed` and bypass the deny list. Pre-R13 the
+    // comment claimed font scanning + drag-drop produce verbatim
+    // paths through canonicalize(); audit confirmed those are
+    // Rust-internal (don't round-trip back through validate_ipc_path),
+    // so rejecting verbatim forms from frontend IPC is safe.
+    //
+    // Note: this closes the bypass for OUR Rust safe_io / encoding /
+    // fonts entrypoints. Direct plugin-fs frontend calls
+    // (`read_text_file`, `exists`) still hit Tauri's `is_allowed`
+    // without going through validate_ipc_path; the bypass persists
+    // for those at the Tauri-scope layer. Per design doc § fs:scope
+    // policy, the Rust backends are the actual security boundary;
+    // plugin-fs read exposure remains accepted P1a (requires WebView
+    // XSS to reach).
     //
     // Byte-prefix check on raw `path.as_bytes()`. The previous form
     // called `path.to_ascii_lowercase()` which allocated a fresh
@@ -112,8 +131,8 @@ pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
         bytes.len() >= needle.len() && bytes[..needle.len()].eq_ignore_ascii_case(needle)
     };
     let is_dos_device = starts_ci(br"\\.\") || starts_ci(b"//./");
-    let is_globalroot = starts_ci(br"\\?\globalroot\") || starts_ci(b"//?/globalroot/");
-    if is_dos_device || is_globalroot {
+    let is_verbatim_drive = starts_ci(br"\\?\") || starts_ci(b"//?/");
+    if is_dos_device || is_verbatim_drive {
         return Err(format!("{label} path uses a reserved device namespace"));
     }
     // Reject `..` path components (Round 5 A-R5-RUSTGUI-02). A raw IPC
@@ -498,9 +517,33 @@ mod tests {
     }
 
     #[test]
-    fn validate_accepts_long_path_prefix() {
-        // \\?\C:\… is the legitimate long-path form, NOT in the deny set.
-        validate_ipc_path(r"\\?\C:\fonts\sample.ttf", "Test").expect("long path should be allowed");
+    fn validate_rejects_long_path_prefix_drive() {
+        // R13 A-R13-19: extended-length verbatim prefix (\\?\C:\…)
+        // was previously allowed because the comment claimed font
+        // scanning + drag-drop produce them through canonicalize().
+        // Audit confirmed those are Rust-internal (don't round-trip
+        // back through validate_ipc_path), so rejecting verbatim
+        // forms from frontend IPC is safe AND closes the
+        // Tauri-scope-deny bypass for our Rust safe_io / encoding
+        // entrypoints. The frontend file dialog + drag-drop return
+        // ordinary `C:\Users\…` form, so legitimate traffic isn't
+        // affected.
+        let err = validate_ipc_path(r"\\?\C:\fonts\sample.ttf", "Test").unwrap_err();
+        assert!(err.contains("reserved device namespace"));
+    }
+
+    #[test]
+    fn validate_rejects_long_path_prefix_unc() {
+        let err = validate_ipc_path(r"\\?\UNC\server\share\foo.ass", "Test").unwrap_err();
+        assert!(err.contains("reserved device namespace"));
+    }
+
+    #[test]
+    fn validate_rejects_long_path_prefix_forward_slash() {
+        // Forward-slash equivalent (used in some Web-derived path
+        // serializations) must also reject.
+        let err = validate_ipc_path("//?/C:/Users/u/.ssh/id_rsa", "Test").unwrap_err();
+        assert!(err.contains("reserved device namespace"));
     }
 
     // ── strip_visual_line_breaks ──
