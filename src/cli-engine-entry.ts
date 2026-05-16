@@ -58,6 +58,16 @@ export interface HdrConversionRequest {
 export interface HdrConversionResult {
   outputPath: string;
   content: string;
+  /**
+   * Count of captions whose text exceeded MAX_CAPTION_TEXT_LEN (64 KB)
+   * and were emitted as skipped placeholders by parseSubtitle. The CLI
+   * shell surfaces this via stderr (no-silent-action) to mirror the
+   * GUI's `msg_oversized_skipped` warning — R12 N-R12-3 close. Always
+   * 0 for native-ASS input (processAssContent is line-based, doesn't
+   * route through parseSubtitle; the MAX_CAPTION_TEXT_LEN concept
+   * doesn't apply at this layer).
+   */
+  skippedCount: number;
 }
 
 export interface ShiftConversionRequest {
@@ -74,6 +84,14 @@ export interface ShiftConversionResult {
   format: string;
   captionCount: number;
   shiftedCount: number;
+  /**
+   * Count of captions whose text exceeded MAX_CAPTION_TEXT_LEN (64 KB)
+   * and were emitted as skipped placeholders. Forwarded from
+   * `shiftSubtitles`'s ShiftResult; the CLI shell stderr-surfaces this
+   * to mirror TimingShift.tsx's msg_oversized_skipped (R12 N-R12-3
+   * close).
+   */
+  skippedCount: number;
 }
 
 export interface RenamePlanRequest {
@@ -177,6 +195,7 @@ export function convertHdr(request: HdrConversionRequest): HdrConversionResult {
     return {
       outputPath,
       content: processAssContent(request.content, brightness, request.eotf),
+      skippedCount: 0,
     };
   }
 
@@ -184,10 +203,14 @@ export function convertHdr(request: HdrConversionRequest): HdrConversionResult {
     const preprocessed = processSrtUserText(request.content);
     const { captions } = parseSubtitle(preprocessed, DEFAULT_STYLE.fps);
     // Drop oversized-text placeholders before building ASS. parseSrt /
-    // parseVtt / parseSub / parseAss emit `{ text: "", skipped: true }`
-    // for captions over MAX_CAPTION_TEXT_LEN (W11.1 contract); without
-    // this filter the CLI HDR path serializes each as a blank Dialogue
-    // line. Mirrors HdrConvert.tsx:444 GUI-side filter.
+    // parseSub emit `{ text: "", skipped: true }` for captions over
+    // MAX_CAPTION_TEXT_LEN (W11.1 contract); without this filter the
+    // CLI HDR path serializes each as a blank Dialogue line. Mirrors
+    // HdrConvert.tsx:444 GUI-side filter. (parseVtt placeholders never
+    // reach here — `.vtt` doesn't match isConvertible; parseAss
+    // placeholders also don't — `.ass` goes through the isNativeAss
+    // branch above.)
+    const skippedCount = captions.filter((c) => c.skipped).length;
     const rawAss = buildAssDocument(
       captions
         .filter((caption) => !caption.skipped)
@@ -201,6 +224,7 @@ export function convertHdr(request: HdrConversionRequest): HdrConversionResult {
     return {
       outputPath,
       content: processAssContent(rawAss, brightness, request.eotf),
+      skippedCount,
     };
   }
 
@@ -223,6 +247,7 @@ export function convertShift(request: ShiftConversionRequest): ShiftConversionRe
     format: result.format,
     captionCount: result.captionCount,
     shiftedCount: result.preview.filter((entry) => entry.wasShifted).length,
+    skippedCount: result.skippedCount,
   };
 }
 

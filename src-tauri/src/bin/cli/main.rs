@@ -1529,6 +1529,8 @@ fn process_hdr_file(
         }
     };
 
+    let warnings = emit_oversized_skipped_warning(conversion.skipped_count, &input);
+
     if let Err(error) = write_output(
         globals,
         &output_path,
@@ -1544,8 +1546,27 @@ fn process_hdr_file(
         encoding: Some(read_result.encoding),
         status: FileStatus::Written,
         error: None,
-        warnings: None,
+        warnings,
     }
+}
+
+/// R12 N-R12-3: stderr-surface the count of skipped oversized captions
+/// (>64 KB text) so CLI / chain users get the same signal the GUI shows
+/// via msg_oversized_skipped. Returns the warning string for inclusion
+/// in `FileReport.warnings` (used by --json output) so machine readers
+/// see it too. English-only per the existing convention for
+/// unconditional warnings (verbose-gated paths use `emit_verbose` /
+/// `localize` for bilingual output).
+fn emit_oversized_skipped_warning(skipped_count: usize, input: &str) -> Option<Vec<String>> {
+    if skipped_count == 0 {
+        return None;
+    }
+    let msg = format!(
+        "Dropped {skipped_count} oversized caption(s) from {input}: \
+         text exceeded 64 KB per-caption cap"
+    );
+    eprintln!("⚠ {msg}");
+    Some(vec![msg])
 }
 
 fn run_shift(globals: &GlobalOptions, args: ShiftArgs) -> Result<ExitCode, String> {
@@ -1738,6 +1759,8 @@ fn process_shift_file_cheap_first(
         ),
     );
 
+    let warnings = emit_oversized_skipped_warning(conversion.skipped_count, &input);
+
     if let Err(error) = write_output(
         globals,
         &output_path,
@@ -1753,7 +1776,7 @@ fn process_shift_file_cheap_first(
         encoding: Some(read_result.encoding),
         status: FileStatus::Written,
         error: None,
-        warnings: None,
+        warnings,
     }
 }
 
@@ -1834,6 +1857,8 @@ fn process_shift_file_heavy_first(
         ),
     );
 
+    let warnings = emit_oversized_skipped_warning(conversion.skipped_count, &input);
+
     if let Err(error) = write_output(
         globals,
         &output_path,
@@ -1849,7 +1874,7 @@ fn process_shift_file_heavy_first(
         encoding: Some(read_result.encoding),
         status: FileStatus::Written,
         error: None,
-        warnings: None,
+        warnings,
     }
 }
 

@@ -20,10 +20,16 @@ pub struct HdrConversionRequest {
 /// `outputPath` is intentionally absent here — serde drops the unknown
 /// field. If you re-add this field, also remove the cheap resolver
 /// path in `process_hdr_file` so the two stay paired.
+///
+/// `skipped_count` carries the count of captions whose text exceeded
+/// MAX_CAPTION_TEXT_LEN (64 KB) and were emitted as skipped
+/// placeholders. The shell stderr-surfaces this when > 0 to mirror
+/// the GUI's `msg_oversized_skipped` warning — R12 N-R12-3 close.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HdrConversionResult {
     pub content: String,
+    pub skipped_count: usize,
 }
 
 /// Cheap path-only resolution request. Lets the CLI shell dedup output
@@ -79,6 +85,10 @@ pub struct ShiftConversionResult {
     pub format: String,
     pub caption_count: usize,
     pub shifted_count: usize,
+    /// Captions whose text exceeded MAX_CAPTION_TEXT_LEN (64 KB) and
+    /// were emitted as skipped placeholders. R12 N-R12-3 close (see
+    /// also `HdrConversionResult::skipped_count`).
+    pub skipped_count: usize,
 }
 
 #[derive(Debug, Serialize)]

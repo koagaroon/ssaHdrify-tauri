@@ -130,8 +130,17 @@ function shiftTransform(ctx: TransformContext, params: ShiftStepParams): Transfo
   // from the preview array's `wasShifted` flags, matching how the
   // existing `convertShift` wrapper in cli-engine-entry.ts does it.
   const shiftedCount = result.preview.filter((entry) => entry.wasShifted).length;
+  // R12 N-R12-8: surface skippedCount in the chain note when > 0.
+  // Mirrors TimingShift.tsx's msg_oversized_skipped warning — the
+  // chain note is the only user-visible signal the CLI emits for a
+  // chain step's diagnostics, so silently dropping skipped count
+  // here means oversized captions vanish without trace.
+  const baseNote =
+    `shift: ${shiftedCount}/${result.captionCount} entries shifted (format: ${result.format})`;
   const note =
-    `shift: ${shiftedCount}/${result.captionCount} entries shifted ` + `(format: ${result.format})`;
+    result.skippedCount > 0
+      ? `${baseNote}; ${result.skippedCount} oversized caption(s) skipped (>64 KB cap)`
+      : baseNote;
   return { content: result.content, note };
 }
 
