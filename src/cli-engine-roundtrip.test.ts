@@ -90,8 +90,11 @@ function guiHdrFlow(
   if (isConvertible(fileName)) {
     const preprocessed = processSrtUserText(content);
     const { captions } = parseSubtitle(preprocessed, DEFAULT_STYLE.fps);
+    // Mirror HdrConvert.tsx:444's filter — without it this test helper
+    // would diverge from the actual GUI path, falsely confirming CLI ↔
+    // GUI byte equivalence against a buggy mirror.
     const rawAss = buildAssDocument(
-      captions.map((c) => ({ start: c.start, end: c.end, text: c.text })),
+      captions.filter((c) => !c.skipped).map((c) => ({ start: c.start, end: c.end, text: c.text })),
       DEFAULT_STYLE
     );
     return { outputPath, content: processAssContent(rawAss, brightness, eotf) };

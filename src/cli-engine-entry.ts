@@ -183,12 +183,19 @@ export function convertHdr(request: HdrConversionRequest): HdrConversionResult {
   if (isConvertible(fileName)) {
     const preprocessed = processSrtUserText(request.content);
     const { captions } = parseSubtitle(preprocessed, DEFAULT_STYLE.fps);
+    // Drop oversized-text placeholders before building ASS. parseSrt /
+    // parseVtt / parseSub / parseAss emit `{ text: "", skipped: true }`
+    // for captions over MAX_CAPTION_TEXT_LEN (W11.1 contract); without
+    // this filter the CLI HDR path serializes each as a blank Dialogue
+    // line. Mirrors HdrConvert.tsx:444 GUI-side filter.
     const rawAss = buildAssDocument(
-      captions.map((caption) => ({
-        start: caption.start,
-        end: caption.end,
-        text: caption.text,
-      })),
+      captions
+        .filter((caption) => !caption.skipped)
+        .map((caption) => ({
+          start: caption.start,
+          end: caption.end,
+          text: caption.text,
+        })),
       DEFAULT_STYLE
     );
     return {
