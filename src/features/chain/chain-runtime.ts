@@ -135,8 +135,7 @@ function shiftTransform(ctx: TransformContext, params: ShiftStepParams): Transfo
   // chain note is the only user-visible signal the CLI emits for a
   // chain step's diagnostics, so silently dropping skipped count
   // here means oversized captions vanish without trace.
-  const baseNote =
-    `shift: ${shiftedCount}/${result.captionCount} entries shifted (format: ${result.format})`;
+  const baseNote = `shift: ${shiftedCount}/${result.captionCount} entries shifted (format: ${result.format})`;
   const note =
     result.skippedCount > 0
       ? `${baseNote}; ${result.skippedCount} oversized caption(s) skipped (>64 KB cap)`

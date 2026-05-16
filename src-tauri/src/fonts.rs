@@ -27,15 +27,18 @@ pub const ALLOWED_FONT_EXTENSIONS: &[&str] = &["ttf", "otf", "ttc", "otc"];
 ///
 /// Off-by-one note: the check `if total > MAX_FONTS_PER_SCAN` runs INSIDE
 /// the per-face inner loop, AFTER the entry was pushed and `total`
-/// incremented. The check fires on the very next iteration once `total`
-/// crosses the threshold, so the actual buffer ceiling is
-/// `MAX_FONTS_PER_SCAN + 1` — one over the cap by the per-push check.
-/// Kept this way deliberately so the final emit carries the entry that
-/// tripped the gate (rather than discarding it post-push). Round 11
-/// W11.5 (N4-R11-01): pre-R11 this paragraph claimed
+/// incremented. The check fires on the SAME iteration as the push that
+/// crossed the threshold — the (cap+1)th push sets `total = cap+1`,
+/// the inline check sees `cap+1 > cap` and breaks immediately. Final
+/// buffer size = `MAX_FONTS_PER_SCAN + 1`, one over the cap. Kept this
+/// way deliberately so the final emit carries the entry that tripped
+/// the gate (rather than discarding it post-push). Round 11 W11.5
+/// (N4-R11-01): pre-R11 this paragraph claimed
 /// `MAX_FONTS_PER_SCAN + MAX_TTC_FACES - 1`, which would have been true
 /// if the check ran once per FILE; it runs once per FACE, so the
-/// `MAX_TTC_FACES` term doesn't apply.
+/// `MAX_TTC_FACES` term doesn't apply. R12 N-R12-11: previous wording
+/// said "fires on the very next iteration once total crosses", which
+/// suggested a one-iteration delay; the check fires same-iteration.
 const MAX_FONTS_PER_SCAN: usize = 100_000;
 
 // MAX_INPUT_PATHS lives in `util` so dropzone and fonts share a single
@@ -3013,8 +3016,14 @@ pub fn subset_font(
         // not supported by fontcull / skrifa, would fail parse anyway,
         // and is so rare that the false-reject cost is bounded to
         // archive-only fonts.
-        let is_font = matches!(&header, b"\x00\x01\x00\x00" | b"OTTO" | b"ttcf" | b"true");
-        if !is_font {
+        // R12 N-R12-12: renamed from `is_font` — true here means
+        // "has a recognized OpenType / TrueType signature", which is
+        // narrower than "is a font". PostScript Type 1 fonts ARE
+        // fonts but lack any of these magic numbers; the comment
+        // above documents the deliberate Type 1 exclusion.
+        let has_recognized_font_signature =
+            matches!(&header, b"\x00\x01\x00\x00" | b"OTTO" | b"ttcf" | b"true");
+        if !has_recognized_font_signature {
             return Err(format!(
                 "Font file '{filename}' has no recognized font signature"
             ));

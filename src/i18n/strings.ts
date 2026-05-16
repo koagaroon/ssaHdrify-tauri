@@ -63,8 +63,14 @@ export const strings: Record<string, StringEntry> = {
   preset_hdr10_desc: { en: "Consumer", zh: "消费级" },
   preset_dv_desc: { en: "Dolby Vision", zh: "杜比视界" },
   template_tokens_hint: {
-    en: "Placeholders — {name}: input filename without extension · {eotf}: pq or hlg (lowercase)",
-    zh: "占位符 — {name}：输入文件名（不含扩展名）· {eotf}：pq 或 hlg（小写）",
+    // R12 A-R12-4: list every supported token. Custom templates now
+    // throw at conversion time for unknown tokens (post-bb85bd9
+    // substituteTemplate strict mode), so the user needs the full
+    // list to avoid surprises. `{lang}` auto-extracts from filename
+    // suffix (.zh.ass etc.); `{video_name}` is meaningful only when
+    // paired with a video (otherwise empty).
+    en: "Placeholders — {name}: filename without extension · {eotf}: pq / hlg · {lang}: language tag from filename · {video_name}: paired video stem (empty if unpaired)",
+    zh: "占位符 — {name}：输入文件名（不含扩展名）· {eotf}：pq / hlg · {lang}：从文件名后缀提取的语言标签 · {video_name}：配对视频文件名（未配对时为空）",
   },
   tab_hdr: { en: "HDR Convert", zh: "HDR 转换" },
   tab_timing: { en: "Time Shift", zh: "时间轴偏移" },

@@ -298,6 +298,14 @@ export function pathsEqualOnFs(a: string, b: string): boolean {
  *    lowercase-only by design — uppercase `{NAME}` typos fall through
  *    as literal text and surface at `assertSafeOutputFilename`'s
  *    brace gate.
+ *
+ * Caller contract for `vars` (R12 N-R12-6): keys MUST match the
+ * lexer's accepted shape `[a-z_][a-z0-9_]{0,31}` — keys containing
+ * uppercase letters, hyphens, or other characters are unreachable
+ * (the lexer never matches them, so the lookup never fires). Pass
+ * lowercase ASCII keys only. The lookup itself is case-sensitive
+ * exact-match: `vars["Lang"]` is NOT seen by a `{lang}` token even
+ * though both name the same intent.
  */
 export function substituteTemplate(template: string, vars: Record<string, string>): string {
   // Parse template into ordered segments — alternating literal text

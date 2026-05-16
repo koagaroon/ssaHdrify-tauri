@@ -104,6 +104,18 @@ static GUI_FONT_CACHE_PATH: Lazy<Mutex<Option<PathBuf>>> = Lazy::new(|| Mutex::n
 /// `fs::rename` is atomic on same-filesystem moves (both paths live
 /// under the same per-user data root, so this holds in practice).
 pub fn migrate_legacy_gui_cache(legacy_dir: &Path, new_dir: &Path) {
+    // R12 A-R12-6: PathBuf::eq is byte-level equality, not canonical.
+    // On the current shape (`<data_dir>/com.koagaroon.ssahdrify` vs
+    // `<data_dir>/ssahdrify`) the two strings are distinct, so this
+    // check correctly fires "different dirs → proceed with migration".
+    // The trap would be if the two ever resolved to the same physical
+    // path through symlinks / case-folding / 8.3 short names — in
+    // which case migration would copy a file onto itself. Today's
+    // setup precludes that: legacy uses the Tauri bundle identifier
+    // (compile-time string) and new uses `ssahdrify` (also compile-
+    // time), and both are joined onto the same `data_dir()` base. If
+    // the unified path ever changes to share a segment with the
+    // bundle ID, swap this for a canonicalize-then-compare.
     if legacy_dir == new_dir {
         return;
     }
@@ -169,6 +181,18 @@ pub fn migrate_legacy_gui_cache(legacy_dir: &Path, new_dir: &Path) {
             return;
         }
     }
+    // Sidecar loop is independently best-effort: each sidecar's
+    // rename can succeed or fail on its own, so a partial-failure
+    // shape like "main + -journal moved, -wal stuck at legacy" is
+    // possible (R12 N-R12-9 documented). SQLite at the new location
+    // recovers from a missing sidecar as a clean-close state, which
+    // is correct fallback semantics; the orphan sidecar at the
+    // legacy location is invisible to the running app and gets
+    // cleaned up the next time Tauri's bundle-namespaced dir is
+    // pruned (or by the user inspecting the legacy dir). The cost
+    // of a precise cleanup-on-failure rollback (move sidecars back
+    // to legacy if any later sidecar fails) isn't worth it — the
+    // orphan is harmless and "clean app launch" is the priority.
     for suffix in ["-journal", "-wal", "-shm"] {
         let mut legacy_side = legacy_main.clone().into_os_string();
         legacy_side.push(suffix);

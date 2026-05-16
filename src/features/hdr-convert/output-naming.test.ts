@@ -182,9 +182,9 @@ describe("resolveOutputPath — strict-throw on unknown tokens (R12 N-R12-2)", (
 
   it("throws on a 32-char unknown token (inclusive cap boundary)", () => {
     const longToken = "a".repeat(32);
-    expect(() =>
-      resolveOutputPath(`${BASE}/EP01.srt`, `{name}.{${longToken}}.ass`, "PQ")
-    ).toThrow(/unknown token/);
+    expect(() => resolveOutputPath(`${BASE}/EP01.srt`, `{name}.{${longToken}}.ass`, "PQ")).toThrow(
+      /unknown token/
+    );
   });
 
   it("rejects an over-cap unknown token via the downstream brace gate (33 chars)", () => {
@@ -193,9 +193,9 @@ describe("resolveOutputPath — strict-throw on unknown tokens (R12 N-R12-2)", (
     // brace gate catches the `{` / `}` characters. Different error
     // message than the strict-throw path, same fail-loud outcome.
     const longToken = "a".repeat(33);
-    expect(() =>
-      resolveOutputPath(`${BASE}/EP01.srt`, `{name}.{${longToken}}.ass`, "PQ")
-    ).toThrow(/illegal characters/);
+    expect(() => resolveOutputPath(`${BASE}/EP01.srt`, `{name}.{${longToken}}.ass`, "PQ")).toThrow(
+      /illegal characters/
+    );
   });
 
   it("accepts {video_name} and {lang} (known tokens with default empty values)", () => {

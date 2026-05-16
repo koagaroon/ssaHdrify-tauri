@@ -880,6 +880,19 @@ fn find_embed_step_index(plan: &chain::ChainPlan) -> Option<usize> {
 /// authoritative `unknown token` error, avoiding a permissive
 /// silent-empty prediction that diverges from TS resolution.
 ///
+/// Case asymmetry note (R12 A-R12-5): this lexer is lowercase-only
+/// (matches the TS substituteTemplate lexer). The TS chain validator
+/// at `chain-runtime.ts::resolveChainOutputPath` is case-insensitive
+/// (`[a-zA-Z_]...`) by design — it widens to catch capitalized typos
+/// like `{Eotf}` / `{NAME}` at the chain-level error path with a
+/// clean message. Uppercase fall-through from this lexer (`{NAME}`
+/// stays as literal `{NAME}` text) is then caught downstream by
+/// predict_chain_output_path's per-char brace reject (and on the TS
+/// side by `assertSafeOutputFilename`'s default-strict brace gate).
+/// Both layers fail loud; widening this lexer to mixed-case would
+/// duplicate the chain validator's check without changing the user-
+/// visible outcome.
+///
 /// Non-recursive by design (A-R5-RUSTCLI-01): substitution scans the
 /// TEMPLATE for `{...}` placeholders, not the substituted VALUES, so
 /// a malicious filename like `{name}.ass` substituted into a `{name}`
@@ -1393,24 +1406,35 @@ fn emit_chain_dry_run(plan: &chain::ChainPlan, globals: &GlobalOptions) {
     println!();
     println!("Output template: {}", plan.output_template);
     println!();
+    // R12 N-R12-10: track predicted outputs across inputs to surface
+    // duplicate-output collisions in dry-run output. The real run
+    // catches these via `seen_outputs.insert` returning false (HDR /
+    // Shift / Embed in chain). Pre-R12 dry-run silently printed both
+    // rows pointing at the same output, hiding the future failure
+    // from the user. Mirroring the real-run check here means
+    // `--dry-run` is now a faithful preview of what the real run
+    // will report.
+    let mut seen_outputs: HashSet<String> = HashSet::new();
     for input in &plan.input_files {
         println!("  {}", input.display());
         // Show the resolved output path for parity with per-feature
         // dry-run output, so users can verify the template + output_dir
         // combination produces what they expect before they remove
         // --dry-run.
-        let resolved = absolute_path(input)
-            .ok()
-            .and_then(|abs| {
-                predict_chain_output_path(
-                    &abs,
-                    &plan.output_template,
-                    globals.output_dir.as_deref(),
-                )
-            })
-            .map(|p| p.display().to_string());
-        if let Some(out) = resolved {
-            println!("    → {out}");
+        let resolved_path = absolute_path(input).ok().and_then(|abs| {
+            predict_chain_output_path(&abs, &plan.output_template, globals.output_dir.as_deref())
+        });
+        if let Some(out_path) = resolved_path.as_ref() {
+            let out_str = out_path.display().to_string();
+            // Same dedup key as real-run seen_outputs (case-folded /
+            // separator-normalized via normalize_output_key) so the
+            // dry-run preview matches what the real run will skip.
+            let key = normalize_output_key(out_path);
+            if !seen_outputs.insert(key) {
+                println!("    → {out_str}  ⚠ duplicate output (real run will fail)");
+            } else {
+                println!("    → {out_str}");
+            }
         }
         for (i, step) in plan.steps.iter().enumerate() {
             println!("    {}. {}", i + 1, step.kind_name());
