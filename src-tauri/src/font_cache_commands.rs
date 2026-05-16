@@ -129,6 +129,23 @@ pub fn migrate_legacy_gui_cache(legacy_dir: &Path, new_dir: &Path) {
         );
         return;
     }
+    // R12 A-R12-1: refuse migration if the legacy main file (or any
+    // sidecar) is a reparse point. Codebase posture across every other
+    // fs op site (safe_io, encoding, fonts) is "refuse on reparse";
+    // this migration was the lone outlier. Even though rename is
+    // generally atomic and on Windows doesn't fall back to follow-link
+    // copy-then-delete the way Linux does, posture consistency matters
+    // — and if a future stdlib change altered rename semantics the
+    // codebase should already be defended. Skip the whole migration on
+    // a suspicious legacy path; cache starts fresh at new location.
+    if crate::util::is_reparse_point(&legacy_main) {
+        log::warn!(
+            "GUI cache migration: legacy main file {} is a reparse point. \
+             Refusing to migrate; cache will start fresh at new location.",
+            legacy_main.display()
+        );
+        return;
+    }
     // Migrate main file first; sidecars follow only if main rename
     // succeeded. If sidecar rename fails after main succeeded, the
     // sidecar is left at the legacy location — SQLite at the new
@@ -157,6 +174,17 @@ pub fn migrate_legacy_gui_cache(legacy_dir: &Path, new_dir: &Path) {
         legacy_side.push(suffix);
         let legacy_side = PathBuf::from(legacy_side);
         if !legacy_side.exists() {
+            continue;
+        }
+        // Same reparse-point posture as the main file above. Sidecar
+        // is best-effort, so a suspicious sidecar just gets left at
+        // the legacy location.
+        if crate::util::is_reparse_point(&legacy_side) {
+            log::warn!(
+                "GUI cache migration: legacy sidecar {} is a reparse point. \
+                 Leaving in place; SQLite treats new location as clean-close.",
+                legacy_side.display()
+            );
             continue;
         }
         let mut new_side = new_main.clone().into_os_string();
@@ -751,10 +779,25 @@ pub fn clear_font_cache() -> Result<(), String> {
     // Best-effort cleanup of main file + journal sidecars. Same suffix
     // set as init_user_font_db so a partially-cleared state from an
     // earlier crash gets fully wiped here.
+    //
+    // R12 A-R12-2: reparse-point check before remove_file. On Windows
+    // `fs::remove_file` of a symlink removes the link, not the target,
+    // so the security delta is small — but the codebase posture
+    // everywhere else (safe_io, encoding, fonts) refuses on reparse,
+    // and the cache file under per-user AppData should never be a
+    // symlink in the normal case. Skip the remove on suspicion;
+    // re-create below will then fail and surface the issue.
     for suffix in ["", "-journal", "-wal", "-shm"] {
         let mut p = path.clone().into_os_string();
         p.push(suffix);
         let p = PathBuf::from(p);
+        if crate::util::is_reparse_point(&p) {
+            log::warn!(
+                "clear_font_cache: refusing to remove reparse-point {}; leaving in place.",
+                p.display()
+            );
+            continue;
+        }
         match std::fs::remove_file(&p) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}

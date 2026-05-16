@@ -306,6 +306,21 @@ pub fn init_user_font_db(app_data_dir: &Path) -> Result<(), String> {
         "Cannot create user font index directory".to_string()
     })?;
     let db_path = app_data_dir.join(USER_FONT_DB_FILENAME);
+    // R12 A-R12-2: reparse-point check before stale-DB cleanup. Posture
+    // consistency with safe_io / encoding / fonts elsewhere. On Windows
+    // remove_file of a symlink removes the link not the target, so the
+    // security delta is small — but a startup invariant is "cache files
+    // under per-user AppData are not symlinks", and a reparse point
+    // here signals tampering / a manual user link that we should not
+    // silently destroy.
+    if crate::util::is_reparse_point(&db_path) {
+        log::warn!(
+            "User font index path '{}' is a reparse point; \
+             refusing to reset.",
+            db_path.display()
+        );
+        return Err("Cannot reset user font index".to_string());
+    }
     match fs::remove_file(&db_path) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -323,11 +338,20 @@ pub fn init_user_font_db(app_data_dir: &Path) -> Result<(), String> {
     // they accumulate over time and complicate forensics. Suffixes per
     // SQLite docs: -journal (rollback), -wal / -shm (write-ahead log).
     // Mirror the main-file pattern: NotFound is silent, other errors get
-    // a forensic warn but never block init.
+    // a forensic warn but never block init. Reparse-point sidecars are
+    // skipped (defense-in-depth alongside the main file's check above).
     for suffix in ["-journal", "-wal", "-shm"] {
         let mut sidecar = db_path.clone().into_os_string();
         sidecar.push(suffix);
         let sidecar = PathBuf::from(sidecar);
+        if crate::util::is_reparse_point(&sidecar) {
+            log::warn!(
+                "User font index sidecar '{}' is a reparse point; \
+                 skipping cleanup.",
+                sidecar.display()
+            );
+            continue;
+        }
         match fs::remove_file(&sidecar) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
