@@ -107,6 +107,57 @@ describe("runChain — single shift step", () => {
     // casing to a particular convention.
     expect(result.notes[0]).toMatch(/shift: \d+\/\d+ entries shifted \(format: ass\)/i);
   });
+
+  it("reports skippedCount = 0 on a clean shift (no oversized captions)", () => {
+    // R13 N-R13-1 / N-R13-2: pin the structured skippedCount field
+    // that replaced R12 W12.2's note-suffix shape. The Rust shell
+    // routes this through emit_oversized_skipped_warning when > 0;
+    // the zero case must NOT trigger any warning, which the Rust
+    // side guarantees only if the field is structurally a number
+    // (not a string-parsed suffix).
+    const plan: ChainPlan = {
+      steps: [{ kind: "shift", params: { offsetMs: 1000 } }],
+      outputTemplate: "{name}.shifted.ass",
+    };
+    const result = runChain({ plan, inputPath: INPUT_PATH, content: ASS_FIXTURE });
+    expect(result.skippedCount).toBe(0);
+  });
+
+  it("aggregates skippedCount > 0 when shift parses oversized captions (R13 N-R13-1)", () => {
+    // Companion to the standalone-side oversized SRT test in
+    // cli-engine-roundtrip.test.ts. The chain runs against ASS, so
+    // the fixture stuffs one Dialogue line with text exceeding
+    // MAX_CAPTION_TEXT_LEN (64,000 chars). parseAss emits a skipped
+    // placeholder for that line, shiftTransform forwards the count
+    // to TransformResult.skippedCount, runChain aggregates into
+    // ChainResult.skippedCount. The note must NOT carry the count
+    // as a string suffix (the W12.2 shape that R13 replaces) —
+    // it's structurally separate now.
+    const huge = "A".repeat(65_000);
+    const oversizedAss = [
+      "[Script Info]",
+      "ScriptType: v4.00+",
+      "",
+      "[V4+ Styles]",
+      "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
+      "Style: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1",
+      "",
+      "[Events]",
+      "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+      `Dialogue: 0,0:00:01.00,0:00:03.00,Default,,0,0,0,,${huge}`,
+      "Dialogue: 0,0:00:04.00,0:00:06.00,Default,,0,0,0,,Normal caption",
+      "",
+    ].join("\n");
+    const plan: ChainPlan = {
+      steps: [{ kind: "shift", params: { offsetMs: 1000 } }],
+      outputTemplate: "{name}.shifted.ass",
+    };
+    const result = runChain({ plan, inputPath: INPUT_PATH, content: oversizedAss });
+    expect(result.skippedCount).toBe(1);
+    // Note stays clean — no string-embedded skipped count.
+    expect(result.notes[0]).not.toMatch(/oversized/i);
+    expect(result.notes[0]).not.toMatch(/skipped/i);
+  });
 });
 
 // ── Multi-step chains: HDR + Shift in both orders ───────────

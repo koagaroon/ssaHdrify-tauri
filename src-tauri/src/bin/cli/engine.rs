@@ -184,12 +184,21 @@ pub struct FontEmbedApplyResult {
 /// truth for the chain output: `content` is what gets written,
 /// `output_path` is where, `notes` is the per-step diagnostic
 /// summary surfaced in the Rust shell's per-file report.
+///
+/// `skipped_count` is the aggregate count of captions whose text
+/// exceeded MAX_CAPTION_TEXT_LEN (64 KB) across every step that
+/// parses subtitle content. The shell routes this through
+/// `emit_oversized_skipped_warning` (stderr + FileReport.warnings)
+/// to mirror the standalone HDR / Shift CLI paths — R13 N-R13-1
+/// closes the gap where R12 W12.2 left the chain side relying on
+/// a string-suffix-in-note shape the Rust shell never parsed.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChainRunResult {
     pub content: String,
     pub output_path: String,
     pub notes: Vec<String>,
+    pub skipped_count: usize,
 }
 
 /// Wrapper struct exists only because the existing `call_engine`

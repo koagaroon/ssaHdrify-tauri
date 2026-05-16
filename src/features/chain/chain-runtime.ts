@@ -65,6 +65,16 @@ interface TransformResult {
   content: string;
   /** Optional human-readable note for the summary report. */
   note?: string;
+  /**
+   * Optional count of captions whose text exceeded
+   * MAX_CAPTION_TEXT_LEN (64 KB) and were emitted as skipped
+   * placeholders during this step's processing. Aggregated by
+   * `runChain` into `ChainResult.skippedCount` for the Rust shell
+   * to surface via `emit_oversized_skipped_warning` (stderr +
+   * FileReport.warnings). R13 N-R13-1 — was previously a note
+   * suffix only, which the Rust shell didn't parse.
+   */
+  skippedCount?: number;
 }
 
 /**
@@ -130,17 +140,17 @@ function shiftTransform(ctx: TransformContext, params: ShiftStepParams): Transfo
   // from the preview array's `wasShifted` flags, matching how the
   // existing `convertShift` wrapper in cli-engine-entry.ts does it.
   const shiftedCount = result.preview.filter((entry) => entry.wasShifted).length;
-  // R12 N-R12-8: surface skippedCount in the chain note when > 0.
-  // Mirrors TimingShift.tsx's msg_oversized_skipped warning — the
-  // chain note is the only user-visible signal the CLI emits for a
-  // chain step's diagnostics, so silently dropping skipped count
-  // here means oversized captions vanish without trace.
-  const baseNote = `shift: ${shiftedCount}/${result.captionCount} entries shifted (format: ${result.format})`;
-  const note =
-    result.skippedCount > 0
-      ? `${baseNote}; ${result.skippedCount} oversized caption(s) skipped (>64 KB cap)`
-      : baseNote;
-  return { content: result.content, note };
+  // R13 N-R13-1: surface skippedCount as a structured field on
+  // TransformResult (not a note suffix). runChain aggregates it
+  // into ChainResult.skippedCount; the Rust shell reads that field
+  // and routes a stderr warning + FileReport.warnings entry via
+  // emit_oversized_skipped_warning, matching the standalone HDR /
+  // Shift CLI paths. R12 W12.2's note-suffix approach was opaque to
+  // the Rust shell (notes are unparsed strings) and only printed
+  // under --verbose, on stdout — neither surface matched the
+  // standalone-path warning behavior.
+  const note = `shift: ${shiftedCount}/${result.captionCount} entries shifted (format: ${result.format})`;
+  return { content: result.content, note, skippedCount: result.skippedCount };
 }
 
 function embedTransform(ctx: TransformContext, params: EmbedStepParams): TransformResult {
@@ -238,6 +248,12 @@ function decodeBase64(b64: string, name: string): Uint8Array {
 export function runChain(request: ChainRunRequest): ChainResult {
   const { plan, inputPath, content } = request;
   const notes: string[] = [];
+  // R13 N-R13-1: aggregate skipped-caption counts across every step
+  // so the Rust shell sees a single number it can pass to
+  // `emit_oversized_skipped_warning`. Today only shiftTransform
+  // populates `result.skippedCount`; an embed or HDR step that grew
+  // similar semantics would feed in the same way.
+  let totalSkippedCount = 0;
   let current = content;
 
   // Round 11 W11.3 (N1-R11-04): chain-level preflight for the strictest
@@ -303,10 +319,13 @@ export function runChain(request: ChainRunRequest): ChainResult {
     if (result.note) {
       notes.push(result.note);
     }
+    if (result.skippedCount !== undefined && result.skippedCount > 0) {
+      totalSkippedCount += result.skippedCount;
+    }
   }
 
   const outputPath = resolveChainOutputPath(inputPath, plan.outputTemplate);
-  return { content: current, outputPath, notes };
+  return { content: current, outputPath, notes, skippedCount: totalSkippedCount };
 }
 
 /**

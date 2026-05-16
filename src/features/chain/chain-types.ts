@@ -161,4 +161,16 @@ export interface ChainResult {
    * Empty array if no notes.
    */
   notes: string[];
+  /**
+   * Aggregate count of captions whose text exceeded
+   * MAX_CAPTION_TEXT_LEN (64 KB) across every step that parses
+   * subtitle content (today: only `shift`). Round 13 N-R13-1 — the
+   * Rust shell reads this directly and routes it through
+   * `emit_oversized_skipped_warning` (stderr + FileReport.warnings),
+   * mirroring the standalone HDR / Shift CLI paths. Previously the
+   * count was embedded as a suffix in `notes[]`, which the Rust
+   * shell never parsed and which printed to stdout (notes loop),
+   * not stderr where warnings belong.
+   */
+  skippedCount: number;
 }

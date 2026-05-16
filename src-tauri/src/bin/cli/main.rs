@@ -1324,6 +1324,18 @@ fn process_one_chain_input(
         }
     };
 
+    // R13 N-R13-1: surface chain's aggregated skipped-caption count
+    // through the same path the standalone HDR / Shift CLIs use —
+    // stderr "⚠ ..." line + append to FileReport.warnings (for
+    // --json output). Pre-R13 this rode along inside an opaque
+    // chain note string that printed to stdout under --verbose
+    // only, missing both the stderr-routing and the json wire.
+    // Embed pre-resolution warnings (collected above) sit in the
+    // same vec; both get surfaced via the Written outcome.
+    if let Some(mut msgs) = emit_oversized_skipped_warning(result.skipped_count, &input_str) {
+        warnings.append(&mut msgs);
+    }
+
     // Apply --output-dir relocation (chain-global, terminal step
     // only) using the existing helper. The runtime returned the
     // path resolved against the input's directory; relocation
