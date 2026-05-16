@@ -1343,7 +1343,7 @@ fn process_one_chain_input(
     // only, missing both the stderr-routing and the json wire.
     // Embed pre-resolution warnings (collected above) sit in the
     // same vec; both get surfaced via the Written outcome.
-    if let Some(mut msgs) = emit_oversized_skipped_warning(result.skipped_count, &input_str) {
+    if let Some(mut msgs) = format_oversized_skipped_warning(result.skipped_count, &input_str) {
         warnings.append(&mut msgs);
     }
 
@@ -1588,7 +1588,7 @@ fn process_hdr_file(
         }
     };
 
-    let warnings = emit_oversized_skipped_warning(conversion.skipped_count, &input);
+    let warnings = format_oversized_skipped_warning(conversion.skipped_count, &input);
 
     if let Err(error) = write_output(
         globals,
@@ -1616,25 +1616,30 @@ fn process_hdr_file(
 /// see it too. English-only per the existing convention for
 /// unconditional warnings (verbose-gated paths use `emit_verbose` /
 /// `localize` for bilingual output).
-fn emit_oversized_skipped_warning(skipped_count: usize, input: &str) -> Option<Vec<String>> {
+/// R14 W14.3 (Codex finding c637f2f4): pure format helper. Builds
+/// the oversized-caption warning message and returns it; does NOT
+/// `eprintln!`. Callers attach the returned `Vec<String>` to
+/// `FileReport.warnings`; the actual stderr emission happens at the
+/// existing print loops — `emit_file_report` for standalone HDR /
+/// Shift / Embed, and the `ChainFileOutcome::Written` arm for chain.
+/// Pre-W14.3 the helper did both (eprintln + return) which caused
+/// double emission AND bypassed `--quiet` at the helper's eprintln
+/// (the print loops are `!globals.quiet`-gated; the helper wasn't).
+/// Naming change reinforces the new contract: this is `format_*`,
+/// not `emit_*`.
+fn format_oversized_skipped_warning(skipped_count: usize, input: &str) -> Option<Vec<String>> {
     if skipped_count == 0 {
         return None;
     }
-    // R14 W14.1: `input` is a raw operational path string and may
-    // contain control / BiDi chars from a crafted argv on POSIX. The
-    // stderr message must be display-safe; the returned Vec retains
-    // the same sanitized form because it flows into
-    // `FileReport.warnings` which is later printed by the chain
-    // Written outcome's loop (also stderr) and serialized to JSON
-    // (where serde's escaping is independent — sanitized form is
-    // still correct, just no longer the raw path).
+    // `input` is a raw operational path; sanitize before embedding
+    // in the message body so downstream stderr / println emission
+    // can't be corrupted by control / BiDi chars from a crafted
+    // argv (R14 W14.1 / Codex 6b2089f3 family).
     let input_disp = sanitize_for_display(input);
-    let msg = format!(
+    Some(vec![format!(
         "Dropped {skipped_count} oversized caption(s) from {input_disp}: \
          text exceeded 64 KB per-caption cap"
-    );
-    eprintln!("⚠ {msg}");
-    Some(vec![msg])
+    )])
 }
 
 fn run_shift(globals: &GlobalOptions, args: ShiftArgs) -> Result<ExitCode, String> {
@@ -1827,7 +1832,7 @@ fn process_shift_file_cheap_first(
         ),
     );
 
-    let warnings = emit_oversized_skipped_warning(conversion.skipped_count, &input);
+    let warnings = format_oversized_skipped_warning(conversion.skipped_count, &input);
 
     if let Err(error) = write_output(
         globals,
@@ -1895,7 +1900,7 @@ fn process_shift_file_heavy_first(
     // on stderr even when X's output coincides with a prior input's
     // and gets skipped at write time. The warning is honest — the
     // conversion really did detect oversized captions in this file.
-    let warnings = emit_oversized_skipped_warning(conversion.skipped_count, &input);
+    let warnings = format_oversized_skipped_warning(conversion.skipped_count, &input);
 
     let output_path = match relocate_output_path(&conversion.output_path, context.output_dir) {
         Ok(path) => path,
@@ -3347,7 +3352,7 @@ fn display_path(path: &Path) -> String {
     // this layer made `evil\u{202e}.ass` silently resolve to a
     // sibling `evil.ass`, picking the wrong file at read / write
     // time. Display-time sanitization belongs at the print sites
-    // (`emit_file_report`, `emit_oversized_skipped_warning`, etc.)
+    // (`emit_file_report`, `format_oversized_skipped_warning`, etc.)
     // via `sanitize_for_display`.
     let raw = path.to_string_lossy().into_owned();
     if cfg!(windows) {
@@ -4126,7 +4131,7 @@ mod tests {
     #[test]
     fn sanitize_for_display_strips_control_and_bidi() {
         // The display-time sanitizer companion to display_path. Used
-        // at `emit_file_report` and `emit_oversized_skipped_warning`
+        // at `emit_file_report` and `format_oversized_skipped_warning`
         // to laundering paths before stderr/println interpolation,
         // so a crafted argv filename can't corrupt the terminal.
         assert_eq!(
