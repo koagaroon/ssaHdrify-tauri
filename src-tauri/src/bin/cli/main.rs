@@ -647,9 +647,13 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
             Some(m) => m,
             None => {
                 if !globals.quiet {
+                    // R14 W14.4: sanitize before stderr interpolation
+                    // (Pattern 1 callsite completion to W14.1 — this
+                    // refresh-fonts print site was missed in the
+                    // initial sweep).
+                    let folder_disp = sanitize_for_display(&folder_path_str);
                     eprintln!(
-                        "  ⚠ {}: skipped — folder mtime unreadable (would cache as epoch-zero and re-trigger refresh next run)",
-                        folder_path_str
+                        "  ⚠ {folder_disp}: skipped — folder mtime unreadable (would cache as epoch-zero and re-trigger refresh next run)"
                     );
                 }
                 continue;
@@ -823,7 +827,15 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
         ) {
             ChainFileOutcome::Written(out, warnings) => {
                 if !globals.quiet {
-                    println!("✓ {} → {}", input.display(), out.display());
+                    // R14 W14.4 (Codex 784f9b56 Pattern 1 sweep):
+                    // `input` / `out` are raw PathBufs from clap
+                    // argv + Rust shell output resolution. Sanitize
+                    // before terminal interpolation; `warning`
+                    // strings already passed through
+                    // sanitize_for_display at the format helpers.
+                    let input_disp = sanitize_for_display(&input.to_string_lossy());
+                    let out_disp = sanitize_for_display(&out.to_string_lossy());
+                    println!("✓ {input_disp} → {out_disp}");
                     // Surface embed pre-resolution warnings (missing
                     // fonts under --on-missing warn, subset failures)
                     // — without this chain mode silently drops the
@@ -837,12 +849,16 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
             }
             ChainFileOutcome::Skipped(reason) => {
                 if !globals.quiet {
-                    println!("⊘ {}: {}", input.display(), reason);
+                    let input_disp = sanitize_for_display(&input.to_string_lossy());
+                    let reason_disp = sanitize_for_display(&reason);
+                    println!("⊘ {input_disp}: {reason_disp}");
                 }
                 skipped += 1;
             }
             ChainFileOutcome::Failed(err) => {
-                eprintln!("✗ {}: {}", input.display(), err);
+                let input_disp = sanitize_for_display(&input.to_string_lossy());
+                let err_disp = sanitize_for_display(&err);
+                eprintln!("✗ {input_disp}: {err_disp}");
                 failed += 1;
             }
         }
@@ -1590,13 +1606,20 @@ fn process_hdr_file(
 
     let warnings = format_oversized_skipped_warning(conversion.skipped_count, &input);
 
+    // R14 W14.4 (Codex 1577b31f sibling): attach warnings to the
+    // failed_report on write_output failure so the oversized-caption
+    // diagnostic isn't silently lost. Same fix shape as
+    // process_shift_file_heavy_first's three early-return paths.
     if let Err(error) = write_output(
         globals,
         &output_path,
         &conversion.content,
         globals.overwrite,
     ) {
-        return failed_report(&input_path, Some(output), Some(read_result.encoding), error);
+        let mut report =
+            failed_report(&input_path, Some(output), Some(read_result.encoding), error);
+        report.warnings = warnings;
+        return report;
     }
 
     FileReport {
@@ -1834,13 +1857,21 @@ fn process_shift_file_cheap_first(
 
     let warnings = format_oversized_skipped_warning(conversion.skipped_count, &input);
 
+    // R14 W14.4 (Codex 1577b31f sibling): attach warnings to the
+    // failed_report on write_output failure so the oversized-caption
+    // diagnostic isn't silently lost. Cheap-first dedup happens
+    // BEFORE convert, so the dedup early-return path doesn't see
+    // warnings — only the write-fail path can lose them here.
     if let Err(error) = write_output(
         globals,
         &output_path,
         &conversion.content,
         globals.overwrite,
     ) {
-        return failed_report(&input_path, Some(output), Some(read_result.encoding), error);
+        let mut report =
+            failed_report(&input_path, Some(output), Some(read_result.encoding), error);
+        report.warnings = warnings;
+        return report;
     }
 
     FileReport {
@@ -1890,27 +1921,32 @@ fn process_shift_file_heavy_first(
         }
     };
 
-    // R13 N-R13-15: emit the oversized-skipped warning IMMEDIATELY
-    // after convert_shift, BEFORE the dedup-and-exists check below.
-    // Heavy-first ordering means dedup runs after conversion; if the
-    // file dedups (output collision with a prior input) the early-
-    // return at `dedup_and_exists_check` would otherwise discard
-    // `conversion.skipped_count` silently. Surfacing the count here
-    // means the user sees "⚠ dropped N oversized captions from X"
-    // on stderr even when X's output coincides with a prior input's
-    // and gets skipped at write time. The warning is honest — the
-    // conversion really did detect oversized captions in this file.
+    // R13 N-R13-15 + R14 W14.4 (Codex 1577b31f): the oversized-skipped
+    // warning is computed BEFORE the dedup / dry-run / write-fail
+    // early returns below, so the warning exists by then. W14.3
+    // removed the helper's eprintln in favor of routing through
+    // FileReport.warnings + emit_file_report's print loop — but those
+    // early returns construct FileReport via `failed_report` /
+    // `skipped_report` / `planned_report`, all of which set
+    // `warnings: None`. Result: pre-W14.3 the helper eprintln'd
+    // the warning on the way out, so dry-run / dedup-skip still
+    // surfaced it; post-W14.3 the warning was silently lost. Fix:
+    // attach `warnings` to every FileReport returned from this
+    // function (early or final) by mutating the helper-constructed
+    // report before returning.
     let warnings = format_oversized_skipped_warning(conversion.skipped_count, &input);
 
     let output_path = match relocate_output_path(&conversion.output_path, context.output_dir) {
         Ok(path) => path,
         Err(error) => {
-            return failed_report(&input_path, None, Some(read_result.encoding), error);
+            let mut report = failed_report(&input_path, None, Some(read_result.encoding), error);
+            report.warnings = warnings;
+            return report;
         }
     };
     let output = display_path(&output_path);
 
-    if let Some(early) = dedup_and_exists_check(
+    if let Some(mut early) = dedup_and_exists_check(
         globals,
         &input_path,
         &output_path,
@@ -1918,6 +1954,7 @@ fn process_shift_file_heavy_first(
         Some(&read_result.encoding),
         seen_outputs,
     ) {
+        early.warnings = warnings.clone();
         return early;
     }
 
@@ -1926,7 +1963,9 @@ fn process_shift_file_heavy_first(
     // captions, M shifted" line because no shift was actually
     // committed. Matches the cheap-first path's ordering.
     if globals.dry_run {
-        return planned_report(&input_path, Some(output), Some(read_result.encoding));
+        let mut planned = planned_report(&input_path, Some(output), Some(read_result.encoding));
+        planned.warnings = warnings;
+        return planned;
     }
 
     let format_upper = conversion.format.to_uppercase();
@@ -1948,7 +1987,10 @@ fn process_shift_file_heavy_first(
         &conversion.content,
         globals.overwrite,
     ) {
-        return failed_report(&input_path, Some(output), Some(read_result.encoding), error);
+        let mut report =
+            failed_report(&input_path, Some(output), Some(read_result.encoding), error);
+        report.warnings = warnings;
+        return report;
     }
 
     FileReport {
@@ -2271,9 +2313,18 @@ fn emit_font_source_summary(
     // Path suffix is optional: font dirs always have one; font files
     // are a flat list with no single "source path" so the suffix is
     // omitted in that case.
+    //
+    // R14 W14.4 (Codex 784f9b56): sanitize_for_display is required
+    // here because this site is a stdout/println interpolation and
+    // `display_path` is now a pure formatter (W14.1 split). A
+    // crafted POSIX font-dir name containing ANSI escape sequences
+    // or U+202E would otherwise reach the terminal verbatim and
+    // corrupt the verbose summary. W14.1 fixed emit_file_report and
+    // format_oversized_skipped_warning's interpolations but missed
+    // this print site; this is a Pattern 1 audit completion.
     let (path_suffix_en, path_suffix_zh) = match path {
         Some(p) => {
-            let display = display_path(p);
+            let display = sanitize_for_display(&display_path(p));
             (format!(" ({display})"), format!("（{display}）"))
         }
         None => (String::new(), String::new()),
@@ -2876,9 +2927,13 @@ fn process_rename_pair(
         );
     }
 
-    let from = display_path(&input_path);
-    let to = display_path(&output_path);
-    let video = &row.video_path;
+    // R14 W14.4 (Codex 784f9b56 Pattern 1 sweep): sanitize before
+    // stdout interpolation. `from` / `to` / `video` are all raw
+    // operational path strings; emit_verbose calls println via
+    // localize, so control chars would reach the terminal verbatim.
+    let from = sanitize_for_display(&display_path(&input_path));
+    let to = sanitize_for_display(&display_path(&output_path));
+    let video = sanitize_for_display(&row.video_path);
     emit_verbose(
         globals,
         format!("rename: {from} -> {to} (video: {video})"),
