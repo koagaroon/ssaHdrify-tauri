@@ -1620,8 +1620,17 @@ fn emit_oversized_skipped_warning(skipped_count: usize, input: &str) -> Option<V
     if skipped_count == 0 {
         return None;
     }
+    // R14 W14.1: `input` is a raw operational path string and may
+    // contain control / BiDi chars from a crafted argv on POSIX. The
+    // stderr message must be display-safe; the returned Vec retains
+    // the same sanitized form because it flows into
+    // `FileReport.warnings` which is later printed by the chain
+    // Written outcome's loop (also stderr) and serialized to JSON
+    // (where serde's escaping is independent — sanitized form is
+    // still correct, just no longer the raw path).
+    let input_disp = sanitize_for_display(input);
     let msg = format!(
-        "Dropped {skipped_count} oversized caption(s) from {input}: \
+        "Dropped {skipped_count} oversized caption(s) from {input_disp}: \
          text exceeded 64 KB per-caption cap"
     );
     eprintln!("⚠ {msg}");
@@ -2945,8 +2954,22 @@ fn emit_report_summary(globals: &GlobalOptions, report: &CommandReport) -> Resul
 
 fn emit_file_report(globals: &GlobalOptions, result: &FileReport) {
     if globals.json {
+        // JSON output: `serde_json` escapes control characters as
+        // `\uXXXX` automatically, so machine readers see the original
+        // raw bytes intact. No sanitization needed at this layer; the
+        // input/output strings remain operationally-correct in the
+        // wire form. Skip the human-formatting branch entirely.
         return;
     }
+
+    // R14 W14.1: paths interpolated into stderr/println output must
+    // pass through `sanitize_for_display` to strip control / BiDi /
+    // zero-width chars. The strings themselves (`result.input` /
+    // `result.output`) are the raw operational path forms — JSON
+    // serialization above handles them correctly via serde escaping,
+    // but a raw control char or U+202E reaching `eprintln!` here
+    // would corrupt the terminal (ANSI escapes, direction reversal).
+    let input_disp = sanitize_for_display(&result.input);
 
     // Status line first. Failed always surfaces to stderr regardless
     // of --quiet (it's an error, not output); other statuses respect
@@ -2957,13 +2980,14 @@ fn emit_file_report(globals: &GlobalOptions, result: &FileReport) {
                 "{}",
                 localize(
                     globals,
-                    format!("failed: {} ({error})", result.input),
-                    format!("失败：{}（{error}）", result.input),
+                    format!("failed: {input_disp} ({error})"),
+                    format!("失败：{input_disp}（{error}）"),
                 )
             );
         }
     } else if !globals.quiet {
         if let Some(output) = &result.output {
+            let output_disp = sanitize_for_display(output);
             match result.status {
                 FileStatus::Written => {
                     if globals.verbose {
@@ -2972,8 +2996,8 @@ fn emit_file_report(globals: &GlobalOptions, result: &FileReport) {
                             "{}",
                             localize(
                                 globals,
-                                format!("written: {} -> {} ({encoding})", result.input, output),
-                                format!("已写入：{} -> {}（{encoding}）", result.input, output),
+                                format!("written: {input_disp} -> {output_disp} ({encoding})"),
+                                format!("已写入：{input_disp} -> {output_disp}（{encoding}）"),
                             )
                         );
                     } else {
@@ -2981,8 +3005,8 @@ fn emit_file_report(globals: &GlobalOptions, result: &FileReport) {
                             "{}",
                             localize(
                                 globals,
-                                format!("written: {output}"),
-                                format!("已写入：{output}"),
+                                format!("written: {output_disp}"),
+                                format!("已写入：{output_disp}"),
                             )
                         );
                     }
@@ -2991,16 +3015,16 @@ fn emit_file_report(globals: &GlobalOptions, result: &FileReport) {
                     "{}",
                     localize(
                         globals,
-                        format!("would write: {output}"),
-                        format!("将写入：{output}"),
+                        format!("would write: {output_disp}"),
+                        format!("将写入：{output_disp}"),
                     )
                 ),
                 FileStatus::Skipped => println!(
                     "{}",
                     localize(
                         globals,
-                        format!("skipped: {output}"),
-                        format!("已跳过：{output}"),
+                        format!("skipped: {output_disp}"),
+                        format!("已跳过：{output_disp}"),
                     )
                 ),
                 FileStatus::Failed => {}
@@ -3314,23 +3338,40 @@ fn s_if(n: usize) -> &'static str {
 }
 
 fn display_path(path: &Path) -> String {
+    // Pure formatter: PathBuf → String + Windows slash normalization.
+    // The returned string is canonical for OS-level filesystem
+    // operations — `read_text_detect_encoding_inner`, engine path
+    // resolution, FileReport.input field. Character filtering MUST
+    // NOT happen here (R14 W14.1 reverting the R13 W13.5 regression
+    // Codex finding 6b2089f3 caught): sanitizing destructively at
+    // this layer made `evil\u{202e}.ass` silently resolve to a
+    // sibling `evil.ass`, picking the wrong file at read / write
+    // time. Display-time sanitization belongs at the print sites
+    // (`emit_file_report`, `emit_oversized_skipped_warning`, etc.)
+    // via `sanitize_for_display`.
     let raw = path.to_string_lossy().into_owned();
-    // R13 A-R13-20: sanitize control + BiDi characters before
-    // anything reaches stderr / JSON output. CLI argv is a trust
-    // boundary; clap doesn't strip ANSI escapes or U+202E and so a
-    // crafted filename like `evil\u{1b}[2J.ass` (clear-screen
-    // escape) could otherwise blank a user's terminal as soon as
-    // its display_path representation lands in a `failed_report`
-    // stderr line — or worse, ANSI sequences that move the cursor
-    // could overwrite preceding lines in the summary. Same
-    // character set as `validate_ipc_path` rejects, but here we
-    // strip rather than refuse: argv-supplied paths might be
-    // legitimate filenames on Linux (where filenames can contain
-    // any byte except `/` and NUL), so the conservative choice is
-    // to launder them at display time rather than fail the
-    // whole batch.
-    let cleaned: String = raw
-        .chars()
+    if cfg!(windows) {
+        raw.replace('/', "\\")
+    } else {
+        raw
+    }
+}
+
+/// Strip control + BiDi + zero-width characters from a path string
+/// for safe interpolation into human-readable output (stderr/println).
+/// R14 W14.1 — the same filter set as `validate_ipc_path` rejects, but
+/// here we strip rather than refuse: argv-supplied filenames may
+/// legitimately contain these characters on POSIX (Linux filenames
+/// accept any byte except `/` and NUL), so the conservative choice is
+/// to launder them at display time rather than fail the whole batch.
+///
+/// JSON output doesn't need this helper — `serde_json` escapes control
+/// characters as `\uXXXX` automatically, so machine-parseable readers
+/// see the original bytes intact. Apply this helper ONLY at the
+/// `eprintln!` / `println!` formatting sites where a raw control char
+/// would corrupt the terminal (ANSI escapes, U+202E direction reversal).
+fn sanitize_for_display(s: &str) -> String {
+    s.chars()
         .filter(|c| {
             !c.is_control()
                 && !matches!(
@@ -3357,12 +3398,7 @@ fn display_path(path: &Path) -> String {
                         | '\u{061C}'
                 )
         })
-        .collect();
-    if cfg!(windows) {
-        cleaned.replace('/', "\\")
-    } else {
-        cleaned
-    }
+        .collect()
 }
 
 fn normalize_output_key(path: &Path) -> String {
@@ -3623,10 +3659,10 @@ fn parse_timestamp_part(part: &str, label: &str) -> Result<i64, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_locale, copy_file_output, create_cli_font_db_dir, duplicate_rename_output_keys,
-        engine, normalize_output_key, parse_duration_ms, parse_timestamp_ms,
-        predict_chain_output_path, relocate_output_path, substitute_template, write_output,
-        GlobalOptions, OutputLang, TempFontDbDir,
+        classify_locale, copy_file_output, create_cli_font_db_dir, display_path,
+        duplicate_rename_output_keys, engine, normalize_output_key, parse_duration_ms,
+        parse_timestamp_ms, predict_chain_output_path, relocate_output_path, sanitize_for_display,
+        substitute_template, write_output, GlobalOptions, OutputLang, TempFontDbDir,
     };
     // Import the canonical filename literal directly from app_lib so the
     // test pins the same name `TempFontDbDir::drop`'s remove_dir_all
@@ -4056,5 +4092,55 @@ mod tests {
             .and_then(|n| n.to_str())
             .expect("file_name str");
         assert_eq!(file_name, "Show..special.shifted.ass");
+    }
+
+    // ── R14 W14.1: display_path is a PURE FORMATTER (operational) ──
+
+    #[test]
+    fn display_path_preserves_control_chars_for_filesystem_correctness() {
+        // R14 W14.1 (Codex finding 6b2089f3): display_path's return
+        // value is used operationally — as the input to
+        // `read_text_detect_encoding_inner` and as the
+        // `HdrPathRequest.input_path` field sent to the engine. If
+        // a POSIX filename legitimately contains a control char or
+        // U+202E, stripping at display_path makes the CLI open a
+        // DIFFERENT file (or the same name minus the special char,
+        // which may also exist). Path-confusion bug. The R13 W13.5
+        // intent was display-time sanitization; that responsibility
+        // moved to `sanitize_for_display` and is applied only at
+        // print sites. display_path itself stays operational-pure.
+        let evil = PathBuf::from("/subs/evil\u{202e}.ass");
+        let got = display_path(&evil);
+        assert!(
+            got.contains('\u{202e}'),
+            "display_path must preserve U+202E for filesystem correctness; got {got:?}"
+        );
+        let esc = PathBuf::from("/subs/x\u{001b}[2J.ass");
+        let got = display_path(&esc);
+        assert!(
+            got.contains('\u{001b}'),
+            "display_path must preserve ESC for filesystem correctness; got {got:?}"
+        );
+    }
+
+    #[test]
+    fn sanitize_for_display_strips_control_and_bidi() {
+        // The display-time sanitizer companion to display_path. Used
+        // at `emit_file_report` and `emit_oversized_skipped_warning`
+        // to laundering paths before stderr/println interpolation,
+        // so a crafted argv filename can't corrupt the terminal.
+        assert_eq!(
+            sanitize_for_display("/subs/evil\u{202e}.ass"),
+            "/subs/evil.ass"
+        );
+        assert_eq!(
+            sanitize_for_display("/subs/x\u{001b}[2J.ass"),
+            "/subs/x[2J.ass"
+        );
+        // Normal paths pass through unchanged.
+        assert_eq!(
+            sanitize_for_display("/home/u/episode.ass"),
+            "/home/u/episode.ass"
+        );
     }
 }
