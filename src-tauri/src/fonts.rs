@@ -316,13 +316,23 @@ pub fn init_user_font_db(app_data_dir: &Path) -> Result<(), String> {
     // under per-user AppData are not symlinks", and a reparse point
     // here signals tampering / a manual user link that we should not
     // silently destroy.
+    //
+    // R13 A-R13-16: error message names the reparse-point path and an
+    // actionable next step. The error propagates through lib.rs's
+    // setup closure into a rfd MessageBox the user sees at startup;
+    // the previous generic "Cannot reset user font index" gave the
+    // user no path to inspect and no recovery hint.
     if crate::util::is_reparse_point(&db_path) {
         log::warn!(
             "User font index path '{}' is a reparse point; \
              refusing to reset.",
             db_path.display()
         );
-        return Err("Cannot reset user font index".to_string());
+        return Err(format!(
+            "User font index path is a reparse point (symlink / junction): {}. \
+             Inspect and remove the link manually before relaunching.",
+            db_path.display()
+        ));
     }
     match fs::remove_file(&db_path) {
         Ok(()) => {}

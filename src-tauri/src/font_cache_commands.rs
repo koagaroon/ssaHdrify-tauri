@@ -124,7 +124,17 @@ pub fn migrate_legacy_gui_cache(legacy_dir: &Path, new_dir: &Path) {
     if !legacy_main.exists() {
         return;
     }
-    if new_main.exists() {
+    // R13 N-R13-5: probe the unified-path destination with
+    // `symlink_metadata` (lstat-equivalent), NOT `Path::exists()`
+    // which follows symlinks. A planted symlink at new_main pointing
+    // at some sensitive target would otherwise make exists() return
+    // true and trigger the "orphan" early-return — but
+    // FontCache::open_or_create called later from init_gui_font_cache
+    // would happily follow the symlink and land the SQLite file on
+    // the attacker's chosen target. lstat-based check sees the
+    // symlink itself; we treat the path as "occupied" (correct
+    // outcome) without ever following it.
+    if std::fs::symlink_metadata(&new_main).is_ok() {
         log::debug!(
             "Legacy GUI cache exists at {} but new location {} already has one; \
              leaving legacy in place as orphan.",
@@ -141,15 +151,21 @@ pub fn migrate_legacy_gui_cache(legacy_dir: &Path, new_dir: &Path) {
         );
         return;
     }
-    // R12 A-R12-1: refuse migration if the legacy main file (or any
-    // sidecar) is a reparse point. Codebase posture across every other
-    // fs op site (safe_io, encoding, fonts) is "refuse on reparse";
-    // this migration was the lone outlier. Even though rename is
-    // generally atomic and on Windows doesn't fall back to follow-link
-    // copy-then-delete the way Linux does, posture consistency matters
-    // — and if a future stdlib change altered rename semantics the
-    // codebase should already be defended. Skip the whole migration on
-    // a suspicious legacy path; cache starts fresh at new location.
+    // R12 A-R12-1 + R13 A-R13-4: refuse migration if the legacy main
+    // file is a reparse point. The check is positioned immediately
+    // before fs::rename (there is no intermediate validation work in
+    // this function between the check and the rename); on Windows
+    // fs::rename of a same-volume reparse point moves the link
+    // itself, but a CROSS-VOLUME rename falls back to copy-then-
+    // delete which DOES follow the link. The reparse-check + rename
+    // remain stat-then-act on Windows — an attacker who can swap the
+    // file between syscalls still wins — but the window is single-
+    // syscall narrow and the codebase posture (safe_io.rs:266 / :313
+    // also stat-then-act with similar narrowness) is "accept the
+    // residual TOCTOU under P1a, close everything wider". A true
+    // race-free fix would need NtSetInformationFile on a handle
+    // opened with FILE_FLAG_OPEN_REPARSE_POINT; not worth the Win32
+    // interop for the single-user threat model.
     if crate::util::is_reparse_point(&legacy_main) {
         log::warn!(
             "GUI cache migration: legacy main file {} is a reparse point. \
@@ -197,18 +213,25 @@ pub fn migrate_legacy_gui_cache(legacy_dir: &Path, new_dir: &Path) {
         let mut legacy_side = legacy_main.clone().into_os_string();
         legacy_side.push(suffix);
         let legacy_side = PathBuf::from(legacy_side);
-        if !legacy_side.exists() {
-            continue;
-        }
-        // Same reparse-point posture as the main file above. Sidecar
-        // is best-effort, so a suspicious sidecar just gets left at
-        // the legacy location.
+        // R13 A-R13-5: check reparse-point BEFORE exists(). The
+        // original order (exists then reparse) was fragile — a
+        // dangling symlink returns false from exists() so the loop
+        // continues without reaching the reparse check; benign here
+        // (loop body never runs), but a future refactor that dropped
+        // the exists() short-circuit would reintroduce a window. By
+        // running is_reparse_point first (which uses symlink_metadata
+        // and so handles dangling symlinks), the loop's structural
+        // invariant becomes "reparse never reaches fs::rename"
+        // regardless of subsequent re-arrangement.
         if crate::util::is_reparse_point(&legacy_side) {
             log::warn!(
                 "GUI cache migration: legacy sidecar {} is a reparse point. \
                  Leaving in place; SQLite treats new location as clean-close.",
                 legacy_side.display()
             );
+            continue;
+        }
+        if !legacy_side.exists() {
             continue;
         }
         let mut new_side = new_main.clone().into_os_string();
@@ -804,22 +827,29 @@ pub fn clear_font_cache() -> Result<(), String> {
     // set as init_user_font_db so a partially-cleared state from an
     // earlier crash gets fully wiped here.
     //
-    // R12 A-R12-2: reparse-point check before remove_file. On Windows
-    // `fs::remove_file` of a symlink removes the link, not the target,
-    // so the security delta is small — but the codebase posture
-    // everywhere else (safe_io, encoding, fonts) refuses on reparse,
-    // and the cache file under per-user AppData should never be a
-    // symlink in the normal case. Skip the remove on suspicion;
-    // re-create below will then fail and surface the issue.
+    // R12 A-R12-2 / R13 A-R13-15: reparse-point check before
+    // remove_file, with FAIL-FAST semantics — any reparse-point
+    // encounter aborts the clear with an Err, surfacing the
+    // suspicious state to the GUI's drift-modal callsite. Pre-R13
+    // the loop silently `continue`d on reparse; the user clicked
+    // "Clear cache" and got Ok back even though the cache was
+    // partially wiped or left around a symlink, then a follow-on
+    // FontCache::open_or_create might silently succeed against a
+    // symlink target. Returning Err here keeps the clear atomic:
+    // either all files removed cleanly (re-create proceeds), or
+    // none removed and the user sees the reparse-path message so
+    // they can investigate manually.
+    let mut reparse_skipped: Vec<String> = Vec::new();
     for suffix in ["", "-journal", "-wal", "-shm"] {
         let mut p = path.clone().into_os_string();
         p.push(suffix);
         let p = PathBuf::from(p);
         if crate::util::is_reparse_point(&p) {
             log::warn!(
-                "clear_font_cache: refusing to remove reparse-point {}; leaving in place.",
+                "clear_font_cache: refusing to remove reparse-point {}; aborting clear.",
                 p.display()
             );
+            reparse_skipped.push(p.display().to_string());
             continue;
         }
         match std::fs::remove_file(&p) {
@@ -827,6 +857,14 @@ pub fn clear_font_cache() -> Result<(), String> {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => log::warn!("clear_font_cache: removing {} failed: {e}", p.display()),
         }
+    }
+    if !reparse_skipped.is_empty() {
+        return Err(format!(
+            "Refusing to clear font cache: the following path(s) are reparse points \
+             (symlinks / junctions) and were left in place to avoid following the link. \
+             Inspect and remove manually: {}",
+            reparse_skipped.join(", ")
+        ));
     }
 
     let fresh = FontCache::open_or_create(&path)

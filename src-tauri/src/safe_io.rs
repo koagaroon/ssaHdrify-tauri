@@ -134,6 +134,25 @@ fn clear_existing_destination(path: &Path, overwrite: bool) -> Result<(), String
                     path.display()
                 ));
             }
+            // R13 A-R13-8: re-check is_reparse_point immediately
+            // before fs::remove_file for posture parity with
+            // safe_copy_file_inner / safe_rename_file_inner's
+            // late re-checks. fs::remove_file of a symlink on
+            // Windows removes the link itself (not the target),
+            // so the security delta is small — but the
+            // codebase pattern is "stat-then-act narrowness via
+            // an immediate re-check", and this site was the lone
+            // remaining outlier. One cheap syscall.
+            if is_reparse_point(path) {
+                log::warn!(
+                    "Refusing to overwrite reparse point at remove-time: {}",
+                    path.display()
+                );
+                return Err(format!(
+                    "Refusing to overwrite a symlink / junction at the destination (race-time detection): {}",
+                    path.display()
+                ));
+            }
             fs::remove_file(path)
                 .map_err(|e| format!("Failed to remove existing destination: {e}"))?;
             Ok(())
