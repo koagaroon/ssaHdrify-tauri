@@ -147,6 +147,25 @@ describe("HDR convert — GUI ↔ CLI byte equivalence", () => {
     expect(cli.content).toBe(gui.content);
   });
 
+  it("native-ASS input returns skippedCount = 0 regardless of content (R13 N-R13-10)", () => {
+    // The CLI HDR ASS branch routes through processAssContent (line-
+    // based), NOT through parseSubtitle's MAX_CAPTION_TEXT_LEN
+    // placeholder path. So the `skippedCount` field's documented
+    // invariant ("Always 0 for native-ASS input") must hold for any
+    // ASS content this branch accepts. A future refactor that swapped
+    // the ASS path to route through parseSubtitle would change this
+    // behavior without surfacing — pinning the invariant here makes
+    // the regression visible at test time.
+    const cli = convertHdr({
+      inputPath: inputAss,
+      content: ASS_FIXTURE,
+      eotf: "PQ",
+      brightness: 1000,
+      outputTemplate: DEFAULT_TEMPLATE,
+    });
+    expect(cli.skippedCount).toBe(0);
+  });
+
   it("oversized SRT caption produces byte-identical filtered output + non-zero skippedCount (R12 N-R12-4)", () => {
     // Exercise the `.filter(c => !c.skipped)` introduced in dba6445.
     // Without an oversized fixture, the byte-equivalence test runs

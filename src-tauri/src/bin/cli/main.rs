@@ -753,6 +753,17 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
         );
     }
 
+    // R13 N-R13-7: chain v1 doesn't implement the --json output shape
+    // that hdr / shift / embed / rename support; reporting loop below
+    // emits the plain-text ✓ / ⊘ / ✗ summary regardless of globals.json.
+    // Surface this explicitly per the no-silent-action principle —
+    // a user piping `chain --json | jq` would otherwise see plain
+    // text and silently get parse errors. Same shape as the
+    // --no-cache informational line above.
+    if globals.json && !globals.quiet {
+        eprintln!("ℹ chain v1 does not implement --json output; reporting in plain text.");
+    }
+
     if globals.dry_run {
         emit_chain_dry_run(&plan, globals);
         return Ok(ExitCode::SUCCESS);
@@ -1423,9 +1434,21 @@ fn emit_chain_dry_run(plan: &chain::ChainPlan, globals: &GlobalOptions) {
     // catches these via `seen_outputs.insert` returning false (HDR /
     // Shift / Embed in chain). Pre-R12 dry-run silently printed both
     // rows pointing at the same output, hiding the future failure
-    // from the user. Mirroring the real-run check here means
-    // `--dry-run` is now a faithful preview of what the real run
-    // will report.
+    // from the user.
+    //
+    // R13 N-R13-6 fidelity caveat: this mirrors the real-run dedup
+    // key ONLY when `predict_chain_output_path` produces a key that
+    // matches what V8's `resolveChainOutputPath` will return. Today
+    // chain templates only support {name} and {ext} and both
+    // predictors agree byte-for-byte, so the mirror is complete. If a
+    // future chain template feature adds a token the Rust predictor
+    // doesn't model, prediction returns None for that input → dry-run
+    // shows no `→ outpath` line and the dedup set never sees the key.
+    // The real run has a post-V8 reconcile step
+    // (`process_one_chain_input` line ~1357) that dry-run can't
+    // replay without invoking V8. So the preview is "faithful for
+    // currently-supported templates"; when prediction abstains, the
+    // user should expect possible divergence at write time.
     let mut seen_outputs: HashSet<String> = HashSet::new();
     for input in &plan.input_files {
         println!("  {}", input.display());
@@ -1853,6 +1876,18 @@ fn process_shift_file_heavy_first(
         }
     };
 
+    // R13 N-R13-15: emit the oversized-skipped warning IMMEDIATELY
+    // after convert_shift, BEFORE the dedup-and-exists check below.
+    // Heavy-first ordering means dedup runs after conversion; if the
+    // file dedups (output collision with a prior input) the early-
+    // return at `dedup_and_exists_check` would otherwise discard
+    // `conversion.skipped_count` silently. Surfacing the count here
+    // means the user sees "⚠ dropped N oversized captions from X"
+    // on stderr even when X's output coincides with a prior input's
+    // and gets skipped at write time. The warning is honest — the
+    // conversion really did detect oversized captions in this file.
+    let warnings = emit_oversized_skipped_warning(conversion.skipped_count, &input);
+
     let output_path = match relocate_output_path(&conversion.output_path, context.output_dir) {
         Ok(path) => path,
         Err(error) => {
@@ -1892,8 +1927,6 @@ fn process_shift_file_heavy_first(
             conversion.caption_count, conversion.shifted_count, format_upper
         ),
     );
-
-    let warnings = emit_oversized_skipped_warning(conversion.skipped_count, &input);
 
     if let Err(error) = write_output(
         globals,

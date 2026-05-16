@@ -587,6 +587,28 @@ mod tests {
     }
 
     #[test]
+    fn validate_font_family_rejects_whitespace_only() {
+        // R13 N-R13-14: Round 10 N-R10-010 added the
+        // `family.trim().is_empty()` reject (alongside the bare empty
+        // string), but never paired it with a test. A
+        // whitespace-only family name like "   " or "\t\t" must
+        // reject; an ASS `Style: ,   ,...` row otherwise threads a
+        // visually-empty family through the font lookup pipeline
+        // without triggering the family-shape gate, surfacing as a
+        // confusing "missing font" lookup miss instead of a clear
+        // rejection at the IPC boundary.
+        let err_spaces = validate_font_family("   ").unwrap_err();
+        assert!(err_spaces.contains("whitespace"));
+        let err_tabs = validate_font_family("\t\t").unwrap_err();
+        assert!(err_tabs.contains("whitespace"));
+        // `\r` and `\n` are whitespace per `str::trim()`; pure-
+        // whitespace mixed input still falls into the trim-empty
+        // branch (which fires before the control-char check below).
+        let err_mixed = validate_font_family(" \t ").unwrap_err();
+        assert!(err_mixed.contains("whitespace"));
+    }
+
+    #[test]
     fn validate_font_family_rejects_overlong() {
         let err = validate_font_family(&"x".repeat(257)).unwrap_err();
         assert!(err.contains("exceeds 256"));

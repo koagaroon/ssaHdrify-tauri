@@ -9,8 +9,9 @@
 //!      flag, leaves the rest as raw argv on `ChainArgs::raw_argv`.
 //!   2. `parse_chain_argv` splits on `+`, parses each step segment
 //!      against its per-feature `Args` wrapper, validates ordering
-//!      (warn catalog 极保守: only shift-after-embed warns), and
-//!      returns a `ChainPlan` with steps + input_files + warnings.
+//!      (warn catalog is intentionally minimal: only shift-after-embed
+//!      warns), and returns a `ChainPlan` with steps + input_files +
+//!      warnings.
 //!   3. main.rs::run_chain iterates `plan.input_files`, calls
 //!      `runChain` via the engine per file, and writes the terminal
 //!      output via existing fs primitives.
@@ -377,10 +378,10 @@ fn collect_suspicious_orderings(steps: &[ParsedStep]) -> Vec<String> {
     //
     // HDR-after-embed has the same mathematical no-op shape (embed
     // doesn't touch color tags either), but it's deliberately NOT
-    // included per the locked "warn catalog 极保守" stance —
-    // empirically, shift-after-embed is the only ordering users
-    // actually file as confusing. Adding HDR-after-embed would erode
-    // trust without solving a real-user problem.
+    // included per the locked "warn catalog stays intentionally
+    // minimal" stance — empirically, shift-after-embed is the only
+    // ordering users actually file as confusing. Adding HDR-after-embed
+    // would erode trust without solving a real-user problem.
     for (i, kind) in kinds.iter().enumerate() {
         if *kind == "shift" && kinds[..i].contains(&"embed") {
             warnings.push(format!(
