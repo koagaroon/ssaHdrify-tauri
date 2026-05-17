@@ -524,7 +524,10 @@ export default function TimingShift() {
             if (abortRef.current?.signal.aborted) break;
 
             await writeText(outputPath, result.content);
-            const outName = fileNameFromPath(outputPath);
+            // R16 W16.5 (N-R16-25, Pattern 1 sibling parity with
+            // HdrConvert + FontEmbed + BatchRename). See N-R16-24 in
+            // HdrConvert for rationale.
+            const outName = sanitizeForDialog(fileNameFromPath(outputPath));
             addLog(t("msg_saved", outName, result.captionCount), "success");
             successCount++;
           } catch (e) {

@@ -479,7 +479,16 @@ export default function HdrConvert() {
 
             // Write output
             await writeText(outputPath, assContent);
-            const outName = fileNameFromPath(outputPath);
+            // R16 W16.5 (N-R16-24, Pattern 1 sibling parity):
+            // FontEmbed wraps fileNameFromPath in sanitizeForDialog
+            // (line ~794); BatchRename does the same. fileNameFromPath
+            // already strips C0/C1/DEL + BiDi via stripUnicodeControls,
+            // so no current bug — but the visible asymmetry left HDR
+            // as a Pattern-1 census exception. Defense-in-depth wrap
+            // for sibling-feature symmetry; a future helper-contract
+            // loosening doesn't silently re-introduce attack surface
+            // here while FontEmbed / BatchRename stay covered.
+            const outName = sanitizeForDialog(fileNameFromPath(outputPath));
             addLog(t("msg_done", outName), "success");
             successCount++;
           } catch (e) {

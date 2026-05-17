@@ -29,6 +29,7 @@ import {
   decomposeInputPath,
 } from "../../lib/path-validation";
 import { sanitizeError } from "../../lib/dedup-helpers";
+import { stripUnicodeControls } from "../../lib/unicode-controls";
 
 // ── Types ─────────────────────────────────────────────────
 
@@ -507,7 +508,15 @@ export async function embedFonts(
       // the subsetting-failure path below.
       // (Reuses `label` from the outer scope; N-R5-FECHAIN-02 removed
       // a redundant inner re-declaration.)
-      console.warn(`[ssaHdrify] embedFonts: no usage entry for ${label}`);
+      // R16 W16.5 (N-R16-30, Pattern 1 sibling completion after R10
+      // N-R10-027 fixed line 547's subset-failure sibling): `label`
+      // is `fontKeyLabel(info.key)` where info.key.family flows from
+      // V8-parsed ASS `\fn` (P1b attacker-influenced). The subset-
+      // failure site below already scrubs; this no-usage-entry sibling
+      // stayed raw. Cheap stripUnicodeControls wrap mirrors line 547's
+      // sanitizeError(...) posture for the same Pattern 1 single-
+      // source-completion reason.
+      console.warn(`[ssaHdrify] embedFonts: no usage entry for ${stripUnicodeControls(label)}`);
       onProgress?.({
         stage:
           t?.("msg_font_skipped", info.key.family, "no usage entry") ??
@@ -544,7 +553,17 @@ export async function embedFonts(
       // dev-tools surface is opt-in in production, so blast radius is
       // small, but Pattern 1 single-source completion requires every
       // sibling output to use the same helper.
-      console.warn(`Font subsetting failed for ${usage.key.family}, skipping: ${safeErr}`);
+      // R16 W16.5 (N-R16-26, Pattern 1 defense-in-depth):
+      // `usage.key.family` is upstream-sanitized at
+      // font-collector.ts::sanitizeFamily so the BiDi/control surface
+      // is closed today. But the comment block at lines 539-546
+      // motivates "every sibling output uses the same helper" — that
+      // discipline argument applies here too. Cheap defensive wrap
+      // keeps the pattern consistent if upstream sanitizeFamily ever
+      // loosens.
+      console.warn(
+        `Font subsetting failed for ${stripUnicodeControls(usage.key.family)}, skipping: ${safeErr}`
+      );
       onProgress?.({
         stage:
           t?.("msg_font_skipped", info.key.family, safeErr) ??
