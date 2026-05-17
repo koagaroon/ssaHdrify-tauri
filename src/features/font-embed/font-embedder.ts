@@ -22,6 +22,7 @@ import {
   type LocalFontEntry,
 } from "../../lib/tauri-api";
 import { SECTION_HEADER_RE } from "../hdr-convert/ass-processor";
+import { MAX_PARSED_ENTRIES } from "../../lib/subtitle-parser";
 import {
   assertSafeOutputFilename,
   assertSafeOutputPath,
@@ -585,17 +586,45 @@ export async function embedFonts(
   };
 }
 
-/// R15 W15.7 (N-R15-29 + A-R15-1): shared shape + size guard reused
-/// by `embedFonts` upfront AND `insertFontsSection` at its boundary.
-/// Direct callers of `insertFontsSection` (`cli-engine-entry.ts::applyFontEmbed`)
-/// bypass `processAssContent`'s upstream 100 MB guard — without a
-/// helper-layer backstop, hostile content reaching this surface
-/// hits unbounded `split(/\r?\n/)` allocation. Cap matches
-/// ass-processor.ts's value for posture symmetry.
+/// R15 W15.7 (N-R15-29 + A-R15-1) + R16 W16.1 (A-R16-10): shared
+/// shape + paired size/line guard reused by `embedFonts` upfront AND
+/// `insertFontsSection` at its boundary. Direct callers of
+/// `insertFontsSection` (`cli-engine-entry.ts::applyFontEmbed`)
+/// bypass `processAssContent`'s upstream byte+line paired guard —
+/// without a helper-layer backstop, hostile content reaching this
+/// surface hits unbounded `split(/\r?\n/)` allocation.
+///
+/// W16.1 adds the line-count probe (paired Pattern 2 fix). Pre-W16.1
+/// the byte cap stood alone: a 50 MB pure-newline blob passes the
+/// 100 MB byte gate but then `.split(/\r?\n/)` at line ~660 below
+/// allocates ~50M empty strings (~2 GB V8 heap) BEFORE any downstream
+/// throw can fire. Mirrors ass-processor.ts:282-306's paired cap;
+/// `MAX_INSERT_LINES` derived from the same MAX_PARSED_ENTRIES +
+/// header-budget basis so an SRT→ASS upcast that parseSrt accepted
+/// can still re-pass through embed.
 const MAX_INSERT_FONTS_SECTION_CONTENT = 100_000_000;
+const INSERT_FONTS_SECTION_HEADER_BUDGET = 1024;
+const MAX_INSERT_LINES = MAX_PARSED_ENTRIES + INSERT_FONTS_SECTION_HEADER_BUDGET;
+const LINE_PROBE_BYTE_GATE = 1_000_000;
 function assertAssShape(content: string): void {
   if (content.length > MAX_INSERT_FONTS_SECTION_CONTENT) {
     throw new Error(`File too large: ${(content.length / 1_000_000).toFixed(1)} MB (max 100 MB)`);
+  }
+  // Pre-split line-count probe (R16 W16.1 A-R16-10, mirror of
+  // ass-processor.ts:286-306). Gated on content.length to keep the
+  // small-file fast path zero-overhead. The 1 MB gate is well above
+  // realistic small subtitles (5-200 KB) and well below the attack
+  // threshold (tens of MB).
+  if (content.length > LINE_PROBE_BYTE_GATE) {
+    let nl = 1;
+    for (let i = 0; i < content.length; i++) {
+      if (content.charCodeAt(i) === 10 /* '\n' */) {
+        nl++;
+        if (nl > MAX_INSERT_LINES) {
+          throw new Error(`File too large: >${MAX_INSERT_LINES} lines`);
+        }
+      }
+    }
   }
   if (!/^\[Script Info\][ \t]*$/im.test(content)) {
     throw new Error(
