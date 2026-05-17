@@ -139,10 +139,14 @@ pub fn parse_chain_argv(
     raw_argv: &[String],
     user_output_template: Option<String>,
 ) -> Result<ChainPlan, String> {
+    // R15 W15.5 (N-R15-8 caller-side): `split_into_step_segments`
+    // returns `Vec<Vec<String>>` initialized as `vec![Vec::new()]`
+    // and only grows from there, so `segments.is_empty()` is
+    // structurally false. The empty-argv case surfaces as
+    // "chain requires at least one step" Err from inside the
+    // splitter now (W15.5 unified message). Caller-side check
+    // removed.
     let segments = split_into_step_segments(raw_argv)?;
-    if segments.is_empty() {
-        return Err("chain requires at least one step".into());
-    }
     let last_idx = segments.len() - 1;
 
     let mut steps: Vec<ParsedStep> = Vec::with_capacity(segments.len());
@@ -239,11 +243,25 @@ fn split_into_step_segments(argv: &[String]) -> Result<Vec<Vec<String>>, String>
                 .push(tok.clone());
         }
     }
+    // R15 W15.5 (N-R15-8): unified end-of-argv check. `segments`
+    // starts as `vec![Vec::new()]` (one empty segment) and only
+    // grows via the `+`-after-non-empty branch above, so any
+    // empty-last-segment state has two reachable shapes: argv was
+    // entirely empty (no tokens at all → still one empty segment),
+    // OR argv ended with `+` after at least one non-empty step.
+    // The prior code reported "trailing `+`" for both, which read
+    // wrong on the empty-argv case. Split the message; the prior
+    // `segments.iter().all(Vec::is_empty)` follow-up check was
+    // structurally unreachable (any all-empty state has at least
+    // one empty last segment, so line 242 caught it first) and is
+    // removed.
     if segments.last().is_some_and(Vec::is_empty) {
-        return Err("trailing `+` separator with no following step".into());
-    }
-    if segments.iter().all(Vec::is_empty) {
-        return Err("chain requires at least one step".into());
+        let msg: &str = if segments.len() == 1 {
+            "chain requires at least one step"
+        } else {
+            "trailing `+` separator with no following step"
+        };
+        return Err(msg.into());
     }
     Ok(segments)
 }
