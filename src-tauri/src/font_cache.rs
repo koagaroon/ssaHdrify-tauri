@@ -551,7 +551,15 @@ impl FontCache {
         )
         .map_err(|e| CacheError::Io(format!("delete folder: {e}")))?;
 
-        let now = current_unix_seconds();
+        // R15 W15.3 (N-R15-15): surface SystemTimeError as CacheError
+        // rather than persisting epoch-zero into last_scanned_at — the
+        // 0 sentinel would otherwise collide with "this folder was
+        // last scanned at the Unix epoch start" semantics if any
+        // future caller treats last_scanned_at as a meaningful
+        // timestamp.
+        let now = current_unix_seconds().ok_or_else(|| {
+            CacheError::Io("system clock is before Unix epoch (1970-01-01)".to_string())
+        })?;
         tx.execute(
             "INSERT INTO cached_folders(folder_path, folder_mtime, last_scanned_at) \
              VALUES(?1, ?2, ?3)",
@@ -793,18 +801,21 @@ impl FontCache {
 }
 
 /// Current Unix timestamp in seconds. Used for `last_scanned_at` on
-/// inserts. Returns 0 if the system clock is somehow before the Unix
-/// epoch (impossible in practice; defensive default).
-///
-/// Sentinel collision note: a future caller MUST NOT reinterpret a 0
-/// in `last_scanned_at` as "missing" or "uninitialized" — every real
-/// insert calls this and gets the current epoch second. The 0 sentinel
-/// only fires for SystemTimeError, which can't happen on a sane clock.
-fn current_unix_seconds() -> i64 {
+/// inserts. Returns `None` if the system clock is somehow before the
+/// Unix epoch — impossible in practice, but the symmetric posture
+/// matches `try_modified_at` (R10 N-R10-008 tightened that helper
+/// from `.unwrap_or(0)` to `.ok()?` for the same sentinel-collision
+/// concern). Callers surface `None` as `CacheError::Io` with a
+/// "system clock before Unix epoch" message rather than persisting
+/// epoch-zero into SQLite. (R15 W15.3 N-R15-15: tightened
+/// symmetrically with try_modified_at; pre-W15.3 the asymmetric
+/// `.unwrap_or(0)` posture relied on doc discipline — exactly what
+/// N-R10-008 already replaced for the parallel helper.)
+fn current_unix_seconds() -> Option<i64> {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
+        .ok()
         .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
 }
 
 /// Schema SQL — one statement per table. Tables match the design
@@ -1288,11 +1299,14 @@ mod tests {
     fn last_scanned_at_set_to_current_time() {
         let (_guard, path) = temp_cache_path();
         let mut cache = FontCache::open_or_create(&path).expect("open");
-        let before = current_unix_seconds();
+        // Test-only `.expect` — running on a sane system clock is a
+        // baseline test-environment assumption; if SystemTime is
+        // broken, every other test in the suite would also fail.
+        let before = current_unix_seconds().expect("sane system clock");
         cache
             .replace_folder("/test/timing", 1_700_000_000, &[])
             .unwrap();
-        let after = current_unix_seconds();
+        let after = current_unix_seconds().expect("sane system clock");
         let folders = cache.list_folders().expect("list");
         assert!(folders[0].last_scanned_at >= before);
         assert!(folders[0].last_scanned_at <= after);
