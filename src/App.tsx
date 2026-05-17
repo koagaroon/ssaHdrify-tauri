@@ -30,12 +30,6 @@ const TAB_IDS: { id: Tab; labelKey: string }[] = (Object.keys(TAB_LABEL_KEYS) as
   (id) => ({ id, labelKey: TAB_LABEL_KEYS[id] })
 );
 
-const THEME_OPTIONS: { mode: ThemeMode; labelKey: string }[] = [
-  { mode: "auto", labelKey: "theme_auto" },
-  { mode: "light", labelKey: "theme_light" },
-  { mode: "dark", labelKey: "theme_dark" },
-];
-
 // Theme label keys — explicit map instead of `t("theme_" + mode)` string
 // concat. If a ThemeMode value is ever renamed the compiler will flag the
 // gap here, where silent string concat would just return the bare key.
@@ -44,6 +38,18 @@ const THEME_LABEL_KEYS: Record<ThemeMode, string> = {
   light: "theme_light",
   dark: "theme_dark",
 };
+
+// R16 W16.6 (N-R16-21): derive THEME_OPTIONS from THEME_LABEL_KEYS as
+// the single source — the TAB_IDS pattern (line ~29) above does the
+// same Object.keys map. Pre-W16.6 THEME_OPTIONS and THEME_LABEL_KEYS
+// were parallel manual maps that had to stay in sync; adding /
+// renaming a theme mode required edits in two places. JS guarantees
+// insertion-order iteration for string keys, so the display order in
+// the theme picker remains the declaration order of THEME_LABEL_KEYS
+// (auto → light → dark).
+const THEME_OPTIONS: { mode: ThemeMode; labelKey: string }[] = (
+  Object.keys(THEME_LABEL_KEYS) as ThemeMode[]
+).map((mode) => ({ mode, labelKey: THEME_LABEL_KEYS[mode] }));
 
 function App() {
   const [activeTab, setActiveTab] = useState<Tab>("hdr");
@@ -78,10 +84,14 @@ function App() {
   // intentional double-mount in dev — drift queries are read-only
   // but rescan_drifted writes; no need to double-do that.
   //
-  // Single-App-instance assumption: the ref-based guard relies on
-  // App rendering exactly once at the root. Multi-instance App
-  // rendering (e.g., a future routing refactor) would share the ref
-  // across instances and skip launch checks for all but the first.
+  // R16 W16.6 (N-R16-23, comment accuracy): `useRef` is per-component-
+  // instance, not module-scoped — multi-instance App rendering would
+  // give each instance its own `cacheChecked` ref and each would run
+  // the launch check independently (redundant cache I/O), NOT skip
+  // the check for all but the first. Prior comment had the semantics
+  // inverted. The real concern (if a future routing refactor ever
+  // mounts App in multiple places) is redundant per-instance launch
+  // checks, not the suppression of subsequent ones.
   const [cacheStatus, setCacheStatus] = useState<FontCacheStatus | null>(null);
   const [cacheDrift, setCacheDrift] = useState<FontCacheDriftReport | null>(null);
   const [showCacheModal, setShowCacheModal] = useState(false);

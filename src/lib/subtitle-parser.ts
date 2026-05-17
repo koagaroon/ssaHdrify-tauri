@@ -443,9 +443,17 @@ function parseAss(content: string): Caption[] {
       // content and consumes captions sequentially; if parseAss
       // silently dropped this entry the index would drift and every
       // subsequent Dialogue line would receive the wrong timestamps.
-      // Keeping a placeholder (no text payload retained, so the
-      // multi-MB body doesn't linger) lets buildAss recognise the
-      // position and return the original line untouched.
+      //
+      // R16 W16.6 (N-R16-14, comment accuracy): the upstream 50 MB
+      // file-read cap (Rust IPC) bounds total retained raw size;
+      // clearing `text` to `""` keeps the parsed-content path clean
+      // so downstream feature layers count `c.skipped` rather than
+      // inspecting `c.text` for the oversized class. (Prior comment
+      // claimed "no text payload retained, so the multi-MB body
+      // doesn't linger" — but the `raw: match[0]` field below
+      // retains the entire original Dialogue line including the
+      // multi-MB body. Memory is bounded by the file-read cap
+      // upstream, not by clearing `text` here.)
       captions.push({
         raw: match[0],
         start: parseAssTime(match[2]),

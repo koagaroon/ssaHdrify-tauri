@@ -39,12 +39,15 @@ export interface StatusContextValue {
   setStatus: (tab: StatusTab, status: Status) => void;
 }
 
-// Frozen so an accidental in-place mutation anywhere fails loudly instead
-// of silently corrupting every tab's default via the shared object alias.
-// Internal-only: DEFAULT_STATUSES is the public surface; this is just the
-// shared shape consumed by the per-tab `Object.freeze({...DEFAULT_STATUS})`
-// spreads below.
-const DEFAULT_STATUS: Status = Object.freeze({ kind: "idle", message: "" }) as Status;
+// R16 W16.6 (N-R16-19): internal-only template literal. Not exported,
+// only spread into the per-tab entries below via `{...DEFAULT_STATUS}`
+// — the spread already produces fresh objects per tab, so the freeze
+// here would only prevent in-place mutation of the *template* (which
+// no callsite does). The per-tab entries below DO need their freeze
+// (they're returned through `DEFAULT_STATUSES` and any consumer could
+// mutate them in-place without it). Pre-W16.6 the redundant freeze
+// + `as Status` cast read like a defense but had zero effect.
+const DEFAULT_STATUS: Status = { kind: "idle", message: "" };
 
 // Per-tab literals — frozen individually so in-place mutation of any slot
 // fails loudly in dev instead of silently drifting that tab's default.

@@ -19,7 +19,7 @@ import { Base64 } from "js-base64";
 import { processAssContent } from "../hdr-convert/ass-processor";
 import { shiftSubtitles } from "../timing-shift/timing-engine";
 import { buildFontEntry } from "../font-embed/ass-uuencode";
-import { insertFontsSection } from "../font-embed/font-embedder";
+import { assertAssShape, insertFontsSection } from "../font-embed/font-embedder";
 import {
   assertSafeOutputFilename,
   assertSafeOutputPath,
@@ -264,14 +264,28 @@ export function runChain(request: ChainRunRequest): ChainResult {
   // `hdr + embed` on a [V4+ Styles]-only input runs hdrTransform's
   // color transform first, only for embed to throw afterwards — wasted
   // work and the error attribution names step 2 (embed) instead of
-  // surfacing "chain shape needs Script Info" upfront. Probe regex is
-  // identical to insertFontsSection's gate; keeping the two consistent
-  // means a future loosening must touch both sites.
+  // surfacing "chain shape needs Script Info" upfront.
+  //
+  // R16 W16.6 (N-R16-28): route through `assertAssShape` so this
+  // preflight shares ONE source with `embedFonts` + `insertFontsSection`
+  // (the [Script Info] regex + byte cap + line-count probe). Pre-W16.6
+  // the regex was duplicated inline; a tightening on the helper side
+  // (e.g., the W16.1 line-count addition) wouldn't have propagated
+  // here. Catch + re-throw with chain-flavored wording so the user
+  // sees "Chain includes an embed step but…" rather than the
+  // helper's "Cannot embed: input ASS has no [Script Info]" — same
+  // root cause, attribution at the chain layer.
   if (plan.steps.some((s) => s.kind === "embed")) {
-    if (!/^\[Script Info\][ \t]*$/im.test(content)) {
+    try {
+      assertAssShape(content);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
       throw new Error(
-        "Chain includes an embed step but input ASS has no [Script Info] " +
-          "section header. Re-parse / rebuild the file before chaining."
+        "Chain includes an embed step but the input ASS failed shape / size " +
+          "validation. Re-parse / rebuild the file before chaining. (" +
+          msg +
+          ")",
+        { cause: err }
       );
     }
   }
@@ -299,6 +313,23 @@ export function runChain(request: ChainRunRequest): ChainResult {
       // through the indexed access — but the registry's mapped type
       // above guarantees the correspondence by construction. The
       // runtime correctness is unchanged; this is a TS limitation.
+      //
+      // R16 W16.6 (N-R16-29, trust boundary): the cast erases
+      // step-shape info, so a malformed `step.params` whose runtime
+      // shape doesn't match its declared `step.kind` (e.g.,
+      // `params.brightness` as a NaN string for an "hdr" step) slips
+      // past here. Downstream field accesses produce undefined/NaN
+      // rather than a clear "params shape mismatch" error. **Trust
+      // contract**: the Rust shell deserializes `ChainPlan` via serde,
+      // and `step.params` is typed as the StepKind-discriminated union
+      // at the Rust→TS boundary (`bin/cli/chain.rs::to_chain_step`).
+      // Serde rejects shape mismatches at deserialize time, so by the
+      // time the plan reaches this cast, the kind/params correspondence
+      // has already been validated structurally. Per-step inline shape
+      // validators here would be defense for a closed surface (P3).
+      // If a future caller bypasses the Rust serde validator (e.g.,
+      // a TS-side test constructs a plan literal), that caller owns
+      // the shape correctness.
       result = (transform as StepTransform<unknown>)({ content: current, inputPath }, step.params);
     } catch (err) {
       // Annotate which step failed so the Rust shell's error

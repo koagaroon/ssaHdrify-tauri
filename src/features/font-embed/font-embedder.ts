@@ -592,6 +592,18 @@ export async function embedFonts(
   // (or throw)" regardless of font count.
   assertAssShape(assContent);
   if (fontEntries.length === 0) {
+    // R16 W16.6 (N-R16-27): zero-font early-return returns
+    // `assContent` verbatim — no [Fonts] insertion means no
+    // separator normalization either. The non-zero path below
+    // routes through `insertFontsSection` which strips
+    // U+2028 / U+2029 line separators (the rewrite path needs
+    // ASCII newlines for the column-0 [Fonts] header regex to
+    // anchor). When there are no fonts to insert, the input is
+    // returned untouched — Unicode line separators in the original
+    // ASS survive intact. Documented so a future
+    // "normalize-on-every-output" refactor doesn't accidentally
+    // strip them here, which would inflate diff noise on files the
+    // user never asked us to transform.
     return { content: assContent, embeddedCount: 0 };
   }
 
@@ -625,7 +637,7 @@ const MAX_INSERT_FONTS_SECTION_CONTENT = 100_000_000;
 const INSERT_FONTS_SECTION_HEADER_BUDGET = 1024;
 const MAX_INSERT_LINES = MAX_PARSED_ENTRIES + INSERT_FONTS_SECTION_HEADER_BUDGET;
 const LINE_PROBE_BYTE_GATE = 1_000_000;
-function assertAssShape(content: string): void {
+export function assertAssShape(content: string): void {
   if (content.length > MAX_INSERT_FONTS_SECTION_CONTENT) {
     throw new Error(`File too large: ${(content.length / 1_000_000).toFixed(1)} MB (max 100 MB)`);
   }

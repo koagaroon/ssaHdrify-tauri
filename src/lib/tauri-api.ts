@@ -278,7 +278,15 @@ export async function copyPath(from: string, to: string): Promise<void> {
  */
 export function fileNameFromPath(path: string): string {
   const normalized = isWindowsRuntime ? path.replace(/\\/g, "/") : path;
-  const raw = normalized.split("/").pop() ?? path;
+  // R16 W16.6 (N-R16-16): `String.prototype.split` always returns a
+  // non-empty array, so `pop()` returns at least `""` — the `??`
+  // fallback was unreachable, and the empty-string output for
+  // trailing-separator inputs (e.g., `C:/Users/`) propagated as empty
+  // interpolation into addLog lines (`t("msg_processing", "")`).
+  // Switch to logical OR so the empty-string case ALSO falls through
+  // to the original path, giving consumers a meaningful display
+  // string in both edge shapes (trailing-separator and empty input).
+  const raw = normalized.split("/").pop() || path;
   // Round 10 N-R10-025: also strip ASCII C0 + DEL + C1 (\x00-\x1f\x7f-\x9f).
   // `stripUnicodeControls` covers BiDi / zero-width only; ASCII \0,
   // \t, \r, \n, ESC etc. previously passed through into
@@ -649,6 +657,18 @@ async function runStreamingScan(
       // resolveDone matches the error branch's pattern; on the
       // current wire format only Batch + Done ever arrive, so the
       // resolve is a no-op for well-formed traffic.
+      //
+      // R16 W16.6 (N-R16-17, forward-compat correctness): also set
+      // doneReceived = true and detach onmessage. Without these, if
+      // Rust later adds a new variant emitted BEFORE Done and then
+      // emits real Done, the wrapper races: unknown payload resolved
+      // donePromise → await returns with stale-default result → real
+      // Done arrives and mutates `result` after caller received the
+      // copy. Mirrors the real-Done branch's settle-and-detach
+      // posture so once we treat a payload as terminal, we commit to
+      // that decision.
+      doneReceived = true;
+      channel.onmessage = () => {};
       resolveDone();
     }
   };

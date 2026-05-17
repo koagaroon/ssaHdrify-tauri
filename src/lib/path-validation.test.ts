@@ -351,9 +351,31 @@ describe("assertSafeOutputPath", () => {
     // (which is case-sensitive) doesn't fire because the directory
     // portion matches the input's case exactly. Self-overwrite check
     // is case-insensitive, so the upper-case basename collides.
-    expect(() => assertSafeOutputPath("C:/subs/EPISODE01.ass", inputBackslash)).toThrow(
-      /same as input/
-    );
+    //
+    // R16 W16.6 (N-R16-15, test portability): `pathsEqualOnFs`'s
+    // case-fold branch is gated on `isCaseInsensitiveFs()`, which
+    // returns true only on win32 and darwin. On Linux CI the test
+    // would fail because the case-fold path doesn't trigger. Force
+    // `__ssahdrifyPlatform = "win32"` via the same injection
+    // mechanism `platform.ts` documents for the CLI runtime; restore
+    // in finally so other tests aren't affected. (CLI runtime uses
+    // the same hook to declare its host platform without depending
+    // on `process.platform`.)
+    type PlatformSlot = { __ssahdrifyPlatform?: unknown };
+    const slot = globalThis as PlatformSlot;
+    const previous = slot.__ssahdrifyPlatform;
+    slot.__ssahdrifyPlatform = "win32";
+    try {
+      expect(() => assertSafeOutputPath("C:/subs/EPISODE01.ass", inputBackslash)).toThrow(
+        /same as input/
+      );
+    } finally {
+      if (previous === undefined) {
+        delete slot.__ssahdrifyPlatform;
+      } else {
+        slot.__ssahdrifyPlatform = previous;
+      }
+    }
   });
 });
 

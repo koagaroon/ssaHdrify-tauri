@@ -92,9 +92,26 @@ export function useLogPanel(): UseLogPanelResult {
       // Round 11 W11.3 (A3-R11-01): truncate over-long entries with an
       // ellipsis so MAX_LOG_ENTRIES × per-entry length stays bounded.
       // See MAX_LOG_ENTRY_TEXT_LEN docblock.
+      //
+      // R16 W16.6 (N-R16-20, Pattern 2 paired-dim surrogate safety):
+      // `String.prototype.slice` operates on UTF-16 code units; a cut
+      // at `MAX_LOG_ENTRY_TEXT_LEN - 1` can land between a high+low
+      // surrogate pair (e.g., a CJK ext-B character or emoji),
+      // leaving a lone surrogate before the ellipsis. Most renderers
+      // display the orphaned surrogate as U+FFFD. P1b attacker
+      // input (font names, filename paths) could position a
+      // surrogate exactly at the cut. `Array.from(text)` iterates
+      // code POINTS (handles surrogate pairs), and `.slice` on the
+      // code-point array can never split a pair. Side effect: cap
+      // semantics shift from "UTF-16 code units" to "code points",
+      // which is friendlier for CJK / emoji (typical font names
+      // 5-20 chars far below the cap; the change is invisible to
+      // realistic inputs).
       const safeText =
         text.length > MAX_LOG_ENTRY_TEXT_LEN
-          ? text.slice(0, MAX_LOG_ENTRY_TEXT_LEN - 1) + "…"
+          ? Array.from(text)
+              .slice(0, MAX_LOG_ENTRY_TEXT_LEN - 1)
+              .join("") + "…"
           : text;
       setLogs((prev) => {
         const next = [...prev, { id, text: safeText, type }];

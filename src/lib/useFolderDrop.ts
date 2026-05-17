@@ -70,17 +70,23 @@ export function useFolderDrop({
   // effect below can keep its closures stable while still reading the
   // latest values. Not a missing-dep bug.
   //
-  // R15 W15.7 (N-R15-21): DO NOT add a deps array here. The
-  // listener-attaching effect at line ~80 reads `*Ref.current` so its
-  // closure never sees prop changes directly; this no-deps effect is
-  // the bridge that keeps the refs current. Adding `[onPaths, ...]`
-  // would only re-run the assignments when props change (vs every
-  // render) — same behavior for callers that always-pass-new-functions,
-  // but if a caller memoizes (`useCallback`), the assignments would
-  // never run after the first render and the bridge breaks silently.
-  // The lint suppression in eslint.config.js exists for this exact
-  // shape; a simplify pass that "tightens" the deps array here would
-  // be a regression.
+  // R15 W15.7 (N-R15-21) + R16 W16.6 (N-R16-18, comment accuracy):
+  // DO NOT add a deps array here. The listener-attaching effect at
+  // line ~80 reads `*Ref.current` so its closure never sees prop
+  // changes directly; this no-deps effect is the bridge that keeps
+  // the refs current. Adding `[onPaths, ...]` would only re-run the
+  // assignments when props change (vs every render) — same behavior
+  // for callers that always-pass-new-functions, but if a caller
+  // memoizes (`useCallback`), the assignments would never run after
+  // the first render and the bridge breaks silently.
+  //
+  // The recommended `react-hooks` config tolerates intentionally-omitted
+  // deps when the effect body uses only refs/setters/static identifiers,
+  // so no `eslint-disable-next-line` is needed today and no project-
+  // level override is configured. (Prior comment claimed a lint
+  // suppression existed — it doesn't; the shape just isn't flagged.)
+  // A simplify pass that tightens the deps array would still pass
+  // lint, hence this WHY comment is the only durable guard.
   useEffect(() => {
     onPathsRef.current = onPaths;
     onActiveChangeRef.current = onActiveChange;

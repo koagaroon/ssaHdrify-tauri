@@ -45,6 +45,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: (...args: unknown[]) => open
 
 // Import AFTER vi.mock so the mocked Channel is picked up.
 import {
+  fileNameFromPath,
   pickAssFiles,
   pickFontFiles,
   pickRenameInputs,
@@ -389,5 +390,25 @@ describe("runStreamingScan — async-after-resolve (A-bug-1 regression)", () => 
 
     const result = await scanFontDirectory("/cancelled/dir", "source-cancelled", 104);
     expect(result).toEqual({ added: 40, duplicated: 0, reason: "userCancel" });
+  });
+});
+
+describe("fileNameFromPath — edge case shapes (R16 W16.6 N-R16-16)", () => {
+  it("returns the full path when the input has a trailing separator", () => {
+    // `String.prototype.split` always returns a non-empty array;
+    // `pop()` returns `""` for trailing-separator input. Pre-W16.6
+    // the `?? path` fallback was unreachable (`""` is not nullish),
+    // so consumers received empty strings to interpolate into log
+    // messages. Logical OR catches the empty-string case and falls
+    // back to the input path — meaningful display in either edge.
+    expect(fileNameFromPath("C:/Users/")).toBe("C:/Users/");
+    expect(fileNameFromPath("/home/u/")).toBe("/home/u/");
+  });
+
+  it("returns the full path when the input is empty", () => {
+    // Sibling edge: empty input → `split(...).pop()` returns `""` →
+    // logical OR falls back to `""` (which IS the path). No useful
+    // attribution but at least the contract "returns a string" holds.
+    expect(fileNameFromPath("")).toBe("");
   });
 });
