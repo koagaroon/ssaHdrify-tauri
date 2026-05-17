@@ -59,16 +59,16 @@ export function useLogPanel(): UseLogPanelResult {
 
   const isNearTail = useCallback((): boolean => {
     const el = logScrollRef.current;
-    // W6.7 Round 6 — WHY null-element returns true (not false): the
-    // panel hasn't mounted yet, OR it mounted then unmounted without
-    // the ref re-resolving. In both cases the safe default is "the
-    // next log entry can scroll into view", because the alternative
-    // (false) would never trigger `scheduleTailScroll`, and a panel
-    // that re-mounts after the first log line would never auto-scroll
-    // to the latest entry. False here would also break addLog's
-    // "follow-tail" contract on the initial frame, where the ref
-    // briefly resolves AFTER the first setLogs call. Tail-following
-    // is the user-visible expectation; returning true favors that.
+    // W6.7 Round 6 — WHY null-element returns true (not false):
+    // protects the initial-render race where the ref briefly resolves
+    // AFTER the first setLogs call. False here would skip
+    // `scheduleTailScroll` for that first log line, breaking the
+    // "follow-tail" contract on the very first user-visible entry.
+    // (R15 W15.7 N-R15-27: prior comment also claimed a re-mount
+    // scenario where false would permanently break auto-scroll;
+    // that's overstated — once the panel mounts, the ref non-null
+    // settles and the next addLog reads non-null. The initial-frame
+    // race is the only real concern.)
     if (!el) return true;
     return el.scrollHeight - el.scrollTop - el.clientHeight < TAIL_THRESHOLD_PX;
   }, []);

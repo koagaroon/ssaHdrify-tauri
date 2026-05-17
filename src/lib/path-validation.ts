@@ -199,10 +199,16 @@ export function decomposeInputPath(inputPath: string): InputPathParts {
   // round-trips. Reject at TS entry as defense-in-depth, symmetric
   // with the Rust backstop. Detect `..` as a path COMPONENT, not as
   // a substring — `foo..bar.ass` is a legitimate filename.
-  const hasDotDotSegment = normalized.split("/").some((seg) => seg === "..");
-  if (hasDotDotSegment) {
-    throw new Error("Input path contains parent-directory segments");
-  }
+  // R15 W15.7 (N-R15-20): absolute-path check runs BEFORE
+  // parent-directory-segment check. Pre-W15.7 the order was
+  // reversed — a non-absolute input containing `..` (e.g., the
+  // string "../foo.ass") threw "Input path contains
+  // parent-directory segments" instead of the more accurate
+  // "Input path must be absolute". The earlier error misattributed
+  // the root cause (caller passed a relative path) by surfacing a
+  // secondary symptom (one of its components happened to be `..`).
+  // Now: callers see "must be absolute" first; absolute paths with
+  // `..` segments still get caught immediately after.
 
   // Absolute = (a) starts with `/` (POSIX root or UNC after backslash
   // conversion), or (b) drive letter + separator. Drive-relative
@@ -211,6 +217,11 @@ export function decomposeInputPath(inputPath: string): InputPathParts {
   const isAbsolute = normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized);
   if (!isAbsolute) {
     throw new Error("Input path must be absolute");
+  }
+
+  const hasDotDotSegment = normalized.split("/").some((seg) => seg === "..");
+  if (hasDotDotSegment) {
+    throw new Error("Input path contains parent-directory segments");
   }
 
   const lastSlash = normalized.lastIndexOf("/");

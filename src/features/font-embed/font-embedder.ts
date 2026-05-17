@@ -562,6 +562,15 @@ export async function embedFonts(
     return null;
   }
 
+  // R15 W15.7 (N-R15-29): the zero-fontEntries early-return used to
+  // skip the insertFontsSection [Script Info] guard (R10 A-R10-011).
+  // A malformed ASS referencing zero fonts would succeed as a no-op
+  // and downstream persisted the still-malformed file untouched —
+  // the embed reported success against input that the GUI would
+  // refuse to re-open. Run the [Script Info] check upfront via
+  // assertAssShape so the contract is "valid ASS in, valid ASS out
+  // (or throw)" regardless of font count.
+  assertAssShape(assContent);
   if (fontEntries.length === 0) {
     return { content: assContent, embeddedCount: 0 };
   }
@@ -576,29 +585,45 @@ export async function embedFonts(
   };
 }
 
-/**
- * Insert [Fonts] section into ASS content.
- * Position: after [V4+ Styles], before [Events].
- * If [Fonts] already exists, replace it.
- */
-export function insertFontsSection(content: string, fontsSection: string): string {
-  // Round 10 A-R10-011: reject input that lacks [Script Info]. A
-  // crafted ASS with zero recognized section headers would otherwise
-  // produce output like `\n\n[Fonts]\n…\n` — structurally invalid
-  // ASS (no [Script Info]) but the embed reports success and the
-  // user later discovers the file won't render. Most input paths
-  // reach here through `parseSubtitle` / `buildAssDocument` upstream
-  // (which always emit a [Script Info] header), so this guard
-  // catches the direct-passthrough path where a hostile ASS skipped
-  // the parser-rebuild route entirely (P1b: subtitle from public
-  // release channel). Check is case-insensitive + anchored to column
-  // 0 with `\s*` trailing to mirror common ASS-renderer lenience.
+/// R15 W15.7 (N-R15-29 + A-R15-1): shared shape + size guard reused
+/// by `embedFonts` upfront AND `insertFontsSection` at its boundary.
+/// Direct callers of `insertFontsSection` (`cli-engine-entry.ts::applyFontEmbed`)
+/// bypass `processAssContent`'s upstream 100 MB guard — without a
+/// helper-layer backstop, hostile content reaching this surface
+/// hits unbounded `split(/\r?\n/)` allocation. Cap matches
+/// ass-processor.ts's value for posture symmetry.
+const MAX_INSERT_FONTS_SECTION_CONTENT = 100_000_000;
+function assertAssShape(content: string): void {
+  if (content.length > MAX_INSERT_FONTS_SECTION_CONTENT) {
+    throw new Error(`File too large: ${(content.length / 1_000_000).toFixed(1)} MB (max 100 MB)`);
+  }
   if (!/^\[Script Info\][ \t]*$/im.test(content)) {
     throw new Error(
       "Cannot embed: input ASS has no [Script Info] section header. " +
         "Re-parse / rebuild the file before embedding fonts."
     );
   }
+}
+
+/**
+ * Insert [Fonts] section into ASS content.
+ * Position: after [V4+ Styles], before [Events].
+ * If [Fonts] already exists, replace it.
+ */
+export function insertFontsSection(content: string, fontsSection: string): string {
+  // Round 10 A-R10-011 + R15 W15.7 (A-R15-1): defense-in-depth at
+  // the helper boundary. `processAssContent`'s 100 MB byte guard
+  // upstream covers the standalone HDR + chain paths, but
+  // `cli-engine-entry.ts::applyFontEmbed` (standalone embed CLI
+  // flow) calls `insertFontsSection` directly on caller-supplied
+  // content — without a per-callsite cap or this helper-layer
+  // backstop, a hostile pack with a multi-hundred-MB ASS hits
+  // unbounded `split(/\r?\n/)` allocation here. The shape check
+  // ([Script Info] header) is the original R10 A-R10-011 defense;
+  // the size cap is the W15.7 addition. Routed through the shared
+  // `assertAssShape` helper so embedFonts (zero-font early-return,
+  // N-R15-29) and direct callers run the same gate.
+  assertAssShape(content);
   const lineEnding = content.includes("\r\n") ? "\r\n" : "\n";
   // Normalize Unicode line separators (U+2028 LINE SEPARATOR,
   // U+2029 PARAGRAPH SEPARATOR) to ASCII newlines BEFORE the split.

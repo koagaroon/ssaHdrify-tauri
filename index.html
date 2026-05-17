@@ -1,5 +1,18 @@
 <!doctype html>
-<html lang="en">
+<!--
+  R15 W15.7 (N-R15-25): `lang="zh"` matches `src/i18n/I18nProvider.tsx`
+  `loadLang()`'s first-launch default. Pre-W15.7 this was `lang="en"`,
+  causing the document to advertise English to the OS / assistive
+  tech for the pre-mount frame before React's mount-time effect
+  overrode the attribute — first-launch users (most common case)
+  saw a brief English→Chinese flip plus an a11y-incorrect lang
+  signal. I18nProvider keeps ownership at runtime via its useEffect
+  (handles user toggling lang via the header switch); this static
+  default just aligns the initial frame with the storage-persisted
+  default. If `loadLang()`'s default changes, this static must
+  track it.
+-->
+<html lang="zh">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
