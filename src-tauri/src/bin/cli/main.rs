@@ -2717,6 +2717,22 @@ fn process_embed_file(
 /// Return shape: Ok = (subsets, warnings); Err = (error, partial_warnings)
 /// — partial_warnings carries diagnostics collected before the failing
 /// step, so the caller can still surface them through ChainFileOutcome.
+///
+/// **Reachability note** (R15 N-R15-6 verification): under current
+/// control flow the partial_warnings Vec is always empty on the Err
+/// path. `resolve_embed_fonts` Errs only under `--on-missing fail`
+/// when ANY font is missing, BEFORE constructing missing_warnings;
+/// `subset_resolved_fonts` Errs only under fail mode AFTER subset
+/// failures, but at that point any missing-font would already have
+/// Err'd in resolve. So the only Err arms that fire have empty
+/// missing_warnings to propagate. Field is kept as architectural
+/// consistency with W14.5's `ChainFileOutcome::Failed/Skipped(_, vec)`
+/// pattern — a future Err path addition (e.g., `resolve_embed_fonts`
+/// surfacing a non-final Err with partial missing_warnings) doesn't
+/// silently lose them. Documented per code_review.md P3 "would a
+/// fresh agent disagree with this defense without knowing the
+/// incident?" — yes, structurally; the answer is W14.5's contract
+/// established the pattern.
 type ChainEmbedSubsetsResult =
     Result<(Vec<engine::FontSubsetPayload>, Vec<String>), (String, Vec<String>)>;
 

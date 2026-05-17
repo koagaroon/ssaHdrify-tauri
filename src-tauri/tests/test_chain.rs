@@ -412,6 +412,76 @@ fn chain_post_v8_failed_surfaces_oversized_warning() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// W14.7's complement (R15 N-R15-7): boundary-pair test pinning the
+/// other reachable Skipped path. The W14.7 test exercises post-V8
+/// Failed + accumulated warnings; this one exercises cheap-first
+/// Skipped, where the warnings vec is structurally empty.
+///
+/// **Reachability note**: post-V8 Skipped + non-empty warnings is
+/// structurally unreachable under current chain templates. The
+/// post-V8 `output_path.exists()` branch only fires when the Rust
+/// predictor's path differs from V8's resolved path — but both
+/// substituteTemplate ports support only `{name}` and `{ext}` and
+/// agree byte-for-byte. Unknown tokens cause V8 to throw → Failed,
+/// not Skipped. Pinning the cheap-first Skipped behavior is the
+/// honest contract; the W14.5 Skipped-with-warnings variant exists
+/// for architectural consistency with Failed-with-warnings (see
+/// `ChainEmbedSubsetsResult` reachability comment in main.rs). If a
+/// future chain template adds a token the Rust predictor doesn't
+/// model, that work owns adding a post-V8 Skipped-with-warnings
+/// fixture too.
+#[test]
+fn chain_cheap_first_skipped_carries_no_warnings_line() {
+    if let Some(reason) = engine_bundle_missing() {
+        panic!("engine bundle missing — run `npm run build:engine` first ({reason})");
+    }
+
+    let dir = temp_dir("cheap_first_skip");
+    let input = write_fixture(&dir, "cat.ass");
+
+    // Pre-create the predicted output as a regular file so the
+    // cheap-first `predicted.exists()` check in process_one_chain_input
+    // fires before V8. Without --overwrite, this returns
+    // ChainFileOutcome::Skipped(_, warnings=empty) — V8 never runs,
+    // no oversized-skipped warning could possibly accumulate.
+    let predicted = dir.join("cat.shifted.ass");
+    fs::write(&predicted, "pre-existing content").expect("failed to pre-create output");
+
+    let output = Command::new(cli_path())
+        .args(["chain", "shift", "--offset", "+2s"])
+        .arg(&input)
+        .output()
+        .expect("failed to run chain");
+
+    assert!(
+        output.status.success(),
+        "cheap-first Skipped should still exit 0 (nothing failed); stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Positive assertion: ⊘ status line + the "already exists"
+    // explanation appear (mirrors `chain_overwrite_toggles_skip_vs_replace`
+    // shape).
+    assert!(
+        stdout.contains("⊘") && stdout.contains("already exists"),
+        "expected cheap-first Skipped line in stdout: {stdout}"
+    );
+    // Negative counter-assertion: no ⚠ warning line surfaces. The
+    // warnings vec at the cheap-first Skipped return site is
+    // structurally empty (declared at function-top, no accumulation
+    // path runs before the check). If a future refactor makes the
+    // Skipped vec carry stale embed-warnings from a previous input
+    // in the batch, this assertion fires.
+    assert!(
+        !stderr.contains("⚠"),
+        "no ⚠ warning expected on cheap-first Skipped path (warnings vec empty pre-V8): {stderr}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn chain_rejects_in_step_output_template() {
     // Locked design: --output-template inside any step segment is a
