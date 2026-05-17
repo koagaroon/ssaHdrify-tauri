@@ -164,8 +164,12 @@ pub struct FontEmbedApplyRequest {
 /// use this struct on the wire — `process_one_chain_input` builds an
 /// inline base64 payload (`{ "fontName": ..., "dataB64": "..." }`)
 /// directly to dodge the ~4-5× expansion JSON-array form would impose
-/// on the worst-case CUMULATIVE_FALLBACK_BYTES path. The two wire
-/// formats are intentional, not a sign of unfinished migration.
+/// against the per-font MAX_FONT_DATA_SIZE budget (50 MB, defined in
+/// fonts.rs). The two wire formats are intentional, not a sign of
+/// unfinished migration. (R15 W15.3 N-R15-12: previous citation of
+/// `CUMULATIVE_FALLBACK_BYTES` was a phantom anchor — that symbol
+/// was removed in R6 W6.9 along with the fontcull-parse-fail fallback
+/// path.)
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FontSubsetPayload {

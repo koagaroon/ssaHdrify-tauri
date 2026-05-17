@@ -872,6 +872,22 @@ mod tests {
     /// removes the entire dir + WAL sidecars, even on test panic —
     /// the previous bare-PathBuf helper relied on OS temp cleanup
     /// for panic paths and accumulated stale dirs across runs.
+    ///
+    /// R15 W15.3 (N-R15-13) cross-reference: a near-identical
+    /// `TempCacheDir` shape (PID + nanos suffix + RAII Drop wiping)
+    /// lives at `font_cache_commands.rs::tests::TempCacheDir` for
+    /// the same cleanup posture in the GUI-side IPC tests. Other
+    /// test modules (`dropzone.rs::tests` line ~256,
+    /// `safe_io.rs::tests::temp_dir` line ~419,
+    /// `fonts.rs::tests` line ~3306/~3688) use inline
+    /// `std::env::temp_dir().join(...)` constructions without RAII
+    /// — those test bodies rely on per-test `fs::remove_dir_all`
+    /// calls. A refactor extracting a single shared `#[cfg(test)]
+    /// mod test_helpers` would need to also harmonize the suffix
+    /// shapes ("font-cache-test-" vs "ssahdrify-cli-chain-test-"
+    /// etc.); each module's per-suite prefix carries diagnostic
+    /// value when stale dirs need attribution, so the cost-benefit
+    /// hasn't tipped toward consolidation.
     struct TempCacheDir(std::path::PathBuf);
 
     impl TempCacheDir {

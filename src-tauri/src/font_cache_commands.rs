@@ -260,12 +260,19 @@ pub fn migrate_legacy_gui_cache(legacy_dir: &Path, new_dir: &Path) {
 ///   matches the locked "no auto-migrate" decision: never silently
 ///   delete a cache file the user might want to inspect.
 pub fn init_gui_font_cache(app_data_dir: &Path) -> Result<(), String> {
-    // R14 W14.10 (N-R14-8, P1a-accepted): `app_data_dir` here is
-    // resolved via Tauri's `app.path().app_data_dir()` → `dirs`
-    // crate → `SHGetKnownFolderPath` (Windows) / XDG paths
-    // (POSIX). The chain runs entirely inside the user's own
-    // AppData / XDG_DATA_HOME, requiring AppData write access to
-    // plant a reparse-point in the parent walk. Same P1a class as
+    // R14 W14.10 (N-R14-8, P1a-accepted) + R15 W15.3 (N-R15-9, rationale
+    // refresh): `app_data_dir` here is resolved via the caller in
+    // `lib.rs` which passes `font_cache::unified_app_data_dir()` —
+    // chain is `std::env::var("APPDATA")` (Windows) /
+    // `$XDG_DATA_HOME` (POSIX) / `~/Library/Application Support`
+    // (macOS) per the W11.4b unified dir migration; the prior
+    // comment cited `dirs` crate / `SHGetKnownFolderPath` which is
+    // Tauri's `app.path().app_data_dir()` resolution, used at a
+    // different layer (the `$DATA` capability scope variable
+    // resolution; see design doc § fs:scope policy "Resolution
+    // divergence note"). Both chains land inside the user's own
+    // AppData / XDG_DATA_HOME — planting a reparse-point in the
+    // parent walk requires AppData write access. Same P1a class as
     // R13 A-R13-3 (parent-walk reparse on AppData). Defending here
     // would mean a parent-walk reparse scan on every startup,
     // duplicating the FontCache::open_or_create boundary check
@@ -330,18 +337,14 @@ pub fn init_gui_font_cache(app_data_dir: &Path) -> Result<(), String> {
 // CLI binary can use the same helper — Round 3 N-R3-15 consolidation.
 use crate::font_cache::try_modified_at;
 
-/// Convenience for callers that want a "best-effort" mtime with a
-/// Returns the folder's modified-at unix-seconds, OR `None` when stat
-/// fails. The previous form silently substituted 0 on failure, which
-/// marked the cache row with the Unix epoch; the next drift-detect
-/// then compared 0 vs the live folder's real positive mtime and
-/// reported `modified`, prompting another doomed rescan that hit the
-/// same failure mode — a loop bug (N-R5-RUSTGUI-03). Callers MUST
-/// handle `None` by skipping the populate/replace for that folder so
-/// no row gets a bogus epoch stamp.
-fn stat_mtime(path: &Path) -> Option<i64> {
-    try_modified_at(path)
-}
+// R15 W15.3 (N-R15-18): `stat_mtime` wrapper deleted — it was a
+// one-line forward to `try_modified_at`. The N-R5-RUSTGUI-03 caller
+// contract ("None means skip the populate/replace; epoch-zero must
+// never reach SQLite") lives on the canonical helper's doc
+// (`font_cache.rs::try_modified_at`); duplicating it on a wrapper
+// just decayed (the wrapper's doc became grammatically broken across
+// edits without re-reading). Callers now use `try_modified_at`
+// directly.
 
 // `entries_to_cache_metadata` (in `crate::fonts`) is the shared helper —
 // `try_record_folder_in_gui_cache` and the rescan-apply path here both
@@ -601,7 +604,7 @@ pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
         // None → skip the populate (see `stat_mtime` doc): without
         // this, a transient stat failure would write an epoch-zero
         // mtime that drift-detect re-flags forever.
-        let Some(folder_mtime) = stat_mtime(folder_path) else {
+        let Some(folder_mtime) = try_modified_at(folder_path) else {
             log::warn!("rescan: skipping {folder} — folder mtime unreadable");
             skipped.push(SkippedFolder {
                 folder: folder.clone(),
@@ -685,6 +688,19 @@ pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
 /// same work twice. Aggregating into `skipped` lets the modal show
 /// "N folders refreshed, M failed to write — see list" partial-
 /// success state.
+///
+/// **Intentional double-surfacing of ScanFailed folders (R15 W15.3
+/// N-R15-14)**: a Phase-1 ScanFailed folder appears in BOTH the
+/// returned `skipped[].kind == ScanFailed` list AND the
+/// `removed_evicted` count, because Phase-2 evicts its stale cache
+/// rows via `cache.remove_folder` (incrementing `removed_evicted`)
+/// while the `skipped` entry stays for the UI to render. The two
+/// surfaces measure different things: `skipped` = "what failed to
+/// rescan, surface to the user"; `removed_evicted` = "DB rows we
+/// dropped this run, for the summary tally". A future refactor
+/// that "deduplicates" by removing the ScanFailed entries from
+/// `skipped` after eviction would silently break the modal's
+/// user-facing failure report.
 fn apply_rescan_to_cache(
     cache: &mut FontCache,
     scanned: &[(String, i64, Vec<FontMetadata>)],
@@ -947,7 +963,7 @@ pub fn try_record_folder_in_gui_cache(
     // None → skip the populate so the cache doesn't acquire an
     // epoch-zero row that drift-detect re-flags forever (see
     // `stat_mtime` doc).
-    let Some(folder_mtime) = stat_mtime(folder_path) else {
+    let Some(folder_mtime) = try_modified_at(folder_path) else {
         log::warn!(
             "GUI cache populate skipped (folder mtime unreadable): {}",
             folder_path.display()
@@ -1164,6 +1180,14 @@ mod tests {
     use super::*;
     use std::fs;
 
+    /// RAII guard mirroring `font_cache.rs::tests::TempCacheDir` —
+    /// the canonical-shape comment on that one (line ~875) enumerates
+    /// every duplicate in the workspace (dropzone.rs / safe_io.rs /
+    /// fonts.rs test modules) and explains why consolidation hasn't
+    /// landed. Keep this struct in sync with its sibling: any change
+    /// to the PID+nanos suffix shape, Drop semantics, or cache-path
+    /// helper signature should be considered for the other site too.
+    /// (R15 W15.3 N-R15-13)
     struct TempCacheDir(std::path::PathBuf);
 
     impl TempCacheDir {

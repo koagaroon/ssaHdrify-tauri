@@ -55,8 +55,13 @@ env_logger = "0.11"
 # Used by the chain feature's pre-resolved subset payload to encode
 # Vec<u8> as base64 instead of the JSON `[byte, byte, ...]` form. The
 # JSON-array form expands ~4-5× per byte (decimal text + comma + space)
-# and pressures V8's heap on the 50 MB CUMULATIVE_FALLBACK_BYTES path;
-# base64 is ~1.33× and decoded in TS via `atob`.
+# and pressures V8's heap on the per-font MAX_FONT_DATA_SIZE budget
+# (50 MB, defined in src/fonts.rs); base64 is ~1.33× and decoded in
+# TS via `atob`. (R15 W15.3 N-R15-12 anchor refresh — previous mention
+# of CUMULATIVE_FALLBACK_BYTES was a phantom citation; that symbol
+# was removed in R6 W6.9 along with the fontcull-parse-fail fallback
+# path. The justification is still load-bearing: MAX_FONT_DATA_SIZE
+# guards subset_font's data return on the Ok path.)
 base64 = "0.22"
 # Direct dep on rfd matches the transitive version pulled in by
 # tauri-plugin-dialog. Used at app setup to surface init failures via a

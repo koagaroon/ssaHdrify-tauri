@@ -106,6 +106,19 @@ fn clear_existing_destination(path: &Path, overwrite: bool) -> Result<(), String
     // and would return false for a dangling shortcut, which is the
     // exact case Codex flagged (the chain CLI write path bypassed
     // this check the same way before commit b7d9d21).
+    //
+    // R15 W15.3 (N-R15-11): the back-to-back syscalls
+    // (symlink_metadata returning `meta` here, then is_reparse_point
+    // calling symlink_metadata again two lines below) look redundant
+    // — `meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT` on
+    // Windows / `meta.file_type().is_symlink()` on POSIX would
+    // answer from the already-fetched `meta`. Kept deliberately for
+    // call-shape parity with the other `is_reparse_point` usages in
+    // this file (lines 170, 285, 332) and across the codebase
+    // (dropzone.rs::walk_one_level documents the same trade-off in
+    // N-R4-09). Centralizing into a `is_reparse_point_from_meta`
+    // helper would touch 6+ sites with no measurable perf win on a
+    // failure-path syscall pattern.
     match fs::symlink_metadata(path) {
         Ok(meta) => {
             if is_reparse_point(path) {

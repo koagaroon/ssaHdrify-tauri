@@ -133,6 +133,24 @@ pub const USER_FONT_DB_FILENAME: &str = "user-font-sources.session.sqlite3";
 /// while millions of canonicalize calls run.
 const MAX_PREFLIGHT_ENTRIES: usize = 200_000;
 
+/// Maximum codepoint count per `subset_font` call. Bounds fontcull's
+/// IntSet allocation against attacker-influenced IPC payloads. A
+/// realistic CJK subset is in the low tens of thousands; 200k covers
+/// every legitimate single-font usage with headroom while rejecting
+/// crafted megabyte-class codepoint arrays before any allocation.
+/// (R15 W15.3 N-R15-10: extracted from inline `200_000` literal in
+/// `subset_font` to match the named-const convention every other cap
+/// in this module follows.)
+const MAX_SUBSET_CODEPOINTS: usize = 200_000;
+
+/// Maximum font-collection face index accepted at `subset_font`'s IPC
+/// boundary. TTC files practically cap at 16 faces (per
+/// `MAX_TTC_FACES`); 255 is the defense-in-depth ceiling, far past
+/// any legitimate font collection and inside u8 range so the value
+/// fits the OpenType `numFonts` field shape. (R15 W15.3 N-R15-10:
+/// extracted from inline `255` literal in `subset_font`.)
+const MAX_SUBSET_FONT_INDEX: u32 = 255;
+
 /// Strip the Win32 extended-length prefix (`\\?\` / `\\?\UNC\`) that
 /// `canonicalize()` adds on Windows, so paths compare consistently
 /// across insert and lookup. UNC form `\\?\UNC\server\share\…` rewrites
@@ -698,6 +716,21 @@ pub fn entries_to_cache_metadata(
             // the helper body inline; a future change to the helper
             // (e.g., Wave 10.4 N-R10-008's `.ok()?` for pre-epoch mtime
             // safety) would have left this site behind.
+            // R15 W15.3 (N-R15-16, Pattern 2 — same try_modified_at
+            // helper guards two callers unevenly): N-R10-008 tightened
+            // the FOLDER mtime path to filter entries when
+            // try_modified_at returns None (avoids epoch-zero
+            // re-trigger of refresh on next run). The FILE mtime path
+            // here still falls back to 0, persisting epoch-zero into
+            // SQLite's cached_fonts.file_mtime. NO current bug —
+            // drift detection uses folder mtime only; per-file mtime
+            // is stored but not consulted. If future drift work hooks
+            // per-file mtime, that work owns either (a) filtering
+            // entries with None like the folder path, OR (b)
+            // sentinelizing differently (e.g., NULL via Option<i64>)
+            // so consumers can distinguish stat-failed from
+            // legitimately-epoch-zero. Cheap WHY-comment instead of
+            // pre-emptive contract change keeps the noise down.
             let mtime = *mtime_cache.entry(e.path.as_str()).or_insert_with(|| {
                 crate::font_cache::try_modified_at(Path::new(e.path.as_str())).unwrap_or(0)
             });
@@ -2844,12 +2877,14 @@ pub fn subset_font(
     // font_path also from JS — validate length / control-char / DOS-device
     // shape before any allocation, matching find_system_font's posture.
     crate::util::validate_ipc_path(&font_path, "Font")?;
-    if font_index > 255 {
-        return Err(format!("Invalid font face index: {font_index} (max 255)"));
-    }
-    if codepoints.len() > 200_000 {
+    if font_index > MAX_SUBSET_FONT_INDEX {
         return Err(format!(
-            "Too many codepoints: {} (max 200,000)",
+            "Invalid font face index: {font_index} (max {MAX_SUBSET_FONT_INDEX})"
+        ));
+    }
+    if codepoints.len() > MAX_SUBSET_CODEPOINTS {
+        return Err(format!(
+            "Too many codepoints: {} (max {MAX_SUBSET_CODEPOINTS})",
             codepoints.len()
         ));
     }

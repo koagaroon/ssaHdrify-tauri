@@ -1432,9 +1432,13 @@ fn process_one_chain_input(
         // Encode subset bytes as base64 strings. The previous form
         // (`{ "data": [byte, byte, ...] }`) expanded ~4-5× per byte
         // when serde_json wrote bytes as decimal+comma JSON-in-JS-source,
-        // which compounds against CUMULATIVE_FALLBACK_BYTES (50 MB)
-        // into ~200 MB of V8 heap pressure on the worst-case fallback
-        // path. Base64 is ~1.33× and decoded in TS via atob().
+        // which compounded against the per-font MAX_FONT_DATA_SIZE
+        // budget (50 MB, defined in fonts.rs) into ~200 MB of V8 heap
+        // pressure on the worst-case path. Base64 is ~1.33× and
+        // decoded in TS via atob(). (R15 W15.3 N-R15-12: previous
+        // mention of `CUMULATIVE_FALLBACK_BYTES` was a phantom anchor
+        // — that symbol was removed in R6 W6.9 along with the
+        // fontcull-parse-fail fallback path.)
         let subsets_json: Vec<serde_json::Value> = subsets
             .into_iter()
             .map(|s| {
