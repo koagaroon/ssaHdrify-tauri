@@ -496,14 +496,50 @@ pub fn open_font_cache() -> Result<CacheStatus, String> {
 /// schema-mismatch state for the rebuild path.
 ///
 /// Does NOT take `CacheMutationGuard` (Round 2 N-R2-16): this is a
-/// read-only command and the slot mutex is held throughout the
-/// `cached_folders` enumeration + `diff_against` call, so a parallel
-/// `clear_font_cache` can't drop the slot mid-iteration. The guard is
-/// load-bearing only when a command both reads AND writes the cache
-/// across multiple lock acquisitions (rescan's Phase 1 / Phase 3
-/// split; clear's drop + recreate); detect_drift does neither.
+/// read-only command. R16 W16.2 (N-R16-6) splits the lock hold so the
+/// per-folder `try_modified_at` syscall loop runs WITHOUT the slot
+/// lock held — the per-folder stat can stall for seconds per call on
+/// a slow network share with hundreds of cached folders, and holding
+/// the slot through that loop blocked concurrent `lookup_font_family`
+/// calls. The split mirrors `rescan_font_cache_drift`'s Phase 1 /
+/// Phase 3 pattern: snapshot folder list under lock, drop lock, stat
+/// loop unlocked, re-acquire lock to call `diff_against` (which needs
+/// the cache handle). A parallel `clear_font_cache` interleaving
+/// between the snapshot drop and the re-acquire would change `slot` to
+/// None — the second `.as_ref()` handles that as a clean
+/// `DriftReport::default()` return. Stat results computed against the
+/// pre-clear cache list against a post-clear cache are still
+/// internally consistent (we report against the snapshot we took).
 #[tauri::command]
 pub fn detect_font_cache_drift() -> Result<DriftReport, String> {
+    // Phase 1: snapshot the cached folder list under the lock.
+    let cached_folders = {
+        let slot = GUI_FONT_CACHE
+            .lock()
+            .map_err(|_| "GUI cache mutex poisoned".to_string())?;
+        let cache = match slot.as_ref() {
+            Some(c) => c,
+            None => return Ok(DriftReport::default()),
+        };
+        cache
+            .list_folders()
+            .map_err(|e| format!("list cached folders: {e}"))?
+        // slot dropped at end of block
+    };
+
+    // Phase 2: per-folder stat loop OUTSIDE the lock. Slow-network /
+    // permission-denied / folder-gone all route to "omit from
+    // snapshot" → Phase 3's diff_against reports them as removed.
+    let mut snapshot: Vec<(String, i64)> = Vec::with_capacity(cached_folders.len());
+    for folder in &cached_folders {
+        if let Some(mtime) = try_modified_at(Path::new(&folder.folder_path)) {
+            snapshot.push((folder.folder_path.clone(), mtime));
+        }
+    }
+
+    // Phase 3: re-acquire the lock for `diff_against`. If the cache
+    // was cleared between Phase 1 and Phase 3, fall back to an empty
+    // report — same behavior as Phase 1 seeing None.
     let slot = GUI_FONT_CACHE
         .lock()
         .map_err(|_| "GUI cache mutex poisoned".to_string())?;
@@ -511,21 +547,6 @@ pub fn detect_font_cache_drift() -> Result<DriftReport, String> {
         Some(c) => c,
         None => return Ok(DriftReport::default()),
     };
-    let cached_folders = cache
-        .list_folders()
-        .map_err(|e| format!("list cached folders: {e}"))?;
-    let mut snapshot: Vec<(String, i64)> = Vec::with_capacity(cached_folders.len());
-    for folder in &cached_folders {
-        // `try_modified_at` failures (folder gone, permission denied,
-        // network share offline, no-mtime FS) all route to "omit from
-        // snapshot" → diff_against reports the folder as removed.
-        // Permission-denied is a slight false positive (folder exists,
-        // we just can't see it) but the user wants to know either way —
-        // the cache rows are about-to-be-stale.
-        if let Some(mtime) = try_modified_at(Path::new(&folder.folder_path)) {
-            snapshot.push((folder.folder_path.clone(), mtime));
-        }
-    }
     let report = cache
         .diff_against(&snapshot)
         .map_err(|e| format!("compute drift: {e}"))?;
@@ -711,6 +732,37 @@ fn apply_rescan_to_cache(
     let mut removed_evicted = 0usize;
 
     for (folder, folder_mtime, metadata) in scanned {
+        // R16 W16.2 (A-R16-6, Pattern 2 racing-replace defense):
+        // re-stat the folder mtime IMMEDIATELY before replace_folder.
+        // Phase 2 ran outside the lock, so a parallel
+        // `try_record_folder_in_gui_cache` (FontSourceModal's
+        // best-effort populate) could have written a fresher row for
+        // this folder while we held only the scanned snapshot. Without
+        // this re-check, Phase 3 would overwrite the racing populate
+        // with our Phase-2 data — low-impact (next drift detect would
+        // pick it up) but a real race. Compare current mtime against
+        // the Phase-2-captured value; if it ticked forward, skip the
+        // replace and surface the race in `skipped` so the user knows
+        // the folder is fresh-elsewhere. Stat-fail at this point
+        // routes to "trust the Phase-2 mtime" (same fail-open posture
+        // as the Phase-1 collection loop).
+        let current_mtime = try_modified_at(Path::new(folder)).unwrap_or(*folder_mtime);
+        if current_mtime > *folder_mtime {
+            log::info!(
+                "apply_rescan_to_cache {folder} — folder mtime advanced \
+                 ({} → {current_mtime}) between Phase 2 scan and Phase 3 \
+                 apply; skipping replace to preserve concurrent fresh row",
+                *folder_mtime
+            );
+            skipped.push(SkippedFolder {
+                folder: folder.clone(),
+                reason: "concurrent fresh write detected; skipped to avoid \
+                         overwriting newer data"
+                    .to_string(),
+                kind: SkipKind::ApplyFailed,
+            });
+            continue;
+        }
         match cache.replace_folder(folder, *folder_mtime, metadata) {
             Ok(()) => modified_rescanned += 1,
             Err(e) => {
@@ -1167,9 +1219,21 @@ pub fn lookup_font_family(
             return Ok(None);
         }
     }
+    // R16 W16.2 (N-R16-1, Pattern 3 cross-helper coupling): the
+    // `register_cache_provenance(r)` call above routes through
+    // `u32::try_from(hit.face_index())` and returns Ok(None) on
+    // negative values (font_cache.rs:298) — so the cast on line below
+    // is safe today only via that sibling check. A future refactor
+    // that weakens / moves / splits provenance's negativity guard
+    // would silently re-introduce wrap-to-huge-u32 here. `try_from`
+    // + unreachable!() makes the negativity guarantee local to this
+    // site; the unreachable arm fires only if provenance contract
+    // breaks, in which case loud panic >> silent wrap to ~4 G face
+    // index.
     Ok(result.map(|r| crate::fonts::FontLookupResult {
         path: r.font_path,
-        index: r.face_index as u32,
+        index: u32::try_from(r.face_index)
+            .expect("face_index negativity guaranteed by register_cache_provenance above"),
     }))
 }
 

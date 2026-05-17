@@ -349,6 +349,24 @@ fn safe_rename_file_inner(
         );
         return Err("Refusing to rename symlink / junction (race-time detection)".to_string());
     }
+    // R16 W16.2 (A-R16-1, P1b TOCTOU symmetry): copy's destination
+    // is implicitly protected by `OpenOptions::create_new(true)` at
+    // open time; rename has no equivalent atomic guard. Between
+    // `clear_existing_destination` (which removed dst after its own
+    // reparse pre-check) and the `fs::rename` below, a P1b actor can
+    // re-plant a symlink at dst — same window copy already closes.
+    // One syscall (`is_reparse_point` = lstat on POSIX, file_attributes
+    // on Windows); race window is narrow but the cost is trivial.
+    if is_reparse_point(dst_ref) {
+        log::warn!(
+            "Refusing to rename to possible symlink / junction at rename-time: {}",
+            dst_ref.display()
+        );
+        return Err(
+            "Refusing to rename to symlink / junction destination (race-time detection)"
+                .to_string(),
+        );
+    }
 
     fs::rename(src_ref, dst_ref).map_err(|e| format!("Failed to rename file: {e}"))
 }

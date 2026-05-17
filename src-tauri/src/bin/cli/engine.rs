@@ -270,10 +270,18 @@ impl CliEngine {
         // calls then fail with the unhelpful "Cannot read properties
         // of undefined (reading 'convertHdr')". Surfacing a build-step
         // pointer here is more useful.
+        //
+        // R16 W16.2 (A-R16-7): tightened from a bare object-non-null
+        // check to also verify `convertHdr` is callable. Pre-W16.2 a
+        // hand-edited bundle that defined `globalThis.ssaHdrifyCliEngine = {}`
+        // (no methods) passed the probe — per-method calls then failed
+        // mid-run with a V8 type error. `convertHdr` is one of four
+        // wired methods; verifying any one of them rules out the
+        // empty-object case at near-zero cost (one extra `typeof`).
         let probe = runtime
             .execute_script(
                 "ssahdrify-cli-engine-probe.js",
-                "typeof globalThis.ssaHdrifyCliEngine === 'object' && globalThis.ssaHdrifyCliEngine !== null",
+                "typeof globalThis.ssaHdrifyCliEngine === 'object' && globalThis.ssaHdrifyCliEngine !== null && typeof globalThis.ssaHdrifyCliEngine.convertHdr === 'function'",
             )
             .map_err(|err| format!("failed to probe CLI engine global: {err}"))?;
         let probe_ok = {

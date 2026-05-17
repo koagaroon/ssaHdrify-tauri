@@ -136,7 +136,23 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {
-            eprintln!("fatal: tauri runtime failed to start: {e}");
+            // R16 W16.2 (N-R16-4): runtime-start failure parity with
+            // the setup-time rfd MessageBox above (line ~95). Windows
+            // GUI subsystem has no visible stderr — the prior eprintln
+            // was effectively silent when WebView2 init / IPC bootstrap
+            // failed post-setup. Same strip_visual_line_breaks scrub
+            // applied to the error body for the same dialog-line-break
+            // reason. exit(1) preserved so the OS-level "process exited
+            // abnormally" surfaces stay intact.
+            use crate::util::strip_visual_line_breaks;
+            let error_one_line = strip_visual_line_breaks(&e.to_string());
+            rfd::MessageDialog::new()
+                .set_level(rfd::MessageLevel::Error)
+                .set_title("SSA HDRify — runtime failure")
+                .set_description(format!(
+                    "The Tauri runtime failed to start.\n\n{error_one_line}\n\nThe app cannot continue."
+                ))
+                .show();
             std::process::exit(1);
         });
 }

@@ -1336,14 +1336,36 @@ fn parse_local_font_file(canonical: &Path, scan_id: u64) -> Vec<LocalFontEntry> 
         // index 0. Test pin: `db_lookup_prefers_newer_source_for_same_family_key`.
         let mut families: Vec<String> = family_variants.into_iter().collect();
         families.sort();
-        if let Some(pos) = primary_hint
-            .as_ref()
-            .and_then(|primary| families.iter().position(|v| v == primary))
-        {
-            // rotate_right(1) moves families[pos] to index 0 while keeping
-            // the elements before it in alphabetical order — swap(0, pos)
-            // would displace the element at 0 to pos, breaking sort order.
-            families[..=pos].rotate_right(1);
+        if let Some(ref primary) = primary_hint {
+            match families.iter().position(|v| v == primary) {
+                Some(pos) => {
+                    // rotate_right(1) moves families[pos] to index 0 while keeping
+                    // the elements before it in alphabetical order — swap(0, pos)
+                    // would displace the element at 0 to pos, breaking sort order.
+                    families[..=pos].rotate_right(1);
+                }
+                None => {
+                    // R16 W16.2 (A-R16-2): structural fallback when
+                    // `primary_hint` is Some but doesn't appear in
+                    // family_variants. The current
+                    // bounded_font_family_name + localized_strings
+                    // path guarantees primary_hint round-trips through
+                    // the variant set (deterministic on today's
+                    // skrifa builds), but a future skrifa upgrade with
+                    // caller-time normalization could break that
+                    // implicit alignment. Without the explicit push,
+                    // the UI primary name silently reverts to
+                    // sorted-first; pushing primary at index 0 keeps
+                    // the contract structural (not security-relevant,
+                    // but matches Pattern 3 "type-system over doc
+                    // discipline" posture from W15.4
+                    // current_unix_seconds).
+                    log::debug!(
+                        "primary_hint '{primary}' not in family_variants; prepending explicitly"
+                    );
+                    families.insert(0, primary.clone());
+                }
+            }
         }
 
         entries.push(LocalFontEntry {
@@ -1438,6 +1460,17 @@ fn preflight_files_inner(paths: Vec<String>) -> FontScanPreflight {
     // The public command enforces MAX_INPUT_PATHS, but the inner
     // helper has no caller-side check. Debug-mode assertion catches
     // any future internal caller that bypasses the public command.
+    //
+    // R16 W16.2 (A-R16-3, seen-HashSet bound documentation): the
+    // assert below also bounds the `seen: HashSet` allocation
+    // implicitly — `seen` grows at most one entry per loop iteration,
+    // and the loop runs `paths.len()` times. With MAX_INPUT_PATHS =
+    // 1000, the worst-case allocation is ~1000 normalized-path
+    // strings (much less than the parallel MAX_PREFLIGHT_ENTRIES =
+    // 200_000 ceiling that applies to directory scans). If a future
+    // change raises MAX_INPUT_PATHS substantially OR removes the IPC
+    // gate, this debug_assert is the structural reminder that `seen`
+    // needs its own cap.
     debug_assert!(
         paths.len() <= MAX_INPUT_PATHS,
         "preflight_files_inner: paths.len()={} exceeds MAX_INPUT_PATHS={}",
