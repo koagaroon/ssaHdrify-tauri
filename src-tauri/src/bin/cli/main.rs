@@ -591,6 +591,17 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
             .to_string());
     }
 
+    // R14 W14.9 (N-R14-5): validate each --font-dir argv early —
+    // fail-fast before opening the cache or starting any scan. The
+    // downstream scan_directory_collecting now validates too (defense
+    // in depth), but the early check produces a cleaner per-arg
+    // error message at the right level. `--cache-file` (also argv P1b)
+    // is already validated at the top of run() before any subcommand.
+    for dir in &args.font_dirs {
+        let dir_str = dir.to_string_lossy();
+        app_lib::util::validate_ipc_path(&dir_str, "--font-dir")?;
+    }
+
     // Resolve cache file path: user override (--cache-file) or default
     // Windows path. Both come from globals now (they're global flags).
     let cache_path = match &globals.cache_file {
@@ -605,7 +616,12 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
             s_if(args.font_dirs.len())
         );
         for dir in &args.font_dirs {
-            eprintln!("    {}", dir.display());
+            // R14 W14.8 sibling: sanitize the per-source-root header
+            // print (argv is now validate_ipc_path-clean above, but
+            // double-sanitize on already-clean strings is a no-op and
+            // matches every other refresh-fonts print site).
+            let dir_disp = sanitize_for_display(&dir.to_string_lossy());
+            eprintln!("    {dir_disp}");
         }
     }
 

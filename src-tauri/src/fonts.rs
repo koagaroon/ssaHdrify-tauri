@@ -1907,6 +1907,16 @@ where
 /// abort. Acceptable for refresh-fonts which is a foreground
 /// operation under user attention.
 pub fn scan_directory_collecting(dir: &Path) -> Result<Vec<LocalFontEntry>, String> {
+    // R14 W14.9 (N-R14-9 considered, rejected): GUI's
+    // scan_font_directory validates inside because it's an IPC entry
+    // point (untrusted JS string). The CLI's scan_directory_collecting
+    // is an INTERNAL helper called from run_refresh_fonts after the
+    // caller has already canonicalized — adding validate_ipc_path
+    // here would reject the caller's `\\?\C:\…` verbatim form, which
+    // Windows canonicalize() returns. Validation lives at the CLI
+    // entry point (`run_refresh_fonts` validates each --font-dir
+    // argv) — the proper boundary. CLI/GUI asymmetry of "where the
+    // entry point lives" is intrinsic, not a missing defense.
     let canonical = dir
         .canonicalize()
         .map_err(|e| format!("Cannot resolve directory '{}': {e}", dir.display()))?;

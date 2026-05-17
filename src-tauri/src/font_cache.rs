@@ -515,6 +515,17 @@ impl FontCache {
         folder_mtime: i64,
         fonts: &[FontMetadata],
     ) -> Result<(), CacheError> {
+        // R14 W14.9 (N-R14-16 considered, rejected): callers reach this
+        // function with already-canonicalized paths (Windows
+        // canonicalize() produces `\\?\C:\…` verbatim form, which
+        // `validate_ipc_path` correctly rejects as a fs:scope-bypass
+        // primitive at the IPC layer but is legitimate when stored
+        // internally after canonicalize). Validating here would block
+        // the normal write flow. The CLI-side untrusted boundary is at
+        // `run_refresh_fonts` (--font-dir argv validated pre-canonicalize);
+        // the GUI side validates at scan_font_directory IPC entry.
+        // SQLite stored values are trusted because their writers are
+        // internal canonicalize()-output, not user input.
         let tx = self
             .conn
             .transaction()
@@ -603,6 +614,11 @@ impl FontCache {
     /// family_keys). Atomic via transaction. Use case: drift
     /// detection found this folder is gone from the filesystem.
     pub fn remove_folder(&mut self, folder_path: &str) -> Result<(), CacheError> {
+        // Symmetric to replace_folder: folder_path is the canonicalized
+        // form persisted in cached_folders.folder_path, which on
+        // Windows starts with `\\?\` and would fail validate_ipc_path.
+        // No validation here — caller is internal Rust code working
+        // from trusted canonical strings, not IPC input.
         let tx = self
             .conn
             .transaction()
