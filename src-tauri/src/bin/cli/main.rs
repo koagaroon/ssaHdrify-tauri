@@ -847,18 +847,30 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
                 }
                 written += 1;
             }
-            ChainFileOutcome::Skipped(reason) => {
+            ChainFileOutcome::Skipped(reason, warnings) => {
                 if !globals.quiet {
                     let input_disp = sanitize_for_display(&input.to_string_lossy());
                     let reason_disp = sanitize_for_display(&reason);
                     println!("⊘ {input_disp}: {reason_disp}");
+                    for warning in &warnings {
+                        eprintln!("  ⚠ {warning}");
+                    }
                 }
                 skipped += 1;
             }
-            ChainFileOutcome::Failed(err) => {
+            ChainFileOutcome::Failed(err, warnings) => {
                 let input_disp = sanitize_for_display(&input.to_string_lossy());
                 let err_disp = sanitize_for_display(&err);
                 eprintln!("✗ {input_disp}: {err_disp}");
+                // Error line surfaces unconditionally (matches
+                // emit_file_report); warnings respect --quiet because
+                // they're informational and the user explicitly silenced
+                // output (errors are the only exception to that rule).
+                if !globals.quiet {
+                    for warning in &warnings {
+                        eprintln!("  ⚠ {warning}");
+                    }
+                }
                 failed += 1;
             }
         }
@@ -879,8 +891,18 @@ enum ChainFileOutcome {
     /// (missing fonts, subset failures) so chain output matches
     /// standalone embed's `FileReport.warnings` semantics.
     Written(PathBuf, Vec<String>),
-    Skipped(String),
-    Failed(String),
+    /// R14 W14.5 (continuation of W14.4's `format_oversized_skipped_warning`
+    /// refactor): Skipped / Failed also carry warnings so post-V8
+    /// early-return paths don't silently lose embed pre-resolution +
+    /// oversized-skipped diagnostics. Pre-W14.5 these arms held no
+    /// warnings field; a chain whose V8 step skipped oversized captions
+    /// AND then took the post-V8 `output_path.exists()` Skipped branch
+    /// (or any post-V8 Failed branch) emitted only the status line, the
+    /// `⚠ ...` warnings dropped. Empty vec at sites that fire before
+    /// warnings accumulate is intentional — uniform call shape, costless
+    /// move.
+    Skipped(String, Vec<String>),
+    Failed(String, Vec<String>),
 }
 
 fn find_embed_step_index(plan: &chain::ChainPlan) -> Option<usize> {
@@ -1203,9 +1225,18 @@ fn process_one_chain_input(
     globals: &GlobalOptions,
     seen_outputs: &mut HashSet<String>,
 ) -> ChainFileOutcome {
+    // R14 W14.5: declared upfront so every Failed/Skipped early-return
+    // site can attach the warnings vec uniformly. Early sites fire
+    // before any warning has been accumulated, so they move an empty
+    // vec — costless; sites past the embed pre-resolution +
+    // `format_oversized_skipped_warning` blocks move the populated vec.
+    // Only one return executes per call, so unconditional move (no
+    // clone) is correct.
+    let mut warnings: Vec<String> = Vec::new();
+
     let input_abs = match absolute_path(input) {
         Ok(p) => p,
-        Err(err) => return ChainFileOutcome::Failed(err),
+        Err(err) => return ChainFileOutcome::Failed(err, warnings),
     };
     let input_str = display_path(&input_abs);
 
@@ -1237,10 +1268,13 @@ fn process_one_chain_input(
     ) {
         let key = normalize_output_key(&predicted);
         if !seen_outputs.insert(key.clone()) {
-            return ChainFileOutcome::Failed(format!(
-                "{} duplicate output path in planned batch",
-                predicted.display()
-            ));
+            return ChainFileOutcome::Failed(
+                format!(
+                    "{} duplicate output path in planned batch",
+                    predicted.display()
+                ),
+                warnings,
+            );
         }
         if !globals.overwrite && predicted.exists() {
             // `Path::exists()` follows symlinks (metadata-follow),
@@ -1252,10 +1286,13 @@ fn process_one_chain_input(
             // gate against through-symlink writes is at write time.
             // Worst case the planted symlink turns a Written into a
             // Skipped — wasted V8 work, no data damage.
-            return ChainFileOutcome::Skipped(format!(
-                "{} already exists (use --overwrite to replace)",
-                predicted.display()
-            ));
+            return ChainFileOutcome::Skipped(
+                format!(
+                    "{} already exists (use --overwrite to replace)",
+                    predicted.display()
+                ),
+                warnings,
+            );
         }
         Some(key)
     } else {
@@ -1287,7 +1324,7 @@ fn process_one_chain_input(
         Ok(r) => r,
         Err(err) => {
             evict_predicted(seen_outputs);
-            return ChainFileOutcome::Failed(err);
+            return ChainFileOutcome::Failed(err, warnings);
         }
     };
 
@@ -1296,7 +1333,7 @@ fn process_one_chain_input(
         Ok(p) => p,
         Err(err) => {
             evict_predicted(seen_outputs);
-            return ChainFileOutcome::Failed(err);
+            return ChainFileOutcome::Failed(err, warnings);
         }
     };
 
@@ -1305,7 +1342,6 @@ fn process_one_chain_input(
     // planFontEmbed needs the file's content; the user-font DB
     // session itself is shared across files (set up once before the
     // loop in run_chain).
-    let mut warnings: Vec<String> = Vec::new();
     if let Some(idx) = embed_step_index {
         let chain::ParsedStep::Embed(embed_args) = &plan.steps[idx] else {
             unreachable!("find_embed_step_index returned a non-Embed index");
@@ -1320,7 +1356,7 @@ fn process_one_chain_input(
             Ok(s) => s,
             Err(err) => {
                 evict_predicted(seen_outputs);
-                return ChainFileOutcome::Failed(err);
+                return ChainFileOutcome::Failed(err, warnings);
             }
         };
         warnings = embed_warnings;
@@ -1347,7 +1383,7 @@ fn process_one_chain_input(
         Ok(r) => r,
         Err(err) => {
             evict_predicted(seen_outputs);
-            return ChainFileOutcome::Failed(err);
+            return ChainFileOutcome::Failed(err, warnings);
         }
     };
 
@@ -1372,7 +1408,7 @@ fn process_one_chain_input(
         Ok(p) => p,
         Err(err) => {
             evict_predicted(seen_outputs);
-            return ChainFileOutcome::Failed(err);
+            return ChainFileOutcome::Failed(err, warnings);
         }
     };
 
@@ -1400,19 +1436,25 @@ fn process_one_chain_input(
         // Round 10 A-R10-014: clone so the write-failure cleanup
         // below can also reference output_key for eviction.
         if !seen_outputs.insert(output_key.clone()) {
-            return ChainFileOutcome::Failed(format!(
-                "{} duplicate output path in planned batch (predictor / V8 resolver disagreed; reconciled post-V8)",
-                output_path.display()
-            ));
+            return ChainFileOutcome::Failed(
+                format!(
+                    "{} duplicate output path in planned batch (predictor / V8 resolver disagreed; reconciled post-V8)",
+                    output_path.display()
+                ),
+                warnings,
+            );
         }
     }
 
     // Skip-or-overwrite check matching existing per-feature behavior.
     if !globals.overwrite && output_path.exists() {
-        return ChainFileOutcome::Skipped(format!(
-            "{} already exists (use --overwrite to replace)",
-            output_path.display()
-        ));
+        return ChainFileOutcome::Skipped(
+            format!(
+                "{} already exists (use --overwrite to replace)",
+                output_path.display()
+            ),
+            warnings,
+        );
     }
 
     // Route through the safe writer used by every other CLI subcommand
@@ -1428,7 +1470,7 @@ fn process_one_chain_input(
     // landed.
     if let Err(err) = write_output(globals, &output_path, &result.content, globals.overwrite) {
         seen_outputs.remove(&output_key);
-        return ChainFileOutcome::Failed(err);
+        return ChainFileOutcome::Failed(err, warnings);
     }
 
     if globals.verbose {
