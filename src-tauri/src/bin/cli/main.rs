@@ -1354,9 +1354,16 @@ fn process_one_chain_input(
             &read_result.text,
         ) {
             Ok(s) => s,
-            Err(err) => {
+            // R14 W14.6 (N-R14-2): partial_warnings carries
+            // missing_warnings collected before the inner Err — surface
+            // them through ChainFileOutcome so chain mode matches
+            // standalone embed's diagnostic surface even on the failure
+            // path. `warnings` at this point is empty (not yet
+            // overwritten by embed_warnings), so the partial vec is
+            // the whole story.
+            Err((err, partial_warnings)) => {
                 evict_predicted(seen_outputs);
-                return ChainFileOutcome::Failed(err, warnings);
+                return ChainFileOutcome::Failed(err, partial_warnings);
             }
         };
         warnings = embed_warnings;
@@ -2503,13 +2510,32 @@ fn process_embed_file(
         ),
     );
 
+    // R14 W14.6 (N-R14-1 + A-R14-3, Pattern 3 sibling of W14.4 F2 / W14.5):
+    // subset / apply / write Err paths must attach the accumulated
+    // `warnings` vec (resolve_warnings, plus subset_warnings on the
+    // apply/write paths) to the FileReport. Pre-W14.6 these returned
+    // through `failed_report(..., error)` which sets `warnings: None`,
+    // so any missing-font / subset-failure diagnostics already gathered
+    // were silently dropped. helper closure mirrors the W14.4 F2 pattern
+    // for the standalone shift early-returns; one allocation per early
+    // path is acceptable (these are failure paths, not the hot path).
+    let attach_warnings = |mut report: FileReport, warnings: &Vec<String>| -> FileReport {
+        if !warnings.is_empty() {
+            report.warnings = Some(warnings.clone());
+        }
+        report
+    };
+
     let subset_payloads = match subset_resolved_fonts(globals, args, &resolved_fonts) {
         Ok((payloads, mut subset_warnings)) => {
             warnings.append(&mut subset_warnings);
             payloads
         }
         Err(error) => {
-            return failed_report(&input_path, Some(output), Some(read_result.encoding), error);
+            return attach_warnings(
+                failed_report(&input_path, Some(output), Some(read_result.encoding), error),
+                &warnings,
+            );
         }
     };
 
@@ -2530,7 +2556,10 @@ fn process_embed_file(
         match engine.apply_font_embed(&apply_request) {
             Ok(result) => result,
             Err(error) => {
-                return failed_report(&input_path, Some(output), Some(read_result.encoding), error);
+                return attach_warnings(
+                    failed_report(&input_path, Some(output), Some(read_result.encoding), error),
+                    &warnings,
+                );
             }
         }
     };
@@ -2543,7 +2572,10 @@ fn process_embed_file(
     );
 
     if let Err(error) = write_output(globals, &output_path, &applied.content, globals.overwrite) {
-        return failed_report(&input_path, Some(output), Some(read_result.encoding), error);
+        return attach_warnings(
+            failed_report(&input_path, Some(output), Some(read_result.encoding), error),
+            &warnings,
+        );
     }
 
     FileReport {
@@ -2571,13 +2603,20 @@ fn process_embed_file(
 /// safe — we get the same font list as if we'd planned against the
 /// post-HDR/Shift content. This lets the chain runtime stay
 /// synchronous (no async TS→Rust callbacks mid-chain).
+///
+/// Return shape: Ok = (subsets, warnings); Err = (error, partial_warnings)
+/// — partial_warnings carries diagnostics collected before the failing
+/// step, so the caller can still surface them through ChainFileOutcome.
+type ChainEmbedSubsetsResult =
+    Result<(Vec<engine::FontSubsetPayload>, Vec<String>), (String, Vec<String>)>;
+
 fn resolve_chain_embed_subsets(
     engine: &mut engine::CliEngine,
     globals: &GlobalOptions,
     embed_args: &EmbedArgs,
     input_path: &str,
     content: &str,
-) -> Result<(Vec<engine::FontSubsetPayload>, Vec<String>), String> {
+) -> ChainEmbedSubsetsResult {
     let use_user_fonts = !embed_args.font_dirs.is_empty() || !embed_args.font_files.is_empty();
 
     // output_template is unused at the chain level (the chain-global
@@ -2588,7 +2627,18 @@ fn resolve_chain_embed_subsets(
         content: content.to_string(),
         output_template: "{name}.embed.ass".to_string(),
     };
-    let plan_result = engine.plan_font_embed(&plan_request)?;
+    // R14 W14.6 (N-R14-2): Err arm now carries (error, partial_warnings)
+    // so missing_warnings collected from resolve_embed_fonts aren't
+    // silently dropped when a downstream step Errs. plan_font_embed +
+    // resolve_embed_fonts Err paths have no partial warnings (their
+    // Err strings carry the relevant context themselves);
+    // subset_resolved_fonts Err path can lose missing_warnings already
+    // gathered from resolve_embed_fonts. Tuple Err type instead of a
+    // named struct because this function has a single caller
+    // (process_one_chain_input) and the partial-warnings shape is local.
+    let plan_result = engine
+        .plan_font_embed(&plan_request)
+        .map_err(|e| (e, Vec::new()))?;
 
     // Chain's embed step doesn't use the persistent cache (yet) — chain
     // pre-resolution runs against the input content with whatever
@@ -2605,8 +2655,12 @@ fn resolve_chain_embed_subsets(
         use_user_fonts,
         None,
         &plan_result.fonts,
-    )?;
-    let (subsets, skipped_warnings) = subset_resolved_fonts(globals, embed_args, &resolved)?;
+    )
+    .map_err(|e| (e, Vec::new()))?;
+    let (subsets, skipped_warnings) = match subset_resolved_fonts(globals, embed_args, &resolved) {
+        Ok(result) => result,
+        Err(e) => return Err((e, missing_warnings)),
+    };
     let mut warnings = missing_warnings;
     warnings.extend(skipped_warnings);
     Ok((subsets, warnings))
