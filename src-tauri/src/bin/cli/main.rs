@@ -523,7 +523,17 @@ fn main() -> ExitCode {
     match run() {
         Ok(code) => code,
         Err(err) => {
-            eprintln!("ssahdrify-cli: {err}");
+            // R14 W14.8 (A-R14-9): sanitize the bubbled-up Err string at
+            // the print boundary. Inner returns interpolate raw
+            // operational paths (e.g., `cache_path.display()` in
+            // run_refresh_fonts's schema-mismatch return) into the Err
+            // body; a crafted --cache-file carrying BiDi / control
+            // chars would otherwise corrupt the terminal here. All other
+            // print sites that interpolate paths sanitize at their own
+            // site too; this is the catch-all for everything that
+            // propagates as Err through `run()`.
+            let err_disp = sanitize_for_display(&err);
+            eprintln!("ssahdrify-cli: {err_disp}");
             ExitCode::from(2)
         }
     }
@@ -669,7 +679,14 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
             Ok(e) => e,
             Err(err) => {
                 if !globals.quiet {
-                    eprintln!("  ⚠ {}: skipped — {err}", folder_path_str);
+                    // R14 W14.8 (N-R14-3 + A-R14-1, Pattern 1 follow-on
+                    // to W14.4 F1): refresh-fonts print sites also need
+                    // sanitize at the boundary. `folder_path_str` is
+                    // display_path output (operational); print sites
+                    // wrap with sanitize_for_display.
+                    let folder_disp = sanitize_for_display(&folder_path_str);
+                    let err_disp = sanitize_for_display(&err);
+                    eprintln!("  ⚠ {folder_disp}: skipped — {err_disp}");
                 }
                 continue;
             }
@@ -687,9 +704,13 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
             .map_err(|e| format!("writing cache for {}: {e}", folder_path_str))?;
 
         if !globals.quiet {
+            // R14 W14.8 (N-R14-3): sanitize_for_display on the success
+            // line too — same Pattern 1 callsite as the error path
+            // above.
+            let folder_disp = sanitize_for_display(&folder_path_str);
             eprintln!(
                 "  ✓ {}: indexed {} font face{}",
-                folder_path_str,
+                folder_disp,
                 font_count,
                 s_if(font_count)
             );
@@ -704,7 +725,11 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
             s_if(total_fonts),
             s_if(total_folders)
         );
-        eprintln!("  Cache file: {}", cache_path.display());
+        // R14 W14.8 (N-R14-3 + A-R14-8): cache_path.display() also
+        // sanitized — `cache_path` comes from globals.cache_file (argv
+        // P1b) or default_cli_cache_path (env-var-resolved).
+        let cache_disp = sanitize_for_display(&cache_path.display().to_string());
+        eprintln!("  Cache file: {cache_disp}");
     }
 
     Ok(ExitCode::SUCCESS)
@@ -830,9 +855,7 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
                     // R14 W14.4 (Codex 784f9b56 Pattern 1 sweep):
                     // `input` / `out` are raw PathBufs from clap
                     // argv + Rust shell output resolution. Sanitize
-                    // before terminal interpolation; `warning`
-                    // strings already passed through
-                    // sanitize_for_display at the format helpers.
+                    // before terminal interpolation.
                     let input_disp = sanitize_for_display(&input.to_string_lossy());
                     let out_disp = sanitize_for_display(&out.to_string_lossy());
                     println!("✓ {input_disp} → {out_disp}");
@@ -841,8 +864,19 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
                     // — without this chain mode silently drops the
                     // diagnostics that standalone embed surfaces
                     // through FileReport.warnings.
+                    //
+                    // R14 W14.8 (A-R14-4): sanitize warning content
+                    // before stderr. `format_oversized_skipped_warning`
+                    // pre-sanitizes its body (per W14.1), but
+                    // missing_warnings / skipped_warnings from
+                    // resolve_embed_fonts / subset_resolved_fonts
+                    // interpolate `font.label` and lookup-error strings
+                    // that can carry argv-supplied or crafted-cache
+                    // path content (P1b). Double-sanitization on
+                    // already-clean strings is a no-op.
                     for warning in &warnings {
-                        eprintln!("  ⚠ {warning}");
+                        let w_disp = sanitize_for_display(warning);
+                        eprintln!("  ⚠ {w_disp}");
                     }
                 }
                 written += 1;
@@ -853,7 +887,8 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
                     let reason_disp = sanitize_for_display(&reason);
                     println!("⊘ {input_disp}: {reason_disp}");
                     for warning in &warnings {
-                        eprintln!("  ⚠ {warning}");
+                        let w_disp = sanitize_for_display(warning);
+                        eprintln!("  ⚠ {w_disp}");
                     }
                 }
                 skipped += 1;
@@ -868,7 +903,8 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
                 // output (errors are the only exception to that rule).
                 if !globals.quiet {
                     for warning in &warnings {
-                        eprintln!("  ⚠ {warning}");
+                        let w_disp = sanitize_for_display(warning);
+                        eprintln!("  ⚠ {w_disp}");
                     }
                 }
                 failed += 1;
@@ -1492,7 +1528,16 @@ fn process_one_chain_input(
 fn emit_chain_dry_run(plan: &chain::ChainPlan, globals: &GlobalOptions) {
     println!("Plan (no files written):");
     println!();
-    println!("Output template: {}", plan.output_template);
+    // R14 W14.8 (A-R14-5 + A-R14-11, Pattern 1 sweep): every
+    // emit_chain_dry_run print site sanitizes interpolated strings.
+    // `plan.output_template` is user-supplied argv (P1b); `input` is
+    // also argv; `out_str` derives from input + template via
+    // predict_chain_output_path, so any input control char leaks into
+    // the predicted path string. dry-run runs in a context where the
+    // user pipes / scripts the output, so terminal corruption is the
+    // same risk class as the per-file run-time sites.
+    let template_disp = sanitize_for_display(&plan.output_template);
+    println!("Output template: {template_disp}");
     println!();
     // R12 N-R12-10: track predicted outputs across inputs to surface
     // duplicate-output collisions in dry-run output. The real run
@@ -1516,7 +1561,8 @@ fn emit_chain_dry_run(plan: &chain::ChainPlan, globals: &GlobalOptions) {
     // user should expect possible divergence at write time.
     let mut seen_outputs: HashSet<String> = HashSet::new();
     for input in &plan.input_files {
-        println!("  {}", input.display());
+        let input_disp = sanitize_for_display(&input.display().to_string());
+        println!("  {input_disp}");
         // Show the resolved output path for parity with per-feature
         // dry-run output, so users can verify the template + output_dir
         // combination produces what they expect before they remove
@@ -1525,7 +1571,7 @@ fn emit_chain_dry_run(plan: &chain::ChainPlan, globals: &GlobalOptions) {
             predict_chain_output_path(&abs, &plan.output_template, globals.output_dir.as_deref())
         });
         if let Some(out_path) = resolved_path.as_ref() {
-            let out_str = out_path.display().to_string();
+            let out_str = sanitize_for_display(&out_path.display().to_string());
             // Same dedup key as real-run seen_outputs (case-folded /
             // separator-normalized via normalize_output_key) so the
             // dry-run preview matches what the real run will skip.
@@ -2137,7 +2183,17 @@ fn prepare_embed_cache(
             Ok(p) => p,
             Err(e) => {
                 if !globals.quiet {
-                    eprintln!("⚠ Cannot resolve cache path: {e}");
+                    // R14 W14.8 (N-R14-4 + A-R14-2, Pattern 1 sweep):
+                    // every prepare_embed_cache eprintln that
+                    // interpolates `cache_path.display()` or a drift
+                    // folder string (sourced from the SQLite cache,
+                    // which is P1b under --cache-file argv override)
+                    // sanitizes at the print boundary. The error `e`
+                    // from default_cli_cache_path can carry env-var
+                    // resolution failure text that includes path
+                    // fragments.
+                    let e_disp = sanitize_for_display(&e);
+                    eprintln!("⚠ Cannot resolve cache path: {e_disp}");
                     eprintln!("  Skipping cache for this run.");
                 }
                 return None;
@@ -2145,12 +2201,16 @@ fn prepare_embed_cache(
         },
     };
 
+    // Pre-compute the sanitized cache-path display once; reused at
+    // every stderr site below. cache_path itself stays operational.
+    let cache_path_disp = sanitize_for_display(&cache_path.display().to_string());
+
     if !cache_path.exists() {
         // No cache yet (first-ever invocation, or user wiped it).
         // Per locked design: distinct messaging from drift, same
         // behavior (skip cache + suggest refresh-fonts).
         if !globals.quiet {
-            eprintln!("ℹ No font cache exists yet at {}.", cache_path.display());
+            eprintln!("ℹ No font cache exists yet at {cache_path_disp}.");
             eprintln!(
                 "  Run `ssahdrify-cli refresh-fonts --font-dir <DIR>...` to build one (--font-dir is repeatable)."
             );
@@ -2164,16 +2224,14 @@ fn prepare_embed_cache(
             if !globals.quiet {
                 eprintln!("⚠ Font cache schema mismatch (found {found}, expected {expected}).");
                 eprintln!("  Cache is from a different release; skipping for this run.");
-                eprintln!(
-                    "  Delete {} and run `refresh-fonts` to rebuild.",
-                    cache_path.display()
-                );
+                eprintln!("  Delete {cache_path_disp} and run `refresh-fonts` to rebuild.");
             }
             return None;
         }
         Err(e) => {
             if !globals.quiet {
-                eprintln!("⚠ Cannot open font cache: {e}");
+                let e_disp = sanitize_for_display(&e.to_string());
+                eprintln!("⚠ Cannot open font cache: {e_disp}");
                 eprintln!("  Skipping cache for this run.");
             }
             return None;
@@ -2188,7 +2246,8 @@ fn prepare_embed_cache(
         Ok(report) => report,
         Err(e) => {
             if !globals.quiet {
-                eprintln!("⚠ Cannot validate cache: {e}");
+                let e_disp = sanitize_for_display(&e);
+                eprintln!("⚠ Cannot validate cache: {e_disp}");
                 eprintln!("  Skipping cache for this run.");
             }
             return None;
@@ -2202,10 +2261,15 @@ fn prepare_embed_cache(
                 drift.modified.len() + drift.removed.len()
             );
             for f in &drift.modified {
-                eprintln!("    ~ {f}  (modified)");
+                // Drift folder strings originate from the SQLite cache
+                // (cached_folders.folder_path). Under --cache-file argv
+                // override, those rows are P1b (attacker may craft).
+                let f_disp = sanitize_for_display(f);
+                eprintln!("    ~ {f_disp}  (modified)");
             }
             for f in &drift.removed {
-                eprintln!("    - {f}  (removed)");
+                let f_disp = sanitize_for_display(f);
+                eprintln!("    - {f_disp}  (removed)");
             }
             eprintln!("  Skipping cache for this run; using --font-dir / system fonts only.");
             eprintln!("  Run `refresh-fonts` to update the cache.");
@@ -2221,11 +2285,10 @@ fn prepare_embed_cache(
     if !globals.quiet {
         if user_supplied_dirs {
             eprintln!(
-                "ℹ Using font cache (at {}) plus the --font-dir / --font-file paths you supplied.",
-                cache_path.display()
+                "ℹ Using font cache (at {cache_path_disp}) plus the --font-dir / --font-file paths you supplied."
             );
         } else {
-            eprintln!("ℹ Using font cache (at {}).", cache_path.display());
+            eprintln!("ℹ Using font cache (at {cache_path_disp}).");
             eprintln!("  Pass --no-cache to use system fonts only.");
         }
     }
@@ -3361,14 +3424,17 @@ fn output_path_exists(globals: &GlobalOptions, path: &Path) -> bool {
             // diagnostics-free run and this warning fired even then,
             // breaking the "no stderr noise when --quiet" contract.
             if !globals.quiet {
-                // Scrub the path and error through `strip_visual_line_breaks`
-                // before printing — a Windows filename containing CR/LF,
-                // NEL, or U+2028/U+2029 would otherwise wrap the warning
-                // across multiple lines (Round 2 N-R2-11). Same defense
-                // the rfd startup dialog already applies; mirroring for
-                // CLI stderr keeps the posture symmetric.
-                let display = app_lib::util::strip_visual_line_breaks(&path.display().to_string());
-                let err_one_line = app_lib::util::strip_visual_line_breaks(&err.to_string());
+                // R14 W14.8 (N-R14-24): upgraded from
+                // `strip_visual_line_breaks` (CR/LF/NEL/U+2028/U+2029
+                // only) to `sanitize_for_display` (covers all C0/C1
+                // controls + BiDi format + zero-width) to match the
+                // W14.1 contract. Pre-W14.8 a Windows filename
+                // containing ESC / U+202E would corrupt the warning
+                // line even though CR/LF wouldn't have. Sanitize at
+                // print boundary (path itself stays operational for
+                // the surrounding fs::metadata call).
+                let display = sanitize_for_display(&path.display().to_string());
+                let err_one_line = sanitize_for_display(&err.to_string());
                 eprintln!(
                     "{}",
                     localize(
