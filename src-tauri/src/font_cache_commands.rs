@@ -260,6 +260,18 @@ pub fn migrate_legacy_gui_cache(legacy_dir: &Path, new_dir: &Path) {
 ///   matches the locked "no auto-migrate" decision: never silently
 ///   delete a cache file the user might want to inspect.
 pub fn init_gui_font_cache(app_data_dir: &Path) -> Result<(), String> {
+    // R14 W14.10 (N-R14-8, P1a-accepted): `app_data_dir` here is
+    // resolved via Tauri's `app.path().app_data_dir()` → `dirs`
+    // crate → `SHGetKnownFolderPath` (Windows) / XDG paths
+    // (POSIX). The chain runs entirely inside the user's own
+    // AppData / XDG_DATA_HOME, requiring AppData write access to
+    // plant a reparse-point in the parent walk. Same P1a class as
+    // R13 A-R13-3 (parent-walk reparse on AppData). Defending here
+    // would mean a parent-walk reparse scan on every startup,
+    // duplicating the FontCache::open_or_create boundary check
+    // W14.2 added — and contradicting the locked single-user-desktop
+    // threat model. Revisit if the project ships in a multi-user /
+    // MDM-managed deployment.
     std::fs::create_dir_all(app_data_dir).map_err(|e| {
         format!(
             "Cannot create app data dir '{}': {e}",
@@ -827,37 +839,37 @@ pub fn clear_font_cache() -> Result<(), String> {
     // set as init_user_font_db so a partially-cleared state from an
     // earlier crash gets fully wiped here.
     //
-    // R12 A-R12-2 / R13 A-R13-15: reparse-point check before
-    // remove_file, with FAIL-FAST semantics — any reparse-point
-    // encounter aborts the clear with an Err, surfacing the
-    // suspicious state to the GUI's drift-modal callsite. Pre-R13
-    // the loop silently `continue`d on reparse; the user clicked
-    // "Clear cache" and got Ok back even though the cache was
-    // partially wiped or left around a symlink, then a follow-on
-    // FontCache::open_or_create might silently succeed against a
-    // symlink target. Returning Err here keeps the clear atomic:
-    // either all files removed cleanly (re-create proceeds), or
-    // none removed and the user sees the reparse-path message so
-    // they can investigate manually.
-    let mut reparse_skipped: Vec<String> = Vec::new();
-    for suffix in ["", "-journal", "-wal", "-shm"] {
-        let mut p = path.clone().into_os_string();
-        p.push(suffix);
-        let p = PathBuf::from(p);
-        if crate::util::is_reparse_point(&p) {
+    // R12 A-R12-2 / R13 A-R13-15 / R14 W14.10 (N-R14-15): two-phase
+    // pre-scan + remove for atomic semantics. Pre-W14.10 the loop
+    // detected reparse and continued — but ALSO continued removing
+    // any subsequent non-reparse sidecars, leaving partial state
+    // (e.g., [main, JOURNAL-reparse, wal, shm] → main + wal + shm
+    // wiped, journal symlink left, Err returned). The Err message
+    // promised atomicity ("none removed and the user sees the
+    // reparse-path message") that the implementation didn't honor.
+    // Phase 1 detects ANY reparse upfront; if found, abort with Err
+    // before any remove_file. Phase 2 (only if all clean) removes
+    // all four files. Atomic in the documented sense: either all
+    // removed or none.
+    let paths: Vec<PathBuf> = ["", "-journal", "-wal", "-shm"]
+        .iter()
+        .map(|suffix| {
+            let mut p = path.clone().into_os_string();
+            p.push(suffix);
+            PathBuf::from(p)
+        })
+        .collect();
+    let reparse_skipped: Vec<String> = paths
+        .iter()
+        .filter(|p| crate::util::is_reparse_point(p))
+        .map(|p| {
             log::warn!(
                 "clear_font_cache: refusing to remove reparse-point {}; aborting clear.",
                 p.display()
             );
-            reparse_skipped.push(p.display().to_string());
-            continue;
-        }
-        match std::fs::remove_file(&p) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => log::warn!("clear_font_cache: removing {} failed: {e}", p.display()),
-        }
-    }
+            p.display().to_string()
+        })
+        .collect();
     if !reparse_skipped.is_empty() {
         return Err(format!(
             "Refusing to clear font cache: the following path(s) are reparse points \
@@ -865,6 +877,13 @@ pub fn clear_font_cache() -> Result<(), String> {
              Inspect and remove manually: {}",
             reparse_skipped.join(", ")
         ));
+    }
+    for p in &paths {
+        match std::fs::remove_file(p) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => log::warn!("clear_font_cache: removing {} failed: {e}", p.display()),
+        }
     }
 
     let fresh = FontCache::open_or_create(&path)

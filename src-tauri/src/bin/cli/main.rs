@@ -3490,6 +3490,28 @@ fn output_path_exists(globals: &GlobalOptions, path: &Path) -> bool {
 // junctions, so the cheap-first existence check would have caught
 // any such junction's target if it existed at check time. The
 // race-window junction-swap is bounded by single-user scope.
+// R14 W14.10 (A-R14-7): symmetric posture with GUI's `safe_io` — reject
+// destinations that resolve as reparse points (symlinks / junctions)
+// before any destructive operation. Rust `create_new(true)` already
+// fails atomically on existing symlinks (per std::fs::OpenOptions docs,
+// "no (dangling) symlink"), so the actual exploitation surface is
+// narrow — but the error message degrades to "failed to create output:
+// file exists" rather than naming the symlink shape. Adding an
+// explicit pre-check produces a clearer user-facing error and matches
+// the safe_io callsite pattern reviewers expect across the project.
+// `fs::symlink_metadata`-based check (one syscall, doesn't follow
+// links) so a dangling symlink is also caught.
+fn reject_reparse_destination(output: &Path, op_label: &str) -> Result<(), String> {
+    if app_lib::util::is_reparse_point(output) {
+        return Err(format!(
+            "refusing to {op_label} to a symlink / junction destination: {} \
+             (remove the link manually before retrying)",
+            output.display()
+        ));
+    }
+    Ok(())
+}
+
 fn write_output(
     globals: &GlobalOptions,
     path: &Path,
@@ -3503,6 +3525,7 @@ fn write_output(
     // (e.g., umask on POSIX, hidden-dir detection) now flows to all
     // three writers from one site.
     ensure_output_parent(path)?;
+    reject_reparse_destination(path, "write")?;
     if overwrite && output_path_exists(globals, path) {
         fs::remove_file(path)
             .map_err(|err| format!("failed to remove existing output before write: {err}"))?;
@@ -3524,6 +3547,7 @@ fn copy_file_output(
     overwrite: bool,
 ) -> Result<(), String> {
     ensure_output_parent(output)?;
+    reject_reparse_destination(output, "copy")?;
 
     if overwrite && output_path_exists(globals, output) {
         fs::remove_file(output)
@@ -3549,6 +3573,7 @@ fn rename_file_output(
     overwrite: bool,
 ) -> Result<(), String> {
     ensure_output_parent(output)?;
+    reject_reparse_destination(output, "rename")?;
     if overwrite && output_path_exists(globals, output) {
         fs::remove_file(output)
             .map_err(|err| format!("failed to remove existing output before rename: {err}"))?;
