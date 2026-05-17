@@ -203,6 +203,12 @@ ssahdrify-cli chain          --help
 > `--json` 输出固定 schema 报告，按文件给出 status (`written` / `planned` / `skipped` / `failed`)、output path、encoding、warnings 等字段；stderr 仍可携带人类可读诊断。pipeline 集成场景建议固定使用此模式。
 >
 > `--json` emits a fixed-schema report listing per-file status (`written` / `planned` / `skipped` / `failed`), output path, encoding, warnings, etc.; stderr still carries human-readable diagnostics. For pipeline integration, prefer this mode.
+>
+> **终端再插值的安全提示 | Terminal-interpolation safety note**
+>
+> `--json` 输出按 RFC 8259 编码，但 BiDi 控制符（U+200E/U+202E 等）、零宽字符与 U+2028/U+2029 行分隔符在 JSON 字符串里是合法字符，不会被转义。如果你通过 `jq -r` 把 `.input` / `.output` 等字段还原成原始字节再插到终端（`echo`、提示符、其他 CLI 的参数等），来自构造文件名的控制字符可能会污染终端显示。下游脚本应在终端边界自行做一次过滤（jq 的 `gsub` 或包装 shell 工具均可）。CLI 自己的人类可读输出（不带 `--json`）已在打印点统一调用 `sanitize_for_display`，不受此影响。
+>
+> `--json` output follows RFC 8259, but BiDi format characters (U+200E/U+202E etc.), zero-width characters, and the U+2028/U+2029 line separators are valid in JSON strings and aren't escaped. If you pipe to `jq -r` to extract `.input` / `.output` as raw bytes and then interpolate into a terminal (echo, prompts, another CLI's arguments), control characters from crafted filenames can corrupt the terminal display. Downstream scripts should sanitize at the terminal boundary (jq's `gsub` or a wrapping shell tool). The CLI's own human-readable output (without `--json`) already passes every print site through `sanitize_for_display` and isn't affected.
 
 ### 字体缓存 | Font Cache
 

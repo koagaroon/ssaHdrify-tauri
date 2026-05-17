@@ -192,11 +192,19 @@ pub fn parse_chain_argv(
         .filter(|s| matches!(s, ParsedStep::Embed(_)))
         .count();
     if embed_count > 1 {
+        // R14 W14.11 (N-R14-10): wording previously suggested "combine
+        // font sources" as if a single embed step always covers
+        // multi-embed-step intent. That's only true when the embed
+        // steps share the same --no-system-fonts and --on-missing
+        // flags; differing flags can't be merged. Call out both
+        // recovery paths explicitly so users with divergent per-step
+        // settings don't get pushed toward a wrong consolidation.
         return Err(format!(
             "chain may include at most one embed step (got {embed_count}); \
              multiple embed steps are not yet supported. Run separate \
-             chains, or combine font sources (--font-dir / --font-file) \
-             into a single embed step."
+             chains; or, when the embed steps share --no-system-fonts \
+             and --on-missing settings, combine font sources (--font-dir \
+             / --font-file) into a single embed step."
         ));
     }
 

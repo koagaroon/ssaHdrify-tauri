@@ -875,25 +875,7 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
                     let input_disp = sanitize_for_display(&input.to_string_lossy());
                     let out_disp = sanitize_for_display(&out.to_string_lossy());
                     println!("✓ {input_disp} → {out_disp}");
-                    // Surface embed pre-resolution warnings (missing
-                    // fonts under --on-missing warn, subset failures)
-                    // — without this chain mode silently drops the
-                    // diagnostics that standalone embed surfaces
-                    // through FileReport.warnings.
-                    //
-                    // R14 W14.8 (A-R14-4): sanitize warning content
-                    // before stderr. `format_oversized_skipped_warning`
-                    // pre-sanitizes its body (per W14.1), but
-                    // missing_warnings / skipped_warnings from
-                    // resolve_embed_fonts / subset_resolved_fonts
-                    // interpolate `font.label` and lookup-error strings
-                    // that can carry argv-supplied or crafted-cache
-                    // path content (P1b). Double-sanitization on
-                    // already-clean strings is a no-op.
-                    for warning in &warnings {
-                        let w_disp = sanitize_for_display(warning);
-                        eprintln!("  ⚠ {w_disp}");
-                    }
+                    emit_chain_warnings(globals, &warnings);
                 }
                 written += 1;
             }
@@ -902,10 +884,7 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
                     let input_disp = sanitize_for_display(&input.to_string_lossy());
                     let reason_disp = sanitize_for_display(&reason);
                     println!("⊘ {input_disp}: {reason_disp}");
-                    for warning in &warnings {
-                        let w_disp = sanitize_for_display(warning);
-                        eprintln!("  ⚠ {w_disp}");
-                    }
+                    emit_chain_warnings(globals, &warnings);
                 }
                 skipped += 1;
             }
@@ -918,10 +897,7 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
                 // they're informational and the user explicitly silenced
                 // output (errors are the only exception to that rule).
                 if !globals.quiet {
-                    for warning in &warnings {
-                        let w_disp = sanitize_for_display(warning);
-                        eprintln!("  ⚠ {w_disp}");
-                    }
+                    emit_chain_warnings(globals, &warnings);
                 }
                 failed += 1;
             }
@@ -961,6 +937,29 @@ fn find_embed_step_index(plan: &chain::ChainPlan) -> Option<usize> {
     plan.steps
         .iter()
         .position(|s| matches!(s, chain::ParsedStep::Embed(_)))
+}
+
+/// R14 W14.11 (N-R14-19): chain warning emission consolidated through
+/// one helper that mirrors `emit_file_report`'s warnings format
+/// (`warning: <msg>` / `警告：<msg>` localized) while keeping the
+/// chain-style `⚠` glyph prefix that distinguishes warnings from the
+/// `✓` / `⊘` / `✗` status lines. Pre-W14.11 the three Written /
+/// Skipped / Failed arms each emitted `  ⚠ {warning}` directly,
+/// bypassing localization — a Chinese-locale user saw the status text
+/// in Chinese but the warning text untranslated. Helper also keeps
+/// the sanitize_for_display call in one place (A-R14-4 follow-on).
+fn emit_chain_warnings(globals: &GlobalOptions, warnings: &[String]) {
+    for warning in warnings {
+        let w_disp = sanitize_for_display(warning);
+        eprintln!(
+            "  ⚠ {}",
+            localize(
+                globals,
+                format!("warning: {w_disp}"),
+                format!("警告：{w_disp}"),
+            )
+        );
+    }
 }
 
 /// Port of TS `substituteTemplate` (`src/lib/path-validation.ts`).
@@ -1506,6 +1505,18 @@ fn process_one_chain_input(
     }
 
     // Skip-or-overwrite check matching existing per-feature behavior.
+    //
+    // R14 W14.11 (N-R14-6): this is the POST-V8 existence check,
+    // distinct from the cheap-first pre-V8 Skipped at lines 1285+.
+    // The cheap-first check fires when the Rust predictor's output
+    // path already exists (common case, no V8 work wasted). This
+    // post-V8 check fires when V8's TS substituteTemplate resolves
+    // to a different path than the Rust predictor produced — e.g.,
+    // a template with a token the Rust port doesn't model — AND that
+    // path also exists. Rare, but the W14.7 fixture exercises a
+    // related post-V8 path (write_output Failed) to pin the
+    // warnings-on-non-Written contract; this Skipped branch shares
+    // the same warnings-attach semantics established by W14.5.
     if !globals.overwrite && output_path.exists() {
         return ChainFileOutcome::Skipped(
             format!(
@@ -3189,11 +3200,21 @@ fn emit_report_summary(globals: &GlobalOptions, report: &CommandReport) -> Resul
 
 fn emit_file_report(globals: &GlobalOptions, result: &FileReport) {
     if globals.json {
-        // JSON output: `serde_json` escapes control characters as
-        // `\uXXXX` automatically, so machine readers see the original
-        // raw bytes intact. No sanitization needed at this layer; the
-        // input/output strings remain operationally-correct in the
-        // wire form. Skip the human-formatting branch entirely.
+        // JSON output: serde_json escapes C0 control characters
+        // (U+0000–U+001F) and the double-quote/backslash pair as
+        // `\uXXXX`/`\"`/`\\` per RFC 8259 §7. Higher-plane format
+        // characters — BiDi controls (U+200E/U+200F, U+202A–U+202E,
+        // U+2066–U+2069, U+061C), zero-width (U+200B–U+200D,
+        // U+2060, U+180E, U+FEFF), and line separators (U+2028,
+        // U+2029) — are NOT escaped by serde_json (they are valid
+        // JSON string characters). The wire form preserves operational
+        // path fidelity for programmatic consumers (`jq '.results[]
+        // | .input'` returns the raw bytes intact, matching how the
+        // path was actually invoked). Downstream consumers piping to
+        // a terminal via `jq -r` should pre-sanitize before
+        // interpolating into stderr/stdout (see README "JSON output"
+        // section). The human-format branch below applies
+        // sanitize_for_display at print boundaries.
         return;
     }
 
