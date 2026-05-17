@@ -321,6 +321,97 @@ fn chain_overwrite_toggles_skip_vs_replace() {
     let _ = fs::remove_dir_all(dir);
 }
 
+/// W14.5 + W14.6 contract — when V8 has already produced warnings
+/// (oversized-skipped captions or embed pre-resolution diagnostics)
+/// and the chain then takes a post-V8 Failed branch, the warnings
+/// must surface to stderr via `⚠ ...` lines, not silently drop with
+/// only the `✗ ...` status line.
+///
+/// Pre-W14.5 the warnings vec was lost on every Failed/Skipped
+/// outcome; W14.5 threaded it through the enum variant and print
+/// loop. Boundary trigger here: oversized caption (>64 KB text) +
+/// pre-existing directory at the predicted output path + `--overwrite`
+/// — the V8 step computes skippedCount > 0, the cheap-first /
+/// post-V8 `output_path.exists()` Skipped branches don't fire under
+/// `--overwrite`, and write_output's fs::remove_file on the
+/// directory target fails on every supported platform (EISDIR /
+/// ERROR_ACCESS_DENIED). Without W14.5's change, the chain would
+/// emit only the `✗ failed: …` line; the `Dropped N oversized
+/// caption(s) …` warning would silently vanish.
+#[test]
+fn chain_post_v8_failed_surfaces_oversized_warning() {
+    if let Some(reason) = engine_bundle_missing() {
+        panic!("engine bundle missing — run `npm run build:engine` first ({reason})");
+    }
+
+    let dir = temp_dir("post_v8_warn");
+    let input = dir.join("oversized.ass");
+
+    // Build an ASS with one oversized Dialogue (>64 KB single text body)
+    // so the subtitle parser emits a `skipped: true` placeholder and
+    // V8 returns ChainRunResult.skippedCount = 1.
+    let oversized = "X".repeat(70_000);
+    let mut content = String::from("[Script Info]\nScriptType: v4.00+\n\n");
+    content.push_str(
+        "[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, \
+         SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, \
+         StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, \
+         Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n",
+    );
+    content.push_str(
+        "Style: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,\
+         0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1\n\n",
+    );
+    content.push_str(
+        "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, \
+         MarginV, Effect, Text\n",
+    );
+    content.push_str("Dialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,Hello world\n");
+    content.push_str(&format!(
+        "Dialogue: 0,0:00:03.00,0:00:04.00,Default,,0,0,0,,{oversized}\n"
+    ));
+    fs::write(&input, content).expect("failed to write oversized fixture");
+
+    // Pre-create the predicted output path as a directory. With
+    // --overwrite, write_output's fs::remove_file call will fail on
+    // the directory (EISDIR on POSIX / ERROR_ACCESS_DENIED on Windows)
+    // — that's the post-V8 Failed branch we want to exercise.
+    //
+    // Step choice: `shift` (not `hdr`). HDR's chain transform is
+    // regex-based via `processAssContent` and doesn't invoke the
+    // per-caption subtitle parser, so oversized captions don't produce
+    // a skippedCount. Shift's `shiftSubtitles` parses captions
+    // line-by-line and emits `skipped: true` placeholders, which
+    // shiftTransform forwards to TransformResult.skippedCount —
+    // exactly the surface format_oversized_skipped_warning consumes.
+    let predicted_output = dir.join("oversized.shifted.ass");
+    fs::create_dir(&predicted_output).expect("failed to pre-create directory at output path");
+
+    let output = Command::new(cli_path())
+        .args(["--overwrite", "chain", "shift", "--offset", "+2s"])
+        .arg(&input)
+        .output()
+        .expect("failed to run chain");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // ✗ failed line must appear (chain-level Failed prints
+    // unconditionally; --quiet isn't passed here so warnings also
+    // print).
+    assert!(
+        stderr.contains("✗"),
+        "expected ✗ failed line in stderr: {stderr}"
+    );
+    // ⚠ oversized warning must surface — the W14.5 contract under
+    // test. Pre-W14.5 this line silently vanished on Failed paths.
+    assert!(
+        stderr.contains("⚠") && stderr.contains("oversized caption"),
+        "expected ⚠ Dropped N oversized caption(s) warning in stderr (W14.5 contract): {stderr}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn chain_rejects_in_step_output_template() {
     // Locked design: --output-template inside any step segment is a
