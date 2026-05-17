@@ -376,11 +376,17 @@ export default function HdrConvert() {
           // below; sanitize once at source so every downstream
           // interpolation is automatically BiDi-scrubbed without each
           // callsite remembering to wrap. Same pattern as FontEmbed.
-          let fileName = sanitizeForDialog(filePath);
+          // R15 W15.6 (N-R15-23): bare-split fallback BEFORE invoking
+          // fileNameFromPath, so the catch path uses just the basename
+          // rather than the full path. Pre-W15.6 the catch path logged
+          // the full sanitized path through every addLog call below —
+          // ~200-char path × ~8 logs = ~1.6 KB log noise per failing
+          // file, within the 4 KB cap but unnecessarily bulky.
+          let fileName = sanitizeForDialog(filePath.split(/[\\/]/).pop() ?? filePath);
           try {
             fileName = sanitizeForDialog(fileNameFromPath(filePath));
           } catch {
-            // Keep the raw path — better than no attribution.
+            // Keep the basename — better than no attribution.
           }
           addLog(t("msg_processing", fileName));
 

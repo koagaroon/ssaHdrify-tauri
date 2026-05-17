@@ -468,11 +468,15 @@ export default function TimingShift() {
           // HdrConvert / FontEmbed — every addLog interpolating fileName
           // gets BiDi-scrubbed display text from a single sanitize-at-
           // source.
-          let fileName = sanitizeForDialog(filePath);
+          // R15 W15.6 (N-R15-23): bare-split fallback BEFORE invoking
+          // fileNameFromPath — basename-only fallback keeps log noise
+          // bounded when fileNameFromPath throws. Same shape adopted
+          // across HdrConvert + FontEmbed for symmetry.
+          let fileName = sanitizeForDialog(filePath.split(/[\\/]/).pop() ?? filePath);
           try {
             fileName = sanitizeForDialog(fileNameFromPath(filePath));
           } catch {
-            // Keep the raw path — better than no attribution.
+            // Keep the basename — better than no attribution.
           }
           addLog(t("msg_processing", fileName));
 

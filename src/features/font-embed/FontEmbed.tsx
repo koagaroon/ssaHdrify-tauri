@@ -372,15 +372,35 @@ export default function FontEmbed() {
 
   const handleDroppedPaths = useCallback(
     async (paths: string[]) => {
+      // R15 W15.6 (N-R15-28): bump pickGenRef at function entry,
+      // symmetric with handlePickFiles. Pre-W15.6 the bump happened
+      // AFTER the filter — concurrent in-flight pick wouldn't see the
+      // generation jump until after the filter completed. Real-world
+      // impact negligible (early-return is just log+banner state), but
+      // the bump-at-entry pattern keeps the generation contract
+      // uniform across pick entry points.
+      const gen = (pickGenRef.current = pickGenRef.current + 1);
+      // R15 W15.6 (N-R15-22, R10 N-R10-029 sibling fix): clear
+      // lastActionResult on every new ingest entry, not just the
+      // happy path. BatchRename was fixed in R10 N-R10-029; FontEmbed
+      // relied on the `fontsFiles` useEffect to clear, but that effect
+      // doesn't fire when the drop is rejected — leaving a stale "Embed
+      // complete" footer alongside a fresh red banner.
+      setLastActionResult(null);
       const assPaths = paths.filter((p) => fileNameHasAssExt(fileNameFromPath(p)));
       if (assPaths.length === 0) {
-        addLog(t("msg_no_subtitle_in_drop"), "error");
+        // R15 W15.6 (N-R15-19, Pattern 1 sibling parity with
+        // HdrConvert.tsx + TimingShift.tsx): surface through both
+        // the log AND the DropErrorBanner per N-R5-FEFEAT-09 — users
+        // with collapsed log panels see nothing from log-only.
+        const msg = t("msg_no_subtitle_in_drop");
+        addLog(msg, "error");
+        setDropError(msg);
         return;
       }
-      const gen = (pickGenRef.current = pickGenRef.current + 1);
       await ingestPaths(assPaths, gen);
     },
-    [ingestPaths, addLog, t]
+    [ingestPaths, addLog, setDropError, setLastActionResult, t]
   );
 
   useFolderDrop({
@@ -649,6 +669,29 @@ export default function FontEmbed() {
         for (let i = 0; i < filePaths.length; i++) {
           const filePath = filePaths[i];
 
+          // R15 W15.6 (N-R15-24): hoist safeFileName above the
+          // skip-check so a future refactor adding work between the
+          // skip-check and the original declaration site doesn't
+          // surface ReferenceError on a defensive throw inside that
+          // gap. Mirrors HdrConvert / TimingShift posture (single
+          // declaration at top-of-loop-body). The compute cost is one
+          // sanitizeForDialog + fileNameFromPath per iteration even
+          // on skipped paths, which is negligible against the actual
+          // embed work and worth the symmetry.
+          //
+          // R15 W15.6 (N-R15-23): bare-split fallback before
+          // fileNameFromPath — if fileNameFromPath throws (invalid
+          // path shapes), we still get a reasonable display string
+          // instead of sanitizeForDialog'ing the full path. Same
+          // shape adopted across HdrConvert + TimingShift.
+          const safeFileName = (() => {
+            try {
+              return sanitizeForDialog(fileNameFromPath(filePath));
+            } catch {
+              return sanitizeForDialog(filePath.split(/[\\/]/).pop() ?? filePath);
+            }
+          })();
+
           if (abortRef.current?.signal.aborted) {
             addLog(t("msg_fonts_cancelled"), "info");
             break;
@@ -665,11 +708,11 @@ export default function FontEmbed() {
           }
 
           // Round 7 Wave 7.1 BiDi parity — fileName / outName below
-          // flow into many addLog calls. Compute the sanitized form
-          // once at source so every downstream interpolation site
-          // automatically gets BiDi-scrubbed display text without
-          // each callsite having to remember to wrap.
-          const safeFileName = sanitizeForDialog(fileNameFromPath(filePath));
+          // flow into many addLog calls. The sanitized form is
+          // computed once at source (hoisted above per N-R15-24) so
+          // every downstream interpolation site automatically gets
+          // BiDi-scrubbed display text without each callsite having
+          // to remember to wrap.
           addLog(t("msg_processing", safeFileName));
 
           try {
