@@ -766,7 +766,18 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
     // still surface elsewhere.
     if !globals.quiet {
         for warning in &plan.warnings {
-            eprintln!("{warning}");
+            // R15 W15.1 (N-R15-5, Pattern 1 census parity): the
+            // suspicious-pattern catalog
+            // (`collect_suspicious_orderings`: HDR×2,
+            // shift-after-embed) emits only literal+numeric strings
+            // today, so no P1b content reaches this print — but every
+            // other eprintln site in run_chain (output-template info,
+            // --no-cache info, --json info) sanitizes. Keeping this
+            // single outlier unaudited invites a future warning that
+            // includes parsed content to bypass the laundering by
+            // accident.
+            let w_disp = sanitize_for_display(warning);
+            eprintln!("{w_disp}");
         }
     }
 
@@ -1545,7 +1556,16 @@ fn process_one_chain_input(
 
     if globals.verbose {
         for note in &result.notes {
-            println!("  {note}");
+            // R15 W15.1 (N-R15-4, Pattern 1 census parity): today's
+            // chain-runtime.ts produces notes from static strings +
+            // numeric counts (safe). This is the only print site in
+            // cli/*.rs left out of W14.8's sanitize census; the
+            // sibling Written outcome's ✓-line already sanitizes
+            // input/out, so completing the census here defends a
+            // future note-source addition that might include parsed
+            // ASS content from bypassing laundering invisibly.
+            let n_disp = sanitize_for_display(note);
+            println!("  {n_disp}");
         }
     }
 
@@ -3232,12 +3252,25 @@ fn emit_file_report(globals: &GlobalOptions, result: &FileReport) {
     // --quiet.
     if matches!(result.status, FileStatus::Failed) {
         if let Some(error) = &result.error {
+            // R15 W15.1 (N-R15-1, Pattern 1 standalone-path completion):
+            // chain-mode emit_chain_warnings sanitizes error/warning
+            // strings; the standalone emit_file_report path was the
+            // sibling miss in W14.8's sweep. Failure messages bubble up
+            // from `resolve_embed_fonts` / `subset_resolved_fonts` with
+            // `font.label` interpolated raw — font.label flows from V8-
+            // parsed ASS `\fn` content (P1b attacker-influenced), so a
+            // crafted subtitle with U+202E / control / zero-width in
+            // \fn reaches stderr unlaundered without this sanitize.
+            // Also covers N-R15-3: `reject_reparse_destination` Err
+            // strings interpolate `output.display()` raw, which bubble
+            // through `failed_report` to this site.
+            let error_disp = sanitize_for_display(error);
             eprintln!(
                 "{}",
                 localize(
                     globals,
-                    format!("failed: {input_disp} ({error})"),
-                    format!("失败：{input_disp}（{error}）"),
+                    format!("failed: {input_disp} ({error_disp})"),
+                    format!("失败：{input_disp}（{error_disp}）"),
                 )
             );
         }
@@ -3299,12 +3332,20 @@ fn emit_file_report(globals: &GlobalOptions, result: &FileReport) {
     if !globals.quiet {
         if let Some(warnings) = &result.warnings {
             for warning in warnings {
+                // R15 W15.1 (N-R15-2, Pattern 1 sibling of N-R15-1):
+                // standalone-path warning content needs the same
+                // print-boundary sanitize as chain-mode
+                // emit_chain_warnings. `font.label` flows from V8-
+                // parsed ASS \fn (P1b) and reaches here via
+                // resolve_embed_fonts missing_warnings +
+                // subset_resolved_fonts skipped_warnings.
+                let w_disp = sanitize_for_display(warning);
                 eprintln!(
                     "  {}",
                     localize(
                         globals,
-                        format!("warning: {warning}"),
-                        format!("警告：{warning}"),
+                        format!("warning: {w_disp}"),
+                        format!("警告：{w_disp}"),
                     )
                 );
             }
