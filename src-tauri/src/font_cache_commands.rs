@@ -919,6 +919,21 @@ pub fn clear_font_cache() -> Result<(), String> {
     // before any remove_file. Phase 2 (only if all clean) removes
     // all four files. Atomic in the documented sense: either all
     // removed or none.
+    //
+    // **TOCTOU between Phase 1 and Phase 2 (R16 W16.3 A-R16-4,
+    // P1a-accepted)**: between the pre-scan reparse check below and
+    // the per-file remove_file loop, a P1a actor with filesystem
+    // access could plant a symlink at any of the four sidecar paths
+    // — the remove_file would then act on the planted link instead
+    // of the file we lstat'd. Bounded by P1a (single-user desktop,
+    // AppData-local — defender controls the parent directory). The
+    // CacheMutationGuard above serializes against rescan / clear-
+    // re-entry but not against an attacker with filesystem-level
+    // access; closing that window would require atomic open-and-
+    // unlink primitives (Linux-specific) or a wider lock scope that
+    // doesn't exist on Windows. Revisit if the project deploys in
+    // multi-user / MDM-managed shapes (same revisit trigger as the
+    // design doc § fs:scope resolution divergence note).
     let paths: Vec<PathBuf> = ["", "-journal", "-wal", "-shm"]
         .iter()
         .map(|suffix| {

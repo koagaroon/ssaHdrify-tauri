@@ -178,6 +178,18 @@ pub fn parse_chain_argv(
         steps.push(step);
     }
 
+    // R16 W16.3 (N-R16-10): defense-in-depth check kept for the
+    // schema-change case. Today, every per-step Args struct (HdrArgs /
+    // ShiftArgs / EmbedArgs) declares `files: Vec<PathBuf>` with
+    // `#[arg(required = true)]`, so clap rejects a terminal-step
+    // parse with no files BEFORE this branch can fire (the
+    // `full_parse_rejects_terminal_step_without_files` test exercises
+    // the clap-side rejection at chain.rs:657). This check would
+    // re-fire only if a future schema change makes `files` optional
+    // at the clap level — at which point we want the parse_chain_argv
+    // gate, not a panic downstream. Mirrors W15.5's deliberate keep
+    // of defensive-but-unreachable shapes where the defense costs ~5
+    // lines and would matter if the gate above weakened.
     if input_files.is_empty() {
         return Err(format!(
             "chain's terminal step ({}) has no input files",
@@ -255,6 +267,18 @@ fn split_into_step_segments(argv: &[String]) -> Result<Vec<Vec<String>>, String>
     // structurally unreachable (any all-empty state has at least
     // one empty last segment, so line 242 caught it first) and is
     // removed.
+    //
+    // R16 W16.3 (N-R16-13, cosmetic): `is_some_and` reads as defense
+    // but `segments.last()` is structurally always `Some` (init
+    // `vec![Vec::new()]` + push-only). Could simplify to
+    // `.last().unwrap().is_empty()`. Kept as `is_some_and` for two
+    // reasons: (1) `unwrap()` calls add panic-on-violation noise to a
+    // function whose other branches all return Err on shape issues;
+    // (2) the invariant is documented by the init expression but a
+    // future refactor that adds a `.pop()` somewhere would have
+    // `is_some_and` degrade gracefully to false while `unwrap()`
+    // would panic. Both annotations live here so the choice doesn't
+    // drift on the next pass.
     if segments.last().is_some_and(Vec::is_empty) {
         let msg: &str = if segments.len() == 1 {
             "chain requires at least one step"

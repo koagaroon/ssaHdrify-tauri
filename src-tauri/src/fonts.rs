@@ -2901,6 +2901,15 @@ fn is_in_system_fonts_dir(canonical: &Path) -> bool {
 /// into `engine::FontSubsetPayload` and ships through the engine's
 /// JSON-payload boundary (where the expansion is bounded by per-font
 /// caps, not the cumulative ceiling).
+///
+/// **IMPORTANT (R16 W16.3 N-R16-5)**: do NOT add `#[tauri::command]`
+/// to this function. The Vec<u8> return shape would JSON-encode as
+/// `[byte, byte, ...]` over the GUI IPC wire, hitting the same ~4-5×
+/// expansion `subset_font_b64` exists specifically to dodge. The
+/// GUI-side IPC path MUST go through `subset_font_b64`; adding the
+/// attribute here would silently bypass that guard and pressure V8
+/// heap on every embed. Future direct exposure must be gated by
+/// review.
 pub fn subset_font(
     font_path: String,
     font_index: u32,
