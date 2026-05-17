@@ -190,8 +190,33 @@ fn chain_dry_run_prints_plan_without_writing() {
         stdout.contains("Plan (no files written)"),
         "stdout: {stdout}"
     );
-    assert!(stdout.contains("hdr"), "stdout: {stdout}");
-    assert!(stdout.contains("shift"), "stdout: {stdout}");
+    // R16 W16.4 (N-R16-7): pin the per-step enumeration shape
+    // ("1. hdr" / "2. shift") rather than bare "hdr" / "shift"
+    // substrings — the temp dir name in dry-run's input-listing
+    // section can contain "hdr" or "shift" characters
+    // incidentally, leaving the weaker assertions tolerant of a
+    // regression that drops the step-list loop entirely.
+    assert!(
+        stdout.contains("1. hdr"),
+        "expected '1. hdr' step line: {stdout}"
+    );
+    assert!(
+        stdout.contains("2. shift"),
+        "expected '2. shift' step line: {stdout}"
+    );
+    // R16 W16.4 (N-R16-11): pin the resolved-output line shape
+    // (`→ <path>`) and the predicted filename. dry-run prints
+    // "    → cat.hdr.shifted.ass" per input; a regression dropping
+    // the resolved-output line or the input-listing loop would
+    // silently pass the substring-only checks above.
+    assert!(
+        stdout.contains("→ "),
+        "expected resolved-output arrow line: {stdout}"
+    );
+    assert!(
+        stdout.contains("cat.hdr.shifted.ass"),
+        "expected predicted output filename: {stdout}"
+    );
 
     // No output file should exist.
     assert!(
@@ -437,19 +462,59 @@ fn chain_cheap_first_skipped_carries_no_warnings_line() {
     }
 
     let dir = temp_dir("cheap_first_skip");
-    let input = write_fixture(&dir, "cat.ass");
+    // R16 W16.4 (N-R16-9, batch leak-detection): two inputs are
+    // required to meaningfully pin the negative "no warnings leak
+    // between inputs" assertion. Input 1 (oversized.ass) goes
+    // through V8 successfully and produces an oversized-skipped
+    // warning that surfaces on its Written outcome. Input 2 (cat.ass)
+    // has its predicted output pre-created as a regular file → hits
+    // cheap-first Skipped with warnings vec empty.  WITHOUT the
+    // multi-input shape, no "previous input warnings" exist to leak,
+    // so the negative counter-assertion below pins only the trivial
+    // single-input case. With it, a refactor that promoted `warnings`
+    // out of `process_one_chain_input`'s local scope (e.g., function-
+    // top declaration shared across `for input in &plan.input_files`)
+    // would have input 2's cheap-first Skipped surface input 1's
+    // warnings — caught here.
+    let oversized = "X".repeat(70_000);
+    let mut oversized_content = String::from("[Script Info]\nScriptType: v4.00+\n\n");
+    oversized_content.push_str(
+        "[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, \
+         SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, \
+         StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, \
+         Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n",
+    );
+    oversized_content.push_str(
+        "Style: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,\
+         0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1\n\n",
+    );
+    oversized_content.push_str(
+        "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, \
+         MarginV, Effect, Text\n",
+    );
+    oversized_content.push_str("Dialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,Hello\n");
+    oversized_content.push_str(&format!(
+        "Dialogue: 0,0:00:03.00,0:00:04.00,Default,,0,0,0,,{oversized}\n"
+    ));
+    let input_with_warning = dir.join("oversized.ass");
+    fs::write(&input_with_warning, oversized_content).expect("failed to write oversized fixture");
+
+    let input_skipped = write_fixture(&dir, "cat.ass");
 
     // Pre-create the predicted output as a regular file so the
     // cheap-first `predicted.exists()` check in process_one_chain_input
-    // fires before V8. Without --overwrite, this returns
-    // ChainFileOutcome::Skipped(_, warnings=empty) — V8 never runs,
-    // no oversized-skipped warning could possibly accumulate.
+    // fires before V8 for input 2. Without --overwrite, this returns
+    // ChainFileOutcome::Skipped(_, warnings=empty).
     let predicted = dir.join("cat.shifted.ass");
     fs::write(&predicted, "pre-existing content").expect("failed to pre-create output");
 
     let output = Command::new(cli_path())
         .args(["chain", "shift", "--offset", "+2s"])
-        .arg(&input)
+        // Order matters: input 1 must produce a warning BEFORE input
+        // 2's cheap-first Skipped runs, so the leak-detection window
+        // (input 1's warnings still in scope) is exercised.
+        .arg(&input_with_warning)
+        .arg(&input_skipped)
         .output()
         .expect("failed to run chain");
 
@@ -461,22 +526,30 @@ fn chain_cheap_first_skipped_carries_no_warnings_line() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    // Positive assertion: ⊘ status line + the "already exists"
-    // explanation appear (mirrors `chain_overwrite_toggles_skip_vs_replace`
-    // shape).
+    // Positive assertions:
+    // - input 1 produced a Written outcome with ⚠ oversized warning.
+    // - input 2 hit cheap-first Skipped with ⊘ + "already exists".
     assert!(
         stdout.contains("⊘") && stdout.contains("already exists"),
-        "expected cheap-first Skipped line in stdout: {stdout}"
+        "expected cheap-first Skipped line for input 2 in stdout: {stdout}"
     );
-    // Negative counter-assertion: no ⚠ warning line surfaces. The
-    // warnings vec at the cheap-first Skipped return site is
-    // structurally empty (declared at function-top, no accumulation
-    // path runs before the check). If a future refactor makes the
-    // Skipped vec carry stale embed-warnings from a previous input
-    // in the batch, this assertion fires.
     assert!(
-        !stderr.contains("⚠"),
-        "no ⚠ warning expected on cheap-first Skipped path (warnings vec empty pre-V8): {stderr}"
+        stdout.contains("✓"),
+        "expected ✓ Written line for input 1 in stdout: {stdout}"
+    );
+
+    // Counter-assertion: exactly ONE ⚠ line surfaces (from input 1's
+    // Written outcome). Pre-W16.4 single-input shape allowed the
+    // negative-no-⚠ assertion to pass trivially; here, if a refactor
+    // promoted `warnings` out of `process_one_chain_input`'s local
+    // scope (function-top declaration shared across the batch loop),
+    // input 2's cheap-first Skipped would re-emit input 1's warning →
+    // ⚠ count would be 2, this assertion fires.
+    let warning_count = stderr.matches("⚠").count();
+    assert_eq!(
+        warning_count, 1,
+        "expected exactly one ⚠ line (input 1's oversized warning, no leak \
+         into input 2's cheap-first Skipped); got {warning_count} in stderr: {stderr}"
     );
 
     let _ = fs::remove_dir_all(&dir);

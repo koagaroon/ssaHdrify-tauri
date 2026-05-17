@@ -4439,6 +4439,144 @@ mod tests {
         assert_eq!(file_name, "Show..special.shifted.ass");
     }
 
+    // R16 W16.4 (N-R16-8): equivalence-class coverage of
+    // predict_chain_output_path's reject branches. Each test below
+    // pins one rejection equivalence class — the predictor must
+    // return None so the caller falls back to V8 + TS for the
+    // authoritative error. Without per-class pins, a refactor that
+    // weakens any single gate (e.g., dropping the superscript COM
+    // variants, or relaxing the BiDi reject) would slip through the
+    // single `predict_chain_output_path_preserves_double_dots` test
+    // — which exercises only the positive-acceptance path.
+
+    #[test]
+    fn predict_chain_output_path_rejects_windows_reserved_device_name() {
+        // {name} = "CON" → predicted name "CON.ass" → Win32 device
+        // path. Predictor rejects → V8/TS handles authoritative msg.
+        let input = PathBuf::from("/subs/CON.ass");
+        let predicted = predict_chain_output_path(&input, "{name}{ext}", None);
+        assert!(
+            predicted.is_none(),
+            "CON.ass should be rejected as a Windows reserved device name; got {predicted:?}"
+        );
+    }
+
+    #[test]
+    fn predict_chain_output_path_rejects_superscript_com_variant() {
+        // Unicode superscript COM¹ is a Win32 device-alias on some
+        // reparse layers — TS-side `assertSafeOutputFilename`
+        // rejects it explicitly; Rust predictor is documented to
+        // omit this superset and let V8/TS handle. Pin the predictor
+        // returning None (so the V8/TS path is reached).
+        let input = PathBuf::from("/subs/COM\u{00B9}.ass");
+        let predicted = predict_chain_output_path(&input, "{name}{ext}", None);
+        assert!(
+            predicted.is_none(),
+            "COM¹.ass should be rejected; got {predicted:?}"
+        );
+    }
+
+    #[test]
+    fn predict_chain_output_path_rejects_drive_letter_prefix_in_template() {
+        // Template-output that starts with a drive-letter prefix
+        // (`C:foo.ass`) is rejected at the predictor — chain output
+        // is a single filename in input's directory, never a path.
+        let input = PathBuf::from("/subs/Show.ass");
+        let predicted = predict_chain_output_path(&input, "C:{name}{ext}", None);
+        assert!(
+            predicted.is_none(),
+            "drive-letter prefix in template should reject; got {predicted:?}"
+        );
+    }
+
+    #[test]
+    fn predict_chain_output_path_rejects_ntfs_illegal_punctuation() {
+        // `<`, `>`, `:`, `"`, `|`, `?`, `*` are NTFS-illegal. TS
+        // `assertSafeOutputFilename` rejects them; predictor mirrors.
+        let input = PathBuf::from("/subs/Show?wild.ass");
+        let predicted = predict_chain_output_path(&input, "{name}{ext}", None);
+        assert!(
+            predicted.is_none(),
+            "NTFS-illegal `?` should reject; got {predicted:?}"
+        );
+    }
+
+    #[test]
+    fn predict_chain_output_path_rejects_control_char_in_name() {
+        // `\u{001B}` ESC is a C0 control. Predictor must reject;
+        // V8 stringification round-trip is unsafe.
+        let input = PathBuf::from("/subs/Show\u{001B}.ass");
+        let predicted = predict_chain_output_path(&input, "{name}{ext}", None);
+        assert!(
+            predicted.is_none(),
+            "ESC control char should reject; got {predicted:?}"
+        );
+    }
+
+    #[test]
+    fn predict_chain_output_path_rejects_bidi_override_in_name() {
+        // U+202E RIGHT-TO-LEFT OVERRIDE — well-known display-flip
+        // exploit primitive. TS-side rejects via `unicode-controls`;
+        // predictor mirrors.
+        let input = PathBuf::from("/subs/evil\u{202E}.ass");
+        let predicted = predict_chain_output_path(&input, "{name}{ext}", None);
+        assert!(
+            predicted.is_none(),
+            "U+202E should reject; got {predicted:?}"
+        );
+    }
+
+    #[test]
+    fn predict_chain_output_path_rejects_zero_width_in_name() {
+        // U+200B ZERO WIDTH SPACE — invisible-character class.
+        let input = PathBuf::from("/subs/Show\u{200B}.ass");
+        let predicted = predict_chain_output_path(&input, "{name}{ext}", None);
+        assert!(
+            predicted.is_none(),
+            "U+200B should reject; got {predicted:?}"
+        );
+    }
+
+    #[test]
+    fn predict_chain_output_path_rejects_unicode_line_separator() {
+        // U+2028 LINE SEPARATOR — would wrap stderr/println output
+        // across lines if it reached display.
+        let input = PathBuf::from("/subs/Show\u{2028}.ass");
+        let predicted = predict_chain_output_path(&input, "{name}{ext}", None);
+        assert!(
+            predicted.is_none(),
+            "U+2028 should reject; got {predicted:?}"
+        );
+    }
+
+    #[test]
+    fn predict_chain_output_path_rejects_whitespace_only_name() {
+        // Template `{name}` with a whitespace-only stem produces
+        // a whitespace-only output_name. R10 N-R10-012: TS rejects
+        // via `!filename.trim()`; predictor mirrors. (Template must
+        // omit `{ext}` so the trim-empty branch fires — `"   .ass"`
+        // would trim to `".ass"` not empty.)
+        let input = PathBuf::from("/subs/   .ass");
+        let predicted = predict_chain_output_path(&input, "{name}", None);
+        assert!(
+            predicted.is_none(),
+            "whitespace-only name should reject; got {predicted:?}"
+        );
+    }
+
+    #[test]
+    fn predict_chain_output_path_rejects_bare_double_dot() {
+        // `..` as the entire output filename is a parent-dir
+        // traversal at the path-resolution layer. Predictor rejects
+        // via the `.` / `..` gate documented in the doc-comment.
+        let input = PathBuf::from("/subs/Show.ass");
+        let predicted = predict_chain_output_path(&input, "..", None);
+        assert!(
+            predicted.is_none(),
+            "bare `..` template should reject; got {predicted:?}"
+        );
+    }
+
     // ── R14 W14.1: display_path is a PURE FORMATTER (operational) ──
 
     #[test]

@@ -330,6 +330,27 @@ mod tests {
         assert!(expand_dropped_paths(many).is_err());
     }
 
+    /// R16 W16.4 (N-R16-2, boundary-pair discipline): the
+    /// over-limit test above pins the rejection direction; this
+    /// at-limit counterpart pins that exactly MAX_INPUT_PATHS still
+    /// returns Ok (the per-path validation may filter individual
+    /// entries, but the input-cap gate itself does not fire).
+    /// Without this pair, a refactor that loosened the cap in the
+    /// reject direction would silently pass. Per `code_review.md`
+    /// "boundary-pair tests".
+    #[test]
+    fn accepts_exactly_max_input_paths_boundary() {
+        let at_limit: Vec<String> = (0..MAX_INPUT_PATHS)
+            .map(|i| format!("/tmp/x{i}.ass"))
+            .collect();
+        let result = expand_dropped_paths(at_limit);
+        assert!(
+            result.is_ok(),
+            "exactly MAX_INPUT_PATHS entries should not trigger the cap-reject; \
+             got {result:?}"
+        );
+    }
+
     #[test]
     fn rejects_control_chars_in_path() {
         let result = expand_dropped_paths(vec!["/tmp/foo\u{0000}bar.ass".to_string()]).unwrap();

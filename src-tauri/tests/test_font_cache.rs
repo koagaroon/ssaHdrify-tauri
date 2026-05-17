@@ -333,6 +333,19 @@ fn embed_reports_drift_when_folder_mtime_changes() {
         stderr.contains("refresh-fonts"),
         "drift fallback should suggest refresh-fonts: {stderr}"
     );
+    // R16 W16.4 (N-R16-12): pin the locked-design exit semantics —
+    // drift fallback should fall through to system fonts and let
+    // embed complete (non-zero indicates a hard failure unrelated
+    // to drift). The sibling `embed_with_no_cache_does_not_touch_cache_file`
+    // intentionally omits this assertion because no-cache → no
+    // input file → embed Err is structurally guaranteed. Here we
+    // DO need to pin success because the test's named contract is
+    // "embed reports drift AND continues processing".
+    assert!(
+        embed.status.success(),
+        "drift fallback should let embed continue (exit code = {:?}, stderr = {stderr})",
+        embed.status.code()
+    );
 
     let _ = fs::remove_dir_all(work);
 }
