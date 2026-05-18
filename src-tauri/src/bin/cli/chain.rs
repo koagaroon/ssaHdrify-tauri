@@ -76,11 +76,19 @@ impl ParsedStep {
     /// `runChain` runtime (`{ kind, params }`). Delegates to per-Args
     /// `to_chain_step` methods which live in main.rs alongside the
     /// struct definitions (where the private fields are visible).
-    pub fn to_chain_step_json(&self) -> Result<serde_json::Value, String> {
+    ///
+    /// R17 W17.2 (N-R17-32): infallible. Shift step argument strings
+    /// (`--offset`, `--after`) are validated upstream in
+    /// `parse_chain_argv` after `parse_one_step` — any parse error
+    /// surfaces at chain-parse time, not per-input at runtime. The
+    /// per-Args `to_chain_step` for Shift uses `.expect()` with a
+    /// pointer back to that validation site; HDR / Embed are
+    /// structurally infallible (no string-parse step).
+    pub fn to_chain_step_json(&self) -> serde_json::Value {
         match self {
-            Self::Hdr(args) => Ok(args.to_chain_step()),
+            Self::Hdr(args) => args.to_chain_step(),
             Self::Shift(args) => args.to_chain_step(),
-            Self::Embed(args) => Ok(args.to_chain_step()),
+            Self::Embed(args) => args.to_chain_step(),
         }
     }
 }
@@ -108,24 +116,20 @@ impl ChainPlan {
     /// serialized — those are Rust-side concerns. The TS runtime sees
     /// only the plan-as-AST + the one input file currently being
     /// processed (multi-file fanout is handled by the Rust shell).
-    pub fn to_runtime_payload(
-        &self,
-        input_path: &str,
-        content: &str,
-    ) -> Result<serde_json::Value, String> {
-        let steps: Result<Vec<_>, _> = self
+    pub fn to_runtime_payload(&self, input_path: &str, content: &str) -> serde_json::Value {
+        let steps: Vec<serde_json::Value> = self
             .steps
             .iter()
             .map(ParsedStep::to_chain_step_json)
             .collect();
-        Ok(serde_json::json!({
+        serde_json::json!({
             "plan": {
-                "steps": steps?,
+                "steps": steps,
                 "outputTemplate": self.output_template,
             },
             "inputPath": input_path,
             "content": content,
-        }))
+        })
     }
 }
 
@@ -172,6 +176,22 @@ pub fn parse_chain_argv(
         }
 
         let mut step = parse_one_step(segment, is_terminal)?;
+        // R17 W17.2 (N-R17-32): eagerly validate Shift step argument
+        // strings (`--offset`, `--after`) here so a malformed value
+        // surfaces at chain-parse time rather than per-input at
+        // `to_runtime_payload` time. After this gate, the per-Args
+        // `to_chain_step` for Shift is structurally infallible — its
+        // `.expect()` calls reference this exact validation site.
+        // HDR / Embed have no string-parse step, so no eager validation
+        // is needed for them.
+        if let ParsedStep::Shift(args) = &step {
+            crate::parse_duration_ms(&args.offset)
+                .map_err(|e| format!("step {} (shift --offset): {e}", i + 1))?;
+            if let Some(after) = args.after.as_deref() {
+                crate::parse_timestamp_ms(after)
+                    .map_err(|e| format!("step {} (shift --after): {e}", i + 1))?;
+            }
+        }
         if is_terminal {
             input_files = take_step_files(&mut step);
         }
@@ -255,18 +275,17 @@ fn split_into_step_segments(argv: &[String]) -> Result<Vec<Vec<String>>, String>
                 .push(tok.clone());
         }
     }
-    // R15 W15.5 (N-R15-8): unified end-of-argv check. `segments`
-    // starts as `vec![Vec::new()]` (one empty segment) and only
-    // grows via the `+`-after-non-empty branch above, so any
-    // empty-last-segment state has two reachable shapes: argv was
-    // entirely empty (no tokens at all → still one empty segment),
-    // OR argv ended with `+` after at least one non-empty step.
-    // The prior code reported "trailing `+`" for both, which read
-    // wrong on the empty-argv case. Split the message; the prior
-    // `segments.iter().all(Vec::is_empty)` follow-up check was
-    // structurally unreachable (any all-empty state has at least
-    // one empty last segment, so line 242 caught it first) and is
-    // removed.
+    // R15 W15.5 (N-R15-8) / R17 W17.2 (N-R17-30): end-of-argv check
+    // unified under the "empty step segment" frame so the user reads
+    // the same shape of error across leading / consecutive / trailing
+    // `+` and the empty-argv case. `segments` starts as
+    // `vec![Vec::new()]` and only grows via the `+`-after-non-empty
+    // branch above, so an empty-last-segment state has two reachable
+    // shapes: argv was entirely empty (no tokens at all → still one
+    // empty segment), OR argv ended with `+` after at least one
+    // non-empty step. Differentiate ONLY the empty-argv case (which
+    // can't reasonably be described as "around `+`") from the trailing
+    // case; keep "empty step segment" framing in both.
     //
     // R16 W16.3 (N-R16-13, cosmetic): `is_some_and` reads as defense
     // but `segments.last()` is structurally always `Some` (init
@@ -283,7 +302,7 @@ fn split_into_step_segments(argv: &[String]) -> Result<Vec<Vec<String>>, String>
         let msg: &str = if segments.len() == 1 {
             "chain requires at least one step"
         } else {
-            "trailing `+` separator with no following step"
+            "empty step segment after trailing `+` (chain requires `<step1> + <step2>...` form)"
         };
         return Err(msg.into());
     }
@@ -412,10 +431,19 @@ fn collect_suspicious_orderings(steps: &[ParsedStep]) -> Vec<String> {
     // Pattern 1: HDR appearing more than once. The color transform
     // is not idempotent — applying it twice doubles the brightness
     // mapping and is almost certainly a user error.
+    //
+    // R17 W17.2 (N-R17-20): the constructed strings deliberately do
+    // NOT include a `warning: ` prefix. They're routed through
+    // `emit_chain_warnings` in `run_chain`, which adds the localized
+    // `warning: ` / `警告：` prefix plus the chain-style `⚠` glyph.
+    // Pre-W17.2 the prefix was hardcoded English here, so a Chinese-
+    // locale user saw the surrounding status / file lines localized
+    // but these warnings in English with no glyph — the only chain
+    // print site that bypassed emit_chain_warnings.
     let hdr_count = kinds.iter().filter(|k| **k == "hdr").count();
     if hdr_count > 1 {
         warnings.push(format!(
-            "warning: HDR step appears {hdr_count} times in chain; \
+            "HDR step appears {hdr_count} times in chain; \
              color transform will be applied {hdr_count}× (likely unintended)"
         ));
     }
@@ -435,7 +463,7 @@ fn collect_suspicious_orderings(steps: &[ParsedStep]) -> Vec<String> {
     for (i, kind) in kinds.iter().enumerate() {
         if *kind == "shift" && kinds[..i].contains(&"embed") {
             warnings.push(format!(
-                "warning: shift step at position {} runs after an embed step; \
+                "shift step at position {} runs after an embed step; \
                  embed does not modify timing, so this shift's effect is \
                  identical to placing it before embed (consider reordering)",
                 i + 1
@@ -810,7 +838,7 @@ mod tests {
     fn marshal_hdr_step_matches_ts_shape() {
         let argv = argv_of(&["hdr", "--eotf", "pq", "--nits", "1000", "cat.ass"]);
         let plan = parse_chain_argv(&argv, None).unwrap();
-        let payload = plan.to_runtime_payload("/tmp/cat.ass", "ass body").unwrap();
+        let payload = plan.to_runtime_payload("/tmp/cat.ass", "ass body");
         assert_eq!(payload["inputPath"], "/tmp/cat.ass");
         assert_eq!(payload["content"], "ass body");
         assert_eq!(payload["plan"]["outputTemplate"], "{name}.hdr.ass");
@@ -823,7 +851,7 @@ mod tests {
     fn marshal_shift_step_translates_offset_to_ms() {
         let argv = argv_of(&["shift", "--offset", "+2.5s", "cat.ass"]);
         let plan = parse_chain_argv(&argv, None).unwrap();
-        let payload = plan.to_runtime_payload("/tmp/cat.ass", "ass body").unwrap();
+        let payload = plan.to_runtime_payload("/tmp/cat.ass", "ass body");
         assert_eq!(payload["plan"]["steps"][0]["kind"], "shift");
         assert_eq!(payload["plan"]["steps"][0]["params"]["offsetMs"], 2500);
         assert!(payload["plan"]["steps"][0]["params"]["thresholdMs"].is_null());
@@ -835,7 +863,7 @@ mod tests {
             "shift", "--offset", "-500ms", "--after", "00:10:00", "cat.ass",
         ]);
         let plan = parse_chain_argv(&argv, None).unwrap();
-        let payload = plan.to_runtime_payload("/tmp/cat.ass", "ass body").unwrap();
+        let payload = plan.to_runtime_payload("/tmp/cat.ass", "ass body");
         assert_eq!(payload["plan"]["steps"][0]["params"]["offsetMs"], -500);
         // 00:10:00 = 600_000 ms.
         assert_eq!(
@@ -858,7 +886,7 @@ mod tests {
             "cat.ass",
         ]);
         let plan = parse_chain_argv(&argv, None).unwrap();
-        let payload = plan.to_runtime_payload("/tmp/cat.ass", "ass body").unwrap();
+        let payload = plan.to_runtime_payload("/tmp/cat.ass", "ass body");
         let params = &payload["plan"]["steps"][0]["params"];
         assert_eq!(params["fontDirs"][0], "./fonts");
         assert_eq!(params["fontFiles"][0], "./SmileySans.ttf");
@@ -872,7 +900,7 @@ mod tests {
             "hdr", "--eotf", "pq", "+", "shift", "--offset", "+2s", "cat.ass",
         ]);
         let plan = parse_chain_argv(&argv, None).unwrap();
-        let payload = plan.to_runtime_payload("/tmp/cat.ass", "ass body").unwrap();
+        let payload = plan.to_runtime_payload("/tmp/cat.ass", "ass body");
         let steps = payload["plan"]["steps"].as_array().unwrap();
         assert_eq!(steps.len(), 2);
         assert_eq!(steps[0]["kind"], "hdr");
@@ -889,7 +917,7 @@ mod tests {
         let plan = parse_chain_argv(&argv, None).unwrap();
         // Confirm warnings exist Rust-side (HDR×2 fires).
         assert_eq!(plan.warnings.len(), 1);
-        let payload = plan.to_runtime_payload("/tmp/cat.ass", "ass body").unwrap();
+        let payload = plan.to_runtime_payload("/tmp/cat.ass", "ass body");
         assert!(payload["plan"].get("inputFiles").is_none());
         assert!(payload["plan"].get("warnings").is_none());
     }

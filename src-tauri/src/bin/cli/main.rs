@@ -15,6 +15,31 @@ mod engine;
 
 const MAX_SHIFT_OFFSET_MS: i64 = 365 * 24 * 60 * 60 * 1000;
 const CLI_FONT_DB_DIR_PREFIX: &str = "ssahdrify-cli-font-db";
+
+/// R17 W17.2 (N-R17-23 + A-R17-18): chain-level cumulative cap on
+/// the aggregate raw font-subset bytes that flow into the per-input
+/// JSON payload handed to V8. Per-font cap is `MAX_FONT_DATA_SIZE`
+/// (50 MB, in `app_lib::fonts`); the gap was the cumulative case —
+/// a pathological subtitle referencing 100+ heavy fonts could produce
+/// multi-GB raw bytes which base64-encode to ~1.33× and then ride
+/// through `format!()` / serde_json on Rust's heap before V8 ever
+/// sees the request. 200 MB raw → ~270 MB base64 → bounded
+/// allocation peak. Reject before payload assembly with a focused
+/// chain-only error so the per-input outcome is `Failed` with a
+/// clear cause.
+const MAX_CHAIN_SUBSET_TOTAL_BYTES: usize = 200 * 1024 * 1024;
+
+/// R17 W17.2 (A-R17-25): cap font.codepoints.len() at the CLI's
+/// resolve_embed_fonts boundary before cloning into
+/// ResolvedEmbedFont. `subset_font`'s downstream
+/// `MAX_SUBSET_CODEPOINTS` (200_000, in `app_lib::fonts`) refuses
+/// the actual subset call, but the clone happens earlier and a
+/// V8/TS-supplied codepoint vec at full size (e.g., 1M elements ×
+/// 4 bytes = 4 MB per font, multiplied across many fonts) sits in
+/// the resolved-vec until subset_font runs. Half of the downstream
+/// cap gives defense-in-depth headroom without rejecting cases that
+/// would otherwise subset successfully.
+const MAX_RESOLVED_FONT_CODEPOINTS: usize = 100_000;
 // Single source of truth in `app_lib::fonts::USER_FONT_DB_FILENAME`
 // (N-R5-RUSTCLI-02): if the CLI ever needs to reference the literal
 // again (the post-5.3a TempFontDbDir::drop uses remove_dir_all so it
@@ -362,20 +387,28 @@ impl HdrArgs {
 }
 
 impl ShiftArgs {
-    pub(crate) fn to_chain_step(&self) -> Result<serde_json::Value, String> {
-        let offset_ms = parse_duration_ms(&self.offset)?;
-        let threshold_ms = match &self.after {
-            Some(text) => Some(parse_timestamp_ms(text)?),
-            None => None,
-        };
+    /// Serialize this step into the chain runtime's `{ kind, params }`
+    /// JSON shape. R17 W17.2 (N-R17-32): infallible. The `--offset` /
+    /// `--after` strings are validated by `chain::parse_chain_argv`
+    /// right after `parse_one_step` succeeds — any parse error
+    /// surfaces at chain-parse time. The `.expect()` calls below
+    /// reference that validation site; if either fires, the
+    /// chain-parse gate regressed and the panic is the correct fail-
+    /// fast (better than a silent semantic divergence).
+    pub(crate) fn to_chain_step(&self) -> serde_json::Value {
+        let offset_ms = parse_duration_ms(&self.offset)
+            .expect("ShiftArgs.offset validated in chain::parse_chain_argv");
+        let threshold_ms = self.after.as_deref().map(|text| {
+            parse_timestamp_ms(text).expect("ShiftArgs.after validated in chain::parse_chain_argv")
+        });
         let mut params = serde_json::json!({ "offsetMs": offset_ms });
         if let Some(t) = threshold_ms {
             params["thresholdMs"] = serde_json::Value::from(t);
         }
-        Ok(serde_json::json!({
+        serde_json::json!({
             "kind": "shift",
             "params": params,
-        }))
+        })
     }
 }
 
@@ -764,21 +797,17 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
     // and proceed. Honors --quiet to match prepare_embed_cache's
     // posture: --quiet suppresses informational diagnostics, errors
     // still surface elsewhere.
+    //
+    // R17 W17.2 (N-R17-20): route through `emit_chain_warnings` for
+    // parity with per-input chain warnings (`⚠` glyph + localize
+    // English/Chinese). Pre-W17.2 this was the only chain print site
+    // that bypassed the helper — Chinese-locale users saw the
+    // surrounding status / file lines localized but plan-level
+    // warnings in raw English. `collect_suspicious_orderings`'s
+    // constructed strings drop their `warning: ` prefix in tandem so
+    // the helper's localized prefix doesn't double up.
     if !globals.quiet {
-        for warning in &plan.warnings {
-            // R15 W15.1 (N-R15-5, Pattern 1 census parity): the
-            // suspicious-pattern catalog
-            // (`collect_suspicious_orderings`: HDR×2,
-            // shift-after-embed) emits only literal+numeric strings
-            // today, so no P1b content reaches this print — but every
-            // other eprintln site in run_chain (output-template info,
-            // --no-cache info, --json info) sanitizes. Keeping this
-            // single outlier unaudited invites a future warning that
-            // includes parsed content to bypass the laundering by
-            // accident.
-            let w_disp = sanitize_for_display(warning);
-            eprintln!("{w_disp}");
-        }
+        emit_chain_warnings(globals, &plan.warnings);
     }
 
     // β behavior for default-stacked output: stderr info line +
@@ -797,13 +826,21 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
 
     let embed_step_index = find_embed_step_index(&plan);
     // Inform user when --no-cache is meaningless in chain — chain v1
-    // doesn't consult the persistent cache (`resolve_chain_embed_subsets`
-    // always passes None per the locked design). Without this, --no-cache
-    // looks like it's silently ignored. Mirror prepare_embed_cache's
-    // posture: stderr informational line, gated on --quiet. Hoisted
-    // ABOVE the dry-run early-return so `--dry-run --no-cache` users
-    // also see the diagnostic (otherwise the early-return swallowed it).
-    if globals.no_cache && !globals.quiet && embed_step_index.is_some() {
+    // doesn't consult the persistent cache regardless of step
+    // composition (`resolve_chain_embed_subsets` always passes None per
+    // the locked design; non-embed chains never reach a cache-aware
+    // path either). Without this, --no-cache looks silently ignored.
+    // Mirror prepare_embed_cache's posture: stderr informational line,
+    // gated on --quiet. Hoisted ABOVE the dry-run early-return so
+    // `--dry-run --no-cache` users also see the diagnostic.
+    //
+    // R17 W17.2 (N-R17-21): dropped the `embed_step_index.is_some()`
+    // gate. Chain v1 never consults the cache at ALL — gating only on
+    // embed presence meant `chain hdr ... --no-cache cat.ass` silently
+    // ignored the flag, violating no-silent-action. Surfacing the info
+    // line whenever --no-cache is set in chain keeps the signal
+    // consistent across step compositions.
+    if globals.no_cache && !globals.quiet {
         eprintln!(
             "ℹ --no-cache has no effect in chain mode; chain v1 doesn't use the persistent cache."
         );
@@ -917,11 +954,22 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
     if !globals.quiet {
         println!("Summary: {written} written, {skipped} skipped, {failed} failed");
     }
-    Ok(if failed > 0 {
+    // R17 W17.2 (N-R17-22): partial-failure (1) vs complete-failure
+    // (2) exit-code split, matching `CommandReport::exit_code`'s
+    // semantics for HDR / Shift / Embed / Rename per the design doc
+    // § Cross-cutting 行为 § Exit codes. Pre-W17.2 chain returned 1
+    // for any failure regardless of whether some inputs succeeded —
+    // CI / pipeline scripts couldn't distinguish "everything failed"
+    // (likely config / argv mistake) from "some files failed" (likely
+    // per-file content issue).
+    let exit_code = if failed == 0 {
+        ExitCode::SUCCESS
+    } else if (written + skipped) > 0 {
         ExitCode::from(1)
     } else {
-        ExitCode::SUCCESS
-    })
+        ExitCode::from(2)
+    };
+    Ok(exit_code)
 }
 
 enum ChainFileOutcome {
@@ -1344,16 +1392,26 @@ fn process_one_chain_input(
                 warnings,
             );
         }
-        if !globals.overwrite && predicted.exists() {
-            // `Path::exists()` follows symlinks (metadata-follow),
-            // so a planted symlink at `predicted` whose target exists
-            // would short-circuit to Skipped (A-R5-RUSTCLI-07). The
-            // harm is bounded: this is a cheap-first skip-check
-            // before V8; `write_output` later uses `create_new(true)`
-            // which is symlink-aware and atomic, so the authoritative
-            // gate against through-symlink writes is at write time.
-            // Worst case the planted symlink turns a Written into a
-            // Skipped — wasted V8 work, no data damage.
+        // R17 W17.2 (N-R17-17): route the cheap-first existence
+        // check through `output_path_exists` (`fs::metadata` + stat-
+        // fail-treated-as-exists fail-safe + `--quiet`-respecting
+        // stderr WARN) instead of raw `Path::exists()`. Pre-W17.2 a
+        // restrictive-ACL / network-share stat failure would silently
+        // resolve as "doesn't exist" and proceed to V8, eventually
+        // failing at `create_new(true)` with a generic AlreadyExists.
+        // The helper sibling matches every other CLI subcommand's
+        // skip-check and preserves the N-R1-9 fail-safe.
+        if !globals.overwrite && output_path_exists(globals, &predicted) {
+            // R17 W17.2 (N-R17-24 sibling): evict the predicted_key
+            // from `seen_outputs` before returning Skipped. The file
+            // at `predicted` exists from a prior session — no write
+            // happens this run. A later input whose prediction
+            // resolves to the same path should reach this exists
+            // check and also Skip; keeping the key would surface as
+            // a misleading "duplicate output path" Failed instead.
+            // Pattern 3 sibling of A-R10-014 (Failed paths) and the
+            // post-V8 Skipped path further below.
+            seen_outputs.remove(&key);
             return ChainFileOutcome::Skipped(
                 format!(
                     "{} already exists (use --overwrite to replace)",
@@ -1397,13 +1455,10 @@ fn process_one_chain_input(
     };
 
     // Build the JSON payload matching the TS-side ChainRunRequest.
-    let mut payload = match plan.to_runtime_payload(&input_str, &read_result.text) {
-        Ok(p) => p,
-        Err(err) => {
-            evict_predicted(seen_outputs);
-            return ChainFileOutcome::Failed(err, warnings);
-        }
-    };
+    // R17 W17.2 (N-R17-32): `to_runtime_payload` is now infallible —
+    // Shift step argument strings are validated upstream in
+    // `chain::parse_chain_argv`.
+    let mut payload = plan.to_runtime_payload(&input_str, &read_result.text);
 
     // Pre-resolve fonts for the embed step (if present) and inject
     // the subset bytes into its params. Done per-file because
@@ -1435,6 +1490,26 @@ fn process_one_chain_input(
             }
         };
         warnings = embed_warnings;
+        // R17 W17.2 (N-R17-23 + A-R17-18): cumulative cap on the
+        // aggregate raw font-subset bytes BEFORE the base64 +
+        // serde_json marshal below. Per-font cap (MAX_FONT_DATA_SIZE,
+        // 50 MB) holds; the gap was the cumulative case — N×50 MB
+        // raw bytes ride through `format!()` / serde_json on Rust
+        // heap before V8 sees the payload. Sum up to the
+        // MAX_CHAIN_SUBSET_TOTAL_BYTES ceiling and Fail with a
+        // focused message if exceeded.
+        let total_subset_bytes: usize = subsets.iter().map(|s| s.data.len()).sum();
+        if total_subset_bytes > MAX_CHAIN_SUBSET_TOTAL_BYTES {
+            evict_predicted(seen_outputs);
+            return ChainFileOutcome::Failed(
+                format!(
+                    "chain embed subsets total {total_subset_bytes} bytes exceeds the \
+                     {MAX_CHAIN_SUBSET_TOTAL_BYTES}-byte cap; reduce per-input font count \
+                     or use the standalone `embed` subcommand which streams per-file"
+                ),
+                warnings,
+            );
+        }
         // Encode subset bytes as base64 strings. The previous form
         // (`{ "data": [byte, byte, ...] }`) expanded ~4-5× per byte
         // when serde_json wrote bytes as decimal+comma JSON-in-JS-source,
@@ -1538,7 +1613,24 @@ fn process_one_chain_input(
     // related post-V8 path (write_output Failed) to pin the
     // warnings-on-non-Written contract; this Skipped branch shares
     // the same warnings-attach semantics established by W14.5.
-    if !globals.overwrite && output_path.exists() {
+    //
+    // R17 W17.2 (N-R17-18 + N-R17-24): two fixes here:
+    //   - Route the existence check through `output_path_exists`
+    //     (Pattern 3 sibling of N-R17-17): preserves the
+    //     stat-fail-treated-as-exists fail-safe (N-R1-9) +
+    //     `--quiet`-respecting WARN that the cheap-first check already
+    //     uses. Pre-W17.2 the raw `Path::exists()` silently treated
+    //     restrictive-ACL stat failure as "doesn't exist" and let
+    //     write_output below trip its own check with a less specific
+    //     error.
+    //   - Evict the post-reconcile `output_key` from `seen_outputs`
+    //     before returning Skipped. A-R10-014 added this for the
+    //     write-failure cleanup path; the post-V8 Skipped sibling
+    //     was missed. A later input whose V8-resolved output_key
+    //     legitimately equals this one would otherwise falsely
+    //     collide and surface as "duplicate output path".
+    if !globals.overwrite && output_path_exists(globals, &output_path) {
+        seen_outputs.remove(&output_key);
         return ChainFileOutcome::Skipped(
             format!(
                 "{} already exists (use --overwrite to replace)",
@@ -1624,19 +1716,41 @@ fn emit_chain_dry_run(plan: &chain::ChainPlan, globals: &GlobalOptions) {
         // dry-run output, so users can verify the template + output_dir
         // combination produces what they expect before they remove
         // --dry-run.
-        let resolved_path = absolute_path(input).ok().and_then(|abs| {
-            predict_chain_output_path(&abs, &plan.output_template, globals.output_dir.as_deref())
-        });
-        if let Some(out_path) = resolved_path.as_ref() {
-            let out_str = sanitize_for_display(&out_path.display().to_string());
-            // Same dedup key as real-run seen_outputs (case-folded /
-            // separator-normalized via normalize_output_key) so the
-            // dry-run preview matches what the real run will skip.
-            let key = normalize_output_key(out_path);
-            if !seen_outputs.insert(key) {
-                println!("    → {out_str}  ⚠ duplicate output (real run will fail)");
-            } else {
-                println!("    → {out_str}");
+        //
+        // R17 W17.2 (N-R17-19): make `absolute_path` failure explicit
+        // rather than collapsing into `None` via `.ok().and_then(...)`.
+        // Pre-W17.2 an unresolvable input (e.g., current-dir lookup
+        // fails under restrictive ACLs) silently dropped the `→ <out>`
+        // line with no diagnostic — the user couldn't tell whether
+        // prediction abstained (template uses tokens the Rust port
+        // doesn't model) or whether `absolute_path` outright failed.
+        // Per no-silent-action, surface the failure with a stderr
+        // line; per-feature real-run paths surface the same failure
+        // via Failed outcome.
+        match absolute_path(input) {
+            Ok(abs) => {
+                let resolved_path = predict_chain_output_path(
+                    &abs,
+                    &plan.output_template,
+                    globals.output_dir.as_deref(),
+                );
+                if let Some(out_path) = resolved_path.as_ref() {
+                    let out_str = sanitize_for_display(&out_path.display().to_string());
+                    // Same dedup key as real-run seen_outputs (case-
+                    // folded / separator-normalized via
+                    // normalize_output_key) so the dry-run preview
+                    // matches what the real run will skip.
+                    let key = normalize_output_key(out_path);
+                    if !seen_outputs.insert(key) {
+                        println!("    → {out_str}  ⚠ duplicate output (real run will fail)");
+                    } else {
+                        println!("    → {out_str}");
+                    }
+                }
+            }
+            Err(err) => {
+                let err_disp = sanitize_for_display(&err);
+                println!("    → (output unresolved: {err_disp})");
             }
         }
         for (i, step) in plan.steps.iter().enumerate() {
@@ -2817,6 +2931,26 @@ fn resolve_embed_fonts(
     let mut missing = Vec::new();
 
     for font in fonts {
+        // R17 W17.2 (A-R17-25, Pattern 2 sibling): cap font.codepoints
+        // BEFORE the lookup + clone into ResolvedEmbedFont. `font` flows
+        // from V8/TS-parsed ASS (P1b attacker-influenced), so a crafted
+        // subtitle declaring a million codepoints per font would
+        // retain a 4 MB Vec<u32> per ResolvedEmbedFont entry until
+        // subset_font runs — multiplied across many fonts. subset_font's
+        // own MAX_SUBSET_CODEPOINTS (200_000) refuses the actual subset
+        // call; this earlier cap bounds the intermediate retention.
+        // Treat over-cap as missing/skipped so it flows through the
+        // existing --on-missing surface (warning + counted in skipped
+        // / Failed under `fail`).
+        if font.codepoints.len() > MAX_RESOLVED_FONT_CODEPOINTS {
+            missing.push(format!(
+                "{} (too many codepoints: {} > cap {})",
+                font.label,
+                font.codepoints.len(),
+                MAX_RESOLVED_FONT_CODEPOINTS
+            ));
+            continue;
+        }
         let lookup = resolve_embed_font(args, use_user_fonts, cache, font);
         let (path, index) = match lookup {
             Ok(Some(found)) => found,
@@ -3793,7 +3927,7 @@ fn classify_locale(raw: &str) -> OutputLang {
     }
 }
 
-fn parse_duration_ms(input: &str) -> Result<i64, String> {
+pub(crate) fn parse_duration_ms(input: &str) -> Result<i64, String> {
     let mut rest = input.trim();
     if rest.is_empty() {
         return Err("offset cannot be empty".to_string());
@@ -3893,7 +4027,7 @@ fn parse_duration_ms(input: &str) -> Result<i64, String> {
     Ok(signed.round() as i64)
 }
 
-fn parse_timestamp_ms(input: &str) -> Result<i64, String> {
+pub(crate) fn parse_timestamp_ms(input: &str) -> Result<i64, String> {
     let trimmed = input.trim();
     let parts: Vec<&str> = trimmed.split(':').collect();
     if parts.len() != 3 {
