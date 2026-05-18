@@ -3183,21 +3183,78 @@ fn resolve_embed_fonts(
 /// upgrades the file's status to Failed and the batch's exit code
 /// to non-zero. With `--fail-fast` on top, the batch also
 /// short-circuits at the per-file boundary.
+///
+/// Dedup by resolved `(path, index)` face: family aliases that
+/// resolve to the same face (e.g., the English `Microsoft YaHei`
+/// and Chinese `微软雅黑` both pointing at `msyh.ttc` face 0)
+/// otherwise subset twice and embed byte-identical payloads under
+/// different `fontname:` filenames. The preserved name-table records
+/// in `app_lib::fonts::subset_with_index` (every name ID, every
+/// language) let libass match every original family alias to the
+/// single deduped entry. `font-embedder.ts` has the parallel TS
+/// dedup for the GUI's standalone embed path; this Rust dedup
+/// serves the CLI + chain paths which call subset_font directly
+/// without routing through `embedFonts()`.
 fn subset_resolved_fonts(
     globals: &GlobalOptions,
     args: &EmbedArgs,
     fonts: &[ResolvedEmbedFont],
 ) -> Result<(Vec<engine::FontSubsetPayload>, Vec<String>), String> {
+    use std::collections::BTreeMap;
+
+    // Group by (path, index). First-occurrence wins for the label
+    // and font_name template; subsequent aliases only contribute
+    // their codepoints to the union. BTreeMap keeps deterministic
+    // iteration order so the resulting `[Fonts]` entries are
+    // stable across runs on the same input.
+    struct FaceGroup<'a> {
+        template: &'a ResolvedEmbedFont,
+        codepoints: std::collections::BTreeSet<u32>,
+        /// All labels that resolved to this face — used for the
+        /// failure-diagnostic string so the user sees every alias
+        /// that would have been missed if subset fails.
+        labels: Vec<String>,
+    }
+    let mut face_groups: BTreeMap<(String, u32), FaceGroup> = BTreeMap::new();
+    for font in fonts {
+        let key = (font.path.clone(), font.index);
+        match face_groups.get_mut(&key) {
+            Some(group) => {
+                group.codepoints.extend(font.codepoints.iter().copied());
+                if !group.labels.contains(&font.label) {
+                    group.labels.push(font.label.clone());
+                }
+            }
+            None => {
+                face_groups.insert(
+                    key,
+                    FaceGroup {
+                        template: font,
+                        codepoints: font.codepoints.iter().copied().collect(),
+                        labels: vec![font.label.clone()],
+                    },
+                );
+            }
+        }
+    }
+
     let mut payloads = Vec::new();
     let mut skipped = Vec::new();
 
-    for font in fonts {
-        match app_lib::fonts::subset_font(font.path.clone(), font.index, font.codepoints.clone()) {
+    for group in face_groups.values() {
+        let codepoints: Vec<u32> = group.codepoints.iter().copied().collect();
+        match app_lib::fonts::subset_font(group.template.path.clone(), group.template.index, codepoints) {
             Ok(data) => payloads.push(engine::FontSubsetPayload {
-                font_name: font.font_name.clone(),
+                font_name: group.template.font_name.clone(),
                 data,
             }),
-            Err(error) => skipped.push(format!("{} ({error})", font.label)),
+            Err(error) => {
+                // Surface every alias that hit this face — the user
+                // needs to know all the Styles that lost their font,
+                // not just the first-seen family name.
+                let aliases = group.labels.join(" / ");
+                skipped.push(format!("{aliases} ({error})"));
+            }
         }
     }
 

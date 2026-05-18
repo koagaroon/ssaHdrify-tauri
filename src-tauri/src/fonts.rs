@@ -3280,29 +3280,21 @@ pub fn subset_font(
     // it in a torn state. Convert any panic into a structured error
     // string the frontend's existing IPC error path can render.
     let subset_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        if !is_ttc_data(&font_data) {
-            // Single-face SFNT (.ttf / .otf): the file is its own
-            // one-and-only face. font_index was registered at the
-            // provenance gate above; for single-face files it's
-            // always 0 in well-formed input.
-            //
-            // Display, not Debug — Debug repr leaks internal struct
-            // fields, table tags, and byte offsets into a
-            // frontend-visible error.
-            fontcull::subset_font_data_unicode(&font_data, &all_codepoints, &[])
-                .map_err(|e| format!("{e}"))
+        // Single-face files always have one face at index 0; the
+        // `font_index` parameter is only meaningful for TTC inputs.
+        // `FontRef::from_index(data, 0)` works on both single-face
+        // SFNT (`\0\1\0\0` / `OTTO` / `true`) and TTC at offset
+        // table entry 0, so the dispatch is just "what index to
+        // slice." The is_ttc_data check is still load-bearing
+        // because a TTC with `font_index > 0` must NOT collapse to
+        // index 0 — that would silently swap the wrong face's
+        // bytes into the output.
+        let effective_index = if is_ttc_data(&font_data) {
+            font_index
         } else {
-            // TTC / OTC collection: every face — including index 0 —
-            // must go through `FontRef::from_index` to slice the
-            // right face out of the collection. The single-face
-            // path expects SFNT magic (`\0\1\0\0` / `OTTO` / `true`)
-            // at offset 0, but a TTC starts with `ttcf`, so routing
-            // any TTC face to that path would fail with
-            // `InvalidSfnt(0x74746366)`. The dispatch keys on the
-            // file shape, not on the face index, because face 0 of
-            // a TTC and a single-face font are NOT the same shape.
-            subset_with_index(&font_data, font_index, &all_codepoints)
-        }
+            0
+        };
+        subset_with_index(&font_data, effective_index, &all_codepoints)
     }))
     .unwrap_or_else(|panic_payload| {
         // Convert panic payload (Box<dyn Any>) into a string for the log
@@ -3427,17 +3419,42 @@ fn is_ttc_data(font_data: &[u8]) -> bool {
     font_data.starts_with(b"ttcf")
 }
 
-/// Subset a specific face from a TTC/OTC collection file.
-/// Uses fontcull's internal crates directly for `FontRef::from_index`.
+/// Subset a single face from a font file. Handles both single-face
+/// SFNT (`.ttf` / `.otf`, callers pass index 0) and TTC collections
+/// (callers pass the requested face index). The plan tuning below
+/// applies to BOTH paths — single-face and TTC subsets come out the
+/// same shape.
+///
+/// Plan tuning rationale (from a measured comparison against
+/// assfonts/AssFontSubset on the same input — see CLI design doc
+/// § Project design locks):
+///
+/// - **Drop `vmtx`, `LTSH`, `kern`.** `vmtx` (vertical metrics) is
+///   ~60 KB per CJK face — one record per `maxp.numGlyphs`, but
+///   subtitle rendering is horizontal (libass doesn't consult `vmtx`
+///   for ASS \fr* tags). `LTSH` (Linear ThreshHold) is a Win9x
+///   screen-rendering optimization modern engines ignore; ~30 KB per
+///   CJK face. `kern` is the legacy kerning table superseded by GPOS;
+///   our subset doesn't trim per-glyph kerning so the kept table is
+///   dead weight. assfonts (libharfbuzz-subset defaults) and
+///   AssFontSubset (pyftsubset defaults) both drop these.
+/// - **Keep ALL name-table records (all name IDs, all languages).**
+///   Pre-fix, our subset had a 6-byte `name` stub — libass could
+///   only match by filename heuristic, which fails for non-ASCII
+///   alternative family names (`微软雅黑` hashes to `font_<hex>.ttf`
+///   under our naming, with no fallback). Preserving the full name
+///   table lets libass match every localized family name in the
+///   original font, which in turn lets the TS embed layer dedup
+///   aliases that resolve to the same face — without dedup, the
+///   same face would be subset and embedded once per family alias.
 fn subset_with_index(font_data: &[u8], index: u32, codepoints: &[u32]) -> Result<Vec<u8>, String> {
     use fontcull_klippa::{subset_font, Plan, SubsetFlags};
     use fontcull_read_fonts::collections::IntSet;
     use fontcull_skrifa::{FontRef, GlyphId, Tag};
     use fontcull_write_fonts::types::NameId;
 
-    // Display, not Debug — same anti-pattern as the unicode-subset path
-    // (Debug repr leaks internal struct fields, table tags, byte offsets
-    // into a frontend-visible error). Round 2's pass missed this site.
+    // Display, not Debug — Debug repr leaks internal struct fields,
+    // table tags, byte offsets into a frontend-visible error.
     let font = FontRef::from_index(font_data, index)
         .map_err(|e| format!("Cannot parse font face {index}: {e}"))?;
 
@@ -3446,10 +3463,22 @@ fn subset_with_index(font_data: &[u8], index: u32, codepoints: &[u32]) -> Result
         unicode_set.insert(cp);
     }
 
+    // Drop the three "dead in subtitle rendering" tables. The set
+    // contains exactly the tags we want fontcull to omit from the
+    // output font.
+    let mut drop_tables: IntSet<Tag> = IntSet::empty();
+    drop_tables.insert(Tag::new(b"vmtx"));
+    drop_tables.insert(Tag::new(b"LTSH"));
+    drop_tables.insert(Tag::new(b"kern"));
+
+    // Preserve the full name-table — every name ID, every language.
+    // `IntSet::all()` is the inverse of `IntSet::empty()`; harfbuzz-
+    // subset's SETS convention treats `all()` as "retain everything",
+    // matching assfonts' explicit `HB_SUBSET_SETS_NAME_LANG_ID` inversion.
+    let name_ids: IntSet<NameId> = IntSet::all();
+    let langs: IntSet<u16> = IntSet::all();
+
     let empty_gids: IntSet<GlyphId> = IntSet::empty();
-    let empty_tags: IntSet<Tag> = IntSet::empty();
-    let empty_name_ids: IntSet<NameId> = IntSet::empty();
-    let empty_langs: IntSet<u16> = IntSet::empty();
     let layout_scripts: IntSet<Tag> = IntSet::all();
     let layout_features: IntSet<Tag> = IntSet::empty();
 
@@ -3458,14 +3487,14 @@ fn subset_with_index(font_data: &[u8], index: u32, codepoints: &[u32]) -> Result
         &unicode_set,
         &font,
         SubsetFlags::default(),
-        &empty_tags,
+        &drop_tables,
         &layout_scripts,
         &layout_features,
-        &empty_name_ids,
-        &empty_langs,
+        &name_ids,
+        &langs,
     );
 
-    // Display, not Debug — same reasoning as the unicode-subset path.
+    // Display, not Debug — same reasoning as above.
     subset_font(&font, &plan).map_err(|e| format!("Subset failed for face {index}: {e}"))
 }
 

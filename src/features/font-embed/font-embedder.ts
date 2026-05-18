@@ -483,7 +483,6 @@ export async function embedFonts(
   isCancelled?: () => boolean,
   t?: (key: string, ...args: (string | number)[]) => string
 ): Promise<{ content: string; embeddedCount: number } | null> {
-  const total = selectedFonts.length;
   const fontEntries: string[] = [];
 
   // Index fontUsages by lookup key once (O(N)) instead of linear-scanning
@@ -495,26 +494,43 @@ export async function embedFonts(
     usageByKey.set(userFontKey(u.key.family, u.key.bold, u.key.italic), u);
   }
 
-  for (let i = 0; i < selectedFonts.length; i++) {
-    // Cancel between fonts — `return null` matches the in-subset cancel
-    // path below. Both shapes are equivalent at the caller (the post-
-    // loop check already returns null when isCancelled fires), but
-    // unifying the two cancel sites avoids the "loop preserves partial
-    // entries / next line discards them" mismatch that an earlier
-    // comment promised but never actually wired up.
-    if (isCancelled?.()) return null;
+  // Group FontInfo entries by the underlying resolved face — the
+  // `(filePath, fontIndex, bold, italic)` tuple. Family aliases that
+  // resolve to the same face (e.g., the English `Microsoft YaHei` and
+  // Chinese `微软雅黑` both pointing at `msyh.ttc` face 0) otherwise
+  // produce duplicate subset operations with byte-identical payloads
+  // embedded under different `fontname:` filenames — measured ~34%
+  // of bundle size on a 3-style CJK ASS against `msyh.ttc`. The
+  // preserved name-table records in `fonts.rs::subset_with_index`
+  // (every name ID, every language) let libass match every original
+  // family alias to the single deduped entry's internal name table.
+  //
+  // First-occurrence wins for the FontInfo used as the group
+  // template (filename, font_name label). The codepoint set unions
+  // across every alias that resolved to this face.
+  const FACE_DEDUP_SEP = "";
+  const faceDedupKey = (info: FontInfo): string =>
+    `${info.filePath}${FACE_DEDUP_SEP}${info.fontIndex}${FACE_DEDUP_SEP}${info.key.bold ? "1" : "0"}${FACE_DEDUP_SEP}${info.key.italic ? "1" : "0"}`;
 
-    const info = selectedFonts[i]!;
+  interface FaceGroup {
+    info: FontInfo;
+    codepoints: Set<number>;
+  }
+  const faceGroups = new Map<string, FaceGroup>();
+
+  // Pre-pass: build dedup groups + emit no-usage diagnostics. The
+  // no-usage warning fires when analyzeFonts produced a FontInfo but
+  // its usage record is absent from fontUsages — analysis-time
+  // disagreement, not embed-time dedup. Progress numbers track the
+  // pre-dedup iteration so the user can correlate warnings with the
+  // FontInfo list order.
+  const preTotal = selectedFonts.length;
+  for (let preIdx = 0; preIdx < selectedFonts.length; preIdx++) {
+    if (isCancelled?.()) return null;
+    const info = selectedFonts[preIdx]!;
     if (!info.filePath) continue;
 
-    const fontName = buildFontFileName(info.key);
     const label = fontKeyLabel(info.key);
-    onProgress?.({
-      stage: t?.("msg_subsetting", label) ?? `Subsetting ${label}…`,
-      current: i + 1,
-      total,
-    });
-
     const usage = usageByKey.get(userFontKey(info.key.family, info.key.bold, info.key.italic));
     if (!usage) {
       // Selected FontInfo has no matching FontUsage — means analyzeFonts and
@@ -548,16 +564,47 @@ export async function embedFonts(
         stage:
           t?.("msg_font_skipped", familyDisplay, "no usage entry") ??
           `Skipped ${familyDisplay}: no usage entry`,
-        current: i + 1,
-        total,
+        current: preIdx + 1,
+        total: preTotal,
       });
       continue;
     }
 
-    // Subset the font to only used glyphs (via Rust backend)
+    // Add this alias's codepoints into the resolved-face group. The
+    // first FontInfo seen for a given face becomes the template
+    // (its family drives `buildFontFileName`); subsequent aliases
+    // only contribute their codepoints. End of pre-pass body.
+    const fKey = faceDedupKey(info);
+    const existing = faceGroups.get(fKey);
+    if (existing) {
+      for (const cp of usage.codepoints) existing.codepoints.add(cp);
+    } else {
+      faceGroups.set(fKey, { info, codepoints: new Set(usage.codepoints) });
+    }
+  }
+
+  // Main pass: subset + embed once per unique resolved face. Progress
+  // numbers reflect the deduped work, so a 3-alias / 1-face input
+  // shows `1/1` instead of `1/3` — matches what the user actually
+  // sees in the output [Fonts] section.
+  const groups = Array.from(faceGroups.values());
+  const groupTotal = groups.length;
+  for (let i = 0; i < groups.length; i++) {
+    if (isCancelled?.()) return null;
+    const { info, codepoints } = groups[i]!;
+    if (!info.filePath) continue; // structural unreachable — pre-pass filtered nulls
+
+    const fontName = buildFontFileName(info.key);
+    const label = fontKeyLabel(info.key);
+    onProgress?.({
+      stage: t?.("msg_subsetting", label) ?? `Subsetting ${label}…`,
+      current: i + 1,
+      total: groupTotal,
+    });
+
     let subsetData: Uint8Array;
     try {
-      subsetData = await subsetFont(info.filePath, info.fontIndex, Array.from(usage.codepoints));
+      subsetData = await subsetFont(info.filePath, info.fontIndex, Array.from(codepoints));
       if (isCancelled?.()) return null;
     } catch (subsetErr) {
       // Round 9 N-R9-N2-1 — sanitizeError (Pattern 1 callsite census
@@ -589,7 +636,7 @@ export async function embedFonts(
       // keeps the pattern consistent if upstream sanitizeFamily ever
       // loosens.
       console.warn(
-        `Font subsetting failed for ${stripUnicodeControls(usage.key.family)}, skipping: ${safeErr}`
+        `Font subsetting failed for ${stripUnicodeControls(info.key.family)}, skipping: ${safeErr}`
       );
       // R17 W17.3 (N-R17-37, Pattern 1 sibling parity): wrap
       // info.key.family for t?.() args + English fallback; same
@@ -599,9 +646,9 @@ export async function embedFonts(
         stage:
           t?.("msg_font_skipped", familyDisplay, safeErr) ?? `Skipped ${familyDisplay}: ${safeErr}`,
         current: i + 1,
-        total,
+        total: groupTotal,
       });
-      continue; // Skip this font, don't fall back to unguarded read
+      continue; // Skip this face, don't fall back to unguarded read
     }
 
     // Build the [Fonts] entry
