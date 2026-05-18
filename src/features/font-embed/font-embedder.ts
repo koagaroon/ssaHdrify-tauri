@@ -512,11 +512,35 @@ export async function embedFonts(
   const faceDedupKey = (info: FontInfo): string =>
     `${info.filePath}${FACE_DEDUP_SEP}${info.fontIndex}${FACE_DEDUP_SEP}${info.key.bold ? "1" : "0"}${FACE_DEDUP_SEP}${info.key.italic ? "1" : "0"}`;
 
-  interface FaceGroup {
+  // Per-alias entries are preserved so the main-pass fallback can
+  // subset each alias separately when the merged-union codepoint
+  // count would exceed the downstream `subset_font` cap (see
+  // `MAX_SUBSET_CODEPOINTS_FOR_DEDUP` below). The happy path still
+  // takes the dedup win by computing the union lazily and calling
+  // subsetFont once; the fallback only fires for the contrived
+  // cap-busting case (4+ aliases each near `MAX_CODEPOINTS_PER_VARIANT`
+  // all resolving to the same face).
+  interface FaceAlias {
     info: FontInfo;
     codepoints: Set<number>;
   }
+  interface FaceGroup {
+    template: FontInfo;
+    aliases: FaceAlias[];
+  }
   const faceGroups = new Map<string, FaceGroup>();
+
+  // Mirrors the Rust `MAX_SUBSET_CODEPOINTS` constant in
+  // `src-tauri/src/fonts.rs` (currently 200,000). The TS dedup
+  // checks the merged-union size BEFORE crossing the
+  // `subsetFont` IPC so we can decide between (a) one IPC call
+  // with the union or (b) N IPC calls per alias. Keep the two
+  // constants in sync — if the Rust cap moves, this should too.
+  // A merged union exceeding this cap means a crafted ASS has
+  // packed several near-per-variant-cap aliases onto one face;
+  // honest workflows produce unions in the low tens of thousands
+  // even on full-CJK subtitle batches.
+  const MAX_SUBSET_CODEPOINTS_FOR_DEDUP = 200_000;
 
   // Pre-pass: build dedup groups + emit no-usage diagnostics. The
   // no-usage warning fires when analyzeFonts produced a FontInfo but
@@ -570,32 +594,105 @@ export async function embedFonts(
       continue;
     }
 
-    // Add this alias's codepoints into the resolved-face group. The
-    // first FontInfo seen for a given face becomes the template
-    // (its family drives `buildFontFileName`); subsequent aliases
-    // only contribute their codepoints. End of pre-pass body.
+    // Append this alias's per-info codepoint set to the resolved-face
+    // group. The first FontInfo seen for a given face becomes the
+    // template (its family drives `buildFontFileName` in the
+    // dedup-happy path); subsequent aliases contribute their own
+    // FaceAlias entry. Keeping per-alias entries (instead of eagerly
+    // unioning into one Set) lets the main-pass fallback subset each
+    // alias separately when the merged union would exceed
+    // `MAX_SUBSET_CODEPOINTS_FOR_DEDUP`.
     const fKey = faceDedupKey(info);
+    const aliasEntry: FaceAlias = { info, codepoints: new Set(usage.codepoints) };
     const existing = faceGroups.get(fKey);
     if (existing) {
-      for (const cp of usage.codepoints) existing.codepoints.add(cp);
+      existing.aliases.push(aliasEntry);
     } else {
-      faceGroups.set(fKey, { info, codepoints: new Set(usage.codepoints) });
+      faceGroups.set(fKey, { template: info, aliases: [aliasEntry] });
     }
   }
 
-  // Main pass: subset + embed once per unique resolved face. Progress
-  // numbers reflect the deduped work, so a 3-alias / 1-face input
-  // shows `1/1` instead of `1/3` — matches what the user actually
-  // sees in the output [Fonts] section.
+  // Main pass: subset + embed once per unique resolved face — UNLESS
+  // the merged-union codepoint count would exceed the downstream
+  // subset cap, in which case fall back to per-alias subsetting for
+  // that face only (pre-2a-i shape, restricted to the cap-busting
+  // edge case so honest inputs keep the dedup win).
+  //
+  // Progress numbers reflect the deduped work in the happy path,
+  // so a 3-alias / 1-face input shows `1/1` instead of `1/3` —
+  // matches what the user actually sees in the output [Fonts]
+  // section. In the fallback path, progress is per-alias for that
+  // group (the user sees N entries appear), aligned with the
+  // pre-2a-i behavior they had before.
   const groups = Array.from(faceGroups.values());
   const groupTotal = groups.length;
   for (let i = 0; i < groups.length; i++) {
     if (isCancelled?.()) return null;
-    const { info, codepoints } = groups[i]!;
-    if (!info.filePath) continue; // structural unreachable — pre-pass filtered nulls
+    const group = groups[i]!;
+    const { template, aliases } = group;
+    if (!template.filePath) continue; // structural unreachable — pre-pass filtered nulls
 
-    const fontName = buildFontFileName(info.key);
-    const label = fontKeyLabel(info.key);
+    // Compute the merged union lazily, then decide between the
+    // dedup path and the per-alias fallback. The union is the
+    // happy-path payload; if it overflows the cap, we throw it
+    // away and subset each alias separately.
+    const mergedCodepoints = new Set<number>();
+    for (const alias of aliases) {
+      for (const cp of alias.codepoints) mergedCodepoints.add(cp);
+    }
+
+    if (mergedCodepoints.size > MAX_SUBSET_CODEPOINTS_FOR_DEDUP) {
+      // Cap-busting fallback: subset each alias independently. Each
+      // alias's codepoints is bounded by `MAX_CODEPOINTS_PER_VARIANT`
+      // upstream (font-collector), which is strictly less than the
+      // subset cap, so individual subset calls always pass. Output
+      // for this face reverts to pre-2a-i shape (one [Fonts] entry
+      // per alias, byte-identical payloads under different
+      // filenames); the dedup byte-reduction win is given up only
+      // for this specific group. The face's family-name records
+      // are still preserved at the Rust subset layer, so libass's
+      // per-glyph fallback can traverse the N entries to find any
+      // requested glyph.
+      for (const alias of aliases) {
+        if (isCancelled?.()) return null;
+        if (!alias.info.filePath) continue;
+        const aliasFontName = buildFontFileName(alias.info.key);
+        const aliasLabel = fontKeyLabel(alias.info.key);
+        onProgress?.({
+          stage: t?.("msg_subsetting", aliasLabel) ?? `Subsetting ${aliasLabel}…`,
+          current: i + 1,
+          total: groupTotal,
+        });
+        let aliasSubsetData: Uint8Array;
+        try {
+          aliasSubsetData = await subsetFont(
+            alias.info.filePath,
+            alias.info.fontIndex,
+            Array.from(alias.codepoints)
+          );
+          if (isCancelled?.()) return null;
+        } catch (subsetErr) {
+          const safeErr = sanitizeError(subsetErr);
+          console.warn(
+            `Font subsetting failed for ${stripUnicodeControls(alias.info.key.family)}, skipping: ${safeErr}`
+          );
+          const familyDisplay = stripUnicodeControls(alias.info.key.family);
+          onProgress?.({
+            stage:
+              t?.("msg_font_skipped", familyDisplay, safeErr) ??
+              `Skipped ${familyDisplay}: ${safeErr}`,
+            current: i + 1,
+            total: groupTotal,
+          });
+          continue;
+        }
+        fontEntries.push(buildFontEntry(aliasFontName, aliasSubsetData));
+      }
+      continue; // Group handled; advance to next face.
+    }
+
+    const fontName = buildFontFileName(template.key);
+    const label = fontKeyLabel(template.key);
     onProgress?.({
       stage: t?.("msg_subsetting", label) ?? `Subsetting ${label}…`,
       current: i + 1,
@@ -604,7 +701,11 @@ export async function embedFonts(
 
     let subsetData: Uint8Array;
     try {
-      subsetData = await subsetFont(info.filePath, info.fontIndex, Array.from(codepoints));
+      subsetData = await subsetFont(
+        template.filePath,
+        template.fontIndex,
+        Array.from(mergedCodepoints)
+      );
       if (isCancelled?.()) return null;
     } catch (subsetErr) {
       // Round 9 N-R9-N2-1 — sanitizeError (Pattern 1 callsite census
@@ -636,12 +737,12 @@ export async function embedFonts(
       // keeps the pattern consistent if upstream sanitizeFamily ever
       // loosens.
       console.warn(
-        `Font subsetting failed for ${stripUnicodeControls(info.key.family)}, skipping: ${safeErr}`
+        `Font subsetting failed for ${stripUnicodeControls(template.key.family)}, skipping: ${safeErr}`
       );
       // R17 W17.3 (N-R17-37, Pattern 1 sibling parity): wrap
-      // info.key.family for t?.() args + English fallback; same
+      // template.key.family for t?.() args + English fallback; same
       // sibling-parity reasoning as the no-usage-entry path above.
-      const familyDisplay = stripUnicodeControls(info.key.family);
+      const familyDisplay = stripUnicodeControls(template.key.family);
       onProgress?.({
         stage:
           t?.("msg_font_skipped", familyDisplay, safeErr) ?? `Skipped ${familyDisplay}: ${safeErr}`,

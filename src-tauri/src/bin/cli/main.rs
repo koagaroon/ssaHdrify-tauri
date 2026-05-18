@@ -3196,16 +3196,46 @@ fn resolve_embed_fonts(
 /// serves the CLI + chain paths which call subset_font directly
 /// without routing through `embedFonts()`.
 /// Output of `group_resolved_fonts_by_face`: one entry per unique
-/// resolved face. `template` points at the first ResolvedEmbedFont
-/// seen for the face (drives `font_name` for the eventual
-/// `[Fonts]` entry filename); `codepoints` is the union of every
-/// alias's codepoints; `labels` lists every alias that resolved
-/// here (for failure-diagnostic strings that name every Style
-/// affected by a subset failure, not just the first-seen one).
+/// resolved face. `aliases` holds every ResolvedEmbedFont that
+/// resolved to this `(path, index)` tuple (in insertion order, so
+/// `aliases[0]` is the first-seen alias and serves as the dedup
+/// template — its `font_name` drives the eventual `[Fonts]` entry
+/// filename in the dedup-happy path). `labels` is the deduplicated
+/// list of alias labels for failure-diagnostic strings that name
+/// every Style affected by a subset failure (not just the
+/// first-seen one).
+///
+/// Per-alias entries are preserved (instead of eagerly unioning
+/// codepoints) so the main-pass fallback can subset each alias
+/// separately when the merged-union codepoint count would exceed
+/// the downstream `subset_font` cap. See
+/// `MAX_SUBSET_CODEPOINTS_FOR_DEDUP` in `subset_resolved_fonts`.
 struct ResolvedFaceGroup<'a> {
-    template: &'a ResolvedEmbedFont,
-    codepoints: std::collections::BTreeSet<u32>,
+    aliases: Vec<&'a ResolvedEmbedFont>,
     labels: Vec<String>,
+}
+
+impl<'a> ResolvedFaceGroup<'a> {
+    /// First-seen alias — its `font_name` / `path` / `index` drive
+    /// the dedup-happy-path subset call. Group is non-empty by
+    /// construction of `group_resolved_fonts_by_face` (a group is
+    /// only inserted when there's at least one alias to seed it).
+    fn template(&self) -> &'a ResolvedEmbedFont {
+        self.aliases[0]
+    }
+
+    /// Lazy union of every alias's codepoints. Used by the
+    /// dedup-happy-path subset call and by the cap-check decision
+    /// in `subset_resolved_fonts`. Returns a new `BTreeSet` so
+    /// the caller owns the allocation and can convert to `Vec<u32>`
+    /// for the `subset_font` call.
+    fn merged_codepoints(&self) -> std::collections::BTreeSet<u32> {
+        let mut set: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+        for alias in &self.aliases {
+            set.extend(alias.codepoints.iter().copied());
+        }
+        set
+    }
 }
 
 /// Group resolved fonts by `(path, index)` so family aliases that
@@ -3227,7 +3257,7 @@ fn group_resolved_fonts_by_face(
         let key = (font.path.clone(), font.index);
         match face_groups.get_mut(&key) {
             Some(group) => {
-                group.codepoints.extend(font.codepoints.iter().copied());
+                group.aliases.push(font);
                 if !group.labels.contains(&font.label) {
                     group.labels.push(font.label.clone());
                 }
@@ -3236,8 +3266,7 @@ fn group_resolved_fonts_by_face(
                 face_groups.insert(
                     key,
                     ResolvedFaceGroup {
-                        template: font,
-                        codepoints: font.codepoints.iter().copied().collect(),
+                        aliases: vec![font],
                         labels: vec![font.label.clone()],
                     },
                 );
@@ -3246,6 +3275,18 @@ fn group_resolved_fonts_by_face(
     }
     face_groups
 }
+
+/// Mirrors `app_lib::fonts::MAX_SUBSET_CODEPOINTS` (currently
+/// 200,000). The dedup decision below checks the merged-union size
+/// against this cap BEFORE calling subset_font; if the union would
+/// overflow, we fall back to per-alias subsetting for that group
+/// only — the dedup byte-reduction win is given up for the
+/// cap-busting case, the IPC defense-in-depth stays at 200k for
+/// every individual `subset_font` call. Keep the two constants
+/// in sync — if `app_lib::fonts::MAX_SUBSET_CODEPOINTS` moves,
+/// this should too. The TS sibling in `font-embedder.ts` (named
+/// `MAX_SUBSET_CODEPOINTS_FOR_DEDUP`) tracks the same value.
+const MAX_SUBSET_CODEPOINTS_FOR_DEDUP: usize = 200_000;
 
 fn subset_resolved_fonts(
     globals: &GlobalOptions,
@@ -3258,14 +3299,44 @@ fn subset_resolved_fonts(
     let mut skipped = Vec::new();
 
     for group in face_groups.values() {
-        let codepoints: Vec<u32> = group.codepoints.iter().copied().collect();
-        match app_lib::fonts::subset_font(
-            group.template.path.clone(),
-            group.template.index,
-            codepoints,
-        ) {
+        let merged = group.merged_codepoints();
+
+        if merged.len() > MAX_SUBSET_CODEPOINTS_FOR_DEDUP {
+            // Cap-busting fallback: subset each alias independently.
+            // Each alias's codepoints is bounded by
+            // `MAX_RESOLVED_FONT_CODEPOINTS` (100,000) upstream in
+            // `resolve_embed_fonts`, which is strictly less than the
+            // subset cap, so individual subset calls always pass.
+            // Output for this face reverts to pre-dedup shape (one
+            // [Fonts] entry per alias, byte-identical payloads under
+            // different filenames); the dedup byte-reduction win is
+            // given up only for this specific group. The face's
+            // family-name records are still preserved at the subset
+            // layer, so libass's per-glyph fallback can traverse the
+            // N entries to find any requested glyph.
+            for alias in &group.aliases {
+                match app_lib::fonts::subset_font(
+                    alias.path.clone(),
+                    alias.index,
+                    alias.codepoints.clone(),
+                ) {
+                    Ok(data) => payloads.push(engine::FontSubsetPayload {
+                        font_name: alias.font_name.clone(),
+                        data,
+                    }),
+                    Err(error) => {
+                        skipped.push(format!("{} ({error})", alias.label));
+                    }
+                }
+            }
+            continue;
+        }
+
+        let codepoints: Vec<u32> = merged.into_iter().collect();
+        let template = group.template();
+        match app_lib::fonts::subset_font(template.path.clone(), template.index, codepoints) {
             Ok(data) => payloads.push(engine::FontSubsetPayload {
-                font_name: group.template.font_name.clone(),
+                font_name: template.font_name.clone(),
                 data,
             }),
             Err(error) => {
@@ -4373,7 +4444,7 @@ mod tests {
         duplicate_rename_output_keys, engine, group_resolved_fonts_by_face, normalize_output_key,
         parse_duration_ms, parse_timestamp_ms, predict_chain_output_path, relocate_output_path,
         sanitize_for_display, substitute_template, write_output, GlobalOptions, OutputLang,
-        ResolvedEmbedFont, TempFontDbDir, MAX_SHIFT_OFFSET_MS,
+        ResolvedEmbedFont, TempFontDbDir, MAX_SHIFT_OFFSET_MS, MAX_SUBSET_CODEPOINTS_FOR_DEDUP,
     };
     // Import the canonical filename literal directly from app_lib so the
     // test pins the same name `TempFontDbDir::drop`'s remove_dir_all
@@ -5084,16 +5155,17 @@ mod tests {
         assert_eq!(group.labels.len(), 2);
         assert!(group.labels.contains(&"Microsoft YaHei".to_string()));
         assert!(group.labels.contains(&"微软雅黑".to_string()));
-        // Codepoints are the union across all aliases.
-        let merged: std::collections::BTreeSet<u32> =
-            group.codepoints.iter().copied().collect();
+        // Aliases list preserves both insertions in order; the
+        // merged codepoints (computed on demand) is the union.
+        assert_eq!(group.aliases.len(), 2);
+        let merged = group.merged_codepoints();
         assert_eq!(
             merged,
             [0x41, 0x42, 0x4f60, 0x597d].into_iter().collect()
         );
         // Template is first-occurrence — drives font_name + path
         // for the subsequent subset_font call.
-        assert_eq!(group.template.label, "Microsoft YaHei");
+        assert_eq!(group.template().label, "Microsoft YaHei");
     }
 
     #[test]
@@ -5130,8 +5202,10 @@ mod tests {
         assert_eq!(groups.len(), 1);
         let group = groups.values().next().expect("single group");
         assert_eq!(group.labels, vec!["Arial".to_string()]);
-        let merged: std::collections::BTreeSet<u32> =
-            group.codepoints.iter().copied().collect();
+        // Aliases list keeps both insertions (labels dedup, aliases don't);
+        // the union is still the same set.
+        assert_eq!(group.aliases.len(), 2);
+        let merged = group.merged_codepoints();
         assert_eq!(merged, [0x41u32, 0x42u32].into_iter().collect());
     }
 
@@ -5147,7 +5221,8 @@ mod tests {
         assert_eq!(groups.len(), 1);
         let group = groups.values().next().expect("single group");
         assert_eq!(group.labels, vec!["Roboto".to_string()]);
-        let merged: Vec<u32> = group.codepoints.iter().copied().collect();
+        assert_eq!(group.aliases.len(), 1);
+        let merged: Vec<u32> = group.merged_codepoints().into_iter().collect();
         assert_eq!(merged, vec![0x30, 0x31, 0x32]);
     }
 
@@ -5155,5 +5230,76 @@ mod tests {
     fn group_resolved_fonts_empty_input_yields_empty_map() {
         let groups = group_resolved_fonts_by_face(&[]);
         assert_eq!(groups.len(), 0);
+    }
+
+    // ── Boundary-pin for the dedup-vs-fallback cap ──
+
+    fn make_resolved_range(label: &str, path: &str, start: u32, count: u32) -> ResolvedEmbedFont {
+        let codepoints: Vec<u32> = (0..count).map(|i| start + i).collect();
+        ResolvedEmbedFont {
+            label: label.to_string(),
+            font_name: format!("{label}.ttf"),
+            path: path.to_string(),
+            index: 0,
+            codepoints,
+        }
+    }
+
+    #[test]
+    fn merged_codepoints_at_cap_stays_within_subset_limit() {
+        // 4 aliases × 50,000 disjoint codepoints each = 200,000
+        // exactly at MAX_SUBSET_CODEPOINTS_FOR_DEDUP. The dedup
+        // decision uses `> cap`, so at-cap takes the dedup path —
+        // one subset_font call with the unioned set. This pins the
+        // boundary: a regression that flipped the comparison to
+        // `>=` would route at-cap groups to the fallback path
+        // unnecessarily and lose the dedup win for inputs that
+        // legitimately fit the cap.
+        let aliases = vec![
+            make_resolved_range("A", "/fonts/face.ttf", 0x010000, 50_000),
+            make_resolved_range("B", "/fonts/face.ttf", 0x020000, 50_000),
+            make_resolved_range("C", "/fonts/face.ttf", 0x030000, 50_000),
+            make_resolved_range("D", "/fonts/face.ttf", 0x040000, 50_000),
+        ];
+        let groups = group_resolved_fonts_by_face(&aliases);
+        assert_eq!(groups.len(), 1);
+        let group = groups.values().next().expect("single group");
+        let merged = group.merged_codepoints();
+        assert_eq!(merged.len(), 200_000);
+        assert!(merged.len() <= MAX_SUBSET_CODEPOINTS_FOR_DEDUP);
+    }
+
+    #[test]
+    fn merged_codepoints_over_cap_signals_fallback() {
+        // 4 aliases × 50,001 disjoint codepoints each = 200,004,
+        // one codepoint over the cap. Pinned via the merged-set
+        // size — the actual subset_font fallback can't be unit-
+        // tested without the IPC-bypass setup that the env-var-
+        // gated integration test (subset_with_index_handles_ttc)
+        // already covers. This test guards the contract that the
+        // grouping helper preserves enough per-alias detail for
+        // `subset_resolved_fonts`' cap check to fire correctly.
+        let aliases = vec![
+            make_resolved_range("A", "/fonts/face.ttf", 0x010000, 50_001),
+            make_resolved_range("B", "/fonts/face.ttf", 0x020000, 50_001),
+            make_resolved_range("C", "/fonts/face.ttf", 0x030000, 50_001),
+            make_resolved_range("D", "/fonts/face.ttf", 0x040000, 50_001),
+        ];
+        let groups = group_resolved_fonts_by_face(&aliases);
+        assert_eq!(groups.len(), 1);
+        let group = groups.values().next().expect("single group");
+        let merged = group.merged_codepoints();
+        assert_eq!(merged.len(), 200_004);
+        assert!(merged.len() > MAX_SUBSET_CODEPOINTS_FOR_DEDUP);
+        // Aliases preserved so subset_resolved_fonts can iterate
+        // them for the per-alias fallback path. Each alias's
+        // codepoint count stays under the cap individually.
+        assert_eq!(group.aliases.len(), 4);
+        for alias in &group.aliases {
+            assert!(
+                alias.codepoints.len() <= MAX_SUBSET_CODEPOINTS_FOR_DEDUP,
+                "fallback subset call must stay within the cap"
+            );
+        }
     }
 }

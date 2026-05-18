@@ -596,3 +596,106 @@ Dialogue: 0,0:00:05.00,0:00:10.00,Alt,你好
     expect(subsetFontMock).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("embedFonts — face dedup cap boundary", () => {
+  let subsetFontMock: ReturnType<typeof vi.fn>;
+  beforeEach(async () => {
+    const tauriApi = await import("../../lib/tauri-api");
+    subsetFontMock = vi.mocked(tauriApi.subsetFont);
+    subsetFontMock.mockReset();
+  });
+
+  const SHELL_ASS_2 = `[Script Info]
+ScriptType: v4.00+
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize
+Style: Default,Microsoft YaHei,40
+
+[Events]
+Format: Layer, Start, End, Style, Text
+Dialogue: 0,0:00:00.00,0:00:05.00,Default,Hello
+`;
+
+  function makeInfoCap(family: string, filePath: string, fontIndex: number): FontInfo {
+    return {
+      key: { family, bold: false, italic: false },
+      glyphCount: 5,
+      filePath,
+      fontIndex,
+      error: null,
+      source: "local",
+    };
+  }
+
+  // Build a Set of `count` consecutive codepoints starting at `start`.
+  // Used to produce DISJOINT ranges across aliases so the merged union
+  // size equals the sum of per-alias sizes — without this, the test
+  // can't pin the boundary because overlapping codepoints would
+  // coalesce on union and the cap check would never fire.
+  function makeCodepointRange(start: number, count: number): Set<number> {
+    const out = new Set<number>();
+    for (let i = 0; i < count; i++) out.add(start + i);
+    return out;
+  }
+
+  it("merged union at MAX_SUBSET_CODEPOINTS goes through dedup (one subsetFont call)", async () => {
+    subsetFontMock.mockResolvedValue(new Uint8Array([1, 2, 3, 4]));
+
+    // 4 aliases × 50,000 disjoint codepoints each = 200,000 union,
+    // exactly at the cap. Dedup decision uses `> cap`, so at-cap
+    // takes the dedup path: one subsetFont call with the unioned
+    // codepoints.
+    const aliases = [
+      makeInfoCap("A", "/fonts/face.ttf", 0),
+      makeInfoCap("B", "/fonts/face.ttf", 0),
+      makeInfoCap("C", "/fonts/face.ttf", 0),
+      makeInfoCap("D", "/fonts/face.ttf", 0),
+    ];
+    const usages = aliases.map((info, k) => ({
+      key: info.key,
+      codepoints: makeCodepointRange(0x010000 + k * 50_000, 50_000),
+    }));
+
+    const result = await embedFonts(SHELL_ASS_2, aliases, usages);
+
+    expect(result).not.toBeNull();
+    expect(result!.embeddedCount).toBe(1);
+    expect(subsetFontMock).toHaveBeenCalledTimes(1);
+    const codepointsArg = subsetFontMock.mock.calls[0]![2] as number[];
+    expect(codepointsArg.length).toBe(200_000);
+  });
+
+  it("merged union over MAX_SUBSET_CODEPOINTS falls back to per-alias subsetting", async () => {
+    subsetFontMock.mockResolvedValue(new Uint8Array([1, 2, 3, 4]));
+
+    // 4 aliases × 50,001 disjoint codepoints each = 200,004 union,
+    // one codepoint over the cap. Dedup is skipped for this face;
+    // each alias is subset separately, producing 4 [Fonts] entries
+    // (pre-2a-i shape, scoped to this group only).
+    const aliases = [
+      makeInfoCap("A", "/fonts/face.ttf", 0),
+      makeInfoCap("B", "/fonts/face.ttf", 0),
+      makeInfoCap("C", "/fonts/face.ttf", 0),
+      makeInfoCap("D", "/fonts/face.ttf", 0),
+    ];
+    const usages = aliases.map((info, k) => ({
+      key: info.key,
+      codepoints: makeCodepointRange(0x010000 + k * 50_001, 50_001),
+    }));
+
+    const result = await embedFonts(SHELL_ASS_2, aliases, usages);
+
+    expect(result).not.toBeNull();
+    expect(result!.embeddedCount).toBe(4);
+    expect(subsetFontMock).toHaveBeenCalledTimes(4);
+    // Each per-alias call gets exactly that alias's codepoints —
+    // 50,001 — which is well under both the per-variant cap (65,536)
+    // and the subset cap (200,000), so no individual subset call
+    // could itself overflow.
+    for (const call of subsetFontMock.mock.calls) {
+      const codepoints = call[2] as number[];
+      expect(codepoints.length).toBe(50_001);
+    }
+  });
+});
