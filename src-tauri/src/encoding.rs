@@ -253,6 +253,17 @@ pub fn read_text_detect_encoding_inner(
                     "Refusing to read symlink / junction when canonicalize fails".to_string(),
                 );
             }
+            // R17 W17.1 (A-R17-4): no second `is_allowed` re-check on
+            // `path_ref` here, even though the Ok-arm above does
+            // double-check (pre-canonicalize at line 188, post-
+            // canonicalize on `read_path` below). The pre-canonicalize
+            // `is_allowed(path_ref)` at the function entry already
+            // gated this exact path; `validate_ipc_path` (line 149)
+            // rejected the BiDi / control / DOS-device shapes that
+            // would let a crafted argv bypass the scope policy. The
+            // canonicalize-fail branch ends with the SAME path the
+            // pre-check accepted, so a third re-check would test the
+            // identical predicate twice without closing any window.
             log::debug!("canonicalize failed; falling back to raw path: {e}");
             path_ref.to_path_buf()
         }

@@ -2176,6 +2176,20 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
             continue;
         }
 
+        // R17 W17.1 (A-R17-8): no `is_reparse_point` pre-check here,
+        // unlike `scan_directory_inner` at line 1650. The asymmetry is
+        // intentional: this function processes paths the user
+        // EXPLICITLY selected one by one via file picker / drag-drop,
+        // each entry expressing the user's direct intent to scan that
+        // exact file. `scan_directory_inner`'s reject applies to
+        // entries DISCOVERED inside a user-chosen folder, where a
+        // crafted font pack could plant top-level symlinks to inflate
+        // the per-folder count past the XL-safety preflight (P1b). For
+        // the file-list path the user picked each entry on its own, so
+        // chasing a single symlinked entry doesn't bypass any aggregate
+        // count gate. `canonicalize` below + `has_allowed_font_extension`
+        // (in `parse_local_font_file`) still bound the exfil surface
+        // to font-extension targets.
         let canonical = match Path::new(&p).canonicalize() {
             Ok(c) => c,
             Err(_) => continue,

@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::fs;
-use std::io::{ErrorKind, Write};
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::OnceLock;
@@ -1330,6 +1330,12 @@ fn process_one_chain_input(
     ) {
         let key = normalize_output_key(&predicted);
         if !seen_outputs.insert(key.clone()) {
+            // R17 W17.1 (A-R17-13): `predicted.display()` is interpolated
+            // raw here; sanitization happens at the chain print boundary
+            // in `run_chain`'s match arm via `sanitize_for_display(&err)`.
+            // Sanitize-at-print is the design (R14 W14.1) — sanitizing
+            // here would corrupt operational consumers if a future
+            // change consumed this Err string programmatically.
             return ChainFileOutcome::Failed(
                 format!(
                     "{} duplicate output path in planned batch",
@@ -3281,9 +3287,13 @@ fn emit_file_report(globals: &GlobalOptions, result: &FileReport) {
             // parsed ASS `\fn` content (P1b attacker-influenced), so a
             // crafted subtitle with U+202E / control / zero-width in
             // \fn reaches stderr unlaundered without this sanitize.
-            // Also covers N-R15-3: `reject_reparse_destination` Err
-            // strings interpolate `output.display()` raw, which bubble
-            // through `failed_report` to this site.
+            // Also covers N-R15-3 + R17 W17.1: safe_io's reparse-refusal
+            // / scope-deny / same-canonical-path Err strings interpolate
+            // `path.display()` raw (see `app_lib::safe_io`), which bubble
+            // through `failed_report` to this site. Sanitize-at-print
+            // is the design (R14 W14.1) — sanitizing operationally inside
+            // safe_io would corrupt path-resolution for operational
+            // consumers.
             let error_disp = sanitize_for_display(error);
             eprintln!(
                 "{}",
@@ -3549,125 +3559,73 @@ fn output_path_exists(globals: &GlobalOptions, path: &Path) -> bool {
     }
 }
 
-// TOCTOU note (applies to write_output / copy_file_output /
-// rename_file_output): there's a small window between the
-// `output_path_exists` skip-check or the `remove_file` overwrite step
-// and the `OpenOptions::create_new(true).open(path)` below where
-// another process in the same user context could swap the path. The
-// window is bounded and the consequences are limited:
-//   - `create_new(true)` is atomic at the OS level — refuses if the
-//     path now exists, regardless of symlink. No through-symlink
-//     write.
-//   - On race, we get `ErrorKind::AlreadyExists` → "failed to create
-//     output" — surfaced cleanly, no data corruption.
-//   - The non-overwrite skip path returns early before any write
-//     attempt, so no race there.
-// Single-user desktop scope makes this acceptable; documented for
-// future adversarial-review eyes.
+// R17 W17.1 (A-R17-9 / A-R17-10 / A-R17-11): write_output /
+// copy_file_output / rename_file_output route through
+// `app_lib::safe_io::*_inner` with a permissive `|_| true` predicate.
+// CLI argv IS the user (P1a authorship); there is no Tauri fs:scope
+// to enforce, so the closure short-circuits the scope check while
+// every other defense in the safe_io chain still applies:
+//   - `validate_ipc_path` rejects extended-length / DOS-device /
+//     BiDi / control-char paths at the write boundary even though
+//     argv-time validation is partial on the CLI side.
+//   - `check_subtitle_extension` confines the destination to the
+//     subtitle-extension whitelist (defense-in-depth against argv
+//     typo redirecting to `.desktop` / `.lnk` persistence paths).
+//   - `clear_existing_destination` lstat's the destination before any
+//     remove_file (refuses reparse points there).
+//   - copy / rename additionally enforce `reject_reparse_source` +
+//     `reject_same_canonical_path` (the case-only NTFS self-overwrite
+//     trap Codex a274852e closed for the GUI) + the late re-check
+//     before `File::open` (copy) / `fs::rename` (rename) for the
+//     dst-side reparse swap window (R8 N-R8-N3-1 + R16 W16.2).
+// Pre-W17.1 the CLI replicated only the destination-side reparse
+// pre-check via the local `reject_reparse_destination` helper and
+// missed the source-side defense entirely — Pattern 3 carry-over
+// from W14.10 + W16.2's safe_io.rs hardening. Routing through the
+// single source of truth means future findings against safe_io
+// auto-propagate here instead of needing parallel fixes.
 //
-// Windows junction caveat: a junction whose target points at a
-// non-existent location is NOT caught by `create_new(true)` — the
-// file is created at the resolved location, not at the junction.
-// `output_path_exists` uses `fs::metadata` which DOES follow
-// junctions, so the cheap-first existence check would have caught
-// any such junction's target if it existed at check time. The
-// race-window junction-swap is bounded by single-user scope.
-// R14 W14.10 (A-R14-7): symmetric posture with GUI's `safe_io` — reject
-// destinations that resolve as reparse points (symlinks / junctions)
-// before any destructive operation. Rust `create_new(true)` already
-// fails atomically on existing symlinks (per std::fs::OpenOptions docs,
-// "no (dangling) symlink"), so the actual exploitation surface is
-// narrow — but the error message degrades to "failed to create output:
-// file exists" rather than naming the symlink shape. Adding an
-// explicit pre-check produces a clearer user-facing error and matches
-// the safe_io callsite pattern reviewers expect across the project.
-// `fs::symlink_metadata`-based check (one syscall, doesn't follow
-// links) so a dangling symlink is also caught.
-fn reject_reparse_destination(output: &Path, op_label: &str) -> Result<(), String> {
-    if app_lib::util::is_reparse_point(output) {
-        return Err(format!(
-            "refusing to {op_label} to a symlink / junction destination: {} \
-             (remove the link manually before retrying)",
-            output.display()
-        ));
-    }
-    Ok(())
-}
-
+// The `_globals` parameter is preserved on each function for caller-
+// site convention (every other CLI fs-helper takes globals) and to
+// keep the W17.1 diff minimal; safe_io owns all decisions internally.
+// Higher-level callers still use `output_path_exists` (preserved as
+// a standalone CLI helper above) for the cheap-first skip-when-
+// exists check + `--quiet`-respecting stderr WARN on stat failure
+// (N-R1-9 fail-safe). safe_io's `clear_existing_destination` provides
+// the second-layer fail-shut on the race between the higher-level
+// check and the write. Error wording at the safe_io boundary bubbles
+// through `failed_report` and is sanitized at the print boundary by
+// `emit_file_report`'s `sanitize_for_display`.
 fn write_output(
-    globals: &GlobalOptions,
+    _globals: &GlobalOptions,
     path: &Path,
     content: &str,
     overwrite: bool,
 ) -> Result<(), String> {
-    // Route through the shared parent-dir helper (N-R5-RUSTCLI-06) —
-    // copy_file_output and rename_file_output both go through
-    // `ensure_output_parent`, and inlining the create_dir_all here was
-    // the only divergence. A future change to parent-dir semantics
-    // (e.g., umask on POSIX, hidden-dir detection) now flows to all
-    // three writers from one site.
-    ensure_output_parent(path)?;
-    reject_reparse_destination(path, "write")?;
-    if overwrite && output_path_exists(globals, path) {
-        fs::remove_file(path)
-            .map_err(|err| format!("failed to remove existing output before write: {err}"))?;
-    }
-
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map_err(|err| format!("failed to create output: {err}"))?;
-    file.write_all(content.as_bytes())
-        .map_err(|err| format!("failed to write output: {err}"))
+    let path_str = path.to_string_lossy();
+    app_lib::safe_io::safe_write_text_file_inner(&path_str, content, overwrite, |_| true)
 }
 
 fn copy_file_output(
-    globals: &GlobalOptions,
+    _globals: &GlobalOptions,
     input: &Path,
     output: &Path,
     overwrite: bool,
 ) -> Result<(), String> {
-    ensure_output_parent(output)?;
-    reject_reparse_destination(output, "copy")?;
-
-    if overwrite && output_path_exists(globals, output) {
-        fs::remove_file(output)
-            .map_err(|err| format!("failed to remove existing output before copy: {err}"))?;
-    }
-
-    let mut source = fs::File::open(input).map_err(|err| format!("failed to open input: {err}"))?;
-    let mut destination = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(output)
-        .map_err(|err| format!("failed to create output: {err}"))?;
-
-    std::io::copy(&mut source, &mut destination)
-        .map(|_| ())
-        .map_err(|err| format!("failed to copy file: {err}"))
+    let src = input.to_string_lossy();
+    let dst = output.to_string_lossy();
+    app_lib::safe_io::safe_copy_file_inner(&src, &dst, overwrite, |_| true)
 }
 
 fn rename_file_output(
-    globals: &GlobalOptions,
+    _globals: &GlobalOptions,
     input: &Path,
     output: &Path,
     overwrite: bool,
 ) -> Result<(), String> {
-    ensure_output_parent(output)?;
-    reject_reparse_destination(output, "rename")?;
-    if overwrite && output_path_exists(globals, output) {
-        fs::remove_file(output)
-            .map_err(|err| format!("failed to remove existing output before rename: {err}"))?;
-    }
-    fs::rename(input, output).map_err(|err| format!("failed to rename file: {err}"))
-}
-
-fn ensure_output_parent(path: &Path) -> Result<(), String> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| "output path has no parent directory".to_string())?;
-    fs::create_dir_all(parent).map_err(|err| format!("failed to create output directory: {err}"))
+    let src = input.to_string_lossy();
+    let dst = output.to_string_lossy();
+    app_lib::safe_io::safe_rename_file_inner(&src, &dst, overwrite, |_| true)
 }
 
 /// English pluralization helper. `s_if(n)` returns "" for n == 1, "s"

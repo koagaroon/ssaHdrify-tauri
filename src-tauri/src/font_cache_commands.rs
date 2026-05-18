@@ -964,6 +964,19 @@ pub fn clear_font_cache() -> Result<(), String> {
     // user's "fresh slate" signal must drop in-process provenance rows
     // alongside the SQLite rebuild. ALLOWED_FONT_PATHS (system fonts)
     // stays — system discovery is cache-independent.
+    //
+    // R17 W17.1 (A-R17-2): the generation counter is NOT bumped here,
+    // even though `slot` transitions Some → None. The second scope
+    // (after the on-disk rebuild succeeds) does `*slot = Some(fresh)`
+    // AND `fetch_add(Release)` together — that's where the new
+    // generation labels the NEW handle's identity. Between these two
+    // scopes, a concurrent `detect_font_cache_drift` Phase 3 that
+    // observes `slot=None` falls through `finalize_drift`'s
+    // None arm (`cache: None` → `DriftReport::default()`) without
+    // needing a generation check. The generation only matters once a
+    // new handle has been published; tagging the empty transition
+    // would be a no-op that any future fourth-state transition
+    // (`Some(stale)` → `Some(fresh)` directly) would need anyway.
     {
         let mut slot = GUI_FONT_CACHE
             .lock()

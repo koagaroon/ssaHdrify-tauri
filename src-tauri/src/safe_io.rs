@@ -41,7 +41,14 @@
 //!
 //! Tests pin the gating logic via `*_inner` helpers that take an
 //! `is_allowed` closure so the Tauri command's `AppHandle` doesn't have
-//! to be mocked. Production wraps `app.fs_scope().is_allowed(...)`.
+//! to be mocked. GUI production wraps `app.fs_scope().is_allowed(...)`;
+//! the CLI binary (`bin/cli/main.rs`) also routes its write / copy /
+//! rename outputs through these helpers with a permissive `|_| true`
+//! closure (R17 W17.1: CLI argv is the user's intent, so there is no
+//! Tauri-side scope policy to enforce — but every other defense in the
+//! chain still applies). Centralizing the defense set here means
+//! future findings against safe_io auto-propagate to both binaries
+//! instead of needing parallel fixes in each.
 
 use crate::encoding::ALLOWED_TEXT_EXTENSIONS;
 use crate::util::{is_reparse_point, validate_ipc_path};
@@ -252,7 +259,21 @@ fn create_new_and_write_bytes(path: &Path, content: &[u8]) -> Result<(), String>
 
 // ── Inner helpers (testable without an AppHandle) ────────────────
 
-fn safe_write_text_file_inner(
+// R17 W17.1 (A-R17-6): no top-of-function `is_reparse_point` re-check
+// for safe_write_text_file_inner, unlike safe_copy_file_inner and
+// safe_rename_file_inner which re-check before the final fs syscall.
+// The asymmetry is intentional: write's atomic guarantee comes from
+// `OpenOptions::create_new(true)` in `create_new_and_write_bytes` — a
+// direct POSIX `O_EXCL` / Windows `CREATE_NEW` open that refuses to
+// follow a planted symlink at the destination regardless of whether
+// the path was a reparse point when `clear_existing_destination`
+// observed it. Copy / rename have no equivalent atomic primitive for
+// the source side (open is `read-only`, no exclusive-create) or for
+// the rename destination (`fs::rename` is not symlink-aware on
+// Windows cross-volume), so they need the late re-check; write
+// doesn't. Putting one here would be redundant defense without
+// closing a real window.
+pub fn safe_write_text_file_inner(
     path: &str,
     content: &str,
     overwrite: bool,
@@ -267,7 +288,7 @@ fn safe_write_text_file_inner(
     create_new_and_write_bytes(path_ref, content.as_bytes())
 }
 
-fn safe_copy_file_inner(
+pub fn safe_copy_file_inner(
     src: &str,
     dst: &str,
     overwrite: bool,
@@ -314,7 +335,7 @@ fn safe_copy_file_inner(
         .map_err(|e| format!("Failed to copy file: {e}"))
 }
 
-fn safe_rename_file_inner(
+pub fn safe_rename_file_inner(
     src: &str,
     dst: &str,
     overwrite: bool,
