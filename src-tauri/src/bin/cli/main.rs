@@ -116,6 +116,27 @@ struct GlobalOptions {
     /// ignored where unread.
     #[arg(long, global = true, value_name = "PATH")]
     cache_file: Option<PathBuf>,
+
+    /// Abort the batch on the first failed file. Useful when running
+    /// many inputs unattended — surfaces the first failure right away
+    /// instead of finishing the whole batch and forcing a log scroll.
+    /// Files processed before the failure are kept; remaining files
+    /// stay untouched.
+    /// 首个失败文件即终止批处理。在无人值守批量运行时有用：第一次失败
+    /// 立刻显现，而非跑完整批后再翻日志。失败前已处理的文件保留，
+    /// 剩余文件不动。
+    ///
+    /// Pairs naturally with `embed --on-missing fail` (which marks a
+    /// file Failed when any font is missing OR fails subsetting): set
+    /// both flags to get "stop the batch the moment any font can't be
+    /// embedded." `--fail-fast` itself is policy-neutral — it triggers
+    /// on whatever the per-subcommand failure semantics produce.
+    /// 与 `embed --on-missing fail`（缺失字体或子集化失败时标记
+    /// 文件为 Failed）天然搭配：两者同开即"任何字体无法嵌入立即停"。
+    /// `--fail-fast` 本身不规定何为失败，只在各子命令现有失败语义
+    /// 触发时生效。
+    #[arg(long, global = true)]
+    fail_fast: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
@@ -266,7 +287,18 @@ pub(crate) struct EmbedArgs {
     #[arg(long)]
     no_system_fonts: bool,
 
-    /// Behavior when referenced fonts are missing. 缺失字体时的行为。
+    /// Behavior when a referenced font cannot be embedded — either
+    /// because the family was not found in any font source, OR because
+    /// the font was found but failed to subset (corrupted file,
+    /// unsupported table layout, etc.). `warn` (default) emits a
+    /// warning and embeds whatever did work; `fail` marks the file
+    /// Failed in the batch summary and surfaces a non-zero exit code.
+    /// Pair with `--fail-fast` to also abort the rest of the batch.
+    /// 引用字体无法嵌入时的行为——无论是任何字体源都找不到该家族，
+    /// 还是找到了但子集化失败（文件损坏、字体表布局不支持等）。
+    /// `warn`（默认）发警告并嵌入已成功的字体；`fail` 在批量汇总中
+    /// 标记该文件失败并触发非零退出码。与 `--fail-fast` 搭配可同时
+    /// 终止剩余批次。
     #[arg(long, value_enum, default_value_t = MissingFontAction::Warn)]
     on_missing: MissingFontAction,
 
@@ -467,6 +499,17 @@ struct CommandReport {
     skipped: usize,
     failed: usize,
     results: Vec<FileReport>,
+    /// True when `--fail-fast` short-circuited the per-file loop after
+    /// a failure. JSON consumers use this to distinguish "all remaining
+    /// inputs tried and failed" from "first failure aborted the rest";
+    /// `results.len()` together with `aborted_by_fail_fast` tells the
+    /// caller how many inputs were actually processed.
+    ///
+    /// Field is skipped from JSON output when false to keep the
+    /// pre-existing JSON shape backward-compatible (consumers reading
+    /// pre-`--fail-fast` output keep working).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    aborted_by_fail_fast: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -489,7 +532,7 @@ struct FileReport {
     warnings: Option<Vec<String>>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 enum FileStatus {
     Written,
@@ -535,6 +578,7 @@ impl CommandReport {
             skipped: 0,
             failed: 0,
             results: Vec::new(),
+            aborted_by_fail_fast: false,
         }
     }
 
@@ -546,6 +590,10 @@ impl CommandReport {
             FileStatus::Failed => self.failed += 1,
         }
         self.results.push(result);
+    }
+
+    fn mark_fail_fast_abort(&mut self) {
+        self.aborted_by_fail_fast = true;
     }
 
     fn exit_code(&self) -> ExitCode {
@@ -560,6 +608,31 @@ impl CommandReport {
             ExitCode::from(2)
         }
     }
+}
+
+/// Emit the visible stderr notice that `--fail-fast` short-circuited
+/// the batch. Suppressed under `--quiet` (by convention; all
+/// non-error chatter is suppressed) and under `--json` (the
+/// `abortedByFailFast` field in the JSON report carries the signal
+/// programmatically — printing a text notice on top would be noise
+/// to script consumers). `remaining` is the count of inputs that
+/// were declared on argv but never processed.
+fn emit_fail_fast_abort_notice(globals: &GlobalOptions, remaining: usize) {
+    if globals.quiet || globals.json || remaining == 0 {
+        return;
+    }
+    eprintln!(
+        "{}",
+        localize(
+            globals,
+            format!(
+                "⚠ --fail-fast: aborting batch after the first failure; {remaining} remaining input(s) untouched."
+            ),
+            format!(
+                "⚠ --fail-fast：首个失败触发批量终止，剩余 {remaining} 个输入未处理。"
+            ),
+        )
+    );
 }
 
 fn main() -> ExitCode {
@@ -979,7 +1052,9 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
     // the other subcommands surface as "duplicate output path in
     // planned batch".
     let mut seen_outputs: HashSet<String> = HashSet::new();
-    for input in &plan.input_files {
+    let mut aborted_by_fail_fast = false;
+    for (idx, input) in plan.input_files.iter().enumerate() {
+        let mut failed_this_input = false;
         match process_one_chain_input(
             &mut engine,
             &plan,
@@ -1022,11 +1097,24 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
                     emit_chain_warnings(globals, &warnings);
                 }
                 failed += 1;
+                failed_this_input = true;
             }
+        }
+        if globals.fail_fast && failed_this_input {
+            let remaining = plan.input_files.len().saturating_sub(idx + 1);
+            emit_fail_fast_abort_notice(globals, remaining);
+            aborted_by_fail_fast = true;
+            break;
         }
     }
     if !globals.quiet {
-        println!("Summary: {written} written, {skipped} skipped, {failed} failed");
+        if aborted_by_fail_fast {
+            println!(
+                "Summary: {written} written, {skipped} skipped, {failed} failed (aborted by --fail-fast)"
+            );
+        } else {
+            println!("Summary: {written} written, {skipped} skipped, {failed} failed");
+        }
     }
     // R17 W17.2 (N-R17-22): partial-failure (1) vs complete-failure
     // (2) exit-code split, matching `CommandReport::exit_code`'s
@@ -1849,7 +1937,7 @@ fn run_hdr(globals: &GlobalOptions, args: HdrArgs) -> Result<ExitCode, String> {
     // ssahdrify_cli_design.md § Cross-cutting 行为.
     let mut seen_outputs = HashSet::new();
 
-    for file in &args.files {
+    for (idx, file) in args.files.iter().enumerate() {
         let result = process_hdr_file(
             globals,
             &args,
@@ -1858,8 +1946,15 @@ fn run_hdr(globals: &GlobalOptions, args: HdrArgs) -> Result<ExitCode, String> {
             file,
             &mut seen_outputs,
         );
+        let failed = result.status == FileStatus::Failed;
         emit_file_report(globals, &result);
         report.push(result);
+        if globals.fail_fast && failed {
+            let remaining = args.files.len().saturating_sub(idx + 1);
+            emit_fail_fast_abort_notice(globals, remaining);
+            report.mark_fail_fast_abort();
+            break;
+        }
     }
 
     emit_report_summary(globals, &report)?;
@@ -2022,7 +2117,7 @@ fn run_shift(globals: &GlobalOptions, args: ShiftArgs) -> Result<ExitCode, Strin
     // inside process_shift_file_heavy_first.
     let mut seen_outputs = HashSet::new();
 
-    for file in &args.files {
+    for (idx, file) in args.files.iter().enumerate() {
         let result = process_shift_file(
             globals,
             &args,
@@ -2035,8 +2130,15 @@ fn run_shift(globals: &GlobalOptions, args: ShiftArgs) -> Result<ExitCode, Strin
             file,
             &mut seen_outputs,
         );
+        let failed = result.status == FileStatus::Failed;
         emit_file_report(globals, &result);
         report.push(result);
+        if globals.fail_fast && failed {
+            let remaining = args.files.len().saturating_sub(idx + 1);
+            emit_fail_fast_abort_notice(globals, remaining);
+            report.mark_fail_fast_abort();
+            break;
+        }
     }
 
     emit_report_summary(globals, &report)?;
@@ -2391,7 +2493,7 @@ fn run_embed(globals: &GlobalOptions, args: EmbedArgs) -> Result<ExitCode, Strin
     // subset+apply), so no JS work is wasted on duplicate batches.
     let mut seen_outputs = HashSet::new();
 
-    for file in &args.files {
+    for (idx, file) in args.files.iter().enumerate() {
         let result = process_embed_file(
             globals,
             &args,
@@ -2402,8 +2504,15 @@ fn run_embed(globals: &GlobalOptions, args: EmbedArgs) -> Result<ExitCode, Strin
             file,
             &mut seen_outputs,
         );
+        let failed = result.status == FileStatus::Failed;
         emit_file_report(globals, &result);
         report.push(result);
+        if globals.fail_fast && failed {
+            let remaining = args.files.len().saturating_sub(idx + 1);
+            emit_fail_fast_abort_notice(globals, remaining);
+            report.mark_fail_fast_abort();
+            break;
+        }
     }
 
     emit_report_summary(globals, &report)?;
@@ -3066,8 +3175,14 @@ fn resolve_embed_fonts(
     Ok((resolved, warnings))
 }
 
-/// Subset fonts; under `--on-missing warn`, returns successful
-/// payloads AND the skipped-font diagnostics for `FileReport.warnings`.
+/// Subset fonts. Under `--on-missing warn`, returns the payloads
+/// that successfully subset AND a list of skipped-font diagnostics
+/// for inclusion in `FileReport.warnings`. Under `--on-missing fail`,
+/// returns Err on the first subset-failure batch (any font in
+/// `fonts` failing fontcull parse / subsetting), so the caller
+/// upgrades the file's status to Failed and the batch's exit code
+/// to non-zero. With `--fail-fast` on top, the batch also
+/// short-circuits at the per-file boundary.
 fn subset_resolved_fonts(
     globals: &GlobalOptions,
     args: &EmbedArgs,
@@ -3290,10 +3405,17 @@ fn run_rename(globals: &GlobalOptions, args: RenameArgs) -> Result<ExitCode, Str
     }
 
     let duplicate_outputs = duplicate_rename_output_keys(&plan.pairings);
-    for row in &plan.pairings {
+    for (idx, row) in plan.pairings.iter().enumerate() {
         let result = process_rename_pair(globals, &args, row, &duplicate_outputs);
+        let failed = result.status == FileStatus::Failed;
         emit_file_report(globals, &result);
         report.push(result);
+        if globals.fail_fast && failed {
+            let remaining = plan.pairings.len().saturating_sub(idx + 1);
+            emit_fail_fast_abort_notice(globals, remaining);
+            report.mark_fail_fast_abort();
+            break;
+        }
     }
 
     emit_report_summary(globals, &report)?;
@@ -4201,6 +4323,7 @@ mod tests {
             lang: Some(OutputLang::En),
             no_cache: false,
             cache_file: None,
+            fail_fast: false,
         }
     }
 
