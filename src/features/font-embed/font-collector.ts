@@ -111,14 +111,17 @@ function normalizeFamily(raw: string): string {
  *  Wave 6.2 parity sweep — previously a family name carrying U+202E
  *  could flow through `sanitizeFamily` into detection-grid labels, log
  *  lines, and chain progress text where the visual-reversal attack
- *  re-surfaced after `safeName` had already scrubbed it on the [Fonts]
- *  header path). Full parity with `ass-uuencode.ts::safeName` on the
+ *  re-surfaced after the inline `safeName` regex inside
+ *  `buildFontEntry` (ass-uuencode.ts) had already scrubbed it on the
+ *  [Fonts] header path). Full parity with that inline regex on the
  *  shared codepoints — see `sanitization.test.ts` for the pin.
  *
- *  Exported for the cross-helper symmetry pin test (Round 2 N-R2-17):
- *  the parity claim between this helper and `ass-uuencode::buildFontEntry`'s
- *  inline `safeName` is enforced by a test that exercises both sides on
- *  the same input range. */
+ *  Exported for the cross-helper symmetry pin test: the parity claim
+ *  between this helper and the inline regex inside
+ *  `ass-uuencode::buildFontEntry` (NOT a named export — `safeName` is
+ *  a local `const` inside that function; grep "BIDI_AND_ZERO_WIDTH"
+ *  to find both consumers) is enforced by a test that exercises both
+ *  sides on the same input range. */
 export function sanitizeFamily(raw: string): string {
   // Control characters reach the regex via the dynamically-built
   // `new RegExp(...)` form rather than a regex literal — eslint's

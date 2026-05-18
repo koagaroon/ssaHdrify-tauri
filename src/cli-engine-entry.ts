@@ -332,6 +332,18 @@ export function applyFontEmbed(request: FontEmbedApplyRequest): FontEmbedApplyRe
   // contract uniformity.
   assertAssShape(request.content);
 
+  // R2 A-R2-2: `font.data` is `number[]` from the deno_core op marshal
+  // (Rust `Vec<u8>` → serde_json → TS array of bytes). `Uint8Array.from`
+  // silently coerces non-byte values (256→0, -1→255, NaN→0, 1.5→1),
+  // which would be a disclosure primitive if a non-Rust source ever
+  // populated `request.fonts`. Today the bytes always originate from
+  // `subset_font` / `subset_font_b64` op outputs whose `u8` Rust type
+  // serde-validates the range; the chain path uses base64 (dataB64)
+  // which rejects non-byte payloads loudly. If a future caller surface
+  // adds a non-Rust origin (browser drag-drop bytes, user-typed hex
+  // input, third-party plugin), validate each element with
+  // `Number.isInteger(b) && b >= 0 && b <= 255` BEFORE this Uint8Array
+  // construction.
   const fontEntries = request.fonts.map((font) =>
     buildFontEntry(font.fontName, Uint8Array.from(font.data))
   );

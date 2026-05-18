@@ -135,17 +135,14 @@ pub fn read_text_detect_encoding_inner(
     // obviously-hostile or pathological shapes BEFORE touching the
     // filesystem. Control chars / NUL in a path on Windows can truncate
     // the access target at the null byte; zero-width and bidi-control
-    // characters are blocked here too. Path-traversal `..` segments are
-    // NOT rejected at this layer — they're defanged by the canonicalize
-    // step below ON THE SUCCESS BRANCH; the canonicalize-fails fallback
-    // later in this function reads through the raw path with `..`
-    // intact, but OS-level `fs::read` resolves `..` correctly so
-    // traversal isn't exploitable, just structurally less defended on
-    // the fallback path. Earlier comments in this function claimed
-    // unconditional `..` rejection; that was inaccurate (the validator
-    // never enforced it). (On Windows, std::fs::read → CreateFileW
-    // resolves `..` per Win32 path canonicalization. On Unix, openat()
-    // with `..` traverses up the FS tree.)
+    // characters are blocked here too. R2 N-R2-12 wording correction:
+    // `..` segments are rejected upstream by `validate_ipc_path` (see
+    // util.rs § "Reject path-traversal segments"), so the canonicalize-
+    // fails fallback discussion further down doesn't apply to `..` —
+    // that branch only covers symlink-redirect cases that survive the
+    // ipc-path validator. The OS-level `..`-resolution notes below
+    // (CreateFileW on Windows / openat on Unix) are kept for general
+    // operational reference, but they aren't a live defense gap here.
     crate::util::validate_ipc_path(path, "Subtitle")?;
 
     // Extension validation: only allow subtitle/text file types
@@ -366,7 +363,16 @@ fn detect_bom(bytes: &[u8]) -> Option<ReadTextResult> {
         });
     }
 
-    // UTF-16 LE BOM (FF FE)
+    // UTF-16 LE BOM (FF FE).
+    //
+    // R2 A-R2-4 trap note: UTF-32LE BOM is `FF FE 00 00` — a strict
+    // byte-prefix superset of the UTF-16LE BOM. A UTF-32LE-encoded
+    // file enters this branch and decodes as UTF-16LE (every other
+    // code unit is 0x00, decoded as NUL → garbled output). Subtitle
+    // files are essentially never UTF-32, so the trade-off is
+    // accepted: a clear "unsupported" error from a hypothetical
+    // dedicated UTF-32 branch above this one isn't worth the cost
+    // until a real UTF-32 subtitle case appears.
     if bytes.starts_with(&[0xFF, 0xFE]) {
         let (cow, _, had_errors) = encoding_rs::UTF_16LE.decode(&bytes[2..]);
         return Some(ReadTextResult {

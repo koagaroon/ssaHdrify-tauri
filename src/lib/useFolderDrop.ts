@@ -80,13 +80,15 @@ export function useFolderDrop({
   // memoizes (`useCallback`), the assignments would never run after
   // the first render and the bridge breaks silently.
   //
-  // The recommended `react-hooks` config tolerates intentionally-omitted
-  // deps when the effect body uses only refs/setters/static identifiers,
-  // so no `eslint-disable-next-line` is needed today and no project-
-  // level override is configured. (Prior comment claimed a lint
-  // suppression existed — it doesn't; the shape just isn't flagged.)
-  // A simplify pass that tightens the deps array would still pass
-  // lint, hence this WHY comment is the only durable guard.
+  // R2 N-R2-24: an inline `eslint-disable-next-line react-hooks/
+  // exhaustive-deps` would be the obvious "defense at site" insurance
+  // here — but the project's eslint config has `report-unused-disable-
+  // directives` enabled, and the current recommended `react-hooks`
+  // preset doesn't flag the no-deps bridge shape, so the disable is
+  // rejected as an unused directive. Net effect: this WHY block IS
+  // the durable guard. If a future preset tightens `exhaustive-deps`
+  // and starts flagging this effect, add the inline disable then
+  // (the rule will be firing, so report-unused won't fight back).
   useEffect(() => {
     onPathsRef.current = onPaths;
     onActiveChangeRef.current = onActiveChange;

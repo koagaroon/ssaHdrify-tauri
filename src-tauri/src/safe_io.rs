@@ -278,6 +278,21 @@ fn reject_same_canonical_path(src: &Path, dst: &Path) -> Result<(), String> {
 /// Atomically create a new file at `path` and write `content` to it.
 /// `create_new(true)` is the OS-level guard against following a planted
 /// symlink between the prior existence check and the open call.
+///
+/// **R2 N-R2-20 — partial-write durability trade-off (accepted).** When
+/// `overwrite=true`, the upstream `clear_existing_destination` removes
+/// the prior file BEFORE `create_new_and_write_bytes` is called. If
+/// `write_all` then fails (disk full mid-write, drive eject, antivirus
+/// quarantine, power loss), the destination is left as a partial file
+/// while the user's prior data is already gone — they get the error
+/// but no recovery path. A tmp-file + atomic-rename pattern would
+/// close this gap, but the vibe-coded desktop scope (~/.claude/rules/
+/// vibe-coding.md) accepts the simpler shape: subtitle files are
+/// small (under 100 MB hard cap), local disks are reliable, the user
+/// can rerun the conversion. Don't refactor to tmp+rename without
+/// re-checking the scope — the create_new gate ABOVE is load-bearing
+/// against symlink races; a naive `fs::write` to a tmp path would
+/// need the same gate transplanted onto the tmp file.
 fn create_new_and_write_bytes(path: &Path, content: &[u8]) -> Result<(), String> {
     let mut file = fs::OpenOptions::new()
         .write(true)
