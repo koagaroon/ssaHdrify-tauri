@@ -313,13 +313,18 @@ describe("parseSubtitle / shiftSubtitle — oversized-ASS-Dialogue placeholder a
 
   it("rejects 13-digit-hour SRT timing (upper bound enforced)", () => {
     const tooLong = "9999999999999"; // 13 digits
-    // detectFormat's SRT_TIMING uses an unbounded `\d+` for hours so
-    // the file is still classified as SRT, but parseSrt's per-block
-    // timingRe rejects the 13-digit form — block skipped, zero captions.
+    // R2 N-R2-9 (Pattern 2 cap symmetry): SRT_TIMING used to allow
+    // `\d+` for hours so 13-digit-hour SRT was format-detected as
+    // SRT and rejected per-block ("zero captions"). After W2 the
+    // detector caps hours at {1,12} matching the extraction regexes,
+    // so a 13-digit hour now fails BOTH detection AND extraction —
+    // parseSubtitle throws "Could not detect subtitle format".
+    // The failure mode shift is acceptable: 13-digit hours
+    // (~10 billion hours) are either malicious or hopelessly
+    // corrupted, and a throw at the format-detection boundary is
+    // strictly more protective than silent zero-caption pass.
     const content = `1\n${tooLong}:00:01,000 --> ${tooLong}:00:02,000\nLine\n`;
-    const result = parseSubtitle(content);
-    expect(result.format).toBe("srt");
-    expect(result.captions).toHaveLength(0);
+    expect(() => parseSubtitle(content)).toThrow("Could not detect subtitle format");
   });
 
   it("parses 12-digit-hour ASS Dialogue (upper bound)", () => {

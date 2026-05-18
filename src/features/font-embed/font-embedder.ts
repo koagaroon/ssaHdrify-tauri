@@ -656,12 +656,14 @@ export async function embedFonts(
     // away and subset each alias separately.
     //
     // R1 N-R1-8 (Pattern 2 — bound the iteration cost): early-exit
-    // the merge loop the moment the union exceeds the cap. Upstream
-    // caps (`MAX_TOTAL_CODEPOINTS` 1M, `MAX_FONT_VARIANTS` 500)
-    // bound the iteration TRANSITIVELY, but locally the loop reads
-    // as unbounded. The early-exit caps worst-case work at
-    // `MAX_SUBSET_CODEPOINTS_FOR_DEDUP + 1` (200,001) Set inserts
-    // instead of the transitive 1M-codepoint walk.
+    // the merge loop on the iteration where the union FIRST exceeds
+    // the cap. The size check fires AFTER add(), so the Set holds
+    // `MAX_SUBSET_CODEPOINTS_FOR_DEDUP + 1` (200,001) entries at the
+    // break point — see R2 N-R2-18 for the precise inclusive bound.
+    // Upstream caps (`MAX_TOTAL_CODEPOINTS` 1M, `MAX_FONT_VARIANTS`
+    // 500) bound the iteration TRANSITIVELY, but locally the loop
+    // reads as unbounded; this caps worst-case work at 200,001 Set
+    // inserts instead of the transitive 1M-codepoint walk.
     const mergedCodepoints = new Set<number>();
     let capExceeded = false;
     outer: for (const alias of aliases) {
@@ -861,6 +863,16 @@ const MAX_INSERT_FONTS_SECTION_CONTENT = 100_000_000;
 const INSERT_FONTS_SECTION_HEADER_BUDGET = 1024;
 const MAX_INSERT_LINES = MAX_PARSED_ENTRIES + INSERT_FONTS_SECTION_HEADER_BUDGET;
 const LINE_PROBE_BYTE_GATE = 1_000_000;
+
+// R2 N-R2-11: module-scope to match the project convention swept by
+// R17 W17.4 (N-R17-53/55 — SRT_COLOR_*_RE / WHITESPACE_RE). Anchored at
+// column 0 and trailing whitespace restricted to ASCII space/tab only —
+// plain `\s*` would also match U+2028 / U+2029, letting a crafted ASS
+// with `[FONTS]\u2028` on one line still match the header regex. This
+// closes the false-positive hole that `.trim().toLowerCase()` left
+// open AND blocks the Unicode-line-sep smuggle.
+const HEADER_FONTS_RE = /^\[[Ff][Oo][Nn][Tt][Ss]\][ \t]*$/;
+const HEADER_EVENTS_RE = /^\[[Ee][Vv][Ee][Nn][Tt][Ss]\][ \t]*$/;
 export function assertAssShape(content: string): void {
   if (content.length > MAX_INSERT_FONTS_SECTION_CONTENT) {
     throw new Error(`File too large: ${(content.length / 1_000_000).toFixed(1)} MB (max 100 MB)`);
@@ -930,7 +942,7 @@ export function insertFontsSection(content: string, fontsSection: string): strin
   // `[FONTS]\u2028` on one line still match the header regex. This
   // closes the false-positive hole that `.trim().toLowerCase()` left
   // open AND blocks the Unicode-line-sep smuggle.
-  const HEADER_FONTS_RE = /^\[[Ff][Oo][Nn][Tt][Ss]\][ \t]*$/;
+  // R2 N-R2-11: HEADER_FONTS_RE / HEADER_EVENTS_RE hoisted to module scope.
   // Reject malformed input with multiple [Fonts] sections. Mirrors the
   // CLI's identical guard in cli-engine-entry.ts: the replace path
   // below only rewrites the first occurrence; silently leaving extra
@@ -996,10 +1008,10 @@ export function insertFontsSection(content: string, fontsSection: string): strin
     return `${before}${sep}${adaptedFontsSection}${afterSep}${after}`;
   }
 
-  // No existing [Fonts] — insert before [Events]. Same ASCII-whitespace
-  // trailing match as above for the same UUEncode-false-positive +
-  // Unicode-line-sep smuggling reason.
-  const HEADER_EVENTS_RE = /^\[[Ee][Vv][Ee][Nn][Tt][Ss]\][ \t]*$/;
+  // No existing [Fonts] — insert before [Events]. HEADER_EVENTS_RE
+  // shares the column-0 + ASCII-space-only shape with HEADER_FONTS_RE
+  // for the same UUEncode-false-positive + Unicode-line-sep reasons
+  // (see module-scope definitions).
   const eventsHeaderIndices: number[] = [];
   for (let i = 0; i < lines.length; i += 1) {
     if (HEADER_EVENTS_RE.test(lines[i]!)) eventsHeaderIndices.push(i);

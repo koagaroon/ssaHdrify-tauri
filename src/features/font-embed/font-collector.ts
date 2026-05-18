@@ -418,7 +418,12 @@ function applyOverrideTags(
   // ASS (P1b) can use this to make the embedded font set diverge
   // from what libass actually renders. matchAll + .at(-1) gives the
   // LAST occurrence per libass semantics.
-  const rMatches = [...block.matchAll(/\\r([\p{L}_][\p{L}\p{N}_-]*)?/gu)];
+  // R2 N-R2-23: style-name capture bounded at {0,127} for parity with
+  // the `\fn<FamilyName>` regex below (cap 128 total — leading letter
+  // + 127 continuation chars). Transitively bounded by
+  // MAX_DIALOGUE_TEXT_LEN = 1_000_000 upstream, so this is Pattern 2
+  // symmetry rather than a load-bearing bound.
+  const rMatches = [...block.matchAll(/\\r([\p{L}_][\p{L}\p{N}_-]{0,127})?/gu)];
   const rMatch = rMatches.at(-1);
   if (rMatch) {
     const styleName = rMatch[1];

@@ -177,7 +177,10 @@ export function buildAssDocument(
   // produces a malformed Style CSV that ASS renderers treat unpredictably.
   // (Round 7 Wave 7.6: regex now lives at module scope as
   // `FONT_NAME_SANITIZER` \u2014 see definition above.)
-  const safeFontName = style.fontName.replace(FONT_NAME_SANITIZER, "") || "Arial";
+  // R2 N-R2-10: 128-codepoint cap matches `sanitizeFamily` (font-embedder).
+  // Without it, a 10 KB font name typed into the HdrConvert style panel
+  // would produce a 10 KB Style line — Pattern 1 cap-consistency.
+  const safeFontName = style.fontName.replace(FONT_NAME_SANITIZER, "").slice(0, 128) || "Arial";
   lines.push(
     `Style: Default,${safeFontName},${style.fontSize},${style.primaryColor},&H000000FF,${style.outlineColor},&H00000000,0,0,0,0,100,100,0,0,1,${style.outlineWidth},${style.shadowDepth},2,10,10,10,1`
   );

@@ -75,6 +75,24 @@ pub fn expand_dropped_paths(paths: Vec<String>) -> Result<ExpandedPaths, String>
     let mut rejected = 0usize;
     let total_inputs = paths.len();
     for (idx, raw) in paths.iter().enumerate() {
+        // R2 N-R2-21: short-circuit at the TOP of the loop body once
+        // the result cap is hit. Pre-W2 the cap check sat after the
+        // per-path stat + walk_one_level call, so the worst case
+        // (1000 input folders, first ~50 already filled `result` to
+        // MAX_RESULT_FILES = 5000) still paid stat + read_dir on
+        // every remaining input. The same check at line ~128 below
+        // handles the case where the LAST input pushed the result to
+        // the cap (we still need to set `truncated` correctly there);
+        // this top-of-loop check is the cheap-first sibling for
+        // every subsequent iteration. `walk_one_level` itself has
+        // the same check at its inner loop top, so this is the third
+        // layer of the same budget.
+        if result.len() >= MAX_RESULT_FILES {
+            if idx < total_inputs {
+                truncated = true;
+            }
+            break;
+        }
         // Skip silently rather than fail — native drag-drop shouldn't
         // produce empty / oversize / control-char paths, but the IPC
         // boundary trusts no caller, and dropping ONE bad path should
