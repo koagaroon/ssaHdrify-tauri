@@ -1052,7 +1052,13 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
     // the other subcommands surface as "duplicate output path in
     // planned batch".
     let mut seen_outputs: HashSet<String> = HashSet::new();
-    let mut aborted_by_fail_fast = false;
+    // R1 N-R1-14 (cosmetic): named `chain_aborted` instead of the
+    // CommandReport field name `aborted_by_fail_fast` so the chain-local
+    // flag and the per-CommandReport struct field don't collide on grep.
+    // Chain has no CommandReport (its summary path is bespoke); the two
+    // never appear in the same scope but reusing the identifier made
+    // "where does this flag flow" harder to answer at a glance.
+    let mut chain_aborted = false;
     for (idx, input) in plan.input_files.iter().enumerate() {
         let mut failed_this_input = false;
         match process_one_chain_input(
@@ -1103,18 +1109,35 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
         if globals.fail_fast && failed_this_input {
             let remaining = plan.input_files.len().saturating_sub(idx + 1);
             emit_fail_fast_abort_notice(globals, remaining);
-            aborted_by_fail_fast = true;
+            chain_aborted = true;
             break;
         }
     }
     if !globals.quiet {
-        if aborted_by_fail_fast {
-            println!(
-                "Summary: {written} written, {skipped} skipped, {failed} failed (aborted by --fail-fast)"
-            );
+        // R1 N-R1-5: chain Summary line + fail-fast suffix go through
+        // `localize`. Pre-R1 only the per-file ✓/⊘/✗ lines and the
+        // standalone subcommands' `emit_report_summary` were localized;
+        // chain's summary stayed English regardless of `--lang zh` /
+        // detected zh locale. Sibling-parity with R17 W17.3's
+        // refresh-fonts sweep.
+        let summary = if chain_aborted {
+            localize(
+                globals,
+                format!(
+                    "Summary: {written} written, {skipped} skipped, {failed} failed (aborted by --fail-fast)"
+                ),
+                format!(
+                    "汇总：{written} 个已写入，{skipped} 个已跳过，{failed} 个失败（已被 --fail-fast 中止）"
+                ),
+            )
         } else {
-            println!("Summary: {written} written, {skipped} skipped, {failed} failed");
-        }
+            localize(
+                globals,
+                format!("Summary: {written} written, {skipped} skipped, {failed} failed"),
+                format!("汇总：{written} 个已写入，{skipped} 个已跳过，{failed} 个失败"),
+            )
+        };
+        println!("{summary}");
     }
     // R17 W17.2 (N-R17-22): partial-failure (1) vs complete-failure
     // (2) exit-code split, matching `CommandReport::exit_code`'s
@@ -2575,9 +2598,30 @@ fn prepare_embed_cache(
                     // from default_cli_cache_path can carry env-var
                     // resolution failure text that includes path
                     // fragments.
+                    // R1 N-R1-7 (Pattern 1 / W17.3 sibling sweep):
+                    // route every prepare_embed_cache stderr line
+                    // through `localize`. Pre-R1 these were the only
+                    // cache-related output that remained English-only
+                    // even under `--lang zh`, while refresh-fonts
+                    // (W17.3) and the per-file ✓/⊘/✗ lines were
+                    // localized.
                     let e_disp = sanitize_for_display(&e);
-                    eprintln!("⚠ Cannot resolve cache path: {e_disp}");
-                    eprintln!("  Skipping cache for this run.");
+                    eprintln!(
+                        "{}",
+                        localize(
+                            globals,
+                            format!("⚠ Cannot resolve cache path: {e_disp}"),
+                            format!("⚠ 无法解析字体缓存路径：{e_disp}"),
+                        )
+                    );
+                    eprintln!(
+                        "{}",
+                        localize(
+                            globals,
+                            "  Skipping cache for this run.".to_string(),
+                            "  本次运行将跳过字体缓存。".to_string(),
+                        )
+                    );
                 }
                 return None;
             }
@@ -2593,9 +2637,21 @@ fn prepare_embed_cache(
         // Per locked design: distinct messaging from drift, same
         // behavior (skip cache + suggest refresh-fonts).
         if !globals.quiet {
-            eprintln!("ℹ No font cache exists yet at {cache_path_disp}.");
             eprintln!(
-                "  Run `ssahdrify-cli refresh-fonts --font-dir <DIR>...` to build one (--font-dir is repeatable)."
+                "{}",
+                localize(
+                    globals,
+                    format!("ℹ No font cache exists yet at {cache_path_disp}."),
+                    format!("ℹ 尚未在 {cache_path_disp} 建立字体缓存。"),
+                )
+            );
+            eprintln!(
+                "{}",
+                localize(
+                    globals,
+                    "  Run `ssahdrify-cli refresh-fonts --font-dir <DIR>...` to build one (--font-dir is repeatable).".to_string(),
+                    "  运行 `ssahdrify-cli refresh-fonts --font-dir <DIR>...` 建立缓存（--font-dir 可重复）。".to_string(),
+                )
             );
         }
         return None;
@@ -2605,17 +2661,54 @@ fn prepare_embed_cache(
         Ok(c) => c,
         Err(app_lib::font_cache::CacheError::SchemaVersionMismatch { found, expected }) => {
             if !globals.quiet {
-                eprintln!("⚠ Font cache schema mismatch (found {found}, expected {expected}).");
-                eprintln!("  Cache is from a different release; skipping for this run.");
-                eprintln!("  Delete {cache_path_disp} and run `refresh-fonts` to rebuild.");
+                eprintln!(
+                    "{}",
+                    localize(
+                        globals,
+                        format!(
+                            "⚠ Font cache schema mismatch (found {found}, expected {expected})."
+                        ),
+                        format!("⚠ 字体缓存 schema 版本不匹配（发现 {found}，期望 {expected}）。"),
+                    )
+                );
+                eprintln!(
+                    "{}",
+                    localize(
+                        globals,
+                        "  Cache is from a different release; skipping for this run.".to_string(),
+                        "  缓存来自另一发行版本；本次运行将跳过。".to_string(),
+                    )
+                );
+                eprintln!(
+                    "{}",
+                    localize(
+                        globals,
+                        format!("  Delete {cache_path_disp} and run `refresh-fonts` to rebuild."),
+                        format!("  删除 {cache_path_disp} 后运行 `refresh-fonts` 重新建立缓存。"),
+                    )
+                );
             }
             return None;
         }
         Err(e) => {
             if !globals.quiet {
                 let e_disp = sanitize_for_display(&e.to_string());
-                eprintln!("⚠ Cannot open font cache: {e_disp}");
-                eprintln!("  Skipping cache for this run.");
+                eprintln!(
+                    "{}",
+                    localize(
+                        globals,
+                        format!("⚠ Cannot open font cache: {e_disp}"),
+                        format!("⚠ 无法打开字体缓存：{e_disp}"),
+                    )
+                );
+                eprintln!(
+                    "{}",
+                    localize(
+                        globals,
+                        "  Skipping cache for this run.".to_string(),
+                        "  本次运行将跳过字体缓存。".to_string(),
+                    )
+                );
             }
             return None;
         }
@@ -2630,8 +2723,22 @@ fn prepare_embed_cache(
         Err(e) => {
             if !globals.quiet {
                 let e_disp = sanitize_for_display(&e);
-                eprintln!("⚠ Cannot validate cache: {e_disp}");
-                eprintln!("  Skipping cache for this run.");
+                eprintln!(
+                    "{}",
+                    localize(
+                        globals,
+                        format!("⚠ Cannot validate cache: {e_disp}"),
+                        format!("⚠ 无法校验字体缓存：{e_disp}"),
+                    )
+                );
+                eprintln!(
+                    "{}",
+                    localize(
+                        globals,
+                        "  Skipping cache for this run.".to_string(),
+                        "  本次运行将跳过字体缓存。".to_string(),
+                    )
+                );
             }
             return None;
         }
@@ -2639,23 +2746,59 @@ fn prepare_embed_cache(
 
     if !drift.is_empty() {
         if !globals.quiet {
+            let drift_count = drift.modified.len() + drift.removed.len();
             eprintln!(
-                "⚠ Cache drift detected — {} folder(s) changed since last refresh:",
-                drift.modified.len() + drift.removed.len()
+                "{}",
+                localize(
+                    globals,
+                    format!(
+                        "⚠ Cache drift detected — {drift_count} folder(s) changed since last refresh:"
+                    ),
+                    format!("⚠ 检测到字体缓存漂移 —— 自上次刷新以来 {drift_count} 个目录已变化："),
+                )
             );
             for f in &drift.modified {
                 // Drift folder strings originate from the SQLite cache
                 // (cached_folders.folder_path). Under --cache-file argv
                 // override, those rows are P1b (attacker may craft).
                 let f_disp = sanitize_for_display(f);
-                eprintln!("    ~ {f_disp}  (modified)");
+                eprintln!(
+                    "{}",
+                    localize(
+                        globals,
+                        format!("    ~ {f_disp}  (modified)"),
+                        format!("    ~ {f_disp}  （已修改）"),
+                    )
+                );
             }
             for f in &drift.removed {
                 let f_disp = sanitize_for_display(f);
-                eprintln!("    - {f_disp}  (removed)");
+                eprintln!(
+                    "{}",
+                    localize(
+                        globals,
+                        format!("    - {f_disp}  (removed)"),
+                        format!("    - {f_disp}  （已删除）"),
+                    )
+                );
             }
-            eprintln!("  Skipping cache for this run; using --font-dir / system fonts only.");
-            eprintln!("  Run `refresh-fonts` to update the cache.");
+            eprintln!(
+                "{}",
+                localize(
+                    globals,
+                    "  Skipping cache for this run; using --font-dir / system fonts only."
+                        .to_string(),
+                    "  本次运行将跳过缓存，仅使用 --font-dir / 系统字体。".to_string(),
+                )
+            );
+            eprintln!(
+                "{}",
+                localize(
+                    globals,
+                    "  Run `refresh-fonts` to update the cache.".to_string(),
+                    "  运行 `refresh-fonts` 更新缓存。".to_string(),
+                )
+            );
         }
         return None;
     }
@@ -2668,11 +2811,34 @@ fn prepare_embed_cache(
     if !globals.quiet {
         if user_supplied_dirs {
             eprintln!(
-                "ℹ Using font cache (at {cache_path_disp}) plus the --font-dir / --font-file paths you supplied."
+                "{}",
+                localize(
+                    globals,
+                    format!(
+                        "ℹ Using font cache (at {cache_path_disp}) plus the --font-dir / --font-file paths you supplied."
+                    ),
+                    format!(
+                        "ℹ 正在使用字体缓存（位于 {cache_path_disp}）以及你通过 --font-dir / --font-file 指定的路径。"
+                    ),
+                )
             );
         } else {
-            eprintln!("ℹ Using font cache (at {cache_path_disp}).");
-            eprintln!("  Pass --no-cache to use system fonts only.");
+            eprintln!(
+                "{}",
+                localize(
+                    globals,
+                    format!("ℹ Using font cache (at {cache_path_disp})."),
+                    format!("ℹ 正在使用字体缓存（位于 {cache_path_disp}）。"),
+                )
+            );
+            eprintln!(
+                "{}",
+                localize(
+                    globals,
+                    "  Pass --no-cache to use system fonts only.".to_string(),
+                    "  传 --no-cache 可改为仅使用系统字体。".to_string(),
+                )
+            );
         }
     }
     Some(cache)
@@ -3735,17 +3901,40 @@ fn emit_report_summary(globals: &GlobalOptions, report: &CommandReport) -> Resul
             .map_err(|err| format!("failed to encode JSON report: {err}"))?;
         println!("{json}");
     } else if !globals.quiet {
-        let message = localize(
-            globals,
-            format!(
-                "Done: {} written, {} planned, {} skipped, {} failed",
-                report.written, report.planned, report.skipped, report.failed
-            ),
-            format!(
-                "完成：{} 个已写入，{} 个计划写入，{} 个已跳过，{} 个失败",
-                report.written, report.planned, report.skipped, report.failed
-            ),
-        );
+        // R1 N-R1-6: when --fail-fast aborts the batch, append a
+        // `(aborted by --fail-fast)` / `（已被 --fail-fast 中止）`
+        // suffix to the human-text summary. Pre-R1 the fail-fast
+        // signal lived in the stderr `⚠` notice (emit_fail_fast_abort_notice)
+        // AND in JSON output's `abortedByFailFast` field, but the
+        // stdout summary line itself never reflected the abort —
+        // users piping stdout to a log lost the signal. Chain's
+        // sibling Summary already does this; this completes the
+        // standalone HDR/Shift/Embed/Rename path.
+        let message = if report.aborted_by_fail_fast {
+            localize(
+                globals,
+                format!(
+                    "Done: {} written, {} planned, {} skipped, {} failed (aborted by --fail-fast)",
+                    report.written, report.planned, report.skipped, report.failed
+                ),
+                format!(
+                    "完成：{} 个已写入，{} 个计划写入，{} 个已跳过，{} 个失败（已被 --fail-fast 中止）",
+                    report.written, report.planned, report.skipped, report.failed
+                ),
+            )
+        } else {
+            localize(
+                globals,
+                format!(
+                    "Done: {} written, {} planned, {} skipped, {} failed",
+                    report.written, report.planned, report.skipped, report.failed
+                ),
+                format!(
+                    "完成：{} 个已写入，{} 个计划写入，{} 个已跳过，{} 个失败",
+                    report.written, report.planned, report.skipped, report.failed
+                ),
+            )
+        };
         println!("{message}");
     }
     Ok(())
