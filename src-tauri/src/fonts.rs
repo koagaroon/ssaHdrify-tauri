@@ -3453,6 +3453,37 @@ fn subset_with_index(font_data: &[u8], index: u32, codepoints: &[u32]) -> Result
     use fontcull_skrifa::{FontRef, GlyphId, Tag};
     use fontcull_write_fonts::types::NameId;
 
+    // R1 A-R1-3 (Pattern 3 defense-in-depth): if the file is a TTC,
+    // peek `numFonts` at the documented offset 8..=11 (TTCHeader
+    // version 1.0/2.0, ULONG big-endian) and reject `index >= numFonts`
+    // upfront. `MAX_SUBSET_FONT_INDEX = 255` at the IPC layer (line
+    // 152) bounds JS-supplied indices, but internal callers (chain's
+    // resolve_chain_embed_subsets, embed batch) reach here via face
+    // indices recorded in the session DB / cache rows, where the
+    // upper bound is `MAX_TTC_FACES = 16` at scan time. This peek is
+    // a structural defense inside `subset_with_index` itself so the
+    // contract holds regardless of caller — a crafted TTC with a
+    // declared `numFonts` huge enough to OOM-pressure
+    // `FontRef::from_index`'s offset-table walk now bounces out
+    // before fontcull's parser allocates anything. The catch_unwind
+    // upstream caught panics; this peek closes the silent-OOM-then-
+    // InvalidSfnt path the panic guard cannot.
+    if is_ttc_data(font_data) {
+        if font_data.len() < 12 {
+            return Err(format!(
+                "Truncated TTC header: {} bytes (need 12 for numFonts)",
+                font_data.len()
+            ));
+        }
+        let num_fonts =
+            u32::from_be_bytes([font_data[8], font_data[9], font_data[10], font_data[11]]);
+        if index >= num_fonts {
+            return Err(format!(
+                "TTC face index out of range: requested {index}, file declares {num_fonts} face(s)"
+            ));
+        }
+    }
+
     // Display, not Debug — Debug repr leaks internal struct fields,
     // table tags, byte offsets into a frontend-visible error.
     let font = FontRef::from_index(font_data, index)
@@ -3548,6 +3579,52 @@ mod tests {
         assert!(!is_ttc_data(b""));
         assert!(!is_ttc_data(b"t"));
         assert!(!is_ttc_data(b"ttc"));
+    }
+
+    /// R1 A-R1-3 boundary tests for the TTC numFonts peek inside
+    /// `subset_with_index`. A crafted TTC whose declared `numFonts`
+    /// does not match the actual offset table length must produce a
+    /// clean Err with attribution naming the requested index and the
+    /// declared count, BEFORE fontcull's parser allocates any
+    /// intermediate offset-table buffer.
+    ///
+    /// The peek lives at TTCHeader offset 8..=11 (`numFonts`, ULONG
+    /// big-endian). Anything shorter than 12 bytes that still starts
+    /// with `ttcf` magic must be rejected as a truncated header.
+    #[test]
+    fn subset_with_index_rejects_truncated_ttc_header() {
+        // 4 bytes of `ttcf` magic + 4 bytes version, but `numFonts`
+        // field absent. is_ttc_data passes; the peek must reject.
+        let truncated = b"ttcf\x00\x01\x00\x00\x00\x00\x00";
+        assert_eq!(truncated.len(), 11);
+        let err = subset_with_index(truncated, 0, &[0x41])
+            .expect_err("11-byte TTC header (numFonts missing) must Err");
+        assert!(
+            err.contains("Truncated TTC header"),
+            "Err should name the truncation explicitly: {err}"
+        );
+    }
+
+    #[test]
+    fn subset_with_index_rejects_index_at_or_above_declared_num_fonts() {
+        // Declared numFonts = 2 (big-endian at offset 8..=11).
+        // Request face index 2 (out of range) and 99 (well out of range).
+        let header = b"ttcf\x00\x01\x00\x00\x00\x00\x00\x02";
+        assert_eq!(header.len(), 12);
+
+        let err_at_cap = subset_with_index(header, 2, &[0x41])
+            .expect_err("index == numFonts must Err (zero-indexed)");
+        assert!(
+            err_at_cap.contains("out of range") && err_at_cap.contains("requested 2"),
+            "Err should attribute index + declared count: {err_at_cap}"
+        );
+
+        let err_above_cap =
+            subset_with_index(header, 99, &[0x41]).expect_err("index >> numFonts must Err");
+        assert!(
+            err_above_cap.contains("requested 99") && err_above_cap.contains("2 face"),
+            "Err should attribute the requested + declared values: {err_above_cap}"
+        );
     }
 
     /// Exercises `subset_with_index` against face 0 AND face 1 of a real

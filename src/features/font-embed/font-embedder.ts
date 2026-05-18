@@ -645,12 +645,27 @@ export async function embedFonts(
     // dedup path and the per-alias fallback. The union is the
     // happy-path payload; if it overflows the cap, we throw it
     // away and subset each alias separately.
+    //
+    // R1 N-R1-8 (Pattern 2 — bound the iteration cost): early-exit
+    // the merge loop the moment the union exceeds the cap. Upstream
+    // caps (`MAX_TOTAL_CODEPOINTS` 1M, `MAX_FONT_VARIANTS` 500)
+    // bound the iteration TRANSITIVELY, but locally the loop reads
+    // as unbounded. The early-exit caps worst-case work at
+    // `MAX_SUBSET_CODEPOINTS_FOR_DEDUP + 1` (200,001) Set inserts
+    // instead of the transitive 1M-codepoint walk.
     const mergedCodepoints = new Set<number>();
-    for (const alias of aliases) {
-      for (const cp of alias.codepoints) mergedCodepoints.add(cp);
+    let capExceeded = false;
+    outer: for (const alias of aliases) {
+      for (const cp of alias.codepoints) {
+        mergedCodepoints.add(cp);
+        if (mergedCodepoints.size > MAX_SUBSET_CODEPOINTS_FOR_DEDUP) {
+          capExceeded = true;
+          break outer;
+        }
+      }
     }
 
-    if (mergedCodepoints.size > MAX_SUBSET_CODEPOINTS_FOR_DEDUP) {
+    if (capExceeded) {
       // Cap-busting fallback: subset each alias independently. Each
       // alias's codepoints is bounded by `MAX_CODEPOINTS_PER_VARIANT`
       // upstream (font-collector), which is strictly less than the

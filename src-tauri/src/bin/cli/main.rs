@@ -5159,10 +5159,7 @@ mod tests {
         // merged codepoints (computed on demand) is the union.
         assert_eq!(group.aliases.len(), 2);
         let merged = group.merged_codepoints();
-        assert_eq!(
-            merged,
-            [0x41, 0x42, 0x4f60, 0x597d].into_iter().collect()
-        );
+        assert_eq!(merged, [0x41, 0x42, 0x4f60, 0x597d].into_iter().collect());
         // Template is first-occurrence — drives font_name + path
         // for the subsequent subset_font call.
         assert_eq!(group.template().label, "Microsoft YaHei");
@@ -5182,8 +5179,7 @@ mod tests {
         let groups = group_resolved_fonts_by_face(&inputs);
         assert_eq!(groups.len(), 2);
         // Both face indices present as map keys.
-        let indices: std::collections::BTreeSet<u32> =
-            groups.keys().map(|(_, i)| *i).collect();
+        let indices: std::collections::BTreeSet<u32> = groups.keys().map(|(_, i)| *i).collect();
         assert_eq!(indices, [0u32, 1u32].into_iter().collect());
     }
 
@@ -5216,7 +5212,12 @@ mod tests {
         // codepoint set survives intact and labels has exactly one
         // entry. Boundary test for "doesn't break the common case
         // where dedup is a no-op."
-        let inputs = vec![make_resolved("Roboto", "/fonts/roboto.ttf", 0, &[0x30, 0x31, 0x32])];
+        let inputs = vec![make_resolved(
+            "Roboto",
+            "/fonts/roboto.ttf",
+            0,
+            &[0x30, 0x31, 0x32],
+        )];
         let groups = group_resolved_fonts_by_face(&inputs);
         assert_eq!(groups.len(), 1);
         let group = groups.values().next().expect("single group");
