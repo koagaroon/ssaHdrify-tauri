@@ -1154,6 +1154,47 @@ enum ChainFileOutcome {
     Failed(String, Vec<String>),
 }
 
+/// R1 A-R1-5: single funnel for `ChainFileOutcome` construction within
+/// `process_one_chain_input`. Owns the `warnings: Vec<String>` vec
+/// accumulated across the 11 early-return sites; each `into_*` method
+/// consumes the builder by move, so the compiler enforces single-use
+/// and a future early-return site cannot accidentally substitute
+/// `Vec::new()` in the warnings slot (the open-coded shape W14.5
+/// introduced — pattern-3 question 4 risk class). Eviction of stale
+/// `seen_outputs` keys stays at the call site — this builder owns
+/// warnings, not the dedup-set membership.
+struct ChainOutcomeBuilder {
+    warnings: Vec<String>,
+}
+
+impl ChainOutcomeBuilder {
+    fn new() -> Self {
+        Self {
+            warnings: Vec::new(),
+        }
+    }
+
+    fn replace_warnings(&mut self, new: Vec<String>) {
+        self.warnings = new;
+    }
+
+    fn extend_warnings<I: IntoIterator<Item = String>>(&mut self, iter: I) {
+        self.warnings.extend(iter);
+    }
+
+    fn into_failed(self, err: String) -> ChainFileOutcome {
+        ChainFileOutcome::Failed(err, self.warnings)
+    }
+
+    fn into_skipped(self, reason: String) -> ChainFileOutcome {
+        ChainFileOutcome::Skipped(reason, self.warnings)
+    }
+
+    fn into_written(self, output_path: PathBuf) -> ChainFileOutcome {
+        ChainFileOutcome::Written(output_path, self.warnings)
+    }
+}
+
 fn find_embed_step_index(plan: &chain::ChainPlan) -> Option<usize> {
     plan.steps
         .iter()
@@ -1497,18 +1538,18 @@ fn process_one_chain_input(
     globals: &GlobalOptions,
     seen_outputs: &mut HashSet<String>,
 ) -> ChainFileOutcome {
-    // R14 W14.5: declared upfront so every Failed/Skipped early-return
-    // site can attach the warnings vec uniformly. Early sites fire
-    // before any warning has been accumulated, so they move an empty
-    // vec — costless; sites past the embed pre-resolution +
-    // `format_oversized_skipped_warning` blocks move the populated vec.
-    // Only one return executes per call, so unconditional move (no
-    // clone) is correct.
-    let mut warnings: Vec<String> = Vec::new();
+    // R14 W14.5 / R1 A-R1-5: outcome funnel owns the warnings vec; each
+    // early-return consumes the builder via `.into_failed(…)` /
+    // `.into_skipped(…)` / `.into_written(…)`. The compiler enforces
+    // single-use (any second consumption is move-of-moved-value), so a
+    // future return site can't accidentally pass `Vec::new()` in the
+    // warnings slot. Eviction of stale `seen_outputs` entries stays at
+    // the call site (separate concern, see `evict_predicted` below).
+    let mut builder = ChainOutcomeBuilder::new();
 
     let input_abs = match absolute_path(input) {
         Ok(p) => p,
-        Err(err) => return ChainFileOutcome::Failed(err, warnings),
+        Err(err) => return builder.into_failed(err),
     };
     let input_str = display_path(&input_abs);
 
@@ -1546,13 +1587,10 @@ fn process_one_chain_input(
             // Sanitize-at-print is the design (R14 W14.1) — sanitizing
             // here would corrupt operational consumers if a future
             // change consumed this Err string programmatically.
-            return ChainFileOutcome::Failed(
-                format!(
-                    "{} duplicate output path in planned batch",
-                    predicted.display()
-                ),
-                warnings,
-            );
+            return builder.into_failed(format!(
+                "{} duplicate output path in planned batch",
+                predicted.display()
+            ));
         }
         // R17 W17.2 (N-R17-17): route the cheap-first existence
         // check through `output_path_exists` (`fs::metadata` + stat-
@@ -1574,13 +1612,10 @@ fn process_one_chain_input(
             // Pattern 3 sibling of A-R10-014 (Failed paths) and the
             // post-V8 Skipped path further below.
             seen_outputs.remove(&key);
-            return ChainFileOutcome::Skipped(
-                format!(
-                    "{} already exists (use --overwrite to replace)",
-                    predicted.display()
-                ),
-                warnings,
-            );
+            return builder.into_skipped(format!(
+                "{} already exists (use --overwrite to replace)",
+                predicted.display()
+            ));
         }
         Some(key)
     } else {
@@ -1612,7 +1647,7 @@ fn process_one_chain_input(
         Ok(r) => r,
         Err(err) => {
             evict_predicted(seen_outputs);
-            return ChainFileOutcome::Failed(err, warnings);
+            return builder.into_failed(err);
         }
     };
 
@@ -1648,10 +1683,13 @@ fn process_one_chain_input(
             // the whole story.
             Err((err, partial_warnings)) => {
                 evict_predicted(seen_outputs);
-                return ChainFileOutcome::Failed(err, partial_warnings);
+                // Replace into builder so the failed-shape funnel still
+                // owns the partial warnings collected pre-Err.
+                builder.replace_warnings(partial_warnings);
+                return builder.into_failed(err);
             }
         };
-        warnings = embed_warnings;
+        builder.replace_warnings(embed_warnings);
         // R17 W17.2 (N-R17-23 + A-R17-18): cumulative cap on the
         // aggregate raw font-subset bytes BEFORE the base64 +
         // serde_json marshal below. Per-font cap (MAX_FONT_DATA_SIZE,
@@ -1663,14 +1701,11 @@ fn process_one_chain_input(
         let total_subset_bytes: usize = subsets.iter().map(|s| s.data.len()).sum();
         if total_subset_bytes > MAX_CHAIN_SUBSET_TOTAL_BYTES {
             evict_predicted(seen_outputs);
-            return ChainFileOutcome::Failed(
-                format!(
-                    "chain embed subsets total {total_subset_bytes} bytes exceeds the \
-                     {MAX_CHAIN_SUBSET_TOTAL_BYTES}-byte cap; reduce per-input font count \
-                     or use the standalone `embed` subcommand which streams per-file"
-                ),
-                warnings,
-            );
+            return builder.into_failed(format!(
+                "chain embed subsets total {total_subset_bytes} bytes exceeds the \
+                 {MAX_CHAIN_SUBSET_TOTAL_BYTES}-byte cap; reduce per-input font count \
+                 or use the standalone `embed` subcommand which streams per-file"
+            ));
         }
         // Encode subset bytes as base64 strings. The previous form
         // (`{ "data": [byte, byte, ...] }`) expanded ~4-5× per byte
@@ -1699,7 +1734,7 @@ fn process_one_chain_input(
         Ok(r) => r,
         Err(err) => {
             evict_predicted(seen_outputs);
-            return ChainFileOutcome::Failed(err, warnings);
+            return builder.into_failed(err);
         }
     };
 
@@ -1711,8 +1746,8 @@ fn process_one_chain_input(
     // only, missing both the stderr-routing and the json wire.
     // Embed pre-resolution warnings (collected above) sit in the
     // same vec; both get surfaced via the Written outcome.
-    if let Some(mut msgs) = format_oversized_skipped_warning(result.skipped_count, &input_str) {
-        warnings.append(&mut msgs);
+    if let Some(msgs) = format_oversized_skipped_warning(result.skipped_count, &input_str) {
+        builder.extend_warnings(msgs);
     }
 
     // Apply --output-dir relocation (chain-global, terminal step
@@ -1724,7 +1759,7 @@ fn process_one_chain_input(
         Ok(p) => p,
         Err(err) => {
             evict_predicted(seen_outputs);
-            return ChainFileOutcome::Failed(err, warnings);
+            return builder.into_failed(err);
         }
     };
 
@@ -1752,13 +1787,10 @@ fn process_one_chain_input(
         // Round 10 A-R10-014: clone so the write-failure cleanup
         // below can also reference output_key for eviction.
         if !seen_outputs.insert(output_key.clone()) {
-            return ChainFileOutcome::Failed(
-                format!(
-                    "{} duplicate output path in planned batch (predictor / V8 resolver disagreed; reconciled post-V8)",
-                    output_path.display()
-                ),
-                warnings,
-            );
+            return builder.into_failed(format!(
+                "{} duplicate output path in planned batch (predictor / V8 resolver disagreed; reconciled post-V8)",
+                output_path.display()
+            ));
         }
     }
 
@@ -1793,13 +1825,10 @@ fn process_one_chain_input(
     //     collide and surface as "duplicate output path".
     if !globals.overwrite && output_path_exists(globals, &output_path) {
         seen_outputs.remove(&output_key);
-        return ChainFileOutcome::Skipped(
-            format!(
-                "{} already exists (use --overwrite to replace)",
-                output_path.display()
-            ),
-            warnings,
-        );
+        return builder.into_skipped(format!(
+            "{} already exists (use --overwrite to replace)",
+            output_path.display()
+        ));
     }
 
     // Route through the safe writer used by every other CLI subcommand
@@ -1815,7 +1844,7 @@ fn process_one_chain_input(
     // landed.
     if let Err(err) = write_output(globals, &output_path, &result.content, globals.overwrite) {
         seen_outputs.remove(&output_key);
-        return ChainFileOutcome::Failed(err, warnings);
+        return builder.into_failed(err);
     }
 
     if globals.verbose {
@@ -1833,7 +1862,7 @@ fn process_one_chain_input(
         }
     }
 
-    ChainFileOutcome::Written(output_path, warnings)
+    builder.into_written(output_path)
 }
 
 fn emit_chain_dry_run(plan: &chain::ChainPlan, globals: &GlobalOptions) {
