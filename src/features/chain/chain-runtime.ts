@@ -279,7 +279,14 @@ export function runChain(request: ChainRunRequest): ChainResult {
     try {
       assertAssShape(content);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      // R17 W17.3 (N-R17-36, Pattern 1 sibling parity): every other
+      // catch-arm in chain-runtime.ts routes through `sanitizeError`
+      // (BiDi / control char stripping). assertAssShape's current
+      // messages are literals (no interpolated content), but a future
+      // loosening that interpolates path / family bytes would silently
+      // re-introduce a P1b leak. Pin the helper at construction so
+      // the sibling parity holds.
+      const msg = sanitizeError(err);
       throw new Error(
         "Chain includes an embed step but the input ASS failed shape / size " +
           "validation. Re-parse / rebuild the file before chaining. (" +
@@ -314,22 +321,32 @@ export function runChain(request: ChainRunRequest): ChainResult {
       // above guarantees the correspondence by construction. The
       // runtime correctness is unchanged; this is a TS limitation.
       //
-      // R16 W16.6 (N-R16-29, trust boundary): the cast erases
-      // step-shape info, so a malformed `step.params` whose runtime
-      // shape doesn't match its declared `step.kind` (e.g.,
-      // `params.brightness` as a NaN string for an "hdr" step) slips
-      // past here. Downstream field accesses produce undefined/NaN
-      // rather than a clear "params shape mismatch" error. **Trust
-      // contract**: the Rust shell deserializes `ChainPlan` via serde,
-      // and `step.params` is typed as the StepKind-discriminated union
-      // at the Rust→TS boundary (`bin/cli/chain.rs::to_chain_step`).
-      // Serde rejects shape mismatches at deserialize time, so by the
-      // time the plan reaches this cast, the kind/params correspondence
-      // has already been validated structurally. Per-step inline shape
+      // R16 W16.6 (N-R16-29) / R17 W17.3 (A-R17-37, trust boundary):
+      // the cast erases step-shape info, so a malformed `step.params`
+      // whose runtime shape doesn't match its declared `step.kind`
+      // (e.g., `params.brightness` as a NaN string for an "hdr" step)
+      // slips past here. Downstream field accesses produce
+      // undefined / NaN rather than a clear "params shape mismatch"
+      // error.
+      //
+      // **Trust contract — corrected in R17**: the W16.6 comment said
+      // "Rust shell deserializes via serde, rejects shape mismatches
+      // at deserialize time." That mechanism would be the right
+      // defense IF the Rust side had `#[derive(Deserialize)]` on a
+      // `ChainStep` enum with `deny_unknown_fields`. It doesn't — the
+      // actual flow is the reverse: the Rust shell *constructs* the
+      // JSON wire form from `clap`-parsed typed `ParsedStep` variants
+      // (`HdrArgs` / `ShiftArgs` / `EmbedArgs`) via per-Args
+      // `to_chain_step` (`bin/cli/main.rs`). Typed-construction is
+      // strictly stricter than deny_unknown_fields for this path —
+      // params can ONLY take shapes the per-Args `to_chain_step` body
+      // emits. By the time the plan reaches this cast in TS, the
+      // kind/params correspondence has been validated by clap's
+      // value parsing + per-Args field types. Per-step inline shape
       // validators here would be defense for a closed surface (P3).
-      // If a future caller bypasses the Rust serde validator (e.g.,
-      // a TS-side test constructs a plan literal), that caller owns
-      // the shape correctness.
+      // If a future caller constructs a plan from another source
+      // (e.g., a TS-side test or a future HTTP-API entry that
+      // bypasses the clap parser), that caller owns shape correctness.
       result = (transform as StepTransform<unknown>)({ content: current, inputPath }, step.params);
     } catch (err) {
       // Annotate which step failed so the Rust shell's error

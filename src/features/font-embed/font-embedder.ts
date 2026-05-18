@@ -517,10 +517,18 @@ export async function embedFonts(
       // sanitizeError(...) posture for the same Pattern 1 single-
       // source-completion reason.
       console.warn(`[ssaHdrify] embedFonts: no usage entry for ${stripUnicodeControls(label)}`);
+      // R17 W17.3 (N-R17-37, Pattern 1 sibling parity): wrap
+      // info.key.family in stripUnicodeControls for the t?.() args +
+      // English fallback, mirroring the subset-failure sibling at
+      // line ~569 below. Upstream `sanitizeFamily` already strips
+      // controls so the surface is closed today; the wrap keeps every
+      // sibling output consistent if upstream sanitization ever
+      // loosens (defense-in-depth, per R16 W16.5 N-R16-26 reasoning).
+      const familyDisplay = stripUnicodeControls(info.key.family);
       onProgress?.({
         stage:
-          t?.("msg_font_skipped", info.key.family, "no usage entry") ??
-          `Skipped ${info.key.family}: no usage entry`,
+          t?.("msg_font_skipped", familyDisplay, "no usage entry") ??
+          `Skipped ${familyDisplay}: no usage entry`,
         current: i + 1,
         total,
       });
@@ -564,10 +572,13 @@ export async function embedFonts(
       console.warn(
         `Font subsetting failed for ${stripUnicodeControls(usage.key.family)}, skipping: ${safeErr}`
       );
+      // R17 W17.3 (N-R17-37, Pattern 1 sibling parity): wrap
+      // info.key.family for t?.() args + English fallback; same
+      // sibling-parity reasoning as the no-usage-entry path above.
+      const familyDisplay = stripUnicodeControls(info.key.family);
       onProgress?.({
         stage:
-          t?.("msg_font_skipped", info.key.family, safeErr) ??
-          `Skipped ${info.key.family}: ${safeErr}`,
+          t?.("msg_font_skipped", familyDisplay, safeErr) ?? `Skipped ${familyDisplay}: ${safeErr}`,
         current: i + 1,
         total,
       });

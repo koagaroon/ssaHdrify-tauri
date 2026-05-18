@@ -1099,7 +1099,15 @@ pub fn try_record_folder_in_gui_cache(
             return;
         }
         Err(std::sync::TryLockError::WouldBlock) => {
-            log::warn!(
+            // R17 W17.3 (N-R17-7): success-of-degradation path —
+            // user's scan completed; cache-populate skipped because a
+            // rescan / clear holds the slot lock. Per
+            // ~/.claude/rules/vibe-coding.md § Log-level discipline,
+            // the discriminator is "does the user's operation
+            // succeed?" Yes → DEBUG, not WARN. Failure-to-degrade
+            // sites (Poisoned, init-failure, real evict Err) stay at
+            // WARN below.
+            log::debug!(
                 "GUI cache busy (rescan or clear in progress); skipping populate \
                  for {} this scan — will populate on next add",
                 folder_path.display()
@@ -1121,8 +1129,12 @@ pub fn try_record_folder_in_gui_cache(
     // None → skip the populate so the cache doesn't acquire an
     // epoch-zero row that drift-detect re-flags forever (see
     // `stat_mtime` doc).
+    //
+    // R17 W17.3 (N-R17-7 sibling): mtime-unreadable is also a
+    // success-of-degradation — scan succeeded, cache populate
+    // skipped — so DEBUG, not WARN.
     let Some(folder_mtime) = try_modified_at(folder_path) else {
-        log::warn!(
+        log::debug!(
             "GUI cache populate skipped (folder mtime unreadable): {}",
             folder_path.display()
         );
@@ -1179,7 +1191,12 @@ pub fn try_remove_folder_from_gui_cache(folder_path: &str) {
             return;
         }
         Err(std::sync::TryLockError::WouldBlock) => {
-            log::warn!(
+            // R17 W17.3 (N-R17-7): success-of-degradation path —
+            // user's remove-source action completed on the session
+            // DB; cache eviction skipped because a rescan / clear
+            // holds the lock. Stays consistent on the next launch's
+            // drift detect. DEBUG, not WARN.
+            log::debug!(
                 "GUI cache busy (rescan or clear in progress); skipping evict for {folder_path}"
             );
             return;
@@ -1318,6 +1335,19 @@ pub fn lookup_font_family(
     // crafted path off the wire.
     if let Some(ref r) = result {
         if let Err(e) = crate::fonts::register_cache_provenance(r) {
+            // R17 W17.3 (N-R17-1, Pattern 1 census parity): `{family}`
+            // is interpolated raw here, no `sanitize_for_display` /
+            // `stripUnicodeControls` wrap. Safe today because
+            // `validate_font_family` (line 1290 above) already rejected
+            // BiDi / zero-width / control characters before reaching
+            // this site — `family` is a sanitized substring of the IPC
+            // input. If `validate_font_family`'s rejection set is ever
+            // relaxed, this log site silently re-opens as a leak; the
+            // pin lives here so a future relaxation reviewer notices
+            // the dependency. `{e}` is the
+            // `register_cache_provenance` error string which carries
+            // no path bytes (provenance Err strings are generic
+            // refusal messages).
             log::warn!(
                 "Font '{family}' cache lookup hit a path that failed provenance validation; \
                  treating as miss: {e}"

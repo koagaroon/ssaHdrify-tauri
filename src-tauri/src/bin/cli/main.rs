@@ -598,9 +598,22 @@ fn run() -> Result<ExitCode, String> {
     // interpolates this path; rejecting BiDi / line-break chars at
     // the entry point closes the smuggling vector symmetrically with
     // every other IPC path.
+    //
+    // R17 W17.3 (A-R17-28): refuse non-UTF-8 paths via `to_str()`
+    // rather than passing `to_string_lossy()` through the validator.
+    // Pre-W17.3 a path with non-UTF-8 / WTF-16-surrogate bytes
+    // lossy-substituted into U+FFFD for the validate call, then
+    // `FontCache::open_or_create` (downstream) opened the PathBuf
+    // with the ORIGINAL byte sequence — different bytes than what
+    // validate_ipc_path checked. Refusing upfront keeps the
+    // validated string and the opened path byte-identical.
     if let Some(ref cache_file) = globals.cache_file {
-        let cache_str = cache_file.to_string_lossy();
-        app_lib::util::validate_ipc_path(&cache_str, "--cache-file")?;
+        let cache_str = cache_file.to_str().ok_or_else(|| {
+            "--cache-file: path contains non-UTF-8 bytes; refuse upfront so the IPC \
+             validator and the subsequent SQLite open agree on the same byte sequence"
+                .to_string()
+        })?;
+        app_lib::util::validate_ipc_path(cache_str, "--cache-file")?;
     }
 
     match command {
@@ -643,10 +656,21 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
     };
 
     if !globals.quiet {
+        // R17 W17.3 (N-R17-28): refresh-fonts stderr now flows through
+        // `localize()` for the en/zh switch, matching every other CLI
+        // subcommand. Pre-W17.3 refresh-fonts was English-only — a
+        // Chinese-locale user saw localized status lines from
+        // hdr / shift / embed / rename / chain but English from this
+        // subcommand. Cache file path interpolation stays sanitized via
+        // sanitize_for_display per the existing print-boundary contract.
+        let n = args.font_dirs.len();
         eprintln!(
-            "ℹ Refreshing cache. Scanning {} source root{}:",
-            args.font_dirs.len(),
-            s_if(args.font_dirs.len())
+            "{}",
+            localize(
+                globals,
+                format!("ℹ Refreshing cache. Scanning {n} source root{}:", s_if(n)),
+                format!("ℹ 正在刷新缓存。扫描 {n} 个源根目录："),
+            )
         );
         for dir in &args.font_dirs {
             // R14 W14.8 sibling: sanitize the per-source-root header
@@ -709,10 +733,19 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
                     // R14 W14.4: sanitize before stderr interpolation
                     // (Pattern 1 callsite completion to W14.1 — this
                     // refresh-fonts print site was missed in the
-                    // initial sweep).
+                    // initial sweep). R17 W17.3 (N-R17-28): localize.
                     let folder_disp = sanitize_for_display(&folder_path_str);
                     eprintln!(
-                        "  ⚠ {folder_disp}: skipped — folder mtime unreadable (would cache as epoch-zero and re-trigger refresh next run)"
+                        "{}",
+                        localize(
+                            globals,
+                            format!(
+                                "  ⚠ {folder_disp}: skipped — folder mtime unreadable (would cache as epoch-zero and re-trigger refresh next run)"
+                            ),
+                            format!(
+                                "  ⚠ {folder_disp}：已跳过——文件夹 mtime 不可读（否则会以 epoch-zero 缓存并导致下次再触发刷新）"
+                            ),
+                        )
                     );
                 }
                 continue;
@@ -733,9 +766,17 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
                     // sanitize at the boundary. `folder_path_str` is
                     // display_path output (operational); print sites
                     // wrap with sanitize_for_display.
+                    // R17 W17.3 (N-R17-28): localize.
                     let folder_disp = sanitize_for_display(&folder_path_str);
                     let err_disp = sanitize_for_display(&err);
-                    eprintln!("  ⚠ {folder_disp}: skipped — {err_disp}");
+                    eprintln!(
+                        "{}",
+                        localize(
+                            globals,
+                            format!("  ⚠ {folder_disp}: skipped — {err_disp}"),
+                            format!("  ⚠ {folder_disp}：已跳过——{err_disp}"),
+                        )
+                    );
                 }
                 continue;
             }
@@ -755,13 +796,18 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
         if !globals.quiet {
             // R14 W14.8 (N-R14-3): sanitize_for_display on the success
             // line too — same Pattern 1 callsite as the error path
-            // above.
+            // above. R17 W17.3 (N-R17-28): localize.
             let folder_disp = sanitize_for_display(&folder_path_str);
             eprintln!(
-                "  ✓ {}: indexed {} font face{}",
-                folder_disp,
-                font_count,
-                s_if(font_count)
+                "{}",
+                localize(
+                    globals,
+                    format!(
+                        "  ✓ {folder_disp}: indexed {font_count} font face{}",
+                        s_if(font_count)
+                    ),
+                    format!("  ✓ {folder_disp}：已索引 {font_count} 个字体面"),
+                )
             );
         }
         total_fonts += font_count;
@@ -769,16 +815,33 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
     }
 
     if !globals.quiet {
+        // R17 W17.3 (N-R17-28): localize.
         eprintln!(
-            "✓ Cache updated: {total_fonts} font face{} indexed across {total_folders} folder{}.",
-            s_if(total_fonts),
-            s_if(total_folders)
+            "{}",
+            localize(
+                globals,
+                format!(
+                    "✓ Cache updated: {total_fonts} font face{} indexed across {total_folders} folder{}.",
+                    s_if(total_fonts),
+                    s_if(total_folders)
+                ),
+                format!(
+                    "✓ 缓存已更新：在 {total_folders} 个文件夹中索引了 {total_fonts} 个字体面。"
+                ),
+            )
         );
         // R14 W14.8 (N-R14-3 + A-R14-8): cache_path.display() also
         // sanitized — `cache_path` comes from globals.cache_file (argv
         // P1b) or default_cli_cache_path (env-var-resolved).
         let cache_disp = sanitize_for_display(&cache_path.display().to_string());
-        eprintln!("  Cache file: {cache_disp}");
+        eprintln!(
+            "{}",
+            localize(
+                globals,
+                format!("  Cache file: {cache_disp}"),
+                format!("  缓存文件：{cache_disp}"),
+            )
+        );
     }
 
     Ok(ExitCode::SUCCESS)

@@ -96,8 +96,23 @@ fn check_scope_allows(
 fn ensure_parent_dir(path: &Path) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create output directory: {e}"))?;
+            // R17 W17.3 (N-R17-25): include the parent path in the
+            // error so the user can identify which directory failed.
+            // Pre-W17.3 a permission / quota / read-only-fs failure
+            // surfaced as "Failed to create output directory:
+            // <generic os error>" with no actionable signal. Path
+            // bytes flow operationally here; downstream callers
+            // (CLI's `emit_file_report`, GUI's IPC error path) launder
+            // BiDi / control characters at the print boundary via
+            // `sanitize_for_display` / `stripUnicodeControls`, so
+            // including the raw `parent.display()` here doesn't reopen
+            // the W14.1 Pattern 3 sanitize-vs-operational concern.
+            fs::create_dir_all(parent).map_err(|e| {
+                format!(
+                    "Failed to create output directory {}: {e}",
+                    parent.display()
+                )
+            })?;
         }
     }
     Ok(())

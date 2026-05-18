@@ -1482,11 +1482,20 @@ fn preflight_files_inner(paths: Vec<String>) -> FontScanPreflight {
         total_bytes: 0,
     };
     let mut seen = HashSet::new();
+    // R17 W17.3 (N-R17-3): mirror dropzone.rs's aggregate-count pattern.
+    // Per-path validate / canonicalize failures `continue` silently inside
+    // the loop; a single `log::info!` post-loop tells anyone reading the
+    // log why the resolved count differs from the input count ("I dragged
+    // 50 files but only 30 are in the preflight" used to leave no trail).
+    let total_inputs = paths.len();
+    let mut rejected = 0usize;
     for p in paths {
         if validate_ipc_path(&p, "File").is_err() {
+            rejected += 1;
             continue;
         }
         let Ok(canonical) = Path::new(&p).canonicalize() else {
+            rejected += 1;
             continue;
         };
         if !canonical.is_file()
@@ -1495,6 +1504,11 @@ fn preflight_files_inner(paths: Vec<String>) -> FontScanPreflight {
             continue;
         }
         add_preflight_file(&canonical, &mut out);
+    }
+    if rejected > 0 {
+        log::info!(
+            "preflight_files: dropped {rejected} of {total_inputs} input path(s) (validate / canonicalize failure)"
+        );
     }
     out
 }
@@ -2156,6 +2170,23 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
     // and inflates the cancel-poll budget.
     let mut seen: HashSet<String> = HashSet::new();
 
+    // R17 W17.3 (N-R17-3): mirror dropzone.rs's aggregate-count pattern.
+    // Per-path validate / canonicalize failures `continue` silently; a
+    // single `log::info!` post-loop tells anyone reading the log why
+    // the parsed face count came from fewer than `total_inputs` source
+    // files. Emitted unconditionally before any cancel / ceiling
+    // early-return below, so the signal survives partial returns.
+    let total_inputs = paths.len();
+    let mut rejected = 0usize;
+
+    let log_rejected = |rejected: usize| {
+        if rejected > 0 {
+            log::info!(
+                "scan_files: dropped {rejected} of {total_inputs} input path(s) (validate / canonicalize failure)"
+            );
+        }
+    };
+
     for p in paths {
         if font_scan_cancelled(scan_id) {
             if !buffer.is_empty() {
@@ -2166,6 +2197,7 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
                 scan_id,
                 total
             );
+            log_rejected(rejected);
             return Ok(ScanOutcome {
                 total,
                 reason: ScanStopReason::UserCancel,
@@ -2173,6 +2205,7 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
         }
 
         if validate_ipc_path(&p, "File").is_err() {
+            rejected += 1;
             continue;
         }
 
@@ -2192,7 +2225,10 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
         // to font-extension targets.
         let canonical = match Path::new(&p).canonicalize() {
             Ok(c) => c,
-            Err(_) => continue,
+            Err(_) => {
+                rejected += 1;
+                continue;
+            }
         };
         if !canonical.is_file() {
             continue;
@@ -2212,6 +2248,7 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
                     "font scan {} hit the {MAX_FONTS_PER_SCAN}-face ceiling in file list",
                     scan_id
                 );
+                log_rejected(rejected);
                 return Ok(ScanOutcome {
                     total,
                     reason: ScanStopReason::CeilingHit,
@@ -2253,6 +2290,7 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
     } else {
         ScanStopReason::Natural
     };
+    log_rejected(rejected);
     Ok(ScanOutcome { total, reason })
 }
 
@@ -3232,10 +3270,20 @@ pub fn subset_font(
         } else if let Some(e) = panic_payload.downcast_ref::<std::io::Error>() {
             e.to_string()
         } else {
-            format!(
-                "fontcull panicked with unknown payload type {:?}",
-                panic_payload.type_id()
-            )
+            // R17 W17.3 (N-R17-15): no `panic_payload.type_id()` —
+            // `Box<dyn Any>::type_id()` returns the TypeId of the
+            // `dyn Any` trait object itself, NOT the boxed concrete
+            // type, so the value was a fixed constant carrying no
+            // diagnostic. The downcast cascade above covers the
+            // panic shapes fontcull is known to produce; this arm is
+            // the structural fallback for "fontcull added a panic
+            // type we don't handle", and surfacing the filename +
+            // face index in the WARN log (line below) is the more
+            // actionable signal than a constant TypeId. A future
+            // need for finer panic-type diagnosis would install a
+            // `panic::set_hook` to capture `PanicInfo::location` /
+            // `PanicInfo::message`, not chase the unboxed type here.
+            "fontcull panicked with unknown payload type".to_string()
         };
         log::warn!(
             "fontcull panicked while subsetting '{filename}' (face {font_index}): {panic_msg}"

@@ -271,17 +271,31 @@ impl CliEngine {
         // of undefined (reading 'convertHdr')". Surfacing a build-step
         // pointer here is more useful.
         //
-        // R16 W16.2 (A-R16-7): tightened from a bare object-non-null
-        // check to also verify `convertHdr` is callable. Pre-W16.2 a
-        // hand-edited bundle that defined `globalThis.ssaHdrifyCliEngine = {}`
-        // (no methods) passed the probe — per-method calls then failed
-        // mid-run with a V8 type error. `convertHdr` is one of four
-        // wired methods; verifying any one of them rules out the
-        // empty-object case at near-zero cost (one extra `typeof`).
+        // R16 W16.2 (A-R16-7) / R17 W17.3 (N-R17-33): probe verifies
+        // all wired engine methods, not just `convertHdr`. Pre-R16
+        // the probe was a bare object-non-null check that passed an
+        // empty `globalThis.ssaHdrifyCliEngine = {}`; R16 W16.2 added
+        // a single-method check ruling out the empty-object case.
+        // R17 widens the check to the full 9-method surface so a
+        // bundle that defines `convertHdr` but is missing (e.g.)
+        // `runChain` due to a build-script regression surfaces at
+        // engine startup instead of mid-run inside the chain loop.
+        // Cost: 8 extra `typeof` checks at process start, each
+        // O(1) global property lookup.
         let probe = runtime
             .execute_script(
                 "ssahdrify-cli-engine-probe.js",
-                "typeof globalThis.ssaHdrifyCliEngine === 'object' && globalThis.ssaHdrifyCliEngine !== null && typeof globalThis.ssaHdrifyCliEngine.convertHdr === 'function'",
+                "typeof globalThis.ssaHdrifyCliEngine === 'object' && \
+                 globalThis.ssaHdrifyCliEngine !== null && \
+                 typeof globalThis.ssaHdrifyCliEngine.convertHdr === 'function' && \
+                 typeof globalThis.ssaHdrifyCliEngine.convertShift === 'function' && \
+                 typeof globalThis.ssaHdrifyCliEngine.planFontEmbed === 'function' && \
+                 typeof globalThis.ssaHdrifyCliEngine.applyFontEmbed === 'function' && \
+                 typeof globalThis.ssaHdrifyCliEngine.planRename === 'function' && \
+                 typeof globalThis.ssaHdrifyCliEngine.runChain === 'function' && \
+                 typeof globalThis.ssaHdrifyCliEngine.resolveHdrOutputPath === 'function' && \
+                 typeof globalThis.ssaHdrifyCliEngine.resolveShiftOutputPath === 'function' && \
+                 typeof globalThis.ssaHdrifyCliEngine.resolveEmbedOutputPath === 'function'",
             )
             .map_err(|err| format!("failed to probe CLI engine global: {err}"))?;
         let probe_ok = {
