@@ -20,7 +20,11 @@ import {
   type ParsedFile,
 } from "./features/batch-rename/pairing-engine";
 import { buildFontEntry } from "./features/font-embed/ass-uuencode";
-import { buildFontFileName, insertFontsSection } from "./features/font-embed/font-embedder";
+import {
+  assertAssShape,
+  buildFontFileName,
+  insertFontsSection,
+} from "./features/font-embed/font-embedder";
 import { collectFontsWithParser, fontKeyLabel } from "./features/font-embed/font-collector";
 import { deriveShiftedPath, shiftSubtitles } from "./features/timing-shift/timing-engine";
 import { extractLangFromBaseName, LANG_TAGS } from "./lib/lang-detection";
@@ -314,6 +318,16 @@ export function planFontEmbed(request: FontEmbedPlanRequest): FontEmbedPlanResul
 }
 
 export function applyFontEmbed(request: FontEmbedApplyRequest): FontEmbedApplyResult {
+  // Shape / size / line-count gate runs BEFORE the zero-fontEntries
+  // early-return so every entry into this helper hits the same
+  // backstop. `insertFontsSection` calls `assertAssShape` internally,
+  // so the non-zero path is already covered; the zero-fonts path
+  // previously returned content verbatim, leaving the standalone
+  // embed CLI flow (process_embed_file's subset_payloads.is_empty()
+  // short-circuit) without shape validation. Pattern 1 helper-
+  // contract uniformity.
+  assertAssShape(request.content);
+
   const fontEntries = request.fonts.map((font) =>
     buildFontEntry(font.fontName, Uint8Array.from(font.data))
   );

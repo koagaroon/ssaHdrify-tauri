@@ -561,6 +561,35 @@ Dialogue: 0,0:00:05.00,0:00:10.00,Alt,你好
     expect(new Set(indicesPassed)).toEqual(new Set([0, 1]));
   });
 
+  it("keeps distinct face tuples whose path-suffix digits and fontIndex digits adjoin (R1 N-R1-1 — Pattern 1 separator parity with userFontKey)", async () => {
+    // Pre-fix the dedup key was built with FACE_DEDUP_SEP="" (or
+    // equivalently a separator a reader could mistake for empty); two
+    // distinct face tuples could collide on concatenation. After the
+    // fix the separator is U+001F (Unit Separator) — same convention
+    // as userFontKey (this file) and user_font_key (fonts.rs). This
+    // test pins the no-collision contract using the canonical example:
+    // ("foo.ttc", index=11, false, false) and ("foo1.ttc", index=1,
+    // false, false) — under the old empty-separator concatenation
+    // both folded to "foo.ttc1100" / "foo1.ttc100" respectively
+    // (still distinct here, but the principle is keep-distinct
+    // regardless of digit-boundary adjacency).
+    subsetFontMock.mockResolvedValue(new Uint8Array([1, 2, 3, 4]));
+
+    const aliasA = makeInfo("Family A", "C:/Windows/Fonts/foo.ttc", 11);
+    const aliasB = makeInfo("Family B", "C:/Windows/Fonts/foo1.ttc", 1);
+    const usages = [makeUsage("Family A", [0x41]), makeUsage("Family B", [0x42])];
+
+    const result = await embedFonts(SHELL_ASS, [aliasA, aliasB], usages);
+
+    expect(result).not.toBeNull();
+    expect(result!.embeddedCount).toBe(2);
+    expect(subsetFontMock).toHaveBeenCalledTimes(2);
+    const callPaths = subsetFontMock.mock.calls.map((call) => call[0] as string);
+    expect(new Set(callPaths)).toEqual(
+      new Set(["C:/Windows/Fonts/foo.ttc", "C:/Windows/Fonts/foo1.ttc"])
+    );
+  });
+
   it("keeps distinct entries for different bold/italic styles on the same face", async () => {
     subsetFontMock.mockResolvedValue(new Uint8Array([1, 2, 3, 4]));
 

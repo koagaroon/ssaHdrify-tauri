@@ -171,8 +171,13 @@ function embedTransform(ctx: TransformContext, params: EmbedStepParams): Transfo
 
   // Empty subsets array is legitimate — subtitle has no font
   // references, or all lookups failed under `--on-missing warn`.
-  // Skip the [Fonts] section insertion in that case (matches
-  // applyFontEmbed's fast-path in cli-engine-entry.ts).
+  // Skip the [Fonts] section insertion in that case. Chain's input
+  // shape is validated upstream by the `assertAssShape(content)` call
+  // in `runChain` (gated on `plan.steps.some(kind === "embed")`), so
+  // this branch can return verbatim content safely. The sibling
+  // fast-path in `cli-engine-entry.ts::applyFontEmbed` now runs
+  // `assertAssShape` at its own entry — both surfaces enforce the
+  // same gate, via different layers.
   if (params.subsets.length === 0) {
     return {
       content: ctx.content,

@@ -184,6 +184,31 @@ Dialogue: 0,0:00:00.00,0:00:01.00,Default,中文
     expect(result.content).toBe(SIMPLE_ASS);
   });
 
+  it("applyFontEmbed rejects malformed ASS even on the zero-fonts early-return path (R1 N-R1-2)", () => {
+    // Pre-fix the zero-fontEntries early-return bypassed assertAssShape
+    // (insertFontsSection runs the gate, but the zero-fonts branch
+    // returned verbatim content without ever invoking it). Result:
+    // standalone embed CLI flow (process_embed_file's
+    // subset_payloads.is_empty() short-circuit) could write a
+    // 50 MB pure-newline blob to disk untouched. The fix moved
+    // assertAssShape ABOVE the early-return — even zero-font calls
+    // now run the shape + byte + line-count gate.
+    const noScriptInfo = `[V4+ Styles]
+Format: Name, Fontname, Fontsize, Bold, Italic
+Style: Default,Arial,20,0,0
+
+[Events]
+Format: Layer, Start, End, Style, Text
+Dialogue: 0,0:00:00.00,0:00:01.00,Default,Hello
+`;
+    expect(() =>
+      applyFontEmbed({
+        content: noScriptInfo,
+        fonts: [],
+      })
+    ).toThrow(/\[Script Info\]/);
+  });
+
   it("applyFontEmbed rejects malformed ASS containing multiple [Fonts] sections", () => {
     const malformedAss = `[Script Info]
 Title: Two Fonts
