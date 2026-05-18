@@ -141,7 +141,14 @@ const MAX_PREFLIGHT_ENTRIES: usize = 200_000;
 /// (R15 W15.3 N-R15-10: extracted from inline `200_000` literal in
 /// `subset_font` to match the named-const convention every other cap
 /// in this module follows.)
-const MAX_SUBSET_CODEPOINTS: usize = 200_000;
+///
+/// R1 N-R1-9: `pub` so the CLI bin's `MAX_SUBSET_CODEPOINTS_FOR_DEDUP`
+/// (which MUST equal this value — the dedup-merge cap is bounded by
+/// what subset_font itself accepts) can both reference it AND assert
+/// equality at test time. The TS sibling in
+/// `src/features/font-embed/font-embedder.ts` mirrors the same value;
+/// its WHY comment names this constant as the source of truth.
+pub const MAX_SUBSET_CODEPOINTS: usize = 200_000;
 
 /// Maximum font-collection face index accepted at `subset_font`'s IPC
 /// boundary. TTC files practically cap at 16 faces (per
@@ -3697,6 +3704,74 @@ mod tests {
         clear_font_sources().expect("test DB should clear");
     }
 
+    /// R1 N-R1-3: replaces the previous `tests/test_subset.rs` integration
+    /// test which called `fontcull::subset_font_data_unicode` directly —
+    /// bypassing the project's tuned Plan in `subset_with_index` (drop
+    /// vmtx/LTSH/kern, preserve full name table — the 4.6× size win
+    /// from forum-feedback (2a), commit `00f44ac`). Unit test inside
+    /// `mod tests` so `subset_with_index` stays private; outside-crate
+    /// callers go through the public `subset_font` (which requires
+    /// provenance setup), and integration tests have no need to expose
+    /// the internal subset path as public API.
+    ///
+    /// Usage (any single-face CJK .ttf works):
+    ///   SSAHDRIFY_TEST_CJK_FONT=C:/Windows/Fonts/simsun.ttc
+    ///   cargo test --lib -- --ignored subset_with_index_yields_size_reduction
+    #[test]
+    #[ignore = "requires SSAHDRIFY_TEST_CJK_FONT env var pointing to a CJK font file"]
+    fn subset_with_index_yields_significant_size_reduction_on_cjk() {
+        let Ok(font_path) = std::env::var("SSAHDRIFY_TEST_CJK_FONT") else {
+            eprintln!("SSAHDRIFY_TEST_CJK_FONT not set — skipping");
+            return;
+        };
+        let font_data = match std::fs::read(&font_path) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("Cannot read {font_path}: {e} — skipping");
+                return;
+            }
+        };
+        let original_size = font_data.len();
+
+        // ~50 CJK chars + ASCII / fullwidth padding (mirrors the
+        // padding subset_font itself applies in production).
+        let subtitle_text = "你好世界，这是一个字幕测试。中文字体子集化可以显著减小文件体积！";
+        let mut codepoints: Vec<u32> = subtitle_text.chars().map(|c| c as u32).collect();
+        codepoints.extend(0x0020u32..=0x007Eu32);
+        codepoints.extend(0xFF01u32..=0xFF5Eu32);
+        codepoints.sort();
+        codepoints.dedup();
+
+        // Pick face 0 (works for both single-face .ttf and TTC). If the
+        // fixture is a TTC, the W2 numFonts peek bounds the index too.
+        let subsetted = subset_with_index(&font_data, 0, &codepoints)
+            .expect("subset_with_index should succeed on a real CJK font");
+        let subset_size = subsetted.len();
+
+        let ratio = (subset_size as f64 / original_size as f64) * 100.0;
+        eprintln!(
+            "fontset → {} bytes → {} bytes ({:.1}% of original, {} codepoints)",
+            original_size,
+            subset_size,
+            ratio,
+            codepoints.len()
+        );
+
+        assert!(
+            subset_size > 0 && subset_size < original_size,
+            "Subset must be non-empty and smaller than original"
+        );
+        // 70% reduction floor on CJK fonts. The tuned Plan (drop
+        // vmtx/LTSH/kern) gives this comfortably; a regression that
+        // re-introduced any of those tables would push the ratio
+        // above 30%.
+        assert!(
+            ratio < 30.0,
+            "Expected ratio < 30% with tuned Plan, got {:.1}%",
+            ratio
+        );
+    }
+
     fn sample_entry(path: &str, family: &str, index: u32) -> LocalFontEntry {
         LocalFontEntry {
             path: path.to_string(),
@@ -3743,8 +3818,14 @@ mod tests {
             has_context,
             "subset error should carry diagnostic context — got: {err}"
         );
-        // Same contract for the unicode-subset path that subset_font's
-        // index==0 branch hits directly.
+        // R1 N-R1-4: fontcull's unicode-subset error contract — parse
+        // failures must produce a non-empty Display string so downstream
+        // wrappers (subset_with_index, subset_font) can interpolate them
+        // cleanly into the IPC error path. Pre-`00f44ac` this branch
+        // referenced a "subset_font index==0 branch" that no longer
+        // exists (dispatch now keys on `is_ttc_data` magic peek, not
+        // on `font_index == 0`); the comment was archaeology pointing
+        // at a removed code path.
         let unicode_err = fontcull::subset_font_data_unicode(&truncated, &[0x41], &[])
             .expect_err("malformed TTF should fail unicode subset")
             .to_string();

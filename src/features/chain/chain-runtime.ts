@@ -161,6 +161,17 @@ function embedTransform(ctx: TransformContext, params: EmbedStepParams): Transfo
   // the subsetted bytes into params.subsets. This lets the transform
   // stay sync (matching every other engine call boundary) without
   // needing async TS→Rust callbacks mid-chain.
+  //
+  // R1 N-R1-12 / A-R1-4: per-subset byte-length defense lives at the
+  // Rust shell (`process_one_chain_input` enforces
+  // `MAX_CHAIN_SUBSET_TOTAL_BYTES = 200 MB` on the raw bytes before
+  // base64 + serde_json marshal; `MAX_FONT_DATA_SIZE = 50 MB` bounds
+  // each individual subset upstream in subset_font). This transform
+  // trusts that upstream — `decodeBase64` below has no local cap.
+  // Today the chain V8 entry is ONLY reached via the Rust shell;
+  // any future caller that constructs a ChainPlan from another
+  // source (a TS-side fixture, an HTTP-API entry) must enforce
+  // its own per-subset size cap before reaching here.
   if (params.subsets === undefined) {
     throw new Error(
       "embed step in chain requires pre-resolved font subsets " +

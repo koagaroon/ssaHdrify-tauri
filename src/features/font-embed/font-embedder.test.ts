@@ -547,10 +547,7 @@ Dialogue: 0,0:00:05.00,0:00:10.00,Alt,你好
     // of the same TTC; must NOT dedup.
     const face0 = makeInfo("Microsoft YaHei", "C:/Windows/Fonts/msyh.ttc", 0);
     const face1 = makeInfo("Microsoft YaHei UI", "C:/Windows/Fonts/msyh.ttc", 1);
-    const usages = [
-      makeUsage("Microsoft YaHei", [0x41]),
-      makeUsage("Microsoft YaHei UI", [0x42]),
-    ];
+    const usages = [makeUsage("Microsoft YaHei", [0x41]), makeUsage("Microsoft YaHei UI", [0x42])];
 
     const result = await embedFonts(SHELL_ASS, [face0, face1], usages);
 

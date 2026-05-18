@@ -186,17 +186,18 @@ ssahdrify-cli chain          --help
 
 ### 全局选项 | Global Options
 
-| 选项 / Option         | 说明 / Description                                                                                                                                   |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--lang <en\|zh>`     | 输出语言；不指定时按系统区域设置自动检测（zh\* → zh，否则 en）/ Output language; auto-detected from OS locale when omitted (zh\* → zh, otherwise en) |
-| `--json`              | 输出机器可读 JSON 报告 / Emit a machine-readable JSON report                                                                                         |
-| `--verbose`           | 显示更多进度细节 / Show more progress detail                                                                                                         |
-| `--quiet`             | 抑制常规进度输出 / Suppress normal progress output                                                                                                   |
-| `--dry-run`           | 预演计划工作但不写文件 / Preview planned work without writing files                                                                                  |
-| `--overwrite`         | 允许覆盖已存在的输出文件 / Replace existing output files instead of skipping                                                                         |
-| `--output-dir <DIR>`  | 重定向输出到指定目录 / Redirect output to a specific directory                                                                                       |
-| `--no-cache`          | 跳过本次运行的字体缓存；缓存文件保持不变 / Skip the font cache for this run; cache file untouched                                                    |
-| `--cache-file <PATH>` | 覆盖默认的缓存文件路径 / Override the default cache file path (OS default: see Cache Location below)                                                 |
+| 选项 / Option         | 说明 / Description                                                                                                                                                                                                                                  |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--lang <en\|zh>`     | 输出语言；不指定时按系统区域设置自动检测（zh\* → zh，否则 en）/ Output language; auto-detected from OS locale when omitted (zh\* → zh, otherwise en)                                                                                                |
+| `--json`              | 输出机器可读 JSON 报告 / Emit a machine-readable JSON report                                                                                                                                                                                        |
+| `--verbose`           | 显示更多进度细节 / Show more progress detail                                                                                                                                                                                                        |
+| `--quiet`             | 抑制常规进度输出 / Suppress normal progress output                                                                                                                                                                                                  |
+| `--dry-run`           | 预演计划工作但不写文件 / Preview planned work without writing files                                                                                                                                                                                 |
+| `--overwrite`         | 允许覆盖已存在的输出文件 / Replace existing output files instead of skipping                                                                                                                                                                        |
+| `--output-dir <DIR>`  | 重定向输出到指定目录 / Redirect output to a specific directory                                                                                                                                                                                      |
+| `--no-cache`          | 跳过本次运行的字体缓存；缓存文件保持不变 / Skip the font cache for this run; cache file untouched                                                                                                                                                   |
+| `--cache-file <PATH>` | 覆盖默认的缓存文件路径 / Override the default cache file path (OS default: see Cache Location below)                                                                                                                                                |
+| `--fail-fast`         | 任一文件失败即中止后续输入；已成功写出的文件保留；失败文件可能留下部分写入产物 / Abort the batch on the first failed file; previously-succeeded outputs are kept, but the failed input itself may leave a partial-write artifact at its destination |
 
 > **JSON 模式 | JSON Mode**
 >

@@ -3471,16 +3471,22 @@ fn group_resolved_fonts_by_face(
     face_groups
 }
 
-/// Mirrors `app_lib::fonts::MAX_SUBSET_CODEPOINTS` (currently
-/// 200,000). The dedup decision below checks the merged-union size
-/// against this cap BEFORE calling subset_font; if the union would
-/// overflow, we fall back to per-alias subsetting for that group
-/// only — the dedup byte-reduction win is given up for the
-/// cap-busting case, the IPC defense-in-depth stays at 200k for
-/// every individual `subset_font` call. Keep the two constants
-/// in sync — if `app_lib::fonts::MAX_SUBSET_CODEPOINTS` moves,
-/// this should too. The TS sibling in `font-embedder.ts` (named
-/// `MAX_SUBSET_CODEPOINTS_FOR_DEDUP`) tracks the same value.
+/// MUST equal `app_lib::fonts::MAX_SUBSET_CODEPOINTS` (the IPC cap
+/// in fonts.rs, also 200,000). The dedup decision below checks the
+/// merged-union size against this cap BEFORE calling subset_font;
+/// if the union would overflow, we fall back to per-alias subsetting
+/// for that group only — the dedup byte-reduction win is given up
+/// for the cap-busting case, the IPC defense-in-depth stays at 200k
+/// for every individual `subset_font` call. The TS sibling in
+/// `font-embedder.ts` (named `MAX_SUBSET_CODEPOINTS_FOR_DEDUP`)
+/// tracks the same value; its WHY comment names fonts.rs as the
+/// source of truth.
+///
+/// R1 N-R1-9: cross-language drift defense. `dedup_cap_matches_ipc_cap`
+/// in `mod tests` pins the equality with `app_lib::fonts::MAX_SUBSET_CODEPOINTS`
+/// so a unilateral bump of the IPC cap (the only realistic regression
+/// shape — TS↔Rust drift surfaces at the user-facing dedup decision)
+/// fails the test instead of shipping silently.
 const MAX_SUBSET_CODEPOINTS_FOR_DEDUP: usize = 200_000;
 
 fn subset_resolved_fonts(
@@ -4674,6 +4680,27 @@ mod tests {
     use app_lib::fonts::USER_FONT_DB_FILENAME;
     use std::fs;
     use std::path::{Path, PathBuf};
+
+    /// R1 N-R1-9: pin the cross-module constant equality. The CLI's
+    /// dedup cap MUST equal the IPC cap inside fonts.rs — the dedup
+    /// decision (merge union vs per-alias fallback) is bounded by
+    /// what subset_font itself accepts. A unilateral bump on either
+    /// side would silently break the b8aa3fd fallback contract; this
+    /// test fails the build instead. TS sibling
+    /// (`MAX_SUBSET_CODEPOINTS_FOR_DEDUP` in font-embedder.ts) carries
+    /// a WHY comment naming `app_lib::fonts::MAX_SUBSET_CODEPOINTS` as
+    /// the source of truth.
+    #[test]
+    fn dedup_cap_matches_ipc_cap() {
+        assert_eq!(
+            MAX_SUBSET_CODEPOINTS_FOR_DEDUP,
+            app_lib::fonts::MAX_SUBSET_CODEPOINTS,
+            "CLI dedup cap must equal the fonts.rs IPC cap; the dedup \
+             fallback path is bounded by what subset_font accepts. \
+             If you change one, change both AND update the TS sibling \
+             at src/features/font-embed/font-embedder.ts."
+        );
+    }
 
     /// Construct a default GlobalOptions for tests that need to call
     /// fs-touching helpers (write_output / copy_file_output etc.) which

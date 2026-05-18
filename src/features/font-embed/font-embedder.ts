@@ -539,16 +539,25 @@ export async function embedFonts(
   }
   const faceGroups = new Map<string, FaceGroup>();
 
-  // Mirrors the Rust `MAX_SUBSET_CODEPOINTS` constant in
+  // Source of truth: `app_lib::fonts::MAX_SUBSET_CODEPOINTS` in
   // `src-tauri/src/fonts.rs` (currently 200,000). The TS dedup
-  // checks the merged-union size BEFORE crossing the
-  // `subsetFont` IPC so we can decide between (a) one IPC call
-  // with the union or (b) N IPC calls per alias. Keep the two
-  // constants in sync — if the Rust cap moves, this should too.
-  // A merged union exceeding this cap means a crafted ASS has
-  // packed several near-per-variant-cap aliases onto one face;
-  // honest workflows produce unions in the low tens of thousands
-  // even on full-CJK subtitle batches.
+  // checks the merged-union size BEFORE crossing the `subsetFont`
+  // IPC so we can decide between (a) one IPC call with the union
+  // or (b) N IPC calls per alias. A merged union exceeding this
+  // cap means a crafted ASS has packed several near-per-variant-cap
+  // aliases onto one face; honest workflows produce unions in the
+  // low tens of thousands even on full-CJK subtitle batches.
+  //
+  // R1 N-R1-9: three values must stay in lockstep —
+  //   1. `app_lib::fonts::MAX_SUBSET_CODEPOINTS` (the IPC cap)
+  //   2. `MAX_SUBSET_CODEPOINTS_FOR_DEDUP` in CLI `bin/cli/main.rs`
+  //   3. this constant (the GUI dedup cap)
+  // The Rust side has a `dedup_cap_matches_ipc_cap` test pinning
+  // values 1 and 2. This TS const isn't reachable from a Rust test;
+  // if Rust changes (1) or (2), update THIS value in the same diff.
+  // Drift between (1) and (3) would cause the GUI to attempt unions
+  // up to a stale 200k while subset_font rejected anything over the
+  // new IPC cap — the dedup-fallback contract from `b8aa3fd` breaks.
   const MAX_SUBSET_CODEPOINTS_FOR_DEDUP = 200_000;
 
   // Pre-pass: build dedup groups + emit no-usage diagnostics. The
@@ -677,6 +686,19 @@ export async function embedFonts(
       // are still preserved at the Rust subset layer, so libass's
       // per-glyph fallback can traverse the N entries to find any
       // requested glyph.
+      //
+      // R1 N-R1-13 (overlap trade-off, not a bug): real-world
+      // cap-busts usually involve aliases whose codepoint sets
+      // overlap (e.g., two CJK aliases both covering the same
+      // ideograph range). The fallback subsets each alias with
+      // its OWN codepoints, so overlapping codepoints get embedded
+      // multiple times under different filenames — the dedup byte-
+      // reduction win is given up MORE than necessary for overlapping
+      // aliases. A pair-merge variant (combine aliases whose union
+      // stays under the cap before falling back to per-alias) would
+      // recover some of that win, but adds an O(N²) merge step for a
+      // deliberately-rare cap-busting case. Rendering remains
+      // correct; the cost is purely [Fonts] section size.
       for (const alias of aliases) {
         if (isCancelled?.()) return null;
         if (!alias.info.filePath) continue;
