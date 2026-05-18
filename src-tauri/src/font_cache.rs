@@ -177,6 +177,16 @@ pub const SCHEMA_VERSION: i32 = 2;
 /// `to_ascii_lowercase` would miss `É`/`Ñ`/`Ü` etc., breaking the
 /// CJK/Latin-extended fonts the cache exists to accelerate.
 pub(crate) fn family_lookup_key(family_name: &str) -> String {
+    // R2 N-R2-15: no codepoint cap here because every caller is
+    // upstream-bounded. The IPC boundary runs `validate_font_family`
+    // (256-codepoint cap) on argv-derived family names; the cache
+    // module's internal callers consume name-table entries that
+    // upstream `bounded_font_family_name` (in fonts.rs) clamps to the
+    // same length. Adding a debug_assert here would document the
+    // invariant but provide no production defense; this comment is
+    // the durable record. If a future direct caller appears that
+    // doesn't route through either upstream, add the bound at THAT
+    // boundary, not here.
     use unicode_normalization::UnicodeNormalization;
     family_name.nfc().collect::<String>().to_lowercase()
 }
@@ -812,10 +822,15 @@ impl FontCache {
 /// `.unwrap_or(0)` posture relied on doc discipline — exactly what
 /// N-R10-008 already replaced for the parallel helper.)
 fn current_unix_seconds() -> Option<i64> {
+    // R2 N-R2-13: `i64::try_from` (not `as i64`) for posture symmetry
+    // with `try_modified_at`. The cast can't overflow until year ~292
+    // billion, but the typed conversion makes the "this could fail"
+    // contract type-level explicit rather than relying on doc
+    // discipline — mirrors the R10 N-R10-008 tightening.
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .ok()
-        .map(|d| d.as_secs() as i64)
+        .and_then(|d| i64::try_from(d.as_secs()).ok())
 }
 
 /// Schema SQL — one statement per table. Tables match the design

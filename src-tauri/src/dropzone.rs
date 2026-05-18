@@ -145,12 +145,15 @@ pub fn expand_dropped_paths(paths: Vec<String>) -> Result<ExpandedPaths, String>
             break;
         }
     }
-    // Surface the per-path rejection count once at the end. Per-failure
-    // log lines were already emitted at warn level; this aggregate
-    // informs anyone reading the log that the result count differs from
-    // the drop count for legitimate reasons (validation / stat / reparse).
+    // R2 N-R2-5: surface the per-path rejection count at WARN, not INFO.
+    // Per `~/.claude/rules/vibe-coding.md` § Log-level discipline, this
+    // aggregate IS the user-visible consequence (N drops of M dropped);
+    // the per-failure warnings above are the function-name-leak class.
+    // Release builds default to LevelFilter::Warn (see lib.rs), so
+    // pre-W3 the per-failure noise was visible but the synthesis that
+    // explains the noise was not.
     if rejected > 0 {
-        log::info!(
+        log::warn!(
             "dropzone: dropped {rejected} of {} input path(s) — see warnings above",
             paths.len()
         );

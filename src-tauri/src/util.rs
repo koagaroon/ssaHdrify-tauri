@@ -72,7 +72,7 @@ pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
                 // word joiner / mongolian vowel separator / BOM —
                 // all invisible characters that can smuggle past
                 // visual review and break path comparisons.
-                | '\u{200B}' | '\u{200C}' | '\u{200D}'
+                | '\u{200B}'..='\u{200D}'
                 | '\u{2060}' | '\u{180E}' | '\u{FEFF}'
                 // BiDi format characters: LRM / RLM marks plus
                 // embedding / override / isolate codepoints. U+202E
@@ -80,9 +80,13 @@ pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
                 // filename-display-reversal vector — `evil\u{202E}txt.exe`
                 // displays as `evilexe.txt` in many UIs. Reject the
                 // whole 200E-202E + 2066-2069 family for symmetry.
+                // R2 N-R2-7: range syntax to match the sibling
+                // `validate_font_family` enumeration; pre-W3 these two
+                // validators listed the same codepoints in different
+                // shapes, inviting drift on the next codepoint addition.
                 | '\u{200E}' | '\u{200F}'
-                | '\u{202A}' | '\u{202B}' | '\u{202C}' | '\u{202D}' | '\u{202E}'
-                | '\u{2066}' | '\u{2067}' | '\u{2068}' | '\u{2069}'
+                | '\u{202A}'..='\u{202E}'
+                | '\u{2066}'..='\u{2069}'
                 // U+061C Arabic Letter Mark — Cf, bidi format
                 // character. The TS unicode-controls set includes
                 // it (Round 5 Wave 5.1); Round 6 Wave 6.2 parity sweep
@@ -200,6 +204,14 @@ pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
                 | "LPT\u{00B3}"
         ) || (stem.len() == 4
             && (stem.starts_with("COM") || stem.starts_with("LPT"))
+            // R2 N-R2-16 WHY: `stem.len()` is BYTE length; combined
+            // with the ASCII "COM"/"LPT" 3-byte prefix and len==4, the
+            // 4th byte is either a single-byte ASCII char OR a UTF-8
+            // continuation byte (0x80-0xBF). `is_ascii_digit()` rejects
+            // continuation bytes, so the index is safe and false-positives
+            // are structurally impossible. A future refactor renaming
+            // `stem.len()` to `stem.chars().count()` would silently
+            // break this invariant; keep the byte-length form.
             && stem.as_bytes()[3].is_ascii_digit())
     });
     if has_reserved_segment {

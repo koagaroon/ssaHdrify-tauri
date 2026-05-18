@@ -99,12 +99,26 @@ impl ParsedStep {
 /// detection (HDR×2, shift-after-embed). The caller emits them to
 /// stderr; they do NOT block execution per the locked decision
 /// "warn but don't enforce" for step ordering.
+// R2 N-R2-22: fields are `pub(crate)`, not `pub`. ChainPlan's eager
+// Shift-validation contract (per R17 W17.2 / N-R17-32) is enforced by
+// "all construction goes through `parse_chain_argv`" — that's a
+// single-entry-point composition (per ~/.claude/rules/code_review.md §
+// Multi-step contracts). Fully-pub fields would let a future sibling
+// module in this bin construct ChainPlan directly with un-validated
+// Shift args, bypassing `parse_duration_ms` / `parse_timestamp_ms`;
+// the `.expect("validated upstream in chain::parse_chain_argv")` in
+// `ShiftArgs::to_chain_step` would then panic at runtime. The
+// pub(crate) constraint keeps the struct usable inside the bin
+// (`main.rs` consumes it) while preventing direct construction at
+// the visibility level — the only way to get a ChainPlan from
+// outside this module is `parse_chain_argv`, which by construction
+// validated every Shift arg.
 #[derive(Debug)]
 pub struct ChainPlan {
-    pub steps: Vec<ParsedStep>,
-    pub output_template: String,
-    pub input_files: Vec<PathBuf>,
-    pub warnings: Vec<String>,
+    pub(crate) steps: Vec<ParsedStep>,
+    pub(crate) output_template: String,
+    pub(crate) input_files: Vec<PathBuf>,
+    pub(crate) warnings: Vec<String>,
 }
 
 impl ChainPlan {

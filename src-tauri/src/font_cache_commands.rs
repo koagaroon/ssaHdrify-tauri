@@ -80,6 +80,59 @@ const GUI_CACHE_FILE_NAME: &str = "gui_font_cache.sqlite3";
 /// user can clear and re-init explicitly.
 static GUI_FONT_CACHE: Lazy<Mutex<Option<FontCache>>> = Lazy::new(|| Mutex::new(None));
 
+/// Outcome of attempting to acquire the GUI font-cache slot. Returned by
+/// [`with_cache_slot`] so each caller decides what to do about a busy
+/// or unavailable cache without sharing a forced policy.
+///
+/// R2 N-R2-6: extracted from three near-identical try_lock + as_mut
+/// blocks across `try_record_folder_in_gui_cache`,
+/// `try_remove_folder_from_gui_cache`, and
+/// `clear_all_folders_in_gui_cache_locked`. The shared shape was the
+/// reviewer's actual concern; the three sites disagree on WouldBlock
+/// log level (DEBUG for the auto-populate / auto-evict best-effort
+/// helpers; WARN for clear-all because the guard is supposed to
+/// prevent contention there) and on whether None-slot deserves a WARN,
+/// so the helper isolates only the locking + cache-handle access and
+/// returns this enum for each call site to dispatch on.
+pub(crate) enum CacheSlotOutcome<R> {
+    /// Closure ran on a live `FontCache`.
+    Ran(R),
+    /// Slot lock was contended (`TryLockError::WouldBlock`). The helper
+    /// did NOT log; the caller logs at the level appropriate to its
+    /// scope (DEBUG = success-of-degradation, WARN = guard-discipline
+    /// regression).
+    Busy,
+    /// Mutex was poisoned. Already logged at WARN by the helper.
+    Poisoned,
+    /// Slot was `None` (init failed or schema mismatch). The helper
+    /// did NOT log; the caller decides whether the situation warrants
+    /// a WARN message or is acceptable as silent no-op.
+    Unavailable,
+}
+
+/// Run `f` against the GUI font-cache handle if available, returning a
+/// [`CacheSlotOutcome`] that distinguishes "ran" from each non-running
+/// shape so the call site can log appropriately. The Poisoned arm logs
+/// here because that's the same message every caller wants; every
+/// other arm is the caller's policy.
+fn with_cache_slot<F, R>(f: F) -> CacheSlotOutcome<R>
+where
+    F: FnOnce(&mut FontCache) -> R,
+{
+    let mut slot = match GUI_FONT_CACHE.try_lock() {
+        Ok(s) => s,
+        Err(std::sync::TryLockError::Poisoned(_)) => {
+            log::warn!("GUI cache mutex poisoned");
+            return CacheSlotOutcome::Poisoned;
+        }
+        Err(std::sync::TryLockError::WouldBlock) => return CacheSlotOutcome::Busy,
+    };
+    match slot.as_mut() {
+        Some(c) => CacheSlotOutcome::Ran(f(c)),
+        None => CacheSlotOutcome::Unavailable,
+    }
+}
+
 /// Cache file path published separately from the live handle so
 /// `clear_font_cache` can drop the connection AND wipe the file even
 /// when `GUI_FONT_CACHE` is `None` (schema-mismatch recovery path).
@@ -562,8 +615,10 @@ pub fn detect_font_cache_drift() -> Result<DriftReport, String> {
         let folders = cache
             .list_folders()
             .map_err(|e| format!("list cached folders: {e}"))?;
-        let gen = GUI_FONT_CACHE_GENERATION.load(Ordering::Acquire);
-        (folders, gen)
+        // R2 N-R2-8: `gen` is reserved in Rust edition 2024 (generator
+        // syntax); rename pre-empts a forced edit on the next edition bump.
+        let generation = GUI_FONT_CACHE_GENERATION.load(Ordering::Acquire);
+        (folders, generation)
         // slot dropped at end of block
     };
 
@@ -999,8 +1054,13 @@ pub fn clear_font_cache() -> Result<(), String> {
     // reparse-path message") that the implementation didn't honor.
     // Phase 1 detects ANY reparse upfront; if found, abort with Err
     // before any remove_file. Phase 2 (only if all clean) removes
-    // all four files. Atomic in the documented sense: either all
-    // removed or none.
+    // all four files. R2 N-R2-19: atomicity is bounded to the
+    // reparse-point pre-check (all-or-none on "encountered a
+    // reparse-point sidecar"). Individual `remove_file` failures
+    // mid-Phase-2 (drive eject, permission flip, antivirus lock)
+    // log WARN and continue, leaving the surviving sidecars in
+    // place — pre-W3 the doc claim "either all removed or none"
+    // read broader than the implementation delivered.
     //
     // **TOCTOU between Phase 1 and Phase 2 (R16 W16.3 A-R16-4,
     // P1a-accepted)**: between the pre-scan reparse check below and
@@ -1086,53 +1146,10 @@ pub fn try_record_folder_in_gui_cache(
     folder_path: &Path,
     entries: &[crate::fonts::LocalFontEntry],
 ) {
-    // try_lock (not lock) so a long-running rescan_font_cache_drift in
-    // another command doesn't make this scan's user-visible completion
-    // wait on cache write. If the lock is contended, skip with a WARN —
-    // the user just doesn't get cache acceleration for this folder
-    // until next time the folder is scanned (or next launch's drift
-    // detection picks up the difference).
-    let mut slot = match GUI_FONT_CACHE.try_lock() {
-        Ok(s) => s,
-        Err(std::sync::TryLockError::Poisoned(_)) => {
-            log::warn!("GUI cache mutex poisoned; skipping populate");
-            return;
-        }
-        Err(std::sync::TryLockError::WouldBlock) => {
-            // R17 W17.3 (N-R17-7): success-of-degradation path —
-            // user's scan completed; cache-populate skipped because a
-            // rescan / clear holds the slot lock. Per
-            // ~/.claude/rules/vibe-coding.md § Log-level discipline,
-            // the discriminator is "does the user's operation
-            // succeed?" Yes → DEBUG, not WARN. Failure-to-degrade
-            // sites (Poisoned, init-failure, real evict Err) stay at
-            // WARN below.
-            log::debug!(
-                "GUI cache busy (rescan or clear in progress); skipping populate \
-                 for {} this scan — will populate on next add",
-                folder_path.display()
-            );
-            return;
-        }
-    };
-    let cache = match slot.as_mut() {
-        Some(c) => c,
-        None => {
-            log::warn!(
-                "GUI cache unavailable (init failed or schema mismatch); \
-                 skipping populate for {}",
-                folder_path.display()
-            );
-            return;
-        }
-    };
-    // None → skip the populate so the cache doesn't acquire an
-    // epoch-zero row that drift-detect re-flags forever (see
-    // `stat_mtime` doc).
-    //
-    // R17 W17.3 (N-R17-7 sibling): mtime-unreadable is also a
-    // success-of-degradation — scan succeeded, cache populate
-    // skipped — so DEBUG, not WARN.
+    // R17 W17.3 (N-R17-7 sibling): mtime-unreadable is a
+    // success-of-degradation — scan succeeded, cache populate skipped —
+    // so DEBUG, not WARN. Done before locking the slot so we don't
+    // bother contending for the cache when there's nothing to write.
     let Some(folder_mtime) = try_modified_at(folder_path) else {
         log::debug!(
             "GUI cache populate skipped (folder mtime unreadable): {}",
@@ -1151,16 +1168,41 @@ pub fn try_record_folder_in_gui_cache(
     // every dir-mode source.
     let folder_path_str = crate::fonts::normalize_canonical_path(&folder_path.to_string_lossy());
     let face_count = metadata.len();
-    match cache.replace_folder(&folder_path_str, folder_mtime, &metadata) {
-        Ok(()) => {
+    // R2 N-R2-6: locking + Poisoned handling moved into `with_cache_slot`;
+    // the WARN-on-busy-vs-DEBUG-on-busy policy lives at the call site so
+    // this helper (best-effort populate after a successful scan) keeps
+    // its DEBUG level and clear_all_folders_in_gui_cache_locked stays at
+    // WARN. See `with_cache_slot` docstring for the outcome semantics.
+    match with_cache_slot(|cache| cache.replace_folder(&folder_path_str, folder_mtime, &metadata)) {
+        CacheSlotOutcome::Ran(Ok(())) => {
             log::info!(
                 "GUI cache populated: {} ({} faces)",
                 folder_path_str,
                 face_count
             );
         }
-        Err(e) => {
+        CacheSlotOutcome::Ran(Err(e)) => {
             log::warn!("GUI cache populate for {folder_path_str} failed: {e}");
+        }
+        CacheSlotOutcome::Busy => {
+            // R17 W17.3 (N-R17-7): success-of-degradation — user's scan
+            // completed; populate skipped because a rescan / clear holds
+            // the slot lock. DEBUG, not WARN (vibe-coding § Log-level).
+            log::debug!(
+                "GUI cache busy (rescan or clear in progress); skipping populate \
+                 for {} this scan — will populate on next add",
+                folder_path.display()
+            );
+        }
+        CacheSlotOutcome::Poisoned => {
+            // Helper already logged the WARN; nothing more to do.
+        }
+        CacheSlotOutcome::Unavailable => {
+            log::warn!(
+                "GUI cache unavailable (init failed or schema mismatch); \
+                 skipping populate for {}",
+                folder_path.display()
+            );
         }
     }
 }
@@ -1184,31 +1226,29 @@ pub fn try_record_folder_in_gui_cache(
 /// Pairs with `try_record_folder_in_gui_cache` (auto-populate on scan)
 /// for symmetric add/remove cache hygiene.
 pub fn try_remove_folder_from_gui_cache(folder_path: &str) {
-    let mut slot = match GUI_FONT_CACHE.try_lock() {
-        Ok(s) => s,
-        Err(std::sync::TryLockError::Poisoned(_)) => {
-            log::warn!("GUI cache mutex poisoned; skipping evict for {folder_path}");
-            return;
+    // R2 N-R2-6: see `try_record_folder_in_gui_cache` for the helper
+    // rationale. Unavailable arm stays silent here (eviction of a
+    // folder we never indexed in the first place is by definition a
+    // no-op) — that's the divergence from the populate sibling.
+    match with_cache_slot(|cache| cache.remove_folder(folder_path)) {
+        CacheSlotOutcome::Ran(Ok(())) => log::info!("GUI cache evicted folder: {folder_path}"),
+        CacheSlotOutcome::Ran(Err(e)) => {
+            log::warn!("GUI cache evict {folder_path} failed: {e}");
         }
-        Err(std::sync::TryLockError::WouldBlock) => {
-            // R17 W17.3 (N-R17-7): success-of-degradation path —
-            // user's remove-source action completed on the session
-            // DB; cache eviction skipped because a rescan / clear
-            // holds the lock. Stays consistent on the next launch's
-            // drift detect. DEBUG, not WARN.
+        CacheSlotOutcome::Busy => {
+            // R17 W17.3 (N-R17-7): success-of-degradation — user's
+            // remove-source action completed on the session DB; cache
+            // eviction skipped because a rescan / clear holds the
+            // lock. Stays consistent on the next launch's drift
+            // detect. DEBUG, not WARN.
             log::debug!(
                 "GUI cache busy (rescan or clear in progress); skipping evict for {folder_path}"
             );
-            return;
         }
-    };
-    let cache = match slot.as_mut() {
-        Some(c) => c,
-        None => return,
-    };
-    match cache.remove_folder(folder_path) {
-        Ok(()) => log::info!("GUI cache evicted folder: {folder_path}"),
-        Err(e) => log::warn!("GUI cache evict {folder_path} failed: {e}"),
+        CacheSlotOutcome::Poisoned => {
+            // Helper already logged the WARN; nothing more to do.
+        }
+        CacheSlotOutcome::Unavailable => {} // silent: nothing to evict
     }
 }
 
@@ -1260,38 +1300,39 @@ pub fn try_remove_folder_from_gui_cache(folder_path: &str) {
 /// fresh row behind — acceptable because the racing populate is
 /// post-intent ("Clear all" was issued before the new populate).
 pub(crate) fn clear_all_folders_in_gui_cache_locked(_guard: &CacheMutationGuard) {
-    let mut slot = match GUI_FONT_CACHE.try_lock() {
-        Ok(s) => s,
-        Err(std::sync::TryLockError::Poisoned(_)) => {
-            log::warn!("GUI cache mutex poisoned; skipping clear-all");
-            return;
+    // R2 N-R2-6: see `try_record_folder_in_gui_cache` for the helper
+    // rationale. The Busy arm logs WARN here (NOT debug like the
+    // best-effort sibling helpers) because `CacheMutationGuard` is
+    // supposed to have already serialized this against
+    // `rescan_font_cache_drift` / `clear_font_cache` — see R17 W17.6
+    // (N-R17-13): the only paths that hold the slot lock for any
+    // meaningful duration. WouldBlock therefore signals a guard-
+    // discipline regression worth surfacing, not normal contention.
+    match with_cache_slot(|cache| {
+        let folders = cache.list_folders()?;
+        let total = folders.len();
+        for f in folders {
+            if let Err(e) = cache.remove_folder(&f.folder_path) {
+                log::warn!(
+                    "GUI cache remove_folder({}) during clear-all: {e}",
+                    f.folder_path
+                );
+            }
         }
-        Err(std::sync::TryLockError::WouldBlock) => {
-            log::warn!("GUI cache slot busy; skipping clear-all");
-            return;
+        Ok::<usize, CacheError>(total)
+    }) {
+        CacheSlotOutcome::Ran(Ok(total)) => {
+            log::info!("GUI cache clear-all evicted {total} folder rows");
         }
-    };
-    let cache = match slot.as_mut() {
-        Some(c) => c,
-        None => return,
-    };
-    let folders = match cache.list_folders() {
-        Ok(fs) => fs,
-        Err(e) => {
+        CacheSlotOutcome::Ran(Err(e)) => {
             log::warn!("GUI cache list_folders failed during clear-all: {e}");
-            return;
         }
-    };
-    let total = folders.len();
-    for f in folders {
-        if let Err(e) = cache.remove_folder(&f.folder_path) {
-            log::warn!(
-                "GUI cache remove_folder({}) during clear-all: {e}",
-                f.folder_path
-            );
+        CacheSlotOutcome::Busy => log::warn!("GUI cache slot busy; skipping clear-all"),
+        CacheSlotOutcome::Poisoned => {
+            // Helper already logged the WARN; nothing more to do.
         }
+        CacheSlotOutcome::Unavailable => {} // silent: nothing to clear
     }
-    log::info!("GUI cache clear-all evicted {total} folder rows");
 }
 
 /// Look up a (family_name, bold, italic) tuple in the cache. Returns
