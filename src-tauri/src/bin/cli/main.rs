@@ -3195,27 +3195,34 @@ fn resolve_embed_fonts(
 /// dedup for the GUI's standalone embed path; this Rust dedup
 /// serves the CLI + chain paths which call subset_font directly
 /// without routing through `embedFonts()`.
-fn subset_resolved_fonts(
-    globals: &GlobalOptions,
-    args: &EmbedArgs,
-    fonts: &[ResolvedEmbedFont],
-) -> Result<(Vec<engine::FontSubsetPayload>, Vec<String>), String> {
-    use std::collections::BTreeMap;
+/// Output of `group_resolved_fonts_by_face`: one entry per unique
+/// resolved face. `template` points at the first ResolvedEmbedFont
+/// seen for the face (drives `font_name` for the eventual
+/// `[Fonts]` entry filename); `codepoints` is the union of every
+/// alias's codepoints; `labels` lists every alias that resolved
+/// here (for failure-diagnostic strings that name every Style
+/// affected by a subset failure, not just the first-seen one).
+struct ResolvedFaceGroup<'a> {
+    template: &'a ResolvedEmbedFont,
+    codepoints: std::collections::BTreeSet<u32>,
+    labels: Vec<String>,
+}
 
-    // Group by (path, index). First-occurrence wins for the label
-    // and font_name template; subsequent aliases only contribute
-    // their codepoints to the union. BTreeMap keeps deterministic
-    // iteration order so the resulting `[Fonts]` entries are
-    // stable across runs on the same input.
-    struct FaceGroup<'a> {
-        template: &'a ResolvedEmbedFont,
-        codepoints: std::collections::BTreeSet<u32>,
-        /// All labels that resolved to this face — used for the
-        /// failure-diagnostic string so the user sees every alias
-        /// that would have been missed if subset fails.
-        labels: Vec<String>,
-    }
-    let mut face_groups: BTreeMap<(String, u32), FaceGroup> = BTreeMap::new();
+/// Group resolved fonts by `(path, index)` so family aliases that
+/// resolve to the same underlying face produce one subset call
+/// instead of N byte-identical ones. Pure helper extracted for
+/// unit-test access; see the test module for boundary coverage
+/// (single alias, two aliases collapse, TTC face 0 vs 1 stay
+/// distinct, label list preserves every alias for diagnostics).
+///
+/// BTreeMap keeps deterministic iteration so `[Fonts]` entries are
+/// stable across runs on the same input — easier to diff outputs
+/// when investigating embed differences across versions.
+fn group_resolved_fonts_by_face(
+    fonts: &[ResolvedEmbedFont],
+) -> std::collections::BTreeMap<(String, u32), ResolvedFaceGroup<'_>> {
+    let mut face_groups: std::collections::BTreeMap<(String, u32), ResolvedFaceGroup> =
+        std::collections::BTreeMap::new();
     for font in fonts {
         let key = (font.path.clone(), font.index);
         match face_groups.get_mut(&key) {
@@ -3228,7 +3235,7 @@ fn subset_resolved_fonts(
             None => {
                 face_groups.insert(
                     key,
-                    FaceGroup {
+                    ResolvedFaceGroup {
                         template: font,
                         codepoints: font.codepoints.iter().copied().collect(),
                         labels: vec![font.label.clone()],
@@ -3237,13 +3244,26 @@ fn subset_resolved_fonts(
             }
         }
     }
+    face_groups
+}
+
+fn subset_resolved_fonts(
+    globals: &GlobalOptions,
+    args: &EmbedArgs,
+    fonts: &[ResolvedEmbedFont],
+) -> Result<(Vec<engine::FontSubsetPayload>, Vec<String>), String> {
+    let face_groups = group_resolved_fonts_by_face(fonts);
 
     let mut payloads = Vec::new();
     let mut skipped = Vec::new();
 
     for group in face_groups.values() {
         let codepoints: Vec<u32> = group.codepoints.iter().copied().collect();
-        match app_lib::fonts::subset_font(group.template.path.clone(), group.template.index, codepoints) {
+        match app_lib::fonts::subset_font(
+            group.template.path.clone(),
+            group.template.index,
+            codepoints,
+        ) {
             Ok(data) => payloads.push(engine::FontSubsetPayload {
                 font_name: group.template.font_name.clone(),
                 data,
@@ -4350,10 +4370,10 @@ fn parse_timestamp_part(part: &str, label: &str) -> Result<i64, String> {
 mod tests {
     use super::{
         classify_locale, copy_file_output, create_cli_font_db_dir, display_path,
-        duplicate_rename_output_keys, engine, normalize_output_key, parse_duration_ms,
-        parse_timestamp_ms, predict_chain_output_path, relocate_output_path, sanitize_for_display,
-        substitute_template, write_output, GlobalOptions, OutputLang, TempFontDbDir,
-        MAX_SHIFT_OFFSET_MS,
+        duplicate_rename_output_keys, engine, group_resolved_fonts_by_face, normalize_output_key,
+        parse_duration_ms, parse_timestamp_ms, predict_chain_output_path, relocate_output_path,
+        sanitize_for_display, substitute_template, write_output, GlobalOptions, OutputLang,
+        ResolvedEmbedFont, TempFontDbDir, MAX_SHIFT_OFFSET_MS,
     };
     // Import the canonical filename literal directly from app_lib so the
     // test pins the same name `TempFontDbDir::drop`'s remove_dir_all
@@ -5032,5 +5052,108 @@ mod tests {
             sanitize_for_display("/home/u/episode.ass"),
             "/home/u/episode.ass"
         );
+    }
+
+    fn make_resolved(label: &str, path: &str, index: u32, codepoints: &[u32]) -> ResolvedEmbedFont {
+        ResolvedEmbedFont {
+            label: label.to_string(),
+            font_name: format!("{label}.ttf"),
+            path: path.to_string(),
+            index,
+            codepoints: codepoints.to_vec(),
+        }
+    }
+
+    #[test]
+    fn group_resolved_fonts_collapses_aliases_on_same_face() {
+        // Canonical alias case: English + Chinese family names both
+        // resolved to msyh.ttc face 0. Pre-fix this produced two
+        // byte-identical subset calls embedded under different
+        // filenames; post-fix it produces one entry with the union
+        // of both aliases' codepoints.
+        let aliases = vec![
+            make_resolved("Microsoft YaHei", "/fonts/msyh.ttc", 0, &[0x41, 0x42]),
+            make_resolved("微软雅黑", "/fonts/msyh.ttc", 0, &[0x4f60, 0x597d]),
+        ];
+        let groups = group_resolved_fonts_by_face(&aliases);
+        assert_eq!(groups.len(), 1, "two aliases on same face must collapse");
+        let group = groups.values().next().expect("the single group");
+        // Both labels are preserved so subset-failure diagnostics
+        // can name every Style affected by a failure, not just
+        // first-seen.
+        assert_eq!(group.labels.len(), 2);
+        assert!(group.labels.contains(&"Microsoft YaHei".to_string()));
+        assert!(group.labels.contains(&"微软雅黑".to_string()));
+        // Codepoints are the union across all aliases.
+        let merged: std::collections::BTreeSet<u32> =
+            group.codepoints.iter().copied().collect();
+        assert_eq!(
+            merged,
+            [0x41, 0x42, 0x4f60, 0x597d].into_iter().collect()
+        );
+        // Template is first-occurrence — drives font_name + path
+        // for the subsequent subset_font call.
+        assert_eq!(group.template.label, "Microsoft YaHei");
+    }
+
+    #[test]
+    fn group_resolved_fonts_keeps_distinct_face_indices() {
+        // Same TTC file, different face_index — these are genuinely
+        // distinct faces (face 0 = Microsoft YaHei, face 1 =
+        // Microsoft YaHei UI inside msyh.ttc) and must NOT collapse.
+        // If a future bug keys dedup on just `path` without `index`,
+        // this test catches the regression.
+        let inputs = vec![
+            make_resolved("Microsoft YaHei", "/fonts/msyh.ttc", 0, &[0x41]),
+            make_resolved("Microsoft YaHei UI", "/fonts/msyh.ttc", 1, &[0x42]),
+        ];
+        let groups = group_resolved_fonts_by_face(&inputs);
+        assert_eq!(groups.len(), 2);
+        // Both face indices present as map keys.
+        let indices: std::collections::BTreeSet<u32> =
+            groups.keys().map(|(_, i)| *i).collect();
+        assert_eq!(indices, [0u32, 1u32].into_iter().collect());
+    }
+
+    #[test]
+    fn group_resolved_fonts_deduplicates_repeated_label_for_same_face() {
+        // Defensive: if the same label appears multiple times for
+        // the same face (shouldn't happen in practice — resolve_embed_fonts
+        // emits one ResolvedEmbedFont per ASS-referenced family — but
+        // a future refactor could let it through), the labels list
+        // must NOT accumulate duplicates. Codepoints still union.
+        let inputs = vec![
+            make_resolved("Arial", "/fonts/arial.ttf", 0, &[0x41]),
+            make_resolved("Arial", "/fonts/arial.ttf", 0, &[0x42]),
+        ];
+        let groups = group_resolved_fonts_by_face(&inputs);
+        assert_eq!(groups.len(), 1);
+        let group = groups.values().next().expect("single group");
+        assert_eq!(group.labels, vec!["Arial".to_string()]);
+        let merged: std::collections::BTreeSet<u32> =
+            group.codepoints.iter().copied().collect();
+        assert_eq!(merged, [0x41u32, 0x42u32].into_iter().collect());
+    }
+
+    #[test]
+    fn group_resolved_fonts_preserves_template_codepoints_for_singleton() {
+        // Singleton input (one ResolvedEmbedFont, no aliases) — the
+        // helper still goes through the BTreeMap path; verify the
+        // codepoint set survives intact and labels has exactly one
+        // entry. Boundary test for "doesn't break the common case
+        // where dedup is a no-op."
+        let inputs = vec![make_resolved("Roboto", "/fonts/roboto.ttf", 0, &[0x30, 0x31, 0x32])];
+        let groups = group_resolved_fonts_by_face(&inputs);
+        assert_eq!(groups.len(), 1);
+        let group = groups.values().next().expect("single group");
+        assert_eq!(group.labels, vec!["Roboto".to_string()]);
+        let merged: Vec<u32> = group.codepoints.iter().copied().collect();
+        assert_eq!(merged, vec![0x30, 0x31, 0x32]);
+    }
+
+    #[test]
+    fn group_resolved_fonts_empty_input_yields_empty_map() {
+        let groups = group_resolved_fonts_by_face(&[]);
+        assert_eq!(groups.len(), 0);
     }
 }

@@ -24,7 +24,14 @@ vi.mock("../../lib/tauri-api", () => ({
 }));
 
 // Import after vi.mock so the mocked module is picked up.
-import { analyzeFonts, buildUserFontMap, userFontKey } from "./font-embedder";
+import {
+  analyzeFonts,
+  buildUserFontMap,
+  embedFonts,
+  userFontKey,
+  type FontInfo,
+} from "./font-embedder";
+import type { FontUsage } from "./font-collector";
 
 const MINIMAL_ASS = `[Script Info]
 ScriptType: v4.00+
@@ -457,5 +464,135 @@ describe("userFontKey", () => {
     expect(userFontKey("Arial", true, false)).toBe("arial\u001f1\u001f0");
     expect(userFontKey("Arial", false, true)).toBe("arial\u001f0\u001f1");
     expect(userFontKey("Arial", true, true)).toBe("arial\u001f1\u001f1");
+  });
+});
+
+describe("embedFonts — face dedup", () => {
+  let subsetFontMock: ReturnType<typeof vi.fn>;
+  beforeEach(async () => {
+    const tauriApi = await import("../../lib/tauri-api");
+    subsetFontMock = vi.mocked(tauriApi.subsetFont);
+    subsetFontMock.mockReset();
+  });
+
+  // Minimal valid ASS with [Script Info] header — embedFonts calls
+  // assertAssShape upfront and rejects anything that doesn't have
+  // a [Script Info] section before [Events].
+  const SHELL_ASS = `[Script Info]
+ScriptType: v4.00+
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize
+Style: Default,Microsoft YaHei,40
+Style: Alt,微软雅黑,40
+
+[Events]
+Format: Layer, Start, End, Style, Text
+Dialogue: 0,0:00:00.00,0:00:05.00,Default,Hello
+Dialogue: 0,0:00:05.00,0:00:10.00,Alt,你好
+`;
+
+  function makeInfo(family: string, filePath: string, fontIndex: number): FontInfo {
+    return {
+      key: { family, bold: false, italic: false },
+      glyphCount: 5,
+      filePath,
+      fontIndex,
+      error: null,
+      source: "local",
+    };
+  }
+  function makeUsage(family: string, codepoints: number[]): FontUsage {
+    return {
+      key: { family, bold: false, italic: false },
+      codepoints: new Set(codepoints),
+    };
+  }
+
+  it("collapses aliases that resolve to the same (filePath, fontIndex) into one [Fonts] entry", async () => {
+    subsetFontMock.mockResolvedValue(new Uint8Array([1, 2, 3, 4]));
+
+    const aliasA = makeInfo("Microsoft YaHei", "C:/Windows/Fonts/msyh.ttc", 0);
+    const aliasB = makeInfo("微软雅黑", "C:/Windows/Fonts/msyh.ttc", 0);
+    const usages = [
+      makeUsage("Microsoft YaHei", [0x41, 0x42]),
+      makeUsage("微软雅黑", [0x4f60, 0x597d]),
+    ];
+
+    const result = await embedFonts(SHELL_ASS, [aliasA, aliasB], usages);
+
+    expect(result).not.toBeNull();
+    expect(result!.embeddedCount).toBe(1);
+
+    // subset_font called once per unique resolved face, not once
+    // per alias. Pre-fix, this was called twice with byte-identical
+    // payloads embedded under different filenames.
+    expect(subsetFontMock).toHaveBeenCalledTimes(1);
+
+    // Union of codepoints from both aliases passed to the single
+    // subset call.
+    const passedCodepoints = subsetFontMock.mock.calls[0]![2] as number[];
+    expect(new Set(passedCodepoints)).toEqual(new Set([0x41, 0x42, 0x4f60, 0x597d]));
+
+    // The resulting [Fonts] section has exactly one entry. The first
+    // alias (English "Microsoft YaHei") wins the filename template.
+    const fontnameMatches = result!.content.match(/^fontname:/gm) ?? [];
+    expect(fontnameMatches.length).toBe(1);
+  });
+
+  it("keeps distinct entries for different fontIndex values (TTC face 0 vs face 1)", async () => {
+    subsetFontMock.mockResolvedValue(new Uint8Array([1, 2, 3, 4]));
+
+    // Same filePath, DIFFERENT fontIndex — genuinely different faces
+    // of the same TTC; must NOT dedup.
+    const face0 = makeInfo("Microsoft YaHei", "C:/Windows/Fonts/msyh.ttc", 0);
+    const face1 = makeInfo("Microsoft YaHei UI", "C:/Windows/Fonts/msyh.ttc", 1);
+    const usages = [
+      makeUsage("Microsoft YaHei", [0x41]),
+      makeUsage("Microsoft YaHei UI", [0x42]),
+    ];
+
+    const result = await embedFonts(SHELL_ASS, [face0, face1], usages);
+
+    expect(result).not.toBeNull();
+    expect(result!.embeddedCount).toBe(2);
+    expect(subsetFontMock).toHaveBeenCalledTimes(2);
+    const indicesPassed = subsetFontMock.mock.calls.map((call) => call[1] as number);
+    expect(new Set(indicesPassed)).toEqual(new Set([0, 1]));
+  });
+
+  it("keeps distinct entries for different bold/italic styles on the same face", async () => {
+    subsetFontMock.mockResolvedValue(new Uint8Array([1, 2, 3, 4]));
+
+    // Same filePath + fontIndex but different bold flags — logically
+    // distinct rendering targets (libass treats them as separate
+    // picks); must NOT dedup. The dedup key includes bold/italic so
+    // a future style refactor can't silently merge them.
+    const plain: FontInfo = {
+      key: { family: "Microsoft YaHei", bold: false, italic: false },
+      glyphCount: 1,
+      filePath: "C:/Windows/Fonts/msyh.ttc",
+      fontIndex: 0,
+      error: null,
+      source: "local",
+    };
+    const bold: FontInfo = {
+      key: { family: "Microsoft YaHei", bold: true, italic: false },
+      glyphCount: 1,
+      filePath: "C:/Windows/Fonts/msyh.ttc",
+      fontIndex: 0,
+      error: null,
+      source: "local",
+    };
+    const usages: FontUsage[] = [
+      { key: plain.key, codepoints: new Set([0x41]) },
+      { key: bold.key, codepoints: new Set([0x42]) },
+    ];
+
+    const result = await embedFonts(SHELL_ASS, [plain, bold], usages);
+
+    expect(result).not.toBeNull();
+    expect(result!.embeddedCount).toBe(2);
+    expect(subsetFontMock).toHaveBeenCalledTimes(2);
   });
 });
