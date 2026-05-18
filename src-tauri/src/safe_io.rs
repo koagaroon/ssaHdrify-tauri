@@ -178,6 +178,22 @@ fn clear_existing_destination(path: &Path, overwrite: bool) -> Result<(), String
             // codebase pattern is "stat-then-act narrowness via
             // an immediate re-check", and this site was the lone
             // remaining outlier. One cheap syscall.
+            //
+            // R17 W17.6 (N-R17-10, syscall count WHY): this is the
+            // THIRD `is_reparse_point` lstat on `path` inside
+            // `clear_existing_destination` — fs::symlink_metadata at
+            // line 122, the first reparse check at line 124, and
+            // this race-time re-check. R15 W15.3 (N-R15-11)
+            // documented the pre-R17 two-syscall pattern (lines 122
+            // + 124); R13 A-R13-8 added this third for late-race
+            // parity. All three are deliberate: the helper is a
+            // failure-path-only helper (only fires when an existing
+            // destination needs clearing) so the extra syscalls cost
+            // nothing on the happy path. A future round that's
+            // tempted to add a FOURTH lstat here should first factor
+            // `is_reparse_point_from_meta(&meta)` to consume the
+            // already-fetched `meta` instead of paying for another
+            // syscall.
             if is_reparse_point(path) {
                 log::warn!(
                     "Refusing to overwrite reparse point at remove-time: {}",

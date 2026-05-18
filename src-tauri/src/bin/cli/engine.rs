@@ -224,10 +224,18 @@ pub struct CliEngine {
 
 impl CliEngine {
     pub fn new() -> Result<Self, String> {
-        // Empty extensions list — the CLI engine runs only pure text
-        // transformations. No fs / net / timer ops are needed; an
-        // explicit empty list documents that intent and hardens
-        // against future deno_core default-set drift.
+        // R17 W17.6 (N-R17-34, scope tightening): only the `extensions`
+        // field is explicitly pinned to empty — the CLI engine runs
+        // only pure text transformations (no fs / net / timer ops).
+        // The rest of `RuntimeOptions` (`module_loader`,
+        // `startup_snapshot`, `op_state`, etc.) uses
+        // `Default::default()` and DOES inherit future deno_core
+        // additions. A future deno_core upgrade that adds a new
+        // field defaulting to something privilege-bearing (a real op
+        // surface, an unconstrained module loader) would silently
+        // become available here. Re-audit `RuntimeOptions`'s field
+        // list on every deno_core bump alongside the API-binding
+        // audit pinned in Cargo.toml's deno_core pin WHY (N-R17-74).
         let mut runtime = JsRuntime::new(RuntimeOptions {
             extensions: vec![],
             ..Default::default()

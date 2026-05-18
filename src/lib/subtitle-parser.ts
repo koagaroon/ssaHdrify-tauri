@@ -444,16 +444,24 @@ function parseAss(content: string): Caption[] {
       // silently dropped this entry the index would drift and every
       // subsequent Dialogue line would receive the wrong timestamps.
       //
-      // R16 W16.6 (N-R16-14, comment accuracy): the upstream 50 MB
-      // file-read cap (Rust IPC) bounds total retained raw size;
-      // clearing `text` to `""` keeps the parsed-content path clean
-      // so downstream feature layers count `c.skipped` rather than
-      // inspecting `c.text` for the oversized class. (Prior comment
-      // claimed "no text payload retained, so the multi-MB body
-      // doesn't linger" — but the `raw: match[0]` field below
-      // retains the entire original Dialogue line including the
-      // multi-MB body. Memory is bounded by the file-read cap
-      // upstream, not by clearing `text` here.)
+      // R16 W16.6 (N-R16-14) / R17 W17.6 (N-R17-46, retention WHY
+      // tightening): the upstream 50 MB file-read cap (Rust IPC,
+      // `MAX_TEXT_SIZE` in encoding.rs) bounds total retained raw
+      // size; clearing `text` to `""` keeps the parsed-content path
+      // clean so downstream feature layers count `c.skipped` rather
+      // than inspecting `c.text` for the oversized class.
+      //
+      // The `raw: match[0]` field below IS load-bearing — it retains
+      // the entire original Dialogue line (potentially multi-MB for a
+      // single oversized caption) because `buildAss`'s positional
+      // walk over `dialogueRe` matches the SAME bytes when
+      // rebuilding output; substituting `raw` with a truncated
+      // string would break drift detection (parsedAss[i].raw must
+      // equal originalContent.match(dialogueRe)[i]). Worst-case
+      // retention: a single 50 MB Dialogue line + `MAX_PARSED_ENTRIES`
+      // other captions at ≤ MAX_CAPTION_TEXT_LEN (64 KB). Sum stays
+      // bounded by the file-read cap; the surface is documented, not
+      // closed.
       captions.push({
         raw: match[0],
         start: parseAssTime(match[2]),

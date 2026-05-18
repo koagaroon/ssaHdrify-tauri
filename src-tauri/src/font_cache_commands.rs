@@ -1241,7 +1241,16 @@ pub fn try_remove_folder_from_gui_cache(folder_path: &str) {
 ///   state: cache holds rows whose session-DB provenance was just
 ///   cleared, UI claim and DB state disagree.
 /// - `try_lock` on the SLOT mutex stays — that protects against
-///   handle drop in the clear_font_cache recovery path.
+///   handle drop in the clear_font_cache recovery path. R17 W17.6
+///   (N-R17-13): in practice `try_lock` here is guaranteed-success
+///   because `CacheMutationGuard` (held by every caller per the
+///   contract above) already serializes against `rescan_font_cache_drift`
+///   and `clear_font_cache` — the only paths that hold the slot
+///   lock for any meaningful duration. The `WouldBlock` arm exists
+///   only as a defensive fallback for an unanticipated future
+///   slot-holder; if a real caller hits it, that's a guard-discipline
+///   regression, not normal contention. WARN log is therefore the
+///   right level (failure-to-degrade), not DEBUG.
 /// - Cache unavailable → silent no-op (nothing to evict).
 /// - Per-folder `remove_folder` errors log WARN but don't abort the
 ///   iteration; best-effort.

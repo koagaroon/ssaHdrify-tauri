@@ -336,6 +336,17 @@ struct RefreshFontsArgs {
     font_dirs: Vec<PathBuf>,
 }
 
+// R17 W17.6 (N-R17-16, visibility asymmetry WHY): `output_template`
+// and `raw_argv` stay private to main.rs. Sibling Args structs
+// (HdrArgs / ShiftArgs / EmbedArgs) use `pub(crate)` on their `files`
+// field because `chain::take_step_files` reaches in via the
+// ParsedStep variant to extract them — see `chain.rs` line 371-377.
+// ChainArgs itself doesn't flow into ParsedStep (it's the wrapper
+// for the `chain` subcommand, not a chain step), so its fields have
+// no cross-module consumer. Keep private as the explicit signal —
+// if a future feature parses a chain plan from JSON / config-file
+// instead of clap argv, that path should construct ChainPlan
+// directly rather than reach in here.
 #[derive(Args, Debug)]
 struct ChainArgs {
     /// Chain-global output filename template applied at the terminal step.
@@ -4163,6 +4174,7 @@ mod tests {
         duplicate_rename_output_keys, engine, normalize_output_key, parse_duration_ms,
         parse_timestamp_ms, predict_chain_output_path, relocate_output_path, sanitize_for_display,
         substitute_template, write_output, GlobalOptions, OutputLang, TempFontDbDir,
+        MAX_SHIFT_OFFSET_MS,
     };
     // Import the canonical filename literal directly from app_lib so the
     // test pins the same name `TempFontDbDir::drop`'s remove_dir_all
@@ -4280,6 +4292,39 @@ mod tests {
         assert!(parse_duration_ms("-9999999999999h").is_err());
         // Above-cap seconds.
         assert!(parse_duration_ms("+999999999999s").is_err());
+    }
+
+    // R17 W17.6 (N-R17-26): at-limit / over-limit boundary pair for
+    // MAX_SHIFT_OFFSET_MS. The reviewer's
+    // `code_review.md § boundary-named tests` rule: when a title
+    // names a cap, pair the at-limit test (must accept) with an
+    // over-limit counter-test (must reject), so a refactor that
+    // loosens the cap in either direction surfaces. The existing
+    // `parse_duration_ms_caps_extreme_values` test above only
+    // exercises far-over-cap inputs; the at-cap boundary was
+    // unpinned.
+    #[test]
+    fn parse_duration_ms_at_max_shift_offset_accepts() {
+        // MAX_SHIFT_OFFSET_MS = 365 * 24 * 60 * 60 * 1000 ms (= 1 year
+        // in ms). At the boundary, parse_duration_ms must accept.
+        // 1 year = 8760 hours exactly.
+        let at_cap_str = "+8760h";
+        let got = parse_duration_ms(at_cap_str)
+            .expect("at-cap +8760h (= MAX_SHIFT_OFFSET_MS) must parse");
+        assert_eq!(got, MAX_SHIFT_OFFSET_MS);
+    }
+
+    #[test]
+    fn parse_duration_ms_one_ms_over_max_shift_offset_rejects() {
+        // 1 ms over the cap must reject (counter-test paired with
+        // the at-cap acceptance test above). Using the smallest
+        // ms-precision step above the cap so the boundary is
+        // pinned at exactly ±1 ms.
+        let over_cap_str = "+31536000001ms"; // MAX_SHIFT_OFFSET_MS + 1
+        assert!(
+            parse_duration_ms(over_cap_str).is_err(),
+            "one ms over MAX_SHIFT_OFFSET_MS must reject"
+        );
     }
 
     #[test]
@@ -4594,15 +4639,21 @@ mod tests {
         assert_eq!(file_name, "Show..special.shifted.ass");
     }
 
-    // R16 W16.4 (N-R16-8): equivalence-class coverage of
-    // predict_chain_output_path's reject branches. Each test below
-    // pins one rejection equivalence class — the predictor must
-    // return None so the caller falls back to V8 + TS for the
-    // authoritative error. Without per-class pins, a refactor that
-    // weakens any single gate (e.g., dropping the superscript COM
-    // variants, or relaxing the BiDi reject) would slip through the
-    // single `predict_chain_output_path_preserves_double_dots` test
-    // — which exercises only the positive-acceptance path.
+    // R16 W16.4 (N-R16-8) / R17 W17.6 (N-R17-27, doc clarification):
+    // each test below pins one rejection CODEPOINT-CLASS — the input
+    // exercises a distinct character / structural class
+    // (Windows-reserved, superscript-COM, drive-letter, NTFS-illegal,
+    // control, BiDi, zero-width, U+2028, whitespace-only, `..`,
+    // empty post-substitution). Several of these classes collapse
+    // onto the same internal boolean gate inside `predict_chain_output_path`
+    // (e.g. the matches!()-block control + BiDi + NTFS-illegal arms
+    // all flip `illegal_in_filename`), so this suite does NOT pin
+    // "every distinct gate branch" — that's a different invariant
+    // and isn't covered here. The codepoint-class structure IS what
+    // changes most often in practice: a refactor that drops a
+    // superscript variant or relaxes a BiDi codepoint slips past a
+    // single positive-acceptance test, which is exactly what these
+    // pins guard against.
 
     #[test]
     fn predict_chain_output_path_rejects_windows_reserved_device_name() {
@@ -4729,6 +4780,27 @@ mod tests {
         assert!(
             predicted.is_none(),
             "bare `..` template should reject; got {predicted:?}"
+        );
+    }
+
+    #[test]
+    fn predict_chain_output_path_rejects_empty_output_name_after_substitution() {
+        // R17 W17.6 (N-R17-27): the `output_name.is_empty()` gate
+        // at the head of predict_chain_output_path was the lone
+        // un-pinned branch in the R16 W16.4 equivalence-class
+        // sweep. An empty template substitutes to `""` for any
+        // input (no tokens to expand). The predictor must reject
+        // so the caller falls back to V8 + TS for the authoritative
+        // empty-name error — without this test, a refactor that
+        // dropped the `.is_empty()` arm would let the cheap-first
+        // path build a `parent/` path which `parent.join("")`
+        // normalizes back to `parent`, and the existence check
+        // would skip the whole batch as "already exists."
+        let input = PathBuf::from("/subs/Show.ass");
+        let predicted = predict_chain_output_path(&input, "", None);
+        assert!(
+            predicted.is_none(),
+            "empty template should reject; got {predicted:?}"
         );
     }
 

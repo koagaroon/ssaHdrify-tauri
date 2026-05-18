@@ -705,6 +705,17 @@ pub struct LocalFontEntry {
 pub fn entries_to_cache_metadata(
     entries: &[LocalFontEntry],
 ) -> Vec<crate::font_cache::FontMetadata> {
+    // R17 W17.6 (N-R17-12, lifetime tie WHY): `mtime_cache`'s key is
+    // `&str` borrowed from `entries[i].path` — the same borrow that
+    // `iter().map()` walks below. The borrow lives only as long as
+    // `entries`, which is bound to the function-parameter lifetime,
+    // so the HashMap never outlives its keys. A future refactor that
+    // changes `entries.iter()` to `entries.into_iter()` (taking
+    // ownership / consuming each LocalFontEntry) would invalidate
+    // these borrows mid-loop — the `String` clone of `e.path` for
+    // `FontMetadata.file_path` below would no longer be the same
+    // memory the HashMap key points to. Switch the HashMap key to
+    // `String` at that point. Pattern 3 lifetime coupling.
     let mut mtime_cache: std::collections::HashMap<&str, i64> = std::collections::HashMap::new();
     entries
         .iter()
@@ -753,6 +764,15 @@ pub fn entries_to_cache_metadata(
         .collect()
 }
 
+// R17 W17.6 (N-R17-6, visibility asymmetry WHY): module-private
+// (not `pub(crate)` like the persistent cache's sibling
+// `family_lookup_key`, fonts.rs:756 vs font_cache.rs:182). Only the
+// NFC + lowercase normalization is shared via `family_lookup_key`;
+// THIS helper additionally appends bold / italic markers via the
+// U+001F field separator and is a session-DB key only. Promoting it
+// to `pub(crate)` would invite cross-module callers to skip the
+// bold/italic composition — those callers should use the underlying
+// `family_lookup_key` directly. Kept private as the explicit signal.
 fn user_font_key(family: &str, bold: bool, italic: bool) -> String {
     // NFC-normalize before lowercase so HFS+ NFD-form filenames and NFC-form
     // font internal names key identically; otherwise precomposed `é` (U+00E9)
@@ -2890,6 +2910,19 @@ fn is_in_system_fonts_dir(canonical: &Path) -> bool {
     } else if cfg!(target_os = "macos") {
         // APFS is case-insensitive by default; compare in lowercase so symlink
         // chains that surface mixed-case paths still match canonical targets.
+        //
+        // R17 W17.6 (N-R17-2, asymmetry with Windows arm WHY): full
+        // Unicode `to_lowercase()` here, not the Windows arm's
+        // `to_ascii_lowercase()` (line 2872). APFS's case-fold IS the
+        // Unicode case-fold (single composed codepoint comparison) —
+        // German `ß` folds to `ss`, Greek final sigma `ς` folds to `σ`
+        // (per UTS #21). Using `to_ascii_lowercase` here would
+        // false-reject a `~/Library/Fonts` path on a system where the
+        // user's home dir contains those glyphs. The Windows arm uses
+        // `to_ascii_lowercase` because NTFS's simple-fold table
+        // intentionally does NOT apply UTS #21 transforms — the two
+        // OSes genuinely disagree on what's case-equivalent, and the
+        // gate must match the OS, not a shared abstraction.
         let lower = canonical_str.to_lowercase();
         let under = |dir: &str| path_under_dir(&lower, &dir.to_lowercase(), "/");
         const MAC_DIRS: &[&str] = &[
