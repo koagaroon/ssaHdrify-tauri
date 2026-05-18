@@ -3280,14 +3280,27 @@ pub fn subset_font(
     // it in a torn state. Convert any panic into a structured error
     // string the frontend's existing IPC error path can render.
     let subset_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        if font_index == 0 {
-            // Common path: single font or first face in TTC.
-            // Display, not Debug — Debug repr leaks internal struct fields,
-            // table tags, and byte offsets into a frontend-visible error.
+        if !is_ttc_data(&font_data) {
+            // Single-face SFNT (.ttf / .otf): the file is its own
+            // one-and-only face. font_index was registered at the
+            // provenance gate above; for single-face files it's
+            // always 0 in well-formed input.
+            //
+            // Display, not Debug — Debug repr leaks internal struct
+            // fields, table tags, and byte offsets into a
+            // frontend-visible error.
             fontcull::subset_font_data_unicode(&font_data, &all_codepoints, &[])
                 .map_err(|e| format!("{e}"))
         } else {
-            // TTC with face index > 0: use internal crates with from_index
+            // TTC / OTC collection: every face — including index 0 —
+            // must go through `FontRef::from_index` to slice the
+            // right face out of the collection. The single-face
+            // path expects SFNT magic (`\0\1\0\0` / `OTTO` / `true`)
+            // at offset 0, but a TTC starts with `ttcf`, so routing
+            // any TTC face to that path would fail with
+            // `InvalidSfnt(0x74746366)`. The dispatch keys on the
+            // file shape, not on the face index, because face 0 of
+            // a TTC and a single-face font are NOT the same shape.
             subset_with_index(&font_data, font_index, &all_codepoints)
         }
     }))
@@ -3398,6 +3411,22 @@ pub fn subset_font_b64(
     Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
 }
 
+/// Returns true if `font_data` begins with the **TrueType / OpenType
+/// Collection** magic. A TTC packs N faces (each with its own SFNT
+/// header) inside one file behind a `ttcf` header + offset table;
+/// any face — including index 0 — must be sliced out via
+/// `FontRef::from_index` before subsetting, because fontcull's
+/// single-face entry point expects SFNT magic at offset 0 and
+/// rejects the `ttcf` container with `InvalidSfnt(0x74746366)`.
+///
+/// `typ1` is Apple's PostScript Type 1 collection — not supported
+/// by fontcull / skrifa and rejected upstream by the magic-byte
+/// sniff (the recognized-signature gate before this is reached),
+/// so it's intentionally absent from this check.
+fn is_ttc_data(font_data: &[u8]) -> bool {
+    font_data.starts_with(b"ttcf")
+}
+
 /// Subset a specific face from a TTC/OTC collection file.
 /// Uses fontcull's internal crates directly for `FontRef::from_index`.
 fn subset_with_index(font_data: &[u8], index: u32, codepoints: &[u32]) -> Result<Vec<u8>, String> {
@@ -3463,6 +3492,93 @@ mod tests {
     #[test]
     fn max_family_variants_per_face_cap_value() {
         assert_eq!(MAX_FAMILY_VARIANTS_PER_FACE, 8);
+    }
+
+    #[test]
+    fn is_ttc_data_recognizes_ttcf_magic() {
+        // Minimal valid TTC header: `ttcf` magic + version + numFonts.
+        let data = b"ttcf\x00\x01\x00\x00\x00\x00\x00\x02";
+        assert!(is_ttc_data(data));
+    }
+
+    #[test]
+    fn is_ttc_data_rejects_single_face_signatures() {
+        // Three SFNT magics that the recognized-signature gate accepts
+        // upstream of subset_font but that MUST route to the single-face
+        // path, not the from_index collection path.
+        assert!(!is_ttc_data(&[0x00, 0x01, 0x00, 0x00, 0xff, 0xff])); // sfnt-flavored TrueType
+        assert!(!is_ttc_data(b"OTTOpadding")); // OpenType CFF
+        assert!(!is_ttc_data(b"truepadding")); // Apple TrueType
+    }
+
+    #[test]
+    fn is_ttc_data_rejects_under_four_bytes() {
+        // Boundary-pin: TTC magic is 4 bytes, so anything shorter must
+        // return false (defends against a 0-byte read sneaking past the
+        // upstream stat as if it were a single-face SFNT).
+        assert!(!is_ttc_data(b""));
+        assert!(!is_ttc_data(b"t"));
+        assert!(!is_ttc_data(b"ttc"));
+    }
+
+    /// Exercises `subset_with_index` against face 0 AND face 1 of a real
+    /// TTC, pinning the contract that both dispatch arms produce distinct,
+    /// non-empty, smaller-than-original subset bytes. Without an env-var-
+    /// supplied fixture the test skips (mirrors `tests/test_subset.rs`'s
+    /// CJK-font convention — multi-face CJK fonts are licensing-encumbered
+    /// and cannot be checked into the repo).
+    ///
+    /// Usage on Windows:
+    ///   SSAHDRIFY_TEST_TTC_FONT=C:/Windows/Fonts/msyh.ttc
+    ///   cargo test --lib -- --ignored subset_with_index_handles_ttc
+    #[test]
+    #[ignore = "requires SSAHDRIFY_TEST_TTC_FONT env var pointing to a multi-face .ttc"]
+    fn subset_with_index_handles_ttc_face_zero_and_one() {
+        let Ok(font_path) = std::env::var("SSAHDRIFY_TEST_TTC_FONT") else {
+            eprintln!("SSAHDRIFY_TEST_TTC_FONT not set — skipping");
+            return;
+        };
+        let font_data = match std::fs::read(&font_path) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("Cannot read {font_path}: {e} — skipping");
+                return;
+            }
+        };
+        assert!(
+            is_ttc_data(&font_data),
+            "fixture at {font_path} must be a TTC (starts with 'ttcf' magic)"
+        );
+
+        let codepoints: Vec<u32> = "你好世界Hello".chars().map(|c| c as u32).collect();
+
+        let face0 = subset_with_index(&font_data, 0, &codepoints)
+            .expect("face 0 of a TTC should subset cleanly");
+        assert!(!face0.is_empty(), "face 0 subset must not be empty");
+        assert!(
+            face0.len() < font_data.len(),
+            "face 0 subset ({} bytes) should be smaller than original ({} bytes)",
+            face0.len(),
+            font_data.len()
+        );
+
+        let face1 = subset_with_index(&font_data, 1, &codepoints)
+            .expect("face 1 of a TTC should subset cleanly");
+        assert!(!face1.is_empty(), "face 1 subset must not be empty");
+        assert!(
+            face1.len() < font_data.len(),
+            "face 1 subset ({} bytes) should be smaller than original ({} bytes)",
+            face1.len(),
+            font_data.len()
+        );
+
+        // Different faces with different name tables / glyph counts must
+        // produce different output bytes. If the from_index path silently
+        // collapsed to face 0, this assertion would catch it.
+        assert_ne!(
+            face0, face1,
+            "face 0 and face 1 should produce different subset bytes"
+        );
     }
 
     fn init_test_user_font_db(name: &str) {
