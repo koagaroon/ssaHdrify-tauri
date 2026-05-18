@@ -11,7 +11,7 @@
 //! lookup tier ordering).
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use once_cell::sync::Lazy;
@@ -84,6 +84,20 @@ static GUI_FONT_CACHE: Lazy<Mutex<Option<FontCache>>> = Lazy::new(|| Mutex::new(
 /// `clear_font_cache` can drop the connection AND wipe the file even
 /// when `GUI_FONT_CACHE` is `None` (schema-mismatch recovery path).
 static GUI_FONT_CACHE_PATH: Lazy<Mutex<Option<PathBuf>>> = Lazy::new(|| Mutex::new(None));
+
+/// Monotonic generation counter bumped every time `clear_font_cache`
+/// publishes a fresh `FontCache` into `GUI_FONT_CACHE`. The counter is
+/// the synchronization primitive that makes `detect_font_cache_drift`'s
+/// Phase 1 / Phase 3 lock split safe against a concurrent
+/// clear-and-republish: Phase 1 captures the generation under the slot
+/// lock alongside the folder snapshot; Phase 3 re-acquires the slot
+/// lock and verifies the generation matches before calling
+/// `diff_against`. A mismatch means the cache was rebuilt between
+/// phases, so the Phase-1 snapshot is stale and the only correct
+/// answer is `DriftReport::default()`. The bump MUST live inside the
+/// same slot-lock scope as `*slot = Some(fresh)` so detect can't
+/// observe the new handle without also observing the new generation.
+static GUI_FONT_CACHE_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 /// One-shot migration of the legacy GUI font cache file from a prior
 /// Tauri-managed `app_data_dir` (typically the bundle-identifier path
@@ -504,16 +518,40 @@ pub fn open_font_cache() -> Result<CacheStatus, String> {
 /// calls. The split mirrors `rescan_font_cache_drift`'s Phase 1 /
 /// Phase 3 pattern: snapshot folder list under lock, drop lock, stat
 /// loop unlocked, re-acquire lock to call `diff_against` (which needs
-/// the cache handle). A parallel `clear_font_cache` interleaving
-/// between the snapshot drop and the re-acquire would change `slot` to
-/// None — the second `.as_ref()` handles that as a clean
-/// `DriftReport::default()` return. Stat results computed against the
-/// pre-clear cache list against a post-clear cache are still
-/// internally consistent (we report against the snapshot we took).
+/// the cache handle).
+///
+/// **R16 W16.7 (Codex `66460d37`)**: a parallel `clear_font_cache`
+/// interleaving between Phase 1 and Phase 3 has TWO failure shapes
+/// that must both be handled, not one:
+///   1. **slot == None mid-clear** — Phase 3 acquires the lock while
+///      clear is still between `*slot = None` and `*slot = Some(fresh)`.
+///      The `None` arm below returns `DriftReport::default()`.
+///   2. **slot == Some(fresh empty cache) post-clear** — Phase 3
+///      acquires the lock after clear completed and republished a
+///      fresh empty cache. The `Some(c)` arm sees the new handle, and
+///      `diff_against` against an empty cache would push every
+///      snapshot folder into `added`, violating the documented contract
+///      that GUI drift detection's `added` is always empty.
+///
+/// Pre-W16.7 the docstring claimed shape (1) was the only failure mode
+/// — wrong. Shape (2) is the more common one because clear is fast
+/// and Phase 2's stat loop on a slow network share is the long step.
+/// The fix is `GUI_FONT_CACHE_GENERATION`: Phase 1 captures the
+/// generation alongside the folder snapshot under the slot lock,
+/// Phase 3 verifies the generation under the slot lock before calling
+/// `diff_against`. `clear_font_cache` bumps the generation in the
+/// same slot-lock scope as `*slot = Some(fresh)`, so any detect that
+/// acquires the slot lock after clear's republish observes both the
+/// new handle AND the new generation atomically with respect to that
+/// lock release. Generation mismatch ⇒ Phase 1's snapshot is stale ⇒
+/// return `DriftReport::default()`.
 #[tauri::command]
 pub fn detect_font_cache_drift() -> Result<DriftReport, String> {
-    // Phase 1: snapshot the cached folder list under the lock.
-    let cached_folders = {
+    // Phase 1: snapshot the cached folder list + capture the cache
+    // generation under the lock. Capturing the generation INSIDE the
+    // lock pairs it with the folder list we observed: the generation
+    // reflects "the handle this list came from".
+    let (cached_folders, captured_generation) = {
         let slot = GUI_FONT_CACHE
             .lock()
             .map_err(|_| "GUI cache mutex poisoned".to_string())?;
@@ -521,9 +559,11 @@ pub fn detect_font_cache_drift() -> Result<DriftReport, String> {
             Some(c) => c,
             None => return Ok(DriftReport::default()),
         };
-        cache
+        let folders = cache
             .list_folders()
-            .map_err(|e| format!("list cached folders: {e}"))?
+            .map_err(|e| format!("list cached folders: {e}"))?;
+        let gen = GUI_FONT_CACHE_GENERATION.load(Ordering::Acquire);
+        (folders, gen)
         // slot dropped at end of block
     };
 
@@ -537,18 +577,47 @@ pub fn detect_font_cache_drift() -> Result<DriftReport, String> {
         }
     }
 
-    // Phase 3: re-acquire the lock for `diff_against`. If the cache
-    // was cleared between Phase 1 and Phase 3, fall back to an empty
-    // report — same behavior as Phase 1 seeing None.
+    // Phase 3: re-acquire the lock and route through `finalize_drift`,
+    // which handles both interleaving shapes (cache cleared mid-detect
+    // / cache rebuilt mid-detect) before reaching `diff_against`.
     let slot = GUI_FONT_CACHE
         .lock()
         .map_err(|_| "GUI cache mutex poisoned".to_string())?;
-    let cache = match slot.as_ref() {
-        Some(c) => c,
-        None => return Ok(DriftReport::default()),
+    let current_generation = GUI_FONT_CACHE_GENERATION.load(Ordering::Acquire);
+    finalize_drift(
+        slot.as_ref(),
+        &snapshot,
+        captured_generation,
+        current_generation,
+    )
+}
+
+/// Phase-3 finalizer for `detect_font_cache_drift`. Pure function so the
+/// generation-mismatch and cache-unavailable shapes are unit-testable
+/// without standing up the global `GUI_FONT_CACHE` state. Callers must
+/// hold the slot lock for the duration of this call.
+fn finalize_drift(
+    cache: Option<&FontCache>,
+    snapshot: &[(String, i64)],
+    captured_generation: u64,
+    current_generation: u64,
+) -> Result<DriftReport, String> {
+    // Shape (2): cache was cleared AND a fresh empty cache republished
+    // between Phase 1 and Phase 3. The snapshot we built describes a
+    // cache that no longer exists; the only correct response is
+    // "no drift to report — caller should re-detect against the new
+    // generation if they still care".
+    if captured_generation != current_generation {
+        return Ok(DriftReport::default());
+    }
+    // Shape (1): cache was cleared and the new handle hasn't landed yet
+    // (`*slot = None` between clear's two slot-lock scopes). Same
+    // user-visible answer as shape (2).
+    let Some(cache) = cache else {
+        return Ok(DriftReport::default());
     };
     let report = cache
-        .diff_against(&snapshot)
+        .diff_against(snapshot)
         .map_err(|e| format!("compute drift: {e}"))?;
     Ok(DriftReport {
         added: report.added,
@@ -975,6 +1044,15 @@ pub fn clear_font_cache() -> Result<(), String> {
         .lock()
         .map_err(|_| "GUI cache mutex poisoned".to_string())?;
     *slot = Some(fresh);
+    // R16 W16.7 (Codex 66460d37): bump the generation INSIDE the slot-
+    // lock scope, after publishing the new handle, so any concurrent
+    // `detect_font_cache_drift` that acquires the slot lock after this
+    // release observes both the new cache AND the bumped generation
+    // atomically with respect to this lock — closing the window where
+    // detect's Phase 3 could see slot=Some(fresh empty) but
+    // generation=old, run diff_against, and leak snapshot folders into
+    // `added`. Release ordering pairs with detect's Acquire load.
+    GUI_FONT_CACHE_GENERATION.fetch_add(1, Ordering::Release);
     Ok(())
 }
 
@@ -1554,5 +1632,75 @@ mod tests {
         fs::write(&main, b"x").unwrap();
         migrate_legacy_gui_cache(&dir.0, &dir.0);
         assert!(main.exists(), "self-rename must not destroy the file");
+    }
+
+    // ── R16 W16.7 (Codex 66460d37): finalize_drift generation check ──
+
+    #[test]
+    fn finalize_drift_returns_default_when_generation_changed() {
+        // Pins the W16.7 fix: simulates `detect_font_cache_drift`
+        // Phase 1 capturing the cached folders + generation, then
+        // `clear_font_cache` republishing a fresh empty cache (which
+        // bumps the generation), then Phase 3 calling finalize_drift
+        // with a cache reference that no longer matches the snapshot.
+        // Without the generation check, the snapshot's folders would
+        // leak into `added`, violating the documented "added is always
+        // empty for the GUI path" contract. With the check, Phase 3
+        // returns DriftReport::default().
+        let (_guard, cache) = temp_cache("fin_drift_gen_changed");
+        // Pre-clear snapshot: two folders the user previously had in
+        // their cache. The fresh post-clear `cache` we pass in does
+        // NOT contain them.
+        let snapshot = vec![
+            ("/legacy/folder/a".to_string(), 100),
+            ("/legacy/folder/b".to_string(), 200),
+        ];
+        let report = finalize_drift(Some(&cache), &snapshot, 5, 6).unwrap();
+        assert!(
+            report.added.is_empty(),
+            "stale snapshot must NOT leak into added[]; got {:?}",
+            report.added
+        );
+        assert!(report.modified.is_empty(), "modified must also be empty");
+        assert!(report.removed.is_empty(), "removed must also be empty");
+    }
+
+    #[test]
+    fn finalize_drift_returns_default_when_cache_unavailable() {
+        // Pins shape (1): cache slot is None (clear is mid-flight,
+        // between `*slot = None` and `*slot = Some(fresh)`).
+        // Generation check still happens first, but None is the
+        // independent reason for the default return.
+        let snapshot = vec![("/folder/a".to_string(), 100)];
+        let report = finalize_drift(None, &snapshot, 0, 0).unwrap();
+        assert!(report.added.is_empty());
+        assert!(report.modified.is_empty());
+        assert!(report.removed.is_empty());
+    }
+
+    #[test]
+    fn finalize_drift_returns_diff_when_generation_matches() {
+        // Counter-test: when the generation didn't change between
+        // Phase 1 and Phase 3 (no clear interleaved), diff_against
+        // runs and reports real drift. Seeds /folder/a with mtime
+        // 100; passes a snapshot with mtime 999 (mtime mismatch
+        // → reported as modified).
+        let (_guard, mut cache) = temp_cache("fin_drift_gen_matches");
+        cache.replace_folder("/folder/a", 100, &[]).unwrap();
+        let snapshot = vec![("/folder/a".to_string(), 999)];
+        let report = finalize_drift(Some(&cache), &snapshot, 42, 42).unwrap();
+        assert_eq!(
+            report.modified,
+            vec!["/folder/a".to_string()],
+            "mtime mismatch should classify as modified"
+        );
+        assert!(
+            report.added.is_empty(),
+            "snapshot path is in cache → not added"
+        );
+        assert!(
+            report.removed.is_empty(),
+            "all cache rows present in snapshot"
+        );
     }
 }
