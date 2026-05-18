@@ -20,46 +20,23 @@
 // helper resolves the version the same way `vite.config.ts` does, so
 // the engine bundle and the GUI bundle agree on `__APP_VERSION__` at
 // every build.
+//
+// R17 W17.5 (N-R17-64): version-resolver logic moved to
+// `scripts/lib/app-version.mjs` so this script and `vite.config.ts`
+// share a single source of truth. Pre-W17.5 the resolver was
+// duplicated in two files and had already drifted (N-R17-63: the
+// sanitize-emptied warn branch existed in vite.config.ts but not
+// here).
 
 import { build } from "esbuild";
-import { execSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveAppVersion } from "./lib/app-version.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(__dirname, "..");
 
-function resolveAppVersion() {
-  // Mirror of vite.config.ts::resolveAppVersion (same precedence
-  // order + same 5 s git timeout + same sanitization allowlist).
-  // Don't `import` from vite.config.ts: that pulls Vite's deps into
-  // an esbuild-only build path. Duplicate the ~20 lines instead.
-  const raw = (() => {
-    try {
-      return execSync("git describe --tags --dirty --always", {
-        stdio: ["pipe", "pipe", "pipe"],
-        timeout: 5000,
-        cwd: projectRoot,
-      })
-        .toString()
-        .trim();
-    } catch {
-      // git unavailable or repo has no commits.
-    }
-    try {
-      const pkg = JSON.parse(readFileSync(resolve(projectRoot, "package.json"), "utf8"));
-      if (pkg.version) return `v${pkg.version}`;
-    } catch {
-      // package.json missing / malformed.
-    }
-    return "v0.0.0-unknown";
-  })();
-  const sanitized = raw.replace(/[^a-zA-Z0-9._+-]/g, "");
-  return sanitized || "v0.0.0-unknown";
-}
-
-const APP_VERSION = resolveAppVersion();
+const APP_VERSION = resolveAppVersion(projectRoot);
 
 await build({
   entryPoints: [resolve(projectRoot, "src/cli-engine-entry.ts")],

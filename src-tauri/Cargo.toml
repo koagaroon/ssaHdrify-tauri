@@ -20,6 +20,17 @@ default-run = "ssahdrify"
 name = "app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# R17 W17.5 (N-R17-65): the GUI binary `ssahdrify` uses Cargo's
+# implicit `src/main.rs` discovery — no `[[bin]]` block needed (and
+# adding one alongside the implicit detection would warn under
+# `cargo` 2024+). `default-run = "ssahdrify"` above is the
+# disambiguation knob `tauri build` reads; this comment is the grep-
+# anchor so a future search for "all binaries" finds both targets.
+#
+# GUI binary: implicit at `src/main.rs` (the file delegates to
+#   `app_lib::run` which boots the Tauri builder).
+# CLI binary: explicit `[[bin]]` below (no implicit because the
+#   path is non-standard — `src/bin/cli/main.rs`).
 [[bin]]
 name = "ssahdrify-cli"
 path = "src/bin/cli/main.rs"
@@ -36,7 +47,18 @@ tauri = { version = "2.10.3", features = [] }
 tauri-plugin-log = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
-deno_core = "0.400.0"
+# Exact-pinned (not semver `0.400`) because deno_core changes its
+# public API at most patch boundaries — V8 binding signatures
+# (`execute_script`, `JsRuntime`, scope macros) and feature-flag
+# defaults shift between 0.400.0 and 0.401.0. The CLI engine bundle
+# (`scripts/build-engine.mjs`) compiles to an iife that THIS exact
+# deno_core version loads; bumping requires reading the deno_core
+# changelog AND re-running the CLI engine integration tests
+# (`tests/test_chain.rs`) to confirm the V8 entry-points still match.
+# R17 W17.5 (N-R17-74): rationale documented so a future
+# `cargo update`-style "just bump the pin" decision pauses for the
+# binding audit first.
+deno_core = "=0.400.0"
 clap = { version = "4.5.53", features = ["derive"] }
 tokio = { version = "1.52.2", features = ["rt"] }
 font-kit = "0.14"
@@ -78,6 +100,18 @@ rfd = "0.16"
 # profiles, Cargo's `[profile.release.package.<name>]` overrides are
 # the way — see the GUI design doc's 2026-05-08 spillover entry for
 # context. Keep this comment if the profile block is reorganized.
+# R17 W17.5 (A-R17-60): `panic = "abort"` is INTENTIONALLY ABSENT.
+# `fonts::subset_font` uses `std::panic::catch_unwind` to recover
+# from fontcull panics on malformed font data — that recovery path
+# requires the unwind runtime to be present. Enabling `panic =
+# "abort"` would turn fontcull panics into immediate process exits
+# (the subset call would never get a chance to translate the panic
+# into the user-visible "Subset panic: …" Err string the GUI / CLI
+# both rely on). The release-size win from `panic = "abort"` (~50–100
+# KB exe) is dwarfed by the regression: a single hostile font file
+# could SIGABRT the whole batch instead of failing one font and
+# continuing. Keep `panic = "unwind"` (the default — no explicit key
+# needed). Revisit only if we also remove the catch_unwind boundary.
 [profile.release]
 opt-level = "z"
 lto = true

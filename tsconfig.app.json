@@ -10,6 +10,17 @@
     /* Bundler mode */
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
+    /* R17 W17.5 (N-R17-70): `verbatimModuleSyntax` requires every
+       type-only import to be `import type` and refuses to elide
+       value imports — keeps the `import { Foo }` vs
+       `import type { Foo }` distinction honest at the source level.
+       `erasableSyntaxOnly` (further down) refuses TS-only construct
+       families (enums, parameter properties, namespaces) that can't
+       be 1:1 stripped to JS by lightweight transpilers; the codebase
+       uses type aliases / unions for the same shapes. Both flags
+       lock the project into a "tools that erase types without
+       semantic transformations work" posture; loosening either
+       re-opens deno_core / esbuild loader compatibility risk. */
     "verbatimModuleSyntax": true,
     "moduleDetection": "force",
     "noEmit": true,
@@ -21,6 +32,11 @@
     "noUnusedParameters": true,
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
+    /* N-R17-59 (`noUncheckedIndexedAccess`) + N-R17-60
+       (`exactOptionalPropertyTypes`) deferred to W17.5b — enabling
+       them surfaces ~240 type errors across src/ + tests, scoped as a
+       follow-up dedicated wave because the call-site sweep is too
+       heavy to bundle here. */
   },
   "include": ["src"]
 }

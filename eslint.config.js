@@ -12,6 +12,20 @@ export default defineConfig([
   // never hand-edited. Ignoring keeps lint runs from flagging the
   // minified output.
   globalIgnores(["dist", "dist-engine", "src-tauri"]),
+  // R17 W17.5 (N-R17-61): scripts/*.mjs runs at build time and ships
+  // engine bytes into the CLI binary via include_str!; the umbrella
+  // `**/*.{ts,tsx}` pattern excluded it from lint coverage. Add a
+  // Node-globals block so the build-engine helper + the shared
+  // app-version resolver get unused-var / unreachable / typo signal.
+  {
+    files: ["scripts/**/*.{mjs,js}"],
+    extends: [js.configs.recommended],
+    languageOptions: {
+      ecmaVersion: 2023,
+      sourceType: "module",
+      globals: globals.node,
+    },
+  },
   {
     files: ["**/*.{ts,tsx}"],
     extends: [
