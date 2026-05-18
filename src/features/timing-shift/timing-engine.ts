@@ -29,9 +29,9 @@ export interface ShiftOptions {
   /** Offset in milliseconds (positive = later/slower, negative = earlier/faster) */
   offsetMs: number;
   /** If set, only shift captions starting at or after this timestamp (ms) */
-  thresholdMs?: number;
+  thresholdMs?: number | undefined;
   /** Frame rate for frame-based formats (SUB/MicroDVD). Defaults to 23.976. */
-  fps?: number;
+  fps?: number | undefined;
 }
 
 export interface PreviewEntry {
@@ -100,9 +100,9 @@ export function shiftSubtitles(content: string, options: ShiftOptions): ShiftRes
   // user might cross-reference.
   const preview: PreviewEntry[] = [];
   for (let i = 0; i < captions.length; i++) {
-    const c = captions[i];
+    const c = captions[i]!;
     if (c.skipped) continue;
-    const s = shifted[i];
+    const s = shifted[i]!;
     const wasShifted = c.start !== s.start || c.end !== s.end;
     preview.push({
       index: i + 1,

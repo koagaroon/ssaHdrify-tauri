@@ -74,7 +74,7 @@ function PreviewRow({
   origLabel,
   shiftedLabel,
 }: RowComponentProps<PreviewRowData>) {
-  const entry = preview[index];
+  const entry = preview[index]!;
   // Spread `ariaAttributes` (Round 1 F2.N-R1-24): react-window 2.x
   // supplies `role`, `aria-rowindex`, etc. via this prop and expects
   // the row component to apply them to the root element. Without the
@@ -314,7 +314,7 @@ export default function TimingShift() {
 
       let firstContent: string;
       try {
-        firstContent = await readText(paths[0]);
+        firstContent = await readText(paths[0]!);
       } catch (e) {
         // Stale-pick guard BEFORE the log emit (N-R5-FEFEAT-06): an
         // earlier pick that errors after the user has already moved on

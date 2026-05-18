@@ -66,8 +66,8 @@ const EPISODE_PATTERNS: EpisodePattern[] = [
     regex: /\bS(\d+)E(\d+)\b/i,
     useRaw: true,
     build: (m) => ({
-      episode: parseInt(m[2], 10),
-      seasonFromMatch: parseInt(m[1], 10),
+      episode: parseInt(m[2]!, 10),
+      seasonFromMatch: parseInt(m[1]!, 10),
     }),
   },
   // Pattern B — `][NN][` — must run on raw (brackets are the cue).
@@ -84,7 +84,7 @@ const EPISODE_PATTERNS: EpisodePattern[] = [
   {
     regex: /\]\s*\[\s*0*(\d{1,3})\s*\]/,
     useRaw: true,
-    build: (m) => ({ episode: parseInt(m[1], 10) }),
+    build: (m) => ({ episode: parseInt(m[1]!, 10) }),
   },
   // Pattern A — ` - NN [` or ` - NN.ext` — runs on raw because the
   // trailing bracket / extension boundary is the right anchor. Most
@@ -99,20 +99,20 @@ const EPISODE_PATTERNS: EpisodePattern[] = [
     // for any future codec naming weirdness.
     regex: /\s-\s*0*(\d+)\s*(?:\[|\.[a-z0-9]{1,10}$)/i,
     useRaw: true,
-    build: (m) => ({ episode: parseInt(m[1], 10) }),
+    build: (m) => ({ episode: parseInt(m[1]!, 10) }),
   },
   // 第N话 / 第N集 — Chinese marker, fallback. Doesn't appear in the
   // documented corpus but worth keeping for older naming styles.
   {
     regex: /第\s*(\d+)\s*[话集]/,
     useRaw: false,
-    build: (m) => ({ episode: parseInt(m[1], 10) }),
+    build: (m) => ({ episode: parseInt(m[1]!, 10) }),
   },
   // Western EP01 / E01 — final fallback.
   {
     regex: /\bEP?(\d+)\b/i,
     useRaw: false,
-    build: (m) => ({ episode: parseInt(m[1], 10) }),
+    build: (m) => ({ episode: parseInt(m[1]!, 10) }),
   },
 ];
 
@@ -149,8 +149,8 @@ function chineseNumeralToInt(s: string): number {
   const tenIdx = s.indexOf("十");
   if (tenIdx === -1) return 1;
   // Forms: 十N (10..19), N十 (20, 30...), N十M (21..99).
-  const tens = tenIdx === 0 ? 1 : (map[s[0]] ?? 1);
-  const ones = tenIdx === s.length - 1 ? 0 : (map[s[tenIdx + 1]] ?? 0);
+  const tens = tenIdx === 0 ? 1 : (map[s[0]!] ?? 1);
+  const ones = tenIdx === s.length - 1 ? 0 : (map[s[tenIdx + 1]!] ?? 0);
   return tens * 10 + ones;
 }
 
@@ -163,18 +163,18 @@ const SEASON_PATTERNS: SeasonPattern[] = [
   // "Nnd Season" / "Nrd Season" / "Nth Season" — anime fan-sub style.
   {
     regex: /(\d+)(?:st|nd|rd|th)\s+Season/i,
-    build: (m) => parseInt(m[1], 10),
+    build: (m) => parseInt(m[1]!, 10),
   },
   // "Season N"
   {
     regex: /Season\s+(\d+)/i,
-    build: (m) => parseInt(m[1], 10),
+    build: (m) => parseInt(m[1]!, 10),
   },
   // 第N季 — Chinese ordinal + numeric or 一二三...
   {
     regex: /第\s*([一二三四五六七八九十\d]+)\s*季/,
     build: (m) => {
-      const raw = m[1];
+      const raw = m[1]!;
       const n = parseInt(raw, 10);
       if (!Number.isNaN(n)) return n;
       return chineseNumeralToInt(raw);
@@ -183,7 +183,7 @@ const SEASON_PATTERNS: SeasonPattern[] = [
   // Standalone S\d (negative lookahead so "S01E01" doesn't double-count).
   {
     regex: /\bS(\d+)(?!E\d+)\b/i,
-    build: (m) => parseInt(m[1], 10),
+    build: (m) => parseInt(m[1]!, 10),
   },
 ];
 
@@ -336,7 +336,7 @@ export function buildPairings(videos: ParsedFile[], subtitles: ParsedFile[]): Pa
     const ambiguous = vs.length > 1;
 
     for (let i = 0; i < vs.length; i++) {
-      const v = vs[i];
+      const v = vs[i]!;
       // Index-pair videos to subs in the ambiguous case so the user
       // sees a defensible default pre-pick. In the common one-video
       // case, the first sub is always the chosen one.
@@ -398,8 +398,8 @@ function compareKeys(a: string, b: string): number {
   // rather than producing NaN comparisons that violate sort transitivity.
   const [as, ae] = a.split("|").map((n) => parseInt(n, 10) || 0);
   const [bs, be] = b.split("|").map((n) => parseInt(n, 10) || 0);
-  if (as !== bs) return as - bs;
-  return ae - be;
+  if (as! !== bs!) return as! - bs!;
+  return ae! - be!;
 }
 
 // ── Output path derivation ──────────────────────────────

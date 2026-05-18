@@ -49,7 +49,7 @@ export async function countExistingFiles(paths: string[]): Promise<number> {
       const idx = cursor++;
       if (idx >= paths.length) return;
       try {
-        if (await exists(paths[idx])) {
+        if (await exists(paths[idx]!)) {
           existingCount += 1;
         }
       } catch {

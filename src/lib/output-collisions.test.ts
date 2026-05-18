@@ -69,8 +69,8 @@ describe("countExistingFiles", () => {
     // matching would miss a regression where errorCount interpolation
     // breaks; pure count-only matching would miss a wording flip away
     // from "stat failure/error" / "fail-safe".
-    expect(warn.mock.calls[0][0]).toMatch(/\b1 stat (failure|error)/);
-    expect(warn.mock.calls[0][0]).toMatch(/fail-safe|treated as existing/);
+    expect(warn.mock.calls[0]![0]).toMatch(/\b1 stat (failure|error)/);
+    expect(warn.mock.calls[0]![0]).toMatch(/fail-safe|treated as existing/);
   });
 
   it("runs stat checks in parallel up to MAX_CONCURRENT_STAT", async () => {

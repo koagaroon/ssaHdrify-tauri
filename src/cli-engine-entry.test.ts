@@ -78,7 +78,7 @@ describe("planRename", () => {
       langs: "auto",
     });
 
-    expect(plan.pairings[0].outputPath).toBe("D:\\out\\[RawsX][Show Title][01][1080P][BDRip].ass");
+    expect(plan.pairings[0]!.outputPath).toBe("D:\\out\\[RawsX][Show Title][01][1080P][BDRip].ass");
   });
 
   it("marks already matched subtitles as no-op", () => {
@@ -89,7 +89,7 @@ describe("planRename", () => {
       langs: "auto",
     });
 
-    expect(plan.pairings[0].noOp).toBe(true);
+    expect(plan.pairings[0]!.noOp).toBe(true);
   });
 });
 
@@ -103,13 +103,13 @@ describe("font embed engine helpers", () => {
 
     expect(plan.outputPath).toBe("C:\\subs\\episode.embed.ass");
     expect(plan.fonts).toHaveLength(1);
-    expect(plan.fonts[0]).toMatchObject({
+    expect(plan.fonts[0]!).toMatchObject({
       family: "Arial",
       bold: false,
       italic: false,
       fontName: "arial.ttf",
     });
-    expect(plan.fonts[0].codepoints).toEqual([72, 101, 108, 111]);
+    expect(plan.fonts[0]!.codepoints).toEqual([72, 101, 108, 111]);
   });
 
   it("applies uuencoded font entries before the events section", () => {
@@ -171,7 +171,7 @@ Dialogue: 0,0:00:00.00,0:00:01.00,Default,中文
     expect(plan.fonts).toHaveLength(1);
     // CJK family strips to empty under [^a-z0-9_-]; fontName must
     // engage the FNV fallback (font_<8 hex chars>.ttf).
-    expect(plan.fonts[0].fontName).toMatch(/^font_[0-9a-f]{8}\.ttf$/);
+    expect(plan.fonts[0]!.fontName).toMatch(/^font_[0-9a-f]{8}\.ttf$/);
   });
 
   it("applyFontEmbed short-circuits to embeddedCount=0 with an empty fonts array", () => {

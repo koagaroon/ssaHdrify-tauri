@@ -83,10 +83,10 @@ function parseSrtTime(ts: string): number {
   const m = ts.match(/(\d{1,12}):(\d{2}):(\d{2})[,.](\d{3})/);
   if (!m) return 0;
   return (
-    parseInt(m[1], 10) * 3600000 +
-    parseInt(m[2], 10) * 60000 +
-    parseInt(m[3], 10) * 1000 +
-    parseInt(m[4], 10)
+    parseInt(m[1]!, 10) * 3600000 +
+    parseInt(m[2]!, 10) * 60000 +
+    parseInt(m[3]!, 10) * 1000 +
+    parseInt(m[4]!, 10)
   );
 }
 
@@ -98,16 +98,18 @@ function parseVttTime(ts: string): number {
   const full = ts.match(/^(\d{1,12}):(\d{2}):(\d{2})\.(\d{3})$/);
   if (full) {
     return (
-      parseInt(full[1], 10) * 3600000 +
-      parseInt(full[2], 10) * 60000 +
-      parseInt(full[3], 10) * 1000 +
-      parseInt(full[4], 10)
+      parseInt(full[1]!, 10) * 3600000 +
+      parseInt(full[2]!, 10) * 60000 +
+      parseInt(full[3]!, 10) * 1000 +
+      parseInt(full[4]!, 10)
     );
   }
   // MM:SS.mmm (no hours — valid per WebVTT spec)
   const short = ts.match(/^(\d{2}):(\d{2})\.(\d{3})$/);
   if (short) {
-    return parseInt(short[1], 10) * 60000 + parseInt(short[2], 10) * 1000 + parseInt(short[3], 10);
+    return (
+      parseInt(short[1]!, 10) * 60000 + parseInt(short[2]!, 10) * 1000 + parseInt(short[3]!, 10)
+    );
   }
   return 0;
 }
@@ -117,10 +119,10 @@ function parseAssTime(ts: string): number {
   const m = ts.match(/(\d{1,12}):(\d{2}):(\d{2})\.(\d{2})/);
   if (!m) return 0;
   return (
-    parseInt(m[1], 10) * 3600000 +
-    parseInt(m[2], 10) * 60000 +
-    parseInt(m[3], 10) * 1000 +
-    parseInt(m[4], 10) * 10
+    parseInt(m[1]!, 10) * 3600000 +
+    parseInt(m[2]!, 10) * 60000 +
+    parseInt(m[3]!, 10) * 1000 +
+    parseInt(m[4]!, 10) * 10
   );
 }
 
@@ -163,10 +165,10 @@ export function parseDisplayTime(ts: string): number | null {
   const m = ts.match(/^(\d{1,12}):(\d{2}):(\d{2})\.(\d{1,3})$/);
   if (!m) return null;
   return (
-    parseInt(m[1], 10) * 3600000 +
-    parseInt(m[2], 10) * 60000 +
-    parseInt(m[3], 10) * 1000 +
-    parseInt(m[4].padEnd(3, "0"), 10)
+    parseInt(m[1]!, 10) * 3600000 +
+    parseInt(m[2]!, 10) * 60000 +
+    parseInt(m[3]!, 10) * 1000 +
+    parseInt(m[4]!.padEnd(3, "0"), 10)
   );
 }
 
@@ -227,14 +229,14 @@ function parseSrt(content: string): Caption[] {
     // Find the timing line (skip the numeric index line)
     let timingIdx = -1;
     for (let i = 0; i < lines.length; i++) {
-      if (timingRe.test(lines[i])) {
+      if (timingRe.test(lines[i]!)) {
         timingIdx = i;
         break;
       }
     }
     if (timingIdx === -1) continue;
 
-    const timingMatch = lines[timingIdx].match(timingRe);
+    const timingMatch = lines[timingIdx]!.match(timingRe);
     if (!timingMatch) continue;
 
     if (captions.length >= MAX_PARSED_ENTRIES) {
@@ -258,8 +260,8 @@ function parseSrt(content: string): Caption[] {
     if (text.length > MAX_CAPTION_TEXT_LEN) {
       captions.push({
         raw: block.trim(),
-        start: parseSrtTime(timingMatch[1]),
-        end: parseSrtTime(timingMatch[2]),
+        start: parseSrtTime(timingMatch[1]!),
+        end: parseSrtTime(timingMatch[2]!),
         text: "",
         skipped: true,
       });
@@ -267,8 +269,8 @@ function parseSrt(content: string): Caption[] {
     }
     captions.push({
       raw: block.trim(),
-      start: parseSrtTime(timingMatch[1]),
-      end: parseSrtTime(timingMatch[2]),
+      start: parseSrtTime(timingMatch[1]!),
+      end: parseSrtTime(timingMatch[2]!),
       text,
     });
   }
@@ -321,14 +323,14 @@ function parseVtt(content: string): Caption[] {
     // Find the timing line — a cue ID is any line that does NOT contain "-->"
     let timingIdx = -1;
     for (let i = 0; i < lines.length; i++) {
-      if (timingRe.test(lines[i])) {
+      if (timingRe.test(lines[i]!)) {
         timingIdx = i;
         break;
       }
     }
     if (timingIdx === -1) continue;
 
-    const timingMatch = lines[timingIdx].match(timingRe);
+    const timingMatch = lines[timingIdx]!.match(timingRe);
     if (!timingMatch) continue;
 
     if (captions.length >= MAX_PARSED_ENTRIES) {
@@ -347,20 +349,20 @@ function parseVtt(content: string): Caption[] {
     if (text.length > MAX_CAPTION_TEXT_LEN) {
       captions.push({
         raw: block.trim(),
-        start: parseVttTime(timingMatch[1]),
-        end: parseVttTime(timingMatch[2]),
+        start: parseVttTime(timingMatch[1]!),
+        end: parseVttTime(timingMatch[2]!),
         text: "",
-        cueId,
+        ...(cueId !== undefined && { cueId }),
         skipped: true,
       });
       continue;
     }
     captions.push({
       raw: block.trim(),
-      start: parseVttTime(timingMatch[1]),
-      end: parseVttTime(timingMatch[2]),
+      start: parseVttTime(timingMatch[1]!),
+      end: parseVttTime(timingMatch[2]!),
       text,
-      cueId,
+      ...(cueId !== undefined && { cueId }),
     });
   }
   return captions;
@@ -436,7 +438,7 @@ function parseAss(content: string): Caption[] {
       // iteration, and that's the bound we just refused to cross).
       throw new Error(`Too many subtitle entries: ${captions.length}+ (max ${MAX_PARSED_ENTRIES})`);
     }
-    const text = match[5];
+    const text = match[5]!;
     if (text.length > MAX_CAPTION_TEXT_LEN) {
       // Emit a skipped placeholder rather than continuing past the
       // match. buildAss walks the same `dialogueRe` over the original
@@ -464,8 +466,8 @@ function parseAss(content: string): Caption[] {
       // closed.
       captions.push({
         raw: match[0],
-        start: parseAssTime(match[2]),
-        end: parseAssTime(match[4]),
+        start: parseAssTime(match[2]!),
+        end: parseAssTime(match[4]!),
         text: "",
         skipped: true,
       });
@@ -473,8 +475,8 @@ function parseAss(content: string): Caption[] {
     }
     captions.push({
       raw: match[0],
-      start: parseAssTime(match[2]),
-      end: parseAssTime(match[4]),
+      start: parseAssTime(match[2]!),
+      end: parseAssTime(match[4]!),
       text,
     });
   }
@@ -487,7 +489,7 @@ function buildAss(content: string, captions: Caption[]): string {
   let idx = 0;
   const result = content.replace(dialogueRe, (original, prefix, _start, space, _end, rest) => {
     if (idx < captions.length) {
-      const c = captions[idx++];
+      const c = captions[idx++]!;
       // Skipped placeholder (oversized text in parseAss): preserve the
       // original Dialogue line verbatim. Advancing idx is what keeps
       // the next non-skipped caption aligned with the next Dialogue
@@ -580,13 +582,13 @@ function parseSub(content: string, fps: number = DEFAULT_FPS): Caption[] {
     // tripping any ceiling (the 50 MB upstream file cap was the only
     // backstop). buildSub filters skipped placeholders out, so disk
     // output is unchanged.
-    const text = match[3];
+    const text = match[3]!;
     if (text.length > MAX_CAPTION_TEXT_LEN) {
       count += 1;
       captions.push({
         raw: match[0],
-        start: Math.round((parseInt(match[1], 10) / fps) * 1000),
-        end: Math.round((parseInt(match[2], 10) / fps) * 1000),
+        start: Math.round((parseInt(match[1]!, 10) / fps) * 1000),
+        end: Math.round((parseInt(match[2]!, 10) / fps) * 1000),
         text: "",
         skipped: true,
       });
@@ -595,8 +597,8 @@ function parseSub(content: string, fps: number = DEFAULT_FPS): Caption[] {
     count += 1;
     captions.push({
       raw: match[0],
-      start: Math.round((parseInt(match[1], 10) / fps) * 1000),
-      end: Math.round((parseInt(match[2], 10) / fps) * 1000),
+      start: Math.round((parseInt(match[1]!, 10) / fps) * 1000),
+      end: Math.round((parseInt(match[2]!, 10) / fps) * 1000),
       text: text.replace(/\|/g, "\n"),
     });
   }

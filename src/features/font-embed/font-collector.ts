@@ -358,7 +358,7 @@ function processDialogueText(
       const pTags = [...block.matchAll(/\\p(\d+)/g)];
       const lastP = pTags.at(-1);
       if (lastP) {
-        isDrawing = parseInt(lastP[1], 10) > 0;
+        isDrawing = parseInt(lastP[1]!, 10) > 0;
       }
       i = closeIdx + 1;
     } else {
@@ -459,7 +459,7 @@ function applyOverrideTags(
   ];
   const fnMatch = fnMatches.at(-1);
   if (fnMatch) {
-    const rawFamily = normalizeFamily(fnMatch[1]);
+    const rawFamily = normalizeFamily(fnMatch[1]!);
     if (!rawFamily) {
       result.family = initialFont.family;
     } else {
@@ -479,7 +479,7 @@ function applyOverrideTags(
   const bMatches = [...block.matchAll(/\\b(\d+)/g)];
   const bMatch = bMatches.at(-1);
   if (bMatch) {
-    const val = parseInt(bMatch[1], 10);
+    const val = parseInt(bMatch[1]!, 10);
     // \b0 = not bold, \b1 = bold, \b700+ = bold by weight
     result.bold = val === 1 || val >= 700;
   }
@@ -488,7 +488,7 @@ function applyOverrideTags(
   const iMatches = [...block.matchAll(/\\i(\d+)/g)];
   const iMatch = iMatches.at(-1);
   if (iMatch) {
-    result.italic = parseInt(iMatch[1], 10) !== 0;
+    result.italic = parseInt(iMatch[1]!, 10) !== 0;
   }
 
   return result;

@@ -298,7 +298,7 @@ export function runChain(request: ChainRunRequest): ChainResult {
   }
 
   for (let i = 0; i < plan.steps.length; i++) {
-    const step = plan.steps[i];
+    const step = plan.steps[i]!;
     const transform = TRANSFORMS[step.kind];
     // Round 11 W11.7 (A1-R11-07): runtime cross-check that the
     // registry actually has a transform for this kind. The TS type
@@ -415,7 +415,7 @@ export function resolveChainOutputPath(inputPath: string, template: string): str
   // would burn iteration cost in matchAll's lexer without ever matching
   // a real token. Defense-in-depth alongside the per-line size cap.
   for (const match of template.matchAll(/\{([a-zA-Z_][a-zA-Z0-9_]{0,31})\}/g)) {
-    if (!CHAIN_ALLOWED_TOKENS.has(match[1])) {
+    if (!CHAIN_ALLOWED_TOKENS.has(match[1]!)) {
       throw new Error(
         `chain output template references unknown token '{${match[1]}}'; ` +
           `chain-level templates support {name} and {ext} only (per-step tokens ` +

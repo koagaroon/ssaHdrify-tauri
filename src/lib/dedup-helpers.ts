@@ -62,7 +62,7 @@ export function buildConflictMessage(
     // would silently produce `undefined` here. Array.from spread keeps
     // the destructure unambiguous and crashes loudly on the impossible
     // case instead of returning `t("msg_dedup_blocked", undefined, ...)`.
-    const [tab, count] = Array.from(conflictsByTab.entries())[0];
+    const [tab, count] = Array.from(conflictsByTab.entries())[0]!;
     return t("msg_dedup_blocked", count, t(TAB_LABEL_KEYS[tab]));
   }
   // Multi-tab: list each "{count} in {tab}" segment, joined by "/".

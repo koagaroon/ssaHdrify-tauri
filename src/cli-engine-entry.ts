@@ -565,7 +565,7 @@ function buildMultiLanguageRenameCandidates(
     if (keyVideos.length === 1) {
       for (const subtitle of keySubtitles) {
         candidates.push({
-          video: keyVideos[0],
+          video: keyVideos[0]!,
           subtitle,
           source: "regex",
           key,
@@ -578,7 +578,7 @@ function buildMultiLanguageRenameCandidates(
       const subtitle = keySubtitles[i];
       if (!subtitle) continue;
       candidates.push({
-        video: keyVideos[i],
+        video: keyVideos[i]!,
         subtitle,
         source: "warning",
         key,
@@ -604,8 +604,8 @@ function groupMatchedFilesByKey(files: ParsedFile[]): Map<string, ParsedFile[]> 
 function comparePairingKeys(a: string, b: string): number {
   const [as, ae] = a.split("|").map((n) => parseInt(n, 10) || 0);
   const [bs, be] = b.split("|").map((n) => parseInt(n, 10) || 0);
-  if (as !== bs) return as - bs;
-  return ae - be;
+  if (as! !== bs!) return as! - bs!;
+  return ae! - be!;
 }
 
 function subtitleLanguage(name: string): string {

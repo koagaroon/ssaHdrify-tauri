@@ -344,14 +344,14 @@ export function substituteTemplate(template: string, vars: Record<string, string
     if (m.index > cursor) {
       segments.push({ kind: "literal", text: template.slice(cursor, m.index) });
     }
-    const name = m[1];
+    const name = m[1]!;
     if (!(name in vars)) {
       throw new Error(
         `output template references unknown token '{${name}}'; ` +
           `known tokens: ${Object.keys(vars).join(", ") || "(none)"}`
       );
     }
-    segments.push({ kind: "value", text: vars[name] });
+    segments.push({ kind: "value", text: vars[name]! });
     cursor = m.index + m[0].length;
   }
   if (cursor < template.length) {

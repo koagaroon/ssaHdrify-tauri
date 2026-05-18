@@ -38,7 +38,7 @@ function buildFontEntryName(name: string): string {
   // buildFontEntry returns `fontname: <safeName>\n<encoded>`; pull the
   // safeName slice for direct comparison.
   const entry = buildFontEntry(name, FONT_DATA);
-  const header = entry.split("\n", 1)[0]; // "fontname: <safeName>"
+  const header = entry.split("\n", 1)[0]!; // "fontname: <safeName>"
   return header.slice("fontname: ".length);
 }
 

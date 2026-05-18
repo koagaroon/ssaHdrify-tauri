@@ -504,7 +504,7 @@ export async function embedFonts(
     // comment promised but never actually wired up.
     if (isCancelled?.()) return null;
 
-    const info = selectedFonts[i];
+    const info = selectedFonts[i]!;
     if (!info.filePath) continue;
 
     const fontName = buildFontFileName(info.key);
@@ -744,7 +744,7 @@ export function insertFontsSection(content: string, fontsSection: string): strin
   // font data. Pre-Round-3 fix the GUI accepted these.
   const fontsHeaderIndices: number[] = [];
   for (let i = 0; i < lines.length; i += 1) {
-    if (HEADER_FONTS_RE.test(lines[i])) fontsHeaderIndices.push(i);
+    if (HEADER_FONTS_RE.test(lines[i]!)) fontsHeaderIndices.push(i);
   }
   if (fontsHeaderIndices.length > 1) {
     throw new Error(
@@ -759,7 +759,7 @@ export function insertFontsSection(content: string, fontsSection: string): strin
   // and add an explicit blank-line separator instead.
   const buildBefore = (endIdx: number): { text: string; sep: string } => {
     const slice = lines.slice(0, endIdx);
-    while (slice.length > 0 && slice[slice.length - 1].trim() === "") {
+    while (slice.length > 0 && slice[slice.length - 1]!.trim() === "") {
       slice.pop();
     }
     const text = slice.join(lineEnding);
@@ -776,7 +776,7 @@ export function insertFontsSection(content: string, fontsSection: string): strin
   // block and the next section header would leak through as extra blank lines.
   const buildAfter = (startIdx: number): string => {
     const slice = lines.slice(startIdx);
-    while (slice.length > 0 && slice[0].trim() === "") {
+    while (slice.length > 0 && slice[0]!.trim() === "") {
       slice.shift();
     }
     return slice.join(lineEnding);
@@ -789,7 +789,7 @@ export function insertFontsSection(content: string, fontsSection: string): strin
   if (existingFontsIdx >= 0) {
     // Find the end of the existing [Fonts] section (next section header or EOF).
     let endIdx = existingFontsIdx + 1;
-    while (endIdx < lines.length && !isSectionHeader(lines[endIdx])) {
+    while (endIdx < lines.length && !isSectionHeader(lines[endIdx]!)) {
       endIdx++;
     }
 
@@ -808,7 +808,7 @@ export function insertFontsSection(content: string, fontsSection: string): strin
   const HEADER_EVENTS_RE = /^\[[Ee][Vv][Ee][Nn][Tt][Ss]\][ \t]*$/;
   const eventsHeaderIndices: number[] = [];
   for (let i = 0; i < lines.length; i += 1) {
-    if (HEADER_EVENTS_RE.test(lines[i])) eventsHeaderIndices.push(i);
+    if (HEADER_EVENTS_RE.test(lines[i]!)) eventsHeaderIndices.push(i);
   }
   // Round 8 N-R8-N2-6: parity with the [Fonts]-duplicate reject above.
   // A single ASS with two [Events] sections produces a corrupted file

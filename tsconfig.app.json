@@ -31,12 +31,21 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "erasableSyntaxOnly": true,
-    "noFallthroughCasesInSwitch": true
-    /* N-R17-59 (`noUncheckedIndexedAccess`) + N-R17-60
-       (`exactOptionalPropertyTypes`) deferred to W17.5b — enabling
-       them surfaces ~240 type errors across src/ + tests, scoped as a
-       follow-up dedicated wave because the call-site sweep is too
-       heavy to bundle here. */
+    "noFallthroughCasesInSwitch": true,
+    /* R17 W17.5b (N-R17-59): `arr[i]` typed `T | undefined` instead of
+       `T`. `strict: true` does NOT include this; it's a separate flag
+       that surfaces an off-by-one regression class — hot paths in
+       subtitle parsing, chain segmentation, and fontcull boundaries
+       use indexed access where a length-mismatch between sibling
+       arrays would otherwise read `undefined` silently. Call sites
+       guard with explicit length checks / `??` fallbacks. */
+    "noUncheckedIndexedAccess": true,
+    /* R17 W17.5b (N-R17-60): `prop?: T` no longer accepts
+       `prop: undefined`. Distinguishes "absent" from "present and
+       undefined" — eliminates a class of subtle bugs where a caller
+       passes `{ prop: undefined }` thinking it's the same as omitting
+       the field. */
+    "exactOptionalPropertyTypes": true
   },
   "include": ["src"]
 }

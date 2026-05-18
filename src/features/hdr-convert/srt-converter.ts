@@ -81,7 +81,8 @@ export function preprocessSrtColors(text: string): string {
   // SRT_COLOR_CLOSE_RE are module-scope (R17 W17.4 N-R17-53) — see
   // comment above the constants for the convention rationale.
   let result = text.replace(SRT_COLOR_OPEN_RE, (_match, raw: string) => {
-    const hexRgb = raw.length === 3 ? raw[0].repeat(2) + raw[1].repeat(2) + raw[2].repeat(2) : raw;
+    const hexRgb =
+      raw.length === 3 ? raw[0]!.repeat(2) + raw[1]!.repeat(2) + raw[2]!.repeat(2) : raw;
     const r = hexRgb.slice(0, 2);
     const g = hexRgb.slice(2, 4);
     const b = hexRgb.slice(4, 6);

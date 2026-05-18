@@ -266,20 +266,20 @@ describe("buildPairings — common shapes", () => {
     // Video-centric: ONE row per video. Other lang subs stay in
     // the input pool, reachable via the UI dropdown.
     expect(rows.length).toBe(1);
-    expect(rows[0].video?.path).toBe(v.path);
-    expect(rows[0].subtitle?.path).toBe(s1.path);
-    expect(rows[0].selected).toBe(true);
-    expect(rows[0].source).toBe("regex");
+    expect(rows[0]!.video?.path).toBe(v.path);
+    expect(rows[0]!.subtitle?.path).toBe(s1.path);
+    expect(rows[0]!.selected).toBe(true);
+    expect(rows[0]!.source).toBe("regex");
   });
 
   it("orphan video — 1 row, not selected, source=unmatched", () => {
     const v = parse("[Group][Show][01][1080p].mkv");
     const rows = buildPairings([v], []);
     expect(rows.length).toBe(1);
-    expect(rows[0].video?.path).toBe(v.path);
-    expect(rows[0].subtitle).toBeNull();
-    expect(rows[0].source).toBe("unmatched");
-    expect(rows[0].selected).toBe(false);
+    expect(rows[0]!.video?.path).toBe(v.path);
+    expect(rows[0]!.subtitle).toBeNull();
+    expect(rows[0]!.source).toBe("unmatched");
+    expect(rows[0]!.selected).toBe(false);
   });
 
   it("subs without a paired video produce no rows (stays in input pool)", () => {
@@ -299,11 +299,11 @@ describe("buildPairings — common shapes", () => {
     const rows = buildPairings([v3, v1, v2], []);
     // Anchor row count first so a regression that drops a row surfaces
     // as "expected 3, got 2" rather than "expected /v01.mkv, got
-    // undefined" against an out-of-bounds rows[2].
+    // undefined" against an out-of-bounds rows[2]!.
     expect(rows.length).toBe(3);
-    expect(rows[0].video?.path).toBe(v1.path);
-    expect(rows[1].video?.path).toBe(v2.path);
-    expect(rows[2].video?.path).toBe(v3.path);
+    expect(rows[0]!.video?.path).toBe(v1.path);
+    expect(rows[1]!.video?.path).toBe(v2.path);
+    expect(rows[2]!.video?.path).toBe(v3.path);
   });
 
   it("ambiguous (2 videos + 2 subs at same key) → 2 warning rows, index-paired", () => {
@@ -313,20 +313,20 @@ describe("buildPairings — common shapes", () => {
     const s2 = parse("[G2][Show][01][1080p].sc.ass");
     const rows = buildPairings([v1, v2], [s1, s2]);
     expect(rows.length).toBe(2);
-    expect(rows[0].source).toBe("warning");
-    expect(rows[0].video?.path).toBe(v1.path);
-    expect(rows[0].subtitle?.path).toBe(s1.path);
-    expect(rows[1].source).toBe("warning");
-    expect(rows[1].video?.path).toBe(v2.path);
-    expect(rows[1].subtitle?.path).toBe(s2.path);
+    expect(rows[0]!.source).toBe("warning");
+    expect(rows[0]!.video?.path).toBe(v1.path);
+    expect(rows[0]!.subtitle?.path).toBe(s1.path);
+    expect(rows[1]!.source).toBe("warning");
+    expect(rows[1]!.video?.path).toBe(v2.path);
+    expect(rows[1]!.subtitle?.path).toBe(s2.path);
     // Round 11 W11.6 (N2-R11-04): pin `selected` too. A warning row
     // has a real (debatable) pairing, so it defaults to selected=true
     // — buildPairings's `selected: sub !== null` line. Pre-W11.6 the
     // test didn't pin this; a regression flipping warning rows to
     // selected=false would have left ambiguous pairings unchecked by
     // default, silently dropping them from a "run all" batch.
-    expect(rows[0].selected).toBe(true);
-    expect(rows[1].selected).toBe(true);
+    expect(rows[0]!.selected).toBe(true);
+    expect(rows[1]!.selected).toBe(true);
   });
 
   it("videos without paired subtitles all show as unmatched", () => {
@@ -334,11 +334,11 @@ describe("buildPairings — common shapes", () => {
     const nonEpisodeName = parse("README.mkv");
     const rows = buildPairings([episodeNamed, nonEpisodeName], []);
     expect(rows.length).toBe(2);
-    expect(rows[0].source).toBe("unmatched");
-    expect(rows[0].video?.path).toBe(episodeNamed.path);
-    expect(rows[1].source).toBe("unmatched");
-    expect(rows[1].video?.path).toBe(nonEpisodeName.path);
-    expect(rows[1].key).toBe("unmatched");
+    expect(rows[0]!.source).toBe("unmatched");
+    expect(rows[0]!.video?.path).toBe(episodeNamed.path);
+    expect(rows[1]!.source).toBe("unmatched");
+    expect(rows[1]!.video?.path).toBe(nonEpisodeName.path);
+    expect(rows[1]!.key).toBe("unmatched");
   });
 });
 
@@ -485,8 +485,8 @@ describe("assignSubtitleToRow — manual edit", () => {
     const rows = [row("a", "/v02.mkv", null)];
     const out = assignSubtitleToRow(rows, "a", sub("/s02.ass"));
     expect(out).toHaveLength(1);
-    expect(out[0].subtitle?.path).toBe("/s02.ass");
-    expect(out[0].source).toBe("manual");
+    expect(out[0]!.subtitle?.path).toBe("/s02.ass");
+    expect(out[0]!.source).toBe("manual");
   });
 
   it("swaps subs between rows — target gets the new sub, source row becomes (video, null)", () => {
@@ -518,8 +518,8 @@ describe("assignSubtitleToRow — manual edit", () => {
     const rows = [row("a", "/v01.mkv", "/s01.ass")];
     const out = assignSubtitleToRow(rows, "a", null);
     expect(out).toHaveLength(1);
-    expect(out[0].subtitle).toBeNull();
-    expect(out[0].source).toBe("manual");
+    expect(out[0]!.subtitle).toBeNull();
+    expect(out[0]!.source).toBe("manual");
   });
 
   it("picking the row's current subtitle is a no-op", () => {
@@ -548,8 +548,8 @@ describe("assignSubtitleToRow — manual edit", () => {
     const rows = [row("a", "/v01.mkv", "/s01.ass")];
     const out = assignSubtitleToRow(rows, "a", sub("/sX.ass"));
     expect(out).toHaveLength(1);
-    expect(out[0].subtitle?.path).toBe("/sX.ass");
-    expect(out[0].source).toBe("manual");
+    expect(out[0]!.subtitle?.path).toBe("/sX.ass");
+    expect(out[0]!.source).toBe("manual");
   });
 
   it("round-trip: pick sub2, then pick sub1 back → original assignments restored (manual badges remain)", () => {
@@ -569,15 +569,15 @@ describe("assignSubtitleToRow — manual edit", () => {
     // is itself "yes, include this row".
     const rows = [row("a", "/v02.mkv", null, false)];
     const out = assignSubtitleToRow(rows, "a", sub("/s02.ass"));
-    expect(out[0].selected).toBe(true);
-    expect(out[0].subtitle?.path).toBe("/s02.ass");
+    expect(out[0]!.selected).toBe(true);
+    expect(out[0]!.subtitle?.path).toBe("/s02.ass");
   });
 
   it("preserves selected=true when reassigning a sub on an already-selected row", () => {
     const rows = [row("a", "/v01.mkv", "/s01.ass", true)];
     const out = assignSubtitleToRow(rows, "a", sub("/sX.ass"));
-    expect(out[0].selected).toBe(true);
-    expect(out[0].subtitle?.path).toBe("/sX.ass");
+    expect(out[0]!.selected).toBe(true);
+    expect(out[0]!.subtitle?.path).toBe("/sX.ass");
   });
 
   it("auto-ticks when assigning over a previously unticked, sub-bearing row", () => {
@@ -585,7 +585,7 @@ describe("assignSubtitleToRow — manual edit", () => {
     // and picked a different sub — the manual sub pick re-arms intent.
     const rows = [row("a", "/v01.mkv", "/s01.ass", false)];
     const out = assignSubtitleToRow(rows, "a", sub("/sX.ass"));
-    expect(out[0].selected).toBe(true);
+    expect(out[0]!.selected).toBe(true);
   });
 
   it("clearing (sub=null) preserves the row's prior selected state", () => {
@@ -593,9 +593,9 @@ describe("assignSubtitleToRow — manual edit", () => {
     // rename loop, so the prior tick is a stale-but-harmless signal
     // that gets re-armed if the user picks a new sub later.
     const rowsTrue = [row("a", "/v01.mkv", "/s01.ass", true)];
-    expect(assignSubtitleToRow(rowsTrue, "a", null)[0].selected).toBe(true);
+    expect(assignSubtitleToRow(rowsTrue, "a", null)[0]!.selected).toBe(true);
     const rowsFalse = [row("a", "/v01.mkv", "/s01.ass", false)];
-    expect(assignSubtitleToRow(rowsFalse, "a", null)[0].selected).toBe(false);
+    expect(assignSubtitleToRow(rowsFalse, "a", null)[0]!.selected).toBe(false);
   });
 });
 

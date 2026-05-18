@@ -29,7 +29,7 @@ export interface Status {
   /** Optional N-of-M progress for batch flows. Omit for single-file or
    *  non-progress states. The footer hides the indicator when this is
    *  undefined or when `total === 0`. */
-  progress?: StatusProgress;
+  progress?: StatusProgress | undefined;
 }
 
 export type StatusTab = "hdr" | "timing" | "fonts" | "rename";

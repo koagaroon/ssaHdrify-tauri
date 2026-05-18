@@ -262,8 +262,8 @@ Dialogue: 0,0:00:05.00,0:00:10.00,Default,{\\fn青鸟华光简粗黑}horizontal
     // partial glyph coverage for the same font file.
     const qingniao = infos.filter((i) => i.key.family.endsWith("青鸟华光简粗黑"));
     expect(qingniao.length).toBe(1);
-    expect(qingniao[0].key.family).toBe("青鸟华光简粗黑"); // no @ prefix
-    expect(qingniao[0].source).toBe("local");
+    expect(qingniao[0]!.key.family).toBe("青鸟华光简粗黑"); // no @ prefix
+    expect(qingniao[0]!.source).toBe("local");
   });
 
   it("exposes every localized variant as a lookup key while keeping entry count = face count", () => {

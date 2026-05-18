@@ -67,7 +67,7 @@ function parseStyleFormatLine(formatLine: string): number[] | null {
     .map((f) => f.trim().toLowerCase());
   const indices: number[] = [];
   for (let i = 0; i < fields.length; i++) {
-    if (STYLE_COLOR_FIELDS.has(fields[i])) {
+    if (STYLE_COLOR_FIELDS.has(fields[i]!)) {
       indices.push(i);
     }
   }
@@ -321,7 +321,7 @@ export function processAssContent(
   let styleColorIndices = STYLE_COLOR_INDICES_FALLBACK.slice();
 
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+    const line = lines[i]!;
 
     // Round 11 W11.3 (A1-R11-02): per-line byte cap fires BEFORE
     // detectSection / transformStyleLine / transformEventText so a

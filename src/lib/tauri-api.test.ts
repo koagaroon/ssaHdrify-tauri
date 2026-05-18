@@ -64,7 +64,7 @@ beforeEach(() => {
 describe("runStreamingScan — sync delivery (batches arrive during invoke)", () => {
   it("invokes onBatch per batch with monotonically increasing totals", async () => {
     invokeMock.mockImplementation(async () => {
-      const channel = channelInstances[0];
+      const channel = channelInstances[0]!;
       channel.onmessage?.({ kind: "batch", total: 2 });
       channel.onmessage?.({ kind: "batch", total: 3 });
       channel.onmessage?.({
@@ -94,7 +94,7 @@ describe("runStreamingScan — sync delivery (batches arrive during invoke)", ()
 
   it("returns zero counts when no batches arrive (Done only)", async () => {
     invokeMock.mockImplementation(async () => {
-      channelInstances[0].onmessage?.({
+      channelInstances[0]!.onmessage?.({
         kind: "done",
         reason: "natural",
         added: 0,
@@ -112,7 +112,7 @@ describe("runStreamingScan — sync delivery (batches arrive during invoke)", ()
     // combination foot-gun). Pin this so a future Rust-side rename of
     // the variant or a runStreamingScan field-drop is caught.
     invokeMock.mockImplementation(async () => {
-      channelInstances[0].onmessage?.({
+      channelInstances[0]!.onmessage?.({
         kind: "done",
         reason: "ceilingHit",
         added: 100_000,
@@ -132,9 +132,9 @@ describe("runStreamingScan — sync delivery (batches arrive during invoke)", ()
 describe("runStreamingScan via scanFontFiles", () => {
   it("forwards the path list and resolves with batched counts", async () => {
     invokeMock.mockImplementation(async () => {
-      channelInstances[0].onmessage?.({ kind: "batch", total: 1 });
-      channelInstances[0].onmessage?.({ kind: "batch", total: 2 });
-      channelInstances[0].onmessage?.({
+      channelInstances[0]!.onmessage?.({ kind: "batch", total: 1 });
+      channelInstances[0]!.onmessage?.({ kind: "batch", total: 2 });
+      channelInstances[0]!.onmessage?.({
         kind: "done",
         reason: "natural",
         added: 2,
@@ -163,7 +163,7 @@ describe("runStreamingScan via scanFontFiles", () => {
   it("forwards a 1000-element path list at the boundary", async () => {
     const paths = Array.from({ length: 1000 }, (_, i) => `D:/dummy-${i}.ttf`);
     invokeMock.mockImplementation(async () => {
-      channelInstances[0].onmessage?.({
+      channelInstances[0]!.onmessage?.({
         kind: "done",
         reason: "natural",
         added: 0,
@@ -182,7 +182,7 @@ describe("runStreamingScan via scanFontFiles", () => {
 
   it("clears the batch count when invoke rejects", async () => {
     invokeMock.mockImplementation(async () => {
-      channelInstances[0].onmessage?.({ kind: "batch", total: 5 });
+      channelInstances[0]!.onmessage?.({ kind: "batch", total: 5 });
       throw new Error("SQLite BUSY: database is locked");
     });
 
@@ -351,13 +351,13 @@ describe("runStreamingScan — async-after-resolve (A-bug-1 regression)", () => 
     invokeMock.mockImplementation(async () => {
       // Schedule batches + Done as separate microtasks AFTER this returns.
       queueMicrotask(() => {
-        channelInstances[0].onmessage?.({ kind: "batch", total: 2 });
+        channelInstances[0]!.onmessage?.({ kind: "batch", total: 2 });
       });
       queueMicrotask(() => {
-        channelInstances[0].onmessage?.({ kind: "batch", total: 3 });
+        channelInstances[0]!.onmessage?.({ kind: "batch", total: 3 });
       });
       queueMicrotask(() => {
-        channelInstances[0].onmessage?.({
+        channelInstances[0]!.onmessage?.({
           kind: "done",
           reason: "natural",
           added: 3,
@@ -376,10 +376,10 @@ describe("runStreamingScan — async-after-resolve (A-bug-1 regression)", () => 
   it("returns the Rust-reported cancellation outcome after async Done", async () => {
     invokeMock.mockImplementation(async () => {
       queueMicrotask(() => {
-        channelInstances[0].onmessage?.({ kind: "batch", total: 40 });
+        channelInstances[0]!.onmessage?.({ kind: "batch", total: 40 });
       });
       queueMicrotask(() => {
-        channelInstances[0].onmessage?.({
+        channelInstances[0]!.onmessage?.({
           kind: "done",
           reason: "userCancel",
           added: 40,

@@ -15,7 +15,7 @@ const PLACEHOLDER_RE = /\{(\d+)\}/g;
  * equality, so multiset semantics hold.
  */
 function placeholders(value: string): string[] {
-  return [...value.matchAll(PLACEHOLDER_RE)].map((m) => m[1]).sort();
+  return [...value.matchAll(PLACEHOLDER_RE)].map((m) => m[1]!).sort();
 }
 
 describe("i18n strings", () => {

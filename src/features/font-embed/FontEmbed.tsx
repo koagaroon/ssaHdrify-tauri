@@ -334,7 +334,7 @@ export default function FontEmbed() {
         // FontsFilesState.firstFileContent slot — the field is kept for
         // FileContext compatibility but the cache is the authoritative
         // store from here on.
-        const firstSuccessfulPath = paths.find((p) => cache.has(p)) ?? paths[0];
+        const firstSuccessfulPath = paths.find((p) => cache.has(p)) ?? paths[0]!;
         const firstContent = cache.get(firstSuccessfulPath)?.content ?? "";
         const names = paths.map(fileNameFromPath);
         setFontsFiles({
@@ -667,7 +667,7 @@ export default function FontEmbed() {
         const seenOutputs = new Set<string>();
 
         for (let i = 0; i < filePaths.length; i++) {
-          const filePath = filePaths[i];
+          const filePath = filePaths[i]!;
 
           // R15 W15.6 (N-R15-24): hoist safeFileName above the
           // skip-check so a future refactor adding work between the

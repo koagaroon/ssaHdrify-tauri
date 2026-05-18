@@ -38,9 +38,9 @@ export function assUuencode(data: Uint8Array): string[] {
 
   for (let i = 0; i < data.length; i += 3) {
     // Read up to 3 bytes, pad missing bytes with 0
-    const b0 = data[i];
-    const b1 = i + 1 < data.length ? data[i + 1] : 0;
-    const b2 = i + 2 < data.length ? data[i + 2] : 0;
+    const b0 = data[i]!;
+    const b1 = i + 1 < data.length ? data[i + 1]! : 0;
+    const b2 = i + 2 < data.length ? data[i + 2]! : 0;
 
     // Split 24 bits into four 6-bit values and add 33. Each 6-bit value is
     // in [0, 63], so the encoded char is in [33, 96] by construction —

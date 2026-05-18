@@ -38,10 +38,10 @@ describe("parseSubtitle", () => {
     // remainder which still includes the Style field; the timing
     // operations don't care about text content. Anchor on the
     // load-bearing fields.
-    expect(result.captions[0].start).toBe(1000);
-    expect(result.captions[0].end).toBe(2500);
-    expect(result.captions[1].start).toBe(3000);
-    expect(result.captions[1].end).toBe(4500);
+    expect(result.captions[0]!.start).toBe(1000);
+    expect(result.captions[0]!.end).toBe(2500);
+    expect(result.captions[1]!.start).toBe(3000);
+    expect(result.captions[1]!.end).toBe(4500);
   });
 
   it("parses MicroDVD SUB frame ranges and reports format=sub", () => {
@@ -53,17 +53,17 @@ describe("parseSubtitle", () => {
     const result = parseSubtitle(content);
     expect(result.format).toBe("sub");
     expect(result.captions).toHaveLength(2);
-    expect(result.captions[0].text).toBe("First frame block");
-    expect(result.captions[1].text).toBe("Second frame block");
+    expect(result.captions[0]!.text).toBe("First frame block");
+    expect(result.captions[1]!.text).toBe("Second frame block");
     // Exact integer assertions — parseSub does Math.round so the
     // output is always an integer ms. The previous toBeCloseTo(N, -1)
     // form was a 5 ms tolerance window (Vitest interprets numDigits as
     // 0.5 × 10^-N, so -1 gives ±5), which would let a Math.round →
     // Math.floor regression slip past silently.
-    expect(result.captions[0].start).toBe(1001);
-    expect(result.captions[0].end).toBe(2002);
-    expect(result.captions[1].start).toBe(3003);
-    expect(result.captions[1].end).toBe(4004);
+    expect(result.captions[0]!.start).toBe(1001);
+    expect(result.captions[0]!.end).toBe(2002);
+    expect(result.captions[1]!.start).toBe(3003);
+    expect(result.captions[1]!.end).toBe(4004);
   });
 
   it("throws when the content has no recognized header or timing", () => {
@@ -209,11 +209,11 @@ describe("parseSubtitle / shiftSubtitle — oversized-ASS-Dialogue placeholder a
     // parseAss emits 3 captions (1 placeholder + 2 normal), preserving
     // positional alignment with the 3 original Dialogue lines.
     expect(parsed.captions).toHaveLength(3);
-    expect(parsed.captions[0].skipped).toBe(true);
-    expect(parsed.captions[0].text).toBe("");
-    expect(parsed.captions[1].skipped).toBeUndefined();
-    expect(parsed.captions[1].text).toContain("SECOND");
-    expect(parsed.captions[2].text).toContain("THIRD");
+    expect(parsed.captions[0]!.skipped).toBe(true);
+    expect(parsed.captions[0]!.text).toBe("");
+    expect(parsed.captions[1]!.skipped).toBeUndefined();
+    expect(parsed.captions[1]!.text).toContain("SECOND");
+    expect(parsed.captions[2]!.text).toContain("THIRD");
 
     // Shift by +1s: the oversized original line must stay verbatim;
     // the next two lines must move from 10/11s → 11/12s and 20/21s →
@@ -331,7 +331,7 @@ describe("parseSubtitle / shiftSubtitle — oversized-ASS-Dialogue placeholder a
     const result = parseSubtitle(ass);
     expect(result.format).toBe("ass");
     expect(result.captions).toHaveLength(1);
-    expect(result.captions[0].text).toContain("Hello");
+    expect(result.captions[0]!.text).toContain("Hello");
   });
 
   it("rejects 13-digit-hour ASS Dialogue (upper bound enforced)", () => {
@@ -358,10 +358,10 @@ describe("parseSubtitle / shiftSubtitle — oversized-ASS-Dialogue placeholder a
     const result = parseSubtitle(sub);
     expect(result.format).toBe("sub");
     expect(result.captions).toHaveLength(2);
-    expect(result.captions[0].skipped).toBe(true);
-    expect(result.captions[0].text).toBe("");
-    expect(result.captions[1].skipped).toBeUndefined();
-    expect(result.captions[1].text).toContain("NORMAL");
+    expect(result.captions[0]!.skipped).toBe(true);
+    expect(result.captions[0]!.text).toBe("");
+    expect(result.captions[1]!.skipped).toBeUndefined();
+    expect(result.captions[1]!.text).toContain("NORMAL");
   });
 
   it("parseSrt emits a skipped placeholder for oversized text (W11.1 N1-R11-01)", () => {
@@ -371,9 +371,9 @@ describe("parseSubtitle / shiftSubtitle — oversized-ASS-Dialogue placeholder a
     const result = parseSubtitle(srt);
     expect(result.format).toBe("srt");
     expect(result.captions).toHaveLength(2);
-    expect(result.captions[0].skipped).toBe(true);
-    expect(result.captions[0].text).toBe("");
-    expect(result.captions[1].text).toBe("NORMAL");
+    expect(result.captions[0]!.skipped).toBe(true);
+    expect(result.captions[0]!.text).toBe("");
+    expect(result.captions[1]!.text).toBe("NORMAL");
   });
 
   it("parseVtt emits a skipped placeholder for oversized text (W11.1 N1-R11-01)", () => {
@@ -386,8 +386,8 @@ describe("parseSubtitle / shiftSubtitle — oversized-ASS-Dialogue placeholder a
     const result = parseSubtitle(vtt);
     expect(result.format).toBe("vtt");
     expect(result.captions).toHaveLength(2);
-    expect(result.captions[0].skipped).toBe(true);
-    expect(result.captions[0].text).toBe("");
-    expect(result.captions[1].text).toBe("NORMAL");
+    expect(result.captions[0]!.skipped).toBe(true);
+    expect(result.captions[0]!.text).toBe("");
+    expect(result.captions[1]!.text).toBe("NORMAL");
   });
 });

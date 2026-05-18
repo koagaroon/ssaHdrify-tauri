@@ -187,7 +187,7 @@ export function sRgbToHdr(
       return Math.round(Math.max(0, Math.min(255, v * 255)));
     });
 
-    return [result[0], result[1], result[2]];
+    return [result[0]!, result[1]!, result[2]!];
   } catch (e) {
     // Any conversion error → black. The conversion always returns a
     // valid [0,0,0] triple — operation succeeds for the caller — so
