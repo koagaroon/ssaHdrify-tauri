@@ -361,6 +361,16 @@ export default function TimingShift() {
 
   const handleDroppedPaths = useCallback(
     async (paths: string[]) => {
+      // R17 W17.4 (N-R17-49, sibling parity with FontEmbed.tsx's
+      // W15.6 N-R15-28 bump-at-entry pattern): bump pickGenRef at
+      // function entry, not after the filter. Pre-W17.4 a concurrent
+      // in-flight pick wouldn't observe the generation jump until the
+      // filter completed. Real-world impact is negligible — the
+      // early-return is just log + banner state — but the
+      // bump-at-entry pattern keeps the generation contract uniform
+      // across pick entry points (FontEmbed already does this; this
+      // wave brings TimingShift into line).
+      const gen = (pickGenRef.current = pickGenRef.current + 1);
       const subtitlePaths = paths.filter((p) => fileNameHasSubtitleExt(fileNameFromPath(p)));
       if (subtitlePaths.length === 0) {
         // Surface through both the log AND the standard DropErrorBanner
@@ -371,7 +381,6 @@ export default function TimingShift() {
         setDropError(msg);
         return;
       }
-      const gen = (pickGenRef.current = pickGenRef.current + 1);
       await ingestPaths(subtitlePaths, gen);
     },
     [ingestPaths, addLog, t]

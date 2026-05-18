@@ -27,13 +27,18 @@ import { isWindowsRuntime } from "../../lib/platform";
 // ── Bracket cleanup ──────────────────────────────────────
 
 const BRACKET_RE = /\[[^\]]*\]/g;
+// R17 W17.4 (N-R17-55): module-scope to match BRACKET_RE above and
+// the rest of the codebase's convention. String.prototype.replace
+// doesn't share lastIndex across calls, so inline was semantically
+// equivalent; this is purely a convention sweep.
+const WHITESPACE_RE = /\s+/g;
 
 /** Strip every `[...]` group from a filename and collapse whitespace.
  *  Used as a separate cleaning pass for season-scan / LCS regexes that
  *  don't depend on the bracket structure (vs. Pattern B which keys
  *  off the brackets and runs on the raw filename). */
 export function bracketCleanup(filename: string): string {
-  return filename.replace(BRACKET_RE, " ").replace(/\s+/g, " ").trim();
+  return filename.replace(BRACKET_RE, " ").replace(WHITESPACE_RE, " ").trim();
 }
 
 // ── Episode extraction ──────────────────────────────────

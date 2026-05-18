@@ -88,10 +88,23 @@ export function shiftSubtitles(content: string, options: ShiftOptions): ShiftRes
     }
     return out;
   };
-  const preview: PreviewEntry[] = captions.map((c, i) => {
+  // R17 W17.4 (N-R17-40, Pattern 2): exclude `skipped: true` placeholders
+  // (oversized captions kept positionally for buildAss's sequential consume
+  // — see subtitle-parser.ts MAX_CAPTION_TEXT_LEN handling). The preview
+  // surface is a user-facing list; including placeholder rows allocates
+  // up to MAX_PARSED_ENTRIES (500k) empty PreviewEntry objects with no
+  // visible content. Build paths (HDR / Embed / output writing) already
+  // filter `c.skipped`; preview was the lone consumer that didn't.
+  // `index` still tracks the caption's position in the buildAss-aligned
+  // vector so the displayed numbering matches the source line numbers a
+  // user might cross-reference.
+  const preview: PreviewEntry[] = [];
+  for (let i = 0; i < captions.length; i++) {
+    const c = captions[i];
+    if (c.skipped) continue;
     const s = shifted[i];
     const wasShifted = c.start !== s.start || c.end !== s.end;
-    return {
+    preview.push({
       index: i + 1,
       originalStart: c.start,
       originalEnd: c.end,
@@ -100,8 +113,8 @@ export function shiftSubtitles(content: string, options: ShiftOptions): ShiftRes
       text: truncateCodepoints(c.text, 60),
       fullText: c.text,
       wasShifted,
-    };
-  });
+    });
+  }
 
   return {
     content: output,

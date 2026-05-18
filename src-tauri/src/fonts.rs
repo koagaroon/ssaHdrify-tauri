@@ -3087,11 +3087,22 @@ pub fn subset_font(
     // trust under the project's single-user-desktop threat model.
     let canonical_string = normalize_canonical_path(&canonical.to_string_lossy());
     let registered_key = (canonical_string.clone(), font_index);
-    let is_system = ALLOWED_FONT_PATHS
+    // R17 W17.4 (N-R17-8, readability): name each tier flag for what
+    // it asserts when `true` — "accepted via this tier" — rather than
+    // "is this tier's nature." Each variable evaluates lazily: once a
+    // prior tier accepts, subsequent ones short-circuit to `false`.
+    // The downstream gate (line ~3117 system-fonts-dir check, line
+    // ~3150 magic-byte sniff skip) keys off `accepted_via_system`
+    // specifically because system fonts get the extra dir-residency
+    // check on top of the registration. Cache + user tiers are
+    // checked only when system didn't accept and are NOT individually
+    // referenced after the gate; collapsing them into one boolean
+    // would lose the lazy-evaluation ordering reviewers expect.
+    let accepted_via_system = ALLOWED_FONT_PATHS
         .lock()
         .map_err(|_| "Internal error: font path cache corrupted".to_string())?
         .contains(&registered_key);
-    let is_cache = if is_system {
+    let accepted_via_cache = if accepted_via_system {
         false
     } else {
         ALLOWED_CACHE_FONT_PATHS
@@ -3099,12 +3110,12 @@ pub fn subset_font(
             .map_err(|_| "Internal error: font path cache corrupted".to_string())?
             .contains(&registered_key)
     };
-    let is_user = if is_system || is_cache {
+    let accepted_via_user = if accepted_via_system || accepted_via_cache {
         false
     } else {
         is_user_font_face_registered(&canonical_string, font_index)?
     };
-    if !is_system && !is_cache && !is_user {
+    if !accepted_via_system && !accepted_via_cache && !accepted_via_user {
         return Err("Font path was not discovered by a scan command".to_string());
     }
 
@@ -3114,7 +3125,7 @@ pub fn subset_font(
     // accept user-chosen directories — but they had to pass their own
     // provenance step above, so random file reads via IPC are still
     // blocked.
-    if is_system && !is_in_system_fonts_dir(&canonical) {
+    if accepted_via_system && !is_in_system_fonts_dir(&canonical) {
         return Err("System font path is not in a system fonts directory".to_string());
     }
 
@@ -3143,11 +3154,11 @@ pub fn subset_font(
     // process memory is itself a primitive worth closing at the
     // source — especially for `--cache-file`-supplied paths (P1b).
     //
-    // System fonts (`is_system=true`) skip this sniff: they already
-    // passed the stricter `is_in_system_fonts_dir` gate above, and
-    // OS font directories are guaranteed to contain real fonts.
+    // System fonts (`accepted_via_system=true`) skip this sniff: they
+    // already passed the stricter `is_in_system_fonts_dir` gate above,
+    // and OS font directories are guaranteed to contain real fonts.
     // Cache + user tiers go through the sniff.
-    if !is_system {
+    if !accepted_via_system {
         use std::io::Read;
         let mut header = [0u8; 4];
         let mut probe = fs::File::open(&canonical).map_err(|e| {

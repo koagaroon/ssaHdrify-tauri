@@ -427,7 +427,26 @@ export function aggregateFonts(perFile: Map<string, FileAnalysis>): {
 export function deriveEmbeddedPath(inputPath: string): string {
   // Decompose via the shared helper. Validates absolute, accepts drive-
   // root files (`C:\foo.ass`), rejects drive-relative (`C:foo.ass`).
-  const { dir, baseName, normalized, usedBackslash } = decomposeInputPath(inputPath);
+  const parts = decomposeInputPath(inputPath);
+  const { dir, normalized, usedBackslash } = parts;
+  let { baseName } = parts;
+  // R17 W17.4 (N-R17-45, sibling parity with deriveShiftedPath +
+  // resolveOutputPath's `.hdr` strip): strip a prior `.embedded`
+  // infix so re-embedding `EP01.embedded.ass` yields
+  // `EP01.embedded.ass` (idempotent) rather than the cumulative
+  // `EP01.embedded.embedded.ass`. Pre-W17.4 a user re-running embed
+  // on already-embedded output would see the cumulative form on disk
+  // — surprising once noticed.
+  if (baseName.toLowerCase().endsWith(".embedded")) {
+    baseName = baseName.slice(0, -".embedded".length);
+  }
+  // Post-strip baseName empty / whitespace-or-dot-only guard mirrors
+  // deriveShiftedPath (R10 N-R10-013): a POSIX dotfile-shape like
+  // `.embedded.ass` whose stem is just `.` would otherwise resolve
+  // to `.embedded.ass` unchanged on every re-run.
+  if (!baseName || !baseName.replace(/^\.+/, "").trim()) {
+    throw new Error("Input filename has no valid stem after stripping .embedded infix");
+  }
   // Output is always .ass — the embed step rebuilds an ASS-format file
   // regardless of whether the input was .ass or .ssa.
   const outputName = `${baseName}.embedded.ass`;

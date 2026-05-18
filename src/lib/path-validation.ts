@@ -268,9 +268,20 @@ export function decomposeInputPath(inputPath: string): InputPathParts {
  * output-collision pre-check.
  */
 export function pathsEqualOnFs(a: string, b: string): boolean {
+  // R17 W17.4 (N-R17-57, cross-platform.md mandate): NFC-normalize
+  // BEFORE separator + case folding. Pre-W17.4 a macOS HFS+ input
+  // with NFD-form filename (e.g., a CJK character decomposed into base
+  // + combining mark, U+0065 + U+0301 for `é`) would not equal an
+  // NFC-form output (precomposed U+00E9) under pure case fold + slash
+  // normalization, even though the filesystem treats them as the same
+  // file. The sibling `normalizeOutputKey` in dedup-helpers.ts already
+  // NFC-normalizes for this exact reason; the self-overwrite gate at
+  // `assertSafeOutputPath`:535 calls pathsEqualOnFs, so without NFC
+  // here the gate misses macOS HFS+ self-overwrite cases.
+  const nfc = (p: string) => p.normalize("NFC");
   const normSep = (p: string) => (isWindowsRuntime ? p.replace(/\\/g, "/") : p);
   const normCase = (p: string) => (isCaseInsensitiveFs ? p.toLowerCase() : p);
-  return normCase(normSep(a)) === normCase(normSep(b));
+  return normCase(normSep(nfc(a))) === normCase(normSep(nfc(b)));
 }
 
 /**
