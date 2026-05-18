@@ -126,10 +126,24 @@ function parseAssTime(ts: string): number {
   );
 }
 
+/**
+ * Floor a millisecond value to a safe non-negative finite integer.
+ *
+ * NaN / Infinity collapse to 0; negatives clamp to 0. Without this,
+ * a malformed upstream caption (NaN start / end) would produce a
+ * literal "NaN:NaN:NaN.NaN" timestamp and corrupt the whole file. R2
+ * N-R2-14: extracted from formatSrtTime / formatAssTime / srt-converter
+ * msToAssTime where three copies were drifting.
+ */
+export function safeMs(ms: number): number {
+  if (!Number.isFinite(ms)) return 0;
+  if (ms < 0) return 0;
+  return ms;
+}
+
 /** Format ms → "HH:MM:SS,mmm" (SRT) */
 function formatSrtTime(ms: number): string {
-  if (!Number.isFinite(ms)) ms = 0;
-  if (ms < 0) ms = 0;
+  ms = safeMs(ms);
   const h = Math.floor(ms / 3600000);
   const m = Math.floor((ms % 3600000) / 60000);
   const s = Math.floor((ms % 60000) / 1000);
@@ -144,8 +158,7 @@ function formatVttTime(ms: number): string {
 
 /** Format ms → "H:MM:SS.cc" (ASS centiseconds) */
 function formatAssTime(ms: number): string {
-  if (!Number.isFinite(ms)) ms = 0;
-  if (ms < 0) ms = 0;
+  ms = safeMs(ms);
   const totalCs = Math.round(ms / 10);
   const cs = totalCs % 100;
   const totalSec = Math.floor(totalCs / 100);

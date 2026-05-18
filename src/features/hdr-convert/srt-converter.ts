@@ -9,6 +9,7 @@
  */
 
 import { BIDI_AND_ZERO_WIDTH_CHARS } from "../../lib/unicode-controls";
+import { safeMs } from "../../lib/subtitle-parser";
 
 // Round 7 Wave 7.6 (N4-R7-7): hoisted to module scope so the regex
 // compiles once instead of per buildAssFromSrtBlocks invocation.
@@ -220,11 +221,7 @@ export function buildAssDocument(
  * Convert milliseconds to ASS timestamp format: H:MM:SS.cc (centiseconds)
  */
 function msToAssTime(ms: number): string {
-  // NaN / Infinity guard matches subtitle-parser.ts:formatAssTime — without
-  // it, a malformed upstream caption (NaN start or end) would produce a
-  // literal "NaN:NaN:NaN.NaN" timestamp and corrupt the whole file.
-  if (!Number.isFinite(ms)) ms = 0;
-  if (ms < 0) ms = 0;
+  ms = safeMs(ms);
   const totalCs = Math.round(ms / 10);
   const cs = totalCs % 100;
   const totalSec = Math.floor(totalCs / 100);

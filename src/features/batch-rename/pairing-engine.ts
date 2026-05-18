@@ -385,7 +385,7 @@ export function buildPairings(videos: ParsedFile[], subtitles: ParsedFile[]): Pa
   return rows;
 }
 
-function compareKeys(a: string, b: string): number {
+export function compareKeys(a: string, b: string): number {
   // Called only on matched-video keys (`${season}|${episode}` shape)
   // — Round 6 Wave 6.5 #20. Unmatched videos take a separate branch
   // above (`unmatchedVideos.push(v)` + dedicated row at the end) and

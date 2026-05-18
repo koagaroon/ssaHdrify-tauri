@@ -1,5 +1,4 @@
 import { parse as parseAss } from "ass-compiler";
-import { isWindowsRuntime } from "./lib/platform";
 import { processAssContent } from "./features/hdr-convert/ass-processor";
 import {
   DEFAULT_STYLE,
@@ -12,6 +11,7 @@ import { DEFAULT_BRIGHTNESS, type Eotf } from "./features/hdr-convert/color-engi
 import { DEFAULT_TEMPLATE, resolveOutputPath } from "./features/hdr-convert/output-naming";
 import {
   buildPairings,
+  compareKeys,
   deriveRenameOutputPath,
   isNoOpRename,
   parseFilename,
@@ -32,10 +32,16 @@ import {
   assertSafeOutputFilename,
   assertSafeOutputPath,
   decomposeInputPath,
+  fileNameFromPath,
   substituteTemplate,
 } from "./lib/path-validation";
+import {
+  IGNORED_EXTS,
+  SUBTITLE_EXTS,
+  VIDEO_EXTS,
+  type RenameCategory,
+} from "./lib/rename-extensions";
 import { parseSubtitle } from "./lib/subtitle-parser";
-import { stripUnicodeControls } from "./lib/unicode-controls";
 
 // Chain feature — runtime + types re-exported so the Rust shell can
 // reach them via the bundled engine.js. Adding the chain entry here
@@ -187,13 +193,11 @@ export function convertHdr(request: HdrConversionRequest): HdrConversionResult {
   // (string ops only) and the two paths route through resolveOutputPath
   // with identical defaults — byte equality is structurally guaranteed.
   const outputPath = resolveOutputPath(request.inputPath, outputTemplate, request.eotf);
-  // Backslash → forward only on Windows. On POSIX, `\` is a valid
-  // filename character; treating it as a separator would mis-extract
-  // `EP\01.ass` as `01.ass` instead of the actual filename.
-  const normalizedForName = isWindowsRuntime
-    ? request.inputPath.replace(/\\/g, "/")
-    : request.inputPath;
-  const fileName = normalizedForName.split("/").pop() ?? request.inputPath;
+  // Filename extraction for the extension-based dispatch below. R2
+  // W1: this used to inline the windows-separator + split logic; now
+  // routed through the shared `fileNameFromPath` so the empty-string
+  // fallback + control-char strip stay in lockstep with the GUI side.
+  const fileName = fileNameFromPath(request.inputPath);
 
   if (isNativeAss(fileName)) {
     return {
@@ -440,39 +444,13 @@ function resolveEmbedOutputPathInternal(inputPath: string, template = "{name}.em
 // here; the duplicates have been removed (N-R5-FECHAIN-12 /
 // N-R5-FECHAIN-13).
 
-const VIDEO_EXTS = new Set([
-  "mp4",
-  "mkv",
-  "avi",
-  "mov",
-  "ts",
-  "m2ts",
-  "webm",
-  "flv",
-  "wmv",
-  "mpg",
-  "mpeg",
-  "m4v",
-]);
-const SUBTITLE_EXTS = new Set(["ass", "ssa", "srt", "sub", "vtt", "sbv", "lrc"]);
-const IGNORED_EXTS = new Set([
-  "torrent",
-  "zip",
-  "rar",
-  "7z",
-  "tar",
-  "gz",
-  "bz2",
-  "xz",
-  "tgz",
-  "mka",
-  "flac",
-  "mp3",
-  "m4a",
-  "aac",
-]);
+// VIDEO_EXTS / SUBTITLE_EXTS / IGNORED_EXTS / RenameCategory now live in
+// `src/lib/rename-extensions.ts` — shared with GUI BatchRename and the
+// tauri-api picker filter (R2 N-R2-2 / N-R2-3). The GUI uses the
+// `categorize(name)` helper; CLI keeps `categorizeRenamePath(path)` as a
+// thin wrapper that runs `fileNameFromPath` first because CLI receives
+// full argv paths, not bare filenames.
 
-type RenameCategory = "video" | "subtitle" | "ignored" | "unknown";
 type LanguageSelection =
   | { kind: "auto" }
   | { kind: "all" }
@@ -510,6 +488,13 @@ function categorizeRenamePaths(paths: string[]): CategorizedRenamePaths {
 }
 
 function categorizeRenamePath(path: string): RenameCategory {
+  // R2 N-R2-1 + N-R2-3: pre-W1 this used a local fileNameFromPath that
+  // lacked the W16.6 `|| path` empty-string fallback — a trailing-
+  // separator video path (`./media/`) returned "" and silently fell
+  // out as "unknown". Now routed through the consolidated
+  // `path-validation.ts::fileNameFromPath` so CLI + GUI behave the
+  // same. Ext lookup logic mirrors `rename-extensions.ts::categorize`
+  // but operates on a path (not a bare name) — kept as a thin wrapper.
   const name = fileNameFromPath(path);
   const dot = name.lastIndexOf(".");
   if (dot < 0) return "unknown";
@@ -571,7 +556,7 @@ function buildMultiLanguageRenameCandidates(
   const subtitlesByKey = groupMatchedFilesByKey(subtitles);
   const candidates: RenameCandidate[] = [];
 
-  for (const key of Array.from(videosByKey.keys()).sort(comparePairingKeys)) {
+  for (const key of Array.from(videosByKey.keys()).sort(compareKeys)) {
     const keyVideos = videosByKey.get(key) ?? [];
     const keySubtitles = subtitlesByKey.get(key) ?? [];
     if (keySubtitles.length === 0) continue;
@@ -615,12 +600,9 @@ function groupMatchedFilesByKey(files: ParsedFile[]): Map<string, ParsedFile[]> 
   return groups;
 }
 
-function comparePairingKeys(a: string, b: string): number {
-  const [as, ae] = a.split("|").map((n) => parseInt(n, 10) || 0);
-  const [bs, be] = b.split("|").map((n) => parseInt(n, 10) || 0);
-  if (as! !== bs!) return as! - bs!;
-  return ae! - be!;
-}
+// `compareKeys` now exported from `pairing-engine.ts` (R2 N-R2-4); the
+// local sibling that lived here had no comments and could drift from the
+// pairing-engine version's malformed-key `|| 0` WHY comment.
 
 function subtitleLanguage(name: string): string {
   const dot = name.lastIndexOf(".");
@@ -658,29 +640,10 @@ function canonicalLanguage(language: string): string {
   }
 }
 
-function fileNameFromPath(path: string): string {
-  // Conditional separator normalization: `\` is a valid filename char on
-  // POSIX (Codex edb0e74f / 8850ede7). Unconditional conversion turned
-  // single Linux filenames containing `\` into path components. Round 8
-  // A-R8-N4-12 gated `tauri-api.ts::fileNameFromPath` on `isWindowsRuntime`
-  // too, so the two siblings now share the same separator semantics.
-  //
-  // Round 7 Wave 7.1: matches the BiDi scrubbing the tauri-api.ts
-  // sibling does via stripUnicodeControls.
-  //
-  // Round 11 W11.2 (M3 / N3-R11-01): also strip ASCII C0 + DEL + C1
-  // (`\x00-\x1f\x7f-\x9f`) — parity with Round 10 N-R10-025 in
-  // tauri-api.ts. stripUnicodeControls only covers BiDi / zero-width;
-  // ASCII control bytes (\0, \t, \r, \n, ESC) previously passed through
-  // CLI-side fileNameFromPath into stderr log lines and JSON output.
-  // The CLI engine's input paths flow from clap's argv into
-  // chain/embed/hdr/shift filename derivation, then back through this
-  // helper for display — without the strip, a crafted argv would still
-  // break log row formatting on the CLI side even after the GUI side
-  // closed the same gap.
-  const normalized = isWindowsRuntime ? path.replace(/\\/g, "/") : path;
-  const slash = normalized.lastIndexOf("/");
-  const raw = slash >= 0 ? normalized.slice(slash + 1) : normalized;
-  // eslint-disable-next-line no-control-regex -- intentional: scrub C0 / DEL / C1
-  return stripUnicodeControls(raw).replace(/[\x00-\x1f\x7f-\x9f]/g, "");
-}
+// `fileNameFromPath` now lives in `path-validation.ts` (R2 N-R2-1).
+// Pre-W1 the CLI sibling differed from the GUI version: it used
+// `lastIndexOf("/") + slice` with no fallback, so a trailing-separator
+// input returned an empty string while the GUI sibling (post-R16 W16.6)
+// returned the original path. The empty-string output silently dropped
+// trailing-separator video paths from the rename plan. Consolidation
+// closes the drift.

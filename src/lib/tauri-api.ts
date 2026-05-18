@@ -6,8 +6,8 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { Base64 } from "js-base64";
 import { strings } from "../i18n/strings";
-import { stripUnicodeControls } from "./unicode-controls";
-import { isWindowsRuntime } from "./platform";
+import { fileNameFromPath } from "./path-validation";
+import { VIDEO_EXTS, SUBTITLE_EXTS } from "./rename-extensions";
 
 // ── File Dialogs ──────────────────────────────────────────
 
@@ -89,52 +89,25 @@ export async function pickAssFiles(t?: DialogTranslator): Promise<string[] | nul
   );
 }
 
+// Picker filters derive from the same Sets that drive post-pick
+// categorization (`rename-extensions.ts`). Single source of truth so
+// adding `.av1` / `.heic` etc. doesn't drift between the dialog's
+// allowed extensions and the post-drop classification.
 function videoAndSubtitleFilters(t?: DialogTranslator): FileFilter[] {
+  const videoExtList = Array.from(VIDEO_EXTS);
+  const subtitleExtList = Array.from(SUBTITLE_EXTS);
   return [
     {
       name: dt(t, "dialog_filter_video_subtitle_files"),
-      extensions: [
-        "mp4",
-        "mkv",
-        "avi",
-        "mov",
-        "ts",
-        "m2ts",
-        "webm",
-        "flv",
-        "wmv",
-        "mpg",
-        "mpeg",
-        "m4v",
-        "ass",
-        "ssa",
-        "srt",
-        "sub",
-        "vtt",
-        "sbv",
-        "lrc",
-      ],
+      extensions: [...videoExtList, ...subtitleExtList],
     },
     {
       name: dt(t, "dialog_filter_video_files"),
-      extensions: [
-        "mp4",
-        "mkv",
-        "avi",
-        "mov",
-        "ts",
-        "m2ts",
-        "webm",
-        "flv",
-        "wmv",
-        "mpg",
-        "mpeg",
-        "m4v",
-      ],
+      extensions: videoExtList,
     },
     {
       name: dt(t, "dialog_filter_subtitle_files"),
-      extensions: ["ass", "ssa", "srt", "sub", "vtt", "sbv", "lrc"],
+      extensions: subtitleExtList,
     },
     { name: dt(t, "dialog_filter_all_files"), extensions: ["*"] },
   ];
@@ -263,46 +236,13 @@ export async function copyPath(from: string, to: string): Promise<void> {
 
 // ── Path Utilities ───────────────────────────────────────
 
-/** Extract the filename from a full file path and strip BiDi / zero-
- *  width controls. Backslash is treated as a separator only on Windows
- *  (Round 8 A-R8-N4-12 — POSIX-correctness gate, parity with
- *  `decomposeInputPath` / `pathsEqualOnFs`); on POSIX `\` is a valid
- *  filename character, so a file literally named `foo\bar.ass` returns
- *  the full name instead of mis-extracting `bar.ass`. Callers feed the
- *  result into addLog / status messages / dropError banners; without
- *  sanitization, a hostile filename like `EP01<U+202E>cssa.ass`
- *  (Trojan-Source class) would render with the RLO flip in the log
- *  panel even though React text-renders so no XSS. Sanitizing at the
- *  source covers every callsite in one place instead of relying on
- *  each log site to remember.
- */
-export function fileNameFromPath(path: string): string {
-  const normalized = isWindowsRuntime ? path.replace(/\\/g, "/") : path;
-  // R16 W16.6 (N-R16-16): `String.prototype.split` always returns a
-  // non-empty array, so `pop()` returns at least `""` — the `??`
-  // fallback was unreachable, and the empty-string output for
-  // trailing-separator inputs (e.g., `C:/Users/`) propagated as empty
-  // interpolation into addLog lines (`t("msg_processing", "")`).
-  // Switch to logical OR so the empty-string case ALSO falls through
-  // to the original path, giving consumers a meaningful display
-  // string in both edge shapes (trailing-separator and empty input).
-  const raw = normalized.split("/").pop() || path;
-  // Round 10 N-R10-025: also strip ASCII C0 + DEL + C1 (\x00-\x1f\x7f-\x9f).
-  // `stripUnicodeControls` covers BiDi / zero-width only; ASCII \0,
-  // \t, \r, \n, ESC etc. previously passed through into
-  // row.subtitle.name, dropdown <option> text, and addLog lines via
-  // `t("msg_processing", subName)`. React text-renders so no XSS,
-  // but `\r\n` produces multi-line log entries (each addLog line
-  // would visibly break across log rows), `\0` invisibly breaks
-  // `<option>` text (everything after the NUL is dropped by the
-  // OS-native dropdown widget on some platforms), and `\t` mangles
-  // tabular layout. The Rust IPC gate rejects all of these on
-  // input paths; this sanitizer protects every display site
-  // downstream from any input that bypassed the gate (rare but
-  // defense-in-depth).
-  // eslint-disable-next-line no-control-regex -- intentional: scrub C0 / DEL / C1
-  return stripUnicodeControls(raw).replace(/[\x00-\x1f\x7f-\x9f]/g, "");
-}
+// `fileNameFromPath` lives in `path-validation.ts` and is re-exported
+// here for backward-compat callers (BatchRename / TimingShift / etc.
+// that import it from `tauri-api`). R2 N-R2-1 consolidated the GUI +
+// CLI siblings: pre-consolidation the CLI copy lacked the W16.6
+// `|| path` empty-string fallback and silently dropped trailing-
+// separator video paths from the rename plan.
+export { fileNameFromPath };
 
 // ── Rust Commands ─────────────────────────────────────────
 

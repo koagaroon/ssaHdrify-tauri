@@ -52,65 +52,13 @@ import {
   type PairingSource,
   type OutputMode,
 } from "./pairing-engine";
+import { categorize } from "../../lib/rename-extensions";
 
-// Categorization sets — drive both the picker filter (in tauri-api) and
-// the post-drop classification here. Kept in sync manually; the duplication
-// is small enough that introducing a shared constant would add an import
-// for two values each side. Revisit if the lists grow or diverge.
-const VIDEO_EXTS = new Set([
-  "mp4",
-  "mkv",
-  "avi",
-  "mov",
-  "ts",
-  "m2ts",
-  "webm",
-  "flv",
-  "wmv",
-  "mpg",
-  "mpeg",
-  "m4v",
-]);
-const SUBTITLE_EXTS = new Set(["ass", "ssa", "srt", "sub", "vtt", "sbv", "lrc"]);
-
-// Extensions we intentionally drop on the floor during folder ingestion.
-// These are companions that ship in fan-sub release folders but have no
-// place in this app's workflow — surfacing them in the unknown counter
-// would be noise, not signal. Categories:
-//   - source / metadata       : torrent
-//   - common archive formats  : zip, rar, 7z, tar, gz, bz2, xz, tgz
-//   - companion audio tracks  : mka, flac, mp3, m4a, aac (e.g., separate
-//                                audio supplied alongside an HEVC video)
-// Add to this set when a release-folder staple shows up that can never
-// be a Tab 4 input.
-const IGNORED_EXTS = new Set([
-  "torrent",
-  "zip",
-  "rar",
-  "7z",
-  "tar",
-  "gz",
-  "bz2",
-  "xz",
-  "tgz",
-  "mka",
-  "flac",
-  "mp3",
-  "m4a",
-  "aac",
-]);
-
-type Category = "video" | "subtitle" | "ignored" | "unknown";
-
-function categorize(name: string): Category {
-  const dot = name.lastIndexOf(".");
-  if (dot < 0) return "unknown";
-  const ext = name.slice(dot + 1).toLowerCase();
-  if (VIDEO_EXTS.has(ext)) return "video";
-  if (SUBTITLE_EXTS.has(ext)) return "subtitle";
-  if (IGNORED_EXTS.has(ext)) return "ignored";
-  return "unknown";
-}
+// VIDEO_EXTS / SUBTITLE_EXTS / IGNORED_EXTS / Category / `categorize` now
+// live in `src/lib/rename-extensions.ts` — shared with the CLI engine and
+// the tauri-api picker filter (R2 N-R2-2 / N-R2-3). Add new extensions
+// (`.av1`, `.heic`, etc.) to that module; this file consumes via the
+// import above.
 
 interface Categorized {
   videos: string[];

@@ -1,5 +1,5 @@
 import { isCaseInsensitiveFs, isWindowsRuntime } from "./platform";
-import { hasUnicodeControls } from "./unicode-controls";
+import { hasUnicodeControls, stripUnicodeControls } from "./unicode-controls";
 
 /**
  * Shared output-path validation helpers.
@@ -546,4 +546,37 @@ export function assertSafeOutputPath(outputPath: string, inputPath: string): voi
   if (pathsEqualOnFs(normalizedOutput, normalizedInput)) {
     throw new Error("Output path is the same as input (would overwrite source file)");
   }
+}
+
+/**
+ * Extract the filename from a full file path and strip BiDi / zero-
+ * width + ASCII control characters. Backslash is treated as a separator
+ * only on Windows (POSIX-correctness gate per A-R8-N4-12 / parity with
+ * `decomposeInputPath`); on POSIX `\` is a valid filename character.
+ *
+ * Empty-result fallback (R16 W16.6 N-R16-16): `String.prototype.split`
+ * always returns a non-empty array and `pop()` returns `""` for
+ * trailing-separator input (`C:/Users/`). Logical OR falls back to the
+ * original path so consumers (addLog / status messages / dropError
+ * banners) always get a meaningful display string.
+ *
+ * Sanitization (Round 10 N-R10-025 + Round 11 W11.2 N3-R11-01):
+ * stripUnicodeControls covers BiDi / zero-width / U+2028 / U+2029 / etc.;
+ * the trailing regex strips ASCII C0 (`\x00-\x1f`), DEL (`\x7f`), and
+ * C1 (`\x80-\x9f`). Both GUI display (addLog, dropdown options, drop-
+ * error banners) and CLI stderr / JSON output consume the result, so a
+ * crafted argv path or a hostile filename containing `\r`, `\0`, or
+ * U+202E (Trojan-Source) cannot break log row formatting or smuggle
+ * a visual-reversal into the displayed name.
+ *
+ * R2 N-R2-1: extracted from `tauri-api.ts::fileNameFromPath` +
+ * `cli-engine-entry.ts::fileNameFromPath` (the two had drifted on the
+ * empty-result fallback — CLI lacked the W16.6 `|| path` fix and
+ * silently dropped trailing-separator paths from the rename plan).
+ */
+export function fileNameFromPath(path: string): string {
+  const normalized = isWindowsRuntime ? path.replace(/\\/g, "/") : path;
+  const raw = normalized.split("/").pop() || path;
+  // eslint-disable-next-line no-control-regex -- intentional: scrub C0 / DEL / C1
+  return stripUnicodeControls(raw).replace(/[\x00-\x1f\x7f-\x9f]/g, "");
 }
