@@ -217,6 +217,12 @@ export const MAX_PARSED_ENTRIES = 500_000;
 // pathological junk-flood input bounded. Per-caption cap below
 // still owns the semantic limit (and its error message); this is
 // a hard ceiling on iteration cost.
+//
+// Scope: cap applies PER parseSrt / parseVtt invocation (each call
+// gets its own `blocks.length` check from `splitCueBlocks(content)`).
+// A script that calls both does NOT compound — there is no shared
+// counter across calls. A single payload >2M blocks throws; two
+// separate payloads of 1.5M blocks each are both accepted.
 const MAX_RAW_BLOCKS = 2_000_000;
 
 function parseSrt(content: string): Caption[] {

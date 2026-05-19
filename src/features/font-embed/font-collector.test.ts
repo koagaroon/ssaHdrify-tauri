@@ -126,9 +126,12 @@ describe("font-collector multi-tag last-wins parity (W7.5 regression anchor)", (
   // matchAll to capture the leading prefix of any longer digit run.
   // The truncated value then fed parseInt → wrong bold / italic /
   // drawing state, diverging from what ass-compiler (and libass)
-  // resolve. These three cases are the exact PoC inputs from Codex
-  // ff5b69f5; the at-limit siblings pin the bounded-prefix path that
-  // a future refactor must NOT reintroduce.
+  // resolve. These three overlong cases are the exact PoC inputs
+  // from Codex ff5b69f5; the canonical short-form siblings pair
+  // with them as baseline coherence checks — a re-bounding
+  // regression lights up the overlong test (truncated prefix gives
+  // the wrong state), and the canonical short-form pin makes sure
+  // the regex still handles well-formed short inputs correctly.
 
   it("\\b00700 (5 digits, overlong) parses as weight=700 → bold (Codex ff5b69f5)", async () => {
     // Truncated `0070` would give weight 70 → NOT bold; full `00700`
@@ -141,10 +144,13 @@ describe("font-collector multi-tag last-wins parity (W7.5 regression anchor)", (
     expect(boldOn!.codepoints.has(0x42), "B must land in the Arial Bold bucket").toBe(true);
   });
 
-  it("\\b0700 (4 digits, at-limit sibling) parses as weight=700 → bold", async () => {
-    // Counter-test pinning the at-limit path so a future regression
-    // that re-narrows the regex to `\d{1,4}` AND breaks the boundary
-    // would still light up the over-limit sibling above.
+  it("\\b0700 (canonical short form) parses as weight=700 → bold", async () => {
+    // Baseline coherence check paired with the overlong sibling
+    // above: a future regression that re-narrows the regex to
+    // `\d{1,4}` without `(?!\d)` lights up the overlong test
+    // (truncated prefix gives weight 70 → NOT bold), while this
+    // canonical short-form pin guarantees the regex still resolves
+    // well-formed short inputs correctly.
     await ensureLoaded();
     const usage = collectFonts(makeASS(String.raw`{\b0700}BBBB`));
     const boldOn = usage.find((u) => u.key.family === "Arial" && u.key.bold && !u.key.italic);
@@ -183,11 +189,11 @@ describe("font-collector multi-tag last-wins parity (W7.5 regression anchor)", (
     );
   });
 
-  it("\\p1 (at-limit sibling) parses as scale=1 → drawing-on", async () => {
-    // Counter-test: well-formed `\p1` is the canonical drawing-on
-    // shape; the test above pins that the overlong variant resolves
-    // to the SAME state, not the truncated-prefix opposite. Same
-    // FontUsage-anchor structure as the overlong test.
+  it("\\p1 (canonical short form) parses as scale=1 → drawing-on", async () => {
+    // Baseline coherence check: well-formed `\p1` is the canonical
+    // drawing-on shape; the overlong test above pins that `\p00001`
+    // resolves to the SAME state, not the truncated-prefix opposite.
+    // Same FontUsage-anchor structure as the overlong test.
     await ensureLoaded();
     const usage = collectFonts(makeASS(String.raw`{\p1}XXXX{\p0}YYYY`));
     const defaultStyle = usage.find((u) => u.key.family === "Arial");
