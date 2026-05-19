@@ -3174,6 +3174,27 @@ pub fn subset_font(
         log::warn!("stat font file failed for '{filename}': {e}");
         "Cannot stat font file".to_string()
     })?;
+    // R8 W5 A-R8-2: defense-symmetry with parse_local_font_file,
+    // scan_directory_inner, scan_files_inner, and preflight — every
+    // other file-read entry in this module gates on is_file() before
+    // touching content; subset_font alone relied on extension + reparse
+    // + provenance + magic-byte sniff. No reachable exploit today
+    // (upstream defenses close `/dev/null`-class device paths via
+    // validate_ipc_path's DOS-device reject + the reparse check; a
+    // directory named `evil.ttf` would fall through to the magic-byte
+    // probe which fails on the read_exact). The check is here so that
+    // a future change loosening any of those upstream defenses (or
+    // adding a new provenance source that doesn't gate on is_file)
+    // can't silently turn this site into a partial-content reader
+    // for non-file inodes. Reuses the metadata already fetched — no
+    // extra syscall.
+    if !metadata.is_file() {
+        log::warn!(
+            "Refusing to subset non-regular font path '{}'",
+            canonical.display()
+        );
+        return Err("Font path is not a regular file".to_string());
+    }
     if metadata.len() > MAX_FONT_DATA_SIZE {
         return Err(format!(
             "Font file too large ({:.1} MB, max {} MB)",
