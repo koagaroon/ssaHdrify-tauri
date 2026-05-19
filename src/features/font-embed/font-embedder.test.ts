@@ -29,6 +29,7 @@ import {
   buildUserFontMap,
   embedFonts,
   userFontKey,
+  MAX_SUBSET_CODEPOINTS_FOR_DEDUP,
   type FontInfo,
 } from "./font-embedder";
 import type { FontUsage } from "./font-collector";
@@ -464,6 +465,25 @@ describe("userFontKey", () => {
     expect(userFontKey("Arial", true, false)).toBe("arial\u001f1\u001f0");
     expect(userFontKey("Arial", false, true)).toBe("arial\u001f0\u001f1");
     expect(userFontKey("Arial", true, true)).toBe("arial\u001f1\u001f1");
+  });
+});
+
+describe("MAX_SUBSET_CODEPOINTS_FOR_DEDUP value pin", () => {
+  // R8 W2 N-R8-7: TS-side mirror of the Rust test
+  // `dedup_cap_matches_ipc_cap` in `bin/cli/main.rs::mod tests`.
+  // The trinity that must stay in lockstep:
+  //   1. `app_lib::fonts::MAX_SUBSET_CODEPOINTS` (Rust IPC cap)
+  //   2. CLI `MAX_SUBSET_CODEPOINTS_FOR_DEDUP` in `bin/cli/main.rs`
+  //   3. this TS `MAX_SUBSET_CODEPOINTS_FOR_DEDUP` in `font-embedder.ts`
+  // The Rust test pins equality between (1) and (2) at the Rust
+  // compile / test boundary. TS cannot import the Rust constant, so
+  // the structural mirror is a literal pin: if you change this TS
+  // value, this test goes red and forces you to update the Rust
+  // source-of-truth (1) AND CLI value (2) in the same diff and
+  // rerun the Rust `dedup_cap_matches_ipc_cap` test to confirm the
+  // full trinity is realigned.
+  it("equals 200_000 (the Rust IPC cap source of truth)", () => {
+    expect(MAX_SUBSET_CODEPOINTS_FOR_DEDUP).toBe(200_000);
   });
 });
 

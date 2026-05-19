@@ -458,6 +458,30 @@ export function deriveEmbeddedPath(inputPath: string): string {
   return usedBackslash ? outputPath.replace(/\//g, "\\") : outputPath;
 }
 
+// Source of truth: `app_lib::fonts::MAX_SUBSET_CODEPOINTS` in
+// `src-tauri/src/fonts.rs` (currently 200,000). The TS dedup checks
+// the merged-union size BEFORE crossing the `subsetFont` IPC so we
+// can decide between (a) one IPC call with the union or (b) N IPC
+// calls per alias. A merged union exceeding this cap means a crafted
+// ASS has packed several near-per-variant-cap aliases onto one face;
+// honest workflows produce unions in the low tens of thousands even
+// on full-CJK subtitle batches.
+//
+// R1 N-R1-9 / R8 W2 N-R8-7: three values must stay in lockstep —
+//   1. `app_lib::fonts::MAX_SUBSET_CODEPOINTS` (the IPC cap)
+//   2. `MAX_SUBSET_CODEPOINTS_FOR_DEDUP` in CLI `bin/cli/main.rs`
+//   3. this constant (the GUI dedup cap)
+// The Rust side has a `dedup_cap_matches_ipc_cap` test pinning
+// values 1 and 2. Hoisted to module scope + exported so the TS test
+// in `font-embedder.test.ts` (`MAX_SUBSET_CODEPOINTS_FOR_DEDUP value
+// pin`) can assert the literal value — a unilateral bump on this
+// side flips that test red and forces the editor to confirm they
+// updated Rust too. Drift between (1) and (3) would cause the GUI
+// to attempt unions up to a stale 200k while subset_font rejected
+// anything over the new IPC cap — the dedup-fallback contract from
+// `b8aa3fd` breaks.
+export const MAX_SUBSET_CODEPOINTS_FOR_DEDUP = 200_000;
+
 /**
  * Embed selected fonts into an ASS file.
  *
@@ -538,27 +562,6 @@ export async function embedFonts(
     aliases: FaceAlias[];
   }
   const faceGroups = new Map<string, FaceGroup>();
-
-  // Source of truth: `app_lib::fonts::MAX_SUBSET_CODEPOINTS` in
-  // `src-tauri/src/fonts.rs` (currently 200,000). The TS dedup
-  // checks the merged-union size BEFORE crossing the `subsetFont`
-  // IPC so we can decide between (a) one IPC call with the union
-  // or (b) N IPC calls per alias. A merged union exceeding this
-  // cap means a crafted ASS has packed several near-per-variant-cap
-  // aliases onto one face; honest workflows produce unions in the
-  // low tens of thousands even on full-CJK subtitle batches.
-  //
-  // R1 N-R1-9: three values must stay in lockstep —
-  //   1. `app_lib::fonts::MAX_SUBSET_CODEPOINTS` (the IPC cap)
-  //   2. `MAX_SUBSET_CODEPOINTS_FOR_DEDUP` in CLI `bin/cli/main.rs`
-  //   3. this constant (the GUI dedup cap)
-  // The Rust side has a `dedup_cap_matches_ipc_cap` test pinning
-  // values 1 and 2. This TS const isn't reachable from a Rust test;
-  // if Rust changes (1) or (2), update THIS value in the same diff.
-  // Drift between (1) and (3) would cause the GUI to attempt unions
-  // up to a stale 200k while subset_font rejected anything over the
-  // new IPC cap — the dedup-fallback contract from `b8aa3fd` breaks.
-  const MAX_SUBSET_CODEPOINTS_FOR_DEDUP = 200_000;
 
   // Pre-pass: build dedup groups + emit no-usage diagnostics. The
   // no-usage warning fires when analyzeFonts produced a FontInfo but

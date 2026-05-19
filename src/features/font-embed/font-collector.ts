@@ -34,11 +34,16 @@ import { BIDI_AND_ZERO_WIDTH_CHARS } from "../../lib/unicode-controls";
 // the `\r` handler in `applyOverrideTags` does the drawing reset
 // inline alongside the style reset.
 // R7 W1 A-R7-3: overlong-branch upper bound made explicit. Transitively
-// bounded by MAX_DIALOGUE_TEXT_LEN = 1_000_000 upstream; 200000 leaves
+// bounded by MAX_DIALOGUE_TEXT_LEN = 1_000_000 upstream; 200_000 leaves
 // comfortable headroom while still being a concrete cap reviewers can
-// audit without chasing the upstream transitive bound.
+// audit without chasing the upstream transitive bound. R8 W2 N-R8-10:
+// the R_TAG_RE overlong upper {128,199999} (1 leading char + 199999
+// continuation = 200000 total) is set so the total-char ceiling of the
+// overlong branch equals FN_TAG_RE's {129,200000} (200000 chars). The
+// two used to differ by 1 (R_TAG total 200001 vs FN_TAG total 200000);
+// cosmetic but the symmetry is the contract reviewers grep for.
 const R_TAG_RE =
-  /\\r(?:([\p{L}\p{N}_][\p{L}\p{N}_-]{0,127})?(?![\p{L}\p{N}_-])|[\p{L}\p{N}_][\p{L}\p{N}_-]{128,200000})/gu;
+  /\\r(?:([\p{L}\p{N}_][\p{L}\p{N}_-]{0,127})?(?![\p{L}\p{N}_-])|[\p{L}\p{N}_][\p{L}\p{N}_-]{128,199999})/gu;
 // `\fn` regex constructed dynamically because the exclusion class
 // interpolates `BIDI_AND_ZERO_WIDTH_CHARS`. Hoisted to a module-level
 // const just like the literal regexes above so the compile cost is
