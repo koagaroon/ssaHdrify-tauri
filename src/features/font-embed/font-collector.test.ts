@@ -153,3 +153,111 @@ Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\rStyleA\rStyleB}DDDD`}
     }
   });
 });
+
+// ── Codex 994c42d1 — boundary-pin for \r and \fn capture caps.
+// R2 W2 added {0,127}/{0,128} caps for Pattern 2 symmetry, but
+// without a trailing boundary the bounded regex silently TRUNCATED
+// overlong names to the prefix, then performed styleMap.has(prefix).
+// An attacker-crafted ASS defining both a 128-char prefix style and
+// a longer same-prefix style would mis-attribute glyphs to PrefixFont
+// while libass renders LongFont — embedded subsets diverge from
+// what's drawn. The fix adds a negative-lookahead boundary so
+// overlong names fail to match outright and fall through to the
+// dialogue's initial style (libass parity for an unknown name).
+// Tests below pin both sides of the boundary: at-cap match works,
+// over-cap match does NOT mis-attribute. \fn sibling parity is
+// tested though it has no demonstrated real-world exploit.
+describe("font-collector \\r / \\fn overlong-name boundary (Codex 994c42d1)", () => {
+  it("\\r at 128-char cap matches and selects the named style", async () => {
+    await ensureLoaded();
+    // {0,127} = leading letter + up to 127 continuation chars = 128 total.
+    const styleName = "A".repeat(128);
+    const ass = `[Script Info]
+ScriptType: v4.00+
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, Bold, Italic
+Style: Default,Arial,40,0,0
+Style: ${styleName},Times New Roman,40,0,0
+
+[Events]
+Format: Layer, Start, End, Style, Text
+Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\r` + styleName + `}E`}
+`;
+    const usage = collectFonts(ass);
+    const times = usage.find((u) => u.key.family === "Times New Roman");
+    expect(times, "128-char style must match \\r at the cap").toBeDefined();
+    expect(times!.codepoints.has(0x45), "E must be collected under the 128-char style").toBe(true);
+  });
+
+  it("\\r overlong name with prefix-sharing sibling falls through to default", async () => {
+    // The Codex PoC: pre-fix the 128-char prefix style would absorb F.
+    // Post-fix the overlong \r fails to match, so F stays under the
+    // dialogue's initial style (Arial). The 128-char prefix style
+    // FontUsage may exist (registered in styleMap) but must NOT carry F.
+    await ensureLoaded();
+    const prefix = "A".repeat(128);
+    const longer = prefix + "B"; // 129 chars sharing the 128-char prefix
+    const ass = `[Script Info]
+ScriptType: v4.00+
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, Bold, Italic
+Style: Default,Arial,40,0,0
+Style: ${prefix},Times New Roman,40,0,0
+Style: ${longer},Courier New,40,0,0
+
+[Events]
+Format: Layer, Start, End, Style, Text
+Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\r` + longer + `}F`}
+`;
+    const usage = collectFonts(ass);
+    // F (0x46) MUST land in Arial (initial style), NOT Times New Roman.
+    const times = usage.find((u) => u.key.family === "Times New Roman");
+    if (times) {
+      expect(
+        times.codepoints.has(0x46),
+        "F must NOT mis-attribute to PrefixFont (Times) — Codex 994c42d1"
+      ).toBe(false);
+    }
+    const arial = usage.find((u) => u.key.family === "Arial");
+    expect(arial, "Arial (Default) FontUsage must exist").toBeDefined();
+    expect(
+      arial!.codepoints.has(0x46),
+      "F must land in Arial — overlong \\r falls through to initial style"
+    ).toBe(true);
+  });
+
+  it("\\fn at 128-char cap matches the family", async () => {
+    // Sibling at-cap test. \fn's cap is {0,128} flat (no separate
+    // leading-letter requirement), so 128 chars match exactly.
+    await ensureLoaded();
+    const family = "A".repeat(128);
+    const usage = collectFonts(makeASS(`{\\fn${family}}G`));
+    const match = usage.find((u) => u.key.family === family);
+    expect(match, "128-char family must be captured by \\fn at the cap").toBeDefined();
+    expect(match!.codepoints.has(0x47), "G must be collected under the 128-char family").toBe(true);
+  });
+
+  it("\\fn overlong name does NOT capture the prefix (sibling parity with \\r)", async () => {
+    // Real-world exploit for \fn is much harder than \r (would need
+    // two installed fonts with a 128-char shared family-name prefix)
+    // but the structural defect is identical. 129-char input must
+    // NOT yield a 128-char-prefix capture; the dialogue's initial
+    // style stays in force.
+    await ensureLoaded();
+    const overlong = "A".repeat(129);
+    const usage = collectFonts(makeASS(`{\\fn${overlong}}H`));
+    const overlongPrefix = "A".repeat(128);
+    const prefixHit = usage.find((u) => u.key.family === overlongPrefix);
+    expect(
+      prefixHit,
+      "128-char prefix MUST NOT be captured when input is 129-char (overlong fails to match)"
+    ).toBeUndefined();
+    const arial = usage.find((u) => u.key.family === "Arial");
+    expect(arial, "Arial (Default) FontUsage must exist").toBeDefined();
+    expect(arial!.codepoints.has(0x48), "H must land in Arial — overlong \\fn falls through").toBe(
+      true
+    );
+  });
+});

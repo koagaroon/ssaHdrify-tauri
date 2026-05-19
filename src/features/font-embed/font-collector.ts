@@ -426,7 +426,18 @@ function applyOverrideTags(
   // + 127 continuation chars). Transitively bounded by
   // MAX_DIALOGUE_TEXT_LEN = 1_000_000 upstream, so this is Pattern 2
   // symmetry rather than a load-bearing bound.
-  const rMatches = [...block.matchAll(/\\r([\p{L}_][\p{L}\p{N}_-]{0,127})?/gu)];
+  // Codex 994c42d1: trailing negative lookahead `(?![\p{L}\p{N}_-])`
+  // makes overlong style names FAIL to match instead of silently
+  // truncating to a 128-char prefix. Without it, an attacker-crafted
+  // ASS defining both a 128-char prefix style (→ PrefixFont) and a
+  // 129-char same-prefix style (→ LongFont) plus a dialogue
+  // `{\r<129-char>}…` would have the captured prefix `styleMap.has`
+  // PrefixFont while libass renders LongFont — embedded subsets
+  // diverge from what's actually drawn. Lookahead enforces "match
+  // up to 128 valid chars AND only if the next char is not another
+  // valid char", so an overlong run falls through to the
+  // initialFont path (libass parity for an unknown style).
+  const rMatches = [...block.matchAll(/\\r([\p{L}_][\p{L}\p{N}_-]{0,127})?(?![\p{L}\p{N}_-])/gu)];
   const rMatch = rMatches.at(-1);
   if (rMatch) {
     const styleName = rMatch[1];
@@ -460,10 +471,16 @@ function applyOverrideTags(
   // matches a real font named `evil` → embed picks a font libass would
   // never render). Stopping the capture at the first control char
   // collapses both paths to "no match → fallback".
+  // Codex 994c42d1 (sibling-parity with \r above): trailing negative
+  // lookahead with the SAME exclusion set as the capture makes
+  // overlong family names FAIL to match instead of silently
+  // truncating. Real-world exploit here is much harder than \r (would
+  // need two installed fonts whose family names share a 128-char
+  // prefix), but the structural defect is identical and Pattern 1
+  // census discipline pins the sibling fix.
+  const fnCharSet = `[^\\\\}{\\x00-\\x1f\\x7f-\\x9f${BIDI_AND_ZERO_WIDTH_CHARS}]`;
   const fnMatches = [
-    ...block.matchAll(
-      new RegExp(`\\\\fn([^\\\\}{\\x00-\\x1f\\x7f-\\x9f${BIDI_AND_ZERO_WIDTH_CHARS}]{0,128})`, "gu")
-    ),
+    ...block.matchAll(new RegExp(`\\\\fn(${fnCharSet}{0,128})(?!${fnCharSet})`, "gu")),
   ];
   const fnMatch = fnMatches.at(-1);
   if (fnMatch) {
