@@ -311,10 +311,13 @@ pub fn migrate_legacy_gui_cache(legacy_dir: &Path, new_dir: &Path) {
         // new unified `app_data_dir` already contains a reparse-pointed
         // sidecar entry that fs::rename would resolve through. SQLite
         // would later open WAL at the resolved target. Cost: one
-        // symlink_metadata syscall per sidecar (4 suffixes × at most
-        // once per app launch on the migration path). Bounded P1a per
-        // single-user-desktop AppData reparse class, but symmetry with
-        // the source-side check is cheap enough to keep.
+        // symlink_metadata syscall per sidecar (3 sidecars iterated
+        // here — `-journal` / `-wal` / `-shm`; the main file is
+        // handled above the loop and gets its own pair of reparse
+        // checks). At most once per app launch on the migration
+        // path. Bounded P1a per single-user-desktop AppData reparse
+        // class, but symmetry with the source-side check is cheap
+        // enough to keep.
         if crate::util::is_reparse_point(&new_side) {
             log::warn!(
                 "GUI cache migration: new-location sidecar {} is a reparse point. \
@@ -644,6 +647,18 @@ pub fn detect_font_cache_drift() -> Result<DriftReport, String> {
     // Phase 2: per-folder stat loop OUTSIDE the lock. Slow-network /
     // permission-denied / folder-gone all route to "omit from
     // snapshot" → Phase 3's diff_against reports them as removed.
+    //
+    // mtime granularity (R8 W4 N-R8-14): `try_modified_at` returns
+    // Unix seconds (1 s resolution). On NTFS / APFS / ext4 / Btrfs
+    // (≤1 ms underlying resolution) sub-second mtime bumps round to
+    // distinct integer seconds so drift detection is reliable. On
+    // FAT / exFAT (2 s native granularity) two writes inside the
+    // same 2 s window can collapse to the same i64 and read as
+    // "no drift". Out of scope: the GUI cache lives under AppData,
+    // which is never FAT/exFAT in a normal Windows install. The
+    // companion test at test_font_cache.rs:308 sleeps 2100 ms
+    // between writes precisely so that test fixture sets a
+    // hardware-floor-safe interval regardless of underlying FS.
     let mut snapshot: Vec<(String, i64)> = Vec::with_capacity(cached_folders.len());
     for folder in &cached_folders {
         if let Some(mtime) = try_modified_at(Path::new(&folder.folder_path)) {
@@ -1095,6 +1110,16 @@ pub fn clear_font_cache() -> Result<(), String> {
     // doesn't exist on Windows. Revisit if the project deploys in
     // multi-user / MDM-managed shapes (same revisit trigger as the
     // design doc § fs:scope resolution divergence note).
+    //
+    // P1a vs P1b note (R8 W4 N-R8-12): these sidecar paths look
+    // filesystem-resident, which superficially suggests P1b (content
+    // source under attacker influence). The distinction: P1b applies
+    // to user-influenced *content* (subtitle files, font packs) — the
+    // attacker chooses the bytes/path. Here the paths are computed
+    // entirely from `init_gui_font_cache(&app_data_dir)` outputs;
+    // there is no user-content tributary. The threat is purely the
+    // P1a actor model (process with filesystem write access to the
+    // defender's AppData parent), not a content-tainted input.
     let paths: Vec<PathBuf> = ["", "-journal", "-wal", "-shm"]
         .iter()
         .map(|suffix| {

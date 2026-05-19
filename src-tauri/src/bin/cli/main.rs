@@ -1051,6 +1051,12 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
     // input → repeated predicted output catches the user-error class
     // the other subcommands surface as "duplicate output path in
     // planned batch".
+    //
+    // R8 W4 N-R8-8: set size is transitively bounded by OS argv (~32 KB
+    // on Windows, ~2 MB on Linux). One entry per `plan.input_files`
+    // element, each a path string from clap argv parsing — same
+    // transitive bound that run_hdr / run_shift / run_embed rely on,
+    // so no chain-local cap is added.
     let mut seen_outputs: HashSet<String> = HashSet::new();
     // R1 N-R1-14 (cosmetic): named `chain_aborted` instead of the
     // CommandReport field name `aborted_by_fail_fast` so the chain-local
@@ -1425,20 +1431,21 @@ fn predict_chain_output_path(
     // diverge" → defer to V8 + TS for the precise
     // rejection error.
     //
-    // Reserved-name coverage scope (Round 3 N-R3-7 + A-R3-4): the
-    // matches! arm covers CON, PRN, AUX, NUL, CONIN$, CONOUT$, plus
-    // ASCII digit variants COM0-COM9 / LPT0-LPT9. The bare-stem form
-    // (no trailing whitespace stripping) is intentional — TS-side
-    // `assertSafeOutputFilename` additionally rejects Unicode
-    // superscript variants (COM¹/²/³, LPT¹/²/³) AND strips trailing
-    // whitespace / dots before the reserved-name check (so `CON ` and
-    // `CON.` resolve to the device too). The Rust pre-check
-    // intentionally omits both — Windows refuses to create files with
-    // any of these names, so the predicted path can never exist on
-    // disk → `predicted.exists()` returns false → prediction returns
-    // Some → V8 runs → TS rejects authoritatively. The harmless-slip
-    // set is closed-form because the Win32 device-namespace gate at
-    // the OS layer is the final arbiter (Round 2 A-R2-6 / N-R2-10).
+    // Reserved-name coverage scope (Round 3 N-R3-7 + A-R3-4, tightened
+    // R9 A-R9-A3-1): the matches! arm covers CON, PRN, AUX, NUL,
+    // CONIN$, CONOUT$, ASCII digit variants COM0-COM9 / LPT0-LPT9, AND
+    // Unicode superscript variants COM¹/²/³ + LPT¹/²/³ (the latter
+    // added in R9 A-R9-A3-1 for parity with TS
+    // `assertSafeOutputFilename` + `util.rs::validate_ipc_path`). The
+    // remaining asymmetry vs TS is the trailing-whitespace / dot strip
+    // before the reserved-name check (`CON ` and `CON.` resolve to the
+    // device on Windows). The Rust pre-check intentionally omits the
+    // strip — Windows refuses to create files with those names, so
+    // the predicted path can never exist on disk →
+    // `predicted.exists()` returns false → prediction returns Some →
+    // V8 runs → TS rejects authoritatively. The harmless-slip set is
+    // closed-form because the Win32 device-namespace gate at the OS
+    // layer is the final arbiter (Round 2 A-R2-6 / N-R2-10).
     //
     // Cross-platform asymmetry note (Round 3 A-R3-4): on Linux/macOS
     // the TS-side reserved-name check still rejects `COM¹.ass` etc.,
