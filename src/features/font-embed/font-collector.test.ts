@@ -522,3 +522,113 @@ Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\p1}{\r9NonexistentStyle
     ).toBe(true);
   });
 });
+
+// ── R6 W2 (A-R6-2) — position-sorted single-pass override handling.
+// Pre-R6-W2 applyOverrideTags ran four independent matchAll().at(-1)
+// passes (one per tag family) and walkText ran two more (R_RESET_RE +
+// pTags). Family-independent last-wins ignored relative position
+// between families: e.g. `{\fnArial\r}` would set family=Arial AND
+// style=initial because the \fn pass ran after \r and overwrote
+// `result.family`; libass / xy-VSFilter process tags left-to-right,
+// so \r should reset family back to initialFont. Same shape applied
+// to `{\b1\r}`, `{\i1\r}`, `{\p1\r}`. R6 W2 consolidates into one
+// position-sorted walk; these tests pin libass-parity for each
+// divergent shape.
+describe("font-collector \\r resets siblings within the same block (A-R6-2)", () => {
+  it("{\\fnTimes\\r}X resets family to initial — \\fn-then-\\r positional order", async () => {
+    // libass: \fn sets family=Times, then \r resets EVERYTHING
+    // including family to dialogue initial (Arial). X collected
+    // under Arial, NOT Times. Pre-R6-W2: \fn matchAll.at(-1)
+    // ran AFTER \r matchAll.at(-1), so family=Times overrode \r's
+    // style reset → embed attributed X to Times while libass
+    // rendered it under Arial.
+    await ensureLoaded();
+    const usage = collectFonts(makeASS(String.raw`{\fnTimes New Roman\r}X`));
+    const times = usage.find((u) => u.key.family === "Times New Roman");
+    if (times) {
+      expect(
+        times.codepoints.has(0x58),
+        "X must NOT land in Times — \\r after \\fn must reset family to initial"
+      ).toBe(false);
+    }
+    const arial = usage.find((u) => u.key.family === "Arial");
+    expect(arial, "Arial (Default/initial) FontUsage must exist").toBeDefined();
+    expect(
+      arial!.codepoints.has(0x58),
+      "X must land in Arial — \\r resets family to dialogue initial"
+    ).toBe(true);
+  });
+
+  it("{\\b1\\r}X resets bold to initial — \\b-then-\\r positional order", async () => {
+    // libass: \b1 sets bold-on, then \r resets to dialogue initial
+    // (Default style is bold=0). X collected under Arial NON-bold,
+    // not Arial-Bold. Pre-R6-W2: \b matchAll.at(-1) ran independently
+    // and set bold=true regardless of \r's relative position.
+    await ensureLoaded();
+    const usage = collectFonts(makeASS(String.raw`{\b1\r}X`));
+    const arialBold = usage.find((u) => u.key.family === "Arial" && u.key.bold);
+    if (arialBold) {
+      expect(
+        arialBold.codepoints.has(0x58),
+        "X must NOT land in Arial-Bold — \\r after \\b1 must reset bold to initial"
+      ).toBe(false);
+    }
+    const arialPlain = usage.find((u) => u.key.family === "Arial" && !u.key.bold && !u.key.italic);
+    expect(arialPlain, "Arial non-bold FontUsage must exist").toBeDefined();
+    expect(arialPlain!.codepoints.has(0x58), "X must land in Arial non-bold").toBe(true);
+  });
+
+  it("{\\i1\\r}X resets italic to initial — \\i-then-\\r positional order", async () => {
+    // Sibling-parity with \b1\r above. Default style is italic=0.
+    await ensureLoaded();
+    const usage = collectFonts(makeASS(String.raw`{\i1\r}X`));
+    const arialItalic = usage.find((u) => u.key.family === "Arial" && u.key.italic);
+    if (arialItalic) {
+      expect(
+        arialItalic.codepoints.has(0x58),
+        "X must NOT land in Arial-Italic — \\r after \\i1 must reset italic to initial"
+      ).toBe(false);
+    }
+    const arialPlain = usage.find((u) => u.key.family === "Arial" && !u.key.bold && !u.key.italic);
+    expect(arialPlain, "Arial non-italic FontUsage must exist").toBeDefined();
+    expect(arialPlain!.codepoints.has(0x58), "X must land in Arial non-italic").toBe(true);
+  });
+
+  it("{\\p1\\r}X resets drawing-mode to OFF — \\p-then-\\r positional order", async () => {
+    // libass: \p1 enables drawing, then \r resets drawing-off
+    // (libass treats \r as a full state reset including drawing
+    // mode). X collected under Arial. Pre-R6-W2: walkText ran
+    // R_RESET_RE first (drawing=false from \r), THEN pTags
+    // matchAll.at(-1) (drawing=true from \p1) — the \p pass
+    // clobbered the \r reset, so X was treated as drawing-mode
+    // commands and dropped from glyph collection.
+    await ensureLoaded();
+    const usage = collectFonts(makeASS(String.raw`{\p1\r}X`));
+    const arial = usage.find((u) => u.key.family === "Arial");
+    expect(arial, "Arial (Default/initial) FontUsage must exist").toBeDefined();
+    expect(
+      arial!.codepoints.has(0x58),
+      "X must land in Arial — \\r after \\p1 must reset drawing-mode OFF"
+    ).toBe(true);
+  });
+
+  it("{\\r\\fnTimes}X — \\r-then-\\fn keeps the later \\fn family (libass parity, sanity check)", async () => {
+    // Counter-direction: when \fn comes AFTER \r in source order,
+    // \fn correctly overrides the reset's family choice. This was
+    // already the behavior pre-R6-W2 (\r matchAll then \fn matchAll
+    // gave the same end state), but pin it explicitly so a future
+    // refactor that flips the position-walk direction doesn't
+    // silently regress.
+    await ensureLoaded();
+    const usage = collectFonts(makeASS(String.raw`{\r\fnTimes New Roman}X`));
+    const times = usage.find((u) => u.key.family === "Times New Roman");
+    expect(
+      times,
+      "Times New Roman FontUsage must exist — \\fn after \\r overrides reset's family"
+    ).toBeDefined();
+    expect(
+      times!.codepoints.has(0x58),
+      "X must land in Times — \\fn after \\r wins per left-to-right"
+    ).toBe(true);
+  });
+});
