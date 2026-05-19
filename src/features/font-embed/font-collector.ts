@@ -427,17 +427,37 @@ function applyOverrideTags(
   // MAX_DIALOGUE_TEXT_LEN = 1_000_000 upstream, so this is Pattern 2
   // symmetry rather than a load-bearing bound.
   // Codex 994c42d1: trailing negative lookahead `(?![\p{L}\p{N}_-])`
-  // makes overlong style names FAIL to match instead of silently
-  // truncating to a 128-char prefix. Without it, an attacker-crafted
-  // ASS defining both a 128-char prefix style (→ PrefixFont) and a
-  // 129-char same-prefix style (→ LongFont) plus a dialogue
-  // `{\r<129-char>}…` would have the captured prefix `styleMap.has`
-  // PrefixFont while libass renders LongFont — embedded subsets
-  // diverge from what's actually drawn. Lookahead enforces "match
-  // up to 128 valid chars AND only if the next char is not another
-  // valid char", so an overlong run falls through to the
-  // initialFont path (libass parity for an unknown style).
-  const rMatches = [...block.matchAll(/\\r([\p{L}_][\p{L}\p{N}_-]{0,127})?(?![\p{L}\p{N}_-])/gu)];
+  // makes overlong style names FAIL to truncate to a 128-char prefix.
+  // Without it, an attacker-crafted ASS defining both a 128-char
+  // prefix style (→ PrefixFont) and a 129-char same-prefix style
+  // (→ LongFont) plus a dialogue `{\r<129-char>}…` would have the
+  // captured prefix `styleMap.has` PrefixFont while libass renders
+  // LongFont — embedded subsets diverge from what's actually drawn.
+  //
+  // Codex f871d0cc (R4 W1, Pattern 3 sub-question 2 follow-up): the
+  // boundary lookahead alone was incomplete. With ONLY the first
+  // alternation, `\r<overlong>` produces NO match — matchAll skips
+  // it entirely. The `if (rMatch)` block then doesn't execute for
+  // that token, so any prior `\r<valid>` in the same override block
+  // leaves its state in `result`. libass instead treats the overlong
+  // name as an unknown style → reset to dialogue initial; our embed
+  // diverges (Codex PoC: `{\rStyleA\r<129 As>}X` attributed X to
+  // StyleA's font, not the dialogue's initial style).
+  //
+  // Fix: second alternation `[\p{L}_][\p{L}\p{N}_-]{128,}` matches
+  // overlong runs (129+ chars total, since the leading char counts)
+  // WITHOUT a capture group. matchAll now sees the overlong token,
+  // `rMatch` is truthy, but `styleName` is undefined — short-circuits
+  // through the `styleName && …` check to the `result = initialFont`
+  // branch. Pattern 3 sub-question 2 lesson: when a regex change
+  // alters what matchAll returns for a given input shape (here, from
+  // "always matches with truncated capture" to "no match"), audit
+  // every caller that walks matchAll for state-machine effects.
+  const rMatches = [
+    ...block.matchAll(
+      /\\r(?:([\p{L}_][\p{L}\p{N}_-]{0,127})?(?![\p{L}\p{N}_-])|[\p{L}_][\p{L}\p{N}_-]{128,})/gu
+    ),
+  ];
   const rMatch = rMatches.at(-1);
   if (rMatch) {
     const styleName = rMatch[1];
@@ -473,18 +493,28 @@ function applyOverrideTags(
   // collapses both paths to "no match → fallback".
   // Codex 994c42d1 (sibling-parity with \r above): trailing negative
   // lookahead with the SAME exclusion set as the capture makes
-  // overlong family names FAIL to match instead of silently
-  // truncating. Real-world exploit here is much harder than \r (would
-  // need two installed fonts whose family names share a 128-char
-  // prefix), but the structural defect is identical and Pattern 1
-  // census discipline pins the sibling fix.
+  // overlong family names FAIL to truncate. Real-world exploit here
+  // is harder than \r (would need two installed fonts whose family
+  // names share a 128-char prefix), but the structural defect is
+  // identical and Pattern 1 census discipline pins the sibling fix.
+  //
+  // Codex f871d0cc (R4 W1, sibling-parity with \r state-retention
+  // fix): same alternation pattern — second branch matches overlong
+  // family runs WITHOUT a capture, so matchAll sees the token and
+  // the if-block executes; `fnMatch[1] ?? ""` then routes through
+  // the existing `if (!rawFamily)` branch to reset to initialFont
+  // family. Without this, `{\fnArial\fn<129 chars>}Y` left Y
+  // attributed to Arial when libass would render it under the
+  // dialogue's initial family.
   const fnCharSet = `[^\\\\}{\\x00-\\x1f\\x7f-\\x9f${BIDI_AND_ZERO_WIDTH_CHARS}]`;
   const fnMatches = [
-    ...block.matchAll(new RegExp(`\\\\fn(${fnCharSet}{0,128})(?!${fnCharSet})`, "gu")),
+    ...block.matchAll(
+      new RegExp(`\\\\fn(?:(${fnCharSet}{0,128})(?!${fnCharSet})|${fnCharSet}{129,})`, "gu")
+    ),
   ];
   const fnMatch = fnMatches.at(-1);
   if (fnMatch) {
-    const rawFamily = normalizeFamily(fnMatch[1]!);
+    const rawFamily = normalizeFamily(fnMatch[1] ?? "");
     if (!rawFamily) {
       result.family = initialFont.family;
     } else {

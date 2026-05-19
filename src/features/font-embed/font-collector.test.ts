@@ -261,3 +261,76 @@ Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\r` + longer + `}F`}
     );
   });
 });
+
+// ── Codex f871d0cc — state-retention pair for the 994c42d1 boundary fix.
+// 994c42d1's boundary lookahead alone made overlong \r / \fn silently
+// disappear from matchAll. The if-block at the caller doesn't execute
+// when matchAll returns no token, so a PRIOR valid \r / \fn in the same
+// override block leaves its state in `result` — X / Y get attributed to
+// the prior style / family instead of being reset to the dialogue
+// initial (libass semantics). R4 W1 fixed it via a second alternation
+// that matches overlong runs with undefined capture, so the if-block
+// runs and falls through to the initialFont path. These tests pin the
+// state-retention contract specifically, complementing the 994c42d1
+// boundary tests above which only cover the no-prior-override case.
+describe("font-collector \\r / \\fn overlong state-retention (Codex f871d0cc)", () => {
+  it("\\r overlong after a valid prior \\r resets to initial style", async () => {
+    // PoC: `{\rStyleA\r<overlong>}X` — the FIRST tag sets state to
+    // StyleA, the SECOND (overlong) must reset to dialogue initial per
+    // libass semantics. Pre-fix the overlong didn't match at all, so
+    // StyleA's state stayed in force and X was attributed to Times
+    // New Roman instead of Arial (the dialogue's initial family).
+    await ensureLoaded();
+    const overlong = "A".repeat(129);
+    const ass = `[Script Info]
+ScriptType: v4.00+
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, Bold, Italic
+Style: Default,Arial,40,0,0
+Style: StyleA,Times New Roman,40,0,0
+
+[Events]
+Format: Layer, Start, End, Style, Text
+Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\rStyleA\r` + overlong + `}X`}
+`;
+    const usage = collectFonts(ass);
+    const times = usage.find((u) => u.key.family === "Times New Roman");
+    if (times) {
+      expect(
+        times.codepoints.has(0x58),
+        "X must NOT remain in StyleA bucket — overlong \\r must reset state"
+      ).toBe(false);
+    }
+    const arial = usage.find((u) => u.key.family === "Arial");
+    expect(arial, "Arial (Default/initial) FontUsage must exist").toBeDefined();
+    expect(
+      arial!.codepoints.has(0x58),
+      "X must land in Arial after overlong \\r resets to initial style"
+    ).toBe(true);
+  });
+
+  it("\\fn overlong after a valid prior \\fn resets to initial family", async () => {
+    // Sibling PoC: `{\fnTimes New Roman\fn<overlong>}Y` — the FIRST
+    // tag sets family to Times, the SECOND (overlong) must reset to
+    // dialogue initial family per libass semantics. Pre-fix the
+    // overlong didn't match, so Times stayed in force and Y was
+    // attributed to Times instead of Arial.
+    await ensureLoaded();
+    const overlong = "A".repeat(129);
+    const usage = collectFonts(makeASS(`{\\fnTimes New Roman\\fn${overlong}}Y`));
+    const times = usage.find((u) => u.key.family === "Times New Roman");
+    if (times) {
+      expect(
+        times.codepoints.has(0x59),
+        "Y must NOT remain in Times bucket — overlong \\fn must reset family"
+      ).toBe(false);
+    }
+    const arial = usage.find((u) => u.key.family === "Arial");
+    expect(arial, "Arial (Default/initial) FontUsage must exist").toBeDefined();
+    expect(
+      arial!.codepoints.has(0x59),
+      "Y must land in Arial after overlong \\fn resets to initial family"
+    ).toBe(true);
+  });
+});
