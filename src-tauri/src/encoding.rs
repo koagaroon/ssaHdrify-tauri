@@ -34,8 +34,16 @@ const MAX_TEXT_SIZE: u64 = 50 * 1024 * 1024; // 50 MB
 /// intentionally excluded — the frontend dialogs never offer it, and
 /// keeping it in the allow-list would widen arbitrary-read via any JS
 /// bug.
-pub(crate) const ALLOWED_TEXT_EXTENSIONS: &[&str] =
-    &["ass", "ssa", "srt", "vtt", "sub", "sbv", "lrc"];
+///
+/// R8 W3 N-R8-4 / A-R8-1: kept in lockstep with TS `SUBTITLE_EXTS` in
+/// `src/lib/rename-extensions.ts`. R7 W1 N-R7-2 narrowed the TS set to
+/// what `subtitle-parser.ts::detectFormat` actually handles (dropping
+/// `sbv` and `lrc`); this Rust set was missed in that wave. The two
+/// sides agreed on a 7-entry superset, then drifted to TS 5 / Rust 7.
+/// Now realigned at 5: read and write IPC commands refuse `.sbv` /
+/// `.lrc` destinations the same way the TS folder-drop filter routes
+/// those extensions to the "unknown" bucket.
+pub(crate) const ALLOWED_TEXT_EXTENSIONS: &[&str] = &["ass", "ssa", "srt", "vtt", "sub"];
 
 /// Map a std::io::Error to a generic, path-free message for IPC. The detailed
 /// error is logged server-side so it's still reachable during debug, but never

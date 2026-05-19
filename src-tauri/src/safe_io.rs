@@ -25,9 +25,11 @@
 //!   1. **`validate_ipc_path`** (util.rs) — Cc / BiDi / DOS-device
 //!      gates. Rejects malformed paths before any fs syscall.
 //!   2. **Subtitle-extension whitelist** — destinations (and copy/rename
-//!      sources) must end with `.ass / .ssa / .srt / .vtt / .sub /
-//!      .sbv / .lrc`. Matches `read_text_detect_encoding`'s pattern;
-//!      closes the "Start Menu autostart .desktop / .lnk" persistence
+//!      sources) must end with `.ass / .ssa / .srt / .vtt / .sub`.
+//!      Matches `read_text_detect_encoding`'s pattern AND the TS
+//!      `SUBTITLE_EXTS` set in `src/lib/rename-extensions.ts` — what the
+//!      `subtitle-parser.ts::detectFormat` parser actually handles.
+//!      Closes the "Start Menu autostart .desktop / .lnk" persistence
 //!      class because those extensions are outside the set.
 //!   3. **`fs_scope().is_allowed()`** — reuses Tauri's plugin-fs
 //!      allow/deny policy verbatim (no manual port of the 50-entry deny
