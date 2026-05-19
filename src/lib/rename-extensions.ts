@@ -46,15 +46,22 @@ export const VIDEO_EXTS: ReadonlySet<string> = new Set([
   "rmvb",
 ]);
 
-export const SUBTITLE_EXTS: ReadonlySet<string> = new Set([
-  "ass",
-  "ssa",
-  "srt",
-  "sub",
-  "vtt",
-  "sbv",
-  "lrc",
-]);
+// R7 W1 N-R7-2: dropped `sbv` (SubViewer) and `lrc` (LRC lyrics) —
+// `subtitle-parser.ts::detectFormat` only recognizes `ass | ssa | srt |
+// sub | vtt`, so the previous superset let .sbv/.lrc files through the
+// TimingShift folder-drop filter (which uses `categorize(name) ===
+// "subtitle"`) only to fail with a confusing "Could not detect subtitle
+// format" inside the parser. The two sets disagreed on "is this a
+// subtitle file" — same Pattern 1 / regex-pair coherence family as
+// R6 W1. ssaHdrify's target fan-sub workflow doesn't touch .sbv or
+// .lrc (SubViewer is a legacy format mostly seen on older platforms;
+// LRC is karaoke-style lyrics, not subtitles), so the cleanest fix is
+// to narrow the SUBTITLE_EXTS set to what the parser actually handles.
+// BatchRename's pairing logic also tightens accordingly — files with
+// those extensions now route to "unknown" bucket and surface in the
+// drop summary, which is the right outcome since pairing them
+// wouldn't lead to a usable output.
+export const SUBTITLE_EXTS: ReadonlySet<string> = new Set(["ass", "ssa", "srt", "sub", "vtt"]);
 
 export const IGNORED_EXTS: ReadonlySet<string> = new Set([
   "torrent",

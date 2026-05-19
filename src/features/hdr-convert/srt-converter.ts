@@ -18,6 +18,19 @@ import { safeMs } from "../../lib/subtitle-parser";
 // `Arial<U+202E>evil` would otherwise render visually reversed in
 // editor previews. U+2028/2029 are included in the shared set so
 // the prior explicit U+2028/U+2029 enumeration here is now covered.
+//
+// R7 W1 N-R7-11 (sibling cross-ref): the extra `,{}\\:` literals on
+// top of the BIDI / control set are SPECIFIC to ASS Style-line CSV
+// shape — Style lines use `,` as field separator and `:` as the
+// post-style-name terminator, so a font name carrying those would
+// silently split the row. The sibling sanitizer in
+// `src/lib/ass-uuencode.ts` (`safeName` inline regex inside
+// `buildFontEntry`) adds `/` instead — that's the [Fonts] header
+// path's stop char. Pattern 1 census rule for these two sanitizers
+// (per R7 W1 lesson): both must keep stripping the shared BIDI /
+// control set; the extra boundary-specific chars are intentional
+// and MUST NOT be unified into a single helper without re-checking
+// the per-boundary character implications.
 const FONT_NAME_SANITIZER = new RegExp(
   `[\\x00-\\x1f\\x7f-\\x9f${BIDI_AND_ZERO_WIDTH_CHARS},{}\\\\:]`,
   "gu"

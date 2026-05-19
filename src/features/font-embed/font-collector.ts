@@ -33,20 +33,31 @@ import { BIDI_AND_ZERO_WIDTH_CHARS } from "../../lib/unicode-controls";
 // `{font, isDrawing}` together. `R_RESET_RE` is no longer needed —
 // the `\r` handler in `applyOverrideTags` does the drawing reset
 // inline alongside the style reset.
+// R7 W1 A-R7-3: overlong-branch upper bound made explicit. Transitively
+// bounded by MAX_DIALOGUE_TEXT_LEN = 1_000_000 upstream; 200000 leaves
+// comfortable headroom while still being a concrete cap reviewers can
+// audit without chasing the upstream transitive bound.
 const R_TAG_RE =
-  /\\r(?:([\p{L}\p{N}_][\p{L}\p{N}_-]{0,127})?(?![\p{L}\p{N}_-])|[\p{L}\p{N}_][\p{L}\p{N}_-]{128,})/gu;
+  /\\r(?:([\p{L}\p{N}_][\p{L}\p{N}_-]{0,127})?(?![\p{L}\p{N}_-])|[\p{L}\p{N}_][\p{L}\p{N}_-]{128,200000})/gu;
 // `\fn` regex constructed dynamically because the exclusion class
 // interpolates `BIDI_AND_ZERO_WIDTH_CHARS`. Hoisted to a module-level
 // const just like the literal regexes above so the compile cost is
 // paid once per process, not per override block.
 const FN_CHAR_SET = `[^\\\\}{\\x00-\\x1f\\x7f-\\x9f${BIDI_AND_ZERO_WIDTH_CHARS}]`;
 const FN_TAG_RE = new RegExp(
-  `\\\\fn(?:(${FN_CHAR_SET}{0,128})(?!${FN_CHAR_SET})|${FN_CHAR_SET}{129,})`,
+  `\\\\fn(?:(${FN_CHAR_SET}{0,128})(?!${FN_CHAR_SET})|${FN_CHAR_SET}{129,200000})`,
   "gu"
 );
-const B_TAG_RE = /\\b(\d+)/g;
-const I_TAG_RE = /\\i(\d+)/g;
-const P_TAG_RE = /\\p(\d+)/g;
+// R7 W1 A-R7-1: digit quantifiers bounded to match the Pattern 1 census
+// rule for module-level tag regex consts (R_TAG_RE / FN_TAG_RE already
+// carried bounded quantifiers; the three numeric tag regexes did not).
+// Realistic spec ranges: `\b` 0-1000 weight (4 digits), `\i` 0-1
+// (1 digit; widened to 2 for forward-compat), `\p` 0-9999 scale
+// (4 digits). Bounding avoids match-object pressure under crafted ASS
+// like `\b1\b1\b1...` packed into a 1 MB block (~330k match objects).
+const B_TAG_RE = /\\b(\d{1,4})/g;
+const I_TAG_RE = /\\i(\d{1,2})/g;
+const P_TAG_RE = /\\p(\d{1,4})/g;
 
 // Lazy dynamic import — only triggers when ensureLoaded() is first called.
 // Previously this ran at module load time, which blocked startup after the
@@ -344,7 +355,12 @@ function processDialogueText(
           // input like `Hello{World\Nfoo` would record literal `\` + `N`
           // codepoints against the per-variant + total caps even
           // though libass treats them as line/space tags, not text.
-          const cleanTail = tail.replace(/\\N/g, "").replace(/\\n/g, "").replace(/\\h/g, "");
+          // R7 W1 A-R7-6: one alternation pass instead of three
+          // sequential replaces. Each `.replace(...)` allocates a fresh
+          // intermediate string; for a 1 MB malformed-brace tail packed
+          // with `\N` / `\n` / `\h`, three passes allocated ~3 MB of
+          // intermediate strings. Single alternation is semantic-identical.
+          const cleanTail = tail.replace(/\\[Nnh]/g, "");
           if (cleanTail.length > 0) recordChars(current, cleanTail);
         }
         return;
@@ -372,8 +388,11 @@ function processDialogueText(
       const plainEnd = nextBrace >= 0 ? nextBrace : text.length;
       const plain = text.slice(i, plainEnd);
 
-      // Skip ASS drawing commands (\N, \n, \h) and line breaks
-      const cleanText = plain.replace(/\\N/g, "").replace(/\\n/g, "").replace(/\\h/g, "");
+      // Skip ASS drawing commands (\N, \n, \h) and line breaks.
+      // R7 W1 A-R7-6: combined alternation (one allocator pass, was
+      // three sequential .replace calls) — see the malformed-brace
+      // tail path above for the rationale.
+      const cleanText = plain.replace(/\\[Nnh]/g, "");
 
       if (cleanText.length > 0 && !isDrawing) {
         recordChars(current, cleanText);
@@ -529,21 +548,38 @@ function applyOverrideTags(
         // `\fn<empty>` and the overlong second-alternation branch
         // both produce `tag.family === undefined`; the `?? ""` keeps
         // the existing fall-through-to-initialFont semantic.
-        // Sanitize-failure fallback references the function parameter
-        // `current` (the pre-block snapshot) rather than the running
-        // `font` state, preserving long-standing edge-case behavior
-        // that pre-dates R6 W2 — see the WHY block above for the
-        // history.
+        //
+        // R7 W1 (N-R7-1 / A-R7-2 / A-R7-5): the previous
+        // `sanitizeFamily(rawFamily) || current.family` fallback was
+        // STRUCTURALLY UNREACHABLE. FN_CHAR_SET excludes the same
+        // codepoints `sanitizeFamily` strips (C0 / DEL / C1 / BiDi /
+        // zero-width) plus `\` `{` `}`, AND the first FN_TAG_RE
+        // alternation branch caps at 128 chars — exactly what
+        // `sanitizeFamily` truncates to. So once `rawFamily` is
+        // non-empty after `normalizeFamily`, `sanitizeFamily(rawFamily)`
+        // is byte-equal to `rawFamily` itself and never returns "".
+        // The `|| current.family` clause could only fire if FN_CHAR_SET
+        // were ever loosened to admit chars `sanitizeFamily` strips —
+        // in that future scenario, the right reference frame is
+        // ambiguous (running font vs pre-block snapshot vs initial)
+        // and would need libass verification at that time. Drop the
+        // dead fallback today; the post-R6-W2 position-sorted walk
+        // doesn't need it.
         const rawFamily = normalizeFamily(tag.family ?? "");
         if (!rawFamily) {
           font.family = initialFont.family;
         } else {
-          font.family = sanitizeFamily(rawFamily) || current.family;
+          font.family = sanitizeFamily(rawFamily);
         }
         break;
       }
       case "b":
-        // `\b0` = not bold, `\b1` = bold, `\b700+` = bold by weight.
+        // `\b0` = not bold; `\b1` = bold; `\b2`-`\b699` = libass treats
+        // as not-bold (only `1` is the bold-on flag in the low range);
+        // `\b700+` = bold by font weight value (CSS-style weight scale).
+        // R7 W1 N-R7-12: middle range named explicitly so the contract
+        // matches the predicate. R7 W1 A-R7-1: weight bounded to 4
+        // digits at the regex level (max realistic 1000).
         font.bold = tag.weight === 1 || tag.weight >= 700;
         break;
       case "i":

@@ -304,6 +304,25 @@ pub fn migrate_legacy_gui_cache(legacy_dir: &Path, new_dir: &Path) {
         let mut new_side = new_main.clone().into_os_string();
         new_side.push(suffix);
         let new_side = PathBuf::from(new_side);
+        // R7 W1 A-R7-4: also check the DESTINATION for reparse-point
+        // before rename. The legacy side check above guards against
+        // following a planted symlink at the source; the destination
+        // check guards against the (rarer but real) shape where the
+        // new unified `app_data_dir` already contains a reparse-pointed
+        // sidecar entry that fs::rename would resolve through. SQLite
+        // would later open WAL at the resolved target. Cost: one
+        // symlink_metadata syscall per sidecar (4 suffixes × at most
+        // once per app launch on the migration path). Bounded P1a per
+        // single-user-desktop AppData reparse class, but symmetry with
+        // the source-side check is cheap enough to keep.
+        if crate::util::is_reparse_point(&new_side) {
+            log::warn!(
+                "GUI cache migration: new-location sidecar {} is a reparse point. \
+                 Leaving legacy sidecar in place; SQLite treats new location as clean-close.",
+                new_side.display()
+            );
+            continue;
+        }
         if let Err(e) = std::fs::rename(&legacy_side, &new_side) {
             log::warn!(
                 "GUI cache migration: sidecar rename {} → {} failed: {e}. \
