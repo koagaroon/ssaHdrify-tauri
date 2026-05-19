@@ -16,7 +16,20 @@ import { BIDI_AND_ZERO_WIDTH_CHARS } from "../../lib/unicode-controls";
 // Hoisted to module scope (A-R5-FECHAIN-12) so the `\p{L}` Unicode
 // property regex compiles once instead of per override block. Used by
 // the `\r<style>` reset detector inside `walkText`.
-const R_RESET_RE = /\\r(?=\\|$|[\p{L}_])/u;
+//
+// REGEX-PAIR COHERENCE CONTRACT (R6 W1 / N-R6-1 / A-R6-1): this regex's
+// leading-char lookahead `[\p{L}\p{N}_]` MUST match the leading-char
+// class used by the `\r` style-detection alternation inside
+// `applyOverrideTags` below (search this file for "rMatches"). The two
+// regexes both decide whether a `\r<name>` token IS a reset — disagreement
+// silently breaks state: one regex routes through the style-switch path
+// while the other leaves `isDrawing` from a prior `\p1` in force, so
+// text after the block gets collected as drawing-mode commands. Pattern
+// 1 census discipline applies to regex PAIRS, not just helper exports:
+// when a regex contract changes here or there, both must move together.
+// R5 W1 widened the alternation regex to accept digit-led names; R6 W1
+// caught this sibling that had been left on the old narrow class.
+const R_RESET_RE = /\\r(?=\\|$|[\p{L}\p{N}_])/u;
 
 // Lazy dynamic import — only triggers when ensureLoaded() is first called.
 // Previously this ran at module load time, which blocked startup after the
@@ -327,13 +340,20 @@ function processDialogueText(
       // The \r anchor accepts:
       //   - End markers: `\` (next override starts), `}` (block closes),
       //     `$` (end of block) — bare `\r` reset.
-      //   - Style-name leading chars: any Unicode letter `\p{L}` plus
-      //     underscore. Covers ASCII `\rdefault`, mixed-case `\rJP`,
-      //     leading-underscore `\r_Alt`, and CJK `\r字幕` — all valid
-      //     style names that the prior `[A-Za-z]` class silently
-      //     rejected (Codex 52379e14: subsequent visible text was
-      //     attributed to the wrong override font, causing missing
-      //     glyphs in embed output).
+      //   - Style-name leading chars: any Unicode letter `\p{L}`, any
+      //     Unicode number `\p{N}`, or underscore. Covers ASCII
+      //     `\rdefault`, mixed-case `\rJP`, leading-underscore `\r_Alt`,
+      //     CJK `\r字幕`, AND digit-led `\r1MainTitle` — all valid style
+      //     names that the prior narrow classes silently rejected
+      //     (Codex 52379e14: `[A-Za-z]` → broadened to `[\p{L}_]`;
+      //     R5 W1 / R6 W1 A-R6-1: `[\p{L}_]` → broadened to
+      //     `[\p{L}\p{N}_]`. ass-compiler accepts digit-led style names
+      //     without validation, so the override-tag dispatcher and the
+      //     reset-detector must both agree).
+      //
+      // REGEX-PAIR COHERENCE: this lookahead class MUST stay in sync
+      // with the `\r` alternation regex in `applyOverrideTags`. See the
+      // R_RESET_RE definition at module top for the full contract.
       // ASS `\p<scale>`: libass parses the full numeric value and
       // treats any positive scale as drawing-on, zero as drawing-off.
       // libass and xy-VSFilter process override tags left-to-right

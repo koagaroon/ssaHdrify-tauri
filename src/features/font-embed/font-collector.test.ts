@@ -421,3 +421,104 @@ Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\rStyleA\r9NonexistentSt
     ).toBe(true);
   });
 });
+
+// ── R6 W1 (N-R6-1 / A-R6-1) — drawing-reset parity for digit-led \r.
+// R5 W1 widened the \r alternation regex inside applyOverrideTags to
+// accept digit-led style names, but the SIBLING regex R_RESET_RE at
+// module top (which the walkText loop uses to decide whether \r was
+// present → reset isDrawing) still used the old [\p{L}_] leading class.
+// When an attacker-controlled ASS pairs \p1 with \r<digit-led>, the two
+// regexes disagree: applyOverrideTags switches style correctly but
+// R_RESET_RE.test() returns false, so isDrawing stays true from the
+// prior \p1. Plain text after the block becomes drawing-mode commands
+// → glyphs missing from the embedded subset. libass renders normally
+// (\r resets drawing-off). Same regex-pair coherence failure mode the
+// R5 W1 WHY comment predicted; the hiding spot was 458 lines above in
+// the same file.
+//
+// Tests below pair the two halves of the contract:
+//   1. Drawing-mode reset fires for digit-led \r (so subsequent text
+//      is collected, not skipped).
+//   2. Style-undefined fallback to initialFont still works in
+//      combination with the drawing reset.
+describe("font-collector \\r digit-led drawing-mode reset (A-R6-1)", () => {
+  it("\\p1 in one block, \\r1MainTitle in the next: digit-led \\r resets drawing AND switches style", async () => {
+    // Two-block sequence: {\p1}{\r1MainTitle}X. isDrawing is a sticky
+    // state that persists across blocks until reset. Block 1's \p1
+    // sets isDrawing=true; block 2's \r1MainTitle must reset
+    // isDrawing=false (via R_RESET_RE.test) AND switch to 1MainTitle
+    // (via applyOverrideTags's matchAll). Then X is collected under
+    // Courier New.
+    //
+    // Pre-R6-W1: R_RESET_RE used [\p{L}_] which rejected the digit
+    // leading char; .test returned false; isDrawing stayed true from
+    // block 1; X was treated as drawing-mode commands and DROPPED.
+    // applyOverrideTags still switched style correctly (R5 W1 widened
+    // its alternation regex), but Courier New's bucket would be empty
+    // because no glyphs reached recordChars.
+    //
+    // Single-block {\p1\r1MainTitle}X is NOT used here — the existing
+    // walkText drawing-mode pass runs pTags AFTER R_RESET_RE, so the
+    // \p1 in the same block always wins regardless of R_RESET_RE's
+    // result. That positional-order defect is A-R6-2 / R6 W2's
+    // refactor target; this W1-only test must isolate the R_RESET_RE
+    // contract via cross-block state propagation.
+    await ensureLoaded();
+    const ass = `[Script Info]
+ScriptType: v4.00+
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, Bold, Italic
+Style: Default,Arial,40,0,0
+Style: 1MainTitle,Courier New,40,0,0
+
+[Events]
+Format: Layer, Start, End, Style, Text
+Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\p1}{\r1MainTitle}X`}
+`;
+    const usage = collectFonts(ass);
+    const courier = usage.find((u) => u.key.family === "Courier New");
+    expect(
+      courier,
+      "Courier New FontUsage must exist — block-2 R_RESET_RE must reset isDrawing for digit-led \\r"
+    ).toBeDefined();
+    expect(
+      courier!.codepoints.has(0x58),
+      "X must land in 1MainTitle's bucket (Courier New) — proves block-2 \\r1MainTitle both switched style AND reset isDrawing"
+    ).toBe(true);
+  });
+
+  it("\\p1 in one block, \\r9Nonexistent in the next: digit-led undefined \\r resets drawing AND falls through to initial", async () => {
+    // Sibling counter-test: {\p1}{\r9Nonexistent}Y. Block 1 sets
+    // isDrawing=true. Block 2's \r9Nonexistent must reset isDrawing
+    // (via R_RESET_RE.test) AND fall through to initialFont (style
+    // name not in styleMap). Y is collected under Arial.
+    //
+    // Pre-R6-W1 + R5-W1: applyOverrideTags's alternation rejected
+    // digit-led → state retained block 1's style. Pre-R6-W1 alone:
+    // R_RESET_RE rejected digit-led → isDrawing stayed true → Y
+    // dropped. Post-R6-W1 + R5-W1: both regexes accept digit-led;
+    // style resets to initial AND isDrawing resets; Y collected
+    // under Arial.
+    await ensureLoaded();
+    const ass = `[Script Info]
+ScriptType: v4.00+
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, Bold, Italic
+Style: Default,Arial,40,0,0
+Style: StyleA,Times New Roman,40,0,0
+
+[Events]
+Format: Layer, Start, End, Style, Text
+Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\p1}{\r9NonexistentStyle}Y`}
+`;
+    const usage = collectFonts(ass);
+    const arial = usage.find((u) => u.key.family === "Arial");
+    expect(arial, "Arial (Default/initial) FontUsage must exist").toBeDefined();
+    expect(
+      arial!.codepoints.has(0x59),
+      "Y must land in Arial — proves block-2 R_RESET_RE reset isDrawing for digit-led \\r AND undefined-style fall-through fired"
+    ).toBe(true);
+  });
+});
