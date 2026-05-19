@@ -444,7 +444,7 @@ function applyOverrideTags(
   // diverges (Codex PoC: `{\rStyleA\r<129 As>}X` attributed X to
   // StyleA's font, not the dialogue's initial style).
   //
-  // Fix: second alternation `[\p{L}_][\p{L}\p{N}_-]{128,}` matches
+  // Fix: second alternation `[\p{L}\p{N}_][\p{L}\p{N}_-]{128,}` matches
   // overlong runs (129+ chars total, since the leading char counts)
   // WITHOUT a capture group. matchAll now sees the overlong token,
   // `rMatch` is truthy, but `styleName` is undefined — short-circuits
@@ -453,9 +453,30 @@ function applyOverrideTags(
   // alters what matchAll returns for a given input shape (here, from
   // "always matches with truncated capture" to "no match"), audit
   // every caller that walks matchAll for state-machine effects.
+  //
+  // R5 W1 (A-R5-1, SECOND Pattern 3 sub-question 2 miss in the same
+  // regex): both alternation branches' leading-char class was
+  // `[\p{L}_]`, excluding digits. ass-compiler accepts digit-led
+  // style names (`Style: 1MainTitle,...`) and stores them in
+  // `styleMap` without validation, but `\r1MainTitle` then failed
+  // BOTH alternation branches — same state-retention divergence as
+  // overlong. Asymmetric pipeline: the parser accepted, the
+  // override-tag dispatcher rejected. Fix extends both leading
+  // classes to `[\p{L}\p{N}_]`, matching the continuation class
+  // minus dash (dash-at-start is a typo trap; keep continuation-
+  // only). `\rdefault` literal-string short-circuit at
+  // `styleName.toLowerCase() !== "default"` is unaffected.
+  //
+  // R5 W1 lesson: when Pattern 3 sub-question 2 catches one
+  // input-shape miss in a regex (overlong, here), audit the
+  // ENTIRE input-shape catalog before declaring the fix complete.
+  // Codex f871d0cc closed overlong; A-R5-1 caught digit-led the
+  // very next round. Likely-exhausted for this regex now, but the
+  // same pattern probably hides in other regexes whose leading-char
+  // class diverges from their continuation class.
   const rMatches = [
     ...block.matchAll(
-      /\\r(?:([\p{L}_][\p{L}\p{N}_-]{0,127})?(?![\p{L}\p{N}_-])|[\p{L}_][\p{L}\p{N}_-]{128,})/gu
+      /\\r(?:([\p{L}\p{N}_][\p{L}\p{N}_-]{0,127})?(?![\p{L}\p{N}_-])|[\p{L}\p{N}_][\p{L}\p{N}_-]{128,})/gu
     ),
   ];
   const rMatch = rMatches.at(-1);

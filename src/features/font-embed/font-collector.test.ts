@@ -334,3 +334,90 @@ Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\rStyleA\r` + overlong +
     ).toBe(true);
   });
 });
+
+// ── R5 W1 (A-R5-1) — digit-led style name pair for the f871d0cc
+// state-retention fix. R4 W1's alternation closed the overlong-run
+// shape but kept the original `[\p{L}_]` leading-char class on BOTH
+// branches, so a digit-led style name (`1MainTitle`) still failed both
+// alternation branches — same state-retention divergence in a
+// different input shape. ass-compiler accepts digit-led names and
+// stores them in styleMap unchanged; the parser-vs-override-tag
+// asymmetry was an internal inconsistency regardless of libass
+// behavior. Fix extends both leading classes to `[\p{L}\p{N}_]`.
+// Tests below cover both directions: digit-led name DEFINED in
+// V4+ Styles (must switch to that style) and digit-led name
+// UNDEFINED (must reset to initial, matching the overlong path).
+describe("font-collector \\r digit-led style name (A-R5-1)", () => {
+  it("\\r1MainTitle resolves to the digit-led style when defined", async () => {
+    // ass-compiler accepts `Style: 1MainTitle,...`; our \r regex
+    // must agree. `{\rStyleA\r1MainTitle}X` should switch to
+    // 1MainTitle's font (Courier New here), NOT retain StyleA
+    // (Times New Roman) from the prior tag.
+    await ensureLoaded();
+    const ass = `[Script Info]
+ScriptType: v4.00+
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, Bold, Italic
+Style: Default,Arial,40,0,0
+Style: StyleA,Times New Roman,40,0,0
+Style: 1MainTitle,Courier New,40,0,0
+
+[Events]
+Format: Layer, Start, End, Style, Text
+Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\rStyleA\r1MainTitle}X`}
+`;
+    const usage = collectFonts(ass);
+    const courier = usage.find((u) => u.key.family === "Courier New");
+    expect(
+      courier,
+      "Courier New FontUsage must exist — \\r1MainTitle must switch to the digit-led style"
+    ).toBeDefined();
+    expect(courier!.codepoints.has(0x58), "X must land in 1MainTitle's bucket (Courier New)").toBe(
+      true
+    );
+    const times = usage.find((u) => u.key.family === "Times New Roman");
+    if (times) {
+      expect(
+        times.codepoints.has(0x58),
+        "X must NOT remain in StyleA bucket (Times) — \\r1MainTitle must override"
+      ).toBe(false);
+    }
+  });
+
+  it("\\r9NonexistentStyle (digit-led, undefined) falls through to initial style", async () => {
+    // Sibling counter-test for the undefined case: `\r<digit-led-name>`
+    // where the name is NOT in styleMap. Pre-R5-W1 fix, both alternation
+    // branches rejected the digit-led leading char, so matchAll missed
+    // the token and prior state stayed in force. Post-fix, the first
+    // branch matches with capture = "9NonexistentStyle", styleMap.has
+    // returns false, the else-arm resets to initialFont.
+    await ensureLoaded();
+    const ass = `[Script Info]
+ScriptType: v4.00+
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, Bold, Italic
+Style: Default,Arial,40,0,0
+Style: StyleA,Times New Roman,40,0,0
+
+[Events]
+Format: Layer, Start, End, Style, Text
+Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\rStyleA\r9NonexistentStyle}Z`}
+`;
+    const usage = collectFonts(ass);
+    const times = usage.find((u) => u.key.family === "Times New Roman");
+    if (times) {
+      expect(
+        times.codepoints.has(0x5a),
+        "Z must NOT remain in StyleA bucket — undefined digit-led \\r must reset to initial"
+      ).toBe(false);
+    }
+    const arial = usage.find((u) => u.key.family === "Arial");
+    expect(arial, "Arial (Default/initial) FontUsage must exist").toBeDefined();
+    expect(
+      arial!.codepoints.has(0x5a),
+      "Z must land in Arial after undefined digit-led \\r resets to initial"
+    ).toBe(true);
+  });
+});
