@@ -80,17 +80,21 @@ pub fn expand_dropped_paths(paths: Vec<String>) -> Result<ExpandedPaths, String>
         // per-path stat + walk_one_level call, so the worst case
         // (1000 input folders, first ~50 already filled `result` to
         // MAX_RESULT_FILES = 5000) still paid stat + read_dir on
-        // every remaining input. The same check at line ~128 below
-        // handles the case where the LAST input pushed the result to
-        // the cap (we still need to set `truncated` correctly there);
+        // every remaining input. The bottom-of-loop check at line
+        // ~128 below handles the case where the LAST iteration pushed
+        // the result to the cap (it uses `idx + 1 < total_inputs`
+        // because the work for this iteration is already done);
         // this top-of-loop check is the cheap-first sibling for
-        // every subsequent iteration. `walk_one_level` itself has
-        // the same check at its inner loop top, so this is the third
-        // layer of the same budget.
+        // every SUBSEQUENT iteration — by construction `idx <
+        // total_inputs` holds for any iteration body that runs, so
+        // entering this branch means there's at least one more input
+        // we're skipping. R3 N-R3-4: dropped the redundant
+        // `if idx < total_inputs` guard that wrapped `truncated = true`
+        // — it was always true by construction. `walk_one_level`
+        // itself has the same check at its inner loop top, so this
+        // is the third layer of the same budget.
         if result.len() >= MAX_RESULT_FILES {
-            if idx < total_inputs {
-                truncated = true;
-            }
+            truncated = true;
             break;
         }
         // Skip silently rather than fail — native drag-drop shouldn't

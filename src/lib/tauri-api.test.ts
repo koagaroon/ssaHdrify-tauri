@@ -307,6 +307,8 @@ describe("localized native file dialogs", () => {
             "mpg",
             "mpeg",
             "m4v",
+            "ogv",
+            "rmvb",
             "ass",
             "ssa",
             "srt",
@@ -331,6 +333,8 @@ describe("localized native file dialogs", () => {
             "mpg",
             "mpeg",
             "m4v",
+            "ogv",
+            "rmvb",
           ],
         },
         {

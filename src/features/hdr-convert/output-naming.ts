@@ -12,6 +12,7 @@ import {
   decomposeInputPath,
   substituteTemplate,
 } from "../../lib/path-validation";
+import { VIDEO_EXTS } from "../../lib/rename-extensions";
 
 // ── Template Presets ──────────────────────────────────────
 
@@ -23,30 +24,12 @@ export const OUTPUT_PRESETS = [
 
 export const DEFAULT_TEMPLATE = OUTPUT_PRESETS[0];
 
-/** Recognized video container extensions. Used to strip the trailing
- *  extension from a video filename when computing {video_name}. Naming
- *  conventions like `Show.S01E01.1080p` are common, so only known video
- *  extensions are stripped — never any trailing dotted segment. */
-const VIDEO_EXTENSIONS = new Set([
-  "mkv",
-  "mp4",
-  "avi",
-  "mov",
-  "ts",
-  "m2ts",
-  "webm",
-  "flv",
-  "wmv",
-  "mpg",
-  "mpeg",
-  "m4v",
-  "ogv",
-  "rmvb",
-]);
-
 /** Strip a recognized video extension from a filename, returning the stem.
- *  Conservative on purpose — names like `Show.S01E01` without an extension
- *  retain their trailing dotted segment. Path separators are tolerated so
+ *  Uses the canonical `VIDEO_EXTS` from `rename-extensions.ts` so the
+ *  set of recognized container formats stays single-sourced between
+ *  Batch Rename categorization and {video_name} stripping. Conservative
+ *  on purpose — names like `Show.S01E01` without an extension retain
+ *  their trailing dotted segment. Path separators are tolerated so
  *  callers may pass either a bare name or a full path. */
 function stripVideoExtension(fileName: string): string {
   if (!fileName) return "";
@@ -55,7 +38,7 @@ function stripVideoExtension(fileName: string): string {
   const dotIdx = tail.lastIndexOf(".");
   if (dotIdx <= 0) return tail;
   const ext = tail.slice(dotIdx + 1).toLowerCase();
-  return VIDEO_EXTENSIONS.has(ext) ? tail.slice(0, dotIdx) : tail;
+  return VIDEO_EXTS.has(ext) ? tail.slice(0, dotIdx) : tail;
 }
 
 /** Optional resolution context for tokens that depend on out-of-band data

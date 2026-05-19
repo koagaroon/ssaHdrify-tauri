@@ -42,6 +42,8 @@ export const VIDEO_EXTS: ReadonlySet<string> = new Set([
   "mpg",
   "mpeg",
   "m4v",
+  "ogv",
+  "rmvb",
 ]);
 
 export const SUBTITLE_EXTS: ReadonlySet<string> = new Set([

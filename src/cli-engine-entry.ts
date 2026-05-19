@@ -35,12 +35,7 @@ import {
   fileNameFromPath,
   substituteTemplate,
 } from "./lib/path-validation";
-import {
-  IGNORED_EXTS,
-  SUBTITLE_EXTS,
-  VIDEO_EXTS,
-  type RenameCategory,
-} from "./lib/rename-extensions";
+import { categorize, type RenameCategory } from "./lib/rename-extensions";
 import { parseSubtitle } from "./lib/subtitle-parser";
 
 // Chain feature — runtime + types re-exported so the Rust shell can
@@ -500,21 +495,14 @@ function categorizeRenamePaths(paths: string[]): CategorizedRenamePaths {
 }
 
 function categorizeRenamePath(path: string): RenameCategory {
-  // R2 N-R2-1 + N-R2-3: pre-W1 this used a local fileNameFromPath that
-  // lacked the W16.6 `|| path` empty-string fallback — a trailing-
-  // separator video path (`./media/`) returned "" and silently fell
-  // out as "unknown". Now routed through the consolidated
-  // `path-validation.ts::fileNameFromPath` so CLI + GUI behave the
-  // same. Ext lookup logic mirrors `rename-extensions.ts::categorize`
-  // but operates on a path (not a bare name) — kept as a thin wrapper.
-  const name = fileNameFromPath(path);
-  const dot = name.lastIndexOf(".");
-  if (dot < 0) return "unknown";
-  const ext = name.slice(dot + 1).toLowerCase();
-  if (VIDEO_EXTS.has(ext)) return "video";
-  if (SUBTITLE_EXTS.has(ext)) return "subtitle";
-  if (IGNORED_EXTS.has(ext)) return "ignored";
-  return "unknown";
+  // R3 N-R3-5: thin wrapper — delegate the ext-lookup chain to the
+  // canonical `categorize` (which scans VIDEO_EXTS → SUBTITLE_EXTS →
+  // IGNORED_EXTS in the same priority order). Pre-R3 the chain was
+  // open-coded here, so a future bucket addition or priority shift in
+  // `rename-extensions.ts::categorize` would silently skip the CLI
+  // path. `fileNameFromPath` still applies upstream to keep the W16.6
+  // trailing-separator handling.
+  return categorize(fileNameFromPath(path));
 }
 
 function parseLanguageSelection(raw: string): LanguageSelection {

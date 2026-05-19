@@ -26,23 +26,13 @@ import {
   sanitizeError,
   sanitizeForDialog,
 } from "../../lib/dedup-helpers";
+import { categorize } from "../../lib/rename-extensions";
 
 type Unit = "ms" | "s";
 type Direction = "slower" | "faster";
 
 /** Cap to ±1 year to prevent integer precision loss for extreme inputs. */
 const MAX_OFFSET_MS = 365 * 24 * 3600 * 1000;
-
-// Subtitle extensions Time Shift accepts. Used by the folder-drop filter
-// to keep videos and unrelated files out of the batch when a user drops
-// a whole show folder.
-const SUBTITLE_EXTS = new Set(["ass", "ssa", "srt", "vtt", "sub", "sbv", "lrc"]);
-
-function fileNameHasSubtitleExt(name: string): boolean {
-  const dot = name.lastIndexOf(".");
-  if (dot < 0) return false;
-  return SUBTITLE_EXTS.has(name.slice(dot + 1).toLowerCase());
-}
 
 // Preview list virtualization (Codex d611ab66 / 7f04ebe6 — preview DOM
 // explosion at the parser's 500k-entry ceiling). The previous
@@ -371,7 +361,7 @@ export default function TimingShift() {
       // across pick entry points (FontEmbed already does this; this
       // wave brings TimingShift into line).
       const gen = (pickGenRef.current = pickGenRef.current + 1);
-      const subtitlePaths = paths.filter((p) => fileNameHasSubtitleExt(fileNameFromPath(p)));
+      const subtitlePaths = paths.filter((p) => categorize(fileNameFromPath(p)) === "subtitle");
       if (subtitlePaths.length === 0) {
         // Surface through both the log AND the standard DropErrorBanner
         // (N-R5-FEFEAT-09). Users with collapsed log panels see nothing

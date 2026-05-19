@@ -34,7 +34,7 @@ function subtitleFilters(t?: DialogTranslator): FileFilter[] {
     { name: dt(t, "dialog_filter_webvtt"), extensions: ["vtt"] },
     {
       name: dt(t, "dialog_filter_all_subtitle_formats"),
-      extensions: ["ass", "ssa", "srt", "sub", "vtt", "sbv", "lrc"],
+      extensions: Array.from(SUBTITLE_EXTS),
     },
     { name: dt(t, "dialog_filter_all_files"), extensions: ["*"] },
   ];
