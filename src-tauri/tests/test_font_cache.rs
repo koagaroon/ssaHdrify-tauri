@@ -322,10 +322,13 @@ fn embed_reports_drift_when_folder_mtime_changes() {
     // Pin the structured drift line — `contains("drift")` alone would
     // pass for unrelated stderr text mentioning drift, undermining
     // the test contract for "embed reports drift when folder mtime
-    // changes". The locked drift report begins with this exact prefix.
+    // changes". The locked drift report begins with this exact prefix
+    // in either locale (EN: "Cache drift detected", ZH: "检测到字体缓存
+    // 漂移"). Bilingual so the test verifies the actual user-visible
+    // path on the runner's machine, not only the EN code path.
     assert!(
-        stderr.contains("Cache drift detected"),
-        "expected drift warning in stderr, got: {stderr}"
+        stderr.contains("Cache drift detected") || stderr.contains("检测到字体缓存漂移"),
+        "expected drift warning (EN or ZH) in stderr, got: {stderr}"
     );
     // Locked design: drift fallback skips the cache for this run.
     // Stderr should also tell the user how to refresh.

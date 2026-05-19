@@ -307,9 +307,16 @@ fn chain_overwrite_toggles_skip_vs_replace() {
         stdout.contains("already exists (use --overwrite to replace)"),
         "expected skip explanation in stdout: {stdout}"
     );
+    // Accept either the English ("Summary: 0 written, 1 skipped, 0 failed")
+    // or the Chinese ("汇总：0 个已写入，1 个已跳过，0 个失败") shape. The CLI
+    // emits whichever matches the OS locale (zh* → ZH, else EN) and our
+    // target audience runs zh-CN, so both code paths must verify. The
+    // numeric tuple stays pinned in both branches — a refactor that
+    // shifts the numbers can't pass through either.
     assert!(
-        stdout.contains("0 written, 1 skipped, 0 failed"),
-        "expected skip in summary line: {stdout}"
+        stdout.contains("0 written, 1 skipped, 0 failed")
+            || stdout.contains("0 个已写入，1 个已跳过，0 个失败"),
+        "expected skip summary (EN or ZH): {stdout}"
     );
     let unchanged = fs::read_to_string(&output_path).unwrap();
     assert_eq!(first_content, unchanged, "skip path mutated the file");
@@ -337,10 +344,12 @@ fn chain_overwrite_toggles_skip_vs_replace() {
     // Strong assertion (N-R5-RUSTCLI-15): substring "1 written" matches
     // "11 written" / "111 written" too. Pin the full
     // "{written}, {skipped}, {failed}" tuple so a refactor that
-    // shifts the numbers can't silently pass.
+    // shifts the numbers can't silently pass. Bilingual to verify both
+    // the EN locale and the zh-CN locale paths real users see.
     assert!(
-        stdout.contains("1 written, 0 skipped, 0 failed"),
-        "expected '1 written, 0 skipped, 0 failed' tuple in --overwrite stdout: {stdout}"
+        stdout.contains("1 written, 0 skipped, 0 failed")
+            || stdout.contains("1 个已写入，0 个已跳过，0 个失败"),
+        "expected write tuple (EN or ZH) in --overwrite stdout: {stdout}"
     );
 
     let _ = fs::remove_dir_all(dir);
