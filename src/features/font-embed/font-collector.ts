@@ -48,16 +48,35 @@ const FN_TAG_RE = new RegExp(
   `\\\\fn(?:(${FN_CHAR_SET}{0,128})(?!${FN_CHAR_SET})|${FN_CHAR_SET}{129,200000})`,
   "gu"
 );
-// R7 W1 A-R7-1: digit quantifiers bounded to match the Pattern 1 census
-// rule for module-level tag regex consts (R_TAG_RE / FN_TAG_RE already
-// carried bounded quantifiers; the three numeric tag regexes did not).
-// Realistic spec ranges: `\b` 0-1000 weight (4 digits), `\i` 0-1
-// (1 digit; widened to 2 for forward-compat), `\p` 0-9999 scale
-// (4 digits). Bounding avoids match-object pressure under crafted ASS
-// like `\b1\b1\b1...` packed into a 1 MB block (~330k match objects).
-const B_TAG_RE = /\\b(\d{1,4})/g;
-const I_TAG_RE = /\\i(\d{1,2})/g;
-const P_TAG_RE = /\\p(\d{1,4})/g;
+// Codex ff5b69f5 (post-R7 W1): the three numeric tag regexes must
+// capture the FULL digit run, not a bounded prefix. The R7 W1 attempt
+// to bound them to `\d{1,4}` / `\d{1,2}` / `\d{1,4}` introduced
+// prefix-truncation divergence from ass-compiler's full numeric parse:
+// `\b00700` captured `0070` (weight 70, NOT bold) instead of 700 (bold);
+// `\i001` captured `00` (not italic) instead of 1 (italic); `\p00001`
+// captured `0000` (drawing OFF) instead of 1 (drawing ON). Each path
+// silently mis-attributes embedded fonts vs what libass renders.
+//
+// The original R7 W1 rationale ("avoids match-object pressure under
+// `\b1\b1\b1...` packed into 1 MB ~330k match objects") didn't hold:
+// every `\b<N>` produces one match regardless of digit bound, so the
+// match-object count is identical with or without the bound; only the
+// per-match capture length changes. Higher-layer caps already bound
+// resource usage: MAX_CAPTION_TEXT_LEN (64,000 bytes per caption) +
+// MAX_FONT_VARIANTS (500) + MAX_CODEPOINTS_PER_VARIANT (65,536) +
+// MAX_TOTAL_CODEPOINTS (1,000,000), and `\d+` over a single-char class
+// is linear with no backtracking.
+//
+// Asymmetry note vs R_TAG_RE / FN_TAG_RE: those two ARE bounded with an
+// explicit overlong second-alternation branch that consumes overlong
+// names rather than truncating — style / family names are strings, so
+// length-capping the captured identifier makes sense. Numeric tags are
+// integer literals; `\d+` + `parseInt` already handles arbitrary
+// length, so the same "bounded + overlong branch" shape is unnecessary
+// and the simplest correct form is unbounded `\d+`.
+const B_TAG_RE = /\\b(\d+)/g;
+const I_TAG_RE = /\\i(\d+)/g;
+const P_TAG_RE = /\\p(\d+)/g;
 
 // Lazy dynamic import — only triggers when ensureLoaded() is first called.
 // Previously this ran at module load time, which blocked startup after the
@@ -578,8 +597,9 @@ function applyOverrideTags(
         // as not-bold (only `1` is the bold-on flag in the low range);
         // `\b700+` = bold by font weight value (CSS-style weight scale).
         // R7 W1 N-R7-12: middle range named explicitly so the contract
-        // matches the predicate. R7 W1 A-R7-1: weight bounded to 4
-        // digits at the regex level (max realistic 1000).
+        // matches the predicate. B_TAG_RE captures the full digit run
+        // (see Codex ff5b69f5 WHY block at the regex const); overlong
+        // values like `\b00700` parse as 700 → bold-on per libass.
         font.bold = tag.weight === 1 || tag.weight >= 700;
         break;
       case "i":

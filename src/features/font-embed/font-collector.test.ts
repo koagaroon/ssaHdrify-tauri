@@ -119,6 +119,83 @@ describe("font-collector multi-tag last-wins parity (W7.5 regression anchor)", (
     expect(italicOff!.codepoints.has(0x43), "C must land in the non-italic bucket").toBe(true);
   });
 
+  // ── Codex ff5b69f5 — overlong numeric tags must parse the FULL
+  // digit run, not a bounded prefix. R7 W1 attempted to bound the
+  // three numeric tag regexes (\b → \d{1,4}, \i → \d{1,2}, \p →
+  // \d{1,4}) without a (?!\d) boundary, which caused JS global
+  // matchAll to capture the leading prefix of any longer digit run.
+  // The truncated value then fed parseInt → wrong bold / italic /
+  // drawing state, diverging from what ass-compiler (and libass)
+  // resolve. These three cases are the exact PoC inputs from Codex
+  // ff5b69f5; the at-limit siblings pin the bounded-prefix path that
+  // a future refactor must NOT reintroduce.
+
+  it("\\b00700 (5 digits, overlong) parses as weight=700 → bold (Codex ff5b69f5)", async () => {
+    // Truncated `0070` would give weight 70 → NOT bold; full `00700`
+    // gives weight 700 → bold-on per libass. B must land in the
+    // Arial Bold bucket.
+    await ensureLoaded();
+    const usage = collectFonts(makeASS(String.raw`{\b00700}BBBB`));
+    const boldOn = usage.find((u) => u.key.family === "Arial" && u.key.bold && !u.key.italic);
+    expect(boldOn, "Arial Bold FontUsage must exist (full weight=700 parses bold)").toBeDefined();
+    expect(boldOn!.codepoints.has(0x42), "B must land in the Arial Bold bucket").toBe(true);
+  });
+
+  it("\\b0700 (4 digits, at-limit sibling) parses as weight=700 → bold", async () => {
+    // Counter-test pinning the at-limit path so a future regression
+    // that re-narrows the regex to `\d{1,4}` AND breaks the boundary
+    // would still light up the over-limit sibling above.
+    await ensureLoaded();
+    const usage = collectFonts(makeASS(String.raw`{\b0700}BBBB`));
+    const boldOn = usage.find((u) => u.key.family === "Arial" && u.key.bold && !u.key.italic);
+    expect(boldOn, "Arial Bold FontUsage must exist (weight=700)").toBeDefined();
+    expect(boldOn!.codepoints.has(0x42), "B must land in the Arial Bold bucket").toBe(true);
+  });
+
+  it("\\i001 (3 digits, overlong) parses as flag=1 → italic (Codex ff5b69f5)", async () => {
+    // Truncated `00` would give flag 0 → NOT italic; full `001`
+    // gives flag 1 → italic-on per libass.
+    await ensureLoaded();
+    const usage = collectFonts(makeASS(String.raw`{\i001}CCCC`));
+    const italicOn = usage.find((u) => u.key.family === "Arial" && u.key.italic && !u.key.bold);
+    expect(italicOn, "Arial Italic FontUsage must exist (full flag=1 parses italic)").toBeDefined();
+    expect(italicOn!.codepoints.has(0x43), "C must land in the Arial Italic bucket").toBe(true);
+  });
+
+  it("\\p00001 (5 digits, overlong) parses as scale=1 → drawing-on (Codex ff5b69f5)", async () => {
+    // Truncated `0000` would give scale 0 → drawing OFF, so the
+    // sentinel `X` (0x58) would be collected as a glyph; full `00001`
+    // gives scale 1 → drawing ON, so `X` is dropped as a drawing
+    // command (not a glyph). `\p0` toggle + `Y` sentinel anchors the
+    // FontUsage entry so the negative assertion on `X` is observable
+    // (when every text codepoint sits inside drawing mode the
+    // collector skips the variant entirely).
+    await ensureLoaded();
+    const usage = collectFonts(makeASS(String.raw`{\p00001}XXXX{\p0}YYYY`));
+    const defaultStyle = usage.find((u) => u.key.family === "Arial");
+    expect(defaultStyle, "Default style FontUsage should exist").toBeDefined();
+    expect(
+      defaultStyle!.codepoints.has(0x58),
+      "X must NOT be collected (drawing-on from full \\p00001=1)"
+    ).toBe(false);
+    expect(defaultStyle!.codepoints.has(0x59), "Y must be collected (drawing-off after \\p0)").toBe(
+      true
+    );
+  });
+
+  it("\\p1 (at-limit sibling) parses as scale=1 → drawing-on", async () => {
+    // Counter-test: well-formed `\p1` is the canonical drawing-on
+    // shape; the test above pins that the overlong variant resolves
+    // to the SAME state, not the truncated-prefix opposite. Same
+    // FontUsage-anchor structure as the overlong test.
+    await ensureLoaded();
+    const usage = collectFonts(makeASS(String.raw`{\p1}XXXX{\p0}YYYY`));
+    const defaultStyle = usage.find((u) => u.key.family === "Arial");
+    expect(defaultStyle, "Default style FontUsage should exist").toBeDefined();
+    expect(defaultStyle!.codepoints.has(0x58), "X must NOT be collected (drawing-on)").toBe(false);
+    expect(defaultStyle!.codepoints.has(0x59), "Y must be collected (drawing-off)").toBe(true);
+  });
+
   it("multi-\\r block uses LAST style reset (libass parity)", async () => {
     // `{\rStyleA\rStyleB}` resolves to StyleB. First-wins regression
     // would route the post-block glyphs to StyleA's font. Construct
