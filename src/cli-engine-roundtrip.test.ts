@@ -147,7 +147,7 @@ describe("HDR convert — GUI ↔ CLI byte equivalence", () => {
     expect(cli.content).toBe(gui.content);
   });
 
-  it("native-ASS input returns skippedCount = 0 regardless of content (R13 N-R13-10)", () => {
+  it("native-ASS input returns skippedCount = 0 regardless of content", () => {
     // The CLI HDR ASS branch routes through processAssContent (line-
     // based), NOT through parseSubtitle's MAX_CAPTION_TEXT_LEN
     // placeholder path. So the `skippedCount` field's documented
@@ -166,7 +166,7 @@ describe("HDR convert — GUI ↔ CLI byte equivalence", () => {
     expect(cli.skippedCount).toBe(0);
   });
 
-  it("oversized SRT caption produces byte-identical filtered output + non-zero skippedCount (R12 N-R12-4)", () => {
+  it("oversized SRT caption produces byte-identical filtered output + non-zero skippedCount", () => {
     // Exercise the `.filter(c => !c.skipped)` introduced in dba6445.
     // Without an oversized fixture, the byte-equivalence test runs
     // through the filter on inputs that produce zero placeholders;
@@ -470,7 +470,7 @@ describe("Font embed plan — GUI ↔ CLI byte equivalence", () => {
   });
 });
 
-describe("Shift / Embed resolvers — strict-throw on unknown tokens (R12 N-R12-2)", () => {
+describe("Shift / Embed resolvers — strict-throw on unknown tokens", () => {
   // Companion to output-naming.test.ts's HDR coverage. Pins that the
   // strict-throw introduced in path-validation.ts surfaces
   // through the CLI engine's Shift and Embed entry points, not just at

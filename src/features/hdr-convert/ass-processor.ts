@@ -10,16 +10,16 @@
 import { sRgbToHdr, type Eotf, DEFAULT_BRIGHTNESS, MIN_BRIGHTNESS } from "./color-engine";
 import { MAX_PARSED_ENTRIES } from "../../lib/subtitle-parser";
 
-// derive LINE_CAP from MAX_PARSED_ENTRIES plus
-// a header-overhead budget so the cap accommodates SRT→ASS upcasts.
-// Pre-R10 LINE_CAP was hardcoded to 500_000 (== MAX_PARSED_ENTRIES);
-// an SRT input near the parser cap then expanded through
-// buildAssDocument's ~11-line header would throw here on the
-// re-pass even though parseSrt had accepted the file. 1024-line
-// budget covers `[Script Info]` / `[V4+ Styles]` / Format / multiple
-// Style rows / `[Events]` / Format / Comment lines / blank
-// separators, well over the ~11-line minimum used by the standard
-// builder and any plausible authoring tool's preamble.
+// Derive LINE_CAP from MAX_PARSED_ENTRIES plus a header-overhead
+// budget so the cap accommodates SRT→ASS upcasts. A hardcoded
+// 500_000 (== MAX_PARSED_ENTRIES) would have an SRT input near the
+// parser cap then expanded through buildAssDocument's ~11-line
+// header throw here on the re-pass even though parseSrt had
+// accepted the file. The 1024-line budget covers `[Script Info]` /
+// `[V4+ Styles]` / Format / multiple Style rows / `[Events]` /
+// Format / Comment lines / blank separators, well over the ~11-line
+// minimum used by the standard builder and any plausible authoring
+// tool's preamble.
 const ASS_HEADER_LINE_BUDGET = 1024;
 const LINE_CAP = MAX_PARSED_ENTRIES + ASS_HEADER_LINE_BUDGET;
 
@@ -203,13 +203,12 @@ function transformStyleLine(
   // shifted slot lands on something that isn't a color, transformColorString
   // would produce garbage and we'd silently corrupt the output. Validate
   // the `&Hxxxxxx` or `&Hxxxxxxxx` shape (6 or 8 hex digits — RGB or
-  // ABGR with alpha) before transforming. Round 1 F2.N-R1-11: previous
-  // `{2,8}` accepted 2-, 3-, 4-, 5-, and 7-digit values that the inline
+  // ABGR with alpha) before transforming. A previous `{2,8}` form
+  // accepted 2-, 3-, 4-, 5-, and 7-digit values that the inline
   // `\cN&Hxxxxxx` tag regex (`COLOR_TAG_RE`, line 101) correctly
   // rejected — the asymmetry let a malformed Style field through that
-  // wouldn't have been transformed if inlined as `\c&H...`.
-  // (Round 7 Wave 7.6: regex now lives at module scope — see
-  // `COLOR_FIELD_RE` definition.)
+  // wouldn't have been transformed if inlined as `\c&H...`. The regex
+  // now lives at module scope — see `COLOR_FIELD_RE` definition.
   for (const idx of styleColorIndices) {
     if (idx < fields.length && fields[idx]) {
       const raw = fields[idx];
@@ -218,7 +217,7 @@ function transformStyleLine(
         // preserve any leading/trailing whitespace
         // padding from the original field so byte-for-byte file
         // structure (excluding the color hex itself) survives the
-        // transform. Pre-R10 the replacement used `trimmed` directly,
+        // transform. A previous form used `trimmed` directly,
         // dropping the padding — ASS renderers tolerate it, but
         // diff-tooling against the input would surface the
         // whitespace shift as a spurious change.

@@ -1,16 +1,16 @@
-//! R17 W17.5 : pin the fs:scope deny-list shape so a typo
-//! (missing trailing `/**`, wrong scope variable per W12.1 / W13.2,
-//! accidental removal of a key entry) surfaces as a test failure
-//! rather than silently widening the attack surface.
+//! Pin the fs:scope deny-list shape so a typo (missing trailing
+//! `/**`, wrong scope variable, accidental removal of a key entry)
+//! surfaces as a test failure rather than silently widening the
+//! attack surface.
 //!
 //! The deny list is data, not runtime behavior, so this test reads
 //! `capabilities/default.json` and asserts:
 //!
 //!   1. Every required entry is present (alarms on accidental delete
-//!      / forgotten W12.1-style scope-variable repair).
-//!   2. No forbidden entry is present (alarms on W12.1 / W13.2 traps:
-//!      `$APPDATA/Microsoft/Credentials/**` would resolve to a
-//!      non-existent bundle-namespaced path; the cross-tool deny
+//!      / forgotten scope-variable repair).
+//!   2. No forbidden entry is present (alarms on bundle-namespaced
+//!      traps: `$APPDATA/Microsoft/Credentials/**` would resolve to
+//!      a non-existent bundle-namespaced path; the cross-tool deny
 //!      lives under `$DATA/Microsoft/Credentials/**` instead).
 //!   3. Each entry's path string parses as expected (scope variable
 //!      prefix, no unbalanced braces / glob shapes that wouldn't
@@ -20,7 +20,7 @@
 //! because that requires a live Tauri app handle. Tauri's matcher
 //! interprets the strings here; if the strings are wrong, the matcher
 //! silently mis-applies. Pinning the strings catches the typo class
-//! the W12.1 incident actually had.
+//! the original incident actually had.
 
 use std::path::PathBuf;
 
@@ -181,7 +181,8 @@ fn deny_list_contains_required_categories() {
 fn deny_list_rejects_w12_1_w13_2_traps() {
     let deny = read_deny_paths();
 
-    // Forbidden entries documented per W12.1 + W13.2 incidents:
+    // Forbidden entries documented per past bundle-namespacing
+    // incidents:
     // Tauri 2's $APPDATA / $APPLOCALDATA are bundle-namespaced (resolve
     // to `<roaming>/com.koagaroon.ssahdrify/`). Cross-tool deny rules
     // that name a SECOND segment (e.g. `$APPDATA/Microsoft/...`)

@@ -19,22 +19,21 @@ import { safeMs } from "../../lib/subtitle-parser";
 // editor previews. U+2028/2029 are included in the shared set so
 // the prior explicit U+2028/U+2029 enumeration here is now covered.
 //
-// R7 W1 N-R7-11 (sibling cross-ref): the extra `,{}\\:` literals on
-// top of the BIDI / control set are SPECIFIC to ASS Style-line CSV
-// shape — Style lines use `,` as field separator and `:` as the
-// post-style-name terminator, so a font name carrying those would
-// silently split the row. The sibling sanitizer in
-// `src/features/font-embed/ass-uuencode.ts` (`safeName` inline regex
-// inside `buildFontEntry`) adds `:/\\` instead — `:` delimits the
-// `fontname: <name>` [Fonts] header line, and `/` / `\\` are
-// defense-in-depth beyond the upstream buildFontFileName sanitizer.
-// `:` and `\\` appear in BOTH sets — that is the structural
+// Sibling cross-ref: the extra `,{}\\:` literals on top of the BIDI /
+// control set are SPECIFIC to ASS Style-line CSV shape — Style lines
+// use `,` as field separator and `:` as the post-style-name terminator,
+// so a font name carrying those would silently split the row. The
+// sibling sanitizer in `src/features/font-embed/ass-uuencode.ts`
+// (`safeName` inline regex inside `buildFontEntry`) adds `:/\\` instead
+// — `:` delimits the `fontname: <name>` [Fonts] header line, and `/`
+// / `\\` are defense-in-depth beyond the upstream buildFontFileName
+// sanitizer. `:` and `\\` appear in BOTH sets — that is the structural
 // overlap; `,{}` are unique to this side, `/` is unique to the
-// ass-uuencode side. Pattern 1 census rule for these two
-// sanitizers (per R7 W1 lesson): both must keep stripping the
-// shared BIDI / control set; the extra boundary-specific chars are
-// intentional and MUST NOT be unified into a single helper without
-// re-checking the per-boundary character implications.
+// ass-uuencode side. Pattern 1 census rule for these two sanitizers:
+// both must keep stripping the shared BIDI / control set; the extra
+// boundary-specific chars are intentional and MUST NOT be unified into
+// a single helper without re-checking the per-boundary character
+// implications.
 const FONT_NAME_SANITIZER = new RegExp(
   `[${ASCII_CONTROL_CHARS}${BIDI_AND_ZERO_WIDTH_CHARS},{}\\\\:]`,
   "gu"
@@ -161,7 +160,7 @@ export const DEFAULT_STYLE: StyleConfig = {
  * `escapeSrtUserText` → `preprocessSrtColors` → `parseSubtitle` on the way
  * in. This function does NOT re-escape `{`/`}`/`\` — doing so would silently
  * defeat our own injected color/bold/italic overrides and was the root of
- * the Round 3 regression. The integration tests in `srt-converter.test.ts`
+ * a past regression. The integration tests in `srt-converter.test.ts`
  * guard against future callers dropping the escape step.
  */
 export function buildAssDocument(
@@ -192,8 +191,8 @@ export function buildAssDocument(
   // Style line. Fall back to
   // "Arial" if sanitization empties the string — an empty Fontname field
   // produces a malformed Style CSV that ASS renderers treat unpredictably.
-  // (Round 7 Wave 7.6: regex now lives at module scope as
-  // `FONT_NAME_SANITIZER` \u2014 see definition above.)
+  // The regex lives at module scope as `FONT_NAME_SANITIZER` \u2014 see
+  // definition above.
   // 128-codepoint cap matches `sanitizeFamily` (font-embedder).
   // Without it, a 10 KB font name typed into the HdrConvert style panel
   // would produce a 10 KB Style line — Pattern 1 cap-consistency.

@@ -114,10 +114,10 @@ describe("processAssContent — inline color tags", () => {
     expect(output).toContain("Hello");
     // White (FFFFFF) should be converted to a different HDR value
     expect(output).not.toMatch(/\\1c&H(?:00)?FFFFFF/);
-    // pin the exact transformed value rather than
-    // a 6/8-digit structural match. Pre-R10 a regression that
-    // produced wrong-but-still-6-digit hex would have silently
-    // passed; the structural match was too loose. White at 203 nits
+    // Pin the exact transformed value rather than a 6/8-digit
+    // structural match. A regression producing wrong-but-still-6-digit
+    // hex would have silently passed; the structural match was too
+    // loose. White at 203 nits
     // PQ is the reference BT.2408 white point — Color.js +
     // sRgbToHdr's PQ path emit a deterministic value for it
     // (&H949494& at the time of this pin; if Color.js or sRgbToHdr's
@@ -207,13 +207,13 @@ describe("processAssContent — style lines", () => {
 
 describe("processAssContent — Wave 5.1 pre-split line-count probe (A-R5-FEFEAT-03)", () => {
   it("rejects pure-newline blob exceeding the line cap before .split allocates", () => {
-    // Round 6 Wave 6.6 #24 — fixture must EXCEED the > 1_000_000 byte
-    // probe gate; pre-W6.6 the test used 600k newlines (600k bytes)
-    // which falls BELOW the gate, so the probe code path was never
-    // actually exercised and the test passed via the post-split
-    // line-count throw at the end of processAssContent. 1.1 MB of
-    // pure newlines now lands above the gate AND above LINE_CAP, so
-    // the probe path is the actual code path the test pins.
+    // Fixture must EXCEED the > 1_000_000 byte probe gate; a fixture
+    // with 600k newlines (600k bytes) falls BELOW the gate, so the
+    // probe code path is never actually exercised and the test would
+    // pass via the post-split line-count throw at the end of
+    // processAssContent. 1.1 MB of pure newlines lands above the gate
+    // AND above LINE_CAP, so the probe path is the actual code path
+    // the test pins.
     const blob = "\n".repeat(1_100_000) + "x";
     expect(() => processAssContent(blob, 1000, "PQ")).toThrow(/too large.*lines/i);
   });

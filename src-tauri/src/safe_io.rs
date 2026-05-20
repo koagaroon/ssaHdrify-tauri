@@ -46,7 +46,7 @@
 //! to be mocked. GUI production wraps `app.fs_scope().is_allowed(...)`;
 //! the CLI binary (`bin/cli/main.rs`) also routes its write / copy /
 //! rename outputs through these helpers with a permissive `|_| true`
-//! closure (R17 W17.1: CLI argv is the user's intent, so there is no
+//! closure (CLI argv is the user's intent, so there is no
 //! Tauri-side scope policy to enforce — but every other defense in the
 //! chain still applies). Centralizing the defense set here means
 //! future findings against safe_io auto-propagate to both binaries
@@ -100,7 +100,7 @@ fn ensure_parent_dir(path: &Path) -> Result<(), String> {
         if !parent.as_os_str().is_empty() {
             // include the parent path in the
             // error so the user can identify which directory failed.
-            // Pre-W17.3 a permission / quota / read-only-fs failure
+            // Previously a permission / quota / read-only-fs failure
             // surfaced as "Failed to create output directory:
             // <generic os error>" with no actionable signal. Path
             // bytes flow operationally here; downstream callers
@@ -108,7 +108,7 @@ fn ensure_parent_dir(path: &Path) -> Result<(), String> {
             // BiDi / control characters at the print boundary via
             // `sanitize_for_display` / `stripUnicodeControls`, so
             // including the raw `parent.display()` here doesn't reopen
-            // the W14.1 Pattern 3 sanitize-vs-operational concern.
+            // the sanitize-vs-operational concern.
             fs::create_dir_all(parent).map_err(|e| {
                 format!(
                     "Failed to create output directory {}: {e}",
@@ -139,8 +139,8 @@ fn clear_existing_destination(path: &Path, overwrite: bool) -> Result<(), String
     // answer from the already-fetched `meta`. Kept deliberately for
     // call-shape parity with the other `is_reparse_point` usages in
     // this file (lines 170, 285, 332) and across the codebase
-    // (dropzone.rs::walk_one_level documents the same trade-off in
-    // N-R4-09). Centralizing into a `is_reparse_point_from_meta`
+    // (dropzone.rs::walk_one_level documents the same trade-off).
+    // Centralizing into a `is_reparse_point_from_meta`
     // helper would touch 6+ sites with no measurable perf win on a
     // failure-path syscall pattern.
     match fs::symlink_metadata(path) {
@@ -151,9 +151,10 @@ fn clear_existing_destination(path: &Path, overwrite: bool) -> Result<(), String
                     path.display()
                 ));
             }
-            // explicit directory check before
-            // `fs::remove_file`. Pre-R10 a destination that happened
-            // to be a directory propagated through `remove_file` as
+            // Explicit directory check before
+            // `fs::remove_file`. Previously a destination that
+            // happened to be a directory propagated through
+            // `remove_file` as
             // an opaque "Failed to remove existing destination:
             // Access is denied" (Windows) / EISDIR (POSIX) — users
             // received a permission-shaped error for a structural
@@ -181,14 +182,14 @@ fn clear_existing_destination(path: &Path, overwrite: bool) -> Result<(), String
             // an immediate re-check", and this site was the lone
             // remaining outlier. One cheap syscall.
             //
-            // (syscall count WHY): this is the
-            // THIRD `is_reparse_point` lstat on `path` inside
+            // (syscall count WHY): this is the THIRD
+            // `is_reparse_point` lstat on `path` inside
             // `clear_existing_destination` — fs::symlink_metadata at
             // line 122, the first reparse check at line 124, and
-            // this race-time re-check. R15 W15.3
-            // documented the pre-R17 two-syscall pattern (lines 122
-            // + 124); R13 A-R13-8 added this third for late-race
-            // parity. All three are deliberate: the helper is a
+            // this race-time re-check. The first two form a
+            // stat-then-act pair documented earlier; the third was
+            // added for late-race parity. All three are deliberate:
+            // the helper is a
             // failure-path-only helper (only fires when an existing
             // destination needs clearing) so the extra syscalls cost
             // nothing on the happy path. A future round that's
@@ -281,7 +282,7 @@ fn reject_same_canonical_path(src: &Path, dst: &Path) -> Result<(), String> {
 /// `create_new(true)` is the OS-level guard against following a planted
 /// symlink between the prior existence check and the open call.
 ///
-/// **R2 N-R2-20 — partial-write durability trade-off (accepted).** When
+/// **Partial-write durability trade-off (accepted).** When
 /// `overwrite=true`, the upstream `clear_existing_destination` removes
 /// the prior file BEFORE `create_new_and_write_bytes` is called. If
 /// `write_all` then fails (disk full mid-write, drive eject, antivirus

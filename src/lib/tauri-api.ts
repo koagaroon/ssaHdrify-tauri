@@ -194,8 +194,8 @@ export async function readTextDetectEncoding(path: string): Promise<ReadTextResu
  *  Routes through the Rust-side `safe_write_text_file` command (not
  *  `@tauri-apps/plugin-fs` writeTextFile, which follows reparse points
  *  and would happily write through a planted symlink at the output
- *  path — see Codex finding 776ff6ef / commit b7d9d21 + the safe_io
- *  module doc). The command refuses if the destination already exists
+ *  path — see the safe_io module doc). The command refuses if the
+ *  destination already exists
  *  as a symlink / junction, regardless of the overwrite flag; for
  *  regular-file destinations it removes the file first and re-creates
  *  via `OpenOptions::create_new(true)` for an atomic guard.
@@ -214,8 +214,8 @@ export async function writeText(path: string, content: string): Promise<void> {
  *  Routes through `safe_rename_file` rather than `@tauri-apps/plugin-fs`
  *  rename, which would let a symlinked source rename a sensitive target
  *  or let a symlinked destination redirect the move outside the user-
- *  selected output dir (Codex findings 818eb84f / d29ac141). The
- *  command refuses if either endpoint is a reparse point. */
+ *  selected output dir. The command refuses if either endpoint is a
+ *  reparse point. */
 export async function renamePath(from: string, to: string): Promise<void> {
   await invoke("safe_rename_file", { src: from, dst: to, overwrite: true });
 }
@@ -238,10 +238,10 @@ export async function copyPath(from: string, to: string): Promise<void> {
 
 // `fileNameFromPath` lives in `path-validation.ts` and is re-exported
 // here for backward-compat callers (BatchRename / TimingShift / etc.
-// that import it from `tauri-api`). R2 N-R2-1 consolidated the GUI +
-// CLI siblings: pre-consolidation the CLI copy lacked the W16.6
-// `|| path` empty-string fallback and silently dropped trailing-
-// separator video paths from the rename plan.
+// that import it from `tauri-api`). The GUI + CLI siblings are now
+// consolidated: before the merge, the CLI copy lacked the `|| path`
+// empty-string fallback and silently dropped trailing-separator
+// video paths from the rename plan.
 export { fileNameFromPath };
 
 // ── Rust Commands ─────────────────────────────────────────
@@ -279,7 +279,7 @@ export async function subsetFont(
   // js-base64 (consistent with chain-runtime's decodeBase64). WebView2
   // has a working `atob`, but using one decoder library across both
   // paths keeps the encoding contract single-rooted — a future bug fix
-  // in one site shows up in the other automatically (Round 1 F1.N-R1-15).
+  // in one site shows up in the other automatically.
   const bytes = Base64.toUint8Array(b64);
   return bytes;
 }
@@ -422,7 +422,7 @@ export async function resolveUserFont(
  *  determines whether the persistent cache eviction runs — only dir-mode
  *  sources populated the cache in the first place, so files-mode removals
  *  must skip eviction to avoid wrongly evicting a coincident dir source
- *  whose folder shares a parent with the removed file (Codex 3d751e26). */
+ *  whose folder shares a parent with the removed file. */
 export async function removeFontSource(sourceId: string, kind: "dir" | "files"): Promise<void> {
   await invoke("remove_font_source", { sourceId, kind });
 }
@@ -460,8 +460,7 @@ export interface FontCacheDriftReport {
 /** One folder that didn't make it through a clean rescan. `kind`
  *  distinguishes Phase-2 scan failure (couldn't read the folder) from
  *  Phase-3 apply failure (couldn't write the cache row). The modal
- *  renders both kinds in the same partial-success block (Round 3
- *  N-R3-2). */
+ *  renders both kinds in the same partial-success block. */
 export type FontCacheSkipKind = "scanFailed" | "applyFailed";
 
 export interface FontCacheSkippedFolder {
@@ -650,10 +649,9 @@ async function runStreamingScan(
 /** Result of `expand_dropped_paths`. `truncated` surfaces when the
  *  expansion stopped at the Rust-side `MAX_RESULT_FILES` cap (5000
  *  today) so the consumer can render a banner instead of silently
- *  presenting an incomplete list (Round 3 N-R3-19). `maxFiles` carries
- *  the cap value alongside so the consumer's truncation message stays
- *  in sync with the Rust source of truth without a TS-side mirrored
- *  constant (Round 11 W11.4c / R10 N-R10-028). */
+ *  presenting an incomplete list. `maxFiles` carries the cap value
+ *  alongside so the consumer's truncation message stays in sync with
+ *  the Rust source of truth without a TS-side mirrored constant. */
 export interface ExpandedPaths {
   files: string[];
   truncated: boolean;

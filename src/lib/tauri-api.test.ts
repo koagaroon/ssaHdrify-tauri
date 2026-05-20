@@ -279,12 +279,12 @@ describe("localized native file dialogs", () => {
     openMock.mockResolvedValue(["D:/Show.mkv", "D:/Show.ass"]);
     await pickRenameInputs(zh);
 
-    // Round 6 Wave 6.6 #26 — exact toHaveBeenCalledWith (was
-    // objectContaining + arrayContaining). Partial match would pass
-    // an extra unintended filter, missing filter order, or wrong
-    // extension list inside any filter; the other picker tests in
-    // this suite already use exact matching so the asymmetry was a
-    // coverage gap, not a deliberate looser contract. Filter shape
+    // Exact toHaveBeenCalledWith rather than objectContaining +
+    // arrayContaining: partial match would pass an extra unintended
+    // filter, missing filter order, or wrong extension list inside
+    // any filter; the other picker tests in this suite already use
+    // exact matching so partial here was a coverage gap, not a
+    // deliberate looser contract. Filter shape
     // tracks `videoAndSubtitleFilters` in tauri-api.ts — any change
     // there must update this fixture (the test pins both the
     // i18n-resolved names AND the per-filter extension set).
@@ -395,12 +395,12 @@ describe("runStreamingScan — async-after-resolve (A-bug-1 regression)", () => 
   });
 });
 
-describe("fileNameFromPath — edge case shapes (R16 W16.6 N-R16-16)", () => {
+describe("fileNameFromPath — edge case shapes", () => {
   it("returns the full path when the input has a trailing separator", () => {
     // `String.prototype.split` always returns a non-empty array;
-    // `pop()` returns `""` for trailing-separator input. Pre-W16.6
-    // the `?? path` fallback was unreachable (`""` is not nullish),
-    // so consumers received empty strings to interpolate into log
+    // `pop()` returns `""` for trailing-separator input. The earlier
+    // `?? path` fallback was unreachable (`""` is not nullish), so
+    // consumers received empty strings to interpolate into log
     // messages. Logical OR catches the empty-string case and falls
     // back to the input path — meaningful display in either edge.
     expect(fileNameFromPath("C:/Users/")).toBe("C:/Users/");

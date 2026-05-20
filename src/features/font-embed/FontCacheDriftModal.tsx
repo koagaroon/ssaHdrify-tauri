@@ -27,13 +27,13 @@ interface Props {
   /** Fires when Rescan completes successfully. Parent should re-run
    *  detect_drift and clear `drift` state. The modal stays mounted
    *  showing the "Rescanned N folders" success line until the user
-   *  dismisses (X / scrim / Use as-is) — Round 2 changed this from
-   *  the original auto-close so the result count is visible. */
+   *  dismisses (X / scrim / Use as-is) — auto-close was dropped so
+   *  the result count stays visible. */
   onRescanComplete: () => void;
   /** Fires when Clear completes successfully. Parent should re-run
    *  open_font_cache to refresh status. Modal stays open showing
    *  the "Font cache cleared" success line until user dismisses
-   *  (same Round 2 design change as onRescanComplete). */
+   *  (same as onRescanComplete). */
   onClearComplete: () => void;
 }
 
@@ -83,7 +83,7 @@ export default function FontCacheDriftModal({
   // freshly-synced `workingRef.current`. Reordering or extracting the
   // two effects across files would break the invariant silently (no
   // build error, just a stale-closure race when the user presses Esc
-  // mid-rescan) — Round 4 N-R4-08.
+  // mid-rescan).
   useEffect(() => {
     if (!open) return;
     const handler = (e: KeyboardEvent) => {
@@ -91,9 +91,9 @@ export default function FontCacheDriftModal({
       // Intercept Escape on every press while this modal is open.
       // When idle, close; when a rescan/clear is in flight, swallow
       // silently so a future global Esc handler (popover dismissal,
-      // etc.) can't mis-fire and break the working state (Round 2
-      // N-R2-15). The disabled close button at the top mirrors this
-      // — no path closes mid-op.
+      // etc.) can't mis-fire and break the working state. The
+      // disabled close button at the top mirrors this — no path
+      // closes mid-op.
       e.stopPropagation();
       if (workingRef.current === null) {
         onClose();
@@ -141,8 +141,8 @@ export default function FontCacheDriftModal({
       setSkippedFolders(result.skipped);
       onRescanComplete();
     } catch (e) {
-      // Round 7 Wave 7.1 BiDi parity sweep — Rust IPC errors can
-      // interpolate folder paths (P1b attacker-influenced content).
+      // BiDi parity — Rust IPC errors can interpolate folder paths
+      // (P1b attacker-influenced content).
       // sanitizeForDialog strips BiDi / zero-width controls so a
       // U+202E in a drifted folder path can't reverse the surrounding
       // error banner text.
@@ -162,7 +162,7 @@ export default function FontCacheDriftModal({
       setDoneMessage(t("font_cache_cleared"));
       onClearComplete();
     } catch (e) {
-      // Same Wave 7.1 reason as handleRescan above.
+      // Same BiDi reason as handleRescan above.
       setError(sanitizeError(e));
       setWorking(null);
     }
@@ -256,9 +256,9 @@ export default function FontCacheDriftModal({
                   <ul style={{ paddingLeft: "1rem", listStyle: "disc" }}>
                     {/* sanitizeForDialog scrubs U+202A-E / U+2066-9 / U+200E-F
                         BiDi-override + zero-width controls before render —
-                        same Trojan-Source class fixed for FontSourceModal in
-                        Round 1 (F3.A-R1-8), parallel pin for the drift modal.
-                        Folder paths come from the persistent gui_font_cache
+                        same Trojan-Source class as FontSourceModal, parallel
+                        pin for the drift modal. Folder paths come from
+                        the persistent gui_font_cache
                         which stores user-picked paths verbatim, so a fan-sub
                         pack folder with a BiDi name reaches React intact.
                         React doesn't render HTML but it DOES render BiDi

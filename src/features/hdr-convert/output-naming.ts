@@ -46,20 +46,19 @@ function stripVideoExtension(fileName: string): string {
  *  to empty when omitted. {video_name} requires `videoName`; {lang} prefers
  *  explicit `lang` over auto-extraction from the input filename.
  *
- *  Round 10 A-R10-008 (Defer P3 — trusted-by-caller contract):
- *  `options.lang` and `options.videoName` values are NOT re-validated
- *  through `extractLangFromBaseName`'s LANG_TAGS allow-list or through
- *  the illegal-char gate. The current production wiring passes
- *  3-argument-form only (no `options`), so the contract holds
- *  trivially today. If a future per-tab lang selector wires up these
- *  fields, the caller MUST either pre-validate via LANG_TAGS /
- *  `decomposeInputPath` / `ILLEGAL_FILENAME_CHARS` OR move the
- *  validation into this resolver. The post-`assertSafeOutputFilename`
- *  gate at the bottom of `resolveOutputPath` catches anything that
- *  produces an illegal filename downstream, but a hostile token
- *  could still produce a legal-looking filename that misroutes
- *  output. Defense-in-depth gap accepted under P3 (no current
- *  caller exposes this surface).
+ *  Trusted-by-caller contract: `options.lang` and `options.videoName`
+ *  values are NOT re-validated through `extractLangFromBaseName`'s
+ *  LANG_TAGS allow-list or through the illegal-char gate. The
+ *  current production wiring passes 3-argument-form only (no
+ *  `options`), so the contract holds trivially today. If a future
+ *  per-tab lang selector wires up these fields, the caller MUST
+ *  either pre-validate via LANG_TAGS / `decomposeInputPath` /
+ *  `ILLEGAL_FILENAME_CHARS` OR move the validation into this
+ *  resolver. The post-`assertSafeOutputFilename` gate at the bottom
+ *  of `resolveOutputPath` catches anything that produces an illegal
+ *  filename downstream, but a hostile token could still produce a
+ *  legal-looking filename that misroutes output. Defense-in-depth
+ *  gap accepted given no current caller exposes this surface.
  */
 export interface ResolveOptions {
   /** Filename (with or without extension) of the paired video. The basename

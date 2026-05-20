@@ -8,9 +8,9 @@
  * carried a fourth inline copy — a future ext-set change (`.av1`, `.heic`,
  * etc.) would have needed to land in four places.
  *
- * R2 N-R2-2 / N-R2-3: consolidated. The previous "two sides is small
- * enough" comment in BatchRename.tsx assumed N=2; the CLI engine made it
- * N=3 + picker = N=4 — past the threshold where the shared module pays
+ * Consolidated here because the previous "two sides is small enough"
+ * comment in BatchRename.tsx assumed N=2; the CLI engine made it N=3
+ * + picker = N=4 — past the threshold where the shared module pays
  * for its import cost.
  *
  * Categories rationale:
@@ -46,14 +46,14 @@ export const VIDEO_EXTS: ReadonlySet<string> = new Set([
   "rmvb",
 ]);
 
-// dropped `sbv` (SubViewer) and `lrc` (LRC lyrics) —
+// `sbv` (SubViewer) and `lrc` (LRC lyrics) are intentionally omitted —
 // `subtitle-parser.ts::detectFormat` only recognizes `ass | ssa | srt |
 // sub | vtt`, so the previous superset let .sbv/.lrc files through the
 // TimingShift folder-drop filter (which uses `categorize(name) ===
 // "subtitle"`) only to fail with a confusing "Could not detect subtitle
 // format" inside the parser. The two sets disagreed on "is this a
-// subtitle file" — same Pattern 1 / regex-pair coherence family as
-// R6 W1. ssaHdrify's target fan-sub workflow doesn't touch .sbv or
+// subtitle file" — same Pattern 1 / regex-pair coherence family.
+// ssaHdrify's target fan-sub workflow doesn't touch .sbv or
 // .lrc (SubViewer is a legacy format mostly seen on older platforms;
 // LRC is karaoke-style lyrics, not subtitles), so the cleanest fix is
 // to narrow the SUBTITLE_EXTS set to what the parser actually handles.

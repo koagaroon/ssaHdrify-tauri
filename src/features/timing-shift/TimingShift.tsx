@@ -477,10 +477,9 @@ export default function TimingShift() {
           // Defensive fallback: see HdrConvert's matching site —
           // `fileName` must remain bound to something usable across the
           // entire iteration so the catch block can attribute errors
-          // even if a future `fileNameFromPath` refactor starts throwing
-          // (Round 1 F2.N-R1-1).
+          // even if a future `fileNameFromPath` refactor starts throwing.
           //
-          // Wave 7.1 BiDi parity: same per-iteration sanitization as
+          // BiDi parity: same per-iteration sanitization as
           // HdrConvert / FontEmbed — every addLog interpolating fileName
           // gets BiDi-scrubbed display text from a single sanitize-at-
           // source.
@@ -528,7 +527,7 @@ export default function TimingShift() {
 
             // surface oversized-text drop
             // count to close the no-silent-action gap (parity with
-            // HdrConvert's R10 N-R10-032 path). All four parsers push
+            // HdrConvert). All four parsers push
             // skipped placeholders for entries exceeding
             // MAX_CAPTION_TEXT_LEN; builders filter them out so disk
             // output stays clean, but without this log the user has no
@@ -540,9 +539,8 @@ export default function TimingShift() {
             if (abortRef.current?.signal.aborted) break;
 
             await writeText(outputPath, result.content);
-            // R16 W16.5 (N-R16-25, Pattern 1 sibling parity with
-            // HdrConvert + FontEmbed + BatchRename). See N-R16-24 in
-            // HdrConvert for rationale.
+            // Pattern 1 sibling parity with HdrConvert + FontEmbed +
+            // BatchRename. See HdrConvert for rationale.
             const outName = sanitizeForDialog(fileNameFromPath(outputPath));
             addLog(t("msg_saved", outName, result.captionCount), "success");
             successCount++;
@@ -786,12 +784,12 @@ export default function TimingShift() {
           >
             {t("offset_label")}
           </label>
-          {/* Round 8 Wave 8.6 — closes N-R5-FEFEAT-24 by migrating to the
-              shared NumberInput. The string-shadow refactor (offsetText)
-              is in place at the top of this component, so this matches
-              HdrConvert's clear-then-retype semantics and inherits the
-              invalid-border feedback for out-of-range typing instead of
-              silently clamping in `effectiveOffsetMs`. */}
+          {/* Migrated to the shared NumberInput. The string-shadow
+              refactor (offsetText) is in place at the top of this
+              component, so this matches HdrConvert's clear-then-retype
+              semantics and inherits the invalid-border feedback for
+              out-of-range typing instead of silently clamping in
+              `effectiveOffsetMs`. */}
           <NumberInput
             id="timing-offset-input"
             value={offsetText}
@@ -824,11 +822,11 @@ export default function TimingShift() {
 
       {/* Direction picker — two big buttons with arrow glyphs */}
       <div className="dir-picker" role="radiogroup" aria-label={t("offset_label")}>
-        {/* Round 6 Wave 6.5 #23: role="radio" elements use aria-checked
-            per the ARIA spec; aria-pressed is for role="button" toggles.
-            Carrying both confused screen readers (some read "pressed"
-            and "checked" twice for the same button); dropping
-            aria-pressed leaves the spec-canonical attribute alone. */}
+        {/* role="radio" elements use aria-checked per the ARIA spec;
+            aria-pressed is for role="button" toggles. Carrying both
+            confused screen readers (some read "pressed" and "checked"
+            twice for the same button); dropping aria-pressed leaves
+            the spec-canonical attribute alone. */}
         <button
           type="button"
           className="dir-btn"
@@ -858,11 +856,10 @@ export default function TimingShift() {
       </div>
 
       {/* The -0.25rem / -0.5rem negative marginTop pulls these hint
-          lines tighter under their controls (N-R5-FEFEAT-28). Negative
-          margins are usually a footgun; pinned here as deliberate
-          density tuning, not an oversight. Switch to a parent `gap`
-          adjustment if the surrounding flex container gains explicit
-          gap control later. */}
+          lines tighter under their controls. Negative margins are
+          usually a footgun; pinned here as deliberate density tuning,
+          not an oversight. Switch to a parent `gap` adjustment if the
+          surrounding flex container gains explicit gap control later. */}
       <p className="text-xs" style={{ color: "var(--text-muted)", marginTop: "-0.25rem" }}>
         {t("offset_hint")}
       </p>

@@ -38,9 +38,9 @@ describe("assertSafeOutputFilename", () => {
   });
 
   it("rejects C1 controls (U+0080–U+009F) — Round 8 A-R8-N4-4 parity with Rust", () => {
-    // Pre-Round-8 ILLEGAL_FILENAME_CHARS covered C0 + DEL only (Cc minus
-    // C1). Rust's `is_control()` matches the full Cc category; expanding
-    // `\x7f-\x9f` closes the TS↔Rust gap.
+    // An earlier ILLEGAL_FILENAME_CHARS covered C0 + DEL only (Cc
+    // minus C1). Rust's `is_control()` matches the full Cc category;
+    // expanding `\x7f-\x9f` closes the TS↔Rust gap.
     expect(() => assertSafeOutputFilename("x\x80y.ass")).toThrow(/illegal/);
     expect(() => assertSafeOutputFilename("x\x85y.ass")).toThrow(/illegal/); // NEL
     expect(() => assertSafeOutputFilename("x\x9fy.ass")).toThrow(/illegal/);
@@ -193,7 +193,7 @@ describe("decomposeInputPath", () => {
   });
 
   it("rejects C1 controls in the path (Round 8 A-R8-N4-4)", () => {
-    // Same gap as in assertSafeOutputFilename: pre-Round-8 the regex
+    // Same gap as in assertSafeOutputFilename: an earlier regex
     // covered C0 + DEL only. C1 (U+0080–U+009F) now rejects too,
     // matching Rust's `is_control()` Cc coverage.
     expect(() => decomposeInputPath("C:\\subs\\evil\x80.ass")).toThrow(/control characters/);
@@ -290,10 +290,10 @@ describe("assertSafeOutputPath", () => {
     expect(() => assertSafeOutputPath(long, inputBackslash)).toThrow(/too long/);
   });
 
-  // at-limit / over-limit pair for the
-  // 259 cap. The pre-R11 test above only had over-limit coverage; a
-  // regression that hard-coded 258 (or any lower value) wouldn't trip
-  // the >300 test. Pair both sides to pin the boundary.
+  // At-limit / over-limit pair for the 259 cap. An earlier version of
+  // the test above only had over-limit coverage; a regression that
+  // hard-coded 258 (or any lower value) wouldn't trip the >300 test.
+  // Pair both sides to pin the boundary.
   it("accepts a path exactly at the 259-char practical MAX_PATH limit", () => {
     // `C:/subs/` is 8 chars, ".ass" is 4 → fill the middle to total 259.
     const stem = "a".repeat(259 - "C:/subs/".length - ".ass".length);
@@ -315,10 +315,10 @@ describe("assertSafeOutputPath", () => {
     expect(() => assertSafeOutputPath(longButOk, longInput)).not.toThrow();
   });
 
-  // at-limit / over-limit pair for the
-  // long-local 32766 cap. Pre-R11 only the 500-char under-limit form
-  // was exercised; a regression that dropped the cap to e.g. 1024
-  // would have left both green.
+  // At-limit / over-limit pair for the long-local 32766 cap. An
+  // earlier version only exercised the 500-char under-limit form;
+  // a regression that dropped the cap to e.g. 1024 would have left
+  // both green.
   it("accepts a long-local path exactly at the 32766-char limit", () => {
     const longInput = "\\\\?\\C:\\subs\\episode01.ass";
     const prefix = "//?/C:/subs/";
@@ -352,8 +352,8 @@ describe("assertSafeOutputPath", () => {
     // portion matches the input's case exactly. Self-overwrite check
     // is case-insensitive, so the upper-case basename collides.
     //
-    // (test portability): `pathsEqualOnFs`'s
-    // case-fold branch is gated on `isCaseInsensitiveFs()`, which
+    // Test portability: `pathsEqualOnFs`'s case-fold branch is gated
+    // on `isCaseInsensitiveFs()`, which
     // returns true only on win32 and darwin. On Linux CI the test
     // would fail because the case-fold path doesn't trigger. Force
     // `__ssahdrifyPlatform = "win32"` via the same injection
@@ -382,10 +382,9 @@ describe("assertSafeOutputPath", () => {
 describe("decomposeInputPath — Round 5 BiDi / zero-width hardening", () => {
   it("rejects paths containing BiDi RLO (Trojan-Source class)", () => {
     // EP01<U+202E>cssa.ass renders as EP01ssa.shifted.ass after the
-    // RLO flip but lands on disk verbatim. Pre-Wave-5.1 the helper's
+    // RLO flip but lands on disk verbatim. An earlier helper's
     // control-char regex was C0/DEL only and let BiDi through; the
-    // shared unicode-controls set now catches it (N-R5-FELIB-06 +
-    // A-R5-FELIB-01).
+    // shared unicode-controls set now catches it.
     expect(() => decomposeInputPath("C:/subs/EP01‮cssa.ass")).toThrow(/invisible|bidi/i);
   });
 
@@ -446,9 +445,9 @@ describe("substituteTemplate — Codex 08c3a51c (identifier cap + strict)", () =
   it("over-cap identifiers (33 chars) fall through as literal text", () => {
     // Boundary-pin: 33 chars exceeds the lexer's {0,31} bound. The
     // sequence is not matched as a token → stays as `{aaa...}` literal
-    // in the output. Closes Codex 08c3a51c: pre-fix, the unbounded
-    // lexer silently substituted "" here, bypassing the chain validator
-    // and producing a hidden filename.
+    // in the output. An earlier unbounded lexer silently substituted
+    // "" here, bypassing the chain validator and producing a hidden
+    // filename.
     const longName = "a".repeat(33);
     const tpl = `{${longName}}.ass`;
     expect(substituteTemplate(tpl, { name: "show" })).toBe(`{${longName}}.ass`);
@@ -462,8 +461,8 @@ describe("substituteTemplate — Codex 08c3a51c (identifier cap + strict)", () =
   });
 
   it("preserves user-content `..` while collapsing template-literal `..` (regression)", () => {
-    // Pre-existing Round 1.5 invariant — pin alongside the new cap
-    // behavior so future refactors don't regress either dimension.
+    // Pre-existing invariant — pin alongside the new cap behavior so
+    // future refactors don't regress either dimension.
     expect(substituteTemplate("{name}..shifted{ext}", { name: "Show", ext: ".ass" })).toBe(
       "Show.shifted.ass"
     );

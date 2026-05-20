@@ -37,7 +37,7 @@ export default function ThemeProvider({ children }: { children: ReactNode }) {
   // Stable setMode identity so the context value's reference is only
   // recreated when mode / appearance change (matched in the useMemo
   // below). Sibling providers (I18nProvider, StatusProvider) use the
-  // same pattern; ThemeProvider was the outlier (Round 1 F1.N-R1-16).
+  // same pattern.
   const setMode = useCallback((next: ThemeMode) => {
     setModeState(next);
     try {

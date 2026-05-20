@@ -389,7 +389,7 @@ fn scan_font_files_accepts_max_input_paths_boundary() {
     assert_eq!(done.reason, REASON_NATURAL);
 }
 
-// Round 1 A4.N-R1-7: the three rejection paths are distinct contracts.
+// The three rejection paths are distinct contracts.
 // Splitting per case + pinning the message lets a future refactor that
 // accidentally collapses them (e.g. early-bailing all three to
 // "invalid directory") get caught by name in the failing case rather

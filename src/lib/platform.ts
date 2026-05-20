@@ -9,8 +9,7 @@
  *    Rust shell injects this object before the bundled engine
  *    executes. See `src-tauri/src/bin/cli/engine.rs::CliEngine::new`.
  *    Without this tier the CLI falls through to (3)'s POSIX default
- *    even on Windows, breaking `C:\…` paths and case-only-rename safety
- *    (Codex 47c58c78).
+ *    even on Windows, breaking `C:\…` paths and case-only-rename safety.
  * 2. **Node `process.platform`** — Vitest test environment.
  * 3. **Browser `navigator.userAgent`** — Tauri WebView2 (chromium-based,
  *    reliably reports the host OS).
@@ -24,15 +23,14 @@
  *
  * - `isWindowsRuntime` — gates the "backslash is a path separator"
  *   heuristic. On Windows it is; on POSIX `\` is a valid filename
- *   character and treating it as a separator misroutes outputs
- *   (Codex edb0e74f / 8850ede7).
+ *   character and treating it as a separator misroutes outputs.
  *
  * - `isCaseInsensitiveFs` — gates the duplicate-output-key lowercasing
  *   that catches case-only collisions (`Episode.ass` vs `episode.ass`).
  *   True on Windows (NTFS) and macOS (APFS / HFS+ both default to
  *   case-insensitive); false on Linux ext4 / btrfs / xfs which are
- *   case-sensitive (Codex dd2d9554). Linux users running macOS-formatted
- *   external drives are a <1% edge that has to opt in another way.
+ *   case-sensitive. Linux users running macOS-formatted external
+ *   drives are a <1% edge that has to opt in another way.
  */
 
 interface InjectedPlatform {

@@ -45,8 +45,9 @@ export interface StatusContextValue {
 // here would only prevent in-place mutation of the *template* (which
 // no callsite does). The per-tab entries below DO need their freeze
 // (they're returned through `DEFAULT_STATUSES` and any consumer could
-// mutate them in-place without it). Pre-W16.6 the redundant freeze
-// + `as Status` cast read like a defense but had zero effect.
+// mutate them in-place without it). The previously-applied freeze
+// + `as Status` cast on this template read like a defense but had
+// zero effect.
 const DEFAULT_STATUS: Status = { kind: "idle", message: "" };
 
 // Per-tab literals — frozen individually so in-place mutation of any slot

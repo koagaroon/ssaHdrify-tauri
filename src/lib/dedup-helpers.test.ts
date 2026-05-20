@@ -21,10 +21,10 @@ describe("sanitizeForDialog", () => {
   });
 
   it("strips C0 + DEL + C1 control range (Round 10 N-R10-026 widening, was Round 8 A-R8-A4-24 \\r\\n-only)", () => {
-    // Round 8 A-R8-A4-24 scrubbed only \n / \r; Round 10 N-R10-026
-    // widened the contract to the full C0 (\x00-\x1f) + DEL (\x7f) +
-    // C1 (\x80-\x9f) range so the test must exercise the wider span,
-    // not just the original \r\n smuggle.
+    // An earlier version scrubbed only \n / \r; the current contract
+    // widens to the full C0 (\x00-\x1f) + DEL (\x7f) + C1 (\x80-\x9f)
+    // range, so the test must exercise the wider span, not just the
+    // original \r\n smuggle.
     //
     // A fan-sub filename with an embedded newline can fake additional
     // confirm lines in the OS-native dialog body (\r\n smuggle, the
@@ -66,16 +66,16 @@ describe("sanitizeError", () => {
   });
 
   it("scrubs BiDi codepoints on non-Error throws too (Round 10 N-R10-021)", () => {
-    // Pre-R10 the non-Error tests only covered ASCII payloads
-    // ("bare string\n.danger", 42), so a future refactor that
-    // bypassed sanitizeForDialog on the non-Error branch (e.g.,
+    // An earlier version's non-Error tests only covered ASCII
+    // payloads ("bare string\n.danger", 42), so a future refactor
+    // that bypassed sanitizeForDialog on the non-Error branch (e.g.,
     // `return e instanceof Error ? sanitizeForDialog(e.message) :
     // String(e)`) would have passed every assertion. The single
     // BiDi-bearing string-throw pins the contract that both branches
     // go through the scrub.
     expect(sanitizeError("evil\u{202E}txt")).toBe("eviltxt");
     // C0 control chars on non-Error throw — sanitizeForDialog's
-    // R10-widened scrub catches these too.
+    // widened scrub catches these too.
     expect(sanitizeError("a\x00b\tc")).toBe("abc");
   });
 });

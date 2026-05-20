@@ -71,8 +71,8 @@ interface TransformResult {
    * placeholders during this step's processing. Aggregated by
    * `runChain` into `ChainResult.skippedCount` for the Rust shell
    * to surface via `emit_oversized_skipped_warning` (stderr +
-   * FileReport.warnings). R13 N-R13-1 — was previously a note
-   * suffix only, which the Rust shell didn't parse.
+   * FileReport.warnings). Previously a note suffix only, which the
+   * Rust shell didn't parse.
    */
   skippedCount?: number;
 }
@@ -145,7 +145,7 @@ function shiftTransform(ctx: TransformContext, params: ShiftStepParams): Transfo
   // into ChainResult.skippedCount; the Rust shell reads that field
   // and routes a stderr warning + FileReport.warnings entry via
   // emit_oversized_skipped_warning, matching the standalone HDR /
-  // Shift CLI paths. R12 W12.2's note-suffix approach was opaque to
+  // Shift CLI paths. The earlier note-suffix approach was opaque to
   // the Rust shell (notes are unparsed strings) and only printed
   // under --verbose, on stdout — neither surface matched the
   // standalone-path warning behavior.
@@ -162,7 +162,7 @@ function embedTransform(ctx: TransformContext, params: EmbedStepParams): Transfo
   // stay sync (matching every other engine call boundary) without
   // needing async TS→Rust callbacks mid-chain.
   //
-  // R1 N-R1-12 / A-R1-4: per-subset byte-length defense lives at the
+  // Per-subset byte-length defense lives at the
   // Rust shell (`process_one_chain_input` enforces
   // `MAX_CHAIN_SUBSET_TOTAL_BYTES = 200 MB` on the raw bytes before
   // base64 + serde_json marshal; `MAX_FONT_DATA_SIZE = 50 MB` bounds
@@ -227,19 +227,18 @@ function decodeBase64(b64: string, name: string): Uint8Array {
   try {
     return Base64.toUint8Array(b64);
   } catch (e) {
-    // `message` is BiDi-scrubbed via sanitizeError (Round 8 N2 catch-arm
+    // `message` is BiDi-scrubbed via sanitizeError (catch-arm
     // sweep): even though Base64.toUint8Array's error message is library-
     // controlled today, the message ends up in a re-thrown Error that
     // surfaces in the chain log panel. Scrubbing at the extraction site
     // keeps the catch-arm contract uniform with the rest of the project.
     //
     // wrap `name` in stripUnicodeControls
-    // too. The N-R5-FECHAIN-17 analysis (buildFontFileName already
-    // strips everything but [a-z0-9_-]) is correct for the current
-    // call path, but the same "future refactor lets the original name
-    // flow through unsanitized" caveat was already documented in the
-    // prior comment — the cheap wrap closes the door instead of
-    // leaving a "if you ever do X, do Y" reminder.
+    // too. The buildFontFileName helper already strips everything but
+    // [a-z0-9_-] on the current call path, but a future refactor that
+    // lets the original name flow through unsanitized would re-open
+    // the leak — the cheap wrap closes the door instead of leaving a
+    // "if you ever do X, do Y" reminder.
     const message = sanitizeError(e);
     const safeName = stripUnicodeControls(name);
     throw new Error(`base64 decode failed for font subset '${safeName}': ${message}`, {
@@ -284,9 +283,9 @@ export function runChain(request: ChainRunRequest): ChainResult {
   //
   // route through `assertAssShape` so this
   // preflight shares ONE source with `embedFonts` + `insertFontsSection`
-  // (the [Script Info] regex + byte cap + line-count probe). Pre-W16.6
+  // (the [Script Info] regex + byte cap + line-count probe). Previously
   // the regex was duplicated inline; a tightening on the helper side
-  // (e.g., the W16.1 line-count addition) wouldn't have propagated
+  // (e.g., a line-count addition) wouldn't have propagated
   // here. Catch + re-throw with chain-flavored wording so the user
   // sees "Chain includes an embed step but…" rather than the
   // helper's "Cannot embed: input ASS has no [Script Info]" — same
@@ -337,20 +336,19 @@ export function runChain(request: ChainRunRequest): ChainResult {
       // above guarantees the correspondence by construction. The
       // runtime correctness is unchanged; this is a TS limitation.
       //
-      // R16 W16.6 / R17 W17.3 (A-R17-37, trust boundary):
-      // the cast erases step-shape info, so a malformed `step.params`
-      // whose runtime shape doesn't match its declared `step.kind`
-      // (e.g., `params.brightness` as a NaN string for an "hdr" step)
-      // slips past here. Downstream field accesses produce
+      // Trust boundary: the cast erases step-shape info, so a malformed
+      // `step.params` whose runtime shape doesn't match its declared
+      // `step.kind` (e.g., `params.brightness` as a NaN string for an
+      // "hdr" step) slips past here. Downstream field accesses produce
       // undefined / NaN rather than a clear "params shape mismatch"
       // error.
       //
-      // **Trust contract — corrected in R17**: the W16.6 comment said
-      // "Rust shell deserializes via serde, rejects shape mismatches
-      // at deserialize time." That mechanism would be the right
-      // defense IF the Rust side had `#[derive(Deserialize)]` on a
-      // `ChainStep` enum with `deny_unknown_fields`. It doesn't — the
-      // actual flow is the reverse: the Rust shell *constructs* the
+      // **Trust contract**: a tempting defense would be "Rust shell
+      // deserializes via serde, rejects shape mismatches at deserialize
+      // time." That mechanism would be the right defense IF the Rust
+      // side had `#[derive(Deserialize)]` on a `ChainStep` enum with
+      // `deny_unknown_fields`. It doesn't — the actual flow is the
+      // reverse: the Rust shell *constructs* the
       // JSON wire form from `clap`-parsed typed `ParsedStep` variants
       // (`HdrArgs` / `ShiftArgs` / `EmbedArgs`) via per-Args
       // `to_chain_step` (`bin/cli/main.rs`). Typed-construction is
@@ -369,11 +367,11 @@ export function runChain(request: ChainRunRequest): ChainResult {
       // reporting can show "step 2 (shift) failed: ..." rather than
       // a bare engine error. `cause` preserves the original error
       // for downstream debugging without losing the annotated
-      // user-facing message. Round 9 N-R9-N1-1 — `message` goes
-      // through sanitizeError (Pattern 1 callsite census miss from
-      // Wave 8.1): the re-thrown error flows to the chain log panel
-      // where any BiDi / line-break smuggling from a P1b transform-
-      // internal error would otherwise reach the UI un-scrubbed.
+      // user-facing message. `message` goes through sanitizeError
+      // (Pattern 1 callsite census miss): the re-thrown error flows
+      // to the chain log panel where any BiDi / line-break smuggling
+      // from a P1b transform-internal error would otherwise reach the
+      // UI un-scrubbed.
       const message = sanitizeError(err);
       throw new Error(`step ${i + 1} (${step.kind}) failed: ${message}`, {
         cause: err,
@@ -419,7 +417,7 @@ export function resolveChainOutputPath(inputPath: string, template: string): str
   // widen the token-name regex to include
   // uppercase + underscore-only starts so `{Format}` / `{NAME}` /
   // `{Eotf}` hit the unknown-token error path here rather than slipping
-  // past silently. Pre-R11 the lowercase-only `[a-z_][a-z0-9_]*`
+  // past silently. Previously the lowercase-only `[a-z_][a-z0-9_]*`
   // refused to even match capitalized tokens; substituteTemplate
   // downstream then either left them as literal text or matched only
   // the lowercase variant, with no signal that the capitalized form

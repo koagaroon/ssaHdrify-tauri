@@ -45,10 +45,10 @@ pub fn run() {
             // env-var manipulation; see fonts::init_system_dirs.
             fonts::init_system_dirs();
 
-            // Round 11 W11.4b : unify the GUI's data
-            // directory with the CLI's so both binaries' state lives
-            // under a single `ssahdrify` parent dir on disk. Pre-R11
-            // the GUI used Tauri's `app_data_dir()` (bundle-identifier
+            // Unify the GUI's data directory with the CLI's so both
+            // binaries' state lives under a single `ssahdrify` parent
+            // dir on disk. Previously the GUI used Tauri's
+            // `app_data_dir()` (bundle-identifier
             // path) while the CLI used `platform_data_dir()/ssahdrify`,
             // splitting one app's state across two folders on Windows.
             // The legacy Tauri-given dir is computed alongside so the

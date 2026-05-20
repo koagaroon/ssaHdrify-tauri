@@ -102,12 +102,12 @@ function parseSrtTime(ts: string): number {
 /** Parse VTT timestamps — supports both "HH:MM:SS.mmm" and "MM:SS.mmm" (no hours) */
 function parseVttTime(ts: string): number {
   // HH:MM:SS.mmm — WebVTT spec mandates ≥2 hour digits, matching the
-  // parseVtt timingRe below at line ~332 (`\d{2,12}`). R7 W1 N-R7-3:
-  // hours bounded to `\d{2,12}` for parity with the only production
-  // caller (parseVtt). The previous `\d{1,12}` admitted a 1-digit hour
-  // shape the caller's timingRe would never produce, leaving a dead
-  // branch in the helper. Both the helper and the timingRe agree on
-  // the same shape now.
+  // parseVtt timingRe below at line ~332 (`\d{2,12}`). Hours are
+  // bounded to `\d{2,12}` for parity with the only production caller
+  // (parseVtt). A `\d{1,12}` form would admit a 1-digit hour shape
+  // the caller's timingRe would never produce, leaving a dead branch
+  // in the helper. Both the helper and the timingRe agree on the
+  // same shape.
   const full = ts.match(/^(\d{2,12}):(\d{2}):(\d{2})\.(\d{3})$/);
   if (full) {
     return (
@@ -144,8 +144,8 @@ function parseAssTime(ts: string): number {
  *
  * NaN / Infinity collapse to 0; negatives clamp to 0. Without this,
  * a malformed upstream caption (NaN start / end) would produce a
- * literal "NaN:NaN:NaN.NaN" timestamp and corrupt the whole file. R2
- * N-R2-14: extracted from formatSrtTime / formatAssTime / srt-converter
+ * literal "NaN:NaN:NaN.NaN" timestamp and corrupt the whole file.
+ * Extracted from formatSrtTime / formatAssTime / srt-converter
  * msToAssTime where three copies were drifting.
  */
 export function safeMs(ms: number): number {
@@ -209,16 +209,16 @@ export function parseDisplayTime(ts: string): number | null {
 // Rust side as a unified "defensive ceiling."
 export const MAX_PARSED_ENTRIES = 500_000;
 
-// raw-block cap restored as
-// defense-in-depth alongside the per-caption cap. W6.5 #18 removed
-// the raw block cap on the rationale that "ASS/SUB count entries
-// not blocks", but `splitCueBlocks` materializes ALL raw blocks
-// before the parse loop and the per-caption cap only fires AFTER
-// `if (timingIdx === -1) continue` skips junk — so a 50 MB SRT/VTT
-// with millions of NOTE-like cue blocks could force the parser to
-// scan every one of them without ever incrementing the caption
-// counter (~7s + ~774 MB RSS in Codex's PoC; constrained-heap V8
-// OOM with `--max-old-space-size=128` and a 24 MB payload). The
+// Raw-block cap as defense-in-depth alongside the per-caption cap.
+// An earlier refactor removed the raw block cap on the rationale that
+// "ASS/SUB count entries not blocks", but `splitCueBlocks`
+// materializes ALL raw blocks before the parse loop and the per-
+// caption cap only fires AFTER `if (timingIdx === -1) continue`
+// skips junk — so a 50 MB SRT/VTT with millions of NOTE-like cue
+// blocks could force the parser to scan every one of them without
+// ever incrementing the caption counter (~7s + ~774 MB RSS in the
+// PoC; constrained-heap V8 OOM with `--max-old-space-size=128` and
+// a 24 MB payload). The
 // 2M ceiling here is 4× MAX_PARSED_ENTRIES, leaving ample headroom
 // for legitimate files with stray blank-line padding while keeping
 // pathological junk-flood input bounded. Per-caption cap below
@@ -236,10 +236,10 @@ function parseSrt(content: string): Caption[] {
   const captions: Caption[] = [];
   // Normalize first so mixed CRLF/LF files still split into cue blocks.
   const blocks = splitCueBlocks(content);
-  // W6.8 raw-block ceiling — see MAX_RAW_BLOCKS docblock for the
-  // Codex Finding 1 rationale (junk-flood DoS bypass of the
-  // per-caption cap). Hard ceiling on iteration cost; the
-  // per-caption cap below owns the semantic limit.
+  // Raw-block ceiling — see MAX_RAW_BLOCKS docblock for the junk-
+  // flood DoS rationale (bypass of the per-caption cap via skipped
+  // junk blocks). Hard ceiling on iteration cost; the per-caption
+  // cap below owns the semantic limit.
   if (blocks.length > MAX_RAW_BLOCKS) {
     throw new Error(
       `Too many subtitle blocks: ${blocks.length} (max ${MAX_RAW_BLOCKS}). ` +
@@ -253,9 +253,9 @@ function parseSrt(content: string): Caption[] {
   // parseInt to Infinity.
   const timingRe = /^(\d{1,12}:\d{2}:\d{2},\d{3})\s*-->\s*(\d{1,12}:\d{2}:\d{2},\d{3})/;
 
-  // per-caption cap below guards the
-  // semantic ceiling (`MAX_PARSED_ENTRIES`); the W6.8 raw-block cap
-  // above is the iteration-cost guard.
+  // The per-caption cap below guards the semantic ceiling
+  // (`MAX_PARSED_ENTRIES`); the raw-block cap above is the
+  // iteration-cost guard.
   for (const block of blocks) {
     const lines = block.replace(/^\n/, "").split("\n");
     // Find the timing line (skip the numeric index line)
@@ -279,15 +279,14 @@ function parseSrt(content: string): Caption[] {
       .slice(timingIdx + 1)
       .join("\n")
       .trim();
-    // oversized text now pushes a skipped
-    // placeholder rather than silently dropping the entry. Feature
-    // layers (HdrConvert / TimingShift) read
-    // `captions.filter(c => c.skipped).length` and surface a count via
-    // msg_oversized_skipped — closes the no-silent-action gap (the
-    // pre-R11 `continue` lost a 64 KB+ caption without any user signal).
-    // The placeholder counts toward MAX_PARSED_ENTRIES (same as
-    // parseAss / parseSub R10 N-R10-006), and buildSrt filters them
-    // out before serialization so disk output is unchanged. Iteration
+    // Oversized text pushes a skipped placeholder rather than silently
+    // dropping the entry. Feature layers (HdrConvert / TimingShift)
+    // read `captions.filter(c => c.skipped).length` and surface a
+    // count via msg_oversized_skipped — closes the no-silent-action
+    // gap (an earlier `continue` lost a 64 KB+ caption without any
+    // user signal). The placeholder counts toward MAX_PARSED_ENTRIES
+    // (same as parseAss / parseSub), and buildSrt filters them out
+    // before serialization so disk output is unchanged. Iteration
     // cost is still bounded by MAX_RAW_BLOCKS (above).
     if (text.length > MAX_CAPTION_TEXT_LEN) {
       captions.push({
@@ -331,7 +330,7 @@ function parseVtt(content: string): Caption[] {
   const body = normalizeLineEndings(content).replace(/^WEBVTT[^\n]*\n/, "");
   // Normalize first so mixed CRLF/LF files still split into cue blocks.
   const blocks = splitCueBlocks(body);
-  // W6.8 raw-block ceiling — same Codex Finding 1 rationale as parseSrt.
+  // Raw-block ceiling — same junk-flood rationale as parseSrt.
   if (blocks.length > MAX_RAW_BLOCKS) {
     throw new Error(
       `Too many subtitle blocks: ${blocks.length} (max ${MAX_RAW_BLOCKS}). ` +
@@ -339,10 +338,10 @@ function parseVtt(content: string): Caption[] {
     );
   }
   // VTT timing: supports both HH:MM:SS.mmm and MM:SS.mmm.
-  // Hour group bounded `\d{2,12}` (Round 8 A-R8-A1-2 / N-R8-N1-1) for
-  // parity with parseSrt + parseAss — the unbounded `\d{2,}` form let a
-  // crafted single-line input scan O(N) before silent-fallback to zero,
-  // and diverged from the rest of the parser family. 12 digits caps the
+  // Hour group bounded `\d{2,12}` for parity with parseSrt + parseAss
+  // — an unbounded `\d{2,}` form let a crafted single-line input scan
+  // O(N) before silent-fallback to zero, and diverged from the rest
+  // of the parser family. 12 digits caps the
   // hours at ~1e12, well past any plausible timecode and aligned with
   // ASS DIALOGUE_PATTERN's `\d{1,12}` bound.
   const timingRe =
@@ -426,8 +425,8 @@ function buildVtt(captions: Caption[], header: string = "WEBVTT"): string {
 // engine consume any number of newlines + blank-line whitespace at each line
 // anchor before failing to match `Dialogue:` and backtracking — a crafted
 // file like `[Script Info]\n` + thousands of empty lines without any
-// Dialogue line drove O(n^2) regex work (Codex 3e8a86d0 — ReDoS via
-// quadratic backtracking on attacker-controlled subtitle inputs). The
+// Dialogue line drove O(n^2) regex work — ReDoS via quadratic
+// backtracking on attacker-controlled subtitle inputs. The
 // captured whitespace is preserved via the prefix group so buildAss round-
 // trips it exactly. A factory (not a shared instance) is used so each call
 // gets a fresh `lastIndex` — guarding against pollution if a previous
@@ -478,8 +477,7 @@ function parseAss(content: string): Caption[] {
       // silently dropped this entry the index would drift and every
       // subsequent Dialogue line would receive the wrong timestamps.
       //
-      // R16 W16.6 / R17 W17.6 (N-R17-46, retention WHY
-      // tightening): the upstream 50 MB file-read cap (Rust IPC,
+      // Retention: the upstream 50 MB file-read cap (Rust IPC,
       // `MAX_TEXT_SIZE` in encoding.rs) bounds total retained raw
       // size; clearing `text` to `""` keeps the parsed-content path
       // clean so downstream feature layers count `c.skipped` rather
@@ -577,12 +575,12 @@ const DEFAULT_FPS = 23.976;
  * either parser noise (a crafted MicroDVD `{1}{1}<fps>` line) or
  * hostile input — fall back to DEFAULT_FPS.
  *
- * Round 11 W11.3 (M4 / N3-R11-04): shared helper consumed by both
- * parseSub and buildSub. Pre-R11 parseSub clamped to [1, 1000] while
- * buildSub only rejected `<= 0`; a round-trip with parser-supplied
- * fps=50 + caller-passed fps=2000 to buildSub silently drifted
- * timestamps. Single source of validation keeps both halves of the
- * round-trip aligned.
+ * Shared helper consumed by both parseSub and buildSub. An earlier
+ * version had parseSub clamp to [1, 1000] while buildSub only
+ * rejected `<= 0`; a round-trip with parser-supplied fps=50 +
+ * caller-passed fps=2000 to buildSub silently drifted timestamps.
+ * Single source of validation keeps both halves of the round-trip
+ * aligned.
  */
 function clampFps(fps: number | undefined): number {
   if (fps === undefined) return DEFAULT_FPS;
@@ -601,26 +599,25 @@ function parseSub(content: string, fps: number = DEFAULT_FPS): Caption[] {
   let match;
   let count = 0;
   while ((match = subLineRe.exec(content)) !== null) {
-    // : per-caption count cap
-    // moved BEFORE the push so the throw fires WHEN refusing the
-    // entry, matching the SRT/VTT/ASS pattern. Pre-W7.5 the cap was
-    // `count += 1; if (count > MAX) throw;` which surfaces "count =
-    // MAX + 1" — an off-by-one that misled triage when reading the
-    // error message against the documented cap (505000 vs 500000).
+    // Per-caption count cap moved BEFORE the push so the throw fires
+    // WHEN refusing the entry, matching the SRT/VTT/ASS pattern. An
+    // earlier version had the cap as `count += 1; if (count > MAX)
+    // throw;` which surfaces "count = MAX + 1" — an off-by-one that
+    // misled triage when reading the error message against the
+    // documented cap (505000 vs 500000).
     if (count >= MAX_PARSED_ENTRIES) {
       throw new Error(`Too many subtitle entries: ${count}+ (max ${MAX_PARSED_ENTRIES})`);
     }
     // Per-caption text cap — same rationale as parseAss.
     //
-    // oversized text now pushes a skipped
-    // placeholder that DOES count toward MAX_PARSED_ENTRIES (option (b)
-    // — matching parseAss's treatment). Pre-R10 the bare `continue`
-    // didn't increment `count`, so iteration was unbounded by the
-    // per-caption cap; a crafted 50 MB MicroDVD file with millions of
-    // oversized entries could spin the `subLineRe.exec` loop without
-    // tripping any ceiling (the 50 MB upstream file cap was the only
-    // backstop). buildSub filters skipped placeholders out, so disk
-    // output is unchanged.
+    // Oversized text pushes a skipped placeholder that DOES count
+    // toward MAX_PARSED_ENTRIES (matching parseAss's treatment). An
+    // earlier bare `continue` didn't increment `count`, so iteration
+    // was unbounded by the per-caption cap; a crafted 50 MB MicroDVD
+    // file with millions of oversized entries could spin the
+    // `subLineRe.exec` loop without tripping any ceiling (the 50 MB
+    // upstream file cap was the only backstop). buildSub filters
+    // skipped placeholders out, so disk output is unchanged.
     const text = match[3]!;
     if (text.length > MAX_CAPTION_TEXT_LEN) {
       count += 1;
@@ -645,20 +642,20 @@ function parseSub(content: string, fps: number = DEFAULT_FPS): Caption[] {
 }
 
 function buildSub(captions: Caption[], fps: number = DEFAULT_FPS): string {
-  // Round 11 W11.3 (M4 / N3-R11-04): shared clampFps — see helper
-  // docblock for the parse/build round-trip asymmetry rationale.
+  // Shared clampFps — see helper docblock for the parse/build
+  // round-trip asymmetry rationale.
   fps = clampFps(fps);
   return (
     captions
-      // parseSub pushes a skipped placeholder for
-      // oversized text to bound iteration cost via MAX_PARSED_ENTRIES.
+      // parseSub pushes a skipped placeholder for oversized text to
+      // bound iteration cost via MAX_PARSED_ENTRIES.
       // Filter those out here so the disk output mirrors the legitimate
       // captions only (placeholders carry empty text and would otherwise
       // emit `{f}{f}` lines with no body, polluting the file).
       .filter((c) => !c.skipped)
       .map((c) => {
-        // clamp non-finite / negative timestamps to 0
-        // for parity with formatSrtTime / formatAssTime / msToAssTime.
+        // Clamp non-finite / negative timestamps to 0 for parity with
+        // formatSrtTime / formatAssTime / msToAssTime.
         // After a Time Shift with `--offset` large enough to push captions
         // before t=0, c.start / c.end can land negative; without clamping
         // they produce negative frame counts (`{-23}{15}`) that downstream
@@ -729,9 +726,9 @@ export function shiftSubtitle(
 
   const shifted = captions.map((c) => {
     // Skipped placeholders (all four parsers emit them for oversized
-    // text since Round 11 W11.1) pass through unchanged — buildAss
-    // returns the original line, buildSrt / buildVtt / buildSub filter
-    // them out. Shifting their timestamps would be wasted work.
+    // text) pass through unchanged — buildAss returns the original
+    // line, buildSrt / buildVtt / buildSub filter them out. Shifting
+    // their timestamps would be wasted work.
     if (c.skipped) return c;
     const shouldShift = thresholdMs === undefined || c.start >= thresholdMs;
     if (!shouldShift) return { ...c };

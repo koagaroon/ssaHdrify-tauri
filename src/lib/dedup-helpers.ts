@@ -55,13 +55,13 @@ export function buildConflictMessage(
   // Single-tab path keeps the existing message exactly so callers /
   // tests anchored on it stay green.
   if (conflictsByTab.size === 1) {
-    // Defensive destructure : the `size === 1` guard
-    // above proves the iterator yields one entry, so the old
-    // `.next().value!` non-null assertion was sound — but a future
-    // refactor that merges the size-1 branch into the multi-tab path
-    // would silently produce `undefined` here. Array.from spread keeps
-    // the destructure unambiguous and crashes loudly on the impossible
-    // case instead of returning `t("msg_dedup_blocked", undefined, ...)`.
+    // Defensive destructure: the `size === 1` guard above proves the
+    // iterator yields one entry, so the earlier `.next().value!`
+    // non-null assertion was sound — but a future refactor that
+    // merges the size-1 branch into the multi-tab path would silently
+    // produce `undefined` here. Array.from spread keeps the destructure
+    // unambiguous and crashes loudly on the impossible case instead of
+    // returning `t("msg_dedup_blocked", undefined, ...)`.
     const [tab, count] = Array.from(conflictsByTab.entries())[0]!;
     return t("msg_dedup_blocked", count, t(TAB_LABEL_KEYS[tab]));
   }
@@ -69,9 +69,9 @@ export function buildConflictMessage(
   // Total count is the sum so the leading "{N} blocked" claim still
   // matches the user's actual selection size.
   //
-  // uses `msg_dedup_blocked_multi` (no "in the
-  // ... tab" suffix) so the compound "3 HDR / 2 Shift" reads
-  // naturally instead of "... in the 3 HDR / 2 Shift tab".
+  // Use `msg_dedup_blocked_multi` (no "in the ... tab" suffix) so the
+  // compound "3 HDR / 2 Shift" reads naturally instead of "... in the
+  // 3 HDR / 2 Shift tab".
   const totalCount = Array.from(conflictsByTab.values()).reduce((a, b) => a + b, 0);
   const tabs = Array.from(conflictsByTab.entries())
     .map(([tab, count]) => `${count} ${t(TAB_LABEL_KEYS[tab])}`)
@@ -90,11 +90,10 @@ export function buildConflictMessage(
  * outputs while Windows NTFS / macOS APFS / HFS+ (case-insensitive by
  * default) collapses them — matches OS-level filesystem semantics so
  * the dedup catches real on-disk collisions but doesn't over-merge on
- * platforms where case-only names are legitimately distinct (Codex
- * dd2d9554).
+ * platforms where case-only names are legitimately distinct.
  */
 export function normalizeOutputKey(path: string): string {
-  // Backslash → forward only on Windows . On POSIX
+  // Backslash → forward only on Windows. On POSIX
   // `\` is a valid filename character, so unconditional rewriting
   // false-collapses two distinct on-disk files (`dir\foo.ass` and
   // `dir/foo.ass`) into one dedup bucket — same gating reasoning as
@@ -116,8 +115,8 @@ export function normalizeOutputKey(path: string): string {
  *  Rust-side `validate_font_family` / `validate_ipc_path` rejection
  *  sets via `unicode-controls.ts`.
  *
- *  Audit (2026-05-04): the only `ask()` callsite in the codebase that
- *  interpolates untrusted text is the BatchRename in-place-rename
+ *  The only `ask()` callsite in the codebase that interpolates
+ *  untrusted text is the BatchRename in-place-rename
  *  sample row (BatchRename.tsx); every other site renders only counts
  *  / pre-formatted byte sizes / fully-translated literals. If a future
  *  callsite adds a filename, path, or backend error string into an
@@ -125,9 +124,10 @@ export function normalizeOutputKey(path: string): string {
  *  are unaffected. */
 export function sanitizeForDialog(name: string): string {
   // Strip BiDi / zero-width controls (visual-reversal class) + ASCII
-  // C0 + DEL + C1 control range (Round 10 N-R10-026 — widened from
-  // the Round 8 A-R8-A4-24 \r\n-only scrub). A fan-sub filename with
-  // an embedded \r\n can fake additional confirm lines in OS-native
+  // C0 + DEL + C1 control range. An earlier version scrubbed only
+  // \r\n; the wider range closes adjacent surfaces. A fan-sub
+  // filename with an embedded \r\n can fake additional confirm lines
+  // in OS-native
   // `ask()` dialog bodies, smuggling a fake question past the user
   // (P1b); the rest of the C0/C1 range carries the same surface —
   // `\t` produces uneven dialog body indentation; \0 can truncate
@@ -145,13 +145,12 @@ export function sanitizeForDialog(name: string): string {
     .replace(new RegExp(`[${ASCII_CONTROL_CHARS}]`, "g"), "");
 }
 
-/** Round 7 Wave 7.1 — shared catch-arm helper. Normalizes the
- *  `e: unknown` thrown by IPC / async code to a string and scrubs
- *  BiDi / zero-width controls in one call. Adopted across all four
- *  tab handlers + FontCacheDriftModal so every render of an error
- *  message into the log panel / dialog body / status banner goes
- *  through the same sanitizer — eliminates the per-callsite "did
- *  I remember to wrap?" question. */
+/** Shared catch-arm helper. Normalizes the `e: unknown` thrown by IPC
+ *  / async code to a string and scrubs BiDi / zero-width controls in
+ *  one call. Adopted across all four tab handlers + FontCacheDriftModal
+ *  so every render of an error message into the log panel / dialog
+ *  body / status banner goes through the same sanitizer — eliminates
+ *  the per-callsite "did I remember to wrap?" question. */
 export function sanitizeError(e: unknown): string {
   return sanitizeForDialog(e instanceof Error ? e.message : String(e));
 }

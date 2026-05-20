@@ -1,5 +1,5 @@
 /**
- * Wire-format round-trip pin (Round 3 N-R3-13).
+ * Wire-format round-trip pin.
  *
  * Two FontSubsetPayload shapes coexist intentionally on different IPC
  * paths:
@@ -84,7 +84,7 @@ describe("FontSubsetPayload wire-format round-trip (Round 3 N-R3-13)", () => {
     const arr = encodeAsNumberArray(SAMPLE);
     const b64 = encodeAsBase64(SAMPLE);
 
-    // Positive type assertions (Round 4 N-R4-07 / A-R4-05): typeof
+    // Positive type assertions: typeof
     // alone reads `object` vs `string`, which is fine but doesn't pin
     // the array-ness of `arr` or the base64-alphabet of `b64`. Add
     // structural checks so a refactor that serialized `arr` as
@@ -96,7 +96,7 @@ describe("FontSubsetPayload wire-format round-trip (Round 3 N-R3-13)", () => {
     expect(b64).toMatch(/^[A-Za-z0-9+/]*={0,2}$/);
 
     // explicit positive typeof on each
-    // side. Pre-R11 this site asserted `typeof arr !== typeof b64`
+    // side. Previously this site asserted `typeof arr !== typeof b64`
     // which passes for many trivial differences (`"object"` vs
     // `"string"` here, but `"function"` vs `"string"` or even
     // `"undefined"` vs `"string"` would also pass) — a refactor that
@@ -124,8 +124,7 @@ describe("FontSubsetPayload wire-format round-trip (Round 3 N-R3-13)", () => {
   // js-base64 module-not-found issue on chain-runtime.ts. Once that's
   // resolved, replace the inline encode/decode helpers above with
   // imports from the real consumer modules so the test pins production
-  // decode behavior, not Node's `Buffer` semantics (Round 4 N-R4-07 /
-  // A-R4-05 deferred coverage).
+  // decode behavior, not Node's `Buffer` semantics (deferred coverage).
 
   it("empty byte input round-trips through both forms", () => {
     const empty = new Uint8Array(0);

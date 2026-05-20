@@ -67,7 +67,7 @@ export interface HdrConversionResult {
    * Count of captions whose text exceeded MAX_CAPTION_TEXT_LEN (64 KB)
    * and were emitted as skipped placeholders by parseSubtitle. The CLI
    * shell surfaces this via stderr (no-silent-action) to mirror the
-   * GUI's `msg_oversized_skipped` warning — R12 N-R12-3 close. Always
+   * GUI's `msg_oversized_skipped` warning. Always
    * 0 for native-ASS input (processAssContent is line-based, doesn't
    * route through parseSubtitle; the MAX_CAPTION_TEXT_LEN concept
    * doesn't apply at this layer).
@@ -93,8 +93,7 @@ export interface ShiftConversionResult {
    * Count of captions whose text exceeded MAX_CAPTION_TEXT_LEN (64 KB)
    * and were emitted as skipped placeholders. Forwarded from
    * `shiftSubtitles`'s ShiftResult; the CLI shell stderr-surfaces this
-   * to mirror TimingShift.tsx's msg_oversized_skipped (R12 N-R12-3
-   * close).
+   * to mirror TimingShift.tsx's msg_oversized_skipped.
    */
   skippedCount: number;
 }
@@ -448,12 +447,11 @@ function resolveEmbedOutputPathInternal(inputPath: string, template = "{name}.em
 // buildFontFileName / familyStableHash / insertFontsSection are
 // re-exported from font-embedder so the GUI and CLI paths share one
 // canonical implementation. Previously they were duplicated verbatim
-// here; the duplicates have been removed (N-R5-FECHAIN-12 /
-// N-R5-FECHAIN-13).
+// here; the duplicates have been removed.
 
 // VIDEO_EXTS / SUBTITLE_EXTS / IGNORED_EXTS / RenameCategory now live in
 // `src/lib/rename-extensions.ts` — shared with GUI BatchRename and the
-// tauri-api picker filter (R2 N-R2-2 / N-R2-3). The GUI uses the
+// tauri-api picker filter. The GUI uses the
 // `categorize(name)` helper; CLI keeps `categorizeRenamePath(path)` as a
 // thin wrapper that runs `fileNameFromPath` first because CLI receives
 // full argv paths, not bare filenames.
@@ -497,10 +495,10 @@ function categorizeRenamePaths(paths: string[]): CategorizedRenamePaths {
 function categorizeRenamePath(path: string): RenameCategory {
   // thin wrapper — delegate the ext-lookup chain to the
   // canonical `categorize` (which scans VIDEO_EXTS → SUBTITLE_EXTS →
-  // IGNORED_EXTS in the same priority order). Pre-R3 the chain was
+  // IGNORED_EXTS in the same priority order). The chain was previously
   // open-coded here, so a future bucket addition or priority shift in
   // `rename-extensions.ts::categorize` would silently skip the CLI
-  // path. `fileNameFromPath` still applies upstream to keep the W16.6
+  // path. `fileNameFromPath` still applies upstream to keep the
   // trailing-separator handling.
   return categorize(fileNameFromPath(path));
 }
@@ -641,9 +639,9 @@ function canonicalLanguage(language: string): string {
 }
 
 // `fileNameFromPath` now lives in `path-validation.ts`.
-// Pre-W1 the CLI sibling differed from the GUI version: it used
+// Previously the CLI sibling differed from the GUI version: it used
 // `lastIndexOf("/") + slice` with no fallback, so a trailing-separator
-// input returned an empty string while the GUI sibling (post-R16 W16.6)
-// returned the original path. The empty-string output silently dropped
+// input returned an empty string while the GUI sibling returned the
+// original path. The empty-string output silently dropped
 // trailing-separator video paths from the rename plan. Consolidation
 // closes the drift.

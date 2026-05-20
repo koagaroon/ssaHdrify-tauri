@@ -184,7 +184,7 @@ Dialogue: 0,0:00:00.00,0:00:01.00,Default,中文
     expect(result.content).toBe(SIMPLE_ASS);
   });
 
-  it("applyFontEmbed rejects malformed ASS even on the zero-fonts early-return path (R1 N-R1-2)", () => {
+  it("applyFontEmbed rejects malformed ASS even on the zero-fonts early-return path", () => {
     // Pre-fix the zero-fontEntries early-return bypassed assertAssShape
     // (insertFontsSection runs the gate, but the zero-fonts branch
     // returned verbatim content without ever invoking it). Result:
@@ -237,7 +237,7 @@ Dialogue: 0,0:00:00.00,0:00:01.00,Default,Hi
     ).toThrow(/2 \[Fonts\] sections/);
   });
 
-  it("applyFontEmbed rejects malformed ASS containing multiple [Events] sections (Round 8 N-R8-N2-6)", () => {
+  it("applyFontEmbed rejects malformed ASS containing multiple [Events] sections", () => {
     // Parity with the duplicate-[Fonts] reject above. libass reads only
     // the first [Events]; other consumers (Aegisub, mpv) may pick the
     // second; silently inserting [Fonts] before the first leaves the

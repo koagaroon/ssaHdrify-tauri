@@ -38,7 +38,7 @@ export interface ShiftStepParams {
 /**
  * Embed step parameters carried in the chain runtime payload.
  *
- * Round 10 N-R10-017: `fontDirs`, `fontFiles`, `noSystemFonts`, and
+ * `fontDirs`, `fontFiles`, `noSystemFonts`, and
  * `onMissing` are populated by the Rust shell but NEVER read by the
  * TS embed transform — Rust resolves all four upstream and bakes
  * the result into `subsets` before invoking runChain, so the TS side
@@ -164,7 +164,7 @@ export interface ChainResult {
   /**
    * Aggregate count of captions whose text exceeded
    * MAX_CAPTION_TEXT_LEN (64 KB) across every step that parses
-   * subtitle content (today: only `shift`). Round 13 N-R13-1 — the
+   * subtitle content (today: only `shift`). The
    * Rust shell reads this directly and routes it through
    * `emit_oversized_skipped_warning` (stderr + FileReport.warnings),
    * mirroring the standalone HDR / Shift CLI paths. Previously the

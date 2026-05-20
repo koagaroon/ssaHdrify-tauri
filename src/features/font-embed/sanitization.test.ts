@@ -1,5 +1,5 @@
 /**
- * Cross-helper symmetry pin (Round 2 N-R2-17).
+ * Cross-helper symmetry pin.
  *
  * font-collector.ts::sanitizeFamily and ass-uuencode.ts::buildFontEntry's
  * inline safeName regex share a documented stripping contract:
@@ -77,8 +77,8 @@ describe("font-name sanitization symmetry (Round 2 N-R2-17)", () => {
     expect(buildFontEntryName(input)).toBe(input);
   });
 
-  // ── Round 6 Wave 6.2 — BiDi / zero-width parity pin ──
-  // Pre-Round-6 sanitizeFamily only stripped C0 + DEL + C1 + line
+  // ── BiDi / zero-width parity pin ──
+  // Previously sanitizeFamily only stripped C0 + DEL + C1 + line
   // separators while safeName (via BIDI_AND_ZERO_WIDTH_CHARS import)
   // also stripped the bidi-control / zero-width set. The asymmetry
   // let a U+202E-bearing family name flow through sanitizeFamily

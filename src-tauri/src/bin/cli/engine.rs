@@ -24,7 +24,7 @@ pub struct HdrConversionRequest {
 /// `skipped_count` carries the count of captions whose text exceeded
 /// MAX_CAPTION_TEXT_LEN (64 KB) and were emitted as skipped
 /// placeholders. The shell stderr-surfaces this when > 0 to mirror
-/// the GUI's `msg_oversized_skipped` warning — R12 N-R12-3 close.
+/// the GUI's `msg_oversized_skipped` warning.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HdrConversionResult {
@@ -86,8 +86,8 @@ pub struct ShiftConversionResult {
     pub caption_count: usize,
     pub shifted_count: usize,
     /// Captions whose text exceeded MAX_CAPTION_TEXT_LEN (64 KB) and
-    /// were emitted as skipped placeholders. R12 N-R12-3 close (see
-    /// also `HdrConversionResult::skipped_count`).
+    /// were emitted as skipped placeholders (see also
+    /// `HdrConversionResult::skipped_count`).
     pub skipped_count: usize,
 }
 
@@ -166,10 +166,7 @@ pub struct FontEmbedApplyRequest {
 /// directly to dodge the ~4-5× expansion JSON-array form would impose
 /// against the per-font MAX_FONT_DATA_SIZE budget (50 MB, defined in
 /// fonts.rs). The two wire formats are intentional, not a sign of
-/// unfinished migration. (R15 W15.3 N-R15-12: previous citation of
-/// `CUMULATIVE_FALLBACK_BYTES` was a phantom anchor — that symbol
-/// was removed in R6 W6.9 along with the fontcull-parse-fail fallback
-/// path.)
+/// unfinished migration.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FontSubsetPayload {
@@ -193,9 +190,9 @@ pub struct FontEmbedApplyResult {
 /// exceeded MAX_CAPTION_TEXT_LEN (64 KB) across every step that
 /// parses subtitle content. The shell routes this through
 /// `emit_oversized_skipped_warning` (stderr + FileReport.warnings)
-/// to mirror the standalone HDR / Shift CLI paths — R13 N-R13-1
-/// closes the gap where R12 W12.2 left the chain side relying on
-/// a string-suffix-in-note shape the Rust shell never parsed.
+/// to mirror the standalone HDR / Shift CLI paths. Previously the
+/// chain side relied on a string-suffix-in-note shape the Rust
+/// shell never parsed; the typed field closes that gap.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChainRunResult {
@@ -279,17 +276,15 @@ impl CliEngine {
         // of undefined (reading 'convertHdr')". Surfacing a build-step
         // pointer here is more useful.
         //
-        // probe verifies
-        // all wired engine methods, not just `convertHdr`. Pre-R16
-        // the probe was a bare object-non-null check that passed an
-        // empty `globalThis.ssaHdrifyCliEngine = {}`; R16 W16.2 added
-        // a single-method check ruling out the empty-object case.
-        // R17 widens the check to the full 9-method surface so a
-        // bundle that defines `convertHdr` but is missing (e.g.)
-        // `runChain` due to a build-script regression surfaces at
-        // engine startup instead of mid-run inside the chain loop.
-        // Cost: 8 extra `typeof` checks at process start, each
-        // O(1) global property lookup.
+        // The probe verifies all wired engine methods, not just
+        // `convertHdr`. An earlier bare object-non-null check passed
+        // an empty `globalThis.ssaHdrifyCliEngine = {}`; a
+        // single-method check ruled out the empty-object case; the
+        // current full 9-method probe ensures a bundle that defines
+        // `convertHdr` but is missing (e.g.) `runChain` due to a
+        // build-script regression surfaces at engine startup instead
+        // of mid-run inside the chain loop. Cost: 8 extra `typeof`
+        // checks at process start, each O(1) global property lookup.
         let probe = runtime
             .execute_script(
                 "ssahdrify-cli-engine-probe.js",

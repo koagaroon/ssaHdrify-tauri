@@ -88,10 +88,10 @@ function sRgbToHlg(
   // Inverse: E_S = E_D * Y_D^((1-γ)/γ) / L_W^(1/γ)
   //   where Y_D = 0.2627*R_D + 0.6780*G_D + 0.0593*B_D
   const Y_D = REC2020_LUM_R * R_D + REC2020_LUM_G * G_D + REC2020_LUM_B * B_D;
-  // `!(y > 0)` catches both `y <= 0` AND `NaN`
-  // (which compares false against every relation). Pre-R10 a NaN
-  // Y_D propagated into `Math.pow` → `factor=NaN` → `hlgOetf(NaN)` →
-  // `[NaN, NaN, NaN]` → `hexByte(NaN)` → literal "NaN" in ASS output.
+  // `!(y > 0)` catches both `y <= 0` AND `NaN` (which compares false
+  // against every relation). Without this guard a NaN Y_D propagates
+  // into `Math.pow` → `factor=NaN` → `hlgOetf(NaN)` → `[NaN, NaN, NaN]`
+  // → `hexByte(NaN)` → literal "NaN" in ASS output.
   // Not currently reachable (inputs are byte-range bounded and
   // brightness is range-guarded), but the cost is one character and
   // it shuts the propagation surface for any future caller that
@@ -195,7 +195,7 @@ export function sRgbToHdr(
     // "log-level discipline"), the success-of-degradation site uses
     // DEBUG, not WARN. Stays visible with `localStorage.debug = '*'`
     // or DevTools verbose-logging when actually investigating
-    // malformed-color edge cases. Round 1 F2.N-R1-15.
+    // malformed-color edge cases.
     console.debug(`[ssaHdrify] sRgbToHdr failed for (${r},${g},${b}):`, e);
     return [0, 0, 0];
   }

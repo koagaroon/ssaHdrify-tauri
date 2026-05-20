@@ -38,10 +38,10 @@ export interface UseLogPanelResult {
  *  off the head so the array stays bounded during long batch runs. */
 const MAX_LOG_ENTRIES = 200;
 /**
- * Per-entry text length cap. Round 11 W11.3 (A3-R11-01): pairs with
- * MAX_LOG_ENTRIES. Without this, attacker-influenced inputs (P1b font /
- * filename / error-message content) could push individual entries to
- * arbitrary length — a 32 KB filename per row × 200 rows ≈ 6 MB
+ * Per-entry text length cap. Pairs with MAX_LOG_ENTRIES. Without this,
+ * attacker-influenced inputs (P1b font / filename / error-message
+ * content) could push individual entries to arbitrary length — a
+ * 32 KB filename per row × 200 rows ≈ 6 MB
  * retained in React state with the log panel rendering each row's
  * full text. 4 KB / entry is generous (typical messages are 30-200
  * chars; even a verbose multi-path stderr is well under 1 KB).
@@ -59,16 +59,14 @@ export function useLogPanel(): UseLogPanelResult {
 
   const isNearTail = useCallback((): boolean => {
     const el = logScrollRef.current;
-    // W6.7 Round 6 — WHY null-element returns true (not false):
-    // protects the initial-render race where the ref briefly resolves
-    // AFTER the first setLogs call. False here would skip
+    // WHY null-element returns true (not false): protects the
+    // initial-render race where the ref briefly resolves AFTER the
+    // first setLogs call. False here would skip
     // `scheduleTailScroll` for that first log line, breaking the
     // "follow-tail" contract on the very first user-visible entry.
-    // (R15 W15.7 N-R15-27: prior comment also claimed a re-mount
-    // scenario where false would permanently break auto-scroll;
-    // that's overstated — once the panel mounts, the ref non-null
-    // settles and the next addLog reads non-null. The initial-frame
-    // race is the only real concern.)
+    // The initial-frame race is the only real concern — once the
+    // panel mounts, the ref non-null settles and the next addLog
+    // reads non-null.
     if (!el) return true;
     return el.scrollHeight - el.scrollTop - el.clientHeight < TAIL_THRESHOLD_PX;
   }, []);
@@ -89,11 +87,11 @@ export function useLogPanel(): UseLogPanelResult {
     (text: string, type: LogType = "info") => {
       const id = logIdRef.current++;
       const shouldFollowTail = isNearTail();
-      // truncate over-long entries with an
-      // ellipsis so MAX_LOG_ENTRIES × per-entry length stays bounded.
-      // See MAX_LOG_ENTRY_TEXT_LEN docblock.
+      // Truncate over-long entries with an ellipsis so MAX_LOG_ENTRIES
+      // × per-entry length stays bounded. See MAX_LOG_ENTRY_TEXT_LEN
+      // docblock.
       //
-      // (Pattern 2 paired-dim surrogate safety):
+      // Pattern 2 paired-dim surrogate safety:
       // `String.prototype.slice` operates on UTF-16 code units; a cut
       // at `MAX_LOG_ENTRY_TEXT_LEN - 1` can land between a high+low
       // surrogate pair (e.g., a CJK ext-B character or emoji),

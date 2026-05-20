@@ -58,9 +58,9 @@ export interface ShiftResult {
   captionCount: number;
   /**
    * Count of captions whose text exceeded MAX_CAPTION_TEXT_LEN (64 KB)
-   * and were emitted as skipped placeholders by the parser. Round 11
-   * W11.1 (N1-R11-01) — TimingShift surfaces this via
-   * msg_oversized_skipped to close the no-silent-action gap.
+   * and were emitted as skipped placeholders by the parser. TimingShift
+   * surfaces this via msg_oversized_skipped to close the
+   * no-silent-action gap.
    */
   skippedCount: number;
 }

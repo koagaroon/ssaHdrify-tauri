@@ -35,14 +35,15 @@ const MAX_TEXT_SIZE: u64 = 50 * 1024 * 1024; // 50 MB
 /// keeping it in the allow-list would widen arbitrary-read via any JS
 /// bug.
 ///
-/// R8 W3 N-R8-4 / A-R8-1: kept in lockstep with TS `SUBTITLE_EXTS` in
-/// `src/lib/rename-extensions.ts`. R7 W1 N-R7-2 narrowed the TS set to
-/// what `subtitle-parser.ts::detectFormat` actually handles (dropping
-/// `sbv` and `lrc`); this Rust set was missed in that wave. The two
-/// sides agreed on a 7-entry superset, then drifted to TS 5 / Rust 7.
-/// Now realigned at 5: read and write IPC commands refuse `.sbv` /
-/// `.lrc` destinations the same way the TS folder-drop filter routes
-/// those extensions to the "unknown" bucket.
+/// Kept in lockstep with TS `SUBTITLE_EXTS` in
+/// `src/lib/rename-extensions.ts`. The TS set was narrowed to what
+/// `subtitle-parser.ts::detectFormat` actually handles (dropping
+/// `sbv` and `lrc`); this Rust set was missed in that earlier
+/// alignment. The two sides agreed on a 7-entry superset, then
+/// drifted to TS 5 / Rust 7. Now realigned at 5: read and write
+/// IPC commands refuse `.sbv` / `.lrc` destinations the same way
+/// the TS folder-drop filter routes those extensions to the
+/// "unknown" bucket.
 pub(crate) const ALLOWED_TEXT_EXTENSIONS: &[&str] = &["ass", "ssa", "srt", "vtt", "sub"];
 
 /// Map a std::io::Error to a generic, path-free message for IPC. The detailed
@@ -143,8 +144,8 @@ pub fn read_text_detect_encoding_inner(
     // obviously-hostile or pathological shapes BEFORE touching the
     // filesystem. Control chars / NUL in a path on Windows can truncate
     // the access target at the null byte; zero-width and bidi-control
-    // characters are blocked here too. R2 N-R2-12 wording correction:
-    // `..` segments are rejected upstream by `validate_ipc_path` (see
+    // characters are blocked here too. `..` segments are rejected
+    // upstream by `validate_ipc_path` (see
     // util.rs § "Reject path-traversal segments"), so the canonicalize-
     // fails fallback discussion further down doesn't apply to `..` —
     // that branch only covers symlink-redirect cases that survive the
@@ -373,7 +374,7 @@ fn detect_bom(bytes: &[u8]) -> Option<ReadTextResult> {
 
     // UTF-16 LE BOM (FF FE).
     //
-    // R2 A-R2-4 trap note: UTF-32LE BOM is `FF FE 00 00` — a strict
+    // Trap note: UTF-32LE BOM is `FF FE 00 00` — a strict
     // byte-prefix superset of the UTF-16LE BOM. A UTF-32LE-encoded
     // file enters this branch and decodes as UTF-16LE (every other
     // code unit is 0x00, decoded as NUL → garbled output). Subtitle

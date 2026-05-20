@@ -109,8 +109,8 @@ describe("runChain — single shift step", () => {
   });
 
   it("reports skippedCount = 0 on a clean shift (no oversized captions)", () => {
-    // R13 N-R13-1 / N-R13-2: pin the structured skippedCount field
-    // that replaced R12 W12.2's note-suffix shape. The Rust shell
+    // Pin the structured skippedCount field that replaced the
+    // previous note-suffix shape. The Rust shell
     // routes this through emit_oversized_skipped_warning when > 0;
     // the zero case must NOT trigger any warning, which the Rust
     // side guarantees only if the field is structurally a number
@@ -131,7 +131,7 @@ describe("runChain — single shift step", () => {
     // placeholder for that line, shiftTransform forwards the count
     // to TransformResult.skippedCount, runChain aggregates into
     // ChainResult.skippedCount. The note must NOT carry the count
-    // as a string suffix (the W12.2 shape that R13 replaces) —
+    // as a string suffix (the earlier shape this replaced) —
     // it's structurally separate now.
     const huge = "A".repeat(65_000);
     const oversizedAss = [
@@ -237,7 +237,7 @@ describe("runChain — embed step", () => {
     // version mismatch…)" is the diagnostic half of the message;
     // dropping it would leave debug-readers without the
     // CLI/runtime-mismatch hint that says where to look. Same shape
-    // as the Round 9 N-R9-N1-2 pin on the hdr-step error.
+    // as the pin on the hdr-step error.
     expect(() => runChain({ plan, inputPath: INPUT_PATH, content: ASS_FIXTURE })).toThrow(
       /step 1 \(embed\) failed: embed step in chain requires pre-resolved font subsets[\s\S]*?CLI\/runtime version mismatch/
     );
@@ -380,7 +380,7 @@ describe("resolveChainOutputPath", () => {
     );
   });
 
-  // ── Round 8 Wave 8.3 — chain template + shape pins ──
+  // ── Chain template + shape pins ──
 
   it("rejects unknown template tokens (chain-level allowlist)", () => {
     // chain-level templates support only {name} / {ext}.
@@ -394,7 +394,7 @@ describe("resolveChainOutputPath", () => {
   });
 
   it("rejects uppercase / mixed-case unknown tokens (R12 N-R12-5)", () => {
-    // Round 11 W11.7 widened the chain validator's regex to
+    // The chain validator's regex is widened to
     // [a-zA-Z_][a-zA-Z0-9_]{0,31} (case-insensitive) so capitalized
     // typos like {Eotf} / {NAME} / {Format} hit the chain-level
     // error path with a clear "unknown token 'X'" message, instead

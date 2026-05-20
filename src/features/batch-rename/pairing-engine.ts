@@ -439,11 +439,10 @@ export function deriveRenameOutputPath(
   // (including any `.zh` / `.sc` / `.tc` lang token) is discarded so
   // the output basename equals the video basename verbatim.
   // `subDot >= 0` (not `> 0`) intentionally accepts the leading-dot
-  // edge case `.ass` (N-R5-FEFEAT-18, A-R5-FEFEAT-17): a fan-sub pack
-  // can deliver a leading-dot filename and the old `> 0` guard would
-  // produce `<videoBase>` with NO extension — no player loads the
-  // result. With `>= 0` the whole `.ass` becomes the extension and
-  // the output is `<videoBase>.ass`.
+  // edge case `.ass`: a fan-sub pack can deliver a leading-dot
+  // filename and the old `> 0` guard would produce `<videoBase>` with
+  // NO extension — no player loads the result. With `>= 0` the whole
+  // `.ass` becomes the extension and the output is `<videoBase>.ass`.
   const subFull = baseName(subtitlePath);
   const subDot = subFull.lastIndexOf(".");
   const subExt = subDot >= 0 ? subFull.slice(subDot) : ""; // ".ass" / ".srt" / etc.
@@ -470,10 +469,10 @@ export function deriveRenameOutputPath(
   // `\`, producing a relative path rooted at the cwd instead of the
   // intended directory.
   const usedBackslash = isWindowsRuntime && subtitlePath.includes("\\");
-  // Backslash → forward only on Windows (Round 8 A-R8-N4-14 — POSIX-
-  // correctness gate). On POSIX `\` is a valid filename character; a
-  // user-chosen directory whose name contains `\` would otherwise be
-  // split mid-segment and produce a wrong output path.
+  // Backslash → forward only on Windows (POSIX-correctness gate). On
+  // POSIX `\` is a valid filename character; a user-chosen directory
+  // whose name contains `\` would otherwise be split mid-segment and
+  // produce a wrong output path.
   const normTargetDir = (isWindowsRuntime ? targetDir.replace(/\\/g, "/") : targetDir).replace(
     /\/$/,
     ""
@@ -528,8 +527,7 @@ export function deriveRenameOutputPath(
   // assertSafeOutputPath's self-overwrite-guards-against-source-loss
   // check.
   //
-  // The bypass skips assertSafeOutputPath's FOUR checks (A-R5-FEFEAT-07
-  // — comment previously named only the self-overwrite reason):
+  // The bypass skips assertSafeOutputPath's FOUR checks:
   //   1. Self-overwrite — trivially OK because output === source by
   //      definition of isNoOpRename.
   //   2. Path traversal (`..` segments) — outputPath equals
@@ -629,10 +627,10 @@ export function isNoOpRename(subtitlePath: string, outputPath: string): boolean 
 }
 
 function baseName(path: string): string {
-  // Backslash → forward only on Windows (Round 8 N-R8-N4-3 — POSIX-
-  // correctness gate, parity with `dirname` below and `pathsEqualOnFs`).
-  // On POSIX a file literally named `foo\bar.ass` must return the full
-  // name; unconditional rewriting truncates it to `bar.ass`.
+  // Backslash → forward only on Windows (POSIX-correctness gate,
+  // parity with `dirname` below and `pathsEqualOnFs`). On POSIX a
+  // file literally named `foo\bar.ass` must return the full name;
+  // unconditional rewriting truncates it to `bar.ass`.
   const windowsPath = isWindowsRuntime && path.includes("\\");
   const norm = windowsPath ? path.replace(/\\/g, "/") : path;
   const lastSlash = norm.lastIndexOf("/");
@@ -640,10 +638,10 @@ function baseName(path: string): string {
 }
 
 function dirname(path: string): string {
-  // Backslashes are only path separators on Windows (Codex edb0e74f /
-  // 8850ede7); on POSIX they're valid filename characters. The earlier
-  // unconditional `path.replace(/\\/g, "/")` would split POSIX filenames
-  // that contain a backslash.
+  // Backslashes are only path separators on Windows; on POSIX they're
+  // valid filename characters. The earlier unconditional
+  // `path.replace(/\\/g, "/")` would split POSIX filenames that
+  // contain a backslash.
   const windowsPath = isWindowsRuntime && path.includes("\\");
   const norm = windowsPath ? path.replace(/\\/g, "/") : path;
   const lastSlash = norm.lastIndexOf("/");

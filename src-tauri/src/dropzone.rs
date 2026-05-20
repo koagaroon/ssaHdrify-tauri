@@ -27,18 +27,18 @@ pub const MAX_RESULT_FILES: usize = 5000;
 
 /// Result of `expand_dropped_paths`. `truncated` surfaces when the
 /// expansion stopped at `MAX_RESULT_FILES` so the frontend can render
-/// a banner instead of silently presenting an incomplete list (Round 3
-/// N-R3-19 — was a bare `Vec<String>` return with a `log::warn` the
-/// frontend couldn't see, in violation of `~/.claude/rules/vibe-coding.md`
-/// "no silent action").
+/// a banner instead of silently presenting an incomplete list (the
+/// earlier shape was a bare `Vec<String>` return with a `log::warn`
+/// the frontend couldn't see, in violation of
+/// `~/.claude/rules/vibe-coding.md` "no silent action").
 ///
 /// `max_files` carries `MAX_RESULT_FILES` to the frontend so the
 /// truncation banner shows the correct number without a TS-side
-/// mirrored constant (Round 11 W11.4b / R10 N-R10-028). Pre-R11 the
-/// frontend hardcoded 5000 with a WHY comment pointing at this Rust
-/// const; a bump on this side would have silently drifted the user-
-/// facing wording. Threading the value matches workflow-design.md
-/// "automation over checklist items".
+/// mirrored constant. Previously the frontend hardcoded 5000 with a
+/// WHY comment pointing at this Rust const; a bump on this side
+/// would have silently drifted the user-facing wording. Threading
+/// the value matches workflow-design.md "automation over checklist
+/// items".
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExpandedPaths {
@@ -75,8 +75,8 @@ pub fn expand_dropped_paths(paths: Vec<String>) -> Result<ExpandedPaths, String>
     let mut rejected = 0usize;
     let total_inputs = paths.len();
     for (idx, raw) in paths.iter().enumerate() {
-        // short-circuit at the TOP of the loop body once
-        // the result cap is hit. Pre-W2 the cap check sat after the
+        // Short-circuit at the TOP of the loop body once the result
+        // cap is hit. The cap check used to sit after the
         // per-path stat + walk_one_level call, so the worst case
         // (1000 input folders, first ~50 already filled `result` to
         // MAX_RESULT_FILES = 5000) still paid stat + read_dir on
@@ -88,9 +88,9 @@ pub fn expand_dropped_paths(paths: Vec<String>) -> Result<ExpandedPaths, String>
         // every SUBSEQUENT iteration — by construction `idx <
         // total_inputs` holds for any iteration body that runs, so
         // entering this branch means there's at least one more input
-        // we're skipping. R3 N-R3-4: dropped the redundant
-        // `if idx < total_inputs` guard that wrapped `truncated = true`
-        // — it was always true by construction. `walk_one_level`
+        // we're skipping. The redundant `if idx < total_inputs`
+        // guard that wrapped `truncated = true` was dropped — it was
+        // always true by construction. `walk_one_level`
         // itself has the same check at its inner loop top, so this
         // is the third layer of the same budget.
         if result.len() >= MAX_RESULT_FILES {
@@ -233,19 +233,20 @@ fn walk_one_level(dir: &Path, out: &mut Vec<String>) -> bool {
         // already-fetched d_type when the FS reports it. Combining
         // into one stat would save a few syscalls on slow FS at the
         // cost of a cross-cfg branch on the reparse-point detection.
-        // Round 4 N-R4-09 — accepted as-is for readability.
+        // Accepted as-is for readability.
         let ft = match entry.file_type() {
             Ok(f) => f,
             Err(_) => continue,
         };
         if ft.is_file() {
             if let Some(s) = entry_path.to_str() {
-                // validate the discovered path
-                // through `validate_ipc_path` before surfacing.
+                // Validate the discovered path through
+                // `validate_ipc_path` before surfacing.
                 // `expand_dropped_paths`'s outer loop runs this gate
-                // on every TOP-LEVEL path the frontend hands in, but
-                // pre-R10 the per-folder children added here skipped
-                // it — a folder dropped at top-level whose entries
+                // on every TOP-LEVEL path the frontend hands in;
+                // previously the per-folder children added here
+                // skipped it — a folder dropped at top-level whose
+                // entries
                 // happened to carry BiDi / zero-width / control
                 // chars in their filenames (P1b: a fan-sub pack
                 // could pre-author such files) would push the
@@ -293,10 +294,10 @@ mod tests {
         let result = expand_dropped_paths(vec![p.to_str().unwrap().to_string()]).unwrap();
         assert_eq!(result.files.len(), 1);
         assert!(!result.truncated);
-        // Round 11 W11.4c : the response carries the
-        // cap so the frontend banner doesn't mirror it as a TS const.
-        // Pin both the channel (field present) and the value
-        // (sourced from MAX_RESULT_FILES, not a literal).
+        // The response carries the cap so the frontend banner
+        // doesn't mirror it as a TS const. Pin both the channel
+        // (field present) and the value (sourced from
+        // MAX_RESULT_FILES, not a literal).
         assert_eq!(result.max_files, MAX_RESULT_FILES);
         let _ = fs::remove_dir_all(&dir);
     }

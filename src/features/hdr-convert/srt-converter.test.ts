@@ -243,7 +243,7 @@ describe("isConvertible", () => {
 // the three properties as siblings).
 
 // Regression: buildAssDocument must NOT re-escape preprocessSrtColors'
-// injected color tags. Round 3 caught a silent break of SRT→HDR color
+// injected color tags. A past defect silently broke SRT→HDR color
 // conversion when the escape pass touched our trusted overrides.
 describe("SRT pipeline integration — color-tag preservation regression", () => {
   it("preserves preprocessSrtColors' injected color tags through buildAssDocument", () => {

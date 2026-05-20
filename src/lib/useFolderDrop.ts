@@ -172,17 +172,16 @@ export function useFolderDrop({
                     // `onTruncated` would force every consumer to wire
                     // a new path.
                     if (expanded.truncated) {
-                      // Round 8 Wave 8.6 — closes N-R5-FELIB-11 by
-                      // threading the optional `t` translator through
+                      // Threads the optional `t` translator through
                       // the options surface. Falls back to English.
                       //
-                      // Round 11 W11.4c : read the cap
-                      // from `expanded.maxFiles` (carried in the IPC
-                      // response) instead of a TS-side mirror of the
-                      // Rust constant. The cap is now structurally
-                      // sourced from `dropzone::MAX_RESULT_FILES`, so
-                      // a bump on the Rust side flows through to the
-                      // user-visible wording automatically.
+                      // Reads the cap from `expanded.maxFiles` (carried
+                      // in the IPC response) instead of a TS-side
+                      // mirror of the Rust constant. The cap is
+                      // structurally sourced from
+                      // `dropzone::MAX_RESULT_FILES`, so a bump on the
+                      // Rust side flows through to the user-visible
+                      // wording automatically.
                       const tr = tRef.current;
                       // No-i18n fallback is deliberately generic — pinning the
                       // exact wording here would duplicate strings.ts's
@@ -198,7 +197,7 @@ export function useFolderDrop({
                     // Non-empty input that expanded to zero paths — the
                     // user dropped *something*, the Rust side accepted
                     // the call, and yet we'd silently do nothing without
-                    // this signal (Round 1 F1.N-R1-17). Surface as an
+                    // this signal. Surface as an
                     // error so the consumer banner reads "no usable
                     // files in this drop" instead of nothing.
                     const tr = tRef.current;

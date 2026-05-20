@@ -27,12 +27,12 @@ const MAX_CONCURRENT_STAT = 32;
  * run in parallel (capped at `MAX_CONCURRENT_STAT`) so batch latency is
  * a small number of round-trips regardless of path count.
  *
- * Round 10 A-R10-013: stat failures are now counted as EXISTING
- * (fail-safe). Pre-R10 they were counted as non-existent, which meant
- * a transient FS error during pre-flight could suppress the
- * overwrite-confirm dialog and let the batch silently overwrite real
- * files. The new behavior — bias toward showing the dialog — is the
- * conservative one: a false-positive collision warning is annoying
+ * Stat failures are counted as EXISTING (fail-safe). An earlier
+ * version counted them as non-existent, which meant a transient FS
+ * error during pre-flight could suppress the overwrite-confirm dialog
+ * and let the batch silently overwrite real files. The current
+ * behavior — bias toward showing the dialog — is the conservative
+ * one: a false-positive collision warning is annoying
  * (user clicks "Yes, overwrite"), but a false-negative miss destroys
  * data. `errorCount` continues to be logged for diagnosis.
  */
@@ -53,8 +53,8 @@ export async function countExistingFiles(paths: string[]): Promise<number> {
           existingCount += 1;
         }
       } catch {
-        // count as existing (fail-safe). See
-        // function-level docblock for the WHY.
+        // Count as existing (fail-safe). See function-level docblock
+        // for the WHY.
         errorCount += 1;
         existingCount += 1;
       }

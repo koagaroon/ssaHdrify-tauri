@@ -59,10 +59,9 @@ interface Props {
 }
 
 function basename(path: string): string {
-  // Backslash → forward only on Windows (Round 8 POSIX-correctness gate,
-  // parity with the four sibling helpers fixed in Wave 8.1). On POSIX
-  // `\` is a valid filename character; a folder literally named `a\b`
-  // must display as `a\b`, not as `b`.
+  // Backslash → forward only on Windows (POSIX-correctness gate). On
+  // POSIX `\` is a valid filename character; a folder literally named
+  // `a\b` must display as `a\b`, not as `b`.
   const norm = isWindowsRuntime ? path.replace(/\\/g, "/") : path;
   return norm.split("/").filter(Boolean).pop() ?? path;
 }
@@ -94,8 +93,8 @@ function fallbackUuidV4(): string {
       .padStart(n, "0");
   // Per RFC 4122: version 4 is the literal "4" preceding the third
   // group; the VARIANT bits (10xx) live in the high nibble of the
-  // fourth group (N-R5-FECHAIN-04 rename — old name was `version`
-  // which conflicted with the literal "4" that's the actual version).
+  // fourth group. (The local `variant` name avoids conflict with the
+  // literal "4" that's the actual version.)
   const variant = (8 + Math.floor(Math.random() * 4)).toString(16); // 8/9/a/b
   return `${hex(8)}-${hex(4)}-4${hex(3)}-${variant}${hex(3)}-${hex(12)}`;
 }
@@ -214,7 +213,7 @@ export default function FontSourceModal(props: Props) {
         // attacker-influenced content), and React renders the result
         // directly into the modal banner without the BiDi reversal
         // protection that `validate_ipc_path` would have applied
-        // upstream (Round 6 Wave 6.2 parity sweep).
+        // upstream.
         const message = sanitizeError(e);
         console.warn("cancelFontScan failed:", e);
         setError(t("font_scan_cancel_failed", message));
@@ -360,8 +359,8 @@ export default function FontSourceModal(props: Props) {
     // otherwise be invisible to the user (UI keeps spinning). Surface
     // through the modal's error banner so they see the IPC failed.
     cancelFontScan(scanId).catch((e: unknown) => {
-      // sanitizeForDialog: same Round 6 Wave 6.2 parity reason as the
-      // requestClose cancel path above — Rust IPC errors can carry
+      // sanitizeForDialog: same BiDi parity reason as the requestClose
+      // cancel path above — Rust IPC errors can carry
       // attacker-influenced path strings.
       const message = sanitizeError(e);
       console.warn("cancelFontScan failed:", e);
@@ -493,7 +492,7 @@ export default function FontSourceModal(props: Props) {
         // sanitizeForDialog: the catch covers the full scan pipeline
         // (picker / preflight / streaming scan), so the error message
         // can carry font-pack path strings or font-file names which
-        // are attacker-influenced (P1b). Round 6 Wave 6.2.
+        // are attacker-influenced (P1b).
         setError(sanitizeError(e));
       } finally {
         if (scanId !== null && activeScanIdRef.current === scanId) {
@@ -515,12 +514,11 @@ export default function FontSourceModal(props: Props) {
       reportSourceAdded,
       resetScanProgress,
       scheduleScanProgress,
-      // Round 7 Wave 7.7 (lint): setScanningWithParent is referenced
-      // ONLY in comments inside runScanFlow's body — actual calls
-      // happen via claimScanFlow / releaseScanFlow, which are already
-      // in the dep array. eslint react-hooks/exhaustive-deps flagged
-      // the explicit entry as unnecessary; removing it closes the
-      // baseline warning carried since Round 5.
+      // setScanningWithParent is referenced ONLY in comments inside
+      // runScanFlow's body — actual calls happen via claimScanFlow /
+      // releaseScanFlow, which are already in the dep array. eslint
+      // react-hooks/exhaustive-deps flagged the explicit entry as
+      // unnecessary; omitting it keeps the lint baseline clean.
     ]
   );
 
@@ -652,7 +650,7 @@ export default function FontSourceModal(props: Props) {
               style={{ border: "1px solid var(--border-light)" }}
             >
               {sources.map((src) => {
-                // BiDi control sanitization (Round 1 F3.A-R1-8): a folder
+                // BiDi control sanitization: a folder
                 // name carrying RLO / LRO / PDF could visually reverse
                 // adjacent characters in the source list, making
                 // `evil.ttf` look benign. `sanitizeForDialog` is the
@@ -804,12 +802,11 @@ export default function FontSourceModal(props: Props) {
                 </p>
                 {missing.length > 0 && (
                   <>
-                    {/* Round 7 Wave 7.6 (N3-R7-9): `missing` entries
-                        come from `fontKeyLabel(u.key)` where `u.key.family`
-                        was sanitized via `sanitizeFamily` upstream
-                        (font-collector.ts), so the BiDi / zero-width
-                        scrub already happened — no second wrap needed
-                        at this render site. */}
+                    {/* `missing` entries come from `fontKeyLabel(u.key)`
+                        where `u.key.family` was sanitized via
+                        `sanitizeFamily` upstream (font-collector.ts), so
+                        the BiDi / zero-width scrub already happened —
+                        no second wrap needed at this render site. */}
                     <p className="text-xs" style={{ color: "var(--text-secondary)" }}>
                       {t("font_coverage_missing", missing.join(", "))}
                     </p>

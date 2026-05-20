@@ -89,8 +89,8 @@ pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
                 | '\u{2066}'..='\u{2069}'
                 // U+061C Arabic Letter Mark — Cf, bidi format
                 // character. The TS unicode-controls set includes
-                // it ; Round 6 Wave 6.2 parity sweep
-                // adds the same here so the two sides match.
+                // it; this validator matches that parity so the two
+                // sides agree.
                 | '\u{061C}'
             )
     }) {
@@ -108,7 +108,7 @@ pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
     // resolves to `C:\Users\u\AppData\Roaming\ssahdrify\**` and does
     // NOT match the verbatim `\\?\C:\Users\u\AppData\Roaming\ssahdrify\…`
     // form — a compromised WebView could pass `\\?\C:\Users\u\.ssh\…`
-    // through `is_allowed` and bypass the deny list. Pre-R13 the
+    // through `is_allowed` and bypass the deny list. An earlier
     // comment claimed font scanning + drag-drop produce verbatim
     // paths through canonicalize(); audit confirmed those are
     // Rust-internal (don't round-trip back through validate_ipc_path),
@@ -162,9 +162,9 @@ pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
     if has_dotdot_component {
         return Err(format!("{label} path contains parent-directory segments"));
     }
-    // Reject Windows reserved device names in any path segment (Round 8
-    // A-R8-A3-8). The TS-side `assertSafeOutputFilename` already
-    // rejects these for templated outputs; here we mirror the check for
+    // Reject Windows reserved device names in any path segment.
+    // The TS-side `assertSafeOutputFilename` already rejects these
+    // for templated outputs; here we mirror the check for
     // any IPC path so a non-TS caller (CLI argv, future deno_core
     // engine entry) can't slip `C:\foo\CON.ass` through. Win32 routes
     // device names regardless of extension (`NUL.txt` opens NUL too),
@@ -204,7 +204,7 @@ pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
                 | "LPT\u{00B3}"
         ) || (stem.len() == 4
             && (stem.starts_with("COM") || stem.starts_with("LPT"))
-            // R2 N-R2-16 WHY: `stem.len()` is BYTE length; combined
+            // WHY: `stem.len()` is BYTE length; combined
             // with the ASCII "COM"/"LPT" 3-byte prefix and len==4, the
             // 4th byte is either a single-byte ASCII char OR a UTF-8
             // continuation byte (0x80-0xBF). `is_ascii_digit()` rejects
@@ -286,9 +286,8 @@ pub fn validate_font_family(family: &str) -> Result<(), String> {
                 | '\u{2060}'
                 | '\u{180E}'
                 | '\u{FEFF}'
-                // Round 6 Wave 6.2 parity sweep — these three were
-                // present in `validate_ipc_path` and the TS
-                // `unicode-controls` set but missing here, leaving a
+                // These three were present in `validate_ipc_path` and
+                // the TS `unicode-controls` set but missing here, leaving a
                 // gap where a family name carrying any of them would
                 // be accepted by validate_font_family then fail
                 // validate_ipc_path downstream (or worse: never reach
@@ -432,8 +431,7 @@ mod tests {
         // is_control() (Cc) and was originally absent from the
         // explicit matches! list, leaving a gap with the TS
         // unicode-controls set and `validate_font_family` (which also
-        // missed it pre-Round-6). Round 6 Wave 6.2 parity sweep
-        // closed both sides.
+        // missed it previously). A parity sweep closed both sides.
         let err = validate_ipc_path("evil\u{061C}.ass", "Test").unwrap_err();
         assert!(err.to_lowercase().contains("invalid"));
     }
@@ -457,11 +455,10 @@ mod tests {
         assert!(err2.to_lowercase().contains("parent-directory"));
     }
 
-    // Round 8 A-R8-A3-8 — Windows reserved-device-name reject (per
-    // segment, case-insensitive, pre-first-dot stem, trailing-ws/dot
-    // strip). The TS-side `assertSafeOutputFilename` already rejects
-    // these; this pins parity for non-TS callers (CLI argv, future
-    // engine).
+    // Windows reserved-device-name reject (per segment,
+    // case-insensitive, pre-first-dot stem, trailing-ws/dot strip).
+    // The TS-side `assertSafeOutputFilename` already rejects these;
+    // this pins parity for non-TS callers (CLI argv, future engine).
     #[test]
     fn validate_rejects_reserved_segment_anywhere_in_path() {
         let err = validate_ipc_path(r"C:\foo\CON.ass", "Test").unwrap_err();
@@ -636,9 +633,8 @@ mod tests {
 
     #[test]
     fn validate_font_family_rejects_whitespace_only() {
-        // Round 10 N-R10-010 added the
-        // `family.trim().is_empty()` reject (alongside the bare empty
-        // string), but never paired it with a test. A
+        // The `family.trim().is_empty()` reject (alongside the bare
+        // empty string) was added but never paired with a test. A
         // whitespace-only family name like "   " or "\t\t" must
         // reject; an ASS `Style: ,   ,...` row otherwise threads a
         // visually-empty family through the font lookup pipeline
@@ -688,7 +684,7 @@ mod tests {
     #[test]
     fn validate_font_family_rejects_bidi_override() {
         // U+202E RTL OVERRIDE — Trojan-Source class. `is_control()`
-        // (Cc) doesn't match this codepoint (Cf). Round 4 extension
+        // (Cc) doesn't match this codepoint (Cf). The validator
         // mirrors `validate_ipc_path`'s rejection set.
         let err = validate_font_family("Ari\u{202E}al").unwrap_err();
         assert!(err.contains("invalid"));
@@ -705,11 +701,11 @@ mod tests {
 
     #[test]
     fn validate_font_family_rejects_line_paragraph_separators() {
-        // U+2028 / U+2029 are Zl / Zp, not Cc — pre-Round-6 the
-        // matches! list omitted them, so a family name carrying
-        // either would slip past validate_font_family and then trip
-        // validate_ipc_path on the path side. Round 6 Wave 6.2 sweep
-        // closes the asymmetry.
+        // U+2028 / U+2029 are Zl / Zp, not Cc — the matches! list
+        // previously omitted them, so a family name carrying either
+        // would slip past validate_font_family and then trip
+        // validate_ipc_path on the path side. A parity sweep closes
+        // the asymmetry.
         let err1 = validate_font_family("Ari\u{2028}al").unwrap_err();
         assert!(err1.contains("invalid"));
         let err2 = validate_font_family("Ari\u{2029}al").unwrap_err();
@@ -719,8 +715,7 @@ mod tests {
     #[test]
     fn validate_font_family_rejects_arabic_letter_mark() {
         // U+061C — Cf bidi format char; same parity rationale as
-        // above. The TS unicode-controls set has had it since Round 5
-        // Wave 5.1.
+        // above. The TS unicode-controls set has had it for a while.
         let err = validate_font_family("Ari\u{061C}al").unwrap_err();
         assert!(err.contains("invalid"));
     }

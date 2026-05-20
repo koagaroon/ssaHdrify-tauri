@@ -66,7 +66,7 @@ function fileNameHasAssExt(name: string): boolean {
   return ASS_EXTS.has(name.slice(dot + 1).toLowerCase());
 }
 
-// Batch ingest caps (Codex 9a2e7e9e — OOM-by-input defense).
+// Batch ingest caps — OOM-by-input defense.
 //
 // Font Embed is the only tab that retains EVERY batch file's decoded content
 // in `perFileAnalysisRef` for the unified detection grid + embed loop —
@@ -287,7 +287,7 @@ export default function FontEmbed() {
           try {
             content = await readText(path);
           } catch (e) {
-            // Wave 7.1 BiDi parity: read errors carry the file path
+            // BiDi parity: read errors carry the file path
             // (often the user-picked path including filename), and
             // the Rust IPC error can interpolate that path again.
             const reason = sanitizeError(e);
@@ -372,27 +372,24 @@ export default function FontEmbed() {
 
   const handleDroppedPaths = useCallback(
     async (paths: string[]) => {
-      // bump pickGenRef at function entry,
-      // symmetric with handlePickFiles. Pre-W15.6 the bump happened
-      // AFTER the filter — concurrent in-flight pick wouldn't see the
+      // Bump pickGenRef at function entry, symmetric with
+      // handlePickFiles. Previously the bump happened AFTER the
+      // filter — concurrent in-flight pick wouldn't see the
       // generation jump until after the filter completed. Real-world
       // impact negligible (early-return is just log+banner state), but
       // the bump-at-entry pattern keeps the generation contract
       // uniform across pick entry points.
       const gen = (pickGenRef.current = pickGenRef.current + 1);
-      // (R10 N-R10-029 sibling fix): clear
-      // lastActionResult on every new ingest entry, not just the
-      // happy path. BatchRename was fixed in R10 N-R10-029; FontEmbed
-      // relied on the `fontsFiles` useEffect to clear, but that effect
-      // doesn't fire when the drop is rejected — leaving a stale "Embed
-      // complete" footer alongside a fresh red banner.
+      // Clear lastActionResult on every new ingest entry, not just the
+      // happy path. The `fontsFiles` useEffect that previously handled
+      // this clear doesn't fire when the drop is rejected — leaving a
+      // stale "Embed complete" footer alongside a fresh red banner.
       setLastActionResult(null);
       const assPaths = paths.filter((p) => fileNameHasAssExt(fileNameFromPath(p)));
       if (assPaths.length === 0) {
-        // R15 W15.6 (N-R15-19, Pattern 1 sibling parity with
-        // HdrConvert.tsx + TimingShift.tsx): surface through both
-        // the log AND the DropErrorBanner per N-R5-FEFEAT-09 — users
-        // with collapsed log panels see nothing from log-only.
+        // Pattern 1 sibling parity with HdrConvert.tsx + TimingShift.tsx:
+        // surface through both the log AND the DropErrorBanner —
+        // users with collapsed log panels see nothing from log-only.
         const msg = t("msg_no_subtitle_in_drop");
         addLog(msg, "error");
         setDropError(msg);
@@ -463,12 +460,11 @@ export default function FontEmbed() {
       setFontUsages(usages);
       setFonts(infos);
       // Merge: keep manual unchecks; auto-check ONLY truly new resolutions.
-      // Round 9 N-R9-N2-2 — the auto-check loop now gates on
-      // `!prevResolved.has(key)` so a font that was resolved before AND
-      // manually unchecked stays unchecked. The two-set diff (was-resolved
-      // vs now-resolved) is the precise definition of "newly resolved";
-      // checking only `!prev.has(key)` (pre-fix) treated re-resolution
-      // identically to first-time resolution.
+      // The auto-check loop gates on `!prevResolved.has(key)` so a font
+      // that was resolved before AND manually unchecked stays unchecked.
+      // The two-set diff (was-resolved vs now-resolved) is the precise
+      // definition of "newly resolved"; checking only `!prev.has(key)`
+      // would treat re-resolution identically to first-time resolution.
       setSelected((prev) => {
         const resolved = keysOfResolvedFonts(infos);
         const next = new Set<string>();
@@ -553,7 +549,7 @@ export default function FontEmbed() {
         // an unrelated tracked folder if a previous source label
         // collided. files-mode never touches the persistent cache, so
         // it's the safe fallback for the (in-practice unreachable)
-        // source-not-found path (Round 1 F3.N-R1-2).
+        // source-not-found path.
         const source = fontSources.find((s) => s.id === id);
         const kind = source?.kind ?? "files";
         setSourceBusy(true);
@@ -602,21 +598,21 @@ export default function FontEmbed() {
       // Pre-flight overwrite check — same project-wide pattern. Per-file
       // try wraps `deriveEmbeddedPath` so a single bad path surfaces with
       // filename context instead of aborting the whole batch with a
-      // template-error string and no attribution (Round 1 F3.N-R1-20).
+      // template-error string and no attribution.
       // Pre-flight errors below render into the log panel via addLog;
       // the per-file path comes from the user's filePaths array which
       // can carry attacker-influenced content (fan-sub drops, P1b).
       // sanitizeForDialog strips BiDi / zero-width controls so a
       // U+202E in a path can't visually reverse the surrounding log
-      // line (Round 6 Wave 6.2 parity sweep).
+      // line.
       //
-      // Round 6 Wave 6.4 #16 — collect-and-continue: one bad template
-      // / unsafe filename in a batch shouldn't abort the entire run.
-      // HDR + Timing already collect failures and continue with the
-      // remaining files; FontEmbed previously returned on the first
-      // pre-flight error, leaving a 10-file batch entirely unprocessed
-      // because file #3 had an unusual filename. We surface each
-      // failure in the log and only abort when EVERY file failed.
+      // Collect-and-continue: one bad template / unsafe filename in a
+      // batch shouldn't abort the entire run. HDR + Timing already
+      // collect failures and continue with the remaining files;
+      // FontEmbed previously returned on the first pre-flight error,
+      // leaving a 10-file batch entirely unprocessed because file #3
+      // had an unusual filename. We surface each failure in the log
+      // and only abort when EVERY file failed.
       const projectedOutputs: string[] = [];
       const skippedPaths = new Set<string>();
       for (const p of filePaths) {
@@ -707,12 +703,11 @@ export default function FontEmbed() {
             continue;
           }
 
-          // Round 7 Wave 7.1 BiDi parity — fileName / outName below
-          // flow into many addLog calls. The sanitized form is
-          // computed once at source (hoisted above per N-R15-24) so
-          // every downstream interpolation site automatically gets
-          // BiDi-scrubbed display text without each callsite having
-          // to remember to wrap.
+          // BiDi parity — fileName / outName below flow into many
+          // addLog calls. The sanitized form is computed once at
+          // source (hoisted above) so every downstream interpolation
+          // site automatically gets BiDi-scrubbed display text
+          // without each callsite having to remember to wrap.
           addLog(t("msg_processing", safeFileName));
 
           try {
@@ -728,10 +723,10 @@ export default function FontEmbed() {
             // Every visible path in the grid was ingested before this
             // loop runs (see `ingestPaths`), and ingest is the site that
             // enforces MAX_BATCH_AGGREGATE_BYTES. The previous defensive
-            // fresh-read fallback bypassed that cap (Round 1 F3.N-R1-1);
-            // a cache miss at this point is a real inconsistency that
-            // should surface as an error rather than silently re-read
-            // outside the ingest guards.
+            // fresh-read fallback bypassed that cap; a cache miss at
+            // this point is a real inconsistency that should surface
+            // as an error rather than silently re-read outside the
+            // ingest guards.
             const cached = perFileAnalysisRef.current.get(filePath);
             if (!cached) {
               addLog(t("msg_fonts_error", safeFileName, "analysis cache miss"), "error");
@@ -787,10 +782,10 @@ export default function FontEmbed() {
             }
             if (abortRef.current?.signal.aborted) break;
 
-            // Round 7 Wave 7.1 — outName goes through addLog twice
-            // below; sanitize once at derivation. fileNameFromPath
-            // result is from a user-derived path that may carry P1b
-            // attacker-influenced segments.
+            // outName goes through addLog twice below; sanitize once
+            // at derivation. fileNameFromPath result is from a
+            // user-derived path that may carry P1b attacker-influenced
+            // segments.
             const safeOutName = sanitizeForDialog(fileNameFromPath(outputPath));
             if (result.embeddedCount === 0) {
               // Nothing was actually embedded — skip the write so we
@@ -812,13 +807,13 @@ export default function FontEmbed() {
           }
         }
 
-        // W6.4 #15 — match HDR/Timing post-loop pattern: gate the
-        // success log on `successCount > 0`, route 0-success batches
-        // to a distinct `msg_fonts_all_failed` line. Pre-W6.4 the
-        // success log fired even on all-failure batches ("Embed
-        // complete: 0/N processed" alongside a red error footer),
-        // contradicting itself. HDR + Timing already correctly split
-        // these two cases — bringing FontEmbed in line.
+        // Match HDR/Timing post-loop pattern: gate the success log on
+        // `successCount > 0`, route 0-success batches to a distinct
+        // `msg_fonts_all_failed` line. Previously the success log
+        // fired even on all-failure batches ("Embed complete: 0/N
+        // processed" alongside a red error footer), contradicting
+        // itself. HDR + Timing already correctly split these two
+        // cases — bringing FontEmbed in line.
         const aborted = !!abortRef.current?.signal.aborted;
         if (aborted) {
           setLastActionResult("cancelled");
@@ -1251,10 +1246,9 @@ export default function FontEmbed() {
                 // numeric ratio of internal counts; safe by inspection.
                 // `progress.total || 1` guards against a future refactor
                 // that publishes a progress event before computing total
-                // (N-R5-FECHAIN-09 belt-and-braces) — current loop
-                // short-circuits before the embed call so total is
-                // always > 0, but the divide-by-zero NaN would render
-                // `NaN%` and CSS-fail silently.
+                // — current loop short-circuits before the embed call so
+                // total is always > 0, but the divide-by-zero NaN would
+                // render `NaN%` and CSS-fail silently.
                 // eslint-disable-next-line no-restricted-syntax
                 width: `${(progress.current / (progress.total || 1)) * 100}%`,
               }}

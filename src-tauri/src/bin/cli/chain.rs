@@ -100,7 +100,7 @@ impl ParsedStep {
 /// stderr; they do NOT block execution per the locked decision
 /// "warn but don't enforce" for step ordering.
 // fields are `pub(crate)`, not `pub`. ChainPlan's eager
-// Shift-validation contract (per R17 W17.2 / N-R17-32) is enforced by
+// Shift-validation contract is enforced by
 // "all construction goes through `parse_chain_argv`" — that's a
 // single-entry-point composition (per ~/.claude/rules/code_review.md §
 // Multi-step contracts). Fully-pub fields would let a future sibling
@@ -162,8 +162,7 @@ pub fn parse_chain_argv(
     // and only grows from there, so `segments.is_empty()` is
     // structurally false. The empty-argv case surfaces as
     // "chain requires at least one step" Err from inside the
-    // splitter now (W15.5 unified message). Caller-side check
-    // removed.
+    // splitter now (unified message). Caller-side check removed.
     let segments = split_into_step_segments(raw_argv)?;
     let last_idx = segments.len() - 1;
 
@@ -221,8 +220,8 @@ pub fn parse_chain_argv(
     // the clap-side rejection at chain.rs:657). This check would
     // re-fire only if a future schema change makes `files` optional
     // at the clap level — at which point we want the parse_chain_argv
-    // gate, not a panic downstream. Mirrors W15.5's deliberate keep
-    // of defensive-but-unreachable shapes where the defense costs ~5
+    // gate, not a panic downstream. Mirrors the deliberate keep of
+    // defensive-but-unreachable shapes where the defense costs ~5
     // lines and would matter if the gate above weakened.
     if input_files.is_empty() {
         return Err(format!(
@@ -453,7 +452,7 @@ fn collect_suspicious_orderings(steps: &[ParsedStep]) -> Vec<String> {
     // NOT include a `warning: ` prefix. They're routed through
     // `emit_chain_warnings` in `run_chain`, which adds the localized
     // `warning: ` / `警告：` prefix plus the chain-style `⚠` glyph.
-    // Pre-W17.2 the prefix was hardcoded English here, so a Chinese-
+    // The prefix used to be hardcoded English here, so a Chinese-
     // locale user saw the surrounding status / file lines localized
     // but these warnings in English with no glyph — the only chain
     // print site that bypassed emit_chain_warnings.

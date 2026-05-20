@@ -69,7 +69,7 @@ describe("extractEpisode — documented fan-sub samples", () => {
   });
 
   it("Pattern A — episode 00 (pilot / OVA zero) is preserved (Round 11 W11.6 N2-R11-03)", () => {
-    // Pre-W11.6 the Pattern A coverage skipped the `episode 0` edge —
+    // The Pattern A coverage previously skipped the `episode 0` edge —
     // OVA pilots and " - 00 [" prologue numbering are real-world
     // fan-sub conventions. A regex regression that excluded zero
     // (`\d+` → `[1-9]\d*`) would have left every prior at-limit pin
@@ -214,7 +214,7 @@ describe("parseFilename — end-to-end (season, episode)", () => {
     // any season pattern (we don't want to false-match every "X 2"),
     // so this reports season=1. Acceptable: Pattern A doesn't carry
     // season info for that style; if user has cross-season episodes
-    // they'll surface as duplicates and resolve via manual edit in 5c.
+    // they'll surface as duplicates and resolve via manual edit.
     expect(p.season).toBe(1);
   });
 
@@ -321,7 +321,7 @@ describe("buildPairings — common shapes", () => {
     expect(rows[1]!.subtitle?.path).toBe(s2.path);
     // pin `selected` too. A warning row
     // has a real (debatable) pairing, so it defaults to selected=true
-    // — buildPairings's `selected: sub !== null` line. Pre-W11.6 the
+    // — buildPairings's `selected: sub !== null` line. The earlier
     // test didn't pin this; a regression flipping warning rows to
     // selected=false would have left ambiguous pairings unchecked by
     // default, silently dropping them from a "run all" batch.
@@ -417,13 +417,13 @@ describe("deriveRenameOutputPath — exact basename match (no lang suffix)", () 
     expect(isNoOpRename(expected, out2)).toBe(true);
   });
 
-  // Round 1 F4.N-R1-13 / F4.N-R1-14: pin the Wave 5 self-overwrite
-  // bypass — rename mode where the subtitle path already matches the
-  // video stem must NOT trip assertSafeOutputPath's self-overwrite
-  // guard. The bypass at pairing-engine.ts:486 is the load-bearing
-  // line; without this test a refactor that drops the guard could
-  // re-introduce the regression (legitimate "rename to same name"
-  // throws self-overwrite error) and existing tests would still pass.
+  // Pin the self-overwrite bypass — rename mode where the subtitle
+  // path already matches the video stem must NOT trip
+  // assertSafeOutputPath's self-overwrite guard. The bypass at
+  // pairing-engine.ts:486 is the load-bearing line; without this
+  // test a refactor that drops the guard could re-introduce the
+  // regression (legitimate "rename to same name" throws self-overwrite
+  // error) and existing tests would still pass.
   it("rename mode no-op (sub already matches video stem) does not throw self-overwrite", () => {
     const v = "C:\\media\\MyShow.S01E01.mkv";
     const sub = "C:\\media\\MyShow.S01E01.ass";
@@ -475,13 +475,13 @@ describe("deriveRenameOutputPath — path-validator integration", () => {
     // filename + the subtitle's extension — there's no template
     // substitution in play, so brace literals are legitimate (NTFS /
     // ext4 / APFS all allow them, and fan-sub releases routinely use
-    // `[Group] Show {1080p}.mkv` style). Pre-R10 this case threw
-    // `illegal characters` because the shared assertSafeOutputFilename
-    // gate (designed for HDR / Shift / Embed / chain template
-    // resolvers, which DO need brace-literal rejection so typo'd
-    // `{Format}` tokens surface as errors) was applied uniformly.
-    // R10 splits the gate via `{ allowBraces: true }` for this
-    // callsite. Other illegal-char gates (control / NTFS-reserved /
+    // `[Group] Show {1080p}.mkv` style). An earlier version of this
+    // case threw `illegal characters` because the shared
+    // assertSafeOutputFilename gate (designed for HDR / Shift / Embed /
+    // chain template resolvers, which DO need brace-literal rejection
+    // so typo'd `{Format}` tokens surface as errors) was applied
+    // uniformly. The gate is now split via `{ allowBraces: true }` for
+    // this callsite. Other illegal-char gates (control / NTFS-reserved /
     // separators) still apply — covered by the sibling tests.
     const video = "C:\\media\\Show.{name}.mkv";
     const sub = "C:\\media\\episode.ass";
@@ -664,7 +664,7 @@ describe("isNoOpRename", () => {
 describe("buildPairings — Round 5 regression guards", () => {
   it("ambiguous videos with no subtitles → source: 'unmatched', not 'warning'", () => {
     // Two videos with identical episode keys (would normally be ambiguous)
-    // but ZERO subtitles — no decision to mark "debatable". Pre-Wave-5.2
+    // but ZERO subtitles — no decision to mark "debatable". An earlier
     // form returned source: "warning", confusingly yellow-flagging a row
     // where nothing existed to argue about.
     const videos = [
@@ -681,9 +681,9 @@ describe("buildPairings — Round 5 regression guards", () => {
 
   it("leading-dot subtitle filename produces output with extension preserved", () => {
     // Crafted fan-sub pack: `.ass` filename (leading-dot Unix hidden
-    // convention). Pre-Wave-5.2 `subDot > 0` guard produced
-    // `<videoBase>` with NO extension — no player loads the result.
-    // The `>= 0` form keeps the full `.ass` as the extension.
+    // convention). An earlier `subDot > 0` guard produced `<videoBase>`
+    // with NO extension — no player loads the result. The `>= 0` form
+    // keeps the full `.ass` as the extension.
     const out = deriveRenameOutputPath("C:/v/Show.mkv", "C:/v/.ass", "rename", null);
     expect(out.endsWith(".ass")).toBe(true);
     expect(out).not.toBe("C:/v/Show");

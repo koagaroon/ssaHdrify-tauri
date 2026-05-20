@@ -13,10 +13,9 @@ interface NumberInputProps {
   /** id forwarded to the inner <input> so a sibling <label htmlFor> works */
   id?: string;
   /**
-   * Caller-derived invalid signal (N-R5-FEFEAT-25). When true, the
-   * border switches to var(--error) so the user sees the
-   * out-of-range / unparseable input instead of the silent fallback
-   * to the prior valid value.
+   * Caller-derived invalid signal. When true, the border switches to
+   * var(--error) so the user sees the out-of-range / unparseable
+   * input instead of the silent fallback to the prior valid value.
    */
   invalid?: boolean;
 }

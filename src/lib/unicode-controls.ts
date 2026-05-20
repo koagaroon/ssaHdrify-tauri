@@ -21,16 +21,15 @@
  * - U+2066..U+2069 — LRI / RLI / FSI / PDI (bidi isolates)
  * - U+FEFF — ZWNBSP / BOM-in-the-middle
  *
- * Round 6 Wave 6.2 brought U+2060 and U+180E into this central set
- * for symmetry with the Rust-side rejections — the Round 5 note
- * "Rust catches them upstream" only held for paths that round-trip
- * through Rust, leaving sanitizeFamily / ass-uuencode safeName (both
- * pure TS) blind to the same codepoints the Rust validators
- * rejected.
+ * U+2060 and U+180E live in this central set for symmetry with the
+ * Rust-side rejections — relying on "Rust catches them upstream"
+ * only held for paths that round-trip through Rust, leaving
+ * sanitizeFamily / ass-uuencode safeName (both pure TS) blind to the
+ * same codepoints the Rust validators rejected.
  *
- * Round 10 A-R10-015 (Defer P3 — coverage scope is intentional):
- * The set targets the well-known Trojan-Source CVE-2021-42574 +
- * widely-deployed zero-width vectors. It does NOT include:
+ * Coverage scope is intentional: the set targets the well-known
+ * Trojan-Source CVE-2021-42574 + widely-deployed zero-width vectors.
+ * It does NOT include:
  *
  * - Tag block U+E0001..U+E007F — "language tags" superseded by the
  *   IETF BCP 47 system; rarely deployed and not part of any current
@@ -65,11 +64,11 @@ export const BIDI_AND_ZERO_WIDTH_CHARS = BIDI_AND_ZERO_WIDTH_PATTERN;
  */
 export const ASCII_CONTROL_CHARS = "\\x00-\\x1f\\x7f-\\x9f";
 
-// Internal matcher consumed by `hasUnicodeControls` below. Round 11
-// W11.7 — was exported pre-R11 but no external caller
-// imported it; `hasUnicodeControls` is the public surface, and external
-// callers needing the regex shape can splice the
-// `BIDI_AND_ZERO_WIDTH_CHARS` character-class fragment instead.
+// Internal matcher consumed by `hasUnicodeControls` below. Was
+// exported in an earlier version but no external caller imported it;
+// `hasUnicodeControls` is the public surface, and external callers
+// needing the regex shape can splice the `BIDI_AND_ZERO_WIDTH_CHARS`
+// character-class fragment instead.
 const BIDI_AND_ZERO_WIDTH_RE = new RegExp(`[${BIDI_AND_ZERO_WIDTH_PATTERN}]`, "u");
 
 /** Global matcher; use with `.replace(GLOBAL_RE, "")` for scrubbing. */

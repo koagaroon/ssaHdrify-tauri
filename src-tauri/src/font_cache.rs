@@ -66,7 +66,7 @@ pub fn try_modified_at(path: &Path) -> Option<i64> {
 /// - macOS:   `$HOME/Library/Application Support/ssahdrify`
 /// - Linux:   `${XDG_DATA_HOME:-$HOME/.local/share}/ssahdrify`
 ///
-/// Round 11 W11.4b : the GUI side used to use Tauri's
+/// The GUI side used to use Tauri's
 /// `app.path().app_data_dir()` which on Windows resolves to the bundle
 /// identifier path `%APPDATA%/com.koagaroon.ssahdrify/` — a separate
 /// folder from the CLI's `%APPDATA%/ssahdrify/`. Unifying under the
@@ -150,7 +150,7 @@ fn platform_data_dir() -> Result<PathBuf, String> {
 /// never silently migrated — release notes call out version bumps so
 /// users intentionally rebuild via `refresh-fonts` or the GUI modal.
 ///
-/// v1 → v2 (Round 2 review): added `family_name_key` column to
+/// v1 → v2: added `family_name_key` column to
 /// `cached_family_keys` storing NFC-normalized lowercase form so
 /// lookup hit rate matches the session DB's user_font_key contract.
 /// Without it, CJK fonts whose name-table form differs from the
@@ -286,7 +286,7 @@ impl DriftReport {
 /// app_lib) can't construct a `FontLookupResult` outside of
 /// `FontCache::lookup_family`. Combined with
 /// `fonts::register_cache_provenance` accepting `&FontLookupResult`
-/// instead of `(&str, u32)`, the W6.3 D1 invariant "only
+/// instead of `(&str, u32)`, the invariant "only
 /// lookup_family hits register in ALLOWED_CACHE_FONT_PATHS" is now
 /// enforced at the type layer rather than by review discipline.
 /// Comments and review notes decay across refactors; types don't.
@@ -418,19 +418,19 @@ impl FontCache {
             }
         }
 
-        // R14 W14.2 (Codex finding 4da5361a): refuse a reparse point
-        // at the cache file path. `Connection::open` follows symlinks,
-        // so a planted symlink (dangling or not) would otherwise be
-        // followed and SQLite would create / open a database at the
-        // attacker's chosen target. The R13 W13.4 fix to
-        // `migrate_legacy_gui_cache` made dangling-symlink handling
-        // worse: pre-W13.4 the migration's `fs::rename` would have
-        // replaced the symlink itself with the legacy cache; post-W13.4
-        // `symlink_metadata().is_ok()` treats the dangling symlink as
-        // "occupied" and skips migration, leaving the symlink for
-        // `open_or_create` to follow. Closing the gap here means
-        // ALL callers (migrate + direct startup + future) are defended
-        // at the SQLite open boundary, not just the migration helper.
+        // Refuse a reparse point at the cache file path.
+        // `Connection::open` follows symlinks, so a planted symlink
+        // (dangling or not) would otherwise be followed and SQLite
+        // would create / open a database at the attacker's chosen
+        // target. An earlier fix to `migrate_legacy_gui_cache` made
+        // dangling-symlink handling worse: previously the migration's
+        // `fs::rename` would have replaced the symlink itself with
+        // the legacy cache; now `symlink_metadata().is_ok()` treats
+        // the dangling symlink as "occupied" and skips migration,
+        // leaving the symlink for `open_or_create` to follow. Closing
+        // the gap here means ALL callers (migrate + direct startup +
+        // future) are defended at the SQLite open boundary, not just
+        // the migration helper.
         if crate::util::is_reparse_point(cache_path) {
             return Err(CacheError::Io(format!(
                 "refusing to open cache at a reparse point (symlink / junction): {}. \
@@ -863,20 +863,17 @@ impl FontCache {
 /// Current Unix timestamp in seconds. Used for `last_scanned_at` on
 /// inserts. Returns `None` if the system clock is somehow before the
 /// Unix epoch — impossible in practice, but the symmetric posture
-/// matches `try_modified_at` (R10 N-R10-008 tightened that helper
-/// from `.unwrap_or(0)` to `.ok()?` for the same sentinel-collision
+/// matches `try_modified_at` (that helper was tightened from
+/// `.unwrap_or(0)` to `.ok()?` for the same sentinel-collision
 /// concern). Callers surface `None` as `CacheError::Io` with a
 /// "system clock before Unix epoch" message rather than persisting
-/// epoch-zero into SQLite. (R15 W15.3 N-R15-15: tightened
-/// symmetrically with try_modified_at; pre-W15.3 the asymmetric
-/// `.unwrap_or(0)` posture relied on doc discipline — exactly what
-/// N-R10-008 already replaced for the parallel helper.)
+/// epoch-zero into SQLite.
 fn current_unix_seconds() -> Option<i64> {
     // `i64::try_from` (not `as i64`) for posture symmetry
     // with `try_modified_at`. The cast can't overflow until year ~292
     // billion, but the typed conversion makes the "this could fail"
     // contract type-level explicit rather than relying on doc
-    // discipline — mirrors the R10 N-R10-008 tightening.
+    // discipline.
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .ok()
@@ -1256,13 +1253,13 @@ mod tests {
         assert_eq!(key_count, 3, "all three family aliases should be indexed");
     }
 
-    /// Round 1 A4.N-R1-14: Wave 5 added `INSERT OR IGNORE` on
-    /// `cached_family_keys` so duplicate raw family names that
-    /// NFC-normalize + lowercase to the same `family_name_key` (e.g.
-    /// the NFC and NFD forms of `Café`, or two case variants of an
-    /// English name) don't violate the PK `(family_name_key, bold,
-    /// italic, font_path, face_index)`. Without OR IGNORE this would
-    /// throw, aborting the whole `replace_folder` transaction.
+    /// `INSERT OR IGNORE` on `cached_family_keys` ensures duplicate
+    /// raw family names that NFC-normalize + lowercase to the same
+    /// `family_name_key` (e.g. the NFC and NFD forms of `Café`, or
+    /// two case variants of an English name) don't violate the PK
+    /// `(family_name_key, bold, italic, font_path, face_index)`.
+    /// Without OR IGNORE this would throw, aborting the whole
+    /// `replace_folder` transaction.
     #[test]
     fn replace_folder_dedupes_normalize_equal_family_keys() {
         let (_guard, path) = temp_cache_path();
@@ -1707,10 +1704,10 @@ mod tests {
 
     #[test]
     fn lookup_family_matches_across_case_and_nfc_form() {
-        // Round 2 review N-R2-14 / N-R2-28: cache lookup must
-        // NFC-normalize + lowercase BOTH the stored key and the
-        // query so a font's name-table form (often NFC) matches an
-        // ASS file's `\fn` reference regardless of NFD/NFC or case.
+        // Cache lookup must NFC-normalize + lowercase BOTH the stored
+        // key and the query so a font's name-table form (often NFC)
+        // matches an ASS file's `\fn` reference regardless of NFD/NFC
+        // or case.
         let (_guard, path) = temp_cache_path();
         let mut cache = FontCache::open_or_create(&path).expect("open");
         // Store an NFC-form precomposed family name.

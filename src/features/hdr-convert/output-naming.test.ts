@@ -167,8 +167,8 @@ describe("resolveOutputPath — {video_name} and {lang} tokens", () => {
 });
 
 describe("resolveOutputPath — strict-throw on unknown tokens (R12 N-R12-2)", () => {
-  // Round 11 W11.7 introduced substituteTemplate strict-throw at the
-  // helper layer; chain-runtime's validator throws even earlier. HDR's
+  // substituteTemplate's strict-throw lives at the helper layer;
+  // chain-runtime's validator throws even earlier. HDR's
   // resolveOutputPath is one of the three consumer entry points (Shift
   // + Embed are the other two, pinned in cli-engine-roundtrip.test.ts).
   // Without consumer-level pins, a future regression that re-loosens

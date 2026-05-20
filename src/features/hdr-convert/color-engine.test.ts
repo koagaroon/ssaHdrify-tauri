@@ -21,12 +21,12 @@ describe("sRgbToHdr — PQ mode", () => {
   });
 
   it("is deterministic — same input maps to specific golden output (Round 11 W11.6 N1-R11-07)", () => {
-    // Pre-R11 this test compared two output triples from the SAME
-    // call inputs to each other — tautological for any pure function.
-    // Now we pin against a golden triple so a regression in the
-    // underlying Color.js math (or its bundled coefficients) trips
-    // the test. The golden is captured from the current Color.js
-    // pipeline; intentional math changes regenerate via
+    // Pin against a golden triple rather than comparing two output
+    // triples from the same call inputs to each other (tautological
+    // for any pure function), so a regression in the underlying
+    // Color.js math (or its bundled coefficients) trips the test.
+    // The golden is captured from the current Color.js pipeline;
+    // intentional math changes regenerate via
     // `npx vitest run -u src/features/hdr-convert/color-engine.test.ts`.
     expect(sRgbToHdr(128, 64, 200, 100, "PQ")).toMatchInlineSnapshot(`
       [
@@ -84,11 +84,12 @@ describe("sRgbToHdr — HLG mode", () => {
 
 describe("sRgbToHdr — edge cases", () => {
   it("snaps zero / negative / NaN brightness to DEFAULT_BRIGHTNESS (W7.5 boundary guard)", () => {
-    // Pre-W7.5 returned [0,0,0] graceful (Python reference threw on
-    // zero). W7.5 introduces a Number.isFinite + < MIN_BRIGHTNESS
-    // guard at the sRgbToHdr entry that snaps invalid values to
-    // DEFAULT_BRIGHTNESS=203, so the conversion still runs against
-    // the BT.2408 reference white instead of producing pure black.
+    // Returning [0,0,0] gracefully (the Python reference threw on
+    // zero) was the prior behavior. Now a Number.isFinite + <
+    // MIN_BRIGHTNESS guard at the sRgbToHdr entry snaps invalid
+    // values to DEFAULT_BRIGHTNESS=203, so the conversion still runs
+    // against the BT.2408 reference white instead of producing pure
+    // black.
     // This is more useful for the chain runtime where a bad config
     // value mid-batch should not silently flatten every pixel to
     // black — the user sees the conversion happen at the standard

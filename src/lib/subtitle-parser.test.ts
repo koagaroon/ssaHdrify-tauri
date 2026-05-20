@@ -126,19 +126,19 @@ describe("parseSubtitle", () => {
   });
 });
 
-// ── Round 6 Wave 6.8 — Codex Finding 1 regression pin ──
+// ── Raw-block junk-flood ceiling regression pin ──
 //
 // Junk-flood SRT/VTT — millions of non-cue blocks separated by blank
 // lines — must trip the raw-block ceiling and abort the parse, NOT
 // silently scan every block until the per-caption cap somehow fires
 // (it never does; junk blocks skip the cap check via timingIdx === -1).
-// W6.5 #18 introduced the regression; W6.8 added MAX_RAW_BLOCKS as
-// defense-in-depth alongside MAX_PARSED_ENTRIES.
+// An earlier refactor introduced the regression; MAX_RAW_BLOCKS is
+// the defense-in-depth alongside MAX_PARSED_ENTRIES.
 describe("parseSubtitle — Wave 6.8 raw-block junk-flood ceiling (Codex Finding 1)", () => {
   it("rejects SRT with > MAX_RAW_BLOCKS junk blocks before the parse loop scans them", () => {
     // One valid cue at the head so format detection fires SRT, followed
-    // by junk blocks that have no timing line. Pre-W6.8 the parser
-    // would scan every junk block via `if (timingIdx === -1) continue`
+    // by junk blocks that have no timing line. An earlier version
+    // scanned every junk block via `if (timingIdx === -1) continue`
     // without counting them against MAX_PARSED_ENTRIES.
     //
     // splitCueBlocks splits on `\n[ \t]*\n` (blank line), so junk blocks
@@ -165,8 +165,9 @@ describe("parseSubtitle — Wave 6.8 raw-block junk-flood ceiling (Codex Finding
 
   it("accepts SRT with stray blank-line padding well below the raw-block ceiling", () => {
     // 100 valid cues + 100 blank padding blocks = 200 raw blocks, far
-    // below the 2M ceiling — must not false-fail. Guards the regression
-    // direction (W6.5 #18 was trying to fix exactly this shape).
+    // below the 2M ceiling — must not false-fail. Guards the
+    // regression direction (the earlier fix was trying to address
+    // exactly this shape).
     const pad = (n: number) => n.toString().padStart(2, "0");
     const cues = Array.from({ length: 100 }, (_, i) => {
       const start = `00:${pad(Math.floor(i / 60))}:${pad(i % 60)},000`;
@@ -181,15 +182,16 @@ describe("parseSubtitle — Wave 6.8 raw-block junk-flood ceiling (Codex Finding
   });
 });
 
-// ── Round 7.5 follow-up — Codex finding (commit 7afe881) regression pin ──
+// ── Oversized ASS Dialogue placeholder alignment regression pin ──
 //
-// W7.5 A4-R7-4 introduced MAX_CAPTION_TEXT_LEN with a `continue` that
-// silently dropped oversized ASS Dialogue lines from `captions`.
-// buildAss still walked every original Dialogue regex match and
-// consumed captions sequentially, so the next normal line received the
-// oversized line's slot. Result for `shiftSubtitle` on a crafted ASS:
-// silent timestamp drift across every Dialogue after the first
-// oversized one. Fix: parseAss now emits a placeholder Caption with
+// An earlier version introduced MAX_CAPTION_TEXT_LEN with a
+// `continue` that silently dropped oversized ASS Dialogue lines from
+// `captions`. buildAss still walked every original Dialogue regex
+// match and consumed captions sequentially, so the next normal line
+// received the oversized line's slot. Result for `shiftSubtitle` on
+// a crafted ASS: silent timestamp drift across every Dialogue after
+// the first oversized one. Fix: parseAss now emits a placeholder
+// Caption with
 // `skipped: true` for oversized lines; buildAss returns the original
 // line untouched on that flag but still advances its index, keeping
 // positional alignment.
@@ -254,14 +256,14 @@ describe("parseSubtitle / shiftSubtitle — oversized-ASS-Dialogue placeholder a
     expect(output).toContain("Dialogue: 0,0:00:40.50,0:00:41.50,Default,LAST");
   });
 
-  // ── Round 8 Wave 8.3 — parser boundary pins ──
+  // ── Parser boundary pins ──
 
   it("parses single-digit-hour VTT timing as zero (bounded-hour regex)", () => {
-    // Round 8 A-R8-A1-2 / N-R8-N1-1: the VTT hour group is bounded
-    // `\d{2,12}` now, so a stray single-digit hour like "1:00:00.000"
-    // doesn't satisfy the HH:MM:SS form. The MM:SS arm still matches
-    // ("1:00.000" is allowed by that arm), but a 3-component "1:00:00"
-    // must NOT match HH:MM:SS. Pin the rejection.
+    // The VTT hour group is bounded `\d{2,12}`, so a stray
+    // single-digit hour like "1:00:00.000" doesn't satisfy the
+    // HH:MM:SS form. The MM:SS arm still matches ("1:00.000" is
+    // allowed by that arm), but a 3-component "1:00:00" must NOT
+    // match HH:MM:SS. Pin the rejection.
     const content =
       "WEBVTT\r\n\r\n" + "1:00:00.000 --> 1:00:02.000\r\n" + "this should not match HH:MM:SS\r\n";
     const result = parseSubtitle(content);
@@ -271,15 +273,14 @@ describe("parseSubtitle / shiftSubtitle — oversized-ASS-Dialogue placeholder a
   });
 
   it("parses 12-digit-hour VTT timing (upper bound)", () => {
-    // actually use a 12-digit fixture so the
-    // at-limit test pins the boundary from the inside. The Round 9
-    // attempt used a 9-digit fixture and called it "upper bound";
-    // a regression lowering the bound to `\d{2,11}` would have left
-    // both tests green (9 digits passes, 13 fails) without
-    // exercising the actual 12-digit edge. The 12-digit fixture +
-    // the 13-digit over-bound counter-test (below) pin the boundary
-    // from both sides — code_review.md "boundary-named tests pair
-    // at-limit + over-limit".
+    // Use a 12-digit fixture so the at-limit test pins the boundary
+    // from the inside. An earlier attempt used a 9-digit fixture and
+    // called it "upper bound"; a regression lowering the bound to
+    // `\d{2,11}` would have left both tests green (9 digits passes,
+    // 13 fails) without exercising the actual 12-digit edge. The
+    // 12-digit fixture + the 13-digit over-bound counter-test (below)
+    // pin the boundary from both sides — code_review.md "boundary-
+    // named tests pair at-limit + over-limit".
     const longHour = "999999999999"; // 12 digits, exactly at {2,12} upper bound
     const content = `WEBVTT\r\n\r\n${longHour}:00:01.000 --> ${longHour}:00:02.000\r\nLine\r\n`;
     const result = parseSubtitle(content);
@@ -287,21 +288,21 @@ describe("parseSubtitle / shiftSubtitle — oversized-ASS-Dialogue placeholder a
   });
 
   it("rejects 13-digit-hour VTT timing (upper bound enforced)", () => {
-    // Round 9 N-R9-N1-3 companion: above-cap hour fails the HH:MM:SS
-    // form (no MM:SS fallback matches a 13-digit prefix either), so
-    // the cue is skipped and the parse yields zero captions.
+    // Above-cap hour fails the HH:MM:SS form (no MM:SS fallback
+    // matches a 13-digit prefix either), so the cue is skipped and
+    // the parse yields zero captions.
     const tooLong = "9999999999999"; // 13 digits, exceeds {2,12}
     const content = `WEBVTT\r\n\r\n${tooLong}:00:01.000 --> ${tooLong}:00:02.000\r\nLine\r\n`;
     const result = parseSubtitle(content);
     expect(result.captions).toHaveLength(0);
   });
 
-  // boundary-pair parity for SRT and ASS
-  // hour fields. VTT already had at-limit + over-limit pairs; SRT and
-  // ASS share the same `\d{1,12}` bound but only had "smoke test"
-  // coverage. Code-review discipline requires both sides of a named
-  // boundary be pinned so a refactor that loosens the cap (`\d{1,13}`)
-  // or tightens it (`\d{1,11}`) trips a test.
+  // Boundary-pair parity for SRT and ASS hour fields. VTT already
+  // had at-limit + over-limit pairs; SRT and ASS share the same
+  // `\d{1,12}` bound but only had "smoke test" coverage. Code-review
+  // discipline requires both sides of a named boundary be pinned so
+  // a refactor that loosens the cap (`\d{1,13}`) or tightens it
+  // (`\d{1,11}`) trips a test.
 
   it("parses 12-digit-hour SRT timing (upper bound)", () => {
     const longHour = "999999999999"; // 12 digits
@@ -313,12 +314,12 @@ describe("parseSubtitle / shiftSubtitle — oversized-ASS-Dialogue placeholder a
 
   it("rejects 13-digit-hour SRT timing (upper bound enforced)", () => {
     const tooLong = "9999999999999"; // 13 digits
-    // R2 N-R2-9 (Pattern 2 cap symmetry): SRT_TIMING used to allow
-    // `\d+` for hours so 13-digit-hour SRT was format-detected as
-    // SRT and rejected per-block ("zero captions"). After W2 the
-    // detector caps hours at {1,12} matching the extraction regexes,
-    // so a 13-digit hour now fails BOTH detection AND extraction —
-    // parseSubtitle throws "Could not detect subtitle format".
+    // Pattern 2 cap symmetry: SRT_TIMING used to allow `\d+` for
+    // hours so 13-digit-hour SRT was format-detected as SRT and
+    // rejected per-block ("zero captions"). The detector now caps
+    // hours at {1,12} matching the extraction regexes, so a 13-digit
+    // hour fails BOTH detection AND extraction — parseSubtitle
+    // throws "Could not detect subtitle format".
     // The failure mode shift is acceptable: 13-digit hours
     // (~10 billion hours) are either malicious or hopelessly
     // corrupted, and a throw at the format-detection boundary is
@@ -382,10 +383,9 @@ describe("parseSubtitle / shiftSubtitle — oversized-ASS-Dialogue placeholder a
     expect(result.captions).toHaveLength(0);
   });
 
-  // direct pins on R10 N-R10-006 (parseSub
-  // skipped-placeholder) + N-R10-007 / Round 11 W11.1 N1-R11-01
-  // (parseSrt/parseVtt skipped-placeholder). Pre-W11.6 these contracts
-  // were exercised only via integration paths.
+  // Direct pins on the parseSub / parseSrt / parseVtt skipped-
+  // placeholder contracts. Previously these contracts were exercised
+  // only via integration paths.
 
   it("parseSub emits a skipped placeholder for oversized text (R10 N-R10-006)", () => {
     const big = "Z".repeat(65_000); // > MAX_CAPTION_TEXT_LEN (64 KB)

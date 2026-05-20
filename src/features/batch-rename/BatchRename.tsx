@@ -1,21 +1,20 @@
 /**
  * Batch Rename — Tab 4.
  *
- * Stage 5a: tab plumbing + ingestion (file pick / folder drop, auto
- *   categorization, count chips, cross-tab dedup).
- * Stage 5b: pairing engine + preview grid.
- * Stage 5c: output-mode radios (rename / copy-to-video / copy-to-chosen)
- *   + per-row checkbox toggle + run flow with rename-confirm +
- *   countExistingFiles overwrite-confirm + cancel mid-batch.
- * Stage 5d: manual edit. Video-centric grid — exactly one row per
- *   video. The subtitle column is a dropdown listing every subtitle
- *   in the batch; the first regex-paired sub is pre-selected. The
- *   user re-pairs by picking a different sub; subs already paired
- *   with another video are unpaired automatically (uniquely owned).
- *   Subtitles whose episode regex didn't match any video are hidden
- *   from the grid but stay in the dropdown — the workflow is
- *   video-first ("I have a video, find me a sub for it"). ↺ Reset
- *   restores the engine's seed.
+ * Tab plumbing + ingestion (file pick / folder drop, auto
+ * categorization, count chips, cross-tab dedup). Pairing engine +
+ * preview grid. Output-mode radios (rename / copy-to-video /
+ * copy-to-chosen) + per-row checkbox toggle + run flow with
+ * rename-confirm + countExistingFiles overwrite-confirm + cancel
+ * mid-batch. Manual edit: video-centric grid — exactly one row per
+ * video. The subtitle column is a dropdown listing every subtitle
+ * in the batch; the first regex-paired sub is pre-selected. The
+ * user re-pairs by picking a different sub; subs already paired
+ * with another video are unpaired automatically (uniquely owned).
+ * Subtitles whose episode regex didn't match any video are hidden
+ * from the grid but stay in the dropdown — the workflow is
+ * video-first ("I have a video, find me a sub for it"). ↺ Reset
+ * restores the engine's seed.
  */
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import {
@@ -56,9 +55,8 @@ import { categorize } from "../../lib/rename-extensions";
 
 // VIDEO_EXTS / SUBTITLE_EXTS / IGNORED_EXTS / Category / `categorize` now
 // live in `src/lib/rename-extensions.ts` — shared with the CLI engine and
-// the tauri-api picker filter (R2 N-R2-2 / N-R2-3). Add new extensions
-// (`.av1`, `.heic`, etc.) to that module; this file consumes via the
-// import above.
+// the tauri-api picker filter. Add new extensions (`.av1`, `.heic`,
+// etc.) to that module; this file consumes via the import above.
 
 interface Categorized {
   videos: string[];
@@ -200,10 +198,10 @@ export default function BatchRename() {
     const parsedSubs = subtitlePaths.map((p, i) => parseFilename(p, subtitleNames[i] ?? ""));
     // buildPairings now owns row id derivation
     // (v|<path> for every row — engine only emits video-bearing rows).
-    // Pre-R10 this site re-keyed every row with `s|...` / `b|...`
-    // branches that were unreachable in practice (subtitle-only or
-    // both-null rows are never produced by buildPairings), and the
-    // engine's `makeRowId` output was discarded one line later.
+    // An earlier form of this site re-keyed every row with `s|...` /
+    // `b|...` branches that were unreachable in practice (subtitle-
+    // only or both-null rows are never produced by buildPairings), and
+    // the engine's `makeRowId` output was discarded one line later.
     return buildPairings(parsedVideos, parsedSubs);
   }, [videoPaths, videoNames, subtitlePaths, subtitleNames]);
 
@@ -288,12 +286,12 @@ export default function BatchRename() {
         width: "1fr",
         render: (row) =>
           row.video ? (
-            // sanitize the visible video filename. Design
-            // doc § Stage 5d positioned the destructive-rename ask()
-            // dialog as the safety net, but a BiDi-reversed display
-            // in the grid undermines the visual-confirm value the
-            // user relies on BEFORE the dialog appears (they pick
-            // which row to rename from this grid, not the dialog).
+            // Sanitize the visible video filename. The design doc
+            // positioned the destructive-rename ask() dialog as the
+            // safety net, but a BiDi-reversed display in the grid
+            // undermines the visual-confirm value the user relies on
+            // BEFORE the dialog appears (they pick which row to rename
+            // from this grid, not the dialog).
             <span title={sanitizeForDialog(row.video.name)}>
               {sanitizeForDialog(row.video.name)}
             </span>
@@ -370,16 +368,16 @@ export default function BatchRename() {
       // before calling so any concurrent async work (from a future
       // refactor that adds an await inside this handler) gets its
       // invalidation signal at the bump site.
-      // clear the previous run's action result on
-      // EVERY new ingest, not just the happy path. Pre-R10 the
-      // conflict / empty-input early returns left `lastActionResult`
-      // set to whatever the last run produced ("success" / "error" /
-      // "cancelled" / "noop"), so the footer rendered the stale
-      // "Rename complete" or "Rename failed" message alongside the
-      // fresh red drop-error banner — contradictory user signals.
-      // Resetting at the top of ingest matches the natural mental
-      // model: a new selection means "start fresh", regardless of
-      // whether the ingest itself succeeds.
+      // Clear the previous run's action result on EVERY new ingest,
+      // not just the happy path. An earlier form's conflict / empty-
+      // input early returns left `lastActionResult` set to whatever
+      // the last run produced ("success" / "error" / "cancelled" /
+      // "noop"), so the footer rendered the stale "Rename complete" or
+      // "Rename failed" message alongside the fresh red drop-error
+      // banner — contradictory user signals. Resetting at the top of
+      // ingest matches the natural mental model: a new selection means
+      // "start fresh", regardless of whether the ingest itself
+      // succeeds.
       setLastActionResult(null);
 
       const { videos, subtitles, unknown } = categorizePaths(paths);
@@ -497,11 +495,10 @@ export default function BatchRename() {
           derivedTargets.push({ row, outputPath });
         } catch (e) {
           const reason = sanitizeError(e);
-          // Round 11 W11.2 (M2 / N2-R11-01): sanitize the subtitle name
-          // before it flows into the log line. fan-sub subtitle
-          // filenames are P1b attacker-influenced; HDR / Timing / Embed
-          // already sanitize at every addLog site, BatchRename was the
-          // outlier.
+          // Sanitize the subtitle name before it flows into the log
+          // line. Fan-sub subtitle filenames are P1b attacker-
+          // influenced; HDR / Timing / Embed already sanitize at every
+          // addLog site, BatchRename was the outlier.
           addLog(t("msg_rename_skipped", sanitizeForDialog(row.subtitle!.name), reason), "error");
           skippedDeriveCount += 1;
         }
@@ -528,7 +525,7 @@ export default function BatchRename() {
         }
       }
       for (const tgt of noopTargets) {
-        // W11.2 (M2 / N2-R11-01): sanitize attacker-influenced filename.
+        // Sanitize attacker-influenced filename.
         addLog(t("msg_rename_already_named", sanitizeForDialog(tgt.row.subtitle!.name)), "info");
       }
       if (targets.length === 0) {
@@ -560,10 +557,10 @@ export default function BatchRename() {
       // + the overwrite-existing confirm can both fire in the same run
       // (rename mode + outputs already exist), so the overwrite branch
       // suppresses the suffix only when the rename branch above already
-      // showed it (N-R5-FEFEAT-03: previously a mutable
-      // `skippedSuffixShown` flag tracked this — collapsed to a derived
-      // const at the overwrite-branch callsite since the only consumer
-      // computes the answer locally).
+      // showed it (previously a mutable `skippedSuffixShown` flag
+      // tracked this — collapsed to a derived const at the
+      // overwrite-branch callsite since the only consumer computes the
+      // answer locally).
       const skippedSuffix =
         skippedDeriveCount > 0 ? "\n\n" + t("msg_rename_skipped_count", skippedDeriveCount) : "";
 
@@ -680,12 +677,11 @@ export default function BatchRename() {
             break;
           }
 
-          // Round 11 W11.2 (M2 / N2-R11-01): hoist sanitized display
-          // names at top of per-row block. Same pattern HDR / Timing /
-          // FontEmbed adopted in Round 7 W7.1 — every addLog site below
-          // reuses these. row.subtitle!.path (used for the actual
-          // renamePath / copyPath calls) keeps the literal bytes; only
-          // the display path is sanitized.
+          // Hoist sanitized display names at top of per-row block.
+          // Same pattern HDR / Timing / FontEmbed adopted — every
+          // addLog site below reuses these. row.subtitle!.path (used
+          // for the actual renamePath / copyPath calls) keeps the
+          // literal bytes; only the display path is sanitized.
           const subName = sanitizeForDialog(row.subtitle!.name);
           const outName = sanitizeForDialog(fileNameFromPath(outputPath));
           addLog(t("msg_processing", subName));
@@ -786,7 +782,7 @@ export default function BatchRename() {
 
   return (
     <div className="space-y-4">
-      {/* File strip / drop zone — the only ingest surface in Stage 5a.
+      {/* File strip / drop zone — the only ingest surface for this tab.
            Videos and subtitles auto-categorize after the drop / pick.
            Drop hint surfaces only when idle. */}
       <div

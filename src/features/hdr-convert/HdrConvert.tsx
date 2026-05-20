@@ -253,9 +253,9 @@ export default function HdrConvert() {
       });
 
       if (subtitlePaths.length === 0) {
-        // Surface through both the log AND the standard DropErrorBanner
-        // (N-R5-FEFEAT-09 mirror). Users with collapsed log panels see
-        // nothing from log-only — banner is the always-visible feedback.
+        // Surface through both the log AND the standard DropErrorBanner.
+        // Users with collapsed log panels see nothing from log-only —
+        // banner is the always-visible feedback.
         const msg = t("msg_no_subtitle_in_drop");
         addLog(msg, "error");
         setDropError(msg);
@@ -378,20 +378,20 @@ export default function HdrConvert() {
           // Defensive fallback: `fileNameFromPath` is currently total but
           // a future refactor (path-validation rejection, etc.) could
           // make it throw — and then the catch block at the bottom of
-          // the loop would lose `fileName` (Round 1 F2.N-R1-1 brittle
-          // TDZ shape). `let` + initial = filePath gives the catch a
-          // usable identifier in every code path.
+          // the loop would lose `fileName` in a brittle TDZ shape.
+          // `let` + initial = filePath gives the catch a usable
+          // identifier in every code path.
           //
-          // Wave 7.1 BiDi parity: fileName flows into ~8 addLog calls
-          // below; sanitize once at source so every downstream
-          // interpolation is automatically BiDi-scrubbed without each
-          // callsite remembering to wrap. Same pattern as FontEmbed.
-          // bare-split fallback BEFORE invoking
-          // fileNameFromPath, so the catch path uses just the basename
-          // rather than the full path. Pre-W15.6 the catch path logged
-          // the full sanitized path through every addLog call below —
-          // ~200-char path × ~8 logs = ~1.6 KB log noise per failing
-          // file, within the 4 KB cap but unnecessarily bulky.
+          // BiDi parity: fileName flows into ~8 addLog calls below;
+          // sanitize once at source so every downstream interpolation
+          // is automatically BiDi-scrubbed without each callsite
+          // remembering to wrap. Same pattern as FontEmbed.
+          // Bare-split fallback BEFORE invoking fileNameFromPath, so
+          // the catch path uses just the basename rather than the
+          // full path — logging the full sanitized path through every
+          // addLog call below would produce ~200-char × ~8 logs =
+          // ~1.6 KB log noise per failing file, within the 4 KB cap
+          // but unnecessarily bulky.
           let fileName = sanitizeForDialog(filePath.split(/[\\/]/).pop() ?? filePath);
           try {
             fileName = sanitizeForDialog(fileNameFromPath(filePath));
@@ -453,15 +453,14 @@ export default function HdrConvert() {
               // Parse with our browser-compatible parser
               const { captions } = parseSubtitle(preprocessed, style.fps);
 
-              // Round 10 N-R10-032 + Round 11 W11.1 : surface
-              // skipped-placeholder count. All four parsers push
-              // `skipped: true` Captions for entries whose text exceeded
-              // MAX_CAPTION_TEXT_LEN (64 KB). Without surfacing the
-              // count, the data loss is invisible to the user (empty
-              // Dialogue lines on the ASS side; cues dropped from the
-              // captions array on the SRT/VTT side after R11). Log via
-              // addLog so the user sees it rather than discovering it
-              // after the fact.
+              // Surface skipped-placeholder count. All four parsers
+              // push `skipped: true` Captions for entries whose text
+              // exceeded MAX_CAPTION_TEXT_LEN (64 KB). Without
+              // surfacing the count, the data loss is invisible to
+              // the user (empty Dialogue lines on the ASS side; cues
+              // dropped from the captions array on the SRT/VTT side).
+              // Log via addLog so the user sees it rather than
+              // discovering it after the fact.
               const skippedCount = captions.filter((c) => c.skipped).length;
               if (skippedCount > 0) {
                 addLog(t("msg_oversized_skipped", skippedCount, fileName), "warn");

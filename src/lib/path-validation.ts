@@ -419,7 +419,7 @@ export function assertSafeOutputFilename(
   if (illegalRe.test(filename)) {
     throw new Error(`Output filename contains illegal characters: ${filename}`);
   }
-  // Reject BiDi / zero-width controls (Round 6 Wave 6.2 parity sweep).
+  // Reject BiDi / zero-width controls (parity sweep).
   // ILLEGAL_FILENAME_CHARS covers C0 + DEL + NTFS punctuation but NOT
   // the Cf bidi format codepoints (U+200E..U+202E, U+2066..U+2069,
   // U+061C) or zero-width joiners — those flow through the regex and
@@ -462,9 +462,9 @@ export function assertSafeOutputFilename(
  * to forward slashes internally before comparing.
  */
 export function assertSafeOutputPath(outputPath: string, inputPath: string): void {
-  // Backslash → forward only on Windows (Round 8 A-R8-N4-7 — POSIX-
-  // correctness gate, parity with `pathsEqualOnFs` and
-  // `decomposeInputPath`). On POSIX `\` is a valid filename character;
+  // Backslash → forward only on Windows (POSIX-correctness gate,
+  // parity with `pathsEqualOnFs` and `decomposeInputPath`). On POSIX
+  // `\` is a valid filename character;
   // unconditional rewriting would mangle directory-escape and
   // self-overwrite checks on legitimate POSIX paths containing `\`.
   const normalizedOutput = isWindowsRuntime ? outputPath.replace(/\\/g, "/") : outputPath;
@@ -498,13 +498,13 @@ export function assertSafeOutputPath(outputPath: string, inputPath: string): voi
   // Output must stay inside the input directory. Comparing against
   // `inputDir + "/"` avoids the `/dir1` vs `/dir12` prefix collision.
   //
-  // Round 10 A-R10-012 (Defer P3 — drive-root edge): for a
+  // Drive-root edge (intentional defense-in-depth gap): for a
   // drive-root input like `/file.ass`, `inputDir` is empty and this
   // check degenerates to "output starts with `/`" — any absolute
   // path passes the dir-escape gate. The `..` traversal regex above
   // still fires, so output can't traverse OUT of the implied root,
   // but it could land in any sibling directory of the drive root.
-  // Defense-in-depth gap accepted under P3: drive-root inputs are
+  // Defense-in-depth gap accepted: drive-root inputs are
   // pathological (a user dropping `/file.ass` directly), and the
   // attack surface (re-rooting output to `/etc/...` instead of `/`)
   // is rejected by `assertSafeOutputFilename` upstream because
@@ -525,12 +525,11 @@ export function assertSafeOutputPath(outputPath: string, inputPath: string): voi
   // Use 259 to surface the limit with a clear error here. Long-local
   // paths get the OS extended limit (32767 incl. null → 32766 usable).
   //
-  // POSIX runtimes get PATH_MAX = 4096 (Linux's
-  // standard limit, matches Rust-side `RELOCATED_PATH_MAX_LEN`
-  // cfg-gated POSIX path) instead of the Windows 259. Pre-R10 the
-  // hard-coded 259 false-rejected legitimate Linux paths approaching
-  // ~260 chars; cross-platform.md mandates portable code from the
-  // first commit, and the per-OS branch closes the gap.
+  // POSIX runtimes get PATH_MAX = 4096 (Linux's standard limit,
+  // matches Rust-side `RELOCATED_PATH_MAX_LEN` cfg-gated POSIX path)
+  // instead of the Windows 259. An earlier hard-coded 259 false-
+  // rejected legitimate Linux paths approaching ~260 chars; the
+  // per-OS branch closes the gap.
   const lower = normalizedOutput.toLowerCase();
   const isLongLocalPath = lower.startsWith("//?/") && !lower.startsWith("//?/unc/");
   let maxPathLen: number;
@@ -558,27 +557,27 @@ export function assertSafeOutputPath(outputPath: string, inputPath: string): voi
 /**
  * Extract the filename from a full file path and strip BiDi / zero-
  * width + ASCII control characters. Backslash is treated as a separator
- * only on Windows (POSIX-correctness gate per A-R8-N4-12 / parity with
+ * only on Windows (POSIX-correctness gate, parity with
  * `decomposeInputPath`); on POSIX `\` is a valid filename character.
  *
- * Empty-result fallback (R16 W16.6 N-R16-16): `String.prototype.split`
- * always returns a non-empty array and `pop()` returns `""` for
- * trailing-separator input (`C:/Users/`). Logical OR falls back to the
- * original path so consumers (addLog / status messages / dropError
- * banners) always get a meaningful display string.
+ * Empty-result fallback: `String.prototype.split` always returns a
+ * non-empty array and `pop()` returns `""` for trailing-separator
+ * input (`C:/Users/`). Logical OR falls back to the original path so
+ * consumers (addLog / status messages / dropError banners) always get
+ * a meaningful display string.
  *
- * Sanitization (Round 10 N-R10-025 + Round 11 W11.2 N3-R11-01):
- * stripUnicodeControls covers BiDi / zero-width / U+2028 / U+2029 / etc.;
- * the trailing regex strips ASCII C0 (`\x00-\x1f`), DEL (`\x7f`), and
- * C1 (`\x80-\x9f`). Both GUI display (addLog, dropdown options, drop-
- * error banners) and CLI stderr / JSON output consume the result, so a
- * crafted argv path or a hostile filename containing `\r`, `\0`, or
- * U+202E (Trojan-Source) cannot break log row formatting or smuggle
- * a visual-reversal into the displayed name.
+ * Sanitization: stripUnicodeControls covers BiDi / zero-width /
+ * U+2028 / U+2029 / etc.; the trailing regex strips ASCII C0
+ * (`\x00-\x1f`), DEL (`\x7f`), and C1 (`\x80-\x9f`). Both GUI display
+ * (addLog, dropdown options, drop-error banners) and CLI stderr /
+ * JSON output consume the result, so a crafted argv path or a hostile
+ * filename containing `\r`, `\0`, or U+202E (Trojan-Source) cannot
+ * break log row formatting or smuggle a visual-reversal into the
+ * displayed name.
  *
- * R2 N-R2-1: extracted from `tauri-api.ts::fileNameFromPath` +
+ * Extracted from `tauri-api.ts::fileNameFromPath` +
  * `cli-engine-entry.ts::fileNameFromPath` (the two had drifted on the
- * empty-result fallback — CLI lacked the W16.6 `|| path` fix and
+ * empty-result fallback — the CLI copy lacked the `|| path` fix and
  * silently dropped trailing-separator paths from the rename plan).
  */
 export function fileNameFromPath(path: string): string {

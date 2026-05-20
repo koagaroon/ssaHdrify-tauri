@@ -41,7 +41,7 @@ const THEME_LABEL_KEYS: Record<ThemeMode, string> = {
 
 // derive THEME_OPTIONS from THEME_LABEL_KEYS as
 // the single source — the TAB_IDS pattern (line ~29) above does the
-// same Object.keys map. Pre-W16.6 THEME_OPTIONS and THEME_LABEL_KEYS
+// same Object.keys map. Previously THEME_OPTIONS and THEME_LABEL_KEYS
 // were parallel manual maps that had to stay in sync; adding /
 // renaming a theme mode required edits in two places. JS guarantees
 // insertion-order iteration for string keys, so the display order in

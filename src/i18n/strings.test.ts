@@ -9,8 +9,7 @@ const PLACEHOLDER_RE = /\{(\d+)\}/g;
  * Extract placeholder ids as a sorted MULTISET (Array, not Set). Sort
  * is for order-independence; duplicates are preserved so
  * `placeholders("{0} {0}")` returns `["0", "0"]` and would fail
- * `toEqual` against an `en` value with only one `{0}`. Round 1
- * F1.N-R1-7 raised concern that this might be set-not-multiset; the
+ * `toEqual` against an `en` value with only one `{0}`. The
  * `.sort()` is order-only and `toEqual` does length-aware deep array
  * equality, so multiset semantics hold.
  */

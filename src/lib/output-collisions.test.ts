@@ -4,10 +4,10 @@
  *
  * Mocks @tauri-apps/plugin-fs so the suite runs in pure Node. The behaviors
  * pinned here are the ones the consumer tabs depend on: empty input is 0,
- * mixed inputs return the correct count, and (post-Round-10 A-R10-013)
- * a stat error counts as EXISTING — fail-safe bias that errs toward
- * surfacing the overwrite-confirm dialog rather than silently
- * overwriting on a transient stat failure.
+ * mixed inputs return the correct count, and a stat error counts as
+ * EXISTING — fail-safe bias that errs toward surfacing the
+ * overwrite-confirm dialog rather than silently overwriting on a
+ * transient stat failure.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -51,13 +51,12 @@ describe("countExistingFiles", () => {
     expect(count).toBe(2);
   });
 
-  it("treats a stat error as existing (fail-safe overwrite-confirm bias, Round 10 A-R10-013)", async () => {
+  it("treats a stat error as existing (fail-safe overwrite-confirm bias)", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    // First exists() throws, the rest report true. Round 10 A-R10-013
-    // flipped the failure mode: stat errors now count as EXISTING
-    // (count == 3, not 2), so the overwrite-confirm dialog fires
-    // conservatively. Pre-R10 a transient EBUSY would suppress the
-    // dialog and let the batch silently overwrite real files.
+    // First exists() throws, the rest report true. Stat errors count
+    // as EXISTING (count == 3, not 2), so the overwrite-confirm
+    // dialog fires conservatively. An earlier version let a transient
+    // EBUSY suppress the dialog and silently overwrite real files.
     existsMock.mockImplementationOnce(async () => {
       throw new Error("EBUSY");
     });
