@@ -771,10 +771,10 @@ pub fn entries_to_cache_metadata(
         .collect()
 }
 
-// R17 W17.6 (N-R17-6, visibility asymmetry WHY): module-private
-// (not `pub(crate)` like the persistent cache's sibling
-// `family_lookup_key`, fonts.rs:756 vs font_cache.rs:182). Only the
-// NFC + lowercase normalization is shared via `family_lookup_key`;
+// Visibility asymmetry WHY: module-private (not `pub(crate)` like
+// the persistent cache's sibling `family_lookup_key` in
+// font_cache.rs). Only the NFC + lowercase normalization is shared
+// via `family_lookup_key`;
 // THIS helper additionally appends bold / italic markers via the
 // U+001F field separator and is a session-DB key only. Promoting it
 // to `pub(crate)` would invite cross-module callers to skip the
@@ -880,9 +880,9 @@ fn import_user_font_batch_tx(
             ",
         )
         .map_err(|e| db_error("face insert prepare failed", e))?;
-    // W6.7 Round 6 — WHY plain INSERT (not OR IGNORE) for the
-    // family_keys table: the schema (line ~284) has NO UNIQUE
-    // constraint on (key, face_id, source_order), so there is
+    // WHY plain INSERT (not OR IGNORE) for the family_keys table:
+    // the `font_family_keys` schema in `init_user_font_db` has NO
+    // UNIQUE constraint on (key, face_id, source_order), so there is
     // nothing for an IGNORE clause to suppress. A font with multiple
     // localized family names legitimately produces multiple rows
     // sharing the same `face_id` — that's the normal case. Any
@@ -2236,9 +2236,9 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
             continue;
         }
 
-        // R17 W17.1 (A-R17-8): no `is_reparse_point` pre-check here,
-        // unlike `scan_directory_inner` at line 1650. The asymmetry is
-        // intentional: this function processes paths the user
+        // No `is_reparse_point` pre-check here, unlike
+        // `scan_directory_inner`. The asymmetry is intentional:
+        // this function processes paths the user
         // EXPLICITLY selected one by one via file picker / drag-drop,
         // each entry expressing the user's direct intent to scan that
         // exact file. `scan_directory_inner`'s reject applies to
@@ -2918,9 +2918,9 @@ fn is_in_system_fonts_dir(canonical: &Path) -> bool {
         // APFS is case-insensitive by default; compare in lowercase so symlink
         // chains that surface mixed-case paths still match canonical targets.
         //
-        // R17 W17.6 (N-R17-2, asymmetry with Windows arm WHY): full
-        // Unicode `to_lowercase()` here, not the Windows arm's
-        // `to_ascii_lowercase()` (line 2872). APFS's case-fold IS the
+        // Asymmetry with Windows arm WHY: full Unicode
+        // `to_lowercase()` here, not the Windows arm's
+        // `to_ascii_lowercase()`. APFS's case-fold IS the
         // Unicode case-fold (single composed codepoint comparison) —
         // German `ß` folds to `ss`, Greek final sigma `ς` folds to `σ`
         // (per UTS #21). Using `to_ascii_lowercase` here would
@@ -2987,8 +2987,8 @@ fn is_in_system_fonts_dir(canonical: &Path) -> bool {
 /// invoke this function as a regular `pub fn`; the `#[tauri::command]`
 /// shim `subset_font_b64` below wraps it for the GUI's IPC path with
 /// base64 encoding so the frontend doesn't pay the JSON `[byte, ...]`
-/// expansion (~4–5× per byte → ~50 MB on the worst-case fallback
-/// path). CLI's chain mode marshals subsets via base64 inline (see
+/// expansion (~4–5× per byte → ~50 MB on a worst-case 10 MB subset).
+/// CLI's chain mode marshals subsets via base64 inline (see
 /// `process_one_chain_input`); CLI's standalone embed bundles them
 /// into `engine::FontSubsetPayload` and ships through the engine's
 /// JSON-payload boundary (where the expansion is bounded by per-font
@@ -3131,8 +3131,9 @@ pub fn subset_font(
     // it asserts when `true` — "accepted via this tier" — rather than
     // "is this tier's nature." Each variable evaluates lazily: once a
     // prior tier accepts, subsequent ones short-circuit to `false`.
-    // The downstream gate (line ~3117 system-fonts-dir check, line
-    // ~3150 magic-byte sniff skip) keys off `accepted_via_system`
+    // The downstream gate (the system-fonts-dir directory-residency
+    // check + the magic-byte sniff skip later in `subset_font`)
+    // keys off `accepted_via_system`
     // specifically because system fonts get the extra dir-residency
     // check on top of the registration. Cache + user tiers are
     // checked only when system didn't accept and are NOT individually
@@ -3174,20 +3175,18 @@ pub fn subset_font(
         log::warn!("stat font file failed for '{filename}': {e}");
         "Cannot stat font file".to_string()
     })?;
-    // R8 W5 A-R8-2: defense-symmetry with parse_local_font_file,
-    // scan_directory_inner, scan_files_inner, and preflight — every
-    // other file-read entry in this module gates on is_file() before
-    // touching content; subset_font alone relied on extension + reparse
-    // + provenance + magic-byte sniff. No reachable exploit today
-    // (upstream defenses close `/dev/null`-class device paths via
-    // validate_ipc_path's DOS-device reject + the reparse check; a
-    // directory named `evil.ttf` would fall through to the magic-byte
-    // probe which fails on the read_exact). The check is here so that
-    // a future change loosening any of those upstream defenses (or
-    // adding a new provenance source that doesn't gate on is_file)
-    // can't silently turn this site into a partial-content reader
-    // for non-file inodes. Reuses the metadata already fetched — no
-    // extra syscall.
+    // Defense-symmetry: every file-read entry path in this module
+    // gates on is_file() before touching content —
+    // `parse_local_font_file` via its callers (scan_directory_inner,
+    // scan_files_inner, preflight_files_inner), and now `subset_font`
+    // here. Pre-this-check `subset_font` relied on extension + reparse
+    // + provenance + magic-byte sniff and could be reached with a
+    // non-regular inode if any of those upstream defenses ever
+    // loosened. No reachable exploit today (validate_ipc_path's
+    // DOS-device reject + the reparse check close `/dev/null`-class
+    // device paths; a directory named `evil.ttf` would fall through
+    // to the magic-byte probe which fails on the read_exact). Reuses
+    // the metadata already fetched above — no extra syscall.
     if !metadata.is_file() {
         log::warn!(
             "Refusing to subset non-regular font path '{}'",
@@ -3255,7 +3254,7 @@ pub fn subset_font(
     // Round 10 A-R10-002: bounded-read TOCTOU mitigation. Parity
     // with the same change in `parse_local_font_file` above —
     // `fs::read` is unbounded and a hostile file swap between the
-    // pre-read stat (line ~2854) and this read could force a
+    // earlier metadata fetch and this read could force a
     // multi-GB allocation before the post-read recheck below
     // catches it. `File::open + take(MAX_FONT_DATA_SIZE + 1) +
     // read_to_end` caps the buffer at the OS layer; the +1 byte
@@ -3347,16 +3346,13 @@ pub fn subset_font(
         } else if let Some(e) = panic_payload.downcast_ref::<std::io::Error>() {
             e.to_string()
         } else {
-            // R17 W17.3 (N-R17-15): no `panic_payload.type_id()` —
-            // `Box<dyn Any>::type_id()` returns the TypeId of the
-            // `dyn Any` trait object itself, NOT the boxed concrete
-            // type, so the value was a fixed constant carrying no
-            // diagnostic. The downcast cascade above covers the
-            // panic shapes fontcull is known to produce; this arm is
-            // the structural fallback for "fontcull added a panic
-            // type we don't handle", and surfacing the filename +
-            // face index in the WARN log (line below) is the more
-            // actionable signal than a constant TypeId. A future
+            // No `panic_payload.type_id()` call — raw TypeId values are
+            // opaque hex without a known type registry, so the WARN log
+            // line below (with filename + face index) is more
+            // actionable than printing the type id. The downcast
+            // cascade above covers the panic shapes fontcull is known
+            // to produce; this arm is the structural fallback for
+            // "fontcull added a panic type we don't handle". A future
             // need for finer panic-type diagnosis would install a
             // `panic::set_hook` to capture `PanicInfo::location` /
             // `PanicInfo::message`, not chase the unboxed type here.
@@ -3416,7 +3412,7 @@ pub fn subset_font(
 /// IPC wrapper around `subset_font` that base64-encodes the result so
 /// the GUI's frontend doesn't pay the JSON `[byte, byte, …]` expansion.
 /// Pre-fix this returned `Vec<u8>` directly; serde-json would write each
-/// byte as decimal+comma (~4–5× per byte), and a 10 MB fallback subset
+/// byte as decimal+comma (~4–5× per byte), and a 10 MB legitimate subset
 /// would expand to ~50 MB IPC payload + a main-thread JSON parse pass.
 /// Frontend `subsetFont()` decodes via `atob` (mirrors chain-runtime's
 /// `decodeBase64`).

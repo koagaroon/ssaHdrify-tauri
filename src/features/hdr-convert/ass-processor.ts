@@ -23,21 +23,36 @@ import { MAX_PARSED_ENTRIES } from "../../lib/subtitle-parser";
 const ASS_HEADER_LINE_BUDGET = 1024;
 const LINE_CAP = MAX_PARSED_ENTRIES + ASS_HEADER_LINE_BUDGET;
 
-// Round 11 W11.3 (A1-R11-02): per-line byte cap. File-level guards
-// (100 MB total, LINE_CAP entries) bound the aggregate but not a
-// single line's length. A crafted ASS with one 99 MB Dialogue line
-// (rest of file tiny) passes both guards yet saturates the UI thread
-// during regex matching + detectSection's trim/lowercase pass. 1 MB
-// per line mirrors font-collector's MAX_DIALOGUE_TEXT_LEN and is
-// generously above legit content (typical Dialogue: 50-2000 chars,
-// complex karaoke ~10 KB, UUEncode rows ~60 chars).
-const MAX_LINE_BYTES = 1_000_000;
+// Per-line character cap. File-level guards (100 MB total, LINE_CAP
+// entries) bound the aggregate but not a single line's length. A
+// crafted ASS with one 99 MB Dialogue line (rest of file tiny) passes
+// both guards yet saturates the UI thread during regex matching +
+// detectSection's trim/lowercase pass. 1 MB per line mirrors
+// font-collector's MAX_DIALOGUE_TEXT_LEN and is generously above legit
+// content (typical Dialogue: 50-2000 chars, complex karaoke ~10 KB,
+// UUEncode rows ~60 chars).
+//
+// Name pin: bound is measured against `line.length` (UTF-16 code
+// units), NOT bytes — the constant is named MAX_LINE_CHARS so a
+// reader doesn't reach for TextEncoder. CJK text effectively counts
+// at 1 unit per character (BMP) / 2 units for surrogates; the
+// 1,000,000 ceiling stays comfortably above realistic input either
+// way.
+const MAX_LINE_CHARS = 1_000_000;
 
-// Round 11 W11.3 (A1-R11-03): cap on field count in a Style line's
-// comma-split. ASS Style format defines ~24 fields; a hostile line
-// with millions of commas would otherwise allocate a multi-MB array
-// in transformStyleLine before any color-field index lookup runs.
-// 1024 is far above any plausible authoring tool's output.
+// Cap on field count in a Style line's comma-split. ASS Style format
+// defines ~24 fields; a hostile line with millions of commas would
+// allocate a multi-MB array in transformStyleLine before any color-
+// field index lookup runs. 1024 is far above any plausible authoring
+// tool's output.
+//
+// Pin: the check runs AFTER `afterColon.split(",")`, so the field
+// vector is already allocated by the time the cap fires. Upstream
+// `MAX_LINE_CHARS` (1 MB per line) bounds the comma count to ~1M
+// regardless, so peak transient allocation stays bounded at ~1M
+// sparse entries — acceptable. A pre-pass `for`-loop comma count
+// would tighten the bound at the cost of an O(N) prefix walk on
+// every Style line; not worth it given the upstream guard.
 const MAX_STYLE_FIELDS = 1024;
 
 // ── Style color fields in ASS [V4+ Styles] section ────────
@@ -174,7 +189,7 @@ function transformStyleLine(
   const fields = afterColon.split(",");
   // Round 11 W11.3 (A1-R11-03): bound the field-array size. See
   // MAX_STYLE_FIELDS docblock for the threat shape. Per-line byte cap
-  // (MAX_LINE_BYTES) already bounds the comma count indirectly via
+  // (MAX_LINE_CHARS) already bounds the comma count indirectly via
   // line length; this check is the explicit pair so a future loosening
   // of the per-line cap doesn't silently re-open the array-allocation
   // attack surface.
@@ -326,9 +341,9 @@ export function processAssContent(
     // Round 11 W11.3 (A1-R11-02): per-line byte cap fires BEFORE
     // detectSection / transformStyleLine / transformEventText so a
     // single pathological line can't burn 99 MB of trim/lowercase +
-    // regex work on the UI thread. See MAX_LINE_BYTES docblock.
-    if (line.length > MAX_LINE_BYTES) {
-      throw new Error(`Line ${i + 1} too long: ${line.length} chars (max ${MAX_LINE_BYTES})`);
+    // regex work on the UI thread. See MAX_LINE_CHARS docblock.
+    if (line.length > MAX_LINE_CHARS) {
+      throw new Error(`Line ${i + 1} too long: ${line.length} chars (max ${MAX_LINE_CHARS})`);
     }
 
     const newSection = detectSection(line);

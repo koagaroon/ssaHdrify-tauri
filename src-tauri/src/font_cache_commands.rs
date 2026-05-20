@@ -426,9 +426,10 @@ pub fn init_gui_font_cache(app_data_dir: &Path) -> Result<(), String> {
 // CLI binary can use the same helper — Round 3 N-R3-15 consolidation.
 use crate::font_cache::try_modified_at;
 
-// R15 W15.3 (N-R15-18): `stat_mtime` wrapper deleted — it was a
-// one-line forward to `try_modified_at`. The N-R5-RUSTGUI-03 caller
-// contract ("None means skip the populate/replace; epoch-zero must
+// Earlier rounds had a `stat_mtime` wrapper here; it was a one-line
+// forward to `try_modified_at` and got deleted. Caller contract
+// preserved across the refactor ("None means skip the populate /
+// replace; epoch-zero must
 // never reach SQLite") lives on the canonical helper's doc
 // (`font_cache.rs::try_modified_at`); duplicating it on a wrapper
 // just decayed (the wrapper's doc became grammatically broken across
@@ -780,9 +781,9 @@ pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
     let mut skipped: Vec<SkippedFolder> = Vec::new();
     for folder in &report.modified {
         let folder_path = Path::new(folder);
-        // None → skip the populate (see `stat_mtime` doc): without
-        // this, a transient stat failure would write an epoch-zero
-        // mtime that drift-detect re-flags forever.
+        // None → skip the populate (see `try_modified_at` doc):
+        // without this, a transient stat failure would write an
+        // epoch-zero mtime that drift-detect re-flags forever.
         let Some(folder_mtime) = try_modified_at(folder_path) else {
             log::warn!("rescan: skipping {folder} — folder mtime unreadable");
             skipped.push(SkippedFolder {
@@ -1432,7 +1433,7 @@ pub fn lookup_font_family(
             // R17 W17.3 (N-R17-1, Pattern 1 census parity): `{family}`
             // is interpolated raw here, no `sanitize_for_display` /
             // `stripUnicodeControls` wrap. Safe today because
-            // `validate_font_family` (line 1290 above) already rejected
+            // `validate_font_family` (invoked at the top of `lookup_font_family`) already rejected
             // BiDi / zero-width / control characters before reaching
             // this site — `family` is a sanitized substring of the IPC
             // input. If `validate_font_family`'s rejection set is ever
@@ -1475,13 +1476,19 @@ mod tests {
     use std::fs;
 
     /// RAII guard mirroring `font_cache.rs::tests::TempCacheDir` —
-    /// the canonical-shape comment on that one (line ~875) enumerates
-    /// every duplicate in the workspace (dropzone.rs / safe_io.rs /
-    /// fonts.rs test modules) and explains why consolidation hasn't
-    /// landed. Keep this struct in sync with its sibling: any change
-    /// to the PID+nanos suffix shape, Drop semantics, or cache-path
-    /// helper signature should be considered for the other site too.
-    /// (R15 W15.3 N-R15-13)
+    /// the canonical-shape comment on that sibling enumerates every
+    /// other temp-dir construction in the workspace (dropzone.rs /
+    /// safe_io.rs / fonts.rs test modules) and explains why
+    /// consolidation hasn't landed.
+    ///
+    /// Same posture, NOT identical: this version takes a `name:
+    /// &str` argument (the lib-side one is no-args) and the seed
+    /// uses `subsec_nanos` (the lib-side uses `as_nanos`, which is
+    /// wider entropy). The difference hasn't surfaced as a collision
+    /// in practice. Keep this struct in sync with its sibling for
+    /// Drop semantics / suffix shape; if the seed-strength gap ever
+    /// becomes a parallel-test issue, port the `as_nanos` form here
+    /// rather than the other way around.
     struct TempCacheDir(std::path::PathBuf);
 
     impl TempCacheDir {

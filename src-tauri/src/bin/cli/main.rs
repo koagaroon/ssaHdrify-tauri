@@ -3529,22 +3529,27 @@ fn group_resolved_fonts_by_face(
     face_groups
 }
 
-/// MUST equal `app_lib::fonts::MAX_SUBSET_CODEPOINTS` (the IPC cap
-/// in fonts.rs, also 200,000). The dedup decision below checks the
-/// merged-union size against this cap BEFORE calling subset_font;
-/// if the union would overflow, we fall back to per-alias subsetting
-/// for that group only — the dedup byte-reduction win is given up
-/// for the cap-busting case, the IPC defense-in-depth stays at 200k
-/// for every individual `subset_font` call. The TS sibling in
-/// `font-embedder.ts` (named `MAX_SUBSET_CODEPOINTS_FOR_DEDUP`)
-/// tracks the same value; its WHY comment names fonts.rs as the
-/// source of truth.
+/// MUST equal `app_lib::fonts::MAX_SUBSET_CODEPOINTS` (the per-call
+/// codepoint cap in `subset_font`, also 200,000). The dedup decision
+/// below checks the merged-union size against this cap BEFORE
+/// calling subset_font; if the union would overflow, we fall back to
+/// per-alias subsetting for that group only — the dedup byte-
+/// reduction win is given up for the cap-busting case, the per-call
+/// defense-in-depth stays at 200k for every individual `subset_font`
+/// call. The TS sibling in `font-embedder.ts` (named
+/// `MAX_SUBSET_CODEPOINTS_FOR_DEDUP`) tracks the same value; its WHY
+/// comment names fonts.rs as the source of truth.
 ///
-/// R1 N-R1-9: cross-language drift defense. `dedup_cap_matches_ipc_cap`
-/// in `mod tests` pins the equality with `app_lib::fonts::MAX_SUBSET_CODEPOINTS`
-/// so a unilateral bump of the IPC cap (the only realistic regression
-/// shape — TS↔Rust drift surfaces at the user-facing dedup decision)
-/// fails the test instead of shipping silently.
+/// CLI lens: `subset_font` is an in-process Rust call from this
+/// binary, not an IPC boundary. The "IPC cap" framing only applies
+/// on the GUI / Tauri path where `subset_font_b64` wraps it.
+///
+/// Cross-language drift defense: `dedup_cap_matches_ipc_cap` in
+/// `mod tests` pins the equality with
+/// `app_lib::fonts::MAX_SUBSET_CODEPOINTS` so a unilateral bump of
+/// the subset cap (the only realistic regression shape — TS↔Rust
+/// drift surfaces at the user-facing dedup decision) fails the test
+/// instead of shipping silently.
 const MAX_SUBSET_CODEPOINTS_FOR_DEDUP: usize = 200_000;
 
 fn subset_resolved_fonts(

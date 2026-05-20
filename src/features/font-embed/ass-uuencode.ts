@@ -93,19 +93,21 @@ export function buildFontEntry(fontName: string, data: Uint8Array): string {
   // literals, and this regex is built via `new RegExp(...)` from a
   // string interpolation, so the rule was never going to fire.
   //
-  // R7 W1 N-R7-11 (sibling cross-ref): the extra `:/\\` literals on
-  // top of the BIDI / control set are SPECIFIC to the [Fonts] header
-  // line shape \u2014 header lines are `fontname: <name>` so a name carrying
-  // `:` would break the parser, and `/` / `\` get sanitized as a
-  // defense-in-depth measure beyond the upstream buildFontFileName
-  // sanitizer. The sibling sanitizer in
-  // `src/features/hdr-convert/srt-converter.ts::FONT_NAME_SANITIZER`
-  // adds `,{}\\:` instead \u2014 that's the ASS Style-line CSV path's stop
-  // chars. Pattern 1 census rule for these two sanitizers (per R7 W1
-  // lesson): both must keep stripping the shared BIDI / control set;
-  // the extra boundary-specific chars are intentional and MUST NOT
-  // be unified into a single helper without re-checking the
-  // per-boundary character implications.
+  // Sibling cross-ref: the extra `:/\\` literals on top of the BIDI /
+  // control set are SPECIFIC to the [Fonts] header line shape \u2014 header
+  // lines are `fontname: <name>` so a name carrying `:` would break the
+  // parser, and `/` / `\` get sanitized as a defense-in-depth measure
+  // beyond the upstream buildFontFileName sanitizer. The sibling
+  // sanitizer in `src/features/hdr-convert/srt-converter.ts::
+  // FONT_NAME_SANITIZER` adds `,{}\\:` instead \u2014 that's the ASS
+  // Style-line CSV path's stop chars.
+  //
+  // BOTH sanitizers share `\\` and `:` \u2014 that is the structural
+  // overlap; `,{}` are unique to srt-converter side, `/` is unique to
+  // this side. Pattern 1 census rule: both must keep stripping the
+  // shared BIDI / control set; the extra boundary-specific chars are
+  // intentional and MUST NOT be unified into a single helper without
+  // re-checking the per-boundary character implications.
   const safeName = fontName.replace(
     new RegExp(`[${ASCII_CONTROL_CHARS}${BIDI_AND_ZERO_WIDTH_CHARS}:/\\\\]`, "gu"),
     "_"

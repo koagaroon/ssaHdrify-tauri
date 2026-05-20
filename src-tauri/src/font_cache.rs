@@ -27,18 +27,19 @@ use std::path::{Path, PathBuf};
 use rusqlite::{params, Connection};
 
 /// Read a folder's mtime as Unix seconds, returning None when either
-/// the metadata stat or the `modified()` call fails. Shared between
-/// GUI `font_cache_commands::detect_font_cache_drift` / rescan flow
-/// and CLI `bin/cli/main.rs::check_cache_drift` so drift detection
-/// uses identical stat semantics on both sides (Round 3 N-R3-15).
+/// the metadata stat or the `modified()` call fails. This is the
+/// canonical mtime-stat helper for every drift / populate site
+/// (GUI's detect / rescan / clear flows + CLI's drift check + every
+/// `replace_folder` callsite). Internal callers use this rather than
+/// inline `metadata().modified()` so drift detection uses identical
+/// stat semantics across all consumers.
 ///
 /// Failure modes route to None: folder gone (NotFound), permission
 /// denied, network share offline, no-mtime FS. Callers treat None as
 /// "omit from snapshot" → `diff_against` reports the folder as
 /// `removed`. A folder whose `metadata().is_ok()` but whose
 /// `modified()` fails is consistently classified as "not statable"
-/// here, matching the symmetry contract that Round 2 N-R2-3 / N-R2-14
-/// fixed for the GUI rescan flow.
+/// here.
 pub fn try_modified_at(path: &Path) -> Option<i64> {
     let modified = std::fs::metadata(path).ok()?.modified().ok()?;
     // Round 10 N-R10-008: pre-epoch mtimes previously fell through
@@ -438,6 +439,17 @@ impl FontCache {
             )));
         }
 
+        // Residual TOCTOU window between the `is_reparse_point`
+        // check above and the `Connection::open` below — an attacker
+        // who can swap `cache_path` to a symlink in this window
+        // bypasses the guard. P1a-accepted: the per-user AppData
+        // location requires an attacker who already has write
+        // access to %APPDATA%/$XDG_DATA_HOME, which is well outside
+        // the single-user-desktop threat model. Sibling acknowledgment
+        // lives in `migrate_legacy_gui_cache` (also a single-syscall
+        // narrow). Tighter forms would need OS-level
+        // `O_NOFOLLOW` / `FILE_FLAG_OPEN_REPARSE_POINT` which
+        // rusqlite doesn't expose.
         let already_existed = cache_path.exists();
         let conn = Connection::open(cache_path)
             .map_err(|e| CacheError::Io(format!("opening {}: {e}", cache_path.display())))?;
@@ -937,21 +949,26 @@ mod tests {
     /// the previous bare-PathBuf helper relied on OS temp cleanup
     /// for panic paths and accumulated stale dirs across runs.
     ///
-    /// R15 W15.3 (N-R15-13) cross-reference: a near-identical
-    /// `TempCacheDir` shape (PID + nanos suffix + RAII Drop wiping)
-    /// lives at `font_cache_commands.rs::tests::TempCacheDir` for
-    /// the same cleanup posture in the GUI-side IPC tests. Other
-    /// test modules (`dropzone.rs::tests` line ~256,
-    /// `safe_io.rs::tests::temp_dir` line ~419,
-    /// `fonts.rs::tests` line ~3306/~3688) use inline
-    /// `std::env::temp_dir().join(...)` constructions without RAII
-    /// — those test bodies rely on per-test `fs::remove_dir_all`
-    /// calls. A refactor extracting a single shared `#[cfg(test)]
-    /// mod test_helpers` would need to also harmonize the suffix
-    /// shapes ("font-cache-test-" vs "ssahdrify-cli-chain-test-"
-    /// etc.); each module's per-suite prefix carries diagnostic
-    /// value when stale dirs need attribution, so the cost-benefit
-    /// hasn't tipped toward consolidation.
+    /// Cross-reference: a sibling `TempCacheDir` lives at
+    /// `font_cache_commands.rs::tests::TempCacheDir` for the GUI-side
+    /// IPC tests. Same posture, NOT identical: the commands-side
+    /// version takes a `name: &str` constructor arg, this one takes
+    /// no args; the seed-strength forms also diverge (`subsec_nanos`
+    /// in commands-side vs `as_nanos` here — the latter is wider
+    /// entropy and is the better default for parallel-test collision
+    /// avoidance, but the difference hasn't surfaced as a real
+    /// collision yet). Don't conflate the two when reading either
+    /// side's WHY block.
+    ///
+    /// Other test modules (`dropzone.rs::tests`,
+    /// `safe_io.rs::tests::temp_dir`, `fonts.rs::tests`) use inline
+    /// `std::env::temp_dir().join(...)` without RAII — those test
+    /// bodies rely on per-test `fs::remove_dir_all` calls. A refactor
+    /// extracting a single shared `#[cfg(test)] mod test_helpers`
+    /// would need to harmonize the suffix shapes (each module's
+    /// per-suite prefix carries diagnostic value when stale dirs need
+    /// attribution); the cost-benefit hasn't tipped toward
+    /// consolidation.
     struct TempCacheDir(std::path::PathBuf);
 
     impl TempCacheDir {
