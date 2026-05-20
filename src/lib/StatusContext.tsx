@@ -39,7 +39,7 @@ export interface StatusContextValue {
   setStatus: (tab: StatusTab, status: Status) => void;
 }
 
-// R16 W16.6 (N-R16-19): internal-only template literal. Not exported,
+// internal-only template literal. Not exported,
 // only spread into the per-tab entries below via `{...DEFAULT_STATUS}`
 // — the spread already produces fresh objects per tab, so the freeze
 // here would only prevent in-place mutation of the *template* (which

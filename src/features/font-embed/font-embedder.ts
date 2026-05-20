@@ -441,7 +441,7 @@ export function deriveEmbeddedPath(inputPath: string): string {
     baseName = baseName.slice(0, -".embedded".length);
   }
   // Post-strip baseName empty / whitespace-or-dot-only guard mirrors
-  // deriveShiftedPath (R10 N-R10-013): a POSIX dotfile-shape like
+  // deriveShiftedPath : a POSIX dotfile-shape like
   // `.embedded.ass` whose stem is just `.` would otherwise resolve
   // to `.embedded.ass` unchanged on every re-run.
   if (!baseName || !baseName.replace(/^\.+/, "").trim()) {
@@ -597,7 +597,7 @@ export async function embedFonts(
       // sanitizeError(...) posture for the same Pattern 1 single-
       // source-completion reason.
       console.warn(`[ssaHdrify] embedFonts: no usage entry for ${stripUnicodeControls(label)}`);
-      // R17 W17.3 (N-R17-37, Pattern 1 sibling parity): wrap
+      // (Pattern 1 sibling parity): wrap
       // info.key.family in stripUnicodeControls for the t?.() args +
       // English fallback, mirroring the subset-failure sibling at
       // line ~569 below. Upstream `sanitizeFamily` already strips
@@ -779,7 +779,7 @@ export async function embedFonts(
       // dev-tools surface is opt-in in production, so blast radius is
       // small, but Pattern 1 single-source completion requires every
       // sibling output to use the same helper.
-      // R16 W16.5 (N-R16-26, Pattern 1 defense-in-depth):
+      // (Pattern 1 defense-in-depth):
       // `usage.key.family` is upstream-sanitized at
       // font-collector.ts::sanitizeFamily so the BiDi/control surface
       // is closed today. But the comment block at lines 539-546
@@ -790,7 +790,7 @@ export async function embedFonts(
       console.warn(
         `Font subsetting failed for ${stripUnicodeControls(template.key.family)}, skipping: ${safeErr}`
       );
-      // R17 W17.3 (N-R17-37, Pattern 1 sibling parity): wrap
+      // (Pattern 1 sibling parity): wrap
       // template.key.family for t?.() args + English fallback; same
       // sibling-parity reasoning as the no-usage-entry path above.
       const familyDisplay = stripUnicodeControls(template.key.family);
@@ -811,8 +811,8 @@ export async function embedFonts(
     return null;
   }
 
-  // R15 W15.7 (N-R15-29): the zero-fontEntries early-return used to
-  // skip the insertFontsSection [Script Info] guard (R10 A-R10-011).
+  // the zero-fontEntries early-return used to
+  // skip the insertFontsSection [Script Info] guard.
   // A malformed ASS referencing zero fonts would succeed as a no-op
   // and downstream persisted the still-malformed file untouched —
   // the embed reported success against input that the GUI would
@@ -821,7 +821,7 @@ export async function embedFonts(
   // (or throw)" regardless of font count.
   assertAssShape(assContent);
   if (fontEntries.length === 0) {
-    // R16 W16.6 (N-R16-27): zero-font early-return returns
+    // zero-font early-return returns
     // `assContent` verbatim — no [Fonts] insertion means no
     // separator normalization either. The non-zero path below
     // routes through `insertFontsSection` which strips
@@ -846,7 +846,7 @@ export async function embedFonts(
   };
 }
 
-/// R15 W15.7 (N-R15-29 + A-R15-1) + R16 W16.1 (A-R16-10): shared
+/// R15 W15.7 (N-R15-29 + A-R15-1) + R16 W16.1 : shared
 /// shape + paired size/line guard reused by `embedFonts` upfront AND
 /// `insertFontsSection` at its boundary. Direct callers of
 /// `insertFontsSection` (`cli-engine-entry.ts::applyFontEmbed`)
@@ -867,7 +867,7 @@ const INSERT_FONTS_SECTION_HEADER_BUDGET = 1024;
 const MAX_INSERT_LINES = MAX_PARSED_ENTRIES + INSERT_FONTS_SECTION_HEADER_BUDGET;
 const LINE_PROBE_BYTE_GATE = 1_000_000;
 
-// R2 N-R2-11: module-scope to match the project convention swept by
+// module-scope to match the project convention swept by
 // R17 W17.4 (N-R17-53/55 — SRT_COLOR_*_RE / WHITESPACE_RE). Anchored at
 // column 0 and trailing whitespace restricted to ASCII space/tab only —
 // plain `\s*` would also match U+2028 / U+2029, letting a crafted ASS
@@ -910,7 +910,7 @@ export function assertAssShape(content: string): void {
  * If [Fonts] already exists, replace it.
  */
 export function insertFontsSection(content: string, fontsSection: string): string {
-  // Round 10 A-R10-011 + R15 W15.7 (A-R15-1): defense-in-depth at
+  // Round 10 A-R10-011 + R15 W15.7 : defense-in-depth at
   // the helper boundary. `processAssContent`'s 100 MB byte guard
   // upstream covers the standalone HDR + chain paths, but
   // `cli-engine-entry.ts::applyFontEmbed` (standalone embed CLI
@@ -945,7 +945,7 @@ export function insertFontsSection(content: string, fontsSection: string): strin
   // `[FONTS]\u2028` on one line still match the header regex. This
   // closes the false-positive hole that `.trim().toLowerCase()` left
   // open AND blocks the Unicode-line-sep smuggle.
-  // R2 N-R2-11: HEADER_FONTS_RE / HEADER_EVENTS_RE hoisted to module scope.
+  // HEADER_FONTS_RE / HEADER_EVENTS_RE hoisted to module scope.
   // Reject malformed input with multiple [Fonts] sections. Mirrors the
   // CLI's identical guard in cli-engine-entry.ts: the replace path
   // below only rewrites the first occurrence; silently leaving extra
@@ -1019,7 +1019,7 @@ export function insertFontsSection(content: string, fontsSection: string): strin
   for (let i = 0; i < lines.length; i += 1) {
     if (HEADER_EVENTS_RE.test(lines[i]!)) eventsHeaderIndices.push(i);
   }
-  // Round 8 N-R8-N2-6: parity with the [Fonts]-duplicate reject above.
+  // parity with the [Fonts]-duplicate reject above.
   // A single ASS with two [Events] sections produces a corrupted file
   // either way — libass reads only the first, every other consumer
   // (Aegisub / mpv) may pick the second — and inserting [Fonts] before

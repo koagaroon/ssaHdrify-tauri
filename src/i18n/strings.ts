@@ -63,7 +63,7 @@ export const strings: Record<string, StringEntry> = {
   preset_hdr10_desc: { en: "Consumer", zh: "消费级" },
   preset_dv_desc: { en: "Dolby Vision", zh: "杜比视界" },
   template_tokens_hint: {
-    // R12 A-R12-4: list every supported token. Custom templates now
+    // list every supported token. Custom templates now
     // throw at conversion time for unknown tokens (post-bb85bd9
     // substituteTemplate strict mode), so the user needs the full
     // list to avoid surprises. `{lang}` auto-extracts from filename
@@ -153,7 +153,7 @@ export const strings: Record<string, StringEntry> = {
   },
   msg_read_error: { en: "Error reading {0}: {1}", zh: "读取 {0} 出错：{1}" },
   msg_unsupported: { en: "Skipped {0}: unsupported format", zh: "已跳过 {0}：不支持的格式" },
-  // Round 10 N-R10-032 + Round 11 W11.1 (N1-R11-01): HDR Convert and
+  // Round 10 N-R10-032 + Round 11 W11.1 : HDR Convert and
   // Time Shift both surface a per-file count of oversized captions
   // dropped by the subtitle parser (MAX_CAPTION_TEXT_LEN = 64 KB).
   // Pre-R10 the placeholder Captions silently emitted empty Dialogue
@@ -496,7 +496,7 @@ export const strings: Record<string, StringEntry> = {
     en: "Can't load — {0} file(s) already loaded in the {1} tab. Clear them there first.",
     zh: "无法加载 — {0} 个文件已在「{1}」标签页中。请先在该标签页中清除。",
   },
-  // Round 6 Wave 6.5 #19: multi-tab variant. The single-tab message
+  // multi-tab variant. The single-tab message
   // reads "in the {N} tab" with `{N}` being a single tab name; that
   // wording breaks for the multi-tab case where `{1}` becomes a
   // compound "3 HDR / 2 Shift" string, producing "in the 3 HDR / 2

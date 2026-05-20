@@ -258,7 +258,7 @@ pub fn read_text_detect_encoding_inner(
                     "Refusing to read symlink / junction when canonicalize fails".to_string(),
                 );
             }
-            // R17 W17.1 (A-R17-4): no second `is_allowed` re-check on
+            // no second `is_allowed` re-check on
             // `path_ref` here, even though the Ok-arm above does
             // double-check (pre-canonicalize at line 188, post-
             // canonicalize on `read_path` below). The pre-canonicalize
@@ -278,7 +278,7 @@ pub fn read_text_detect_encoding_inner(
     // before the stat. The arms above checked the pre-canonicalize
     // `path_ref`; on attacker-controlled local filesystems a swap
     // between that check and the stat below would slip a reparse
-    // point past the upstream gate (Round 2 N-R2-6). Bounded by the
+    // point past the upstream gate . Bounded by the
     // same single-user trust model as the size-check TOCTOU note
     // below, but the re-check is cheap (one syscall) and parallels
     // the symmetric scrub `lib.rs::one_line` already does for the

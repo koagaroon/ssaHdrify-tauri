@@ -231,7 +231,7 @@ describe("runChain — embed step", () => {
       ],
       outputTemplate: "{name}.embed.ass",
     };
-    // Round 11 W11.6 (N1-R11-08): pin the FULL actionable message,
+    // pin the FULL actionable message,
     // not just the "requires pre-resolved font subsets" prefix. The
     // tail "(params.subsets is undefined — likely a CLI/runtime
     // version mismatch…)" is the diagnostic half of the message;
@@ -383,7 +383,7 @@ describe("resolveChainOutputPath", () => {
   // ── Round 8 Wave 8.3 — chain template + shape pins ──
 
   it("rejects unknown template tokens (chain-level allowlist)", () => {
-    // N-R8-N1-2: chain-level templates support only {name} / {ext}.
+    // chain-level templates support only {name} / {ext}.
     // Per-step tokens like {eotf} / {format} previously substituted
     // to "" silently; now they throw at resolve time so users see the
     // mismatch instead of getting a path with collapsed dots.
@@ -411,7 +411,7 @@ describe("resolveChainOutputPath", () => {
   });
 
   it("rejects over-cap unknown tokens via the downstream brace gate", () => {
-    // Codex 08c3a51c: 33-char lowercase tokens exceed both the chain
+    // 33-char lowercase tokens exceed both the chain
     // validator's {0,31} bound AND substituteTemplate's matching
     // {0,31} bound — they fall through both lexers as literal text.
     // assertSafeOutputFilename then catches the `{` / `}` characters
@@ -425,7 +425,7 @@ describe("resolveChainOutputPath", () => {
   });
 
   it("hdr step rejects non-ASS input with an actionable message", () => {
-    // A-R8-A1-7: feeding raw SRT to a chain HDR step previously
+    // feeding raw SRT to a chain HDR step previously
     // produced garbage output silently. The shape guard now throws
     // with guidance pointing at standalone `hdr` first.
     const plan: ChainPlan = {
@@ -433,7 +433,7 @@ describe("resolveChainOutputPath", () => {
       outputTemplate: "{name}.hdr.ass",
     };
     const srt = "1\n00:00:01,000 --> 00:00:02,000\nHello\n";
-    // Round 9 N-R9-N1-2: pin the FULL actionable message, not just the
+    // pin the FULL actionable message, not just the
     // "requires ASS ... SSA content" prefix. The guidance "Run hdr
     // standalone first" is the action-taking half of the message; a
     // refactor that drops it would leave users with "ASS required" but

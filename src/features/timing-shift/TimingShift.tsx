@@ -138,7 +138,7 @@ export default function TimingShift() {
 
   const effectiveOffsetMs = useMemo(() => {
     const base = unit === "s" ? offsetValue * 1000 : offsetValue;
-    // Round 11 W11.1 (N1-R11-02): Math.round at the math boundary so
+    // Math.round at the math boundary so
     // fractional s-unit inputs (e.g. "2.5s" → 2500 ms) accepted by
     // parseFloat below don't propagate sub-ms fractions into
     // formatSrtTime, whose `ms % 1000` produces non-integer
@@ -178,7 +178,7 @@ export default function TimingShift() {
   };
   const handleOffsetChange = (value: string) => {
     setOffsetText(value);
-    // Round 11 W11.1 (N1-R11-02): parseFloat accepts fractional s-unit
+    // parseFloat accepts fractional s-unit
     // inputs ("2.5s" → 2.5 seconds). Pre-R11 parseInt silently dropped
     // the decimal portion ("2.5" → 2), violating no-silent-action.
     // effectiveOffsetMs rounds at the math boundary to keep integer-ms
@@ -192,7 +192,7 @@ export default function TimingShift() {
   // cap. Without this, the math layer silently clamps in effectiveOffsetMs
   // and the user sees no feedback on their out-of-range input — the
   // same no-silent-action class HdrConvert's brightnessOutOfRange
-  // addresses (N-R5-FEFEAT-25).
+  // addresses.
   const offsetOutOfRange = (() => {
     const n = parseFloat(offsetText);
     return !Number.isNaN(n) && Math.abs(n) > offsetMax;
@@ -328,7 +328,7 @@ export default function TimingShift() {
       try {
         firstContent = await readText(paths[0]!);
       } catch (e) {
-        // Stale-pick guard BEFORE the log emit (N-R5-FEFEAT-06): an
+        // Stale-pick guard BEFORE the log emit : an
         // earlier pick that errors after the user has already moved on
         // would otherwise emit a confusing log line tied to the
         // abandoned selection. Drop silently when superseded.
@@ -350,7 +350,7 @@ export default function TimingShift() {
 
   const handlePickFiles = useCallback(async () => {
     const gen = (pickGenRef.current = pickGenRef.current + 1);
-    // Round 11 W11.7 (N1-R11-10): catch dialog IPC failures explicitly
+    // catch dialog IPC failures explicitly
     // — pickSubtitleFiles can reject (Tauri plugin-dialog error, plugin
     // not loaded, OS-level dialog refused, etc.) and the bare await
     // form let those bubble as unhandled rejection → silent console
@@ -386,7 +386,7 @@ export default function TimingShift() {
       const subtitlePaths = paths.filter((p) => categorize(fileNameFromPath(p)) === "subtitle");
       if (subtitlePaths.length === 0) {
         // Surface through both the log AND the standard DropErrorBanner
-        // (N-R5-FEFEAT-09). Users with collapsed log panels see nothing
+        // . Users with collapsed log panels see nothing
         // from log-only — the banner is the always-visible feedback.
         const msg = t("msg_no_subtitle_in_drop");
         addLog(msg, "error");
@@ -489,7 +489,7 @@ export default function TimingShift() {
           // HdrConvert / FontEmbed — every addLog interpolating fileName
           // gets BiDi-scrubbed display text from a single sanitize-at-
           // source.
-          // R15 W15.6 (N-R15-23): bare-split fallback BEFORE invoking
+          // bare-split fallback BEFORE invoking
           // fileNameFromPath — basename-only fallback keeps log noise
           // bounded when fileNameFromPath throws. Same shape adopted
           // across HdrConvert + FontEmbed for symmetry.
@@ -531,7 +531,7 @@ export default function TimingShift() {
               thresholdMs: thresholdMs ?? undefined,
             });
 
-            // Round 11 W11.1 (N1-R11-01): surface oversized-text drop
+            // surface oversized-text drop
             // count to close the no-silent-action gap (parity with
             // HdrConvert's R10 N-R10-032 path). All four parsers push
             // skipped placeholders for entries exceeding
@@ -562,7 +562,7 @@ export default function TimingShift() {
         // Cancel takes precedence over success/error — surfacing
         // "complete" when the user cancelled mid-batch would lie.
         // Avoid success-log vs error-footer contradiction
-        // (N-R5-FEFEAT-17): when every file failed, the previous form
+        // : when every file failed, the previous form
         // fired both "complete: 0/N" + red "failed" footer. Split so
         // success-log fires only when at least one file landed.
         const aborted = !!abortRef.current?.signal.aborted;
@@ -916,7 +916,7 @@ export default function TimingShift() {
           </span>
         )}
         {!thresholdInvalid && thresholdExceedsFile && (
-          // Round 7 Wave 7.6 (N4-R7-6): threshold-exceeds-file is a
+          // threshold-exceeds-file is a
           // warning (the shift will still run, but the threshold gate
           // is moot), not a save-blocker — use --warning, not --error.
           // thresholdInvalid above stays at --error because that path

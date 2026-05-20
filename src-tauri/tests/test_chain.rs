@@ -102,7 +102,7 @@ fn engine_bundle_missing() -> Option<String> {
 #[test]
 fn chain_hdr_shift_byte_equals_sequential_runs() {
     if let Some(reason) = engine_bundle_missing() {
-        // Hard-fail instead of skip-and-return (N-R5-RUSTCLI-12): a
+        // Hard-fail instead of skip-and-return : a
         // skip records PASS in Cargo, so a forgotten
         // `npm run build:engine` ships CI clean while every chain
         // integration test is actually a no-op. Panicking surfaces the
@@ -157,7 +157,7 @@ fn chain_hdr_shift_byte_equals_sequential_runs() {
 #[test]
 fn chain_dry_run_prints_plan_without_writing() {
     if let Some(reason) = engine_bundle_missing() {
-        // Hard-fail instead of skip-and-return (N-R5-RUSTCLI-12): a
+        // Hard-fail instead of skip-and-return : a
         // skip records PASS in Cargo, so a forgotten
         // `npm run build:engine` ships CI clean while every chain
         // integration test is actually a no-op. Panicking surfaces the
@@ -190,7 +190,7 @@ fn chain_dry_run_prints_plan_without_writing() {
         stdout.contains("Plan (no files written)"),
         "stdout: {stdout}"
     );
-    // R16 W16.4 (N-R16-7): pin the per-step enumeration shape
+    // pin the per-step enumeration shape
     // ("1. hdr" / "2. shift") rather than bare "hdr" / "shift"
     // substrings — the temp dir name in dry-run's input-listing
     // section can contain "hdr" or "shift" characters
@@ -204,7 +204,7 @@ fn chain_dry_run_prints_plan_without_writing() {
         stdout.contains("2. shift"),
         "expected '2. shift' step line: {stdout}"
     );
-    // R16 W16.4 (N-R16-11): pin the resolved-output line shape
+    // pin the resolved-output line shape
     // (`→ <path>`) and the predicted filename. dry-run prints
     // "    → cat.hdr.shifted.ass" per input; a regression dropping
     // the resolved-output line or the input-listing loop would
@@ -230,7 +230,7 @@ fn chain_dry_run_prints_plan_without_writing() {
 #[test]
 fn chain_multi_file_batch_processes_all_inputs() {
     if let Some(reason) = engine_bundle_missing() {
-        // Hard-fail instead of skip-and-return (N-R5-RUSTCLI-12): a
+        // Hard-fail instead of skip-and-return : a
         // skip records PASS in Cargo, so a forgotten
         // `npm run build:engine` ships CI clean while every chain
         // integration test is actually a no-op. Panicking surfaces the
@@ -261,7 +261,7 @@ fn chain_multi_file_batch_processes_all_inputs() {
 #[test]
 fn chain_overwrite_toggles_skip_vs_replace() {
     if let Some(reason) = engine_bundle_missing() {
-        // Hard-fail instead of skip-and-return (N-R5-RUSTCLI-12): a
+        // Hard-fail instead of skip-and-return : a
         // skip records PASS in Cargo, so a forgotten
         // `npm run build:engine` ships CI clean while every chain
         // integration test is actually a no-op. Panicking surfaces the
@@ -341,7 +341,7 @@ fn chain_overwrite_toggles_skip_vs_replace() {
         .expect("third run failed to spawn");
     assert!(third_output.status.success(), "third run should succeed");
     let stdout = String::from_utf8_lossy(&third_output.stdout);
-    // Strong assertion (N-R5-RUSTCLI-15): substring "1 written" matches
+    // Strong assertion : substring "1 written" matches
     // "11 written" / "111 written" too. Pin the full
     // "{written}, {skipped}, {failed}" tuple so a refactor that
     // shifts the numbers can't silently pass. Bilingual to verify both
@@ -459,7 +459,7 @@ fn chain_post_v8_failed_surfaces_oversized_warning() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// W14.7's complement (R15 N-R15-7): boundary-pair test pinning the
+/// W14.7's complement : boundary-pair test pinning the
 /// other reachable Skipped path. The W14.7 test exercises post-V8
 /// Failed + accumulated warnings; this one exercises cheap-first
 /// Skipped, where the warnings vec is structurally empty.
@@ -484,7 +484,7 @@ fn chain_cheap_first_skipped_carries_no_warnings_line() {
     }
 
     let dir = temp_dir("cheap_first_skip");
-    // R16 W16.4 (N-R16-9, batch leak-detection): two inputs are
+    // (batch leak-detection): two inputs are
     // required to meaningfully pin the negative "no warnings leak
     // between inputs" assertion. Input 1 (oversized.ass) goes
     // through V8 successfully and produces an oversized-skipped

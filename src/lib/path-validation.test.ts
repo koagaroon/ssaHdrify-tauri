@@ -229,7 +229,7 @@ describe("decomposeInputPath", () => {
 
   it("rejects `..` path components (Round 6 Wave 6.2 parity)", () => {
     // The Rust validate_ipc_path rejects parent-directory segments at
-    // IPC entry (Round 5 Wave 5.1), but TS-side template derivation
+    // IPC entry , but TS-side template derivation
     // consumes decomposeInputPath results BEFORE the round-trip. A
     // raw `C:/Allowed/../Denied/file.ass` would derive an output
     // under `C:/Denied/` and only get caught when that output path
@@ -290,7 +290,7 @@ describe("assertSafeOutputPath", () => {
     expect(() => assertSafeOutputPath(long, inputBackslash)).toThrow(/too long/);
   });
 
-  // Round 11 W11.6 (N3-R11-07): at-limit / over-limit pair for the
+  // at-limit / over-limit pair for the
   // 259 cap. The pre-R11 test above only had over-limit coverage; a
   // regression that hard-coded 258 (or any lower value) wouldn't trip
   // the >300 test. Pair both sides to pin the boundary.
@@ -315,7 +315,7 @@ describe("assertSafeOutputPath", () => {
     expect(() => assertSafeOutputPath(longButOk, longInput)).not.toThrow();
   });
 
-  // Round 11 W11.6 (N3-R11-07): at-limit / over-limit pair for the
+  // at-limit / over-limit pair for the
   // long-local 32766 cap. Pre-R11 only the 500-char under-limit form
   // was exercised; a regression that dropped the cap to e.g. 1024
   // would have left both green.
@@ -352,7 +352,7 @@ describe("assertSafeOutputPath", () => {
     // portion matches the input's case exactly. Self-overwrite check
     // is case-insensitive, so the upper-case basename collides.
     //
-    // R16 W16.6 (N-R16-15, test portability): `pathsEqualOnFs`'s
+    // (test portability): `pathsEqualOnFs`'s
     // case-fold branch is gated on `isCaseInsensitiveFs()`, which
     // returns true only on win32 and darwin. On Linux CI the test
     // would fail because the case-fold path doesn't trigger. Force

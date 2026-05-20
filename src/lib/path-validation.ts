@@ -200,7 +200,7 @@ export function decomposeInputPath(inputPath: string): InputPathParts {
   // round-trips. Reject at TS entry as defense-in-depth, symmetric
   // with the Rust backstop. Detect `..` as a path COMPONENT, not as
   // a substring — `foo..bar.ass` is a legitimate filename.
-  // R15 W15.7 (N-R15-20): absolute-path check runs BEFORE
+  // absolute-path check runs BEFORE
   // parent-directory-segment check. Pre-W15.7 the order was
   // reversed — a non-absolute input containing `..` (e.g., the
   // string "../foo.ass") threw "Input path contains
@@ -470,7 +470,7 @@ export function assertSafeOutputPath(outputPath: string, inputPath: string): voi
   // self-overwrite checks on legitimate POSIX paths containing `\`.
   const normalizedOutput = isWindowsRuntime ? outputPath.replace(/\\/g, "/") : outputPath;
   const normalizedInput = isWindowsRuntime ? inputPath.replace(/\\/g, "/") : inputPath;
-  // Round 10 N-R10-024: ASCII C0 + DEL + C1 control-char gate on the
+  // ASCII C0 + DEL + C1 control-char gate on the
   // full path. `decomposeInputPath` already rejects these on inputs,
   // and `assertSafeOutputFilename` covers the filename portion — but
   // BatchRename's `deriveRenameOutputPath` builds the directory
@@ -526,7 +526,7 @@ export function assertSafeOutputPath(outputPath: string, inputPath: string): voi
   // Use 259 to surface the limit with a clear error here. Long-local
   // paths get the OS extended limit (32767 incl. null → 32766 usable).
   //
-  // Round 10 N-R10-014: POSIX runtimes get PATH_MAX = 4096 (Linux's
+  // POSIX runtimes get PATH_MAX = 4096 (Linux's
   // standard limit, matches Rust-side `RELOCATED_PATH_MAX_LEN`
   // cfg-gated POSIX path) instead of the Windows 259. Pre-R10 the
   // hard-coded 259 false-rejected legitimate Linux paths approaching

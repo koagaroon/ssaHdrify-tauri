@@ -418,7 +418,7 @@ Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\rStyleA\r` + overlong +
   });
 });
 
-// ── R5 W1 (A-R5-1) — digit-led style name pair for the f871d0cc
+// ── R5 W1 — digit-led style name pair for the f871d0cc
 // state-retention fix. R4 W1's alternation closed the overlong-run
 // shape but kept the original `[\p{L}_]` leading-char class on BOTH
 // branches, so a digit-led style name (`1MainTitle`) still failed both
@@ -606,7 +606,7 @@ Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\p1}{\r9NonexistentStyle
   });
 });
 
-// ── R6 W2 (A-R6-2) — position-sorted single-pass override handling.
+// ── R6 W2 — position-sorted single-pass override handling.
 // Pre-R6-W2 applyOverrideTags ran four independent matchAll().at(-1)
 // passes (one per tag family) and walkText ran two more (R_RESET_RE +
 // pTags). Family-independent last-wins ignored relative position

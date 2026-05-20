@@ -213,7 +213,7 @@ export default function HdrConvert() {
     // resolves, only the most recent `gen` is allowed to commit. Mirrors
     // the pattern in TimingShift / FontEmbed / BatchRename.
     const gen = (pickGenRef.current = pickGenRef.current + 1);
-    // Round 11 W11.7 (N1-R11-10): catch dialog IPC failures so a click
+    // catch dialog IPC failures so a click
     // that can't open the picker surfaces an error rather than reading
     // as a silent no-op. Same shape across all four tabs.
     let paths: string[] | null;
@@ -311,7 +311,7 @@ export default function HdrConvert() {
       // path; if any already exist, surface a single ask() dialog before
       // entering the busy state. Failed-to-resolve paths skip pre-flight
       // (the main loop will log per-file errors as before).
-      // Round 10 A-R10-006: silent skip on resolve failure is
+      // silent skip on resolve failure is
       // intentional and bounded. The pre-flight's job is to count
       // existing outputs for the overwrite-confirm dialog; an
       // unresolvable path doesn't contribute to that count by
@@ -386,7 +386,7 @@ export default function HdrConvert() {
           // below; sanitize once at source so every downstream
           // interpolation is automatically BiDi-scrubbed without each
           // callsite remembering to wrap. Same pattern as FontEmbed.
-          // R15 W15.6 (N-R15-23): bare-split fallback BEFORE invoking
+          // bare-split fallback BEFORE invoking
           // fileNameFromPath, so the catch path uses just the basename
           // rather than the full path. Pre-W15.6 the catch path logged
           // the full sanitized path through every addLog call below —
@@ -453,7 +453,7 @@ export default function HdrConvert() {
               // Parse with our browser-compatible parser
               const { captions } = parseSubtitle(preprocessed, style.fps);
 
-              // Round 10 N-R10-032 + Round 11 W11.1 (N1-R11-01): surface
+              // Round 10 N-R10-032 + Round 11 W11.1 : surface
               // skipped-placeholder count. All four parsers push
               // `skipped: true` Captions for entries whose text exceeded
               // MAX_CAPTION_TEXT_LEN (64 KB). Without surfacing the
@@ -489,7 +489,7 @@ export default function HdrConvert() {
 
             // Write output
             await writeText(outputPath, assContent);
-            // R16 W16.5 (N-R16-24, Pattern 1 sibling parity):
+            // (Pattern 1 sibling parity):
             // FontEmbed wraps fileNameFromPath in sanitizeForDialog
             // (line ~794); BatchRename does the same. fileNameFromPath
             // already strips C0/C1/DEL + BiDi via stripUnicodeControls,
@@ -520,7 +520,7 @@ export default function HdrConvert() {
         // when they cancelled mid-batch would be a lie. Only treat the
         // outcome as success/error when the loop ran to completion.
         // Avoid success-log vs error-footer contradiction
-        // (N-R5-FEFEAT-16): when every file failed, the previous form
+        // : when every file failed, the previous form
         // fired both "complete: 0/N" + red "failed" footer. Split so
         // success-log fires only when at least one file landed;
         // full-batch failure gets its own error line.
@@ -861,7 +861,7 @@ export default function HdrConvert() {
                   // this drop the select's `value=` re-derives from
                   // the unchanged fontName ("Arial" etc.) and the
                   // dropdown visually snaps back to the previous font
-                  // — the custom input never appears (N-R5-FEFEAT-20).
+                  // — the custom input never appears.
                   setStyle({
                     ...style,
                     fontName: e.target.value === "__custom" ? "" : e.target.value,

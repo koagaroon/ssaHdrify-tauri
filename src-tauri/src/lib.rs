@@ -45,7 +45,7 @@ pub fn run() {
             // env-var manipulation; see fonts::init_system_dirs.
             fonts::init_system_dirs();
 
-            // Round 11 W11.4b (R10 N-R10-036): unify the GUI's data
+            // Round 11 W11.4b : unify the GUI's data
             // directory with the CLI's so both binaries' state lives
             // under a single `ssahdrify` parent dir on disk. Pre-R11
             // the GUI used Tauri's `app_data_dir()` (bundle-identifier
@@ -136,7 +136,7 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {
-            // R16 W16.2 (N-R16-4): runtime-start failure parity with
+            // runtime-start failure parity with
             // the setup-time rfd MessageBox above (line ~95). Windows
             // GUI subsystem has no visible stderr — the prior eprintln
             // was effectively silent when WebView2 init / IPC bootstrap

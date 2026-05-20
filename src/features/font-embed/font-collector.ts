@@ -15,7 +15,7 @@ import { ASCII_CONTROL_CHARS, BIDI_AND_ZERO_WIDTH_CHARS } from "../../lib/unicod
 
 // Module-scope override-tag regexes. Compiling once (rather than per
 // override block) avoids `\p{L}` Unicode-property recompilation cost
-// (A-R5-FECHAIN-12).
+// .
 //
 // REFACTOR NOTE (R6 W2 / A-R6-2): the previous design had a separate
 // `R_RESET_RE` here that `walkText` used to detect "did this block
@@ -278,7 +278,7 @@ export function collectFontsWithParser(assContent: string, parser: AssParseFunct
     }
     for (const char of text) {
       if (usage.codepoints.size >= MAX_CODEPOINTS_PER_VARIANT) {
-        // Round 10 N-R10-034: throw on per-variant cap for parity
+        // throw on per-variant cap for parity
         // with MAX_FONT_VARIANTS (above) and MAX_TOTAL_CODEPOINTS
         // (below). Pre-R10 this branch silently `break`ed,
         // truncating the variant's glyph set without surfacing the
@@ -302,7 +302,7 @@ export function collectFontsWithParser(assContent: string, parser: AssParseFunct
       // pass through this filter — Rust's subset_font emits `.notdef`
       // for them harmlessly, so the leak (1 extra codepoint per C1 char
       // in MAX_CODEPOINTS_PER_VARIANT accounting) is bounded and benign
-      // (Round 3 A-R3-8).
+      // .
       if (cp !== undefined && cp > 32 && cp !== 0x7f && cp <= 0x10ffff) {
         const before = usage.codepoints.size;
         usage.codepoints.add(cp);
@@ -357,7 +357,7 @@ function processDialogueText(
   recordChars: (key: FontKey, text: string) => void
 ) {
   if (text.length > MAX_DIALOGUE_TEXT_LEN) {
-    // Round 11 W11.1 (A2-R11-01): throw rather than silently truncate
+    // throw rather than silently truncate
     // — parity with MAX_FONT_VARIANTS / MAX_CODEPOINTS_PER_VARIANT /
     // MAX_TOTAL_CODEPOINTS (the R10 N-R10-034 precedent). Pre-R11 the
     // slice() form lost glyphs from the font analysis, producing a
@@ -386,11 +386,11 @@ function processDialogueText(
         if (!isDrawing) {
           const tail = text.slice(i);
           // Strip ASS drawing commands (\N, \n, \h) just like the
-          // plain-text branch below (N-R5-FECHAIN-03). Without this,
+          // plain-text branch below . Without this,
           // input like `Hello{World\Nfoo` would record literal `\` + `N`
           // codepoints against the per-variant + total caps even
           // though libass treats them as line/space tags, not text.
-          // R7 W1 A-R7-6: one alternation pass instead of three
+          // one alternation pass instead of three
           // sequential replaces. Each `.replace(...)` allocates a fresh
           // intermediate string; for a 1 MB malformed-brace tail packed
           // with `\N` / `\n` / `\h`, three passes allocated ~3 MB of
@@ -424,7 +424,7 @@ function processDialogueText(
       const plain = text.slice(i, plainEnd);
 
       // Skip ASS drawing commands (\N, \n, \h) and line breaks.
-      // R7 W1 A-R7-6: combined alternation (one allocator pass, was
+      // combined alternation (one allocator pass, was
       // three sequential .replace calls) — see the malformed-brace
       // tail path above for the rationale.
       const cleanText = plain.replace(/\\[Nnh]/g, "");
@@ -574,7 +574,7 @@ function applyOverrideTags(
         // libass: `\r` resets ALL style state including drawing mode.
         // Previous walkText design did this via a separate
         // `R_RESET_RE.test(block)` pass, which the `\p` pass then
-        // overwrote on `{\p1\r}` (A-R6-2). Folded into the `\r`
+        // overwrote on `{\p1\r}` . Folded into the `\r`
         // handler here so the position-sorted walk gets it right.
         isDrawing = false;
         break;
@@ -584,7 +584,7 @@ function applyOverrideTags(
         // both produce `tag.family === undefined`; the `?? ""` keeps
         // the existing fall-through-to-initialFont semantic.
         //
-        // R7 W1 (N-R7-1 / A-R7-2 / A-R7-5): the previous
+        // (A-R7-2 / A-R7-5): the previous
         // `sanitizeFamily(rawFamily) || current.family` fallback was
         // STRUCTURALLY UNREACHABLE. FN_CHAR_SET excludes the same
         // codepoints `sanitizeFamily` strips (C0 / DEL / C1 / BiDi /
@@ -612,7 +612,7 @@ function applyOverrideTags(
         // `\b0` = not bold; `\b1` = bold; `\b2`-`\b699` = libass treats
         // as not-bold (only `1` is the bold-on flag in the low range);
         // `\b700+` = bold by font weight value (CSS-style weight scale).
-        // R7 W1 N-R7-12: middle range named explicitly so the contract
+        // middle range named explicitly so the contract
         // matches the predicate. B_TAG_RE captures the full digit run
         // (see Codex ff5b69f5 WHY block at the regex const); overlong
         // values like `\b00700` parse as 700 → bold-on per libass.

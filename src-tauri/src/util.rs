@@ -80,7 +80,7 @@ pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
                 // filename-display-reversal vector — `evil\u{202E}txt.exe`
                 // displays as `evilexe.txt` in many UIs. Reject the
                 // whole 200E-202E + 2066-2069 family for symmetry.
-                // R2 N-R2-7: range syntax to match the sibling
+                // range syntax to match the sibling
                 // `validate_font_family` enumeration; pre-W3 these two
                 // validators listed the same codepoints in different
                 // shapes, inviting drift on the next codepoint addition.
@@ -89,7 +89,7 @@ pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
                 | '\u{2066}'..='\u{2069}'
                 // U+061C Arabic Letter Mark — Cf, bidi format
                 // character. The TS unicode-controls set includes
-                // it (Round 5 Wave 5.1); Round 6 Wave 6.2 parity sweep
+                // it ; Round 6 Wave 6.2 parity sweep
                 // adds the same here so the two sides match.
                 | '\u{061C}'
             )
@@ -101,7 +101,7 @@ pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
     // length prefixes (\\?\C:\… / \\?\UNC\server\share\…). These open
     // raw device handles, kernel-namespace paths, or filesystem paths
     // in a verbatim form that bypasses Tauri's fs:scope deny patterns
-    // (R13 A-R13-19): Tauri's `is_allowed` calls
+    // : Tauri's `is_allowed` calls
     // `try_resolve_symlink_and_canonicalize`, which returns the input
     // path unmodified when the path doesn't exist (typical for output
     // files BEFORE write). The deny glob (e.g. `$DATA/ssahdrify/**`)
@@ -139,7 +139,7 @@ pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
     if is_dos_device || is_verbatim_drive {
         return Err(format!("{label} path uses a reserved device namespace"));
     }
-    // Reject `..` path components (Round 5 A-R5-RUSTGUI-02). A raw IPC
+    // Reject `..` path components . A raw IPC
     // path like `C:\Allowed\..\Denied\file.ass` matches an
     // `allow=**` fs:scope rule literally (the deny patterns like
     // `$HOME/.ssh/**` don't string-match a `..`-bearing path), so the
@@ -179,7 +179,7 @@ pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
         let stem = seg[..first_dot]
             .trim_end_matches(|c: char| c.is_whitespace() || c == '.')
             .to_ascii_uppercase();
-        // Round 9 A-R9-A3-1: include the Unicode superscript COM/LPT
+        // include the Unicode superscript COM/LPT
         // variants (COM¹/²/³, LPT¹/²/³). TS-side WINDOWS_RESERVED_NAMES
         // has had these since the initial extraction; Rust's
         // `is_ascii_digit()` fails for multi-byte UTF-8 superscripts
@@ -258,7 +258,7 @@ pub fn validate_font_family(family: &str) -> Result<(), String> {
     if family.is_empty() {
         return Err("Font family name is empty".to_string());
     }
-    // Round 10 N-R10-010: whitespace-only family names are rejected
+    // whitespace-only family names are rejected
     // for parity with `bounded_font_family_name` (fonts.rs), which
     // calls `.trim()` then `is_empty()` to reject names that would
     // round-trip to nothing useful (a font-name table containing only
@@ -566,7 +566,7 @@ mod tests {
 
     #[test]
     fn validate_rejects_long_path_prefix_drive() {
-        // R13 A-R13-19: extended-length verbatim prefix (\\?\C:\…)
+        // extended-length verbatim prefix (\\?\C:\…)
         // was previously allowed because the comment claimed font
         // scanning + drag-drop produce them through canonicalize().
         // Audit confirmed those are Rust-internal (don't round-trip
@@ -636,7 +636,7 @@ mod tests {
 
     #[test]
     fn validate_font_family_rejects_whitespace_only() {
-        // R13 N-R13-14: Round 10 N-R10-010 added the
+        // Round 10 N-R10-010 added the
         // `family.trim().is_empty()` reject (alongside the bare empty
         // string), but never paired it with a test. A
         // whitespace-only family name like "   " or "\t\t" must

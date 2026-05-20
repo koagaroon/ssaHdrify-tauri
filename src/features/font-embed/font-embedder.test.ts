@@ -166,7 +166,7 @@ describe("analyzeFonts — match priority", () => {
     const arialBold = infos.find((i) => i.key.family === "Arial" && i.key.bold);
     expect(arialBold?.source).toBe("local");
     expect(arialBold?.filePath).toBe("C:/user/ArialBold.ttf");
-    // Counter-assertion (N-R5-FECHAIN-10): the bold-variant key hit
+    // Counter-assertion : the bold-variant key hit
     // the user map, so findSystemFont was NOT consulted for Arial
     // (only for FZLanTingHei). Pins the variant-keyed priority: a
     // regression that dropped the bold bit from userFontKey would
@@ -359,7 +359,7 @@ describe("analyzeFonts — useRustUserFonts production path", () => {
     // Without the anchor, a future refactor that flipped the
     // short-circuit order would silently change the priority.
     findSystemFontMock.mockResolvedValue({ path: "C:/Windows/Fonts/sys.ttf", index: 0 });
-    // Scoped mock (Round 6 Wave 6.6 #25): return FZ only for the FZ
+    // Scoped mock : return FZ only for the FZ
     // family, null for Arial. Pre-W6.6 the mock returned the same FZ
     // value for ANY family — Arial would then resolve via the Rust
     // user-font tier with the wrong path, masking a regression where
@@ -469,7 +469,7 @@ describe("userFontKey", () => {
 });
 
 describe("MAX_SUBSET_CODEPOINTS_FOR_DEDUP value pin", () => {
-  // R8 W2 N-R8-7: TS-side mirror of the Rust test
+  // TS-side mirror of the Rust test
   // `dedup_cap_matches_ipc_cap` in `bin/cli/main.rs::mod tests`.
   // The trinity that must stay in lockstep:
   //   1. `app_lib::fonts::MAX_SUBSET_CODEPOINTS` (Rust IPC cap)

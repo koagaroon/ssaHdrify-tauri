@@ -68,7 +68,7 @@ export default function FontCacheDriftModal({
   // matches.
   //
   // `working` is read via a ref inside the handler instead of being a
-  // dep on the effect (Round 3 N-R3-10): the prior `[open, working,
+  // dep on the effect : the prior `[open, working,
   // onClose]` dep array tore down and re-attached the keydown listener
   // on every working-state flip, matching `useFolderDrop`'s explicit
   // anti-pattern note. Stable handler now mounts once per `open=true`
@@ -110,7 +110,7 @@ export default function FontCacheDriftModal({
     if (open) closeButtonRef.current?.focus();
   }, [open]);
 
-  // INVARIANT (Round 3 N-R3-14): `requestClose` MUST NOT call onClose
+  // INVARIANT : `requestClose` MUST NOT call onClose
   // while `working !== null`. The component's open=false→true effect
   // (further down) resets transient state on mount/unmount, but
   // App.tsx currently mounts/unmounts the modal — so a future

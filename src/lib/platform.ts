@@ -62,7 +62,7 @@ function nodePlatform(): string | undefined {
   //
   // Narrowed access via globalThis instead of bare `process` so TS
   // doesn't pull in @types/node ambient declarations browser code
-  // shouldn't depend on (N-R5-FELIB-23). Optional-chain through the
+  // shouldn't depend on . Optional-chain through the
   // shape — runtime check stays exactly equivalent to the prior form.
   const proc = (globalThis as { process?: { platform?: string } }).process;
   return proc?.platform;

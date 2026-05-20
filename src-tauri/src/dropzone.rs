@@ -22,7 +22,7 @@ use std::path::Path;
 /// `ExpandedPaths.truncated` flag set when there's known unprocessed
 /// input). `pub` so the CLI shell can interpolate the constant into
 /// its truncation warning without hardcoding a number that drifts
-/// out of sync (Round 4 N-R4-06).
+/// out of sync.
 pub const MAX_RESULT_FILES: usize = 5000;
 
 /// Result of `expand_dropped_paths`. `truncated` surfaces when the
@@ -75,7 +75,7 @@ pub fn expand_dropped_paths(paths: Vec<String>) -> Result<ExpandedPaths, String>
     let mut rejected = 0usize;
     let total_inputs = paths.len();
     for (idx, raw) in paths.iter().enumerate() {
-        // R2 N-R2-21: short-circuit at the TOP of the loop body once
+        // short-circuit at the TOP of the loop body once
         // the result cap is hit. Pre-W2 the cap check sat after the
         // per-path stat + walk_one_level call, so the worst case
         // (1000 input folders, first ~50 already filled `result` to
@@ -136,7 +136,7 @@ pub fn expand_dropped_paths(paths: Vec<String>) -> Result<ExpandedPaths, String>
             // of the drop is silently dropped on the floor from the
             // path-walk perspective. Set `truncated` for the
             // cross-input case (`idx + 1 < total_inputs`) — Codex
-            // finding 2 (Round 4): exactly hitting the cap with no
+            // finding 2 : exactly hitting the cap with no
             // remainder ("exactly 5000 files in one folder, no more
             // inputs") would otherwise produce a false-positive
             // banner / stderr warning. Intra-folder mid-walk
@@ -149,7 +149,7 @@ pub fn expand_dropped_paths(paths: Vec<String>) -> Result<ExpandedPaths, String>
             break;
         }
     }
-    // R2 N-R2-5: surface the per-path rejection count at WARN, not INFO.
+    // surface the per-path rejection count at WARN, not INFO.
     // Per `~/.claude/rules/vibe-coding.md` § Log-level discipline, this
     // aggregate IS the user-visible consequence (N drops of M dropped);
     // the per-failure warnings above are the function-name-leak class.
@@ -200,7 +200,7 @@ fn walk_one_level(dir: &Path, out: &mut Vec<String>) -> bool {
     for entry_result in entries {
         if out.len() >= MAX_RESULT_FILES {
             // Shared cap with `expand_dropped_paths` outer loop
-            // (N-R5-RUSTGUI-09): both layers read the same constant so
+            // : both layers read the same constant so
             // the per-folder check here participates in the same total
             // budget as the cross-input check there. Splitting them
             // into separate constants would let one layer truncate
@@ -240,7 +240,7 @@ fn walk_one_level(dir: &Path, out: &mut Vec<String>) -> bool {
         };
         if ft.is_file() {
             if let Some(s) = entry_path.to_str() {
-                // Round 10 A-R10-004: validate the discovered path
+                // validate the discovered path
                 // through `validate_ipc_path` before surfacing.
                 // `expand_dropped_paths`'s outer loop runs this gate
                 // on every TOP-LEVEL path the frontend hands in, but
@@ -293,7 +293,7 @@ mod tests {
         let result = expand_dropped_paths(vec![p.to_str().unwrap().to_string()]).unwrap();
         assert_eq!(result.files.len(), 1);
         assert!(!result.truncated);
-        // Round 11 W11.4c (R10 N-R10-028): the response carries the
+        // Round 11 W11.4c : the response carries the
         // cap so the frontend banner doesn't mirror it as a TS const.
         // Pin both the channel (field present) and the value
         // (sourced from MAX_RESULT_FILES, not a literal).
@@ -355,7 +355,7 @@ mod tests {
         assert!(expand_dropped_paths(many).is_err());
     }
 
-    /// R16 W16.4 (N-R16-2, boundary-pair discipline): the
+    /// (boundary-pair discipline): the
     /// over-limit test above pins the rejection direction; this
     /// at-limit counterpart pins that exactly MAX_INPUT_PATHS still
     /// returns Ok (the per-path validation may filter individual
@@ -426,7 +426,7 @@ mod tests {
         let dir = make_tempdir("cap");
         // Create MAX_RESULT_FILES + 100 files in one folder; expanding the
         // folder must stop at the cap AND set `truncated=true` so the
-        // frontend can surface a banner (Round 3 N-R3-19).
+        // frontend can surface a banner.
         let count = MAX_RESULT_FILES + 100;
         for i in 0..count {
             fs::File::create(dir.join(format!("f{i}.ass")))
@@ -447,7 +447,7 @@ mod tests {
 
     #[test]
     fn exact_cap_with_no_remainder_does_not_set_truncated() {
-        // Codex finding 2 (Round 4): a single folder containing
+        // Codex finding 2 : a single folder containing
         // EXACTLY MAX_RESULT_FILES regular files, no more inputs to
         // process — nothing was dropped on the floor, so `truncated`
         // must stay false. Pre-fix, the `>= cap` check fired on

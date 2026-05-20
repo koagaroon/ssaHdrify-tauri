@@ -16,7 +16,7 @@ use crate::util::{validate_ipc_path, MAX_INPUT_PATHS};
 /// Allowed font file extensions (lowercase).
 // Exposed `pub` so integration tests (test_scan.rs) can pattern-match
 // against the same canonical list instead of re-enumerating a sibling
-// literal that could drift (N-R5-RUSTCLI-13).
+// literal that could drift.
 pub const ALLOWED_FONT_EXTENSIONS: &[&str] = &["ttf", "otf", "ttc", "otc"];
 
 /// Defense-in-depth ceiling on faces emitted from a single scan. Not a UX
@@ -33,7 +33,7 @@ pub const ALLOWED_FONT_EXTENSIONS: &[&str] = &["ttf", "otf", "ttc", "otc"];
 /// buffer size = `MAX_FONTS_PER_SCAN + 1`, one over the cap. Kept this
 /// way deliberately so the final emit carries the entry that tripped
 /// the gate (rather than discarding it post-push). Round 11 W11.5
-/// (N4-R11-01): pre-R11 this paragraph claimed
+/// : pre-R11 this paragraph claimed
 /// `MAX_FONTS_PER_SCAN + MAX_TTC_FACES - 1`, which would have been true
 /// if the check ran once per FILE; it runs once per FACE, so the
 /// `MAX_TTC_FACES` term doesn't apply. R12 N-R12-11: previous wording
@@ -94,7 +94,7 @@ const MAX_TTC_FACES: u32 = 16;
 /// fonts and mirrors the front-end guard in `ass-uuencode.ts`.
 const MAX_FONT_DATA_SIZE: u64 = 50 * 1024 * 1024;
 
-// Round 6 Wave 6.9 (Codex Finding 2 fix): MAX_FONT_FALLBACK_SIZE,
+// MAX_FONT_FALLBACK_SIZE,
 // MAX_CUMULATIVE_FALLBACK_BYTES, and CUMULATIVE_FALLBACK_BYTES were
 // deleted along with the subset-failure raw-bytes fallback they
 // bounded. The fallback path turned every readable local file with
@@ -109,7 +109,7 @@ const MAX_FONT_DATA_SIZE: u64 = 50 * 1024 * 1024;
 /// session SQLite index instead of an in-memory set, so XL source folders
 /// do not pin tens of gigabytes of path/name metadata.
 ///
-/// Round 7 Wave 7.6 (A1-R7-3): doc-comment names both consumers — pre-W7.6
+/// doc-comment names both consumers — pre-W7.6
 /// it only mentioned "system-font" provenance, but W6.3 D1 added the
 /// separate cache-provenance set sharing the same cap via `insert_with_cap`.
 /// Cap applies per-set (each can hold up to 100k entries independently).
@@ -120,7 +120,7 @@ const MAX_PROVENANCE_CACHE_SIZE: usize = 100_000;
 ///
 /// Exposed `pub` so the CLI bin (a separate crate from the lib) can
 /// reuse the same literal in its TempFontDbDir cleanup
-/// (N-R5-RUSTCLI-02). Previously the CLI re-declared
+/// . Previously the CLI re-declared
 /// `CLI_FONT_DB_FILENAME` as a sibling literal; if either drifted the
 /// CLI's TempFontDbDir::drop would leave SQLite + sidecar files on disk.
 pub const USER_FONT_DB_FILENAME: &str = "user-font-sources.session.sqlite3";
@@ -142,7 +142,7 @@ const MAX_PREFLIGHT_ENTRIES: usize = 200_000;
 /// `subset_font` to match the named-const convention every other cap
 /// in this module follows.)
 ///
-/// R1 N-R1-9: `pub` so the CLI bin's `MAX_SUBSET_CODEPOINTS_FOR_DEDUP`
+/// `pub` so the CLI bin's `MAX_SUBSET_CODEPOINTS_FOR_DEDUP`
 /// (which MUST equal this value — the dedup-merge cap is bounded by
 /// what subset_font itself accepts) can both reference it AND assert
 /// equality at test time. The TS sibling in
@@ -181,7 +181,7 @@ pub(crate) fn normalize_canonical_path(canonical_str: &str) -> String {
 /// dir restriction below, this is two layers of defense against
 /// arbitrary-file-read via IPC.
 ///
-/// Round 6 Wave 6.3 #12: key changed from `String` to `(String, u32)`.
+/// key changed from `String` to `(String, u32)`.
 /// The path-only key let an attacker-influenced subtitle request a
 /// system-font path with an arbitrary face index — TTC files contain
 /// multiple faces, so `subset_font(arial.ttc, 5, ...)` against a path
@@ -334,7 +334,7 @@ pub fn init_user_font_db(app_data_dir: &Path) -> Result<(), String> {
         "Cannot create user font index directory".to_string()
     })?;
     let db_path = app_data_dir.join(USER_FONT_DB_FILENAME);
-    // R12 A-R12-2: reparse-point check before stale-DB cleanup. Posture
+    // reparse-point check before stale-DB cleanup. Posture
     // consistency with safe_io / encoding / fonts elsewhere. On Windows
     // remove_file of a symlink removes the link not the target, so the
     // security delta is small — but a startup invariant is "cache files
@@ -342,7 +342,7 @@ pub fn init_user_font_db(app_data_dir: &Path) -> Result<(), String> {
     // here signals tampering / a manual user link that we should not
     // silently destroy.
     //
-    // R13 A-R13-16: error message names the reparse-point path and an
+    // error message names the reparse-point path and an
     // actionable next step. The error propagates through lib.rs's
     // setup closure into a rfd MessageBox the user sees at startup;
     // the previous generic "Cannot reset user font index" gave the
@@ -427,7 +427,7 @@ pub fn init_user_font_db(app_data_dir: &Path) -> Result<(), String> {
 /// `open_user_font_db` calls fail-shut instead of returning
 /// SQLITE_CANTOPEN against a deleted file.
 ///
-/// Round 2 N-R2-8: `init_cli_font_sources` wraps the import sequence
+/// `init_cli_font_sources` wraps the import sequence
 /// in a `TempFontDbDir` guard whose Drop wipes the temp directory on
 /// failure — but the static `USER_FONT_DB_PATH` outlives the guard
 /// because `init_user_font_db` ran first and set it. Today's call
@@ -574,7 +574,7 @@ impl Drop for ActiveScanGuard {
             Ordering::SeqCst,
         );
         // Release CANCEL_SCAN_ID's claim on this scan's id, if any.
-        // Codex 7e355cb7: CANCEL_SCAN_ID is a monotonic high-water
+        // CANCEL_SCAN_ID is a monotonic high-water
         // mark via fetch_max, so a finished scan whose id was the
         // current max would leave the cancel state "poisoned" — every
         // subsequent scan with a lower id (Date.now()-seeded ids are
@@ -712,7 +712,7 @@ pub struct LocalFontEntry {
 pub fn entries_to_cache_metadata(
     entries: &[LocalFontEntry],
 ) -> Vec<crate::font_cache::FontMetadata> {
-    // R17 W17.6 (N-R17-12, lifetime tie WHY): `mtime_cache`'s key is
+    // (lifetime tie WHY): `mtime_cache`'s key is
     // `&str` borrowed from `entries[i].path` — the same borrow that
     // `iter().map()` walks below. The borrow lives only as long as
     // `entries`, which is bound to the function-parameter lifetime,
@@ -727,7 +727,7 @@ pub fn entries_to_cache_metadata(
     entries
         .iter()
         .map(|e| {
-            // Round 10 N-R10-009: route through the shared
+            // route through the shared
             // `try_modified_at` helper (promoted to `font_cache.rs` pub
             // fn in Round 3 / Round 6.3) so every stat-time extraction
             // site stays single-source. Pre-R10 this branch reproduced
@@ -903,7 +903,7 @@ fn import_user_font_batch_tx(
         .map_err(|e| db_error("family-key insert prepare failed", e))?;
 
     for entry in entries {
-        // Round 10 N-R10-011: saturate u64→i64 instead of aborting the
+        // saturate u64→i64 instead of aborting the
         // batch. Companion `entries_to_cache_metadata` saturates via
         // `unwrap_or(i64::MAX)` (Pattern 2 policy mismatch — same
         // conversion, two opposite failure modes). u64 values above
@@ -1048,7 +1048,7 @@ pub fn find_system_font(
                 .and_then(|e| e.to_str())
                 // Use ascii-only fold for consistency with
                 // `has_allowed_font_extension` and `parse_local_font_file`
-                // (N-R5-RUSTGUI-01) — all font extensions are pure ASCII,
+                // — all font extensions are pure ASCII,
                 // so locale-aware `to_lowercase()` is unnecessary alloc.
                 .map(|e| e.to_ascii_lowercase())
                 .unwrap_or_default();
@@ -1106,7 +1106,7 @@ fn bounded_font_family_name(chars: impl Iterator<Item = char>) -> Option<String>
     if trimmed.is_empty() || char_count > 256 {
         return None;
     }
-    // Round 7 Wave 7.2: fold validate_font_family into this helper so
+    // fold validate_font_family into this helper so
     // every call from `parse_local_font_file` (3 sites: family /
     // typographic-family / full-name+postscript fallback) automatically
     // rejects BiDi / zero-width-bearing names. Pre-W7.2 a crafted font
@@ -1192,7 +1192,7 @@ fn parse_local_font_file(canonical: &Path, scan_id: u64) -> Vec<LocalFontEntry> 
     // font-kit here: on Windows its in-memory loader routes through
     // DirectWrite and can retain/copy whole font blobs across huge scans.
     //
-    // Round 10 A-R10-002: bounded-read pattern closes the TOCTOU
+    // bounded-read pattern closes the TOCTOU
     // window between the pre-read stat gate (`metadata.len()` check
     // above) and the unbounded `fs::read`. An attacker who can swap
     // the file between stat and read (rare on single-user but
@@ -1269,7 +1269,7 @@ fn parse_local_font_file(canonical: &Path, scan_id: u64) -> Vec<LocalFontEntry> 
         };
         consecutive_failures = 0;
 
-        // Round 7 Wave 7.3 (A1-R7-1): catch_unwind around the per-face
+        // catch_unwind around the per-face
         // skrifa name-table walk + entry construction. Mirrors the
         // existing wrap around fontcull::subset_font_data_unicode
         // below: skrifa is in active development and crafted TTC /
@@ -1372,7 +1372,7 @@ fn parse_local_font_file(canonical: &Path, scan_id: u64) -> Vec<LocalFontEntry> 
                     families[..=pos].rotate_right(1);
                 }
                 None => {
-                    // R16 W16.2 (A-R16-2): structural fallback when
+                    // structural fallback when
                     // `primary_hint` is Some but doesn't appear in
                     // family_variants. The current
                     // bounded_font_family_name + localized_strings
@@ -1488,7 +1488,7 @@ fn preflight_files_inner(paths: Vec<String>) -> FontScanPreflight {
     // helper has no caller-side check. Debug-mode assertion catches
     // any future internal caller that bypasses the public command.
     //
-    // R16 W16.2 (A-R16-3, seen-HashSet bound documentation): the
+    // (seen-HashSet bound documentation): the
     // assert below also bounds the `seen: HashSet` allocation
     // implicitly — `seen` grows at most one entry per loop iteration,
     // and the loop runs `paths.len()` times. With MAX_INPUT_PATHS =
@@ -1509,7 +1509,7 @@ fn preflight_files_inner(paths: Vec<String>) -> FontScanPreflight {
         total_bytes: 0,
     };
     let mut seen = HashSet::new();
-    // R17 W17.3 (N-R17-3): mirror dropzone.rs's aggregate-count pattern.
+    // mirror dropzone.rs's aggregate-count pattern.
     // Per-path validate / canonicalize failures `continue` silently inside
     // the loop; a single `log::info!` post-loop tells anyone reading the
     // log why the resolved count differs from the input count ("I dragged
@@ -1581,7 +1581,7 @@ pub async fn preflight_font_files(paths: Vec<String>) -> Result<FontScanPrefligh
 /// limiting recursion keeps the "only files under the picked directory"
 /// security reasoning straightforward.
 ///
-/// Bytes-cap posture (Round 2 A-R2-5): per-file size is capped at
+/// Bytes-cap posture : per-file size is capped at
 /// `MAX_FONT_DATA_SIZE` (50 MB) and face count at `MAX_FONTS_PER_SCAN`
 /// (100k). There is NO cumulative-bytes ceiling on the scan as a
 /// whole. Peak memory stays bounded because each file's bytes are
@@ -1764,7 +1764,7 @@ fn scan_directory_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
         emit_batch(buffer)?;
     }
 
-    // Post-loop cancellation re-check (Codex 5421ac47). The top-of-loop
+    // Post-loop cancellation re-check . The top-of-loop
     // `font_scan_cancelled` only fires on the NEXT iteration; when
     // `parse_local_font_file`'s per-face cancel poll fires inside the
     // FINAL directory entry / file, the loop exits naturally and the
@@ -1865,7 +1865,7 @@ where
         // grow, so .extend wouldn't compile against them.
         //
         // Cache cap: take what fits instead of dropping everything
-        // (Round 2 N-R2-4). Previously a 19_999-entry batch followed
+        // . Previously a 19_999-entry batch followed
         // by a 2-entry batch would clear all 20_001 because the cap
         // tripped on the second batch, losing the well-under-cap work
         // already done. Now: take MAX_CACHE_POPULATE_FACES - c.len()
@@ -1939,7 +1939,7 @@ where
     // that only resolves when this event arrives. A dropped receiver
     // (Channel.onmessage cleared, page unloaded) would otherwise leave
     // that promise hanging silently. Log WARN so the asymmetric failure
-    // mode is visible in diagnostics (Round 2 N-R2-7).
+    // mode is visible in diagnostics.
     if let Err(e) = progress.send(ScanProgress::Done {
         reason: outcome.reason,
         added: import.added,
@@ -2014,7 +2014,7 @@ where
 /// abort. Acceptable for refresh-fonts which is a foreground
 /// operation under user attention.
 pub fn scan_directory_collecting(dir: &Path) -> Result<Vec<LocalFontEntry>, String> {
-    // R14 W14.9 (N-R14-9 considered, rejected): GUI's
+    // (considered, rejected): GUI's
     // scan_font_directory validates inside because it's an IPC entry
     // point (untrusted JS string). The CLI's scan_directory_collecting
     // is an INTERNAL helper called from run_refresh_fonts after the
@@ -2176,7 +2176,7 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
     scan_id: u64,
     mut emit_batch: F,
 ) -> Result<ScanOutcome, String> {
-    // Round 9 A-R9-A2-2: hard cap inside the function instead of relying
+    // hard cap inside the function instead of relying
     // on caller-trust. Public commands already enforce MAX_INPUT_PATHS
     // at IPC boundary, but this matches `scan_directory_inner`'s shape
     // (visited-entry hard cap) so a future internal caller can't bypass
@@ -2197,7 +2197,7 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
     // and inflates the cancel-poll budget.
     let mut seen: HashSet<String> = HashSet::new();
 
-    // R17 W17.3 (N-R17-3): mirror dropzone.rs's aggregate-count pattern.
+    // mirror dropzone.rs's aggregate-count pattern.
     // Per-path validate / canonicalize failures `continue` silently; a
     // single `log::info!` post-loop tells anyone reading the log why
     // the parsed face count came from fewer than `total_inputs` source
@@ -2293,14 +2293,14 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
         emit_batch(buffer)?;
     }
 
-    // Post-loop cancellation re-check (Codex 5421ac47). The top-of-loop
+    // Post-loop cancellation re-check . The top-of-loop
     // `font_scan_cancelled` only fires on the NEXT iteration; when
     // `parse_local_font_file`'s per-face cancel poll fires inside the
     // FINAL directory entry / file, the loop exits naturally and the
     // outer reason would otherwise read as Natural — UI sees "completed
     // normally" while the partial buffer is silently kept.
     //
-    // Round 6 Wave 6.3 #13: the post-loop classification is intentionally
+    // the post-loop classification is intentionally
     // 2-way (cancel / natural) rather than the 3-way (cancel / ceiling /
     // natural) in `scan_directory_inner`. The reason is structural —
     // scan_directory_inner has a `visited >= MAX_PREFLIGHT_ENTRIES`
@@ -2485,7 +2485,7 @@ pub fn remove_font_source(source_id: String, kind: Option<String>) -> Result<(),
     // The surrounding SQLite transaction is an orthogonal serialization
     // mechanism for the DB-state side; the cross-thread happens-before
     // we need on the Rust side comes from the Acquire ordering
-    // (N-R5-RUSTGUI-11).
+    // .
     reject_during_active_scan("Cannot remove font source while a scan is running")?;
     // Only dir-mode sources populate the persistent GUI cache
     // (try_record_folder_in_gui_cache is called from
@@ -2493,7 +2493,7 @@ pub fn remove_font_source(source_id: String, kind: Option<String>) -> Result<(),
     // the cache collector — see comment in scan_font_files). So we
     // ONLY derive an evict_folder when this source is a dir.
     //
-    // Codex 3d751e26: the prior unconditional "grab any face path's
+    // the prior unconditional "grab any face path's
     // parent → evict" would wrongly evict a coincident dir source's
     // cache row when the user removed a files-mode source whose face
     // happened to share a parent (e.g. files source picking
@@ -2521,7 +2521,7 @@ pub fn remove_font_source(source_id: String, kind: Option<String>) -> Result<(),
     // shape later, derive `is_dir_source` from a join against
     // `gui_font_cache.cached_folders` instead of trusting `kind`.
     let is_dir_source = kind.as_deref() == Some("dir");
-    // Round 10 N-R10-035: `LIMIT 1` without `ORDER BY` returns an
+    // `LIMIT 1` without `ORDER BY` returns an
     // arbitrary row, which is correct UNDER the current one-level
     // scan invariant — every face in a dir-mode source shares the
     // same `parent()` directory (the user-picked folder), so any
@@ -2599,11 +2599,11 @@ pub fn clear_font_sources() -> Result<(), String> {
     // also evict the persistent cache, otherwise the next embed pass
     // resolves to paths whose session-DB provenance was just cleared
     // and subset_font rejects them with "Font path was not discovered
-    // by a scan command" (Round 2 N-R2-2). Use the locked variant —
+    // by a scan command" . Use the locked variant —
     // we hold the guard already from this fn's top, so re-acquiring
     // would CAS-fail / silently skip (the original Codex 3 bug).
     crate::font_cache_commands::clear_all_folders_in_gui_cache_locked(&_mutation_guard);
-    // Round 7 Wave 7.3: also drop the in-process cache-provenance
+    // also drop the in-process cache-provenance
     // set (W6.3 D1). Without this, paths registered earlier in the
     // session via `lookup_family` cache hits would survive
     // `clear_font_sources` and still pass subset_font's gate on
@@ -2615,7 +2615,7 @@ pub fn clear_font_sources() -> Result<(), String> {
     if let Ok(mut cache) = ALLOWED_CACHE_FONT_PATHS.lock() {
         cache.clear();
     }
-    // Round 6 Wave 6.9: the `CUMULATIVE_FALLBACK_BYTES` reset that
+    // the `CUMULATIVE_FALLBACK_BYTES` reset that
     // used to live here was deleted along with the subset-fallback
     // path. No per-session budget to reset; nothing left to do on
     // session boundaries beyond what the calls above already
@@ -2658,7 +2658,7 @@ fn register_font_path(path: &Path, font_index: u32) -> Result<FontLookupResult, 
         "Cannot resolve font path".to_string()
     })?;
     let canonical_string = normalize_canonical_path(&canonical.to_string_lossy());
-    // Round 11 W11.2 (A4-R11-01): validate the canonical path through
+    // validate the canonical path through
     // `validate_ipc_path` for parity with `register_cache_provenance`
     // (above). System-font paths come from font-kit's OS enumeration
     // and pass through canonicalize() + the system-fonts-dir constraint
@@ -2686,7 +2686,7 @@ fn register_font_path(path: &Path, font_index: u32) -> Result<FontLookupResult, 
 /// are the entry. `label` distinguishes the set in error messages so
 /// a future "Too many registered font paths" report can be attributed
 /// to system fonts vs cache hits — pre-W7.6 both reported the same
-/// text and triage had to dig into the caller (N1-R7-5). Enforces
+/// text and triage had to dig into the caller . Enforces
 /// `MAX_PROVENANCE_CACHE_SIZE` per-set as a rollback-on-overflow contract.
 fn insert_with_cap(
     cache: &Lazy<Mutex<HashSet<(String, u32)>>>,
@@ -2753,7 +2753,7 @@ pub fn clear_cache_provenance() {
 /// font set so the system-fonts-dir defense still applies to
 /// `find_system_font` registrations.
 ///
-/// Round 10 A-R10-001: signature accepts `&font_cache::FontLookupResult`
+/// signature accepts `&font_cache::FontLookupResult`
 /// directly, replacing the prior `(canonical_path: &str, face_index:
 /// u32)` shape. `FontLookupResult` has `pub(crate)` fields, so external
 /// callers (CLI bin, future external consumers) cannot construct one
@@ -2767,13 +2767,13 @@ pub fn clear_cache_provenance() {
 /// hostile `--cache-file` swap can't smuggle crafted bytes past the
 /// trust set.
 pub fn register_cache_provenance(hit: &crate::font_cache::FontLookupResult) -> Result<(), String> {
-    // Round 8 A-R8-A2-2: re-validate the canonical path through the
+    // re-validate the canonical path through the
     // IPC validator before insertion. A hostile cache file supplied
     // via `--cache-file` (P1b) could carry crafted rows with control
     // chars, BiDi, parent-directory segments, or DOS device prefixes;
     // catching at insert time keeps the trust set clean.
     crate::util::validate_ipc_path(hit.font_path(), "Cache font")?;
-    // Round 10 A-R10-001: face_index is stored as i32; reject
+    // face_index is stored as i32; reject
     // negative values explicitly rather than reinterpreting the bit
     // pattern into a huge u32.
     let face_index = u32::try_from(hit.face_index()).map_err(|_| {
@@ -2849,7 +2849,7 @@ static MACOS_USER_FONTS_DIR: Lazy<Option<String>> = Lazy::new(|| {
 
 /// Cached Linux per-user fonts dirs (`~/.fonts` + `~/.local/share/fonts`).
 /// Empty vector if `$HOME` was unset at startup. Same eager-snapshot
-/// reason as `MACOS_USER_FONTS_DIR` (Round 8 A-R8-A3-1).
+/// reason as `MACOS_USER_FONTS_DIR`.
 #[cfg(all(unix, not(target_os = "macos")))]
 static LINUX_USER_FONT_DIRS: Lazy<Vec<String>> = Lazy::new(|| {
     if let Some(home) = std::env::var_os("HOME") {
@@ -2889,7 +2889,7 @@ fn is_in_system_fonts_dir(canonical: &Path) -> bool {
     if cfg!(windows) {
         #[cfg(windows)]
         {
-            // ASCII-fold only (Round 3 N-R3-6): NTFS uses simple case
+            // ASCII-fold only : NTFS uses simple case
             // fold which diverges from Unicode case fold for a handful
             // of non-ASCII codepoints (German ß folds to "ss" under
             // Unicode but stays ß under NTFS; Greek final sigma ς).
@@ -2933,7 +2933,7 @@ fn is_in_system_fonts_dir(canonical: &Path) -> bool {
         let lower = canonical_str.to_lowercase();
         let under = |dir: &str| path_under_dir(&lower, &dir.to_lowercase(), "/");
         const MAC_DIRS: &[&str] = &[
-            // Alphabetized (N-R3-9). Narrow to Adobe/Fonts — the
+            // Alphabetized . Narrow to Adobe/Fonts — the
             // wider /Library/Application Support tree holds every
             // app's data, not just fonts, so allowing the whole tree
             // weakens the "system font directory" gate.
@@ -2959,7 +2959,7 @@ fn is_in_system_fonts_dir(canonical: &Path) -> bool {
         false
     } else {
         // Linux — same eager-snapshot pattern as macOS / Windows
-        // (Round 8 A-R8-A3-1). The static is populated at startup;
+        // . The static is populated at startup;
         // here we only read it.
         let under = |dir: &str| path_under_dir(&canonical_str, dir, "/");
         if under("/usr/share/fonts") || under("/usr/local/share/fonts") {
@@ -2994,7 +2994,7 @@ fn is_in_system_fonts_dir(canonical: &Path) -> bool {
 /// JSON-payload boundary (where the expansion is bounded by per-font
 /// caps, not the cumulative ceiling).
 ///
-/// **IMPORTANT (R16 W16.3 N-R16-5)**: do NOT add `#[tauri::command]`
+/// **IMPORTANT **: do NOT add `#[tauri::command]`
 /// to this function. The Vec<u8> return shape would JSON-encode as
 /// `[byte, byte, ...]` over the GUI IPC wire, hitting the same ~4-5×
 /// expansion `subset_font_b64` exists specifically to dodge. The
@@ -3038,7 +3038,7 @@ pub fn subset_font(
     // Validate file extension against allowed font types.
     // ASCII-only fold matches `has_allowed_font_extension` /
     // `parse_local_font_file` / `find_system_font::Handle::Path` arms
-    // (N-R5-RUSTGUI-01) — every entry in ALLOWED_FONT_EXTENSIONS is
+    // — every entry in ALLOWED_FONT_EXTENSIONS is
     // pure ASCII so locale-aware lowercase is unnecessary alloc.
     let ext = path
         .extension()
@@ -3054,7 +3054,7 @@ pub fn subset_font(
         ));
     }
 
-    // Round 10 A-R10-003: PRE-canonicalize reparse-point reject. On
+    // PRE-canonicalize reparse-point reject. On
     // Windows, `Path::canonicalize` follows symlinks / junctions to
     // resolve the target, so the POST-canonicalize check below sees
     // the target (typically not a reparse point) — for the documented
@@ -3078,7 +3078,7 @@ pub fn subset_font(
         "Cannot resolve font path".to_string()
     })?;
 
-    // Round 9 A-R9-A2-1: post-canonicalize reparse-point reject —
+    // post-canonicalize reparse-point reject —
     // belt-and-suspenders with the Round 10 A-R10-003 pre-check
     // above. Covers reparse-point chains (e.g., symlink → symlink →
     // file) where the FIRST hop is canonicalize-resolved cleanly
@@ -3110,7 +3110,7 @@ pub fn subset_font(
     //      GUI's lookup_font_family) → registers in
     //      ALLOWED_CACHE_FONT_PATHS via `register_cache_provenance`.
     //
-    // Round 6 Wave 6.3 #12: keying by (path, face_index) instead of
+    // keying by (path, face_index) instead of
     // path alone closes a face-index injection where attacker-influenced
     // ASS would request `subset_font(arial.ttc, 5, ...)` against a path
     // registered for face 0. TTC files contain multiple faces, and the
@@ -3122,12 +3122,12 @@ pub fn subset_font(
     // process (the second set, ALLOWED_CACHE_FONT_PATHS). Nothing
     // accepts a path that merely appears in the SQLite file but was
     // not actually looked up this run. Pre-D1 the gate rejected all
-    // cache rows (Codex 7a34374f), which broke the design-locked CLI
+    // cache rows , which broke the design-locked CLI
     // Situation B and GUI lookup tier 2. P1a accepts the in-process
     // trust under the project's single-user-desktop threat model.
     let canonical_string = normalize_canonical_path(&canonical.to_string_lossy());
     let registered_key = (canonical_string.clone(), font_index);
-    // R17 W17.4 (N-R17-8, readability): name each tier flag for what
+    // (readability): name each tier flag for what
     // it asserts when `true` — "accepted via this tier" — rather than
     // "is this tier's nature." Each variable evaluates lazily: once a
     // prior tier accepts, subsequent ones short-circuit to `false`.
@@ -3202,7 +3202,7 @@ pub fn subset_font(
         ));
     }
 
-    // Round 8 A-R8-A2-1: magic-byte sniff for non-system tiers as a
+    // magic-byte sniff for non-system tiers as a
     // defense-in-depth gate before the full file read. The extension
     // check above rejects `/etc/passwd` (no `.ttf` extension), but
     // attacker-crafted cache rows pointing at `/etc/passwd.ttf` (or
@@ -3236,7 +3236,7 @@ pub fn subset_font(
         // not supported by fontcull / skrifa, would fail parse anyway,
         // and is so rare that the false-reject cost is bounded to
         // archive-only fonts.
-        // R12 N-R12-12: renamed from `is_font` — true here means
+        // renamed from `is_font` — true here means
         // "has a recognized OpenType / TrueType signature", which is
         // narrower than "is a font". PostScript Type 1 fonts ARE
         // fonts but lack any of these magic numbers; the comment
@@ -3251,7 +3251,7 @@ pub fn subset_font(
         drop(probe);
     }
 
-    // Round 10 A-R10-002: bounded-read TOCTOU mitigation. Parity
+    // bounded-read TOCTOU mitigation. Parity
     // with the same change in `parse_local_font_file` above —
     // `fs::read` is unbounded and a hostile file swap between the
     // earlier metadata fetch and this read could force a
@@ -3276,7 +3276,7 @@ pub fn subset_font(
     };
 
     // Post-read size check (TOCTOU mitigation — file could grow between stat and read).
-    // Round 10 A-R10-002: kept as belt-and-suspenders for the bounded-read above.
+    // kept as belt-and-suspenders for the bounded-read above.
     if font_data.len() as u64 > MAX_FONT_DATA_SIZE {
         return Err(format!(
             "Font file too large after read ({:.1} MB, max {} MB)",
@@ -3377,7 +3377,7 @@ pub fn subset_font(
             Ok(subsetted)
         }
         Err(e) => {
-            // Round 6 Wave 6.9 (Codex Finding 2 fix): on subsetting
+            // on subsetting
             // failure, return Err instead of falling back to raw
             // `font_data`. The fallback path was a corner-case
             // accommodation for "corrupt fonts in user-trusted dirs"
@@ -3721,7 +3721,7 @@ mod tests {
         clear_font_sources().expect("test DB should clear");
     }
 
-    /// R1 N-R1-3: replaces the previous `tests/test_subset.rs` integration
+    /// replaces the previous `tests/test_subset.rs` integration
     /// test which called `fontcull::subset_font_data_unicode` directly —
     /// bypassing the project's tuned Plan in `subset_with_index` (drop
     /// vmtx/LTSH/kern, preserve full name table — the 4.6× size win
@@ -3835,7 +3835,7 @@ mod tests {
             has_context,
             "subset error should carry diagnostic context — got: {err}"
         );
-        // R1 N-R1-4: fontcull's unicode-subset error contract — parse
+        // fontcull's unicode-subset error contract — parse
         // failures must produce a non-empty Display string so downstream
         // wrappers (subset_with_index, subset_font) can interpolate them
         // cleanly into the IPC error path. Pre-`00f44ac` this branch
@@ -3900,7 +3900,7 @@ mod tests {
 
     #[test]
     fn bounded_font_family_name_rejects_bidi_and_zero_width() {
-        // Round 7 Wave 7.2: bounded_font_family_name now delegates to
+        // bounded_font_family_name now delegates to
         // validate_font_family for the BiDi / zero-width / line-sep /
         // U+061C rejection set. Without this pin, a future refactor
         // that drops the validate call (or replaces it with a partial
@@ -3977,7 +3977,7 @@ mod tests {
         assert!(!is_user_font_face_registered("C:\\Fonts\\A.ttf", 1).unwrap());
     }
 
-    // ── Round 7 Wave 7.8 (N1-R7-4) — cache provenance gate pins ──
+    // ── Round 7 Wave 7.8 — cache provenance gate pins ──
     //
     // W6.3 D1 added ALLOWED_CACHE_FONT_PATHS as a SECOND trusted set
     // (alongside ALLOWED_FONT_PATHS for system fonts) so cache lookup
@@ -3985,7 +3985,7 @@ mod tests {
     // gate's three documented states: rejects unregistered, accepts
     // registered, and refuses to grow past MAX_PROVENANCE_CACHE_SIZE.
     // Without these pins, a refactor that drops the (path, face_index)
-    // pair-keying (Round 6 W6.3 #12) or accidentally widens the gate
+    // pair-keying or accidentally widens the gate
     // to trust EVERY path that ever entered the SQLite cache (the
     // anti-pattern the W7.8 design explicitly rejects) would still
     // compile and pass higher-level integration tests.
@@ -4020,7 +4020,7 @@ mod tests {
         ALLOWED_CACHE_FONT_PATHS.lock().unwrap().clear();
 
         let path = "C:\\Fonts\\Registered.ttf";
-        // Round 10 A-R10-001: register_cache_provenance now takes
+        // register_cache_provenance now takes
         // `&FontLookupResult`. Tests in this module are in-crate, so
         // pub(crate) construction is permitted.
         let hit = crate::font_cache::FontLookupResult {
@@ -4247,7 +4247,7 @@ mod tests {
         assert_eq!(outcome.total, 0);
         assert_eq!(outcome.reason, ScanStopReason::UserCancel);
         assert!(emitted.is_empty());
-        // Round 7 Wave 7.8 (N1-R7-3): reset CANCEL_SCAN_ID via
+        // reset CANCEL_SCAN_ID via
         // `compare_exchange` to its pre-test value so subsequent tests
         // sharing the binary process don't inherit the elevated cancel
         // id. SCAN_TEST_LOCK serializes the tests but `CANCEL_SCAN_ID`

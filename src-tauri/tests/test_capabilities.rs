@@ -1,4 +1,4 @@
-//! R17 W17.5 (A-R17-49): pin the fs:scope deny-list shape so a typo
+//! R17 W17.5 : pin the fs:scope deny-list shape so a typo
 //! (missing trailing `/**`, wrong scope variable per W12.1 / W13.2,
 //! accidental removal of a key entry) surfaces as a test failure
 //! rather than silently widening the attack surface.
@@ -202,7 +202,7 @@ fn deny_list_rejects_w12_1_w13_2_traps() {
             "$APPLOCALDATA/Google/Chrome/User Data/**",
             "should be $LOCALDATA/... (W12.1)",
         ),
-        // R17 W17.5 (A-R17-50): per-file `.cargo/credentials*` /
+        // per-file `.cargo/credentials*` /
         // `.cargo/config*` enumeration is superseded by the wildcard
         // `.cargo/**`. Adding the narrower rules back would suggest
         // a future contributor might enumerate by hand again and

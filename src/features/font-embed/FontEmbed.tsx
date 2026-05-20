@@ -82,7 +82,7 @@ function fileNameHasAssExt(name: string): boolean {
 // covers any legitimate workflow (a typical fan-sub ASS is 30-200 KB,
 // even rich-typography ones rarely exceed 5 MB).
 const MAX_BATCH_FILES = 500;
-// Round 10 N-R10-033: lowered from 500 MB to 200 MB headroom. The
+// lowered from 500 MB to 200 MB headroom. The
 // cap counts decoded UTF-16 string bytes (`content.length * 2`)
 // only — per-file `usages` Maps with up to MAX_CODEPOINTS_PER_VARIANT
 // entries × MAX_FONT_VARIANTS variants per file add another ~25-100
@@ -242,7 +242,7 @@ export default function FontEmbed() {
         setDropError(conflictMsg);
         return;
       }
-      // Defense-in-depth file-count cap (Codex 9a2e7e9e). The drag-drop
+      // Defense-in-depth file-count cap . The drag-drop
       // expansion on the Rust side caps at 5000 entries; the multi-file
       // picker has no explicit cap. Reject up front so a malicious /
       // accidental large folder doesn't even start consuming readText
@@ -354,7 +354,7 @@ export default function FontEmbed() {
 
   const handlePickFiles = useCallback(async () => {
     const gen = (pickGenRef.current = pickGenRef.current + 1);
-    // Round 11 W11.7 (N1-R11-10): catch dialog IPC failures so a click
+    // catch dialog IPC failures so a click
     // that can't open the picker doesn't read as a silent no-op. See
     // TimingShift.handlePickFiles for the full rationale.
     let paths: string[] | null;
@@ -372,7 +372,7 @@ export default function FontEmbed() {
 
   const handleDroppedPaths = useCallback(
     async (paths: string[]) => {
-      // R15 W15.6 (N-R15-28): bump pickGenRef at function entry,
+      // bump pickGenRef at function entry,
       // symmetric with handlePickFiles. Pre-W15.6 the bump happened
       // AFTER the filter — concurrent in-flight pick wouldn't see the
       // generation jump until after the filter completed. Real-world
@@ -380,7 +380,7 @@ export default function FontEmbed() {
       // the bump-at-entry pattern keeps the generation contract
       // uniform across pick entry points.
       const gen = (pickGenRef.current = pickGenRef.current + 1);
-      // R15 W15.6 (N-R15-22, R10 N-R10-029 sibling fix): clear
+      // (R10 N-R10-029 sibling fix): clear
       // lastActionResult on every new ingest entry, not just the
       // happy path. BatchRename was fixed in R10 N-R10-029; FontEmbed
       // relied on the `fontsFiles` useEffect to clear, but that effect
@@ -425,7 +425,7 @@ export default function FontEmbed() {
   const reanalyzeWithSources = useCallback(async () => {
     const cache = perFileAnalysisRef.current;
     if (cache.size === 0) return;
-    // Round 9 N-R9-N2-2: snapshot the set of fonts that were ALREADY
+    // snapshot the set of fonts that were ALREADY
     // resolved before this reanalyze. Below, the selection merge
     // distinguishes "truly new resolution" (auto-check) from "resolved
     // both before and after" (respect the user's prior selection
@@ -435,7 +435,7 @@ export default function FontEmbed() {
     // silently overridden.
     const prevResolved = keysOfResolvedFonts(aggregateFonts(cache).infos);
     const gen = (pickGenRef.current = pickGenRef.current + 1);
-    // Round 6 Wave 6.4 #17: set analyzing=true during the sequential
+    // set analyzing=true during the sequential
     // per-file IPC sequence. Without this, the Embed button remains
     // enabled while reanalyzeWithSources walks the cache against
     // (changed) sources — clicking Embed mid-reanalyze would consume
@@ -527,7 +527,7 @@ export default function FontEmbed() {
         try {
           await reanalyzeWithSources();
         } catch (e) {
-          // Round 8 N-R8-N2-11: parity with handleRemoveFontSource —
+          // parity with handleRemoveFontSource —
           // reanalyzeWithSources can throw (font_cache_commands /
           // analyzeFonts internal errors); without an outer catch the
           // rejection becomes an unhandled-promise warning and the user
@@ -546,7 +546,7 @@ export default function FontEmbed() {
     (id: string) => {
       void (async () => {
         // Look up the source's kind before the remove call — needed to
-        // gate the persistent cache eviction (Codex 3d751e26). Defaults
+        // gate the persistent cache eviction . Defaults
         // to "files" (NOT "dir") when the source isn't found: dir-mode
         // removal triggers a `try_remove_folder_from_gui_cache` side
         // effect, and an unknown id falling into that branch could evict
@@ -669,7 +669,7 @@ export default function FontEmbed() {
         for (let i = 0; i < filePaths.length; i++) {
           const filePath = filePaths[i]!;
 
-          // R15 W15.6 (N-R15-24): hoist safeFileName above the
+          // hoist safeFileName above the
           // skip-check so a future refactor adding work between the
           // skip-check and the original declaration site doesn't
           // surface ReferenceError on a defensive throw inside that
@@ -679,7 +679,7 @@ export default function FontEmbed() {
           // on skipped paths, which is negligible against the actual
           // embed work and worth the symmetry.
           //
-          // R15 W15.6 (N-R15-23): bare-split fallback before
+          // bare-split fallback before
           // fileNameFromPath — if fileNameFromPath throws (invalid
           // path shapes), we still get a reasonable display string
           // instead of sanitizeForDialog'ing the full path. Same
@@ -698,7 +698,7 @@ export default function FontEmbed() {
           }
 
           // Skip files that failed pre-flight collect-and-continue
-          // (Wave 6.4 #16). Their error was already logged above; here
+          // . Their error was already logged above; here
           // we just need to not process them so processedCount still
           // climbs to filePaths.length and the footer chip is accurate.
           if (skippedPaths.has(filePath)) {
@@ -756,7 +756,7 @@ export default function FontEmbed() {
             );
 
             if (selectedFonts.length === 0) {
-              // Round 8 N-R8-N2-17: misattributed message correction.
+              // misattributed message correction.
               // The outer "Embed" button is gated on `selected.size > 0`,
               // so the global-zero case never reaches this loop body.
               // The remaining 0-fonts case here is "this file references

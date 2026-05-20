@@ -327,7 +327,7 @@ export function applyFontEmbed(request: FontEmbedApplyRequest): FontEmbedApplyRe
   // contract uniformity.
   assertAssShape(request.content);
 
-  // R2 A-R2-2: `font.data` is `number[]` from the deno_core op marshal
+  // `font.data` is `number[]` from the deno_core op marshal
   // (Rust `Vec<u8>` → serde_json → TS array of bytes). `Uint8Array.from`
   // silently coerces non-byte values (256→0, -1→255, NaN→0, 1.5→1),
   // which would be a disclosure primitive if a non-Rust source ever
@@ -495,7 +495,7 @@ function categorizeRenamePaths(paths: string[]): CategorizedRenamePaths {
 }
 
 function categorizeRenamePath(path: string): RenameCategory {
-  // R3 N-R3-5: thin wrapper — delegate the ext-lookup chain to the
+  // thin wrapper — delegate the ext-lookup chain to the
   // canonical `categorize` (which scans VIDEO_EXTS → SUBTITLE_EXTS →
   // IGNORED_EXTS in the same priority order). Pre-R3 the chain was
   // open-coded here, so a future bucket addition or priority shift in
@@ -600,7 +600,7 @@ function groupMatchedFilesByKey(files: ParsedFile[]): Map<string, ParsedFile[]> 
   return groups;
 }
 
-// `compareKeys` now exported from `pairing-engine.ts` (R2 N-R2-4); the
+// `compareKeys` now exported from `pairing-engine.ts` ; the
 // local sibling that lived here had no comments and could drift from the
 // pairing-engine version's malformed-key `|| 0` WHY comment.
 
@@ -627,7 +627,7 @@ function canonicalLanguage(language: string): string {
       return "jp";
     case "eng":
       return "en";
-    // Round 8 N-R8-N1-4: `ko` / `kor` reconcile. Without this branch,
+    // `ko` / `kor` reconcile. Without this branch,
     // a CLI invocation with `--langs kor` could not match subtitle
     // filenames carrying the `.ko.ass` suffix (and vice versa),
     // silently filtering the row. Mirrors the sc / tc / jp / en
@@ -640,7 +640,7 @@ function canonicalLanguage(language: string): string {
   }
 }
 
-// `fileNameFromPath` now lives in `path-validation.ts` (R2 N-R2-1).
+// `fileNameFromPath` now lives in `path-validation.ts`.
 // Pre-W1 the CLI sibling differed from the GUI version: it used
 // `lastIndexOf("/") + slice` with no fallback, so a trailing-separator
 // input returned an empty string while the GUI sibling (post-R16 W16.6)

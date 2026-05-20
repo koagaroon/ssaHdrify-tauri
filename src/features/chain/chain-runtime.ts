@@ -104,7 +104,7 @@ function hdrTransform(ctx: TransformContext, params: HdrStepParams): TransformRe
   // For v1, chain assumes ASS content; SRT inputs that need HDR
   // conversion should run `hdr` standalone first.
   //
-  // Round 8 A-R8-A1-7: explicit ASS-shape guard. Without it, a raw SRT
+  // explicit ASS-shape guard. Without it, a raw SRT
   // fed into `chain hdr ...` runs processAssContent on text that has
   // no `[V4+ Styles]` / `[Events]` sections, producing garbage output
   // that's neither ASS nor SRT. Violates no-silent-action: chain
@@ -113,7 +113,7 @@ function hdrTransform(ctx: TransformContext, params: HdrStepParams): TransformRe
   // `[Script Info]` or `[V4+ Styles]` qualifies; both real ASS files
   // open with at least one of those headers (allowing leading BOM /
   // whitespace / comments).
-  // Round 11 W11.7 (A1-R11-05): bound the whitespace runs explicitly.
+  // bound the whitespace runs explicitly.
   // Real ASS headers carry no leading whitespace, and renderers
   // tolerate at most a tab or two before / inside the bracket. {0,16}
   // is generous past anything legitimate and keeps the regex out of
@@ -140,7 +140,7 @@ function shiftTransform(ctx: TransformContext, params: ShiftStepParams): Transfo
   // from the preview array's `wasShifted` flags, matching how the
   // existing `convertShift` wrapper in cli-engine-entry.ts does it.
   const shiftedCount = result.preview.filter((entry) => entry.wasShifted).length;
-  // R13 N-R13-1: surface skippedCount as a structured field on
+  // surface skippedCount as a structured field on
   // TransformResult (not a note suffix). runChain aggregates it
   // into ChainResult.skippedCount; the Rust shell reads that field
   // and routes a stderr warning + FileReport.warnings entry via
@@ -233,7 +233,7 @@ function decodeBase64(b64: string, name: string): Uint8Array {
     // surfaces in the chain log panel. Scrubbing at the extraction site
     // keeps the catch-arm contract uniform with the rest of the project.
     //
-    // Round 11 W11.7 (A1-R11-06): wrap `name` in stripUnicodeControls
+    // wrap `name` in stripUnicodeControls
     // too. The N-R5-FECHAIN-17 analysis (buildFontFileName already
     // strips everything but [a-z0-9_-]) is correct for the current
     // call path, but the same "future refactor lets the original name
@@ -264,7 +264,7 @@ function decodeBase64(b64: string, name: string): Uint8Array {
 export function runChain(request: ChainRunRequest): ChainResult {
   const { plan, inputPath, content } = request;
   const notes: string[] = [];
-  // R13 N-R13-1: aggregate skipped-caption counts across every step
+  // aggregate skipped-caption counts across every step
   // so the Rust shell sees a single number it can pass to
   // `emit_oversized_skipped_warning`. Today only shiftTransform
   // populates `result.skippedCount`; an embed or HDR step that grew
@@ -272,7 +272,7 @@ export function runChain(request: ChainRunRequest): ChainResult {
   let totalSkippedCount = 0;
   let current = content;
 
-  // Round 11 W11.3 (N1-R11-04): chain-level preflight for the strictest
+  // chain-level preflight for the strictest
   // step's input requirement. hdrTransform accepts content with either
   // [Script Info] OR [V4+ Styles] as the ASS-shape probe, but
   // insertFontsSection (the embed step's terminal call) requires
@@ -282,7 +282,7 @@ export function runChain(request: ChainRunRequest): ChainResult {
   // work and the error attribution names step 2 (embed) instead of
   // surfacing "chain shape needs Script Info" upfront.
   //
-  // R16 W16.6 (N-R16-28): route through `assertAssShape` so this
+  // route through `assertAssShape` so this
   // preflight shares ONE source with `embedFonts` + `insertFontsSection`
   // (the [Script Info] regex + byte cap + line-count probe). Pre-W16.6
   // the regex was duplicated inline; a tightening on the helper side
@@ -295,7 +295,7 @@ export function runChain(request: ChainRunRequest): ChainResult {
     try {
       assertAssShape(content);
     } catch (err) {
-      // R17 W17.3 (N-R17-36, Pattern 1 sibling parity): every other
+      // (Pattern 1 sibling parity): every other
       // catch-arm in chain-runtime.ts routes through `sanitizeError`
       // (BiDi / control char stripping). assertAssShape's current
       // messages are literals (no interpolated content), but a future
@@ -316,7 +316,7 @@ export function runChain(request: ChainRunRequest): ChainResult {
   for (let i = 0; i < plan.steps.length; i++) {
     const step = plan.steps[i]!;
     const transform = TRANSFORMS[step.kind];
-    // Round 11 W11.7 (A1-R11-07): runtime cross-check that the
+    // runtime cross-check that the
     // registry actually has a transform for this kind. The TS type
     // system ensures `step.kind` is a `StepKind` union member, so the
     // index access should never miss in well-typed code; but a malformed
@@ -337,7 +337,7 @@ export function runChain(request: ChainRunRequest): ChainResult {
       // above guarantees the correspondence by construction. The
       // runtime correctness is unchanged; this is a TS limitation.
       //
-      // R16 W16.6 (N-R16-29) / R17 W17.3 (A-R17-37, trust boundary):
+      // R16 W16.6 / R17 W17.3 (A-R17-37, trust boundary):
       // the cast erases step-shape info, so a malformed `step.params`
       // whose runtime shape doesn't match its declared `step.kind`
       // (e.g., `params.brightness` as a NaN string for an "hdr" step)
@@ -406,7 +406,7 @@ export function runChain(request: ChainRunRequest): ChainResult {
  * uses neither, so the most-common path doesn't need them.
  */
 export function resolveChainOutputPath(inputPath: string, template: string): string {
-  // Round 8 N-R8-N1-2: explicit unknown-token reject. substituteTemplate
+  // explicit unknown-token reject. substituteTemplate
   // silently substitutes unknown tokens to ""; without this check, a
   // template like `{name}.{eotf}.ass` (using a per-step token at the
   // chain level) would collapse to `{name}.ass` after the empty
@@ -416,7 +416,7 @@ export function resolveChainOutputPath(inputPath: string, template: string): str
   // {eotf} / {format} restriction; this matches it with a runtime
   // gate.
   const CHAIN_ALLOWED_TOKENS = new Set(["name", "ext"]);
-  // Round 11 W11.7 (N1-R11-06): widen the token-name regex to include
+  // widen the token-name regex to include
   // uppercase + underscore-only starts so `{Format}` / `{NAME}` /
   // `{Eotf}` hit the unknown-token error path here rather than slipping
   // past silently. Pre-R11 the lowercase-only `[a-z_][a-z0-9_]*`
@@ -425,7 +425,7 @@ export function resolveChainOutputPath(inputPath: string, template: string): str
   // the lowercase variant, with no signal that the capitalized form
   // was an unrecognized intent. The whitelist stays lowercase so a
   // mixed-case input correctly hits this error path.
-  // Round 11 W11.7 (A1-R11-01): bound the identifier run to {0,31}
+  // bound the identifier run to {0,31}
   // (32 chars total including the leading char). Real tokens are short
   // ("name", "ext", "eotf"); a multi-MB unbounded run inside `{...}`
   // would burn iteration cost in matchAll's lexer without ever matching

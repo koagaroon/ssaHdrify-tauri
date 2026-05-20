@@ -86,9 +86,9 @@ export function buildFontEntry(fontName: string, data: Uint8Array): string {
   // unicode-controls set (mirrors validate_font_family + safeFontName +
   // sanitizeForDialog). Slashes/backslashes are added beyond the
   // upstream buildFontFileName output as a self-contained defense at
-  // the encoder boundary (A-R5-FECHAIN-09).
+  // the encoder boundary.
   //
-  // Round 7 Wave 7.7 (N4-R7-2 / N4-R7-3 followup): `no-control-regex`
+  // (N4-R7-3 followup): `no-control-regex`
   // eslint-disable directive removed \u2014 the rule only inspects regex
   // literals, and this regex is built via `new RegExp(...)` from a
   // string interpolation, so the rule was never going to fire.

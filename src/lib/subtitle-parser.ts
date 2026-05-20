@@ -209,7 +209,7 @@ export function parseDisplayTime(ts: string): number | null {
 // Rust side as a unified "defensive ceiling."
 export const MAX_PARSED_ENTRIES = 500_000;
 
-// Round 6 Wave 6.8 (Codex Finding 1 fix): raw-block cap restored as
+// raw-block cap restored as
 // defense-in-depth alongside the per-caption cap. W6.5 #18 removed
 // the raw block cap on the rationale that "ASS/SUB count entries
 // not blocks", but `splitCueBlocks` materializes ALL raw blocks
@@ -253,7 +253,7 @@ function parseSrt(content: string): Caption[] {
   // parseInt to Infinity.
   const timingRe = /^(\d{1,12}:\d{2}:\d{2},\d{3})\s*-->\s*(\d{1,12}:\d{2}:\d{2},\d{3})/;
 
-  // Round 6 Wave 6.5 #18 / Wave 6.8: per-caption cap below guards the
+  // per-caption cap below guards the
   // semantic ceiling (`MAX_PARSED_ENTRIES`); the W6.8 raw-block cap
   // above is the iteration-cost guard.
   for (const block of blocks) {
@@ -279,7 +279,7 @@ function parseSrt(content: string): Caption[] {
       .slice(timingIdx + 1)
       .join("\n")
       .trim();
-    // Round 11 W11.1 (N1-R11-01): oversized text now pushes a skipped
+    // oversized text now pushes a skipped
     // placeholder rather than silently dropping the entry. Feature
     // layers (HdrConvert / TimingShift) read
     // `captions.filter(c => c.skipped).length` and surface a count via
@@ -310,7 +310,7 @@ function parseSrt(content: string): Caption[] {
 }
 
 function buildSrt(captions: Caption[]): string {
-  // Round 11 W11.1 (N1-R11-01): filter skipped placeholders before
+  // filter skipped placeholders before
   // serialization. parseSrt now pushes them for oversized text so the
   // feature layer can count and surface the drop; buildSrt rebuilds
   // from the captions array, so filtering here keeps disk output
@@ -348,7 +348,7 @@ function parseVtt(content: string): Caption[] {
   const timingRe =
     /^(\d{2,12}:\d{2}:\d{2}\.\d{3}|\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{2,12}:\d{2}:\d{2}\.\d{3}|\d{2}:\d{2}\.\d{3})/;
 
-  // Per-entry cap (Round 6 Wave 6.5 #18) — see parseSrt for the
+  // Per-entry cap — see parseSrt for the
   // block-vs-entry rationale.
   for (const block of blocks) {
     const lines = block.replace(/^\n/, "").split("\n");
@@ -374,7 +374,7 @@ function parseVtt(content: string): Caption[] {
       .slice(timingIdx + 1)
       .join("\n")
       .trim();
-    // Round 11 W11.1 (N1-R11-01): oversized text → skipped placeholder
+    // oversized text → skipped placeholder
     // (same rationale as parseSrt; see WHY block there). The
     // placeholder retains cueId because buildVtt's filter respects the
     // skipped flag, not the cueId presence.
@@ -403,7 +403,7 @@ function parseVtt(content: string): Caption[] {
 function buildVtt(captions: Caption[], header: string = "WEBVTT"): string {
   const lines = [header, ""];
   for (const c of captions) {
-    // Round 11 W11.1 (N1-R11-01): skip placeholders left by parseVtt
+    // skip placeholders left by parseVtt
     // for oversized text. The feature layer surfaces the drop via
     // msg_oversized_skipped; disk output stays clean.
     if (c.skipped) continue;
@@ -432,7 +432,7 @@ function buildVtt(captions: Caption[], header: string = "WEBVTT"): string {
 // trips it exactly. A factory (not a shared instance) is used so each call
 // gets a fresh `lastIndex` — guarding against pollution if a previous
 // parseAss call threw mid-loop.
-// Round 7 Wave 7.5 (A4-R7-4): hour fields bounded to {1,12} digits,
+// hour fields bounded to {1,12} digits,
 // matching `parseAssTime`. Unbounded `\d+` would let pathological
 // `999…9:00:00.00` (100+ hour digits) saturate parseInt to Infinity
 // before the time-math even runs. 12 digits is identical to the SRT /
@@ -444,7 +444,7 @@ function createDialogueRe(): RegExp {
   return new RegExp(DIALOGUE_PATTERN, DIALOGUE_FLAGS);
 }
 
-// Round 7 Wave 7.5 (A4-R7-4): per-caption text cap. Real-world ASS
+// per-caption text cap. Real-world ASS
 // dialogue lines are < 1 KB even for elaborate styled karaoke. 64 KB
 // is generous — guards against a crafted file with a single dialogue
 // containing a multi-MB text body (P1b attacker-influenced content).
@@ -478,7 +478,7 @@ function parseAss(content: string): Caption[] {
       // silently dropped this entry the index would drift and every
       // subsequent Dialogue line would receive the wrong timestamps.
       //
-      // R16 W16.6 (N-R16-14) / R17 W17.6 (N-R17-46, retention WHY
+      // R16 W16.6 / R17 W17.6 (N-R17-46, retention WHY
       // tightening): the upstream 50 MB file-read cap (Rust IPC,
       // `MAX_TEXT_SIZE` in encoding.rs) bounds total retained raw
       // size; clearing `text` to `""` keeps the parsed-content path
@@ -601,7 +601,7 @@ function parseSub(content: string, fps: number = DEFAULT_FPS): Caption[] {
   let match;
   let count = 0;
   while ((match = subLineRe.exec(content)) !== null) {
-    // Round 7 Wave 7.5 (N4-R7-8 / A4-R7-14): per-caption count cap
+    // : per-caption count cap
     // moved BEFORE the push so the throw fires WHEN refusing the
     // entry, matching the SRT/VTT/ASS pattern. Pre-W7.5 the cap was
     // `count += 1; if (count > MAX) throw;` which surfaces "count =
@@ -610,9 +610,9 @@ function parseSub(content: string, fps: number = DEFAULT_FPS): Caption[] {
     if (count >= MAX_PARSED_ENTRIES) {
       throw new Error(`Too many subtitle entries: ${count}+ (max ${MAX_PARSED_ENTRIES})`);
     }
-    // Per-caption text cap (A4-R7-5) — same rationale as parseAss.
+    // Per-caption text cap — same rationale as parseAss.
     //
-    // Round 10 N-R10-006: oversized text now pushes a skipped
+    // oversized text now pushes a skipped
     // placeholder that DOES count toward MAX_PARSED_ENTRIES (option (b)
     // — matching parseAss's treatment). Pre-R10 the bare `continue`
     // didn't increment `count`, so iteration was unbounded by the
@@ -650,14 +650,14 @@ function buildSub(captions: Caption[], fps: number = DEFAULT_FPS): string {
   fps = clampFps(fps);
   return (
     captions
-      // Round 10 N-R10-006: parseSub pushes a skipped placeholder for
+      // parseSub pushes a skipped placeholder for
       // oversized text to bound iteration cost via MAX_PARSED_ENTRIES.
       // Filter those out here so the disk output mirrors the legitimate
       // captions only (placeholders carry empty text and would otherwise
       // emit `{f}{f}` lines with no body, polluting the file).
       .filter((c) => !c.skipped)
       .map((c) => {
-        // Round 8 N-R8-N1-3: clamp non-finite / negative timestamps to 0
+        // clamp non-finite / negative timestamps to 0
         // for parity with formatSrtTime / formatAssTime / msToAssTime.
         // After a Time Shift with `--offset` large enough to push captions
         // before t=0, c.start / c.end can land negative; without clamping

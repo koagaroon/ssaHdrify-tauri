@@ -95,7 +95,7 @@ describe("FontSubsetPayload wire-format round-trip (Round 3 N-R3-13)", () => {
     expect(typeof b64).toBe("string");
     expect(b64).toMatch(/^[A-Za-z0-9+/]*={0,2}$/);
 
-    // Round 11 W11.6 (N1-R11-09): explicit positive typeof on each
+    // explicit positive typeof on each
     // side. Pre-R11 this site asserted `typeof arr !== typeof b64`
     // which passes for many trivial differences (`"object"` vs
     // `"string"` here, but `"function"` vs `"string"` or even

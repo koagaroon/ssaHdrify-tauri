@@ -222,7 +222,7 @@ fn refresh_fonts_with_no_cache_errors() {
 #[test]
 fn embed_with_no_cache_does_not_touch_cache_file() {
     if let Some(reason) = engine_bundle_missing() {
-        // Hard-fail instead of skip-and-return (N-R5-RUSTCLI-12): see
+        // Hard-fail instead of skip-and-return : see
         // test_chain.rs for the WHY — green-when-broken is the failure
         // mode this guards against.
         panic!("engine bundle missing — run `npm run build:engine` first ({reason})");
@@ -282,7 +282,7 @@ fn embed_with_no_cache_does_not_touch_cache_file() {
 #[test]
 fn embed_reports_drift_when_folder_mtime_changes() {
     if let Some(reason) = engine_bundle_missing() {
-        // Hard-fail instead of skip-and-return (N-R5-RUSTCLI-12): see
+        // Hard-fail instead of skip-and-return : see
         // test_chain.rs for the WHY — green-when-broken is the failure
         // mode this guards against.
         panic!("engine bundle missing — run `npm run build:engine` first ({reason})");
@@ -336,7 +336,7 @@ fn embed_reports_drift_when_folder_mtime_changes() {
         stderr.contains("refresh-fonts"),
         "drift fallback should suggest refresh-fonts: {stderr}"
     );
-    // R16 W16.4 (N-R16-12): pin the locked-design exit semantics —
+    // pin the locked-design exit semantics —
     // drift fallback should fall through to system fonts and let
     // embed complete (non-zero indicates a hard failure unrelated
     // to drift). The sibling `embed_with_no_cache_does_not_touch_cache_file`

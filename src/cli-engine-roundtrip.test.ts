@@ -472,7 +472,7 @@ describe("Font embed plan — GUI ↔ CLI byte equivalence", () => {
 
 describe("Shift / Embed resolvers — strict-throw on unknown tokens (R12 N-R12-2)", () => {
   // Companion to output-naming.test.ts's HDR coverage. Pins that the
-  // strict-throw introduced in path-validation.ts (R11 W11.7) surfaces
+  // strict-throw introduced in path-validation.ts surfaces
   // through the CLI engine's Shift and Embed entry points, not just at
   // the substituteTemplate helper level. A future regression that
   // re-loosened either resolver wouldn't fail without this.

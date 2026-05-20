@@ -88,7 +88,7 @@ export function shiftSubtitles(content: string, options: ShiftOptions): ShiftRes
     }
     return out;
   };
-  // R17 W17.4 (N-R17-40, Pattern 2): exclude `skipped: true` placeholders
+  // (Pattern 2): exclude `skipped: true` placeholders
   // (oversized captions kept positionally for buildAss's sequential consume
   // — see subtitle-parser.ts MAX_CAPTION_TEXT_LEN handling). The preview
   // surface is a user-facing list; including placeholder rows allocates
@@ -154,7 +154,7 @@ export function deriveShiftedPath(inputPath: string): string {
   if (baseName.toLowerCase().endsWith(".shifted")) {
     baseName = baseName.slice(0, -".shifted".length);
   }
-  // Round 10 N-R10-013: after the `.shifted` strip the baseName can
+  // after the `.shifted` strip the baseName can
   // be empty (or whitespace-/dot-only — POSIX dotfile shapes like
   // `.shifted.srt` whose stem is just `.`). Without this re-check
   // the output name resolves to `.shifted${ext}` — identical to the

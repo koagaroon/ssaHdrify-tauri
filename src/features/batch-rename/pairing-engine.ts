@@ -27,7 +27,7 @@ import { isWindowsRuntime } from "../../lib/platform";
 // ── Bracket cleanup ──────────────────────────────────────
 
 const BRACKET_RE = /\[[^\]]*\]/g;
-// R17 W17.4 (N-R17-55): module-scope to match BRACKET_RE above and
+// module-scope to match BRACKET_RE above and
 // the rest of the codebase's convention. String.prototype.replace
 // doesn't share lastIndex across calls, so inline was semantically
 // equivalent; this is purely a convention sweep.
@@ -73,7 +73,7 @@ const EPISODE_PATTERNS: EpisodePattern[] = [
   // Pattern B — `][NN][` — must run on raw (brackets are the cue).
   // Common in adjacent-bracket fan-sub naming styles.
   //
-  // Round 11 W11.7 (N2-R11-02): cap episode digits at 1-3. Pre-R11 the
+  // cap episode digits at 1-3. Pre-R11 the
   // unbounded `\d+` matched 4-digit year markers like `][2024][` in
   // names that pack release year between brackets (e.g.
   // `[Group][2024][Show][01][1080p].mkv` → first match wins → episode
@@ -290,7 +290,7 @@ function pairingKeyTuple(season: number, episode: number): string {
  */
 export function buildPairings(videos: ParsedFile[], subtitles: ParsedFile[]): PairingRow[] {
   const rows: PairingRow[] = [];
-  // Round 10 N-R10-018: previously a `makeRowId(v.path, s?.path)`
+  // previously a `makeRowId(v.path, s?.path)`
   // helper produced `${v}|||${s}` ids that BatchRename.tsx immediately
   // overwrote with the v|/s|/b| keying below. That double-derivation
   // was confusing — the engine's output was discarded. Move the
@@ -347,11 +347,11 @@ export function buildPairings(videos: ParsedFile[], subtitles: ParsedFile[]): Pa
       const sub = ambiguous ? (ss[i] ?? null) : (ss[0] ?? null);
       // `warning` implies "debatable pairing" — only meaningful when
       // there IS a sub to argue about. Ambiguous video with no sub
-      // is just unmatched (N-R5-FEFEAT-11). Old form pinned every
+      // is just unmatched . Old form pinned every
       // ambiguous row to `warning` regardless, yielding yellow badges
       // on rows where no decision was actually made.
       const rowSource = ambiguous && sub ? "warning" : sub ? "regex" : "unmatched";
-      // Round 11 W11.7 (N2-R11-05): when the ambiguous-overflow path
+      // when the ambiguous-overflow path
       // resolves to source="unmatched" (3 videos / 2 subs → vs[2]
       // gets no sub), also flip key to "unmatched" so the row aligns
       // with the trailing unmatchedVideos loop's key convention.
@@ -467,7 +467,7 @@ export function deriveRenameOutputPath(
 
   // Preserve native path separator from the subtitle path. Only emit
   // backslashes when running on Windows: on POSIX `\` is a valid
-  // filename character (Codex edb0e74f), and a path like
+  // filename character , and a path like
   // `/home/u/Show\01.ass` would otherwise have every `/` rewritten to
   // `\`, producing a relative path rooted at the cwd instead of the
   // intended directory.
@@ -518,7 +518,7 @@ export function deriveRenameOutputPath(
     }
     validatorRef = `${normTargetDir}/__validator_ref__`;
   }
-  // Round 10 N-R10-005: BatchRename's outName is `${videoBase}${subExt}`,
+  // BatchRename's outName is `${videoBase}${subExt}`,
   // i.e., the user's verbatim video filename with the subtitle's
   // extension. Brace characters in legitimate fan-sub video names
   // (`[Group] Show {1080p}.mkv`) must pass — they're not template
@@ -528,7 +528,7 @@ export function deriveRenameOutputPath(
   // Rename mode's legitimate no-op (subtitle already matches the
   // video name) makes outputPath === subtitlePath, which would trip
   // assertSafeOutputPath's self-overwrite-guards-against-source-loss
-  // check (Codex 30c18b79).
+  // check.
   //
   // The bypass skips assertSafeOutputPath's FOUR checks (A-R5-FEFEAT-07
   // — comment previously named only the self-overwrite reason):

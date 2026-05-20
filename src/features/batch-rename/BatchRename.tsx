@@ -185,7 +185,7 @@ export default function BatchRename() {
   // Pairing seed — recomputed whenever the file lists change. Row IDs
   // are anchored on the video path (or subtitle path for unmatched
   // rows) so adding one video to the picker doesn't shift every
-  // existing row's ID (N-R5-FEFEAT-22). The old form used per-iteration
+  // existing row's ID . The old form used per-iteration
   // counters (`b1`, `b2`, ...): adding one video at the top renumbered
   // every row, React remounted every <select>, and any in-progress
   // dropdown interaction was lost. Path-anchored IDs survive list
@@ -198,7 +198,7 @@ export default function BatchRename() {
   const baseRows = useMemo<PairingRow[]>(() => {
     const parsedVideos = videoPaths.map((p, i) => parseFilename(p, videoNames[i] ?? ""));
     const parsedSubs = subtitlePaths.map((p, i) => parseFilename(p, subtitleNames[i] ?? ""));
-    // Round 10 N-R10-018: buildPairings now owns row id derivation
+    // buildPairings now owns row id derivation
     // (v|<path> for every row — engine only emits video-bearing rows).
     // Pre-R10 this site re-keyed every row with `s|...` / `b|...`
     // branches that were unreachable in practice (subtitle-only or
@@ -288,7 +288,7 @@ export default function BatchRename() {
         width: "1fr",
         render: (row) =>
           row.video ? (
-            // Wave 7.1: sanitize the visible video filename. Design
+            // sanitize the visible video filename. Design
             // doc § Stage 5d positioned the destructive-rename ask()
             // dialog as the safety net, but a BiDi-reversed display
             // in the grid undermines the visual-confirm value the
@@ -361,7 +361,7 @@ export default function BatchRename() {
 
   const ingestPaths = useCallback(
     (paths: string[]) => {
-      // Round 8 N-R8-N4-6: gen-guard removed. The previous form took a
+      // gen-guard removed. The previous form took a
       // `gen` parameter and short-circuited via `gen !== pickGenRef.current`
       // for shape consistency with HDR / Timing / FontEmbed's async
       // ingest. Here the handler is synchronous — no `await` suspension
@@ -370,7 +370,7 @@ export default function BatchRename() {
       // before calling so any concurrent async work (from a future
       // refactor that adds an await inside this handler) gets its
       // invalidation signal at the bump site.
-      // Round 10 N-R10-029: clear the previous run's action result on
+      // clear the previous run's action result on
       // EVERY new ingest, not just the happy path. Pre-R10 the
       // conflict / empty-input early returns left `lastActionResult`
       // set to whatever the last run produced ("success" / "error" /
@@ -395,7 +395,7 @@ export default function BatchRename() {
       setDropError(null);
 
       if (videos.length === 0 && subtitles.length === 0) {
-        // Round 8 N-R8-N4-2: reset the unknown-count chip on this early
+        // reset the unknown-count chip on this early
         // return too. Without it, a drop of only unknown / ignored files
         // after a prior drop with unknowns leaves the stale chip count
         // visible even though the current state shows zero videos +
@@ -422,7 +422,7 @@ export default function BatchRename() {
 
   const handlePickFiles = useCallback(async () => {
     const gen = (pickGenRef.current = pickGenRef.current + 1);
-    // Round 11 W11.7 (N1-R11-10): catch dialog IPC failures. See
+    // catch dialog IPC failures. See
     // TimingShift.handlePickFiles for the project-wide rationale.
     let paths: string[] | null;
     try {
@@ -721,7 +721,7 @@ export default function BatchRename() {
         }
 
         // Avoid the success-log vs error-footer contradiction
-        // (N-R5-FEFEAT-15): when every row failed, the
+        // : when every row failed, the
         // "Rename complete: 0/N" success line and the red
         // "Rename failed" footer fired together — visually inconsistent
         // signal. Split so success-log fires only when at least one row

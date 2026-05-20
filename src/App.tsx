@@ -22,7 +22,7 @@ import "./shell.css";
 // Tab ids also serve as StatusTab keys — single source of truth.
 type Tab = StatusTab;
 
-// Round 10 N-R10-016: TAB_LABEL_KEYS is imported from lib/tab-labels.ts
+// TAB_LABEL_KEYS is imported from lib/tab-labels.ts
 // as the project-wide single source. Visual tab-strip order is the
 // declaration order in that map (JS guarantees insertion-order
 // iteration for string keys).
@@ -39,7 +39,7 @@ const THEME_LABEL_KEYS: Record<ThemeMode, string> = {
   dark: "theme_dark",
 };
 
-// R16 W16.6 (N-R16-21): derive THEME_OPTIONS from THEME_LABEL_KEYS as
+// derive THEME_OPTIONS from THEME_LABEL_KEYS as
 // the single source — the TAB_IDS pattern (line ~29) above does the
 // same Object.keys map. Pre-W16.6 THEME_OPTIONS and THEME_LABEL_KEYS
 // were parallel manual maps that had to stay in sync; adding /
@@ -84,7 +84,7 @@ function App() {
   // intentional double-mount in dev — drift queries are read-only
   // but rescan_drifted writes; no need to double-do that.
   //
-  // R16 W16.6 (N-R16-23, comment accuracy): `useRef` is per-component-
+  // (comment accuracy): `useRef` is per-component-
   // instance, not module-scoped — multi-instance App rendering would
   // give each instance its own `cacheChecked` ref and each would run
   // the launch check independently (redundant cache I/O), NOT skip
@@ -109,7 +109,7 @@ function App() {
         if (status.schemaMismatch) {
           // Empty drift: cache file is unreadable, modal renders the
           // rebuild-required path (Clear cache button only).
-          // Round 10 N-R10-015: dropped a redundant `if (cancelled)
+          // dropped a redundant `if (cancelled)
           // return` here — JS is single-threaded and no await fires
           // between the initial post-`openFontCache` cancel check
           // (line above) and these setters. React's setState is
@@ -127,7 +127,7 @@ function App() {
         if (cancelled) return;
         setCacheDrift(drift);
         if (drift.modified.length > 0 || drift.removed.length > 0) {
-          // Round 10 N-R10-015: dropped a redundant `if (cancelled)
+          // dropped a redundant `if (cancelled)
           // return` here for the same reason as the schemaMismatch
           // branch above — no await fires between the post-
           // `detectFontCacheDrift` cancel check (`if (cancelled)
@@ -140,7 +140,7 @@ function App() {
         // Don't block app launch on cache probe failures — the user
         // can still use the app, embed just falls through to system
         // fonts. Log so devs see it during tauri dev.
-        // Round 8 N-R8-N4-5: WARN names the user-visible consequence
+        // WARN names the user-visible consequence
         // (embed falls back to system fonts) per vibe-coding.md
         // log-level discipline, instead of leaking the internal
         // function name.
@@ -166,7 +166,7 @@ function App() {
       const status = await openFontCache();
       setCacheStatus(status);
     } catch (e) {
-      // Round 8 N-R8-N4-5: WARN names the user-visible consequence.
+      // WARN names the user-visible consequence.
       // A failed re-probe means the launch-time `cacheStatus` is now
       // stale relative to the user's just-performed action (Rescan /
       // Clear); the drift modal won't auto-re-pop and embed continues

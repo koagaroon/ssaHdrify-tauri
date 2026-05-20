@@ -98,7 +98,7 @@ fn check_scope_allows(
 fn ensure_parent_dir(path: &Path) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
-            // R17 W17.3 (N-R17-25): include the parent path in the
+            // include the parent path in the
             // error so the user can identify which directory failed.
             // Pre-W17.3 a permission / quota / read-only-fs failure
             // surfaced as "Failed to create output directory:
@@ -131,7 +131,7 @@ fn clear_existing_destination(path: &Path, overwrite: bool) -> Result<(), String
     // exact case Codex flagged (the chain CLI write path bypassed
     // this check the same way before commit b7d9d21).
     //
-    // R15 W15.3 (N-R15-11): the back-to-back syscalls
+    // the back-to-back syscalls
     // (symlink_metadata returning `meta` here, then is_reparse_point
     // calling symlink_metadata again two lines below) look redundant
     // — `meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT` on
@@ -151,7 +151,7 @@ fn clear_existing_destination(path: &Path, overwrite: bool) -> Result<(), String
                     path.display()
                 ));
             }
-            // Round 10 A-R10-005: explicit directory check before
+            // explicit directory check before
             // `fs::remove_file`. Pre-R10 a destination that happened
             // to be a directory propagated through `remove_file` as
             // an opaque "Failed to remove existing destination:
@@ -171,7 +171,7 @@ fn clear_existing_destination(path: &Path, overwrite: bool) -> Result<(), String
                     path.display()
                 ));
             }
-            // R13 A-R13-8: re-check is_reparse_point immediately
+            // re-check is_reparse_point immediately
             // before fs::remove_file for posture parity with
             // safe_copy_file_inner / safe_rename_file_inner's
             // late re-checks. fs::remove_file of a symlink on
@@ -181,11 +181,11 @@ fn clear_existing_destination(path: &Path, overwrite: bool) -> Result<(), String
             // an immediate re-check", and this site was the lone
             // remaining outlier. One cheap syscall.
             //
-            // R17 W17.6 (N-R17-10, syscall count WHY): this is the
+            // (syscall count WHY): this is the
             // THIRD `is_reparse_point` lstat on `path` inside
             // `clear_existing_destination` — fs::symlink_metadata at
             // line 122, the first reparse check at line 124, and
-            // this race-time re-check. R15 W15.3 (N-R15-11)
+            // this race-time re-check. R15 W15.3
             // documented the pre-R17 two-syscall pattern (lines 122
             // + 124); R13 A-R13-8 added this third for late-race
             // parity. All three are deliberate: the helper is a
@@ -240,11 +240,11 @@ fn reject_reparse_source(path: &Path, label: &str) -> Result<(), String> {
 /// `clear_existing_destination(dst, overwrite=true)` removes dst first
 /// — which IS src under FS-level case-fold — then `fs::rename` /
 /// `fs::copy` fails because src is gone, silently destroying the user's
-/// input (Codex a274852e). Both paths must canonicalize for the check
+/// input . Both paths must canonicalize for the check
 /// to fire; a not-yet-existing dst (normal rename to a new name)
 /// returns Ok here and the downstream existence checks proceed.
 ///
-/// Hardlinks are intentionally out of scope (Round 2 N-R2-5): two
+/// Hardlinks are intentionally out of scope : two
 /// hardlinks to the same inode canonicalize to distinct paths because
 /// canonicalize() only resolves symlinks, not hardlink aliases. A
 /// rename through one hardlink to another succeeds — net data loss
@@ -256,7 +256,7 @@ fn reject_reparse_source(path: &Path, label: &str) -> Result<(), String> {
 /// hardlinks; revisit if the threat model shifts to multi-tool
 /// pipelines that pre-link files.
 ///
-/// Mixed canonicalize-result cases (Round 3 N-R3-11): when EITHER src
+/// Mixed canonicalize-result cases : when EITHER src
 /// OR dst canonicalize-fails (e.g., dst doesn't yet exist, which is
 /// the common "rename to a new name" case), this helper returns Ok
 /// and the downstream `clear_existing_destination` + `fs::rename` /
@@ -307,7 +307,7 @@ fn create_new_and_write_bytes(path: &Path, content: &[u8]) -> Result<(), String>
 
 // ── Inner helpers (testable without an AppHandle) ────────────────
 
-// R17 W17.1 (A-R17-6): no top-of-function `is_reparse_point` re-check
+// no top-of-function `is_reparse_point` re-check
 // for safe_write_text_file_inner, unlike safe_copy_file_inner and
 // safe_rename_file_inner which re-check before the final fs syscall.
 // The asymmetry is intentional: write's atomic guarantee comes from
@@ -355,7 +355,7 @@ pub fn safe_copy_file_inner(
     ensure_parent_dir(dst_ref)?;
     clear_existing_destination(dst_ref, overwrite)?;
 
-    // Round 6 Wave 6.3 #11: re-check `is_reparse_point` immediately
+    // re-check `is_reparse_point` immediately
     // before `File::open` to close the TOCTOU window where an
     // attacker could swap the source for a symlink between
     // `reject_reparse_source` (above) and the open below. Mirrors the
@@ -402,9 +402,9 @@ pub fn safe_rename_file_inner(
     ensure_parent_dir(dst_ref)?;
     clear_existing_destination(dst_ref, overwrite)?;
 
-    // Round 8 N-R8-N3-1: re-check `is_reparse_point` immediately before
+    // re-check `is_reparse_point` immediately before
     // `fs::rename` for parity with `safe_copy_file_inner`'s open-time
-    // re-check (Round 6 Wave 6.3 #11). `fs::rename` on POSIX moves the
+    // re-check . `fs::rename` on POSIX moves the
     // symlink itself (doesn't chase the target) and Windows behaves
     // similarly for same-volume renames — but cross-volume `rename`
     // falls back to copy-then-delete (std semantics), which DOES
@@ -418,7 +418,7 @@ pub fn safe_rename_file_inner(
         );
         return Err("Refusing to rename symlink / junction (race-time detection)".to_string());
     }
-    // R16 W16.2 (A-R16-1, P1b TOCTOU symmetry): copy's destination
+    // (P1b TOCTOU symmetry): copy's destination
     // is implicitly protected by `OpenOptions::create_new(true)` at
     // open time; rename has no equivalent atomic guard. Between
     // `clear_existing_destination` (which removed dst after its own

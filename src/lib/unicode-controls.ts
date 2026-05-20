@@ -66,7 +66,7 @@ export const BIDI_AND_ZERO_WIDTH_CHARS = BIDI_AND_ZERO_WIDTH_PATTERN;
 export const ASCII_CONTROL_CHARS = "\\x00-\\x1f\\x7f-\\x9f";
 
 // Internal matcher consumed by `hasUnicodeControls` below. Round 11
-// W11.7 (N3-R11-05) — was exported pre-R11 but no external caller
+// W11.7 — was exported pre-R11 but no external caller
 // imported it; `hasUnicodeControls` is the public surface, and external
 // callers needing the regex shape can splice the
 // `BIDI_AND_ZERO_WIDTH_CHARS` character-class fragment instead.

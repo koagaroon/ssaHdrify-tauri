@@ -42,7 +42,7 @@ use rusqlite::{params, Connection};
 /// here.
 pub fn try_modified_at(path: &Path) -> Option<i64> {
     let modified = std::fs::metadata(path).ok()?.modified().ok()?;
-    // Round 10 N-R10-008: pre-epoch mtimes previously fell through
+    // pre-epoch mtimes previously fell through
     // `.unwrap_or(0)` and returned `Some(0)`, but the caller contract
     // (every drift / Phase-1 / Phase-3 stat site) requires `None` for
     // "stat failed" cases so the populate / replace path is skipped.
@@ -66,7 +66,7 @@ pub fn try_modified_at(path: &Path) -> Option<i64> {
 /// - macOS:   `$HOME/Library/Application Support/ssahdrify`
 /// - Linux:   `${XDG_DATA_HOME:-$HOME/.local/share}/ssahdrify`
 ///
-/// Round 11 W11.4b (R10 N-R10-036): the GUI side used to use Tauri's
+/// Round 11 W11.4b : the GUI side used to use Tauri's
 /// `app.path().app_data_dir()` which on Windows resolves to the bundle
 /// identifier path `%APPDATA%/com.koagaroon.ssahdrify/` — a separate
 /// folder from the CLI's `%APPDATA%/ssahdrify/`. Unifying under the
@@ -158,7 +158,7 @@ fn platform_data_dir() -> Result<PathBuf, String> {
 ///
 /// BUMP this constant when the `family_name_key` normalization or
 /// any other on-disk shape changes — even if no DDL changes
-/// (Round 3 A-R3-3). The verifier only checks numeric equality, so
+/// . The verifier only checks numeric equality, so
 /// a stale cache with subtly-different keys would silently produce
 /// "font not found" regressions until manual clear/rebuild. If a
 /// future migration touches `family_lookup_key`, NFC normalization
@@ -191,7 +191,7 @@ pub const MAX_CACHED_FOLDERS: usize = 100_000;
 /// `to_ascii_lowercase` would miss `É`/`Ñ`/`Ü` etc., breaking the
 /// CJK/Latin-extended fonts the cache exists to accelerate.
 pub(crate) fn family_lookup_key(family_name: &str) -> String {
-    // R2 N-R2-15: no codepoint cap here because every caller is
+    // no codepoint cap here because every caller is
     // upstream-bounded. The IPC boundary runs `validate_font_family`
     // (256-codepoint cap) on argv-derived family names; the cache
     // module's internal callers consume name-table entries that
@@ -281,7 +281,7 @@ impl DriftReport {
 /// for subsetting since TTC files require the face index alongside
 /// the file path.
 ///
-/// Round 10 A-R10-001: fields are `pub(crate)` so callers outside
+/// fields are `pub(crate)` so callers outside
 /// app_lib (the CLI binary compiles as a separate crate against
 /// app_lib) can't construct a `FontLookupResult` outside of
 /// `FontCache::lookup_family`. Combined with
@@ -564,7 +564,7 @@ impl FontCache {
         folder_mtime: i64,
         fonts: &[FontMetadata],
     ) -> Result<(), CacheError> {
-        // R14 W14.9 (N-R14-16 considered, rejected): callers reach this
+        // (considered, rejected): callers reach this
         // function with already-canonicalized paths (Windows
         // canonicalize() produces `\\?\C:\…` verbatim form, which
         // `validate_ipc_path` correctly rejects as a fs:scope-bypass
@@ -600,7 +600,7 @@ impl FontCache {
         )
         .map_err(|e| CacheError::Io(format!("delete folder: {e}")))?;
 
-        // R15 W15.3 (N-R15-15): surface SystemTimeError as CacheError
+        // surface SystemTimeError as CacheError
         // rather than persisting epoch-zero into last_scanned_at — the
         // 0 sentinel would otherwise collide with "this folder was
         // last scanned at the Unix epoch start" semantics if any
@@ -637,7 +637,7 @@ impl FontCache {
                 // as NFD; or 'Foo' + 'foo' with bold/italic identical)
                 // don't violate the (font_path, face_index, family_name_key,
                 // bold, italic) primary key and abort the whole folder
-                // populate (Codex 1a7ba4bd). The first variant lands;
+                // populate . The first variant lands;
                 // subsequent normalized-duplicates are dropped — they'd
                 // produce identical lookup results anyway since
                 // family_lookup_key is what later queries match on. A
@@ -872,7 +872,7 @@ impl FontCache {
 /// `.unwrap_or(0)` posture relied on doc discipline — exactly what
 /// N-R10-008 already replaced for the parallel helper.)
 fn current_unix_seconds() -> Option<i64> {
-    // R2 N-R2-13: `i64::try_from` (not `as i64`) for posture symmetry
+    // `i64::try_from` (not `as i64`) for posture symmetry
     // with `try_modified_at`. The cast can't overflow until year ~292
     // billion, but the typed conversion makes the "this could fail"
     // contract type-level explicit rather than relying on doc

@@ -380,7 +380,7 @@ export default function FontSourceModal(props: Props) {
     // hole where the parent ✕ Clear button stayed enabled while the OS
     // picker was up — a user clicking Add Folder then ✕ Clear could
     // fire clearFontSources against state the modal was about to
-    // mutate (N-R5-FECHAIN-01). Mirrored in releaseScanFlow.
+    // mutate . Mirrored in releaseScanFlow.
     setScanningWithParent(true);
     return true;
   }, [setScanningWithParent]);
@@ -537,7 +537,7 @@ export default function FontSourceModal(props: Props) {
           label: basename(dir),
           count,
         }),
-        // Round 9 A-R9-A4-1: scrub the basename through sanitizeForDialog
+        // scrub the basename through sanitizeForDialog
         // before interpolating into the error message. The error renders
         // in the modal's <p> banner without React-level escaping for
         // BiDi controls, so a P1b hostile folder name like

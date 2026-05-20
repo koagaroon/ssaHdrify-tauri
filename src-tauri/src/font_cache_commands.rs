@@ -84,7 +84,7 @@ static GUI_FONT_CACHE: Lazy<Mutex<Option<FontCache>>> = Lazy::new(|| Mutex::new(
 /// [`with_cache_slot`] so each caller decides what to do about a busy
 /// or unavailable cache without sharing a forced policy.
 ///
-/// R2 N-R2-6: extracted from three near-identical try_lock + as_mut
+/// extracted from three near-identical try_lock + as_mut
 /// blocks across `try_record_folder_in_gui_cache`,
 /// `try_remove_folder_from_gui_cache`, and
 /// `clear_all_folders_in_gui_cache_locked`. The shared shape was the
@@ -171,7 +171,7 @@ static GUI_FONT_CACHE_GENERATION: AtomicU64 = AtomicU64::new(0);
 /// `fs::rename` is atomic on same-filesystem moves (both paths live
 /// under the same per-user data root, so this holds in practice).
 pub fn migrate_legacy_gui_cache(legacy_dir: &Path, new_dir: &Path) {
-    // R12 A-R12-6: PathBuf::eq is byte-level equality, not canonical.
+    // PathBuf::eq is byte-level equality, not canonical.
     // On the current shape (`<data_dir>/com.koagaroon.ssahdrify` vs
     // `<data_dir>/ssahdrify`) the two strings are distinct, so this
     // check correctly fires "different dirs → proceed with migration".
@@ -191,7 +191,7 @@ pub fn migrate_legacy_gui_cache(legacy_dir: &Path, new_dir: &Path) {
     if !legacy_main.exists() {
         return;
     }
-    // R13 N-R13-5: probe the unified-path destination with
+    // probe the unified-path destination with
     // `symlink_metadata` (lstat-equivalent), NOT `Path::exists()`
     // which follows symlinks. A planted symlink at new_main pointing
     // at some sensitive target would otherwise make exists() return
@@ -280,7 +280,7 @@ pub fn migrate_legacy_gui_cache(legacy_dir: &Path, new_dir: &Path) {
         let mut legacy_side = legacy_main.clone().into_os_string();
         legacy_side.push(suffix);
         let legacy_side = PathBuf::from(legacy_side);
-        // R13 A-R13-5: check reparse-point BEFORE exists(). The
+        // check reparse-point BEFORE exists(). The
         // original order (exists then reparse) was fragile — a
         // dangling symlink returns false from exists() so the loop
         // continues without reaching the reparse check; benign here
@@ -304,7 +304,7 @@ pub fn migrate_legacy_gui_cache(legacy_dir: &Path, new_dir: &Path) {
         let mut new_side = new_main.clone().into_os_string();
         new_side.push(suffix);
         let new_side = PathBuf::from(new_side);
-        // R7 W1 A-R7-4: also check the DESTINATION for reparse-point
+        // also check the DESTINATION for reparse-point
         // before rename. The legacy side check above guards against
         // following a planted symlink at the source; the destination
         // check guards against the (rarer but real) shape where the
@@ -555,7 +555,7 @@ pub fn open_font_cache() -> Result<CacheStatus, String> {
     // `schema_mismatch` stays false — only state (1) actually surfaces
     // as schema_mismatch=true.
     //
-    // Round 6 Wave 6.5 #22: switched to `try_exists()` to distinguish
+    // switched to `try_exists()` to distinguish
     // NotFound from permission-denied. Pre-W6.5 the comment here
     // recommended this switch (chmod-000 cache misclassifying as "no
     // file"); the loop is now closed. `try_exists()` returns Err on
@@ -585,8 +585,8 @@ pub fn open_font_cache() -> Result<CacheStatus, String> {
 /// "no modal needed" while `open_font_cache` separately surfaces the
 /// schema-mismatch state for the rebuild path.
 ///
-/// Does NOT take `CacheMutationGuard` (Round 2 N-R2-16): this is a
-/// read-only command. R16 W16.2 (N-R16-6) splits the lock hold so the
+/// Does NOT take `CacheMutationGuard` : this is a
+/// read-only command. R16 W16.2 splits the lock hold so the
 /// per-folder `try_modified_at` syscall loop runs WITHOUT the slot
 /// lock held — the per-folder stat can stall for seconds per call on
 /// a slow network share with hundreds of cached folders, and holding
@@ -638,7 +638,7 @@ pub fn detect_font_cache_drift() -> Result<DriftReport, String> {
         let folders = cache
             .list_folders()
             .map_err(|e| format!("list cached folders: {e}"))?;
-        // R2 N-R2-8: `gen` is reserved in Rust edition 2024 (generator
+        // `gen` is reserved in Rust edition 2024 (generator
         // syntax); rename pre-empts a forced edit on the next edition bump.
         let generation = GUI_FONT_CACHE_GENERATION.load(Ordering::Acquire);
         (folders, generation)
@@ -649,7 +649,7 @@ pub fn detect_font_cache_drift() -> Result<DriftReport, String> {
     // permission-denied / folder-gone all route to "omit from
     // snapshot" → Phase 3's diff_against reports them as removed.
     //
-    // mtime granularity (R8 W4 N-R8-14): `try_modified_at` returns
+    // mtime granularity : `try_modified_at` returns
     // Unix seconds (1 s resolution). On NTFS / APFS / ext4 / Btrfs
     // (≤1 ms underlying resolution) sub-second mtime bumps round to
     // distinct integer seconds so drift detection is reliable. On
@@ -817,7 +817,7 @@ pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
     // ApplyFailed errors aggregate into `skipped` alongside the
     // Phase-2 ScanFailed entries; the helper no longer short-circuits
     // on the first SQLite error so an N-th folder failure doesn't
-    // hide the success of folders 0..N (Round 3 N-R3-2).
+    // hide the success of folders 0..N.
     let (modified_rescanned, removed_evicted) = {
         let mut slot = GUI_FONT_CACHE
             .lock()
@@ -850,7 +850,7 @@ pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
 ///   rows MUST go: without this, a failed-scan folder kept old rows
 ///   while `rescan_font_cache_drift` still returned `Ok` and the
 ///   frontend cleared drift state, leaving `lookup_font_family` to
-///   serve wrong-font results silently (Codex ccac42fe). Eviction is
+///   serve wrong-font results silently . Eviction is
 ///   the structural defense; UI handling of `RescanResult.skipped` is
 ///   the user-visible defense on top. No re-stat dance — a folder we
 ///   couldn't scan is a folder we can't trust.
@@ -860,7 +860,7 @@ pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
 /// operation; the caller's user-facing tally is just "rows we dropped".
 ///
 /// Per-folder ApplyFailed errors push into `skipped` rather than
-/// short-circuiting via `?` (Round 3 N-R3-2). Each `replace_folder` /
+/// short-circuiting via `?` . Each `replace_folder` /
 /// `remove_folder` is its own SQLite transaction, so committed rows
 /// 0..N stay committed even if row N+1 fails — propagating the
 /// failure as a hard Err to the frontend would discard that
@@ -891,7 +891,7 @@ fn apply_rescan_to_cache(
     let mut removed_evicted = 0usize;
 
     for (folder, folder_mtime, metadata) in scanned {
-        // R16 W16.2 (A-R16-6, Pattern 2 racing-replace defense):
+        // (Pattern 2 racing-replace defense):
         // re-stat the folder mtime IMMEDIATELY before replace_folder.
         // Phase 2 ran outside the lock, so a parallel
         // `try_record_folder_in_gui_cache` (FontSourceModal's
@@ -1032,7 +1032,7 @@ pub fn clear_font_cache() -> Result<(), String> {
     // try to delete. Holding the slot lock through the close is fine —
     // it's the SQLite-level file handle drop we care about.
     //
-    // Round 11 W11.4 (A4-R11-02): also clear provenance HERE, inside
+    // also clear provenance HERE, inside
     // the same lock scope that sets slot=None. Pre-R11 the
     // `clear_cache_provenance()` call sat at the END of this function
     // — after the fresh empty cache had already been published to
@@ -1050,12 +1050,12 @@ pub fn clear_font_cache() -> Result<(), String> {
     // Lock order slot → provenance matches the existing GUI
     // lookup_font_family path (slot → register_cache_provenance).
     //
-    // Round 10 N-R10-002: symmetric with `clear_font_sources` — the
+    // symmetric with `clear_font_sources` — the
     // user's "fresh slate" signal must drop in-process provenance rows
     // alongside the SQLite rebuild. ALLOWED_FONT_PATHS (system fonts)
     // stays — system discovery is cache-independent.
     //
-    // R17 W17.1 (A-R17-2): the generation counter is NOT bumped here,
+    // the generation counter is NOT bumped here,
     // even though `slot` transitions Some → None. The second scope
     // (after the on-disk rebuild succeeds) does `*slot = Some(fresh)`
     // AND `fetch_add(Release)` together — that's where the new
@@ -1079,7 +1079,7 @@ pub fn clear_font_cache() -> Result<(), String> {
     // set as init_user_font_db so a partially-cleared state from an
     // earlier crash gets fully wiped here.
     //
-    // R12 A-R12-2 / R13 A-R13-15 / R14 W14.10 (N-R14-15): two-phase
+    // R12 A-R12-2 / R13 A-R13-15 / R14 W14.10 : two-phase
     // pre-scan + remove for atomic semantics. Pre-W14.10 the loop
     // detected reparse and continued — but ALSO continued removing
     // any subsequent non-reparse sidecars, leaving partial state
@@ -1112,7 +1112,7 @@ pub fn clear_font_cache() -> Result<(), String> {
     // multi-user / MDM-managed shapes (same revisit trigger as the
     // design doc § fs:scope resolution divergence note).
     //
-    // P1a vs P1b note (R8 W4 N-R8-12): these sidecar paths look
+    // P1a vs P1b note : these sidecar paths look
     // filesystem-resident, which superficially suggests P1b (content
     // source under attacker influence). The distinction: P1b applies
     // to user-influenced *content* (subtitle files, font packs) — the
@@ -1162,7 +1162,7 @@ pub fn clear_font_cache() -> Result<(), String> {
         .lock()
         .map_err(|_| "GUI cache mutex poisoned".to_string())?;
     *slot = Some(fresh);
-    // R16 W16.7 (Codex 66460d37): bump the generation INSIDE the slot-
+    // bump the generation INSIDE the slot-
     // lock scope, after publishing the new handle, so any concurrent
     // `detect_font_cache_drift` that acquires the slot lock after this
     // release observes both the new cache AND the bumped generation
@@ -1191,7 +1191,7 @@ pub fn try_record_folder_in_gui_cache(
     folder_path: &Path,
     entries: &[crate::fonts::LocalFontEntry],
 ) {
-    // R17 W17.3 (N-R17-7 sibling): mtime-unreadable is a
+    // (sibling): mtime-unreadable is a
     // success-of-degradation — scan succeeded, cache populate skipped —
     // so DEBUG, not WARN. Done before locking the slot so we don't
     // bother contending for the cache when there's nothing to write.
@@ -1213,7 +1213,7 @@ pub fn try_record_folder_in_gui_cache(
     // every dir-mode source.
     let folder_path_str = crate::fonts::normalize_canonical_path(&folder_path.to_string_lossy());
     let face_count = metadata.len();
-    // R2 N-R2-6: locking + Poisoned handling moved into `with_cache_slot`;
+    // locking + Poisoned handling moved into `with_cache_slot`;
     // the WARN-on-busy-vs-DEBUG-on-busy policy lives at the call site so
     // this helper (best-effort populate after a successful scan) keeps
     // its DEBUG level and clear_all_folders_in_gui_cache_locked stays at
@@ -1230,7 +1230,7 @@ pub fn try_record_folder_in_gui_cache(
             log::warn!("GUI cache populate for {folder_path_str} failed: {e}");
         }
         CacheSlotOutcome::Busy => {
-            // R17 W17.3 (N-R17-7): success-of-degradation — user's scan
+            // success-of-degradation — user's scan
             // completed; populate skipped because a rescan / clear holds
             // the slot lock. DEBUG, not WARN (vibe-coding § Log-level).
             log::debug!(
@@ -1271,7 +1271,7 @@ pub fn try_record_folder_in_gui_cache(
 /// Pairs with `try_record_folder_in_gui_cache` (auto-populate on scan)
 /// for symmetric add/remove cache hygiene.
 pub fn try_remove_folder_from_gui_cache(folder_path: &str) {
-    // R2 N-R2-6: see `try_record_folder_in_gui_cache` for the helper
+    // see `try_record_folder_in_gui_cache` for the helper
     // rationale. Unavailable arm stays silent here (eviction of a
     // folder we never indexed in the first place is by definition a
     // no-op) — that's the divergence from the populate sibling.
@@ -1281,7 +1281,7 @@ pub fn try_remove_folder_from_gui_cache(folder_path: &str) {
             log::warn!("GUI cache evict {folder_path} failed: {e}");
         }
         CacheSlotOutcome::Busy => {
-            // R17 W17.3 (N-R17-7): success-of-degradation — user's
+            // success-of-degradation — user's
             // remove-source action completed on the session DB; cache
             // eviction skipped because a rescan / clear holds the
             // lock. Stays consistent on the next launch's drift
@@ -1300,7 +1300,7 @@ pub fn try_remove_folder_from_gui_cache(folder_path: &str) {
 /// Eviction of every folder from the GUI cache, called from
 /// `fonts::clear_font_sources` so the persistent cache stays in step
 /// with the user's "Clear all sources" intent on the session-DB side
-/// (Round 2 N-R2-2). Without this, clear_font_sources wiped the
+/// . Without this, clear_font_sources wiped the
 /// session DB but left `cached_folders` / `cached_fonts` rows intact —
 /// the next embed pass resolved a family via the cache to a path
 /// whose session-DB provenance had been cleared, and `subset_font`
@@ -1327,7 +1327,7 @@ pub fn try_remove_folder_from_gui_cache(folder_path: &str) {
 ///   cleared, UI claim and DB state disagree.
 /// - `try_lock` on the SLOT mutex stays — that protects against
 ///   handle drop in the clear_font_cache recovery path. R17 W17.6
-///   (N-R17-13): in practice `try_lock` here is guaranteed-success
+///   : in practice `try_lock` here is guaranteed-success
 ///   because `CacheMutationGuard` (held by every caller per the
 ///   contract above) already serializes against `rescan_font_cache_drift`
 ///   and `clear_font_cache` — the only paths that hold the slot
@@ -1345,12 +1345,12 @@ pub fn try_remove_folder_from_gui_cache(folder_path: &str) {
 /// fresh row behind — acceptable because the racing populate is
 /// post-intent ("Clear all" was issued before the new populate).
 pub(crate) fn clear_all_folders_in_gui_cache_locked(_guard: &CacheMutationGuard) {
-    // R2 N-R2-6: see `try_record_folder_in_gui_cache` for the helper
+    // see `try_record_folder_in_gui_cache` for the helper
     // rationale. The Busy arm logs WARN here (NOT debug like the
     // best-effort sibling helpers) because `CacheMutationGuard` is
     // supposed to have already serialized this against
     // `rescan_font_cache_drift` / `clear_font_cache` — see R17 W17.6
-    // (N-R17-13): the only paths that hold the slot lock for any
+    // : the only paths that hold the slot lock for any
     // meaningful duration. WouldBlock therefore signals a guard-
     // discipline regression worth surfacing, not normal contention.
     match with_cache_slot(|cache| {
@@ -1396,7 +1396,7 @@ pub fn lookup_font_family(
     bold: bool,
     italic: bool,
 ) -> Result<Option<crate::fonts::FontLookupResult>, String> {
-    // Shared `validate_font_family` (Round 3 N-R3-20): bounds family
+    // Shared `validate_font_family` : bounds family
     // length + rejects control characters before the SQL bind, same
     // as find_system_font and resolve_user_font.
     crate::util::validate_font_family(&family)?;
@@ -1417,7 +1417,7 @@ pub fn lookup_font_family(
     // as "Font path was not discovered by a scan command". See
     // `register_cache_provenance` for the threat-model rationale.
     //
-    // Round 10 N-R10-003: registration failure → treat as a cache
+    // registration failure → treat as a cache
     // miss (`Ok(None)`) rather than returning the unsafe path.
     // `register_cache_provenance` calls `validate_ipc_path`, so a
     // hostile cache row carrying BiDi / control / `..` segments
@@ -1430,7 +1430,7 @@ pub fn lookup_font_family(
     // crafted path off the wire.
     if let Some(ref r) = result {
         if let Err(e) = crate::fonts::register_cache_provenance(r) {
-            // R17 W17.3 (N-R17-1, Pattern 1 census parity): `{family}`
+            // (Pattern 1 census parity): `{family}`
             // is interpolated raw here, no `sanitize_for_display` /
             // `stripUnicodeControls` wrap. Safe today because
             // `validate_font_family` (invoked at the top of `lookup_font_family`) already rejected
@@ -1450,7 +1450,7 @@ pub fn lookup_font_family(
             return Ok(None);
         }
     }
-    // R16 W16.2 (N-R16-1, Pattern 3 cross-helper coupling): the
+    // (Pattern 3 cross-helper coupling): the
     // `register_cache_provenance(r)` call above routes through
     // `u32::try_from(hit.face_index())` and returns Ok(None) on
     // negative values (font_cache.rs:298) — so the cast on line below
@@ -1493,7 +1493,7 @@ mod tests {
 
     impl TempCacheDir {
         fn new(name: &str) -> Self {
-            // PID + nanos (Round 6 Wave 6.5 #21) — `font_cache.rs`'s
+            // PID + nanos — `font_cache.rs`'s
             // equivalent TempCacheDir uses the same shape. PID alone
             // collides when two tests with the same `name` argument
             // run in the same process (parallel test threads or a
@@ -1699,7 +1699,7 @@ mod tests {
         );
     }
 
-    // ── Round 11 W11.4b (R10 N-R10-036): migrate_legacy_gui_cache ──
+    // ── Round 11 W11.4b : migrate_legacy_gui_cache ──
 
     fn make_legacy_pair(name: &str) -> (TempCacheDir, TempCacheDir) {
         // Two disjoint tempdirs simulate the legacy (Tauri-given) and
@@ -1778,7 +1778,7 @@ mod tests {
         assert!(main.exists(), "self-rename must not destroy the file");
     }
 
-    // ── R16 W16.7 (Codex 66460d37): finalize_drift generation check ──
+    // ── R16 W16.7 : finalize_drift generation check ──
 
     #[test]
     fn finalize_drift_returns_default_when_generation_changed() {

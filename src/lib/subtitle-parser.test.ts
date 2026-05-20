@@ -271,7 +271,7 @@ describe("parseSubtitle / shiftSubtitle — oversized-ASS-Dialogue placeholder a
   });
 
   it("parses 12-digit-hour VTT timing (upper bound)", () => {
-    // Round 10 N-R10-019: actually use a 12-digit fixture so the
+    // actually use a 12-digit fixture so the
     // at-limit test pins the boundary from the inside. The Round 9
     // attempt used a 9-digit fixture and called it "upper bound";
     // a regression lowering the bound to `\d{2,11}` would have left
@@ -296,7 +296,7 @@ describe("parseSubtitle / shiftSubtitle — oversized-ASS-Dialogue placeholder a
     expect(result.captions).toHaveLength(0);
   });
 
-  // Round 11 W11.6 (N3-R11-07): boundary-pair parity for SRT and ASS
+  // boundary-pair parity for SRT and ASS
   // hour fields. VTT already had at-limit + over-limit pairs; SRT and
   // ASS share the same `\d{1,12}` bound but only had "smoke test"
   // coverage. Code-review discipline requires both sides of a named
@@ -382,7 +382,7 @@ describe("parseSubtitle / shiftSubtitle — oversized-ASS-Dialogue placeholder a
     expect(result.captions).toHaveLength(0);
   });
 
-  // Round 11 W11.6 (N3-R11-08): direct pins on R10 N-R10-006 (parseSub
+  // direct pins on R10 N-R10-006 (parseSub
   // skipped-placeholder) + N-R10-007 / Round 11 W11.1 N1-R11-01
   // (parseSrt/parseVtt skipped-placeholder). Pre-W11.6 these contracts
   // were exercised only via integration paths.

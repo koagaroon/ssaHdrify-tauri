@@ -89,11 +89,11 @@ export function useLogPanel(): UseLogPanelResult {
     (text: string, type: LogType = "info") => {
       const id = logIdRef.current++;
       const shouldFollowTail = isNearTail();
-      // Round 11 W11.3 (A3-R11-01): truncate over-long entries with an
+      // truncate over-long entries with an
       // ellipsis so MAX_LOG_ENTRIES × per-entry length stays bounded.
       // See MAX_LOG_ENTRY_TEXT_LEN docblock.
       //
-      // R16 W16.6 (N-R16-20, Pattern 2 paired-dim surrogate safety):
+      // (Pattern 2 paired-dim surrogate safety):
       // `String.prototype.slice` operates on UTF-16 code units; a cut
       // at `MAX_LOG_ENTRY_TEXT_LEN - 1` can land between a high+low
       // surrogate pair (e.g., a CJK ext-B character or emoji),

@@ -77,7 +77,7 @@ impl ParsedStep {
     /// `to_chain_step` methods which live in main.rs alongside the
     /// struct definitions (where the private fields are visible).
     ///
-    /// R17 W17.2 (N-R17-32): infallible. Shift step argument strings
+    /// infallible. Shift step argument strings
     /// (`--offset`, `--after`) are validated upstream in
     /// `parse_chain_argv` after `parse_one_step` — any parse error
     /// surfaces at chain-parse time, not per-input at runtime. The
@@ -99,7 +99,7 @@ impl ParsedStep {
 /// detection (HDR×2, shift-after-embed). The caller emits them to
 /// stderr; they do NOT block execution per the locked decision
 /// "warn but don't enforce" for step ordering.
-// R2 N-R2-22: fields are `pub(crate)`, not `pub`. ChainPlan's eager
+// fields are `pub(crate)`, not `pub`. ChainPlan's eager
 // Shift-validation contract (per R17 W17.2 / N-R17-32) is enforced by
 // "all construction goes through `parse_chain_argv`" — that's a
 // single-entry-point composition (per ~/.claude/rules/code_review.md §
@@ -157,7 +157,7 @@ pub fn parse_chain_argv(
     raw_argv: &[String],
     user_output_template: Option<String>,
 ) -> Result<ChainPlan, String> {
-    // R15 W15.5 (N-R15-8 caller-side): `split_into_step_segments`
+    // (caller-side): `split_into_step_segments`
     // returns `Vec<Vec<String>>` initialized as `vec![Vec::new()]`
     // and only grows from there, so `segments.is_empty()` is
     // structurally false. The empty-argv case surfaces as
@@ -190,7 +190,7 @@ pub fn parse_chain_argv(
         }
 
         let mut step = parse_one_step(segment, is_terminal)?;
-        // R17 W17.2 (N-R17-32): eagerly validate Shift step argument
+        // eagerly validate Shift step argument
         // strings (`--offset`, `--after`) here so a malformed value
         // surfaces at chain-parse time rather than per-input at
         // `to_runtime_payload` time. After this gate, the per-Args
@@ -212,7 +212,7 @@ pub fn parse_chain_argv(
         steps.push(step);
     }
 
-    // R16 W16.3 (N-R16-10): defense-in-depth check kept for the
+    // defense-in-depth check kept for the
     // schema-change case. Today, every per-step Args struct (HdrArgs /
     // ShiftArgs / EmbedArgs) declares `files: Vec<PathBuf>` with
     // `#[arg(required = true)]`, so clap rejects a terminal-step
@@ -242,7 +242,7 @@ pub fn parse_chain_argv(
         .filter(|s| matches!(s, ParsedStep::Embed(_)))
         .count();
     if embed_count > 1 {
-        // R14 W14.11 (N-R14-10): wording previously suggested "combine
+        // wording previously suggested "combine
         // font sources" as if a single embed step always covers
         // multi-embed-step intent. That's only true when the embed
         // steps share the same --no-system-fonts and --on-missing
@@ -289,7 +289,7 @@ fn split_into_step_segments(argv: &[String]) -> Result<Vec<Vec<String>>, String>
                 .push(tok.clone());
         }
     }
-    // R15 W15.5 (N-R15-8) / R17 W17.2 (N-R17-30): end-of-argv check
+    // end-of-argv check
     // unified under the "empty step segment" frame so the user reads
     // the same shape of error across leading / consecutive / trailing
     // `+` and the empty-argv case. `segments` starts as
@@ -301,7 +301,7 @@ fn split_into_step_segments(argv: &[String]) -> Result<Vec<Vec<String>>, String>
     // can't reasonably be described as "around `+`") from the trailing
     // case; keep "empty step segment" framing in both.
     //
-    // R16 W16.3 (N-R16-13, cosmetic): `is_some_and` reads as defense
+    // (cosmetic): `is_some_and` reads as defense
     // but `segments.last()` is structurally always `Some` (init
     // `vec![Vec::new()]` + push-only). Could simplify to
     // `.last().unwrap().is_empty()`. Kept as `is_some_and` for two
@@ -449,7 +449,7 @@ fn collect_suspicious_orderings(steps: &[ParsedStep]) -> Vec<String> {
     // is not idempotent — applying it twice doubles the brightness
     // mapping and is almost certainly a user error.
     //
-    // R17 W17.2 (N-R17-20): the constructed strings deliberately do
+    // the constructed strings deliberately do
     // NOT include a `warning: ` prefix. They're routed through
     // `emit_chain_warnings` in `run_chain`, which adds the localized
     // `warning: ` / `警告：` prefix plus the chain-style `⚠` glyph.

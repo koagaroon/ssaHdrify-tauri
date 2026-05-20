@@ -88,7 +88,7 @@ function sRgbToHlg(
   // Inverse: E_S = E_D * Y_D^((1-γ)/γ) / L_W^(1/γ)
   //   where Y_D = 0.2627*R_D + 0.6780*G_D + 0.0593*B_D
   const Y_D = REC2020_LUM_R * R_D + REC2020_LUM_G * G_D + REC2020_LUM_B * B_D;
-  // Round 10 A-R10-007: `!(y > 0)` catches both `y <= 0` AND `NaN`
+  // `!(y > 0)` catches both `y <= 0` AND `NaN`
   // (which compares false against every relation). Pre-R10 a NaN
   // Y_D propagated into `Math.pow` → `factor=NaN` → `hlgOetf(NaN)` →
   // `[NaN, NaN, NaN]` → `hexByte(NaN)` → literal "NaN" in ASS output.
@@ -138,7 +138,7 @@ export function sRgbToHdr(
     return [0, 0, 0];
   }
 
-  // Round 7 Wave 7.5 (A4-R7-1): guard against NaN / Infinity / sub-1
+  // guard against NaN / Infinity / sub-1
   // targetBrightness. NaN propagates through all subsequent math
   // (scale = NaN / 203 = NaN, every pixel → 0 or undefined behavior).
   // Negative or zero produces nonsense output without erroring out.
@@ -163,7 +163,7 @@ export function sRgbToHdr(
     const xyz = srgb.to("xyz-d65");
 
     const y = xyz.coords[1] ?? 0;
-    // Round 10 A-R10-007: `!(y > 0)` catches NaN propagation; same
+    // `!(y > 0)` catches NaN propagation; same
     // shape as the HLG path above. See that site for the WHY.
     if (!(y > 0)) return [0, 0, 0];
 

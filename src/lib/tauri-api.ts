@@ -20,7 +20,7 @@ export type DialogTranslator = (key: string, ...args: (string | number)[]) => st
 
 // `dt` returns the active translator's value when present, else derives
 // the English fallback from `strings[key].en` so the two never drift
-// (N-R5-FELIB-28). Previously a hardcoded shadow copy of strings.ts
+// . Previously a hardcoded shadow copy of strings.ts
 // entries lived here; any strings.ts edit silently left stale fallbacks.
 function dt(t: DialogTranslator | undefined, key: string): string {
   return t ? t(key) : (strings[key]?.en ?? key);
@@ -574,7 +574,7 @@ async function runStreamingScan(
       result.added = msg.added;
       result.duplicated = msg.duplicated;
       resolveDone();
-      // Round 8 A-R8-A4-4: detach onmessage after Done, parity with the
+      // detach onmessage after Done, parity with the
       // error branch below. Tauri drops the channel sender on Rust-side
       // completion today, but a late-arriving Batch from a lifecycle
       // refactor would otherwise call `onBatch` on a settled UI
@@ -585,12 +585,12 @@ async function runStreamingScan(
       // compile time, but a Rust enum variant rename without updating
       // RawScanProgress would silently fall through here. Surface in
       // dev so future drift is visible. Log the FULL payload, not just
-      // the kind tag (N-R5-FELIB-22): an object payload without a
+      // the kind tag : an object payload without a
       // `.kind` field used to log as "[object Object]" which leaked
       // no diagnostic info — the full payload reveals the actual
       // serde-emitted shape.
       console.warn("unknown ScanProgress payload:", msg);
-      // Round 9 A-R9-A4-2: forward-compat hang vector. If Rust adds a
+      // forward-compat hang vector. If Rust adds a
       // new ScanProgress variant (e.g., Skipped, Paused) without
       // ALSO emitting Done at end-of-stream, the await donePromise
       // below would hang forever and freeze the modal. Defensive
@@ -598,7 +598,7 @@ async function runStreamingScan(
       // current wire format only Batch + Done ever arrive, so the
       // resolve is a no-op for well-formed traffic.
       //
-      // R16 W16.6 (N-R16-17, forward-compat correctness): also set
+      // (forward-compat correctness): also set
       // doneReceived = true and detach onmessage. Without these, if
       // Rust later adds a new variant emitted BEFORE Done and then
       // emits real Done, the wrapper races: unknown payload resolved
@@ -627,7 +627,7 @@ async function runStreamingScan(
     // catch already resolved the UI to the error state, producing a
     // confusing 5, 7, 0, 12 sequence.
     //
-    // Round 8 N-R8-N4-10: resolve `donePromise` defensively before the
+    // resolve `donePromise` defensively before the
     // throw. The thrown `err` propagates out of this function before
     // the `await donePromise` line below, so today the promise's
     // unresolved state is harmless — but a future refactor that wraps

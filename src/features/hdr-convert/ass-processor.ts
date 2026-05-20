@@ -10,7 +10,7 @@
 import { sRgbToHdr, type Eotf, DEFAULT_BRIGHTNESS, MIN_BRIGHTNESS } from "./color-engine";
 import { MAX_PARSED_ENTRIES } from "../../lib/subtitle-parser";
 
-// Round 10 N-R10-031: derive LINE_CAP from MAX_PARSED_ENTRIES plus
+// derive LINE_CAP from MAX_PARSED_ENTRIES plus
 // a header-overhead budget so the cap accommodates SRT→ASS upcasts.
 // Pre-R10 LINE_CAP was hardcoded to 500_000 (== MAX_PARSED_ENTRIES);
 // an SRT input near the parser cap then expanded through
@@ -146,7 +146,7 @@ function transformColorString(assColor: string, targetBrightness: number, eotf: 
 // regex per line.
 const COLOR_TAG_RE = /(\\[0-9]?c&H)([0-9a-fA-F]{6}|[0-9a-fA-F]{8})(?=[&}),\\\r\n]|$)/g;
 
-// Round 7 Wave 7.6 (A4-R7-13): hoisted from inside transformStyleLine
+// hoisted from inside transformStyleLine
 // to match COLOR_TAG_RE's module-scope precedent. Previously the
 // regex literal compiled per style-line; with thousands of styled
 // dialogues a per-call recompile is wasted work, and `no-misleading-
@@ -187,7 +187,7 @@ function transformStyleLine(
   const prefix = line.slice(0, colonIdx + 1);
   const afterColon = line.slice(colonIdx + 1);
   const fields = afterColon.split(",");
-  // Round 11 W11.3 (A1-R11-03): bound the field-array size. See
+  // bound the field-array size. See
   // MAX_STYLE_FIELDS docblock for the threat shape. Per-line byte cap
   // (MAX_LINE_CHARS) already bounds the comma count indirectly via
   // line length; this check is the explicit pair so a future loosening
@@ -215,7 +215,7 @@ function transformStyleLine(
       const raw = fields[idx];
       const trimmed = raw.trim();
       if (COLOR_FIELD_RE.test(trimmed)) {
-        // Round 10 N-R10-030: preserve any leading/trailing whitespace
+        // preserve any leading/trailing whitespace
         // padding from the original field so byte-for-byte file
         // structure (excluding the color hex itself) survives the
         // transform. Pre-R10 the replacement used `trimmed` directly,
@@ -281,7 +281,7 @@ export function processAssContent(
   eotf: Eotf = "PQ",
   onProgress?: (current: number, total: number) => void
 ): string {
-  // Round 7 Wave 7.5 (A4-R7-2): same targetBrightness guard as
+  // same targetBrightness guard as
   // sRgbToHdr (defense-in-depth at the outer entry — if a future
   // caller bypasses sRgbToHdr's guard, e.g. via direct color-math
   // utility import, the file-level config still gets normalized).
@@ -298,7 +298,7 @@ export function processAssContent(
     throw new Error(`File too large: ${(content.length / 1_000_000).toFixed(1)} MB (max 100 MB)`);
   }
 
-  // Pre-split line-count probe (A-R5-FEFEAT-03). 50 MB of pure '\n'
+  // Pre-split line-count probe . 50 MB of pure '\n'
   // passes the byte-size guard above, but `.split(/\r?\n/)` then
   // allocates ~50M empty strings (~2 GB V8 heap) BEFORE the post-split
   // throw at line 221 can fire. A small content+pure-newline blob
@@ -338,7 +338,7 @@ export function processAssContent(
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
 
-    // Round 11 W11.3 (A1-R11-02): per-line byte cap fires BEFORE
+    // per-line byte cap fires BEFORE
     // detectSection / transformStyleLine / transformEventText so a
     // single pathological line can't burn 99 MB of trim/lowercase +
     // regex work on the UI thread. See MAX_LINE_CHARS docblock.
@@ -377,7 +377,7 @@ export function processAssContent(
       result.push(line);
     }
 
-    // Skip the i === 0 fire (N-R5-FEFEAT-01): `0 % 100 === 0` would
+    // Skip the i === 0 fire : `0 % 100 === 0` would
     // emit a 0% update on every call, which for small files makes the
     // UI jump 0% → 100% with no intermediate ticks. Starting at the
     // first real boundary keeps the progress bar smooth.

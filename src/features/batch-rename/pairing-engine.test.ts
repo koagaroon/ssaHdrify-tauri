@@ -319,7 +319,7 @@ describe("buildPairings — common shapes", () => {
     expect(rows[1]!.source).toBe("warning");
     expect(rows[1]!.video?.path).toBe(v2.path);
     expect(rows[1]!.subtitle?.path).toBe(s2.path);
-    // Round 11 W11.6 (N2-R11-04): pin `selected` too. A warning row
+    // pin `selected` too. A warning row
     // has a real (debatable) pairing, so it defaults to selected=true
     // — buildPairings's `selected: sub !== null` line. Pre-W11.6 the
     // test didn't pin this; a regression flipping warning rows to
@@ -430,7 +430,7 @@ describe("deriveRenameOutputPath — exact basename match (no lang suffix)", () 
     // mode=rename is the branch the bypass protects: without
     // pairing-engine.ts:486's `!(mode === "rename" && isNoOpRename(...))`
     // guard, deriveRenameOutputPath here would have invoked
-    // assertSafeOutputPath which self-overwrite-rejects (Codex 30c18b79).
+    // assertSafeOutputPath which self-overwrite-rejects.
     // The legitimate "rename to same name" case is OK because the
     // rename loop later skips no-op rows before any I/O attempt.
     const out = deriveRenameOutputPath(v, sub, "rename", null);

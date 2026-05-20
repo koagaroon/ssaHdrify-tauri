@@ -260,7 +260,7 @@ fn os_font_file_sample(max: usize) -> Vec<String> {
         else {
             continue;
         };
-        // Pattern over enumeration (N-R5-RUSTCLI-13): reuse the
+        // Pattern over enumeration : reuse the
         // canonical allowlist from app_lib::fonts so a future
         // extension addition in fonts.rs flows here automatically.
         if app_lib::fonts::ALLOWED_FONT_EXTENSIONS.contains(&ext.as_str()) && p.is_file() {

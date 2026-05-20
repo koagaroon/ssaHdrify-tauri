@@ -114,7 +114,7 @@ describe("processAssContent — inline color tags", () => {
     expect(output).toContain("Hello");
     // White (FFFFFF) should be converted to a different HDR value
     expect(output).not.toMatch(/\\1c&H(?:00)?FFFFFF/);
-    // Round 10 N-R10-022: pin the exact transformed value rather than
+    // pin the exact transformed value rather than
     // a 6/8-digit structural match. Pre-R10 a regression that
     // produced wrong-but-still-6-digit hex would have silently
     // passed; the structural match was too loose. White at 203 nits

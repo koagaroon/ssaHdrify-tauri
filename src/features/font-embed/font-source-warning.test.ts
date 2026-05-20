@@ -27,7 +27,7 @@ describe("large font source warning helpers", () => {
         totalBytes: LARGE_FONT_SCAN_BYTES_WARNING_THRESHOLD,
       })
     ).toBe(true);
-    // Round 10 N-R10-020: pair the at-threshold tests above with
+    // pair the at-threshold tests above with
     // over-threshold counter-tests. The original triple covered
     // (below-below, at-file, at-bytes) — a regression flipping the
     // gate to `>` instead of `>=` would silently weaken the cap, and

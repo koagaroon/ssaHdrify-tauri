@@ -224,7 +224,7 @@ pub struct CliEngine {
 
 impl CliEngine {
     pub fn new() -> Result<Self, String> {
-        // R17 W17.6 (N-R17-34, scope tightening): only the `extensions`
+        // (scope tightening): only the `extensions`
         // field is explicitly pinned to empty — the CLI engine runs
         // only pure text transformations (no fs / net / timer ops).
         // The rest of `RuntimeOptions` (`module_loader`,
@@ -235,7 +235,7 @@ impl CliEngine {
         // surface, an unconstrained module loader) would silently
         // become available here. Re-audit `RuntimeOptions`'s field
         // list on every deno_core bump alongside the API-binding
-        // audit pinned in Cargo.toml's deno_core pin WHY (N-R17-74).
+        // audit pinned in Cargo.toml's deno_core pin WHY.
         let mut runtime = JsRuntime::new(RuntimeOptions {
             extensions: vec![],
             ..Default::default()
@@ -279,7 +279,7 @@ impl CliEngine {
         // of undefined (reading 'convertHdr')". Surfacing a build-step
         // pointer here is more useful.
         //
-        // R16 W16.2 (A-R16-7) / R17 W17.3 (N-R17-33): probe verifies
+        // probe verifies
         // all wired engine methods, not just `convertHdr`. Pre-R16
         // the probe was a bare object-non-null check that passed an
         // empty `globalThis.ssaHdrifyCliEngine = {}`; R16 W16.2 added

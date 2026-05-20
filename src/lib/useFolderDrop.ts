@@ -70,7 +70,7 @@ export function useFolderDrop({
   // effect below can keep its closures stable while still reading the
   // latest values. Not a missing-dep bug.
   //
-  // R15 W15.7 (N-R15-21) + R16 W16.6 (N-R16-18, comment accuracy):
+  // R15 W15.7 + R16 W16.6 (N-R16-18, comment accuracy):
   // DO NOT add a deps array here. The listener-attaching effect at
   // line ~80 reads `*Ref.current` so its closure never sees prop
   // changes directly; this no-deps effect is the bridge that keeps
@@ -80,7 +80,7 @@ export function useFolderDrop({
   // memoizes (`useCallback`), the assignments would never run after
   // the first render and the bridge breaks silently.
   //
-  // R2 N-R2-24: an inline `eslint-disable-next-line react-hooks/
+  // an inline `eslint-disable-next-line react-hooks/
   // exhaustive-deps` would be the obvious "defense at site" insurance
   // here — but the project's eslint config has `report-unused-disable-
   // directives` enabled, and the current recommended `react-hooks`
@@ -128,7 +128,7 @@ export function useFolderDrop({
           // getCurrentWebview() up-stack: cheap-and-safe guard for
           // non-browser execution contexts (Node-side tests, future
           // SSR snapshot) where `window` may be unbound
-          // (N-R5-FELIB-15).
+          // .
           const dpr = (typeof window !== "undefined" && window.devicePixelRatio) || 1;
 
           // Tauri reports the cursor position in physical pixels relative
@@ -154,7 +154,7 @@ export function useFolderDrop({
               if (!inside) return;
               try {
                 const expanded = await expandDroppedPaths(event.payload.paths);
-                // Re-check `disabled` AFTER the await (Codex f0cd1143).
+                // Re-check `disabled` AFTER the await.
                 // If the consumer flipped disabled=true while the IPC
                 // round-trip was in flight (e.g. another batch just
                 // started and the parent tab raised its busy flag), a
@@ -168,7 +168,7 @@ export function useFolderDrop({
                     onPathsRef.current(expanded.files);
                     // Surface truncation alongside the partial result so
                     // the consumer banner can prompt the user to retry
-                    // with a smaller drop (Round 3 N-R3-19). Routed
+                    // with a smaller drop . Routed
                     // through onError because consumers already render
                     // an error banner from that callback; a dedicated
                     // `onTruncated` would force every consumer to wire
@@ -178,7 +178,7 @@ export function useFolderDrop({
                       // threading the optional `t` translator through
                       // the options surface. Falls back to English.
                       //
-                      // Round 11 W11.4c (R10 N-R10-028): read the cap
+                      // Round 11 W11.4c : read the cap
                       // from `expanded.maxFiles` (carried in the IPC
                       // response) instead of a TS-side mirror of the
                       // Rust constant. The cap is now structurally

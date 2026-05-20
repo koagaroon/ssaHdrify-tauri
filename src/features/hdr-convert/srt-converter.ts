@@ -11,7 +11,7 @@
 import { ASCII_CONTROL_CHARS, BIDI_AND_ZERO_WIDTH_CHARS } from "../../lib/unicode-controls";
 import { safeMs } from "../../lib/subtitle-parser";
 
-// Round 7 Wave 7.6 (N4-R7-7): hoisted to module scope so the regex
+// hoisted to module scope so the regex
 // compiles once instead of per buildAssFromSrtBlocks invocation.
 // Bidi + zero-width chars come from the shared rejection set
 // (mirrors Rust-side validate_font_family + sanitizeForDialog).
@@ -40,7 +40,7 @@ const FONT_NAME_SANITIZER = new RegExp(
   "gu"
 );
 
-// R17 W17.4 (N-R17-53): module-scope to match project convention
+// module-scope to match project convention
 // (FONT_NAME_SANITIZER above, plus every other named regex in
 // subtitle-parser.ts / ass-processor.ts). String.prototype.replace
 // doesn't share `lastIndex` across calls, so inline definitions
@@ -96,7 +96,7 @@ export function escapeSrtUserText(text: string): string {
  */
 export function preprocessSrtColors(text: string): string {
   // Convert opening tags with color. SRT_COLOR_OPEN_RE /
-  // SRT_COLOR_CLOSE_RE are module-scope (R17 W17.4 N-R17-53) — see
+  // SRT_COLOR_CLOSE_RE are module-scope — see
   // comment above the constants for the convention rationale.
   let result = text.replace(SRT_COLOR_OPEN_RE, (_match, raw: string) => {
     const hexRgb =
@@ -194,7 +194,7 @@ export function buildAssDocument(
   // produces a malformed Style CSV that ASS renderers treat unpredictably.
   // (Round 7 Wave 7.6: regex now lives at module scope as
   // `FONT_NAME_SANITIZER` \u2014 see definition above.)
-  // R2 N-R2-10: 128-codepoint cap matches `sanitizeFamily` (font-embedder).
+  // 128-codepoint cap matches `sanitizeFamily` (font-embedder).
   // Without it, a 10 KB font name typed into the HdrConvert style panel
   // would produce a 10 KB Style line — Pattern 1 cap-consistency.
   const safeFontName = style.fontName.replace(FONT_NAME_SANITIZER, "").slice(0, 128) || "Arial";

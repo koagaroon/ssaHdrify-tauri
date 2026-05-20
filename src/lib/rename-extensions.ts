@@ -46,7 +46,7 @@ export const VIDEO_EXTS: ReadonlySet<string> = new Set([
   "rmvb",
 ]);
 
-// R7 W1 N-R7-2: dropped `sbv` (SubViewer) and `lrc` (LRC lyrics) —
+// dropped `sbv` (SubViewer) and `lrc` (LRC lyrics) —
 // `subtitle-parser.ts::detectFormat` only recognizes `ass | ssa | srt |
 // sub | vtt`, so the previous superset let .sbv/.lrc files through the
 // TimingShift folder-drop filter (which uses `categorize(name) ===

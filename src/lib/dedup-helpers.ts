@@ -55,7 +55,7 @@ export function buildConflictMessage(
   // Single-tab path keeps the existing message exactly so callers /
   // tests anchored on it stay green.
   if (conflictsByTab.size === 1) {
-    // Defensive destructure (N-R5-FELIB-13): the `size === 1` guard
+    // Defensive destructure : the `size === 1` guard
     // above proves the iterator yields one entry, so the old
     // `.next().value!` non-null assertion was sound — but a future
     // refactor that merges the size-1 branch into the multi-tab path
@@ -69,7 +69,7 @@ export function buildConflictMessage(
   // Total count is the sum so the leading "{N} blocked" claim still
   // matches the user's actual selection size.
   //
-  // Round 6 Wave 6.5 #19: uses `msg_dedup_blocked_multi` (no "in the
+  // uses `msg_dedup_blocked_multi` (no "in the
   // ... tab" suffix) so the compound "3 HDR / 2 Shift" reads
   // naturally instead of "... in the 3 HDR / 2 Shift tab".
   const totalCount = Array.from(conflictsByTab.values()).reduce((a, b) => a + b, 0);
@@ -94,7 +94,7 @@ export function buildConflictMessage(
  * dd2d9554).
  */
 export function normalizeOutputKey(path: string): string {
-  // Backslash → forward only on Windows (Round 8 N-R8-N4-3). On POSIX
+  // Backslash → forward only on Windows . On POSIX
   // `\` is a valid filename character, so unconditional rewriting
   // false-collapses two distinct on-disk files (`dir\foo.ass` and
   // `dir/foo.ass`) into one dedup bucket — same gating reasoning as

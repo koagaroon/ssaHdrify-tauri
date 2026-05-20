@@ -53,7 +53,7 @@ export async function countExistingFiles(paths: string[]): Promise<number> {
           existingCount += 1;
         }
       } catch {
-        // Round 10 A-R10-013: count as existing (fail-safe). See
+        // count as existing (fail-safe). See
         // function-level docblock for the WHY.
         errorCount += 1;
         existingCount += 1;
