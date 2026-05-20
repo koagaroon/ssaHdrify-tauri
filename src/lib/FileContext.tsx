@@ -139,6 +139,15 @@ export function FileProvider({ children }: { children: ReactNode }) {
       case "rename":
         setRenameFiles(null);
         break;
+      default: {
+        // Exhaustiveness pin: when a new TabId variant is added, this
+        // assignment fails type-check unless `tab`'s residual type is
+        // `never`. Without the pin, a new variant would silently no-op
+        // through clearFile and the corresponding tab's file state
+        // would never reset.
+        const _exhaustive: never = tab;
+        void _exhaustive;
+      }
     }
   }, []);
 

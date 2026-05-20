@@ -36,7 +36,7 @@ export function DropErrorBanner({ message, onDismiss }: DropErrorBannerProps) {
       <button
         type="button"
         onClick={onDismiss}
-        aria-label={t("btn_clear_file")}
+        aria-label={t("btn_dismiss")}
         className="flex-none text-base"
         style={{ color: "var(--error)", lineHeight: 1 }}
       >

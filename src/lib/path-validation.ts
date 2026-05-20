@@ -443,7 +443,13 @@ export function assertSafeOutputFilename(
     /[\s.]+$/,
     ""
   );
-  if (WINDOWS_RESERVED_NAMES.has(firstSegment.toUpperCase())) {
+  // `toLocaleUpperCase("en-US")` pins the upper-casing locale —
+  // `toUpperCase()` honors the runtime's display locale, which on
+  // Turkish hosts upcases ASCII `i` to `İ` (U+0130) and breaks
+  // reserved-name lookups. None of the current reserved names
+  // contain `i`, so this is forward-looking insurance against
+  // future additions rather than a today-bug.
+  if (WINDOWS_RESERVED_NAMES.has(firstSegment.toLocaleUpperCase("en-US"))) {
     throw new Error(`Output filename is a Windows reserved name: ${firstSegment}`);
   }
 }

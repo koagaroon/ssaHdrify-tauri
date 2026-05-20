@@ -976,11 +976,23 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
     // pass --output-template. --quiet suppresses (consistent with
     // every other informational stderr line in the CLI).
     if !user_supplied_template && !globals.quiet {
+        let tmpl = &plan.output_template;
         eprintln!(
-            "ℹ Output template defaulted to '{}' (stacked from chain steps).",
-            plan.output_template
+            "{}",
+            localize(
+                globals,
+                format!("ℹ Output template defaulted to '{tmpl}' (stacked from chain steps)."),
+                format!("ℹ 输出模板使用默认 '{tmpl}'（按 chain 步骤栈叠生成）。"),
+            )
         );
-        eprintln!("  Pass --output-template <T> to override, or --dry-run to preview.");
+        eprintln!(
+            "{}",
+            localize(
+                globals,
+                "  Pass --output-template <T> to override, or --dry-run to preview.".to_string(),
+                "  传 --output-template <T> 自定义，或 --dry-run 预览。".to_string(),
+            )
+        );
     }
 
     let embed_step_index = find_embed_step_index(&plan);
@@ -1001,7 +1013,12 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
     // consistent across step compositions.
     if globals.no_cache && !globals.quiet {
         eprintln!(
-            "ℹ --no-cache has no effect in chain mode; chain v1 doesn't use the persistent cache."
+            "{}",
+            localize(
+                globals,
+                "ℹ --no-cache has no effect in chain mode; chain v1 doesn't use the persistent cache.".to_string(),
+                "ℹ chain 模式下 --no-cache 不生效；chain v1 不读取持久缓存。".to_string(),
+            )
         );
     }
 
@@ -1013,7 +1030,14 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
     // text and silently get parse errors. Same shape as the
     // --no-cache informational line above.
     if globals.json && !globals.quiet {
-        eprintln!("ℹ chain v1 does not implement --json output; reporting in plain text.");
+        eprintln!(
+            "{}",
+            localize(
+                globals,
+                "ℹ chain v1 does not implement --json output; reporting in plain text.".to_string(),
+                "ℹ chain v1 不支持 --json 输出，按纯文本报告。".to_string(),
+            )
+        );
     }
 
     if globals.dry_run {
@@ -1483,7 +1507,13 @@ fn predict_chain_output_path(
     // Per-char loop covers control chars + NTFS punctuation + BiDi/zw
     // in one pass; mirrors `util::validate_ipc_path` but for the
     // narrower "single filename, no separators" shape.
-    if output_name.is_empty() || (output_name.len() >= 2 && output_name.as_bytes()[1] == b':') {
+    // Drive-letter check via `chars().nth(1)` — `as_bytes()[1]` would
+    // read into the middle of a multi-byte UTF-8 sequence if a future
+    // template / substitution shape lands a non-ASCII first char at
+    // byte 0. Safe today (the lexer's accepted token set is ASCII)
+    // but the byte-indexed form is brittle to the next input-shape
+    // change; sibling code elsewhere in this file uses `chars().nth`.
+    if output_name.is_empty() || output_name.chars().nth(1) == Some(':') {
         return None;
     }
     // Round 10 N-R10-012: whitespace-only output_name is rejected for
@@ -1788,7 +1818,8 @@ fn process_one_chain_input(
     // only, missing both the stderr-routing and the json wire.
     // Embed pre-resolution warnings (collected above) sit in the
     // same vec; both get surfaced via the Written outcome.
-    if let Some(msgs) = format_oversized_skipped_warning(result.skipped_count, &input_str) {
+    if let Some(msgs) = format_oversized_skipped_warning(globals, result.skipped_count, &input_str)
+    {
         builder.extend_warnings(msgs);
     }
 
@@ -2110,7 +2141,7 @@ fn process_hdr_file(
         }
     };
 
-    let warnings = format_oversized_skipped_warning(conversion.skipped_count, &input);
+    let warnings = format_oversized_skipped_warning(globals, conversion.skipped_count, &input);
 
     // R14 W14.4 (Codex 1577b31f sibling): attach warnings to the
     // failed_report on write_output failure so the oversized-caption
@@ -2156,18 +2187,26 @@ fn process_hdr_file(
 /// (the print loops are `!globals.quiet`-gated; the helper wasn't).
 /// Naming change reinforces the new contract: this is `format_*`,
 /// not `emit_*`.
-fn format_oversized_skipped_warning(skipped_count: usize, input: &str) -> Option<Vec<String>> {
+fn format_oversized_skipped_warning(
+    globals: &GlobalOptions,
+    skipped_count: usize,
+    input: &str,
+) -> Option<Vec<String>> {
     if skipped_count == 0 {
         return None;
     }
     // `input` is a raw operational path; sanitize before embedding
     // in the message body so downstream stderr / println emission
     // can't be corrupted by control / BiDi chars from a crafted
-    // argv (R14 W14.1 / Codex 6b2089f3 family).
+    // argv.
     let input_disp = sanitize_for_display(input);
-    Some(vec![format!(
-        "Dropped {skipped_count} oversized caption(s) from {input_disp}: \
-         text exceeded 64 KB per-caption cap"
+    Some(vec![localize(
+        globals,
+        format!(
+            "Dropped {skipped_count} oversized caption(s) from {input_disp}: \
+             text exceeded 64 KB per-caption cap"
+        ),
+        format!("已丢弃 {skipped_count} 条超大字幕（来自 {input_disp}）：单条文本超过 64 KB 上限"),
     )])
 }
 
@@ -2368,7 +2407,7 @@ fn process_shift_file_cheap_first(
         ),
     );
 
-    let warnings = format_oversized_skipped_warning(conversion.skipped_count, &input);
+    let warnings = format_oversized_skipped_warning(globals, conversion.skipped_count, &input);
 
     // R14 W14.4 (Codex 1577b31f sibling): attach warnings to the
     // failed_report on write_output failure so the oversized-caption
@@ -2447,7 +2486,7 @@ fn process_shift_file_heavy_first(
     // attach `warnings` to every FileReport returned from this
     // function (early or final) by mutating the helper-constructed
     // report before returning.
-    let warnings = format_oversized_skipped_warning(conversion.skipped_count, &input);
+    let warnings = format_oversized_skipped_warning(globals, conversion.skipped_count, &input);
 
     let output_path = match relocate_output_path(&conversion.output_path, context.output_dir) {
         Ok(path) => path,
@@ -3810,9 +3849,17 @@ fn expand_rename_inputs(globals: &GlobalOptions, paths: &[PathBuf]) -> Result<Ve
     // doesn't get this stderr line — same posture as every other
     // informational stderr in the CLI.
     if expanded.truncated && !globals.quiet {
+        let cap = app_lib::dropzone::MAX_RESULT_FILES;
         eprintln!(
-            "⚠ Dropped path expansion hit the {} file cap; remainder ignored. Drop fewer files per batch.",
-            app_lib::dropzone::MAX_RESULT_FILES
+            "{}",
+            localize(
+                globals,
+                format!(
+                    "⚠ Dropped path expansion hit the {cap} file cap; remainder ignored. \
+                     Drop fewer files per batch."
+                ),
+                format!("⚠ 拖入路径展开触及 {cap} 个文件上限；剩余忽略。请减少单次拖入数量。"),
+            )
         );
     }
     Ok(expanded.files)

@@ -10,6 +10,7 @@
  * Only implements what we need: parse timestamps, shift them, rebuild.
  * Does NOT attempt full semantic parsing of style tags etc.
  */
+import { stripUnicodeControls } from "./unicode-controls";
 
 export interface Caption {
   /** Raw line(s) from the original file for this caption block */
@@ -547,8 +548,15 @@ function buildAss(content: string, captions: Caption[]): string {
     // file name. If users start reporting it, that's the signal
     // to investigate parser/regex divergence in this file.
     const firstUnconsumed = captions[idx]?.raw ?? "(no raw line captured)";
-    const excerpt =
+    // Defense-in-depth: sanitize the excerpt before interpolating
+    // into the error string. The branch is documented unreachable,
+    // but if a crafted ASS does reach here the raw caption text
+    // could carry U+202E (Trojan-Source) or other BiDi marks; the
+    // error message lands in addLog / stderr where reversed display
+    // misleads the user about which file is failing.
+    const raw =
       firstUnconsumed.length > 120 ? `${firstUnconsumed.slice(0, 120)}…` : firstUnconsumed;
+    const excerpt = stripUnicodeControls(raw);
     throw new Error(
       `buildAss/parseAss drift: consumed ${idx}/${captions.length} shifted entries; ` +
         `first unconsumed entry index=${idx}, raw="${excerpt}"`

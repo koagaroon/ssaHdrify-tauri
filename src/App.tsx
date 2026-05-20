@@ -300,7 +300,7 @@ function App() {
               <button
                 className="icon-btn lang"
                 onClick={() => setLang(lang === "en" ? "zh" : "en")}
-                title={lang === "en" ? "切换到中文" : "Switch to English"}
+                title={lang === "en" ? t("lang_switch_to_zh") : t("lang_switch_to_en")}
               >
                 {lang === "en" ? "中" : "EN"}
               </button>
@@ -422,6 +422,7 @@ function App() {
             id="panel-hdr"
             role="tabpanel"
             aria-labelledby="tab-hdr"
+            aria-hidden={activeTab !== "hdr"}
             style={{ display: activeTab === "hdr" ? "block" : "none" }}
           >
             <HdrConvert />
@@ -430,6 +431,7 @@ function App() {
             id="panel-timing"
             role="tabpanel"
             aria-labelledby="tab-timing"
+            aria-hidden={activeTab !== "timing"}
             style={{ display: activeTab === "timing" ? "block" : "none" }}
           >
             <TimingShift />
@@ -438,6 +440,7 @@ function App() {
             id="panel-fonts"
             role="tabpanel"
             aria-labelledby="tab-fonts"
+            aria-hidden={activeTab !== "fonts"}
             style={{ display: activeTab === "fonts" ? "block" : "none" }}
           >
             <FontEmbed />
@@ -446,6 +449,7 @@ function App() {
             id="panel-rename"
             role="tabpanel"
             aria-labelledby="tab-rename"
+            aria-hidden={activeTab !== "rename"}
             style={{ display: activeTab === "rename" ? "block" : "none" }}
           >
             <BatchRename />

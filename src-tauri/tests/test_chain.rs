@@ -421,8 +421,21 @@ fn chain_post_v8_failed_surfaces_oversized_warning() {
     let predicted_output = dir.join("oversized.shifted.ass");
     fs::create_dir(&predicted_output).expect("failed to pre-create directory at output path");
 
+    // Pin `--lang en` so the warning assertion below tests an
+    // English-locale environment regardless of the host's OS locale.
+    // Without the pin, a CN-locale host sees the Chinese-side phrase
+    // ("已丢弃 N 条超大字幕") and the English `contains("oversized
+    // caption")` assertion fails — flaky-by-locale, not by behavior.
     let output = Command::new(cli_path())
-        .args(["--overwrite", "chain", "shift", "--offset", "+2s"])
+        .args([
+            "--overwrite",
+            "--lang",
+            "en",
+            "chain",
+            "shift",
+            "--offset",
+            "+2s",
+        ])
         .arg(&input)
         .output()
         .expect("failed to run chain");

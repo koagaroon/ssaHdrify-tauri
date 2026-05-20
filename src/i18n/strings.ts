@@ -489,6 +489,9 @@ export const strings: Record<string, StringEntry> = {
 
   // ── Shared ──────────────────────────────────────────────
   btn_clear_file: { en: "Clear", zh: "清除" },
+  btn_dismiss: { en: "Dismiss", zh: "关闭" },
+  lang_switch_to_zh: { en: "切换到中文", zh: "切换到中文" },
+  lang_switch_to_en: { en: "Switch to English", zh: "Switch to English" },
   msg_dedup_blocked: {
     en: "Can't load — {0} file(s) already loaded in the {1} tab. Clear them there first.",
     zh: "无法加载 — {0} 个文件已在「{1}」标签页中。请先在该标签页中清除。",
