@@ -167,20 +167,25 @@ export default function HdrConvert() {
 
   const handleBrightnessChange = (value: string) => {
     setBrightnessText(value);
-    const num = parseInt(value, 10);
+    // parseFloat + Math.round mirror TimingShift's offset handler.
+    // parseInt silently truncates fractional input ("100.5" → 100)
+    // with no visible signal; parseFloat accepts the full value and
+    // rounding happens at the storage boundary so downstream nits
+    // math stays on integer cd/m².
+    const num = parseFloat(value);
     if (!Number.isNaN(num) && num >= MIN_BRIGHTNESS && num <= MAX_BRIGHTNESS) {
-      setBrightness(num);
+      setBrightness(Math.round(num));
     }
   };
 
   // Derived: brightnessText parses cleanly but lands outside the
   // [MIN_BRIGHTNESS, MAX_BRIGHTNESS] window. Used to drive the input's
-  // visible-error border (N-R5-FEFEAT-25). Without this signal, a user
-  // typing "99999" sees no validation feedback and the Convert button
-  // proceeds with the prior in-range value silently — the kind of
-  // surprise vibe-coding.md no-silent-action exists to prevent.
+  // visible-error border. Without this signal, a user typing "99999"
+  // sees no validation feedback and the Convert button proceeds with
+  // the prior in-range value silently — the kind of surprise
+  // vibe-coding.md no-silent-action exists to prevent.
   const brightnessOutOfRange = (() => {
-    const num = parseInt(brightnessText, 10);
+    const num = parseFloat(brightnessText);
     return !Number.isNaN(num) && (num < MIN_BRIGHTNESS || num > MAX_BRIGHTNESS);
   })();
 
@@ -191,7 +196,12 @@ export default function HdrConvert() {
   }, []);
 
   const activeTemplate = template === "custom" ? customTemplate : template;
-  const convertDisabled = !hdrFiles || processing;
+  // Gate Convert on out-of-range too. Without this, a user typing
+  // "99999" sees the invalid border on the input but Convert still
+  // proceeds against the prior in-range `brightness` state — a stale
+  // commit with no visible signal. The button's disabled state binds
+  // to the same expression, so keyboard activation is also blocked.
+  const convertDisabled = !hdrFiles || processing || brightnessOutOfRange;
 
   // ── File selection (separate from conversion) ──────────
   // Strict cross-tab dedup contract: any conflict rejects the WHOLE

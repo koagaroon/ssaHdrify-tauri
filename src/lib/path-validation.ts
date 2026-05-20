@@ -345,7 +345,15 @@ export function substituteTemplate(template: string, vars: Record<string, string
       segments.push({ kind: "literal", text: template.slice(cursor, m.index) });
     }
     const name = m[1]!;
-    if (!(name in vars)) {
+    // Use hasOwnProperty rather than `in` so prototype-chain keys
+    // (`constructor`, `toString`, `hasOwnProperty`, …) don't satisfy
+    // the lookup. With `in`, `{constructor}` would skip this throw and
+    // surface as a downstream TypeError when `vars[name]` returned
+    // Function.prototype.constructor and `.startsWith` was called on
+    // it. CLI argv and GUI input fields both flow into `template`, so
+    // a user-typed `--out '{constructor}.ass'` would crash with a
+    // misleading error instead of the documented unknown-token throw.
+    if (!Object.prototype.hasOwnProperty.call(vars, name)) {
       throw new Error(
         `output template references unknown token '{${name}}'; ` +
           `known tokens: ${Object.keys(vars).join(", ") || "(none)"}`

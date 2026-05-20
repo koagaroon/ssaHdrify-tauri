@@ -154,6 +154,28 @@ export default function TimingShift() {
   // MAX_OFFSET_MS literal; in s-unit it scales down by 1000 so the same
   // visible value range stays user-friendly.
   const offsetMax = unit === "s" ? MAX_OFFSET_MS / 1000 : MAX_OFFSET_MS;
+
+  // Unit toggle preserves the intended shift duration: ms→s scales the
+  // value down by 1000 (1500 ms → 1.5 s), s→ms scales up (2.5 s →
+  // 2500 ms). Without this rescale, the displayed number stays the
+  // same while its semantic meaning shifts by 1000× — a no-silent-action
+  // violation the user only notices when subtitles end up minutes off.
+  // s-side text uses toFixed(3) + trailing-zero strip so floating-point
+  // noise like 0.7000000000000001 doesn't surface; ms-side rounds to
+  // integer because downstream math is integer ms anyway.
+  const handleUnitChange = (newUnit: Unit) => {
+    if (newUnit === unit) return;
+    if (newUnit === "s") {
+      const sVal = offsetValue / 1000;
+      setOffsetValue(sVal);
+      setOffsetText(sVal.toFixed(3).replace(/\.?0+$/, "") || "0");
+    } else {
+      const msVal = Math.round(offsetValue * 1000);
+      setOffsetValue(msVal);
+      setOffsetText(msVal.toString());
+    }
+    setUnit(newUnit);
+  };
   const handleOffsetChange = (value: string) => {
     setOffsetText(value);
     // Round 11 W11.1 (N1-R11-02): parseFloat accepts fractional s-unit
@@ -791,7 +813,7 @@ export default function TimingShift() {
           name="offset-unit"
           aria-label={t("offset_label")}
           value={unit}
-          onChange={(e) => setUnit(e.target.value as Unit)}
+          onChange={(e) => handleUnitChange(e.target.value as Unit)}
           disabled={busy}
           className="px-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           style={{

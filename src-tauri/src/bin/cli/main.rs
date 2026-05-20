@@ -728,8 +728,20 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
     // error message at the right level. `--cache-file` (also argv P1b)
     // is already validated at the top of run() before any subcommand.
     for dir in &args.font_dirs {
-        let dir_str = dir.to_string_lossy();
-        app_lib::util::validate_ipc_path(&dir_str, "--font-dir")?;
+        // Refuse non-UTF-8 paths upfront via `to_str()` rather than
+        // routing `to_string_lossy()` through the validator. With
+        // lossy substitution, WTF-16-surrogate / non-UTF-8 bytes
+        // become U+FFFD for the validate call while downstream scan
+        // / cache writes consume the ORIGINAL PathBuf — different
+        // bytes than what validate_ipc_path checked. Sibling pattern
+        // to the `--cache-file` refusal at the top of run().
+        let dir_str = dir.to_str().ok_or_else(|| {
+            "--font-dir: path contains non-UTF-8 bytes; refuse upfront so the IPC \
+             validator and the subsequent scan / cache write agree on the same \
+             byte sequence"
+                .to_string()
+        })?;
+        app_lib::util::validate_ipc_path(dir_str, "--font-dir")?;
     }
 
     // Resolve cache file path: user override (--cache-file) or default

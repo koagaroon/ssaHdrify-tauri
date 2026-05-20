@@ -48,11 +48,17 @@ const VTT_HEADER = /^WEBVTT/m;
 // SRT hours use variable digit width in practice — many tools emit
 // `0:00:01,234` or `1:02:03,456`. Hours bounded at `{1,12}` to match
 // `parseSrtTime` / `parseAssTime` / `parseDisplayTime`'s extraction
-// regexes (R2 N-R2-9 Pattern 2 symmetry — pre-W2 detection used \d+
-// while extraction caps at {1,12}; a future caller piping the
-// detection match into parseInt would have re-introduced the
-// unbounded surface).
-const SRT_TIMING = /\d{1,12}:\d{2}:\d{2},\d{3}\s*-->\s*\d{1,12}:\d{2}:\d{2},\d{3}/;
+// regexes (Pattern 2 symmetry — earlier detection used \d+ while
+// extraction caps at {1,12}; a future caller piping the detection
+// match into parseInt would have re-introduced the unbounded surface).
+//
+// `^…/m` anchor + multiline flag — matches `parseSrt`'s line-anchored
+// `timingRe`. Without the anchor, prose like `Caption text
+// 12:00:00,000 --> 12:00:01,000 in prose` matches detection but
+// `parseSrt`'s `timingRe.test(line)` finds zero hits → captions=[]
+// returns silently. Sibling regex coherence with ASS_HEADER /
+// VTT_HEADER / SUB_LINE which all use `^…/m`.
+const SRT_TIMING = /^\d{1,12}:\d{2}:\d{2},\d{3}\s*-->\s*\d{1,12}:\d{2}:\d{2},\d{3}/m;
 const ASS_HEADER = /^\[Script Info\]/im;
 const SUB_LINE = /^\{\d+\}\{\d+\}/m;
 

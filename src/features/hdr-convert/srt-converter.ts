@@ -224,6 +224,12 @@ export function buildAssDocument(
       // one-line-per-Dialogue invariant; U+2028 smuggles a line break
       // past naive renderers.
       .replace(/\r\n|\r|\n|\u0085|\u2028|\u2029/g, "\\N")
+      // Convert `<br>` / `<br/>` to ASS hard break BEFORE the
+      // unknown-tag strip below. SRT is HTML-ish in many real-world
+      // exports (legacy tools, fan-sub edits); without this step
+      // intentional line breaks get silently absorbed by the
+      // `<[^>]*>` strip pass and the cue collapses to a single line.
+      .replace(/<br\s*\/?>/gi, "\\N")
       .replace(/<b>/gi, "{\\b1}")
       .replace(/<\/b>/gi, "{\\b0}")
       .replace(/<i>/gi, "{\\i1}")
