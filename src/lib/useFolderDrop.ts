@@ -186,9 +186,14 @@ export function useFolderDrop({
                       // a bump on the Rust side flows through to the
                       // user-visible wording automatically.
                       const tr = tRef.current;
+                      // No-i18n fallback is deliberately generic — pinning the
+                      // exact wording here would duplicate strings.ts's
+                      // `msg_drop_truncated` and silently drift if that key
+                      // ever reworded. tr is only null in tests / non-i18n
+                      // hosts; the production path always has it.
                       const msg = tr
                         ? tr("msg_drop_truncated", expanded.maxFiles)
-                        : `Drop too large — first ${expanded.maxFiles} files accepted, the rest were ignored. Retry with a smaller batch.`;
+                        : `Drop too large (cap ${expanded.maxFiles}) — see log`;
                       onErrorRef.current?.(new Error(msg));
                     }
                   } else if (event.payload.paths.length > 0) {
@@ -199,9 +204,9 @@ export function useFolderDrop({
                     // error so the consumer banner reads "no usable
                     // files in this drop" instead of nothing.
                     const tr = tRef.current;
-                    const msg = tr
-                      ? tr("msg_drop_no_usable")
-                      : "Drop expanded to zero usable paths";
+                    // Same generic-fallback contract as msg_drop_truncated
+                    // above: avoid duplicating strings.ts content here.
+                    const msg = tr ? tr("msg_drop_no_usable") : "No usable paths in drop";
                     onErrorRef.current?.(new Error(msg));
                   }
                 }

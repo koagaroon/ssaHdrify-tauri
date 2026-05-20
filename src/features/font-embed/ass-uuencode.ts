@@ -1,4 +1,4 @@
-import { BIDI_AND_ZERO_WIDTH_CHARS } from "../../lib/unicode-controls";
+import { ASCII_CONTROL_CHARS, BIDI_AND_ZERO_WIDTH_CHARS } from "../../lib/unicode-controls";
 
 /**
  * ASS-specific UUEncode implementation.
@@ -107,7 +107,7 @@ export function buildFontEntry(fontName: string, data: Uint8Array): string {
   // be unified into a single helper without re-checking the
   // per-boundary character implications.
   const safeName = fontName.replace(
-    new RegExp(`[\\x00-\\x1f\\x7f-\\x9f${BIDI_AND_ZERO_WIDTH_CHARS}:/\\\\]`, "gu"),
+    new RegExp(`[${ASCII_CONTROL_CHARS}${BIDI_AND_ZERO_WIDTH_CHARS}:/\\\\]`, "gu"),
     "_"
   );
   const encodedLines = assUuencode(data);

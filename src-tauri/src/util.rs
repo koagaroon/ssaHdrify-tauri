@@ -311,6 +311,13 @@ pub fn validate_font_family(family: &str) -> Result<(), String> {
 /// stderr, rfd dialog body, log line). Strips:
 ///
 /// - ASCII CR / LF (`\r`, `\n`)
+/// - ASCII ESC (`\u{001B}`) — ISO-2022-JP-decoded subtitle content can
+///   carry ESC bytes from the input file; when such content is later
+///   printed to a terminal (CLI `emit_file_report` etc.), ESC can
+///   drive cursor movement, color resets, or other terminal-side
+///   manipulations. The cap is decoded TEXT, not paths — paths get
+///   `validate_ipc_path`, this helper covers the text-disclosure
+///   surfaces.
 /// - C1 NEL (`U+0085`) — historical newline on EBCDIC; some terminals
 ///   honor it
 /// - Unicode line / paragraph separators (`U+2028` / `U+2029`)
@@ -320,7 +327,10 @@ pub fn validate_font_family(family: &str) -> Result<(), String> {
 /// containing a bidi override becomes a credible threat, extend this
 /// helper and apply at every untrusted-output boundary.
 pub fn strip_visual_line_breaks(s: &str) -> String {
-    s.replace(['\r', '\n', '\u{0085}', '\u{2028}', '\u{2029}'], " — ")
+    s.replace(
+        ['\r', '\n', '\u{001B}', '\u{0085}', '\u{2028}', '\u{2029}'],
+        " — ",
+    )
 }
 
 /// Detect symlinks AND Windows junctions / OneDrive placeholders.

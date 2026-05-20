@@ -50,6 +50,21 @@ const BIDI_AND_ZERO_WIDTH_PATTERN =
 /** Inline character class fragment for splicing into composite regexes. */
 export const BIDI_AND_ZERO_WIDTH_CHARS = BIDI_AND_ZERO_WIDTH_PATTERN;
 
+/**
+ * Inline character class fragment for the ASCII C0 + DEL + C1 control
+ * range — U+0000..U+001F, U+007F, U+0080..U+009F. Same splice-into-
+ * composite-regex shape as `BIDI_AND_ZERO_WIDTH_CHARS` above. Mirrors
+ * Rust-side `char::is_control()` rejections.
+ *
+ * Single source of truth for the ASCII control range. Splice via
+ * `new RegExp(`[${ASCII_CONTROL_CHARS}]`, "...")` rather than reaching
+ * for a literal `\x00-\x1f\x7f-\x9f` regex — the template form avoids
+ * the per-callsite `eslint-disable no-control-regex` directives, and
+ * a future widening / hardening (adding U+E0001..U+E007F tag block,
+ * etc.) lands in one place instead of grepping every consumer.
+ */
+export const ASCII_CONTROL_CHARS = "\\x00-\\x1f\\x7f-\\x9f";
+
 // Internal matcher consumed by `hasUnicodeControls` below. Round 11
 // W11.7 (N3-R11-05) — was exported pre-R11 but no external caller
 // imported it; `hasUnicodeControls` is the public surface, and external

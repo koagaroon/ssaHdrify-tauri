@@ -11,7 +11,7 @@
  */
 
 import type { ParsedASS } from "ass-compiler";
-import { BIDI_AND_ZERO_WIDTH_CHARS } from "../../lib/unicode-controls";
+import { ASCII_CONTROL_CHARS, BIDI_AND_ZERO_WIDTH_CHARS } from "../../lib/unicode-controls";
 
 // Module-scope override-tag regexes. Compiling once (rather than per
 // override block) avoids `\p{L}` Unicode-property recompilation cost
@@ -59,7 +59,7 @@ const R_TAG_RE =
 // interpolates `BIDI_AND_ZERO_WIDTH_CHARS`. Hoisted to a module-level
 // const just like the literal regexes above so the compile cost is
 // paid once per process, not per override block.
-const FN_CHAR_SET = `[^\\\\}{\\x00-\\x1f\\x7f-\\x9f${BIDI_AND_ZERO_WIDTH_CHARS}]`;
+const FN_CHAR_SET = `[^\\\\}{${ASCII_CONTROL_CHARS}${BIDI_AND_ZERO_WIDTH_CHARS}]`;
 const FN_TAG_RE = new RegExp(
   `\\\\fn(?:(${FN_CHAR_SET}{0,128})(?!${FN_CHAR_SET})|${FN_CHAR_SET}{129,200000}(?!${FN_CHAR_SET}))`,
   "gu"
@@ -205,7 +205,7 @@ export function sanitizeFamily(raw: string): string {
   // directive is needed. Behavior is identical to a literal regex
   // (codepoint classes are evaluated at the same runtime stage).
   return raw
-    .replace(new RegExp(`[\\x00-\\x1f\\x7f-\\x9f${BIDI_AND_ZERO_WIDTH_CHARS}]`, "gu"), "")
+    .replace(new RegExp(`[${ASCII_CONTROL_CHARS}${BIDI_AND_ZERO_WIDTH_CHARS}]`, "gu"), "")
     .slice(0, 128);
 }
 

@@ -276,10 +276,10 @@ fn split_into_step_segments(argv: &[String]) -> Result<Vec<Vec<String>>, String>
             // `map_or(true, ...)` covers None + empty Vec. Swap to
             // `is_none_or` only after Cargo.toml `rust-version` ≥ 1.82.
             if segments.last().map_or(true, Vec::is_empty) {
-                return Err(
-                    "empty step segment around `+` (chain requires `<step1> + <step2>...` form)"
-                        .into(),
-                );
+                return Err(format!(
+                    "empty step segment around `{STEP_SEPARATOR}` (chain requires \
+                     `<step1> {STEP_SEPARATOR} <step2>...` form)"
+                ));
             }
             segments.push(Vec::new());
         } else {
@@ -313,12 +313,15 @@ fn split_into_step_segments(argv: &[String]) -> Result<Vec<Vec<String>>, String>
     // would panic. Both annotations live here so the choice doesn't
     // drift on the next pass.
     if segments.last().is_some_and(Vec::is_empty) {
-        let msg: &str = if segments.len() == 1 {
-            "chain requires at least one step"
+        let msg: String = if segments.len() == 1 {
+            "chain requires at least one step".to_string()
         } else {
-            "empty step segment after trailing `+` (chain requires `<step1> + <step2>...` form)"
+            format!(
+                "empty step segment after trailing `{STEP_SEPARATOR}` (chain requires \
+                 `<step1> {STEP_SEPARATOR} <step2>...` form)"
+            )
         };
-        return Err(msg.into());
+        return Err(msg);
     }
     Ok(segments)
 }

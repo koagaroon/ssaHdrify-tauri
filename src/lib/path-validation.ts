@@ -1,5 +1,6 @@
-import { isCaseInsensitiveFs, isWindowsRuntime } from "./platform";
-import { hasUnicodeControls, stripUnicodeControls } from "./unicode-controls";
+import { normalizeOutputKey } from "./dedup-helpers";
+import { isWindowsRuntime } from "./platform";
+import { ASCII_CONTROL_CHARS, hasUnicodeControls, stripUnicodeControls } from "./unicode-controls";
 
 /**
  * Shared output-path validation helpers.
@@ -86,20 +87,21 @@ export const WINDOWS_RESERVED_NAMES = new Set([
 // `{format}` — surface as filename errors rather than producing a
 // literal `episode.{Format}.ass` file. The substitution path is
 // case-sensitive; rejecting brace literals turns typos into errors.
-// eslint-disable-next-line no-control-regex -- intentional: reject control chars in filenames
-export const ILLEGAL_FILENAME_CHARS = /[\x00-\x1f\x7f-\x9f<>:"|?*\\/{}]/;
+// Built via new RegExp so the C0/DEL/C1 range is sourced from
+// `ASCII_CONTROL_CHARS` (single source of truth, no per-callsite
+// eslint disable directive needed).
+export const ILLEGAL_FILENAME_CHARS = new RegExp(`[${ASCII_CONTROL_CHARS}<>:"|?*\\\\/{}]`);
 
-// Round 10 N-R10-005: BatchRename's `deriveRenameOutputPath` builds
-// the output name from the user's verbatim video filename (no
-// template machinery in play), so legitimate fan-sub video names
-// like `[Group] Show {1080p}.mkv` would otherwise trip the brace
-// reject above and force the user to rename the source file by hand.
-// This sibling pattern omits `{` and `}` for the BatchRename
-// callsite; every other consumer (HDR/Shift/Embed/chain template
-// resolvers) keeps the strict variant so typo'd tokens surface as
-// errors instead of literal `{Format}` filenames.
-// eslint-disable-next-line no-control-regex -- intentional: reject control chars in filenames
-const ILLEGAL_FILENAME_CHARS_BRACES_OK = /[\x00-\x1f\x7f-\x9f<>:"|?*\\/]/;
+// BatchRename's `deriveRenameOutputPath` builds the output name from
+// the user's verbatim video filename (no template machinery in
+// play), so legitimate fan-sub video names like `[Group] Show
+// {1080p}.mkv` would otherwise trip the brace reject above and force
+// the user to rename the source file by hand. This sibling pattern
+// omits `{` and `}` for the BatchRename callsite; every other
+// consumer (HDR/Shift/Embed/chain template resolvers) keeps the
+// strict variant so typo'd tokens surface as errors instead of
+// literal `{Format}` filenames.
+const ILLEGAL_FILENAME_CHARS_BRACES_OK = new RegExp(`[${ASCII_CONTROL_CHARS}<>:"|?*\\\\/]`);
 
 /**
  * Decomposed parts of a validated input path.
@@ -172,9 +174,8 @@ export function decomposeInputPath(inputPath: string): InputPathParts {
   // at NUL — `evil\0.exe.ass` becomes `evil`, bypassing the trailing
   // `.ass` extension allow-list. Range covers C0 (`\x00-\x1f`), DEL
   // and C1 (`\x7f-\x9f`); Rust's `char::is_control()` rejects the same
-  // span so the gate stays TS↔Rust symmetric (Round 8 A-R8-N4-4).
-  // eslint-disable-next-line no-control-regex -- intentional: reject control chars
-  if (/[\x00-\x1f\x7f-\x9f]/.test(normalized)) {
+  // span so the gate stays TS↔Rust symmetric.
+  if (new RegExp(`[${ASCII_CONTROL_CHARS}]`).test(normalized)) {
     throw new Error("Input path contains control characters");
   }
   // Reject BiDi / zero-width controls. These slip past the C0/DEL
@@ -268,20 +269,14 @@ export function decomposeInputPath(inputPath: string): InputPathParts {
  * output-collision pre-check.
  */
 export function pathsEqualOnFs(a: string, b: string): boolean {
-  // R17 W17.4 (N-R17-57, cross-platform.md mandate): NFC-normalize
-  // BEFORE separator + case folding. Pre-W17.4 a macOS HFS+ input
-  // with NFD-form filename (e.g., a CJK character decomposed into base
-  // + combining mark, U+0065 + U+0301 for `é`) would not equal an
-  // NFC-form output (precomposed U+00E9) under pure case fold + slash
-  // normalization, even though the filesystem treats them as the same
-  // file. The sibling `normalizeOutputKey` in dedup-helpers.ts already
-  // NFC-normalizes for this exact reason; the self-overwrite gate at
-  // `assertSafeOutputPath`:535 calls pathsEqualOnFs, so without NFC
-  // here the gate misses macOS HFS+ self-overwrite cases.
-  const nfc = (p: string) => p.normalize("NFC");
-  const normSep = (p: string) => (isWindowsRuntime ? p.replace(/\\/g, "/") : p);
-  const normCase = (p: string) => (isCaseInsensitiveFs ? p.toLowerCase() : p);
-  return normCase(normSep(nfc(a))) === normCase(normSep(nfc(b)));
+  // Single source of truth for the NFC + slash + case-fold pipeline:
+  // delegate to `normalizeOutputKey`. Pre-consolidation both functions
+  // re-implemented the same 3-step transform independently; the dedup
+  // path's `normalizeOutputKey` and the self-overwrite gate's
+  // `pathsEqualOnFs` could silently disagree about path identity if a
+  // future Unicode-width or normalization step landed in one but not
+  // the other.
+  return normalizeOutputKey(a) === normalizeOutputKey(b);
 }
 
 /**
@@ -479,9 +474,8 @@ export function assertSafeOutputPath(outputPath: string, inputPath: string): voi
   // A control-char-bearing directory name would land in the output
   // path and only get caught downstream at Rust's `validate_ipc_path`
   // (or worse, if a future call bypassed Rust validation). Mirror
-  // `decomposeInputPath:165` here as defense-in-depth.
-  // eslint-disable-next-line no-control-regex -- intentional: reject control chars
-  if (/[\x00-\x1f\x7f-\x9f]/.test(normalizedOutput)) {
+  // the input-side control-char reject above as defense-in-depth.
+  if (new RegExp(`[${ASCII_CONTROL_CHARS}]`).test(normalizedOutput)) {
     throw new Error(`Output path contains control characters: ${normalizedOutput}`);
   }
   const inputDirEnd = normalizedInput.lastIndexOf("/");
@@ -585,6 +579,5 @@ export function assertSafeOutputPath(outputPath: string, inputPath: string): voi
 export function fileNameFromPath(path: string): string {
   const normalized = isWindowsRuntime ? path.replace(/\\/g, "/") : path;
   const raw = normalized.split("/").pop() || path;
-  // eslint-disable-next-line no-control-regex -- intentional: scrub C0 / DEL / C1
-  return stripUnicodeControls(raw).replace(/[\x00-\x1f\x7f-\x9f]/g, "");
+  return stripUnicodeControls(raw).replace(new RegExp(`[${ASCII_CONTROL_CHARS}]`, "g"), "");
 }

@@ -18,7 +18,7 @@
  */
 import type { TabId } from "./FileContext";
 import { TAB_LABEL_KEYS } from "./tab-labels";
-import { BIDI_AND_ZERO_WIDTH_GLOBAL_RE } from "./unicode-controls";
+import { ASCII_CONTROL_CHARS, BIDI_AND_ZERO_WIDTH_GLOBAL_RE } from "./unicode-controls";
 import { isCaseInsensitiveFs, isWindowsRuntime } from "./platform";
 
 /** Translator signature used by `buildConflictMessage`. Matches the
@@ -140,8 +140,9 @@ export function sanitizeForDialog(name: string): string {
   // sanitizer now covers the same span on names that bypass the
   // input gate (e.g., a sanitized-elsewhere error message
   // interpolation reaching the dialog body).
-  // eslint-disable-next-line no-control-regex -- intentional: scrub C0 / DEL / C1
-  return name.replace(BIDI_AND_ZERO_WIDTH_GLOBAL_RE, "").replace(/[\x00-\x1f\x7f-\x9f]/g, "");
+  return name
+    .replace(BIDI_AND_ZERO_WIDTH_GLOBAL_RE, "")
+    .replace(new RegExp(`[${ASCII_CONTROL_CHARS}]`, "g"), "");
 }
 
 /** Round 7 Wave 7.1 — shared catch-arm helper. Normalizes the

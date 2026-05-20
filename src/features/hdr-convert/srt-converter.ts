@@ -8,7 +8,7 @@
  * Uses subsrt for multi-format parsing and ass-compiler for ASS generation.
  */
 
-import { BIDI_AND_ZERO_WIDTH_CHARS } from "../../lib/unicode-controls";
+import { ASCII_CONTROL_CHARS, BIDI_AND_ZERO_WIDTH_CHARS } from "../../lib/unicode-controls";
 import { safeMs } from "../../lib/subtitle-parser";
 
 // Round 7 Wave 7.6 (N4-R7-7): hoisted to module scope so the regex
@@ -36,7 +36,7 @@ import { safeMs } from "../../lib/subtitle-parser";
 // intentional and MUST NOT be unified into a single helper without
 // re-checking the per-boundary character implications.
 const FONT_NAME_SANITIZER = new RegExp(
-  `[\\x00-\\x1f\\x7f-\\x9f${BIDI_AND_ZERO_WIDTH_CHARS},{}\\\\:]`,
+  `[${ASCII_CONTROL_CHARS}${BIDI_AND_ZERO_WIDTH_CHARS},{}\\\\:]`,
   "gu"
 );
 

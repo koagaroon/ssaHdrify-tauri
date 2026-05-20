@@ -166,6 +166,19 @@ fn platform_data_dir() -> Result<PathBuf, String> {
 /// version number to catch unbumped semantic shifts.
 pub const SCHEMA_VERSION: i32 = 2;
 
+/// DoS-class sanity cap on the number of `cached_folders` rows
+/// `list_folders` / `diff_against` will return. Paralleling
+/// `fonts.rs::MAX_PROVENANCE_CACHE_SIZE` (100,000): a hostile cache
+/// file (P1b via `--cache-file`) populated with tens of thousands of
+/// fabricated folder rows — especially UNC paths to dead servers —
+/// would otherwise spin every detect call through a per-row stat
+/// loop, bounded only by per-stat OS timeout. The cap fires inside
+/// `list_folders` and refuses to return the result; downstream
+/// `diff_against` / `detect_font_cache_drift` surface the error and
+/// the user is pointed at rebuilding the cache. Realistic working
+/// caches hold dozens to hundreds of folders.
+pub const MAX_CACHED_FOLDERS: usize = 100_000;
+
 /// Normalize a family-name string into the lookup key used by
 /// `cached_family_keys.family_name_key`: NFC-normalize then full
 /// Unicode lowercase (so `É`→`é`, not just ASCII-only `A`→`a`).
@@ -500,6 +513,20 @@ impl FontCache {
                 found: -1,
                 expected: SCHEMA_VERSION,
             }),
+            // A pre-versioned file or a partial-init crash that left
+            // the database file without a `cache_meta` table surfaces
+            // as a "no such table" SqliteFailure. Route to the same
+            // drift-equivalent path as missing-row (-1) so the user
+            // sees the rebuild prompt instead of a raw SQL error
+            // string. Other SQL errors (locked, permission denied,
+            // disk corruption) still flow to Io for the
+            // "couldn't open cache" branch upstream.
+            Err(e) if format!("{e}").contains("no such table") => {
+                Err(CacheError::SchemaVersionMismatch {
+                    found: -1,
+                    expected: SCHEMA_VERSION,
+                })
+            }
             Err(e) => Err(CacheError::Io(format!("reading schema_version: {e}"))),
         }
     }
@@ -805,6 +832,17 @@ impl FontCache {
         let mut out = Vec::new();
         for row in rows {
             out.push(row.map_err(|e| CacheError::Io(format!("read row: {e}")))?);
+            // DoS-class sanity cap: a hostile cache file with millions
+            // of fabricated folder rows would otherwise drive every
+            // detect call through a per-stat loop bounded only by OS
+            // timeout. Refuse upfront and let the caller surface a
+            // rebuild prompt.
+            if out.len() > MAX_CACHED_FOLDERS {
+                return Err(CacheError::Io(format!(
+                    "cached_folders table exceeds {MAX_CACHED_FOLDERS}-row sanity cap; \
+                     cache file appears corrupted or hostile — rebuild required"
+                )));
+            }
         }
         Ok(out)
     }
