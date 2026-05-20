@@ -34,12 +34,12 @@ type Direction = "slower" | "faster";
 /** Cap to ±1 year to prevent integer precision loss for extreme inputs. */
 const MAX_OFFSET_MS = 365 * 24 * 3600 * 1000;
 
-// Preview list virtualization (Codex d611ab66 / 7f04ebe6 — preview DOM
-// explosion at the parser's 500k-entry ceiling). The previous
-// preview.map(...) materialized one DOM node per caption regardless of
-// scroll position, freezing the WebView on large inputs even though only
-// a few rows fit in the 280px viewport at any time. react-window
-// constrains the rendered set to overscan + visible rows.
+// Preview list virtualization — defends against preview DOM explosion
+// at the parser's 500k-entry ceiling. A naive preview.map(...) would
+// materialize one DOM node per caption regardless of scroll position,
+// freezing the WebView on large inputs even though only a few rows fit
+// in the 280px viewport at any time. react-window constrains the
+// rendered set to overscan + visible rows.
 //
 // PREVIEW_ROW_HEIGHT: derived from the .timeline-row CSS — 12px mono
 // text × 1.2 line-height + 6px top/bottom padding ≈ 26.4px; rounded up
@@ -65,11 +65,10 @@ function PreviewRow({
   shiftedLabel,
 }: RowComponentProps<PreviewRowData>) {
   const entry = preview[index]!;
-  // Spread `ariaAttributes` (Round 1 F2.N-R1-24): react-window 2.x
-  // supplies `role`, `aria-rowindex`, etc. via this prop and expects
-  // the row component to apply them to the root element. Without the
-  // spread, screen readers can't navigate the virtualized list as a
-  // table.
+  // Spread `ariaAttributes`: react-window 2.x supplies `role`,
+  // `aria-rowindex`, etc. via this prop and expects the row component
+  // to apply them to the root element. Without the spread, screen
+  // readers can't navigate the virtualized list as a table.
   return (
     <div
       {...ariaAttributes}
@@ -95,13 +94,12 @@ export default function TimingShift() {
   const { timingFiles, setTimingFiles, clearFile, isFileInUse } = useFileContext();
 
   const [detectedFormat, setDetectedFormat] = useState<string>("");
-  // Round 8 Wave 8.6 — closes N-R5-FEFEAT-24. Two-slot shadow mirroring
-  // HdrConvert's `brightness` / `brightnessText`: `offsetValue` is the
-  // validated integer used by `effectiveOffsetMs` math; `offsetText` is
-  // the raw input string the user is typing. The pair lets NumberInput
-  // own clear-then-retype semantics (mid-type NaN states don't snap the
-  // visible field back to a stale number) while keeping the math path
-  // typed.
+  // Two-slot shadow mirroring HdrConvert's `brightness` /
+  // `brightnessText`: `offsetValue` is the validated integer used by
+  // `effectiveOffsetMs` math; `offsetText` is the raw input string the
+  // user is typing. The pair lets NumberInput own clear-then-retype
+  // semantics (mid-type NaN states don't snap the visible field back to
+  // a stale number) while keeping the math path typed.
   const [offsetValue, setOffsetValue] = useState(200);
   const [offsetText, setOffsetText] = useState("200");
   const [unit, setUnit] = useState<Unit>("ms");
@@ -178,9 +176,9 @@ export default function TimingShift() {
   };
   const handleOffsetChange = (value: string) => {
     setOffsetText(value);
-    // parseFloat accepts fractional s-unit
-    // inputs ("2.5s" → 2.5 seconds). Pre-R11 parseInt silently dropped
-    // the decimal portion ("2.5" → 2), violating no-silent-action.
+    // parseFloat accepts fractional s-unit inputs ("2.5s" → 2.5
+    // seconds). An earlier parseInt-based form silently dropped the
+    // decimal portion ("2.5" → 2), violating no-silent-action.
     // effectiveOffsetMs rounds at the math boundary to keep integer-ms
     // downstream.
     const n = parseFloat(value);
@@ -231,11 +229,11 @@ export default function TimingShift() {
     [preview.length]
   );
 
-  // Memoize `rowProps` for the virtualized list (Round 1 F2.N-R1-31).
-  // A fresh `{}` per render forced react-window's internal memo to bust
-  // every state change, costing a full PreviewRow re-render across every
-  // visible row for unrelated state updates (overflow toggles, drag
-  // active, etc.).
+  // Memoize `rowProps` for the virtualized list. A fresh `{}` per
+  // render forced react-window's internal memo to bust every state
+  // change, costing a full PreviewRow re-render across every visible
+  // row for unrelated state updates (overflow toggles, drag active,
+  // etc.).
   const previewRowProps = useMemo<PreviewRowData>(
     () => ({
       preview,
@@ -328,10 +326,10 @@ export default function TimingShift() {
       try {
         firstContent = await readText(paths[0]!);
       } catch (e) {
-        // Stale-pick guard BEFORE the log emit : an
-        // earlier pick that errors after the user has already moved on
-        // would otherwise emit a confusing log line tied to the
-        // abandoned selection. Drop silently when superseded.
+        // Stale-pick guard BEFORE the log emit: an earlier pick that
+        // errors after the user has already moved on would otherwise
+        // emit a confusing log line tied to the abandoned selection.
+        // Drop silently when superseded.
         if (gen !== pickGenRef.current) return;
         addLog(t("error_prefix", sanitizeError(e)), "error");
         return;
@@ -350,14 +348,13 @@ export default function TimingShift() {
 
   const handlePickFiles = useCallback(async () => {
     const gen = (pickGenRef.current = pickGenRef.current + 1);
-    // catch dialog IPC failures explicitly
-    // — pickSubtitleFiles can reject (Tauri plugin-dialog error, plugin
-    // not loaded, OS-level dialog refused, etc.) and the bare await
-    // form let those bubble as unhandled rejection → silent console
-    // error from the user's POV ("clicked Select, nothing happened").
-    // Surface via addLog so the user knows the click was received but
-    // the dialog couldn't open. Same shape for HDR / Embed / Rename
-    // siblings (project-wide pattern, fixed at each site).
+    // Catch dialog IPC failures explicitly — pickSubtitleFiles can
+    // reject (Tauri plugin-dialog error, plugin not loaded, OS-level
+    // dialog refused, etc.) and the bare await form let those bubble
+    // as unhandled rejection → silent console error from the user's
+    // POV ("clicked Select, nothing happened"). Surface via addLog so
+    // the user knows the click was received but the dialog couldn't
+    // open. Same shape for HDR / Embed / Rename siblings.
     let paths: string[] | null;
     try {
       paths = await pickSubtitleFiles(t);
@@ -373,21 +370,19 @@ export default function TimingShift() {
 
   const handleDroppedPaths = useCallback(
     async (paths: string[]) => {
-      // R17 W17.4 (N-R17-49, sibling parity with FontEmbed.tsx's
-      // W15.6 N-R15-28 bump-at-entry pattern): bump pickGenRef at
-      // function entry, not after the filter. Pre-W17.4 a concurrent
-      // in-flight pick wouldn't observe the generation jump until the
-      // filter completed. Real-world impact is negligible — the
-      // early-return is just log + banner state — but the
-      // bump-at-entry pattern keeps the generation contract uniform
-      // across pick entry points (FontEmbed already does this; this
-      // wave brings TimingShift into line).
+      // Bump pickGenRef at function entry, not after the filter. A
+      // concurrent in-flight pick must observe the generation jump
+      // before the filter completes — otherwise stale results could
+      // still write state after the user moved on. The early-return
+      // here is only log + banner state, but bump-at-entry keeps the
+      // generation contract uniform across pick entry points (mirrors
+      // FontEmbed.handleDroppedPaths).
       const gen = (pickGenRef.current = pickGenRef.current + 1);
       const subtitlePaths = paths.filter((p) => categorize(fileNameFromPath(p)) === "subtitle");
       if (subtitlePaths.length === 0) {
-        // Surface through both the log AND the standard DropErrorBanner
-        // . Users with collapsed log panels see nothing
-        // from log-only — the banner is the always-visible feedback.
+        // Surface through both the log AND the standard DropErrorBanner.
+        // Users with collapsed log panels see nothing from log-only —
+        // the banner is the always-visible feedback.
         const msg = t("msg_no_subtitle_in_drop");
         addLog(msg, "error");
         setDropError(msg);
@@ -428,11 +423,11 @@ export default function TimingShift() {
       // Pre-flight overwrite check — same project-wide pattern as HDR
       // Convert. Template-derived output paths would silently overwrite
       // a previous run otherwise; one ask() before the batch is the
-      // single safety net. Per-file try mirrors HDR Convert's shape
-      // (Round 1 F2.N-R1-27): a single bad path used to fail the entire
-      // batch with no attribution; now resolution failures fall through
-      // to the main loop's per-file error logging and the pre-flight
-      // existence check just skips them.
+      // single safety net. Per-file try mirrors HDR Convert's shape: a
+      // single bad path must not fail the entire batch with no
+      // attribution — resolution failures fall through to the main
+      // loop's per-file error logging and the pre-flight existence
+      // check just skips them.
       const projectedOutputs: string[] = [];
       for (const filePath of paths) {
         try {

@@ -38,10 +38,9 @@ export interface UseFolderDropOptions {
    *  busy processing a previous drop and wants to ignore further drops. */
   disabled?: boolean;
   /** Translator for hook-emitted error wording (truncated drop,
-   *  zero-usable-paths). Round 8 Wave 8.6 — previously the hook's
-   *  error messages were hardcoded English (N-R5-FELIB-11). Optional
-   *  so consumers in non-i18n contexts (tests, future internal
-   *  callers) still work; falls back to English when omitted. */
+   *  zero-usable-paths). Optional so consumers in non-i18n contexts
+   *  (tests, future internal callers) still work; falls back to
+   *  English when omitted. */
   t?: (key: string, ...args: (string | number)[]) => string;
 }
 
@@ -70,7 +69,6 @@ export function useFolderDrop({
   // effect below can keep its closures stable while still reading the
   // latest values. Not a missing-dep bug.
   //
-  // R15 W15.7 + R16 W16.6 (N-R16-18, comment accuracy):
   // DO NOT add a deps array here. The listener-attaching effect at
   // line ~80 reads `*Ref.current` so its closure never sees prop
   // changes directly; this no-deps effect is the bridge that keeps

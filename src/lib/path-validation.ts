@@ -76,7 +76,7 @@ export const WINDOWS_RESERVED_NAMES = new Set([
  * Control range `\x00-\x1f` covers C0; `\x7f-\x9f` covers DEL and C1.
  * Rust-side `char::is_control()` (used by `validate_ipc_path` and
  * `validate_font_family`) rejects all of Cc; matching the same span
- * here keeps TS↔Rust parity (Round 8 A-R8-N4-4 / N4-5).
+ * here keeps TS↔Rust parity.
  *
  * Cross-platform note: `:` is technically valid on macOS / Linux but
  * we reject it everywhere — this app's primary platform is Windows
@@ -160,8 +160,8 @@ export function decomposeInputPath(inputPath: string): InputPathParts {
     throw new Error("Input path must be absolute");
   }
   // ANY backslash → output uses backslashes — but ONLY on Windows.
-  // On POSIX, `\` is a valid filename character (Codex 8850ede7 /
-  // edb0e74f), not a path separator; treating it as one normalizes
+  // On POSIX, `\` is a valid filename character, not a path separator;
+  // treating it as one normalizes
   // `/home/u/ep\01.srt` to `/home/u/ep/01.srt` and replaces output
   // slashes with backslashes, producing `\home\u\ep\01.shifted.srt`
   // which is a relative filename rather than a path under /home/u.
@@ -189,9 +189,9 @@ export function decomposeInputPath(inputPath: string): InputPathParts {
     throw new Error("Input path contains invisible or bidi-control characters");
   }
 
-  // Reject `..` path components (Round 6 Wave 6.2 parity sweep).
+  // Reject `..` path components.
   // The Rust `validate_ipc_path` already rejects parent-directory
-  // segments at IPC entry (Round 5 Wave 5.1 fix), so any path that
+  // segments at IPC entry, so any path that
   // round-trips through the backend is bounded. But the TS engine
   // path consumes `decomposeInputPath` results directly for output-
   // template derivation BEFORE round-tripping — a raw
@@ -200,15 +200,13 @@ export function decomposeInputPath(inputPath: string): InputPathParts {
   // round-trips. Reject at TS entry as defense-in-depth, symmetric
   // with the Rust backstop. Detect `..` as a path COMPONENT, not as
   // a substring — `foo..bar.ass` is a legitimate filename.
-  // absolute-path check runs BEFORE
-  // parent-directory-segment check. Pre-W15.7 the order was
-  // reversed — a non-absolute input containing `..` (e.g., the
-  // string "../foo.ass") threw "Input path contains
-  // parent-directory segments" instead of the more accurate
-  // "Input path must be absolute". The earlier error misattributed
-  // the root cause (caller passed a relative path) by surfacing a
-  // secondary symptom (one of its components happened to be `..`).
-  // Now: callers see "must be absolute" first; absolute paths with
+  // absolute-path check runs BEFORE parent-directory-segment check.
+  // A non-absolute input containing `..` (e.g., the string "../foo.ass")
+  // should throw "Input path must be absolute" rather than the less
+  // accurate "Input path contains parent-directory segments" — the
+  // latter misattributes the root cause (caller passed a relative path)
+  // by surfacing a secondary symptom (one of its components happened to
+  // be `..`). Callers see "must be absolute" first; absolute paths with
   // `..` segments still get caught immediately after.
 
   // Absolute = (a) starts with `/` (POSIX root or UNC after backslash
@@ -256,13 +254,13 @@ export function decomposeInputPath(inputPath: string): InputPathParts {
  * Why two gates, not one:
  * - **Separator normalization** is conditional on `isWindowsRuntime`. On
  *   Windows `/` and `\` are interchangeable separators; on POSIX `\` is
- *   a valid filename character (Codex edb0e74f / 8850ede7). Normalizing
+ *   a valid filename character. Normalizing
  *   `EP\01.ass` to `EP/01.ass` on Linux turns a single file into a path.
  * - **Case folding** is conditional on `isCaseInsensitiveFs`. NTFS (Win)
  *   and APFS / HFS+ (macOS default) are case-insensitive; Linux ext4 /
  *   btrfs / xfs are case-sensitive. Folding case on Linux false-conflates
  *   `Episode.ass` and `episode.ass`, which legitimately are distinct
- *   files there (Codex dd2d9554).
+ *   files there.
  *
  * Use this anywhere two paths need to be compared for "is this the same
  * file" semantics: cross-tab duplicate guard, self-overwrite check,
@@ -303,9 +301,9 @@ export function pathsEqualOnFs(a: string, b: string): boolean {
  *    instead and trims at most one boundary dot — user content's
  *    internal dots stay intact.
  *
- * 3. **Strict on unknown tokens + 32-char identifier cap** (Codex
- *    finding 08c3a51c, post-Round-11). Tokens that match the lexer
- *    but aren't in `vars` THROW instead of substituting to "" — the
+ * 3. **Strict on unknown tokens + 32-char identifier cap.** Tokens
+ *    that match the lexer but aren't in `vars` THROW instead of
+ *    substituting to "" — the
  *    silent-collapse path previously turned typos like `{namE}.hdr.ass`
  *    into a hidden `.hdr.ass` filename. The 32-char identifier cap
  *    aligns the lexer with the chain validator's bound
@@ -316,7 +314,7 @@ export function pathsEqualOnFs(a: string, b: string): boolean {
  *    as literal text and surface at `assertSafeOutputFilename`'s
  *    brace gate.
  *
- * Caller contract for `vars` (R12 N-R12-6): keys MUST match the
+ * Caller contract for `vars`: keys MUST match the
  * lexer's accepted shape `[a-z_][a-z0-9_]{0,31}` — keys containing
  * uppercase letters, hyphens, or other characters are unreachable
  * (the lexer never matches them, so the lookup never fires). Pass
@@ -331,7 +329,8 @@ export function substituteTemplate(template: string, vars: Record<string, string
   const segments: Seg[] = [];
   // Identifier bound {0,31} (32 chars total): real tokens are short
   // (`name`, `ext`, `eotf`, `format`, `video_name`, `lang`); long
-  // unknown identifiers were the Codex 08c3a51c bypass vector.
+  // unknown identifiers were the historical bypass vector for the
+  // chain-validator.
   const tokenRe = /\{([a-z_][a-z0-9_]{0,31})\}/g;
   let cursor = 0;
   let m: RegExpExecArray | null;

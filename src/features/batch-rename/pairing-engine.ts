@@ -73,14 +73,14 @@ const EPISODE_PATTERNS: EpisodePattern[] = [
   // Pattern B — `][NN][` — must run on raw (brackets are the cue).
   // Common in adjacent-bracket fan-sub naming styles.
   //
-  // cap episode digits at 1-3. Pre-R11 the
-  // unbounded `\d+` matched 4-digit year markers like `][2024][` in
-  // names that pack release year between brackets (e.g.
-  // `[Group][2024][Show][01][1080p].mkv` → first match wins → episode
-  // = 2024 instead of 1). Real fan-sub episode counts top out around
-  // 999 (anime/drama almost universally; the rare 1000+ shows
-  // typically use Pattern A's ` - NNNN` form anyway). Reject 4+ digit
-  // forms here and let Pattern A or LCS handle the long-running edge.
+  // Episode digits capped at 1-3. An unbounded `\d+` would match
+  // 4-digit year markers like `][2024][` in names that pack release
+  // year between brackets (e.g. `[Group][2024][Show][01][1080p].mkv`
+  // → first match wins → episode = 2024 instead of 1). Real fan-sub
+  // episode counts top out around 999 (anime/drama almost universally;
+  // the rare 1000+ shows typically use Pattern A's ` - NNNN` form
+  // anyway). Reject 4+ digit forms here and let Pattern A or LCS
+  // handle the long-running edge.
   {
     regex: /\]\s*\[\s*0*(\d{1,3})\s*\]/,
     useRaw: true,
@@ -143,8 +143,7 @@ function chineseNumeralToInt(s: string): number {
     十: 10,
   };
   // single-char `s` (including "十") covered by the map above:
-  // map["十"] === 10, so the previous explicit "十"-check here was
-  // unreachable (Round 1 F4.N-R1-9, deleted).
+  // map["十"] === 10, so an explicit "十"-check here would be unreachable.
   if (s.length === 1) return map[s] ?? 1;
   const tenIdx = s.indexOf("十");
   if (tenIdx === -1) return 1;
@@ -199,7 +198,7 @@ export function extractSeason(rawName: string, cleanedName: string): number {
       // seasons specifically, when the actual intent is just "skip
       // when the regex caught something but build() failed to parse
       // it" (returns NaN). 0 is accepted for shows that genuinely use
-      // "Season 0" / specials (Round 1 F4.N-R1-10).
+      // "Season 0" / specials.
       if (!Number.isNaN(n)) return n;
     }
   }
@@ -351,14 +350,13 @@ export function buildPairings(videos: ParsedFile[], subtitles: ParsedFile[]): Pa
       // ambiguous row to `warning` regardless, yielding yellow badges
       // on rows where no decision was actually made.
       const rowSource = ambiguous && sub ? "warning" : sub ? "regex" : "unmatched";
-      // when the ambiguous-overflow path
-      // resolves to source="unmatched" (3 videos / 2 subs → vs[2]
-      // gets no sub), also flip key to "unmatched" so the row aligns
-      // with the trailing unmatchedVideos loop's key convention.
-      // Pre-R11 these overflow rows carried the real `<season>|<episode>`
-      // key while sourcing as "unmatched" — downstream UI sort grouped
-      // them by episode instead of clustering with the other unmatched
-      // entries at the tail of the list.
+      // When the ambiguous-overflow path resolves to source="unmatched"
+      // (3 videos / 2 subs → vs[2] gets no sub), also flip key to
+      // "unmatched" so the row aligns with the trailing unmatchedVideos
+      // loop's key convention. Otherwise the overflow rows carry the
+      // real `<season>|<episode>` key while sourcing as "unmatched" —
+      // downstream UI sort then groups them by episode instead of
+      // clustering with the other unmatched entries at the tail.
       const rowKey = rowSource === "unmatched" ? "unmatched" : key;
       rows.push({
         id: newId(v),
@@ -386,12 +384,12 @@ export function buildPairings(videos: ParsedFile[], subtitles: ParsedFile[]): Pa
 }
 
 export function compareKeys(a: string, b: string): number {
-  // Called only on matched-video keys (`${season}|${episode}` shape)
-  // — Round 6 Wave 6.5 #20. Unmatched videos take a separate branch
-  // above (`unmatchedVideos.push(v)` + dedicated row at the end) and
-  // never reach this comparator. The `|| 0` floor below is for
-  // truly-malformed key strings (shouldn't happen by construction),
-  // not for the unmatched-row case.
+  // Called only on matched-video keys (`${season}|${episode}` shape).
+  // Unmatched videos take a separate branch above
+  // (`unmatchedVideos.push(v)` + dedicated row at the end) and never
+  // reach this comparator. The `|| 0` floor below is for truly-
+  // malformed key strings (shouldn't happen by construction), not for
+  // the unmatched-row case.
   //
   // `|| 0` floors NaN to 0 so a malformed key (shouldn't happen — keys are
   // always integer pairs constructed by buildPairings) sorts deterministically
@@ -623,11 +621,9 @@ export function assignSubtitleToRow(
  *  for copyFile(src, src) on Windows) and must be filtered out before
  *  the overwrite-confirm dialog so the user doesn't see a spurious
  *  warning. Case folding is delegated to `normalizeOutputKey`, which
- *  is FS-aware (Round 7 Wave 7.6 N3-R7-7 doc fix — earlier text said
- *  "OK on Windows ... acceptable on Linux/macOS" which was inaccurate:
- *  normalizeOutputKey gates lowercasing on `isCaseInsensitiveFs`, so
+ *  is FS-aware: it gates lowercasing on `isCaseInsensitiveFs`, so
  *  Linux ext4 / btrfs / xfs preserves case distinction and `EP01.ass`
- *  vs `ep01.ass` are NOT no-op there). */
+ *  vs `ep01.ass` are NOT no-op there. */
 export function isNoOpRename(subtitlePath: string, outputPath: string): boolean {
   return normalizeOutputKey(subtitlePath) === normalizeOutputKey(outputPath);
 }
