@@ -38,9 +38,9 @@ static CACHE_MUTATION_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 /// constructed — there's no "flag set but guard not yet bound" window
 /// for a panic to leak the flag.
 ///
-/// `pub(crate)` since Round 4 Codex finding 3: `clear_font_sources`
-/// in `fonts.rs` now acquires the guard upfront so its session-DB
-/// clear and persistent-cache clear commit atomically. The earlier
+/// `pub(crate)` because `clear_font_sources` in `fonts.rs` acquires
+/// the guard upfront so its session-DB clear and persistent-cache
+/// clear commit atomically. The earlier
 /// scheme (helper acquires guard internally) silently no-op'd cache
 /// clear when a concurrent rescan held the guard — leaving session-
 /// DB cleared but cache rows behind. Atomic acquire + pass-by-
@@ -155,7 +155,7 @@ static GUI_FONT_CACHE_GENERATION: AtomicU64 = AtomicU64::new(0);
 /// One-shot migration of the legacy GUI font cache file from a prior
 /// Tauri-managed `app_data_dir` (typically the bundle-identifier path
 /// `%APPDATA%/com.koagaroon.ssahdrify/`) to the unified `ssahdrify/`
-/// data dir introduced in Round 11 W11.4b. Best-effort: every failure
+/// data dir introduced in the unified dir migration. Best-effort: every failure
 /// is logged at WARN and the function returns — the worst case is a
 /// stale ~4 KB orphan at the legacy location, and the GUI continues
 /// with a fresh empty cache (no different from a first-run user).
@@ -218,8 +218,8 @@ pub fn migrate_legacy_gui_cache(legacy_dir: &Path, new_dir: &Path) {
         );
         return;
     }
-    // R12 A-R12-1 + R13 A-R13-4: refuse migration if the legacy main
-    // file is a reparse point. The check is positioned immediately
+    // Refuse migration if the legacy main file is a reparse point.
+    // The check is positioned immediately
     // before fs::rename (there is no intermediate validation work in
     // this function between the check and the rename); on Windows
     // fs::rename of a same-volume reparse point moves the link
@@ -267,7 +267,7 @@ pub fn migrate_legacy_gui_cache(legacy_dir: &Path, new_dir: &Path) {
     // Sidecar loop is independently best-effort: each sidecar's
     // rename can succeed or fail on its own, so a partial-failure
     // shape like "main + -journal moved, -wal stuck at legacy" is
-    // possible (R12 N-R12-9 documented). SQLite at the new location
+    // possible. SQLite at the new location
     // recovers from a missing sidecar as a clean-close state, which
     // is correct fallback semantics; the orphan sidecar at the
     // legacy location is invisible to the running app and gets
@@ -349,24 +349,21 @@ pub fn migrate_legacy_gui_cache(legacy_dir: &Path, new_dir: &Path) {
 ///   matches the locked "no auto-migrate" decision: never silently
 ///   delete a cache file the user might want to inspect.
 pub fn init_gui_font_cache(app_data_dir: &Path) -> Result<(), String> {
-    // R14 W14.10 (N-R14-8, P1a-accepted) + R15 W15.3 (N-R15-9, rationale
-    // refresh): `app_data_dir` here is resolved via the caller in
-    // `lib.rs` which passes `font_cache::unified_app_data_dir()` —
-    // chain is `std::env::var("APPDATA")` (Windows) /
-    // `$XDG_DATA_HOME` (POSIX) / `~/Library/Application Support`
-    // (macOS) per the W11.4b unified dir migration; the prior
-    // comment cited `dirs` crate / `SHGetKnownFolderPath` which is
-    // Tauri's `app.path().app_data_dir()` resolution, used at a
-    // different layer (the `$DATA` capability scope variable
-    // resolution; see design doc § fs:scope policy "Resolution
-    // divergence note"). Both chains land inside the user's own
-    // AppData / XDG_DATA_HOME — planting a reparse-point in the
-    // parent walk requires AppData write access. Same P1a class as
-    // R13 A-R13-3 (parent-walk reparse on AppData). Defending here
-    // would mean a parent-walk reparse scan on every startup,
-    // duplicating the FontCache::open_or_create boundary check
-    // W14.2 added — and contradicting the locked single-user-desktop
-    // threat model. Revisit if the project ships in a multi-user /
+    // `app_data_dir` here is resolved via the caller in `lib.rs`
+    // which passes `font_cache::unified_app_data_dir()` — chain is
+    // `std::env::var("APPDATA")` (Windows) / `$XDG_DATA_HOME` (POSIX)
+    // / `~/Library/Application Support` (macOS) per the unified dir
+    // migration; an alternative resolution exists via Tauri's
+    // `app.path().app_data_dir()` (the `$DATA` capability scope
+    // variable resolution; see design doc § fs:scope policy
+    // "Resolution divergence note"), used at a different layer. Both
+    // chains land inside the user's own AppData / XDG_DATA_HOME —
+    // planting a reparse-point in the parent walk requires AppData
+    // write access. Same P1a class as parent-walk reparse on AppData.
+    // Defending here would mean a parent-walk reparse scan on every
+    // startup, duplicating the FontCache::open_or_create boundary
+    // check — and contradicting the locked single-user-desktop threat
+    // model. Revisit if the project ships in a multi-user /
     // MDM-managed deployment.
     std::fs::create_dir_all(app_data_dir).map_err(|e| {
         format!(
@@ -423,7 +420,7 @@ pub fn init_gui_font_cache(app_data_dir: &Path) -> Result<(), String> {
 
 // Re-export so test code can reach it via this module without a
 // crate-path qualifier. The canonical home is `font_cache.rs` so the
-// CLI binary can use the same helper — Round 3 N-R3-15 consolidation.
+// CLI binary can use the same helper.
 use crate::font_cache::try_modified_at;
 
 // Earlier rounds had a `stat_mtime` wrapper here; it was a one-line
@@ -440,8 +437,7 @@ use crate::font_cache::try_modified_at;
 // `try_record_folder_in_gui_cache` and the rescan-apply path here both
 // route through it, and the CLI's `run_refresh_fonts` loop does too.
 // The previous local `entries_to_metadata` duplicated that conversion
-// AND lacked the per-file mtime dedup needed for TTC files
-// (Round 1 A2.N-R1-15 / A2.N-R1-17 / A2.N-R1-18).
+// AND lacked the per-file mtime dedup needed for TTC files.
 
 // ---- IPC types ---------------------------------------------------------
 
@@ -497,9 +493,9 @@ pub struct SkippedFolder {
     /// read errored; cache rows for the folder were evicted as a
     /// fall-through-to-fresh guard. ApplyFailed: SQLite write errored
     /// mid-rescan; the cache row state for this folder is whatever
-    /// the previous successful operation left (Round 3 N-R3-2 — was
-    /// previously a hard Err return that wiped the partial-success
-    /// signal for ALL folders).
+    /// the previous successful operation left — this was previously
+    /// a hard Err return that wiped the partial-success signal for
+    /// ALL folders.
     pub kind: SkipKind,
 }
 
@@ -524,8 +520,7 @@ pub struct RescanResult {
     /// Folders that didn't apply cleanly — both Phase-2 scan failures
     /// (ScanFailed) and Phase-3 apply failures (ApplyFailed). The
     /// frontend keeps the drift modal in a partial-success state when
-    /// this is non-empty so the user knows which folders need attention
-    /// (Codex ccac42fe + Round 3 N-R3-2).
+    /// this is non-empty so the user knows which folders need attention.
     pub skipped: Vec<SkippedFolder>,
 }
 
@@ -556,9 +551,8 @@ pub fn open_font_cache() -> Result<CacheStatus, String> {
     // as schema_mismatch=true.
     //
     // switched to `try_exists()` to distinguish
-    // NotFound from permission-denied. Pre-W6.5 the comment here
-    // recommended this switch (chmod-000 cache misclassifying as "no
-    // file"); the loop is now closed. `try_exists()` returns Err on
+    // NotFound from permission-denied (chmod-000 cache previously
+    // misclassified as "no file"). `try_exists()` returns Err on
     // genuine IO failure (we propagate via `?`) and Ok(false) only on
     // confirmed NotFound. The Ok(true) branch is the same "path
     // present but handle absent → schema mismatch" signal as before.
@@ -586,8 +580,8 @@ pub fn open_font_cache() -> Result<CacheStatus, String> {
 /// schema-mismatch state for the rebuild path.
 ///
 /// Does NOT take `CacheMutationGuard` : this is a
-/// read-only command. R16 W16.2 splits the lock hold so the
-/// per-folder `try_modified_at` syscall loop runs WITHOUT the slot
+/// read-only command. Lock hold is split so the per-folder
+/// `try_modified_at` syscall loop runs WITHOUT the slot
 /// lock held — the per-folder stat can stall for seconds per call on
 /// a slow network share with hundreds of cached folders, and holding
 /// the slot through that loop blocked concurrent `lookup_font_family`
@@ -596,9 +590,8 @@ pub fn open_font_cache() -> Result<CacheStatus, String> {
 /// loop unlocked, re-acquire lock to call `diff_against` (which needs
 /// the cache handle).
 ///
-/// **R16 W16.7 (Codex `66460d37`)**: a parallel `clear_font_cache`
-/// interleaving between Phase 1 and Phase 3 has TWO failure shapes
-/// that must both be handled, not one:
+/// A parallel `clear_font_cache` interleaving between Phase 1 and
+/// Phase 3 has TWO failure shapes that must both be handled, not one:
 ///   1. **slot == None mid-clear** — Phase 3 acquires the lock while
 ///      clear is still between `*slot = None` and `*slot = Some(fresh)`.
 ///      The `None` arm below returns `DriftReport::default()`.
@@ -609,8 +602,8 @@ pub fn open_font_cache() -> Result<CacheStatus, String> {
 ///      snapshot folder into `added`, violating the documented contract
 ///      that GUI drift detection's `added` is always empty.
 ///
-/// Pre-W16.7 the docstring claimed shape (1) was the only failure mode
-/// — wrong. Shape (2) is the more common one because clear is fast
+/// An earlier version of this docstring claimed shape (1) was the only
+/// failure mode — wrong. Shape (2) is the more common one because clear is fast
 /// and Phase 2's stat loop on a slow network share is the long step.
 /// The fix is `GUI_FONT_CACHE_GENERATION`: Phase 1 captures the
 /// generation alongside the folder snapshot under the slot lock,
@@ -775,7 +768,7 @@ pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
     // would let one oversized font pack DoS the user's entire cache
     // refresh. Log WARN with folder context, push to `skipped`, continue.
     // Phase 3's eviction of skipped folders' stale rows closes the
-    // silent-stale-cache shortcut Codex ccac42fe flagged.
+    // silent-stale-cache shortcut.
     let mut scanned: Vec<(String, i64, Vec<FontMetadata>)> =
         Vec::with_capacity(report.modified.len());
     let mut skipped: Vec<SkippedFolder> = Vec::new();
@@ -869,8 +862,8 @@ pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
 /// "N folders refreshed, M failed to write — see list" partial-
 /// success state.
 ///
-/// **Intentional double-surfacing of ScanFailed folders (R15 W15.3
-/// N-R15-14)**: a Phase-1 ScanFailed folder appears in BOTH the
+/// **Intentional double-surfacing of ScanFailed folders**: a
+/// Phase-1 ScanFailed folder appears in BOTH the
 /// returned `skipped[].kind == ScanFailed` list AND the
 /// `removed_evicted` count, because Phase-2 evicts its stale cache
 /// rows via `cache.remove_folder` (incrementing `removed_evicted`)
@@ -941,7 +934,7 @@ fn apply_rescan_to_cache(
         // whose `metadata().is_ok()` but whose `modified()` still fails
         // matches the same "barely visible" state Phase 1 omitted from
         // the snapshot — proceed with eviction so the UI claim and DB
-        // state stay aligned (N-R2-3 / N-R2-14).
+        // state stay aligned.
         if try_modified_at(Path::new(folder)).is_some() {
             log::info!(
                 "Skipping cache eviction for {folder}: folder reappeared between drift detect and apply"
@@ -1010,8 +1003,8 @@ pub fn clear_font_cache() -> Result<(), String> {
         .clone()
         .ok_or_else(|| "Cache path not initialized; setup did not run".to_string())?;
 
-    // Two-lock pattern (W6.7 Round 6): the slot lock is taken,
-    // released, then re-taken — bracketed by the CacheMutationGuard
+    // Two-lock pattern: the slot lock is taken, released, then
+    // re-taken — bracketed by the CacheMutationGuard
     // above. The interleaved drop is intentional so the SQLite file
     // handle is released before `std::fs::remove_file` runs (Windows
     // file locks prevent removing an open file). During the brief
@@ -1033,8 +1026,8 @@ pub fn clear_font_cache() -> Result<(), String> {
     // it's the SQLite-level file handle drop we care about.
     //
     // also clear provenance HERE, inside
-    // the same lock scope that sets slot=None. Pre-R11 the
-    // `clear_cache_provenance()` call sat at the END of this function
+    // the same lock scope that sets slot=None. An earlier version had
+    // the `clear_cache_provenance()` call at the END of this function
     // — after the fresh empty cache had already been published to
     // the slot. Between `*slot = Some(fresh)` and the trailing
     // `clear_cache_provenance()`, subset_font on another thread (which
@@ -1079,27 +1072,26 @@ pub fn clear_font_cache() -> Result<(), String> {
     // set as init_user_font_db so a partially-cleared state from an
     // earlier crash gets fully wiped here.
     //
-    // R12 A-R12-2 / R13 A-R13-15 / R14 W14.10 : two-phase
-    // pre-scan + remove for atomic semantics. Pre-W14.10 the loop
-    // detected reparse and continued — but ALSO continued removing
-    // any subsequent non-reparse sidecars, leaving partial state
-    // (e.g., [main, JOURNAL-reparse, wal, shm] → main + wal + shm
-    // wiped, journal symlink left, Err returned). The Err message
-    // promised atomicity ("none removed and the user sees the
+    // Two-phase pre-scan + remove for atomic semantics. An earlier
+    // version of the loop detected reparse and continued — but ALSO
+    // continued removing any subsequent non-reparse sidecars, leaving
+    // partial state (e.g., [main, JOURNAL-reparse, wal, shm] → main +
+    // wal + shm wiped, journal symlink left, Err returned). The Err
+    // message promised atomicity ("none removed and the user sees the
     // reparse-path message") that the implementation didn't honor.
     // Phase 1 detects ANY reparse upfront; if found, abort with Err
     // before any remove_file. Phase 2 (only if all clean) removes
-    // all four files. R2 N-R2-19: atomicity is bounded to the
-    // reparse-point pre-check (all-or-none on "encountered a
-    // reparse-point sidecar"). Individual `remove_file` failures
-    // mid-Phase-2 (drive eject, permission flip, antivirus lock)
-    // log WARN and continue, leaving the surviving sidecars in
-    // place — pre-W3 the doc claim "either all removed or none"
-    // read broader than the implementation delivered.
+    // all four files. Atomicity is bounded to the reparse-point
+    // pre-check (all-or-none on "encountered a reparse-point
+    // sidecar"). Individual `remove_file` failures mid-Phase-2
+    // (drive eject, permission flip, antivirus lock) log WARN and
+    // continue, leaving the surviving sidecars in place — an earlier
+    // doc claim "either all removed or none" read broader than the
+    // implementation delivered.
     //
-    // **TOCTOU between Phase 1 and Phase 2 (R16 W16.3 A-R16-4,
-    // P1a-accepted)**: between the pre-scan reparse check below and
-    // the per-file remove_file loop, a P1a actor with filesystem
+    // **TOCTOU between Phase 1 and Phase 2 (P1a-accepted)**: between
+    // the pre-scan reparse check below and the per-file remove_file
+    // loop, a P1a actor with filesystem
     // access could plant a symlink at any of the four sidecar paths
     // — the remove_file would then act on the planted link instead
     // of the file we lstat'd. Bounded by P1a (single-user desktop,
@@ -1306,18 +1298,17 @@ pub fn try_remove_folder_from_gui_cache(folder_path: &str) {
 /// whose session-DB provenance had been cleared, and `subset_font`
 /// rejected it with "Font path was not discovered by a scan command."
 ///
-/// CALLER MUST already hold `CacheMutationGuard` (Round 4 Codex
-/// finding 3): `clear_font_sources` clears the session DB AND evicts
-/// the persistent cache as one atomic mutation, so the guard wraps
-/// both steps. Re-acquiring inside this fn would either deadlock
-/// (reentrancy-unsafe CAS) or fail and silently skip the eviction.
+/// CALLER MUST already hold `CacheMutationGuard`: `clear_font_sources`
+/// clears the session DB AND evicts the persistent cache as one
+/// atomic mutation, so the guard wraps both steps. Re-acquiring
+/// inside this fn would either deadlock (reentrancy-unsafe CAS) or
+/// fail and silently skip the eviction.
 ///
 /// (A prior `try_clear_all_folders_in_gui_cache` wrapper that
-/// acquired the guard itself was removed in Wave 5.3b N-R5-RUSTGUI-02
-/// — every caller already held the guard for atomic-mutation reasons,
-/// the wrapper was dead.)
+/// acquired the guard itself was removed — every caller already held
+/// the guard for atomic-mutation reasons, the wrapper was dead.)
 ///
-/// Mutation-guard + slot-lock interaction (Round 3 N-R3-3 / A-R3-1):
+/// Mutation-guard + slot-lock interaction:
 /// - The `&CacheMutationGuard` arg proves the caller blocked /
 ///   blocks `rescan_font_cache_drift`. Without it, a clear landing
 ///   between rescan's Phase 2 (long scan outside slot lock) and
@@ -1326,9 +1317,9 @@ pub fn try_remove_folder_from_gui_cache(folder_path: &str) {
 ///   state: cache holds rows whose session-DB provenance was just
 ///   cleared, UI claim and DB state disagree.
 /// - `try_lock` on the SLOT mutex stays — that protects against
-///   handle drop in the clear_font_cache recovery path. R17 W17.6
-///   : in practice `try_lock` here is guaranteed-success
-///   because `CacheMutationGuard` (held by every caller per the
+///   handle drop in the clear_font_cache recovery path. In practice
+///   `try_lock` here is guaranteed-success because
+///   `CacheMutationGuard` (held by every caller per the
 ///   contract above) already serializes against `rescan_font_cache_drift`
 ///   and `clear_font_cache` — the only paths that hold the slot
 ///   lock for any meaningful duration. The `WouldBlock` arm exists
@@ -1349,9 +1340,9 @@ pub(crate) fn clear_all_folders_in_gui_cache_locked(_guard: &CacheMutationGuard)
     // rationale. The Busy arm logs WARN here (NOT debug like the
     // best-effort sibling helpers) because `CacheMutationGuard` is
     // supposed to have already serialized this against
-    // `rescan_font_cache_drift` / `clear_font_cache` — see R17 W17.6
-    // : the only paths that hold the slot lock for any
-    // meaningful duration. WouldBlock therefore signals a guard-
+    // `rescan_font_cache_drift` / `clear_font_cache` — the only paths
+    // that hold the slot lock for any meaningful duration.
+    // WouldBlock therefore signals a guard-
     // discipline regression worth surfacing, not normal contention.
     match with_cache_slot(|cache| {
         let folders = cache.list_folders()?;
@@ -1410,8 +1401,8 @@ pub fn lookup_font_family(
     let result = cache
         .lookup_family(&family, bold, italic)
         .map_err(|e| format!("lookup_family: {e}"))?;
-    // Round 6 Wave 6.3 D1: register the cache hit in the in-process
-    // provenance set so `subset_font`'s gate accepts the returned
+    // Register the cache hit in the in-process provenance set so
+    // `subset_font`'s gate accepts the returned
     // path. Without this, the GUI's lookup tier 2 (embed-time cache
     // hit) goes through the IPC roundtrip and then trips the gate
     // as "Font path was not discovered by a scan command". See
@@ -1530,7 +1521,7 @@ mod tests {
 
     #[test]
     fn apply_rescan_evicts_skipped_folder_rows() {
-        // Codex ccac42fe regression: a Phase-2 scan failure must drop
+        // Regression pin: a Phase-2 scan failure must drop
         // the stale rows so later lookup_font_family can't short-circuit
         // through them. Without this fix, `skipped` was silent and the
         // command returned Ok; the rows lingered for the rest of the
@@ -1649,9 +1640,9 @@ mod tests {
 
     #[test]
     fn apply_rescan_evicts_removed_that_no_longer_resolves() {
-        // Pinning the N-R2-3 fix: a folder that doesn't pass the same
-        // stat bar Phase 1 used (no real mtime now) must still be
-        // evicted — Phase 3 must NOT short-circuit to "reappeared".
+        // A folder that doesn't pass the same stat bar Phase 1 used
+        // (no real mtime now) must still be evicted — Phase 3 must
+        // NOT short-circuit to "reappeared".
         let (_guard, mut cache) = temp_cache("removed_actually_gone");
         let bogus = "/bogus/definitely-not-a-real-folder/round-2";
         cache.replace_folder(bogus, 100, &[]).unwrap();
@@ -1669,17 +1660,15 @@ mod tests {
 
     #[test]
     fn apply_rescan_preserves_pre_existing_failed_entry_alongside_success() {
-        // Round 3 N-R3-2 partial coverage: the Phase-3 ApplyFailed
-        // push path (Err arm of `cache.replace_folder` /
-        // `remove_folder`) requires real SQLite-write injection to
-        // exercise and is not covered by this test. What we DO pin
-        // here: a pre-existing `SkippedFolder { kind: ApplyFailed }`
-        // in the input vec survives alongside successful operations —
-        // i.e., the helper doesn't accidentally wipe or rewrite the
-        // input vec. Real mid-loop failure coverage deferred until
-        // the repo gains a FontCache fault-injection seam (Round 4
-        // N-R4-05 — original title "continues_after_per_folder_failure"
-        // over-promised).
+        // Partial coverage: the Phase-3 ApplyFailed push path (Err arm
+        // of `cache.replace_folder` / `remove_folder`) requires real
+        // SQLite-write injection to exercise and is not covered by
+        // this test. What we DO pin here: a pre-existing
+        // `SkippedFolder { kind: ApplyFailed }` in the input vec
+        // survives alongside successful operations — i.e., the helper
+        // doesn't accidentally wipe or rewrite the input vec. Real
+        // mid-loop failure coverage is not yet done — it needs the
+        // repo to gain a FontCache fault-injection seam.
         let (_guard, mut cache) = temp_cache("preserves_pre_existing_apply_failed");
         cache.replace_folder("/folder/x", 100, &[]).unwrap();
 
@@ -1699,7 +1688,7 @@ mod tests {
         );
     }
 
-    // ── Round 11 W11.4b : migrate_legacy_gui_cache ──
+    // ── migrate_legacy_gui_cache ──
 
     fn make_legacy_pair(name: &str) -> (TempCacheDir, TempCacheDir) {
         // Two disjoint tempdirs simulate the legacy (Tauri-given) and
@@ -1778,12 +1767,12 @@ mod tests {
         assert!(main.exists(), "self-rename must not destroy the file");
     }
 
-    // ── R16 W16.7 : finalize_drift generation check ──
+    // ── finalize_drift generation check ──
 
     #[test]
     fn finalize_drift_returns_default_when_generation_changed() {
-        // Pins the W16.7 fix: simulates `detect_font_cache_drift`
-        // Phase 1 capturing the cached folders + generation, then
+        // Simulates `detect_font_cache_drift` Phase 1 capturing the
+        // cached folders + generation, then
         // `clear_font_cache` republishing a fresh empty cache (which
         // bumps the generation), then Phase 3 calling finalize_drift
         // with a cache reference that no longer matches the snapshot.

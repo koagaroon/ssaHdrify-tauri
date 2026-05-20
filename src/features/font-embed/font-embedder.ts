@@ -255,8 +255,8 @@ export async function analyzeFonts(
       systemFontCache?.set(key, resolution);
       infos.push({ ...base, ...resolution });
     } catch (e) {
-      // Round 8 N2 — sanitizeError so a BiDi/zero-width char carried
-      // by a Rust IPC error message can't surface in the UI through
+      // sanitizeError so a BiDi/zero-width char carried by a Rust IPC
+      // error message can't surface in the UI through
       // `SystemFontResolution.error` (which the detection grid renders).
       const reason = sanitizeError(e);
       if (isDev) {
@@ -289,8 +289,8 @@ export async function analyzeFonts(
  * surrogate halves independently — two fonts that differ only in the
  * astral half could otherwise collide.
  */
-// FNV-1a-INSPIRED, not FNV-1a (Round 1 F1.N-R1-5): standard FNV-1a runs
-// on a byte stream, typically the UTF-8 encoding of the input. This
+// FNV-1a-INSPIRED, not FNV-1a: standard FNV-1a runs on a byte stream,
+// typically the UTF-8 encoding of the input. This
 // variant iterates over Unicode codepoints and mixes each one as three
 // 8-bit chunks (low / mid / high) — a stable, deterministic hash with
 // the same shape but distinct outputs from a textbook FNV-1a on the
@@ -430,13 +430,12 @@ export function deriveEmbeddedPath(inputPath: string): string {
   const parts = decomposeInputPath(inputPath);
   const { dir, normalized, usedBackslash } = parts;
   let { baseName } = parts;
-  // R17 W17.4 (N-R17-45, sibling parity with deriveShiftedPath +
-  // resolveOutputPath's `.hdr` strip): strip a prior `.embedded`
-  // infix so re-embedding `EP01.embedded.ass` yields
-  // `EP01.embedded.ass` (idempotent) rather than the cumulative
-  // `EP01.embedded.embedded.ass`. Pre-W17.4 a user re-running embed
-  // on already-embedded output would see the cumulative form on disk
-  // — surprising once noticed.
+  // Sibling parity with deriveShiftedPath + resolveOutputPath's `.hdr`
+  // strip: strip a prior `.embedded` infix so re-embedding
+  // `EP01.embedded.ass` yields `EP01.embedded.ass` (idempotent) rather
+  // than the cumulative `EP01.embedded.embedded.ass`. Without this, a
+  // user re-running embed on already-embedded output would see the
+  // cumulative form on disk — surprising once noticed.
   if (baseName.toLowerCase().endsWith(".embedded")) {
     baseName = baseName.slice(0, -".embedded".length);
   }
@@ -467,7 +466,7 @@ export function deriveEmbeddedPath(inputPath: string): string {
 // honest workflows produce unions in the low tens of thousands even
 // on full-CJK subtitle batches.
 //
-// R1 N-R1-9 / R8 W2 N-R8-7: three values must stay in lockstep —
+// Three values must stay in lockstep —
 //   1. `app_lib::fonts::MAX_SUBSET_CODEPOINTS` (the IPC cap)
 //   2. `MAX_SUBSET_CODEPOINTS_FOR_DEDUP` in CLI `bin/cli/main.rs`
 //   3. this constant (the GUI dedup cap)
@@ -581,29 +580,25 @@ export async function embedFonts(
       // Selected FontInfo has no matching FontUsage — means analyzeFonts and
       // the current fontUsages array disagree, which should be impossible if
       // both came from the same ASS parse. Surface the drift through
-      // onProgress (Round 1 F3.N-R1-19) so the user sees in the log
-      // panel that a selected font silently won't embed — the previous
-      // `console.warn`-only path left the user with no feedback. Reuses
-      // the existing `msg_font_skipped` i18n key for consistency with
-      // the subsetting-failure path below.
-      // (Reuses `label` from the outer scope; N-R5-FECHAIN-02 removed
-      // a redundant inner re-declaration.)
-      // R16 W16.5 (N-R16-30, Pattern 1 sibling completion after R10
-      // N-R10-027 fixed line 547's subset-failure sibling): `label`
-      // is `fontKeyLabel(info.key)` where info.key.family flows from
-      // V8-parsed ASS `\fn` (P1b attacker-influenced). The subset-
-      // failure site below already scrubs; this no-usage-entry sibling
-      // stayed raw. Cheap stripUnicodeControls wrap mirrors line 547's
-      // sanitizeError(...) posture for the same Pattern 1 single-
-      // source-completion reason.
+      // onProgress so the user sees in the log panel that a selected font
+      // silently won't embed — the previous `console.warn`-only path left
+      // the user with no feedback. Reuses the existing `msg_font_skipped`
+      // i18n key for consistency with the subsetting-failure path below.
+      // (Reuses `label` from the outer scope.)
+      // Pattern 1 sibling completion: `label` is `fontKeyLabel(info.key)`
+      // where info.key.family flows from V8-parsed ASS `\fn` (P1b
+      // attacker-influenced). The subset-failure site below already
+      // scrubs; this no-usage-entry sibling stayed raw. Cheap
+      // stripUnicodeControls wrap mirrors the subset-failure
+      // sanitizeError(...) posture for the same Pattern 1
+      // single-source-completion reason.
       console.warn(`[ssaHdrify] embedFonts: no usage entry for ${stripUnicodeControls(label)}`);
-      // (Pattern 1 sibling parity): wrap
-      // info.key.family in stripUnicodeControls for the t?.() args +
-      // English fallback, mirroring the subset-failure sibling at
-      // line ~569 below. Upstream `sanitizeFamily` already strips
-      // controls so the surface is closed today; the wrap keeps every
-      // sibling output consistent if upstream sanitization ever
-      // loosens (defense-in-depth, per R16 W16.5 N-R16-26 reasoning).
+      // Pattern 1 sibling parity: wrap info.key.family in
+      // stripUnicodeControls for the t?.() args + English fallback,
+      // mirroring the subset-failure sibling below. Upstream
+      // `sanitizeFamily` already strips controls so the surface is
+      // closed today; the wrap keeps every sibling output consistent
+      // if upstream sanitization ever loosens (defense-in-depth).
       const familyDisplay = stripUnicodeControls(info.key.family);
       onProgress?.({
         stage:
@@ -658,15 +653,15 @@ export async function embedFonts(
     // happy-path payload; if it overflows the cap, we throw it
     // away and subset each alias separately.
     //
-    // R1 N-R1-8 (Pattern 2 — bound the iteration cost): early-exit
-    // the merge loop on the iteration where the union FIRST exceeds
-    // the cap. The size check fires AFTER add(), so the Set holds
+    // Pattern 2 — bound the iteration cost: early-exit the merge loop
+    // on the iteration where the union FIRST exceeds the cap. The size
+    // check fires AFTER add(), so the Set holds
     // `MAX_SUBSET_CODEPOINTS_FOR_DEDUP + 1` (200,001) entries at the
-    // break point — see R2 N-R2-18 for the precise inclusive bound.
-    // Upstream caps (`MAX_TOTAL_CODEPOINTS` 1M, `MAX_FONT_VARIANTS`
-    // 500) bound the iteration TRANSITIVELY, but locally the loop
-    // reads as unbounded; this caps worst-case work at 200,001 Set
-    // inserts instead of the transitive 1M-codepoint walk.
+    // break point. Upstream caps (`MAX_TOTAL_CODEPOINTS` 1M,
+    // `MAX_FONT_VARIANTS` 500) bound the iteration TRANSITIVELY, but
+    // locally the loop reads as unbounded; this caps worst-case work
+    // at 200,001 Set inserts instead of the transitive 1M-codepoint
+    // walk.
     const mergedCodepoints = new Set<number>();
     let capExceeded = false;
     outer: for (const alias of aliases) {
@@ -692,8 +687,8 @@ export async function embedFonts(
       // per-glyph fallback can traverse the N entries to find any
       // requested glyph.
       //
-      // R1 N-R1-13 (overlap trade-off, not a bug): real-world
-      // cap-busts usually involve aliases whose codepoint sets
+      // Overlap trade-off, not a bug: real-world cap-busts usually
+      // involve aliases whose codepoint sets
       // overlap (e.g., two CJK aliases both covering the same
       // ideograph range). The fallback subsets each alias with
       // its OWN codepoints, so overlapping codepoints get embedded
@@ -759,40 +754,37 @@ export async function embedFonts(
       );
       if (isCancelled?.()) return null;
     } catch (subsetErr) {
-      // Round 9 N-R9-N2-1 — sanitizeError (Pattern 1 callsite census
-      // closure from Wave 8.1, which missed this site). The Rust
-      // subset_font error string can interpolate font-file paths
-      // (P1b — fan-sub font packs are attacker-influenced content).
-      // The error flows into progress.stage which the log panel
-      // renders directly; without scrubbing, a font with a BiDi-
-      // bearing name or path can visually reverse adjacent text in
-      // the log line. Round 6 Wave 6.2 originally added the
-      // sanitizeForDialog wrap here; sanitizeError combines message-
-      // extraction (drops the "Error: " prefix String(e) prepends)
-      // with the same scrub, keeping every catch arm uniform.
+      // sanitizeError (Pattern 1 callsite census). The Rust subset_font
+      // error string can interpolate font-file paths (P1b — fan-sub
+      // font packs are attacker-influenced content). The error flows
+      // into progress.stage which the log panel renders directly;
+      // without scrubbing, a font with a BiDi-bearing name or path can
+      // visually reverse adjacent text in the log line. sanitizeError
+      // combines message-extraction (drops the "Error: " prefix
+      // String(e) prepends) with the same scrub, keeping every catch
+      // arm uniform.
       const safeErr = sanitizeError(subsetErr);
-      // Round 10 N-R10-027 — dev-console warn must scrub too. Pre-R10
-      // this site interpolated raw `subsetErr` on the line immediately
-      // above the sanitized onProgress dispatch — the comment block
-      // motivating the scrub argued exactly the BiDi disclosure
-      // surface the dev-console line then re-introduced. WebView2's
-      // dev-tools surface is opt-in in production, so blast radius is
-      // small, but Pattern 1 single-source completion requires every
-      // sibling output to use the same helper.
-      // (Pattern 1 defense-in-depth):
-      // `usage.key.family` is upstream-sanitized at
-      // font-collector.ts::sanitizeFamily so the BiDi/control surface
-      // is closed today. But the comment block at lines 539-546
-      // motivates "every sibling output uses the same helper" — that
-      // discipline argument applies here too. Cheap defensive wrap
-      // keeps the pattern consistent if upstream sanitizeFamily ever
-      // loosens.
+      // Dev-console warn must scrub too. Without scrubbing, this site
+      // interpolates raw `subsetErr` on the line immediately above the
+      // sanitized onProgress dispatch — re-introducing exactly the
+      // BiDi disclosure surface the comment block motivating the scrub
+      // argues against. WebView2's dev-tools surface is opt-in in
+      // production, so blast radius is small, but Pattern 1
+      // single-source completion requires every sibling output to use
+      // the same helper.
+      // Pattern 1 defense-in-depth: `usage.key.family` is
+      // upstream-sanitized at font-collector.ts::sanitizeFamily so the
+      // BiDi/control surface is closed today. But the comment block
+      // above motivates "every sibling output uses the same helper" —
+      // that discipline argument applies here too. Cheap defensive
+      // wrap keeps the pattern consistent if upstream sanitizeFamily
+      // ever loosens.
       console.warn(
         `Font subsetting failed for ${stripUnicodeControls(template.key.family)}, skipping: ${safeErr}`
       );
-      // (Pattern 1 sibling parity): wrap
-      // template.key.family for t?.() args + English fallback; same
-      // sibling-parity reasoning as the no-usage-entry path above.
+      // Pattern 1 sibling parity: wrap template.key.family for t?.()
+      // args + English fallback; same sibling-parity reasoning as the
+      // no-usage-entry path above.
       const familyDisplay = stripUnicodeControls(template.key.family);
       onProgress?.({
         stage:
@@ -846,16 +838,15 @@ export async function embedFonts(
   };
 }
 
-/// R15 W15.7 (N-R15-29 + A-R15-1) + R16 W16.1 : shared
-/// shape + paired size/line guard reused by `embedFonts` upfront AND
-/// `insertFontsSection` at its boundary. Direct callers of
+/// Shared shape + paired size/line guard reused by `embedFonts`
+/// upfront AND `insertFontsSection` at its boundary. Direct callers of
 /// `insertFontsSection` (`cli-engine-entry.ts::applyFontEmbed`)
 /// bypass `processAssContent`'s upstream byte+line paired guard —
 /// without a helper-layer backstop, hostile content reaching this
 /// surface hits unbounded `split(/\r?\n/)` allocation.
 ///
-/// W16.1 adds the line-count probe (paired Pattern 2 fix). Pre-W16.1
-/// the byte cap stood alone: a 50 MB pure-newline blob passes the
+/// The line-count probe is the paired Pattern 2 fix. Without it, the
+/// byte cap would stand alone: a 50 MB pure-newline blob passes the
 /// 100 MB byte gate but then `.split(/\r?\n/)` at line ~660 below
 /// allocates ~50M empty strings (~2 GB V8 heap) BEFORE any downstream
 /// throw can fire. Mirrors ass-processor.ts:282-306's paired cap;
@@ -867,9 +858,9 @@ const INSERT_FONTS_SECTION_HEADER_BUDGET = 1024;
 const MAX_INSERT_LINES = MAX_PARSED_ENTRIES + INSERT_FONTS_SECTION_HEADER_BUDGET;
 const LINE_PROBE_BYTE_GATE = 1_000_000;
 
-// module-scope to match the project convention swept by
-// R17 W17.4 (N-R17-53/55 — SRT_COLOR_*_RE / WHITESPACE_RE). Anchored at
-// column 0 and trailing whitespace restricted to ASCII space/tab only —
+// Module-scope to match the project convention (sibling
+// SRT_COLOR_*_RE / WHITESPACE_RE). Anchored at column 0 and trailing
+// whitespace restricted to ASCII space/tab only —
 // plain `\s*` would also match U+2028 / U+2029, letting a crafted ASS
 // with `[FONTS]\u2028` on one line still match the header regex. This
 // closes the false-positive hole that `.trim().toLowerCase()` left
@@ -880,8 +871,8 @@ export function assertAssShape(content: string): void {
   if (content.length > MAX_INSERT_FONTS_SECTION_CONTENT) {
     throw new Error(`File too large: ${(content.length / 1_000_000).toFixed(1)} MB (max 100 MB)`);
   }
-  // Pre-split line-count probe (R16 W16.1 A-R16-10, mirror of
-  // ass-processor.ts:286-306). Gated on content.length to keep the
+  // Pre-split line-count probe (mirror of ass-processor.ts:286-306).
+  // Gated on content.length to keep the
   // small-file fast path zero-overhead. The 1 MB gate is well above
   // realistic small subtitles (5-200 KB) and well below the attack
   // threshold (tens of MB).
@@ -910,18 +901,15 @@ export function assertAssShape(content: string): void {
  * If [Fonts] already exists, replace it.
  */
 export function insertFontsSection(content: string, fontsSection: string): string {
-  // Round 10 A-R10-011 + R15 W15.7 : defense-in-depth at
-  // the helper boundary. `processAssContent`'s 100 MB byte guard
-  // upstream covers the standalone HDR + chain paths, but
-  // `cli-engine-entry.ts::applyFontEmbed` (standalone embed CLI
-  // flow) calls `insertFontsSection` directly on caller-supplied
+  // Defense-in-depth at the helper boundary. `processAssContent`'s
+  // 100 MB byte guard upstream covers the standalone HDR + chain
+  // paths, but `cli-engine-entry.ts::applyFontEmbed` (standalone embed
+  // CLI flow) calls `insertFontsSection` directly on caller-supplied
   // content — without a per-callsite cap or this helper-layer
   // backstop, a hostile pack with a multi-hundred-MB ASS hits
-  // unbounded `split(/\r?\n/)` allocation here. The shape check
-  // ([Script Info] header) is the original R10 A-R10-011 defense;
-  // the size cap is the W15.7 addition. Routed through the shared
-  // `assertAssShape` helper so embedFonts (zero-font early-return,
-  // N-R15-29) and direct callers run the same gate.
+  // unbounded `split(/\r?\n/)` allocation here. Routed through the
+  // shared `assertAssShape` helper so embedFonts (zero-font
+  // early-return) and direct callers run the same gate.
   assertAssShape(content);
   const lineEnding = content.includes("\r\n") ? "\r\n" : "\n";
   // Normalize Unicode line separators (U+2028 LINE SEPARATOR,

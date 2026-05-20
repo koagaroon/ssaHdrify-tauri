@@ -16,7 +16,7 @@ mod engine;
 const MAX_SHIFT_OFFSET_MS: i64 = 365 * 24 * 60 * 60 * 1000;
 const CLI_FONT_DB_DIR_PREFIX: &str = "ssahdrify-cli-font-db";
 
-/// (+ A-R17-18): chain-level cumulative cap on
+/// Chain-level cumulative cap on
 /// the aggregate raw font-subset bytes that flow into the per-input
 /// JSON payload handed to V8. Per-font cap is `MAX_FONT_DATA_SIZE`
 /// (50 MB, in `app_lib::fonts`); the gap was the cumulative case —
@@ -431,7 +431,7 @@ impl HdrArgs {
 
 impl ShiftArgs {
     /// Serialize this step into the chain runtime's `{ kind, params }`
-    /// JSON shape. R17 W17.2 : infallible. The `--offset` /
+    /// JSON shape. Infallible: the `--offset` /
     /// `--after` strings are validated by `chain::parse_chain_argv`
     /// right after `parse_one_step` succeeds — any parse error
     /// surfaces at chain-parse time. The `.expect()` calls below
@@ -685,8 +685,8 @@ fn run() -> Result<ExitCode, String> {
     //
     // refuse non-UTF-8 paths via `to_str()`
     // rather than passing `to_string_lossy()` through the validator.
-    // Pre-W17.3 a path with non-UTF-8 / WTF-16-surrogate bytes
-    // lossy-substituted into U+FFFD for the validate call, then
+    // A path with non-UTF-8 / WTF-16-surrogate bytes would otherwise
+    // lossy-substitute into U+FFFD for the validate call, then
     // `FontCache::open_or_create` (downstream) opened the PathBuf
     // with the ORIGINAL byte sequence — different bytes than what
     // validate_ipc_path checked. Refusing upfront keeps the
@@ -754,7 +754,7 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
     if !globals.quiet {
         // refresh-fonts stderr now flows through
         // `localize()` for the en/zh switch, matching every other CLI
-        // subcommand. Pre-W17.3 refresh-fonts was English-only — a
+        // subcommand. Previously refresh-fonts was English-only — a
         // Chinese-locale user saw localized status lines from
         // hdr / shift / embed / rename / chain but English from this
         // subcommand. Cache file path interpolation stays sanitized via
@@ -769,10 +769,10 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
             )
         );
         for dir in &args.font_dirs {
-            // R14 W14.8 sibling: sanitize the per-source-root header
-            // print (argv is now validate_ipc_path-clean above, but
-            // double-sanitize on already-clean strings is a no-op and
-            // matches every other refresh-fonts print site).
+            // Sanitize the per-source-root header print (argv is now
+            // validate_ipc_path-clean above, but double-sanitize on
+            // already-clean strings is a no-op and matches every other
+            // refresh-fonts print site).
             let dir_disp = sanitize_for_display(&dir.to_string_lossy());
             eprintln!("    {dir_disp}");
         }
@@ -818,18 +818,14 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
         // with the user-visible consequence (folder skipped, not "stat
         // failed at line N") per vibe-coding no-silent-action.
         //
-        // Routed through `font_cache::try_modified_at` (Round 6 Wave
-        // 6.3 #14 consolidation) — the helper was promoted to pub fn
-        // in Round 3 Wave 3.3 for exactly this kind of cross-binary
-        // reuse, and the inline duplicate would drift over time.
+        // Routed through `font_cache::try_modified_at` — the helper is
+        // pub fn for exactly this kind of cross-binary reuse, and an
+        // inline duplicate would drift over time.
         let folder_mtime = match app_lib::font_cache::try_modified_at(&canonical) {
             Some(m) => m,
             None => {
                 if !globals.quiet {
-                    // sanitize before stderr interpolation
-                    // (Pattern 1 callsite completion to W14.1 — this
-                    // refresh-fonts print site was missed in the
-                    // initial sweep). R17 W17.3 : localize.
+                    // Sanitize before stderr interpolation, then localize.
                     let folder_disp = sanitize_for_display(&folder_path_str);
                     eprintln!(
                         "{}",
@@ -857,12 +853,10 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
             Ok(e) => e,
             Err(err) => {
                 if !globals.quiet {
-                    // R14 W14.8 (N-R14-3 + A-R14-1, Pattern 1 follow-on
-                    // to W14.4 F1): refresh-fonts print sites also need
-                    // sanitize at the boundary. `folder_path_str` is
-                    // display_path output (operational); print sites
-                    // wrap with sanitize_for_display.
-                    // localize.
+                    // Refresh-fonts print sites also need sanitize at
+                    // the boundary. `folder_path_str` is display_path
+                    // output (operational); print sites wrap with
+                    // sanitize_for_display, then localize.
                     let folder_disp = sanitize_for_display(&folder_path_str);
                     let err_disp = sanitize_for_display(&err);
                     eprintln!(
@@ -890,9 +884,8 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
             .map_err(|e| format!("writing cache for {}: {e}", folder_path_str))?;
 
         if !globals.quiet {
-            // sanitize_for_display on the success
-            // line too — same Pattern 1 callsite as the error path
-            // above. R17 W17.3 : localize.
+            // sanitize_for_display on the success line too — same
+            // callsite shape as the error path above, then localize.
             let folder_disp = sanitize_for_display(&folder_path_str);
             eprintln!(
                 "{}",
@@ -926,9 +919,9 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
                 ),
             )
         );
-        // (+ A-R14-8): cache_path.display() also
-        // sanitized — `cache_path` comes from globals.cache_file (argv
-        // P1b) or default_cli_cache_path (env-var-resolved).
+        // cache_path.display() is also sanitized — `cache_path` comes
+        // from globals.cache_file (argv P1b) or default_cli_cache_path
+        // (env-var-resolved).
         let cache_disp = sanitize_for_display(&cache_path.display().to_string());
         eprintln!(
             "{}",
@@ -957,14 +950,13 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
     // posture: --quiet suppresses informational diagnostics, errors
     // still surface elsewhere.
     //
-    // route through `emit_chain_warnings` for
-    // parity with per-input chain warnings (`⚠` glyph + localize
-    // English/Chinese). Pre-W17.2 this was the only chain print site
-    // that bypassed the helper — Chinese-locale users saw the
-    // surrounding status / file lines localized but plan-level
-    // warnings in raw English. `collect_suspicious_orderings`'s
-    // constructed strings drop their `warning: ` prefix in tandem so
-    // the helper's localized prefix doesn't double up.
+    // Route through `emit_chain_warnings` for parity with per-input
+    // chain warnings (`⚠` glyph + localize English/Chinese). Bypassing
+    // the helper here would leave plan-level warnings in raw English
+    // while the surrounding status / file lines stay localized.
+    // `collect_suspicious_orderings`'s constructed strings drop their
+    // `warning: ` prefix in tandem so the helper's localized prefix
+    // doesn't double up.
     if !globals.quiet {
         emit_chain_warnings(globals, &plan.warnings);
     }
@@ -1094,9 +1086,9 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
     // transitive bound that run_hdr / run_shift / run_embed rely on,
     // so no chain-local cap is added.
     let mut seen_outputs: HashSet<String> = HashSet::new();
-    // R1 N-R1-14 (cosmetic): named `chain_aborted` instead of the
-    // CommandReport field name `aborted_by_fail_fast` so the chain-local
-    // flag and the per-CommandReport struct field don't collide on grep.
+    // Named `chain_aborted` instead of the CommandReport field name
+    // `aborted_by_fail_fast` so the chain-local flag and the per-
+    // CommandReport struct field don't collide on grep.
     // Chain has no CommandReport (its summary path is bespoke); the two
     // never appear in the same scope but reusing the identifier made
     // "where does this flag flow" harder to answer at a glance.
@@ -1113,7 +1105,6 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
         ) {
             ChainFileOutcome::Written(out, warnings) => {
                 if !globals.quiet {
-                    // (Pattern 1 sweep):
                     // `input` / `out` are raw PathBufs from clap
                     // argv + Rust shell output resolution. Sanitize
                     // before terminal interpolation.
@@ -1156,12 +1147,9 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
         }
     }
     if !globals.quiet {
-        // chain Summary line + fail-fast suffix go through
-        // `localize`. Pre-R1 only the per-file ✓/⊘/✗ lines and the
-        // standalone subcommands' `emit_report_summary` were localized;
-        // chain's summary stayed English regardless of `--lang zh` /
-        // detected zh locale. Sibling-parity with R17 W17.3's
-        // refresh-fonts sweep.
+        // chain Summary line + fail-fast suffix go through `localize`,
+        // for sibling-parity with the refresh-fonts sweep and the
+        // standalone subcommands' `emit_report_summary`.
         let summary = if chain_aborted {
             localize(
                 globals,
@@ -1184,11 +1172,10 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
     // partial-failure (1) vs complete-failure
     // (2) exit-code split, matching `CommandReport::exit_code`'s
     // semantics for HDR / Shift / Embed / Rename per the design doc
-    // § Cross-cutting 行为 § Exit codes. Pre-W17.2 chain returned 1
-    // for any failure regardless of whether some inputs succeeded —
-    // CI / pipeline scripts couldn't distinguish "everything failed"
-    // (likely config / argv mistake) from "some files failed" (likely
-    // per-file content issue).
+    // § Cross-cutting 行为 § Exit codes. A flat exit code 1 for any
+    // failure would prevent CI / pipeline scripts from distinguishing
+    // "everything failed" (likely config / argv mistake) from "some
+    // files failed" (likely per-file content issue).
     let exit_code = if failed == 0 {
         ExitCode::SUCCESS
     } else if (written + skipped) > 0 {
@@ -1205,16 +1192,14 @@ enum ChainFileOutcome {
     /// (missing fonts, subset failures) so chain output matches
     /// standalone embed's `FileReport.warnings` semantics.
     Written(PathBuf, Vec<String>),
-    /// R14 W14.5 (continuation of W14.4's `format_oversized_skipped_warning`
-    /// refactor): Skipped / Failed also carry warnings so post-V8
-    /// early-return paths don't silently lose embed pre-resolution +
-    /// oversized-skipped diagnostics. Pre-W14.5 these arms held no
-    /// warnings field; a chain whose V8 step skipped oversized captions
-    /// AND then took the post-V8 `output_path.exists()` Skipped branch
-    /// (or any post-V8 Failed branch) emitted only the status line, the
-    /// `⚠ ...` warnings dropped. Empty vec at sites that fire before
-    /// warnings accumulate is intentional — uniform call shape, costless
-    /// move.
+    /// Skipped / Failed also carry warnings so post-V8 early-return
+    /// paths don't silently lose embed pre-resolution + oversized-
+    /// skipped diagnostics. Without the warnings field, a chain whose
+    /// V8 step skipped oversized captions AND then took the post-V8
+    /// `output_path.exists()` Skipped branch (or any post-V8 Failed
+    /// branch) would emit only the status line, the `⚠ ...` warnings
+    /// dropped. Empty vec at sites that fire before warnings accumulate
+    /// is intentional — uniform call shape, costless move.
     Skipped(String, Vec<String>),
     Failed(String, Vec<String>),
 }
@@ -1224,8 +1209,7 @@ enum ChainFileOutcome {
 /// accumulated across the 11 early-return sites; each `into_*` method
 /// consumes the builder by move, so the compiler enforces single-use
 /// and a future early-return site cannot accidentally substitute
-/// `Vec::new()` in the warnings slot (the open-coded shape W14.5
-/// introduced — pattern-3 question 4 risk class). Eviction of stale
+/// `Vec::new()` in the warnings slot. Eviction of stale
 /// `seen_outputs` keys stays at the call site — this builder owns
 /// warnings, not the dedup-set membership.
 struct ChainOutcomeBuilder {
@@ -1270,11 +1254,11 @@ fn find_embed_step_index(plan: &chain::ChainPlan) -> Option<usize> {
 /// one helper that mirrors `emit_file_report`'s warnings format
 /// (`warning: <msg>` / `警告：<msg>` localized) while keeping the
 /// chain-style `⚠` glyph prefix that distinguishes warnings from the
-/// `✓` / `⊘` / `✗` status lines. Pre-W14.11 the three Written /
-/// Skipped / Failed arms each emitted `  ⚠ {warning}` directly,
-/// bypassing localization — a Chinese-locale user saw the status text
-/// in Chinese but the warning text untranslated. Helper also keeps
-/// the sanitize_for_display call in one place (A-R14-4 follow-on).
+/// `✓` / `⊘` / `✗` status lines. Without this helper, the three
+/// Written / Skipped / Failed arms would each emit `  ⚠ {warning}`
+/// directly, bypassing localization — a Chinese-locale user would see
+/// the status text in Chinese but the warning text untranslated. The
+/// helper also keeps the sanitize_for_display call in one place.
 fn emit_chain_warnings(globals: &GlobalOptions, warnings: &[String]) {
     for warning in warnings {
         let w_disp = sanitize_for_display(warning);
@@ -1293,14 +1277,14 @@ fn emit_chain_warnings(globals: &GlobalOptions, warnings: &[String]) {
 /// Segment-based: tokens substitute literally, `..` runs INSIDE
 /// template literals collapse to `.`, and at literal/value boundaries
 /// at most one dot is dropped — so user-content `..` in stems
-/// (`Show..special`) survives intact. The pre-Round-1.5 implementation
-/// here used a blanket `replace("..", ".")` post-pass that mangled
-/// such filenames, diverging from the TS resolver and causing the
-/// cheap-first existence check to short-circuit to "Skipped" against
-/// a path V8 would actually produce differently.
+/// (`Show..special`) survives intact. A blanket `replace("..", ".")`
+/// post-pass would mangle such filenames, diverging from the TS
+/// resolver and causing the cheap-first existence check to short-
+/// circuit to "Skipped" against a path V8 would actually produce
+/// differently.
 ///
 /// Token shape `[a-z_][a-z0-9_]{0,31}` mirrors the TS regex
-/// (32-char identifier cap, Codex 08c3a51c). Returns `None` when a
+/// (32-char identifier cap). Returns `None` when a
 /// token's name is not present in `vars` — this matches the TS
 /// strict-throw behavior at the prediction layer: the caller
 /// (`predict_chain_output_path`) defers to V8 + TS for the
@@ -1440,8 +1424,8 @@ fn predict_chain_output_path(
         .and_then(|e| e.to_str())
         .map(|e| format!(".{e}"))
         .unwrap_or_default();
-    // `substitute_template` returns None for unknown tokens (Codex
-    // 08c3a51c). `?` propagates: predict returns None → caller falls
+    // `substitute_template` returns None for unknown tokens. `?`
+    // propagates: predict returns None → caller falls
     // back to V8 + TS, which throws the authoritative `unknown token`
     // error. Matches the "defer to V8 on divergence" pattern used
     // elsewhere in this function.
@@ -1467,12 +1451,11 @@ fn predict_chain_output_path(
     // diverge" → defer to V8 + TS for the precise
     // rejection error.
     //
-    // Reserved-name coverage scope (Round 3 N-R3-7 + A-R3-4, tightened
-    // R9 A-R9-A3-1): the matches! arm covers CON, PRN, AUX, NUL,
-    // CONIN$, CONOUT$, ASCII digit variants COM0-COM9 / LPT0-LPT9, AND
-    // Unicode superscript variants COM¹/²/³ + LPT¹/²/³ (the latter
-    // added in R9 A-R9-A3-1 for parity with TS
-    // `assertSafeOutputFilename` + `util.rs::validate_ipc_path`). The
+    // Reserved-name coverage scope: the matches! arm covers CON, PRN,
+    // AUX, NUL, CONIN$, CONOUT$, ASCII digit variants COM0-COM9 /
+    // LPT0-LPT9, AND Unicode superscript variants COM¹/²/³ + LPT¹/²/³
+    // — parity with TS `assertSafeOutputFilename` +
+    // `util.rs::validate_ipc_path`. The
     // remaining asymmetry vs TS is the trailing-whitespace / dot strip
     // before the reserved-name check (`CON ` and `CON.` resolve to the
     // device on Windows). The Rust pre-check intentionally omits the
@@ -1481,7 +1464,7 @@ fn predict_chain_output_path(
     // `predicted.exists()` returns false → prediction returns Some →
     // V8 runs → TS rejects authoritatively. The harmless-slip set is
     // closed-form because the Win32 device-namespace gate at the OS
-    // layer is the final arbiter (Round 2 A-R2-6 / N-R2-10).
+    // layer is the final arbiter.
     //
     // Cross-platform asymmetry note : on Linux/macOS
     // the TS-side reserved-name check still rejects `COM¹.ass` etc.,
@@ -1518,8 +1501,8 @@ fn predict_chain_output_path(
     }
     // whitespace-only output_name is rejected for
     // parity with TS `assertSafeOutputFilename`'s `!filename.trim()`
-    // gate (path-validation.ts). Pre-R10 the predictor accepted
-    // `"   "` and `"\t\t"` while V8/TS would have refused them inside
+    // gate (path-validation.ts). Without this check the predictor
+    // would accept `"   "` and `"\t\t"` while V8/TS refuses them inside
     // the chain step, surfacing as a buried chain-step error rather
     // than the clearer predictor-layer rejection. Same shape as the
     // `.` / `..` reject below.
@@ -1548,9 +1531,9 @@ fn predict_chain_output_path(
         // ILLEGAL_FILENAME_CHARS regex.
         || c.is_control()
         // BiDi format chars + zero-width — same codepoint set as
-        // validate_ipc_path + Round 6 Wave 6.2 unicode-controls. A
-        // U+202E-bearing filename would otherwise predict OK here
-        // and trip on TS-side hasUnicodeControls inside V8.
+        // validate_ipc_path's unicode-controls gate. A U+202E-bearing
+        // filename would otherwise predict OK here and trip on TS-side
+        // hasUnicodeControls inside V8.
         || matches!(
             c,
             '\u{200E}' | '\u{200F}'
@@ -1610,8 +1593,8 @@ fn process_one_chain_input(
     globals: &GlobalOptions,
     seen_outputs: &mut HashSet<String>,
 ) -> ChainFileOutcome {
-    // R14 W14.5 / R1 A-R1-5: outcome funnel owns the warnings vec; each
-    // early-return consumes the builder via `.into_failed(…)` /
+    // Outcome funnel owns the warnings vec; each early-return consumes
+    // the builder via `.into_failed(…)` /
     // `.into_skipped(…)` / `.into_written(…)`. The compiler enforces
     // single-use (any second consumption is move-of-moved-value), so a
     // future return site can't accidentally pass `Vec::new()` in the
@@ -1625,8 +1608,8 @@ fn process_one_chain_input(
     };
     let input_str = display_path(&input_abs);
 
-    // Cheap-first checks via the predicted output path (Round 3
-    // N-R3-1). Two early returns share the prediction:
+    // Cheap-first checks via the predicted output path. Two early
+    // returns share the prediction:
     //   1. Duplicate-output-in-batch — if a prior input in this run
     //      produced the same predicted output, fail before any I/O
     //      or V8 work. Mirrors `dedup_and_exists_check` in the
@@ -1664,15 +1647,15 @@ fn process_one_chain_input(
                 predicted.display()
             ));
         }
-        // route the cheap-first existence
-        // check through `output_path_exists` (`fs::metadata` + stat-
-        // fail-treated-as-exists fail-safe + `--quiet`-respecting
-        // stderr WARN) instead of raw `Path::exists()`. Pre-W17.2 a
-        // restrictive-ACL / network-share stat failure would silently
-        // resolve as "doesn't exist" and proceed to V8, eventually
-        // failing at `create_new(true)` with a generic AlreadyExists.
-        // The helper sibling matches every other CLI subcommand's
-        // skip-check and preserves the N-R1-9 fail-safe.
+        // Route the cheap-first existence check through
+        // `output_path_exists` (`fs::metadata` + stat-fail-treated-as-
+        // exists fail-safe + `--quiet`-respecting stderr WARN) instead
+        // of raw `Path::exists()`. Otherwise a restrictive-ACL /
+        // network-share stat failure would silently resolve as
+        // "doesn't exist" and proceed to V8, eventually failing at
+        // `create_new(true)` with a generic AlreadyExists. The helper
+        // matches every other CLI subcommand's skip-check and
+        // preserves the stat-fail fail-safe.
         if !globals.overwrite && output_path_exists(globals, &predicted) {
             // (sibling): evict the predicted_key
             // from `seen_outputs` before returning Skipped. The file
@@ -1681,8 +1664,8 @@ fn process_one_chain_input(
             // resolves to the same path should reach this exists
             // check and also Skip; keeping the key would surface as
             // a misleading "duplicate output path" Failed instead.
-            // Pattern 3 sibling of A-R10-014 (Failed paths) and the
-            // post-V8 Skipped path further below.
+            // Sibling of the Failed-path eviction and the post-V8
+            // Skipped path further below.
             seen_outputs.remove(&key);
             return builder.into_skipped(format!(
                 "{} already exists (use --overwrite to replace)",
@@ -1696,11 +1679,11 @@ fn process_one_chain_input(
 
     // Failed early-return paths between this
     // point and the post-V8 dedup reconcile (below) must REMOVE the
-    // already-inserted predicted_key from seen_outputs. Pre-R10 the
-    // stale key lingered — a later input whose predicted_key
-    // legitimately equalled this one would falsely collide and
-    // surface as `duplicate output path` despite no file having
-    // been written. Helper closure (captures `&mut seen_outputs`
+    // already-inserted predicted_key from seen_outputs. Otherwise the
+    // stale key lingers — a later input whose predicted_key
+    // legitimately equals this one would falsely collide and surface
+    // as `duplicate output path` despite no file having been written.
+    // Helper closure (captures `&mut seen_outputs`
     // via the function-local `seen_outputs` borrow) keeps the 5
     // failure sites tidy. Successful path (post-V8 reconcile +
     // write) keeps the key inserted, since a real output file
@@ -1762,8 +1745,8 @@ fn process_one_chain_input(
             }
         };
         builder.replace_warnings(embed_warnings);
-        // (+ A-R17-18): cumulative cap on the
-        // aggregate raw font-subset bytes BEFORE the base64 +
+        // Cumulative cap on the aggregate raw font-subset bytes
+        // BEFORE the base64 +
         // serde_json marshal below. Per-font cap (MAX_FONT_DATA_SIZE,
         // 50 MB) holds; the gap was the cumulative case — N×50 MB
         // raw bytes ride through `format!()` / serde_json on Rust
@@ -1785,10 +1768,7 @@ fn process_one_chain_input(
         // which compounded against the per-font MAX_FONT_DATA_SIZE
         // budget (50 MB, defined in fonts.rs) into ~200 MB of V8 heap
         // pressure on the worst-case path. Base64 is ~1.33× and
-        // decoded in TS via atob(). (R15 W15.3 N-R15-12: previous
-        // mention of `CUMULATIVE_FALLBACK_BYTES` was a phantom anchor
-        // — that symbol was removed in R6 W6.9 along with the
-        // fontcull-parse-fail fallback path.)
+        // decoded in TS via atob().
         let subsets_json: Vec<serde_json::Value> = subsets
             .into_iter()
             .map(|s| {
@@ -1810,14 +1790,14 @@ fn process_one_chain_input(
         }
     };
 
-    // surface chain's aggregated skipped-caption count
-    // through the same path the standalone HDR / Shift CLIs use —
-    // stderr "⚠ ..." line + append to FileReport.warnings (for
-    // --json output). Pre-R13 this rode along inside an opaque
-    // chain note string that printed to stdout under --verbose
-    // only, missing both the stderr-routing and the json wire.
-    // Embed pre-resolution warnings (collected above) sit in the
-    // same vec; both get surfaced via the Written outcome.
+    // Surface chain's aggregated skipped-caption count through the
+    // same path the standalone HDR / Shift CLIs use — stderr "⚠ ..."
+    // line + append to FileReport.warnings (for --json output). An
+    // older shape rode along inside an opaque chain note string that
+    // printed to stdout under --verbose only, missing both the
+    // stderr-routing and the json wire. Embed pre-resolution warnings
+    // (collected above) sit in the same vec; both get surfaced via
+    // the Written outcome.
     if let Some(msgs) = format_oversized_skipped_warning(globals, result.skipped_count, &input_str)
     {
         builder.extend_warnings(msgs);
@@ -1836,16 +1816,16 @@ fn process_one_chain_input(
         }
     };
 
-    // Post-V8 dedup reconcile (Round 4 N-R4-10, Round 7 W7.4 N2-R7-2).
-    // If the actual output path differs from the prediction, REMOVE
-    // the stale predicted_key from seen_outputs before inserting the
-    // actual one. Pre-W7.4 the stale key was left in the set — harmless
-    // when the same template ran on every input (next input's
-    // predicted_key matched and naturally re-collided), but pathological
-    // when one input's predictor ran but a later input collided with
-    // that stale key while its OWN predicted_key was None or
-    // different. Removing the stale entry makes seen_outputs always
-    // reflect the actual set of files this run will write.
+    // Post-V8 dedup reconcile. If the actual output path differs from
+    // the prediction, REMOVE the stale predicted_key from seen_outputs
+    // before inserting the actual one. Without the removal, the stale
+    // key would linger — harmless when the same template ran on every
+    // input (next input's predicted_key matches and naturally re-
+    // collides), but pathological when one input's predictor ran but a
+    // later input collided with that stale key while its OWN
+    // predicted_key was None or different. Removing the stale entry
+    // makes seen_outputs always reflect the actual set of files this
+    // run will write.
     //
     // When predicted_key was Some AND matches the actual output_key,
     // skip the re-insert (already inserted upstream; would self-
@@ -1876,26 +1856,24 @@ fn process_one_chain_input(
     // post-V8 check fires when V8's TS substituteTemplate resolves
     // to a different path than the Rust predictor produced — e.g.,
     // a template with a token the Rust port doesn't model — AND that
-    // path also exists. Rare, but the W14.7 fixture exercises a
-    // related post-V8 path (write_output Failed) to pin the
-    // warnings-on-non-Written contract; this Skipped branch shares
-    // the same warnings-attach semantics established by W14.5.
+    // path also exists. Rare, but a fixture exercises a related
+    // post-V8 path (write_output Failed) to pin the warnings-on-non-
+    // Written contract; this Skipped branch shares the same warnings-
+    // attach semantics.
     //
-    // (+ N-R17-24): two fixes here:
-    //   - Route the existence check through `output_path_exists`
-    //     (Pattern 3 sibling of N-R17-17): preserves the
-    //     stat-fail-treated-as-exists fail-safe +
+    // Two coordinated behaviors here:
+    //   - Route the existence check through `output_path_exists`:
+    //     preserves the stat-fail-treated-as-exists fail-safe +
     //     `--quiet`-respecting WARN that the cheap-first check already
-    //     uses. Pre-W17.2 the raw `Path::exists()` silently treated
+    //     uses. A raw `Path::exists()` would silently treat
     //     restrictive-ACL stat failure as "doesn't exist" and let
     //     write_output below trip its own check with a less specific
     //     error.
     //   - Evict the post-reconcile `output_key` from `seen_outputs`
-    //     before returning Skipped. A-R10-014 added this for the
-    //     write-failure cleanup path; the post-V8 Skipped sibling
-    //     was missed. A later input whose V8-resolved output_key
-    //     legitimately equals this one would otherwise falsely
-    //     collide and surface as "duplicate output path".
+    //     before returning Skipped — same eviction the write-failure
+    //     cleanup path does. A later input whose V8-resolved
+    //     output_key legitimately equals this one would otherwise
+    //     falsely collide and surface as "duplicate output path".
     if !globals.overwrite && output_path_exists(globals, &output_path) {
         seen_outputs.remove(&output_key);
         return builder.into_skipped(format!(
@@ -1922,14 +1900,12 @@ fn process_one_chain_input(
 
     if globals.verbose {
         for note in &result.notes {
-            // (Pattern 1 census parity): today's
-            // chain-runtime.ts produces notes from static strings +
-            // numeric counts (safe). This is the only print site in
-            // cli/*.rs left out of W14.8's sanitize census; the
+            // Today's chain-runtime.ts produces notes from static
+            // strings + numeric counts (safe). Sanitizing here defends
+            // a future note-source addition that might include parsed
+            // ASS content from bypassing laundering invisibly. The
             // sibling Written outcome's ✓-line already sanitizes
-            // input/out, so completing the census here defends a
-            // future note-source addition that might include parsed
-            // ASS content from bypassing laundering invisibly.
+            // input/out, so this completes the print-site coverage.
             let n_disp = sanitize_for_display(note);
             println!("  {n_disp}");
         }
@@ -1941,9 +1917,9 @@ fn process_one_chain_input(
 fn emit_chain_dry_run(plan: &chain::ChainPlan, globals: &GlobalOptions) {
     println!("Plan (no files written):");
     println!();
-    // (+ A-R14-11, Pattern 1 sweep): every
-    // emit_chain_dry_run print site sanitizes interpolated strings.
-    // `plan.output_template` is user-supplied argv (P1b); `input` is
+    // Every emit_chain_dry_run print site sanitizes interpolated
+    // strings. `plan.output_template` is user-supplied argv (P1b);
+    // `input` is
     // also argv; `out_str` derives from input + template via
     // predict_chain_output_path, so any input control char leaks into
     // the predicted path string. dry-run runs in a context where the
@@ -1955,12 +1931,12 @@ fn emit_chain_dry_run(plan: &chain::ChainPlan, globals: &GlobalOptions) {
     // track predicted outputs across inputs to surface
     // duplicate-output collisions in dry-run output. The real run
     // catches these via `seen_outputs.insert` returning false (HDR /
-    // Shift / Embed in chain). Pre-R12 dry-run silently printed both
-    // rows pointing at the same output, hiding the future failure
-    // from the user.
+    // Shift / Embed in chain). Without this tracking, dry-run would
+    // silently print both rows pointing at the same output, hiding the
+    // future failure from the user.
     //
-    // R13 N-R13-6 fidelity caveat: this mirrors the real-run dedup
-    // key ONLY when `predict_chain_output_path` produces a key that
+    // Fidelity caveat: this mirrors the real-run dedup key ONLY when
+    // `predict_chain_output_path` produces a key that
     // matches what V8's `resolveChainOutputPath` will return. Today
     // chain templates only support {name} and {ext} and both
     // predictors agree byte-for-byte, so the mirror is complete. If a
@@ -1981,11 +1957,11 @@ fn emit_chain_dry_run(plan: &chain::ChainPlan, globals: &GlobalOptions) {
         // combination produces what they expect before they remove
         // --dry-run.
         //
-        // make `absolute_path` failure explicit
-        // rather than collapsing into `None` via `.ok().and_then(...)`.
-        // Pre-W17.2 an unresolvable input (e.g., current-dir lookup
-        // fails under restrictive ACLs) silently dropped the `→ <out>`
-        // line with no diagnostic — the user couldn't tell whether
+        // Make `absolute_path` failure explicit rather than collapsing
+        // into `None` via `.ok().and_then(...)`. Otherwise an
+        // unresolvable input (e.g., current-dir lookup fails under
+        // restrictive ACLs) would silently drop the `→ <out>` line
+        // with no diagnostic — the user couldn't tell whether
         // prediction abstained (template uses tokens the Rust port
         // doesn't model) or whether `absolute_path` outright failed.
         // Per no-silent-action, surface the failure with a stderr
@@ -2176,17 +2152,15 @@ fn process_hdr_file(
 /// see it too. English-only per the existing convention for
 /// unconditional warnings (verbose-gated paths use `emit_verbose` /
 /// `localize` for bilingual output).
-/// R14 W14.3 (Codex finding c637f2f4): pure format helper. Builds
-/// the oversized-caption warning message and returns it; does NOT
-/// `eprintln!`. Callers attach the returned `Vec<String>` to
-/// `FileReport.warnings`; the actual stderr emission happens at the
-/// existing print loops — `emit_file_report` for standalone HDR /
-/// Shift / Embed, and the `ChainFileOutcome::Written` arm for chain.
-/// Pre-W14.3 the helper did both (eprintln + return) which caused
-/// double emission AND bypassed `--quiet` at the helper's eprintln
-/// (the print loops are `!globals.quiet`-gated; the helper wasn't).
-/// Naming change reinforces the new contract: this is `format_*`,
-/// not `emit_*`.
+/// Pure format helper: builds the oversized-caption warning message
+/// and returns it; does NOT `eprintln!`. Callers attach the returned
+/// `Vec<String>` to `FileReport.warnings`; the actual stderr emission
+/// happens at the existing print loops — `emit_file_report` for
+/// standalone HDR / Shift / Embed, and the `ChainFileOutcome::Written`
+/// arm for chain. A combined eprintln+return helper would cause double
+/// emission AND bypass `--quiet` at the helper's eprintln (the print
+/// loops are `!globals.quiet`-gated; a helper wouldn't be). The
+/// `format_*` name reinforces the contract.
 fn format_oversized_skipped_warning(
     globals: &GlobalOptions,
     skipped_count: usize,
@@ -2473,19 +2447,16 @@ fn process_shift_file_heavy_first(
         }
     };
 
-    // R13 N-R13-15 + R14 W14.4 : the oversized-skipped
-    // warning is computed BEFORE the dedup / dry-run / write-fail
-    // early returns below, so the warning exists by then. W14.3
-    // removed the helper's eprintln in favor of routing through
-    // FileReport.warnings + emit_file_report's print loop — but those
-    // early returns construct FileReport via `failed_report` /
-    // `skipped_report` / `planned_report`, all of which set
-    // `warnings: None`. Result: pre-W14.3 the helper eprintln'd
-    // the warning on the way out, so dry-run / dedup-skip still
-    // surfaced it; post-W14.3 the warning was silently lost. Fix:
-    // attach `warnings` to every FileReport returned from this
-    // function (early or final) by mutating the helper-constructed
-    // report before returning.
+    // The oversized-skipped warning is computed BEFORE the dedup /
+    // dry-run / write-fail early returns below, so the warning exists
+    // by then. The format helper returns the message via
+    // FileReport.warnings + emit_file_report's print loop instead of
+    // its own eprintln — but the early-return paths construct
+    // FileReport via `failed_report` / `skipped_report` /
+    // `planned_report`, all of which set `warnings: None`. Without
+    // attaching `warnings` to every FileReport returned from this
+    // function (early or final), the dry-run / dedup-skip paths would
+    // silently lose the warning.
     let warnings = format_oversized_skipped_warning(globals, conversion.skipped_count, &input);
 
     let output_path = match relocate_output_path(&conversion.output_path, context.output_dir) {
@@ -2647,8 +2618,7 @@ fn prepare_embed_cache(
             Ok(p) => p,
             Err(e) => {
                 if !globals.quiet {
-                    // (+ A-R14-2, Pattern 1 sweep):
-                    // every prepare_embed_cache eprintln that
+                    // Every prepare_embed_cache eprintln that
                     // interpolates `cache_path.display()` or a drift
                     // folder string (sourced from the SQLite cache,
                     // which is P1b under --cache-file argv override)
@@ -2656,13 +2626,11 @@ fn prepare_embed_cache(
                     // from default_cli_cache_path can carry env-var
                     // resolution failure text that includes path
                     // fragments.
-                    // R1 N-R1-7 (Pattern 1 / W17.3 sibling sweep):
-                    // route every prepare_embed_cache stderr line
-                    // through `localize`. Pre-R1 these were the only
-                    // cache-related output that remained English-only
-                    // even under `--lang zh`, while refresh-fonts
-                    // and the per-file ✓/⊘/✗ lines were
-                    // localized.
+                    //
+                    // Every prepare_embed_cache stderr line also
+                    // routes through `localize` so cache-related
+                    // output respects `--lang zh` for parity with the
+                    // refresh-fonts and per-file ✓/⊘/✗ paths.
                     let e_disp = sanitize_for_display(&e);
                     eprintln!(
                         "{}",
@@ -2953,8 +2921,8 @@ fn init_cli_font_sources(
     // path below — the static `USER_FONT_DB_PATH` set by
     // `init_user_font_db` must be cleared alongside the temp dir wipe,
     // otherwise the slot points at a deleted file after the guard's
-    // Drop runs (Round 2 N-R2-8 — latent bug, no current caller
-    // retries, but the helper makes the cleanup explicit).
+    // Drop runs (latent bug, no current caller retries, but the
+    // helper makes the cleanup explicit).
     let import_result: Result<(), String> = (|| -> Result<(), String> {
         for (index, dir) in args.font_dirs.iter().enumerate() {
             let dir = absolute_path(dir)?;
@@ -3033,14 +3001,11 @@ fn emit_font_source_summary(
     // are a flat list with no single "source path" so the suffix is
     // omitted in that case.
     //
-    // sanitize_for_display is required
-    // here because this site is a stdout/println interpolation and
-    // `display_path` is now a pure formatter (W14.1 split). A
-    // crafted POSIX font-dir name containing ANSI escape sequences
-    // or U+202E would otherwise reach the terminal verbatim and
-    // corrupt the verbose summary. W14.1 fixed emit_file_report and
-    // format_oversized_skipped_warning's interpolations but missed
-    // this print site; this is a Pattern 1 audit completion.
+    // sanitize_for_display is required here because this site is a
+    // stdout/println interpolation and `display_path` is a pure
+    // formatter. A crafted POSIX font-dir name containing ANSI escape
+    // sequences or U+202E would otherwise reach the terminal verbatim
+    // and corrupt the verbose summary.
     let (path_suffix_en, path_suffix_zh) = match path {
         Some(p) => {
             let display = sanitize_for_display(&display_path(p));
@@ -3180,15 +3145,15 @@ fn process_embed_file(
         ),
     );
 
-    // (+ A-R14-3, Pattern 3 sibling of W14.4 F2 / W14.5):
-    // subset / apply / write Err paths must attach the accumulated
+    // Subset / apply / write Err paths must attach the accumulated
     // `warnings` vec (resolve_warnings, plus subset_warnings on the
-    // apply/write paths) to the FileReport. Pre-W14.6 these returned
-    // through `failed_report(..., error)` which sets `warnings: None`,
-    // so any missing-font / subset-failure diagnostics already gathered
-    // were silently dropped. helper closure mirrors the W14.4 F2 pattern
-    // for the standalone shift early-returns; one allocation per early
-    // path is acceptable (these are failure paths, not the hot path).
+    // apply/write paths) to the FileReport. A bare
+    // `failed_report(..., error)` sets `warnings: None`, so any
+    // missing-font / subset-failure diagnostics already gathered would
+    // be silently dropped. The helper closure mirrors the shape used
+    // for the standalone shift early-returns; one allocation per
+    // early path is acceptable (these are failure paths, not the hot
+    // path).
     let attach_warnings = |mut report: FileReport, warnings: &Vec<String>| -> FileReport {
         if !warnings.is_empty() {
             report.warnings = Some(warnings.clone());
@@ -3278,21 +3243,18 @@ fn process_embed_file(
 /// — partial_warnings carries diagnostics collected before the failing
 /// step, so the caller can still surface them through ChainFileOutcome.
 ///
-/// **Reachability note** (R15 N-R15-6 verification): under current
-/// control flow the partial_warnings Vec is always empty on the Err
-/// path. `resolve_embed_fonts` Errs only under `--on-missing fail`
-/// when ANY font is missing, BEFORE constructing missing_warnings;
+/// **Reachability note**: under current control flow the
+/// partial_warnings Vec is always empty on the Err path.
+/// `resolve_embed_fonts` Errs only under `--on-missing fail` when ANY
+/// font is missing, BEFORE constructing missing_warnings;
 /// `subset_resolved_fonts` Errs only under fail mode AFTER subset
 /// failures, but at that point any missing-font would already have
 /// Err'd in resolve. So the only Err arms that fire have empty
-/// missing_warnings to propagate. Field is kept as architectural
-/// consistency with W14.5's `ChainFileOutcome::Failed/Skipped(_, vec)`
-/// pattern — a future Err path addition (e.g., `resolve_embed_fonts`
-/// surfacing a non-final Err with partial missing_warnings) doesn't
-/// silently lose them. Documented per code_review.md P3 "would a
-/// fresh agent disagree with this defense without knowing the
-/// incident?" — yes, structurally; the answer is W14.5's contract
-/// established the pattern.
+/// missing_warnings to propagate. The field is kept for architectural
+/// consistency with `ChainFileOutcome::Failed/Skipped(_, vec)` — a
+/// future Err path addition (e.g., `resolve_embed_fonts` surfacing a
+/// non-final Err with partial missing_warnings) won't silently lose
+/// them.
 type ChainEmbedSubsetsResult =
     Result<(Vec<engine::FontSubsetPayload>, Vec<String>), (String, Vec<String>)>;
 
@@ -3367,8 +3329,8 @@ fn resolve_embed_fonts(
     let mut missing = Vec::new();
 
     for font in fonts {
-        // (Pattern 2 sibling): cap font.codepoints
-        // BEFORE the lookup + clone into ResolvedEmbedFont. `font` flows
+        // Cap font.codepoints BEFORE the lookup + clone into
+        // ResolvedEmbedFont. `font` flows
         // from V8/TS-parsed ASS (P1b attacker-influenced), so a crafted
         // subtitle declaring a million codepoints per font would
         // retain a 4 MB Vec<u32> per ResolvedEmbedFont entry until
@@ -3643,10 +3605,11 @@ fn resolve_embed_font(
     // validates at the IPC boundary; the CLI's resolve_embed_font is
     // the equivalent boundary on the CLI side (font.family flows from
     // TS-engine V8-extracted ASS `\fn` content, which is P1b
-    // attacker-influenced). Pre-R11, tier-1 `resolve_user_font` and
-    // tier-3 `find_system_font` validated internally but tier-2
-    // `c.lookup_family` did not — a cache row keyed by a hostile name
-    // could resolve and flow into `register_cache_provenance` (which
+    // attacker-influenced). Without this upfront validation, tier-2
+    // `c.lookup_family` would be the odd tier — tier-1
+    // `resolve_user_font` and tier-3 `find_system_font` validate
+    // internally, but a cache row keyed by a hostile name could
+    // resolve and flow into `register_cache_provenance` (which
     // validates path but not family). Validating here keeps the trust
     // boundary uniform across all three tiers; the tier-1 / tier-3
     // internal validate calls become redundant but stay as
@@ -3673,11 +3636,11 @@ fn resolve_embed_font(
     if let Some(c) = cache {
         match c.lookup_family(&font.family, font.bold, font.italic) {
             Ok(Some(result)) => {
-                // Round 6 Wave 6.3 D1: register the cache hit in the
-                // in-process provenance set so subset_font's gate
-                // accepts the returned path. Without this, Situation B
-                // breaks: cache returns the path, subset_font rejects
-                // as "Font path was not discovered by a scan command".
+                // Register the cache hit in the in-process provenance
+                // set so subset_font's gate accepts the returned path.
+                // Without this, the cache-hit path breaks: cache
+                // returns the path, subset_font rejects as "Font path
+                // was not discovered by a scan command".
                 //
                 // registration failure (BiDi /
                 // control char / `..` in a hostile cache row) →
@@ -3849,10 +3812,9 @@ fn expand_rename_inputs(globals: &GlobalOptions, paths: &[PathBuf]) -> Result<Ve
     // the output. GUI side surfaces this through useFolderDrop's
     // onError consumer . The cap value comes from
     // the dropzone module so a future bump there flows here
-    // automatically . Gate on --quiet (Round 4
-    // N-R4-16) so the user who opted into a diagnostics-free run
-    // doesn't get this stderr line — same posture as every other
-    // informational stderr in the CLI.
+    // automatically. Gate on --quiet so the user who opted into a
+    // diagnostics-free run doesn't get this stderr line — same posture
+    // as every other informational stderr in the CLI.
     if expanded.truncated && !globals.quiet {
         let cap = app_lib::dropzone::MAX_RESULT_FILES;
         eprintln!(
@@ -3909,10 +3871,9 @@ fn process_rename_pair(
         );
     }
 
-    // (Pattern 1 sweep): sanitize before
-    // stdout interpolation. `from` / `to` / `video` are all raw
-    // operational path strings; emit_verbose calls println via
-    // localize, so control chars would reach the terminal verbatim.
+    // Sanitize before stdout interpolation. `from` / `to` / `video`
+    // are all raw operational path strings; emit_verbose calls println
+    // via localize, so control chars would reach the terminal verbatim.
     let from = sanitize_for_display(&display_path(&input_path));
     let to = sanitize_for_display(&display_path(&output_path));
     let video = sanitize_for_display(&row.video_path);
@@ -3980,13 +3941,12 @@ fn emit_report_summary(globals: &GlobalOptions, report: &CommandReport) -> Resul
     } else if !globals.quiet {
         // when --fail-fast aborts the batch, append a
         // `(aborted by --fail-fast)` / `（已被 --fail-fast 中止）`
-        // suffix to the human-text summary. Pre-R1 the fail-fast
-        // signal lived in the stderr `⚠` notice (emit_fail_fast_abort_notice)
-        // AND in JSON output's `abortedByFailFast` field, but the
-        // stdout summary line itself never reflected the abort —
-        // users piping stdout to a log lost the signal. Chain's
-        // sibling Summary already does this; this completes the
-        // standalone HDR/Shift/Embed/Rename path.
+        // suffix to the human-text summary. Without this suffix, the
+        // fail-fast signal would live only in the stderr `⚠` notice
+        // (emit_fail_fast_abort_notice) and JSON output's
+        // `abortedByFailFast` field — users piping stdout to a log
+        // would lose the signal. Chain's sibling Summary does this
+        // too; this keeps standalone HDR/Shift/Embed/Rename aligned.
         let message = if report.aborted_by_fail_fast {
             localize(
                 globals,
@@ -4051,17 +4011,16 @@ fn emit_file_report(globals: &GlobalOptions, result: &FileReport) {
     // --quiet.
     if matches!(result.status, FileStatus::Failed) {
         if let Some(error) = &result.error {
-            // (Pattern 1 standalone-path completion):
-            // chain-mode emit_chain_warnings sanitizes error/warning
-            // strings; the standalone emit_file_report path was the
-            // sibling miss in W14.8's sweep. Failure messages bubble up
-            // from `resolve_embed_fonts` / `subset_resolved_fonts` with
+            // Chain-mode emit_chain_warnings sanitizes error/warning
+            // strings; the standalone emit_file_report path does the
+            // same here. Failure messages bubble up from
+            // `resolve_embed_fonts` / `subset_resolved_fonts` with
             // `font.label` interpolated raw — font.label flows from V8-
             // parsed ASS `\fn` content (P1b attacker-influenced), so a
             // crafted subtitle with U+202E / control / zero-width in
             // \fn reaches stderr unlaundered without this sanitize.
-            // Also covers N-R15-3 + R17 W17.1: safe_io's reparse-refusal
-            // / scope-deny / same-canonical-path Err strings interpolate
+            // Also covers safe_io's reparse-refusal / scope-deny /
+            // same-canonical-path Err strings, which interpolate
             // `path.display()` raw (see `app_lib::safe_io`), which bubble
             // through `failed_report` to this site. Sanitize-at-print
             // is the design — sanitizing operationally inside
@@ -4135,8 +4094,7 @@ fn emit_file_report(globals: &GlobalOptions, result: &FileReport) {
     if !globals.quiet {
         if let Some(warnings) = &result.warnings {
             for warning in warnings {
-                // (Pattern 1 sibling of N-R15-1):
-                // standalone-path warning content needs the same
+                // Standalone-path warning content needs the same
                 // print-boundary sanitize as chain-mode
                 // emit_chain_warnings. `font.label` flows from V8-
                 // parsed ASS \fn (P1b) and reaches here via
@@ -4301,15 +4259,14 @@ fn output_path_exists(globals: &GlobalOptions, path: &Path) -> bool {
             // network shares with metadata-read denied). Surface a
             // stderr warning so the user sees the real cause instead of
             // a misleading "skipped: output exists" diagnostic. Honors
-            // --quiet (Round 1 A3.N-R1-9): the user opted into a
-            // diagnostics-free run and this warning fired even then,
-            // breaking the "no stderr noise when --quiet" contract.
+            // --quiet: the user opted into a diagnostics-free run, so
+            // suppress this warning to respect the "no stderr noise
+            // when --quiet" contract.
             if !globals.quiet {
-                // upgraded from
-                // `strip_visual_line_breaks` (CR/LF/NEL/U+2028/U+2029
-                // only) to `sanitize_for_display` (covers all C0/C1
-                // controls + BiDi format + zero-width) to match the
-                // W14.1 contract. Pre-W14.8 a Windows filename
+                // Use `sanitize_for_display` here (covers all C0/C1
+                // controls + BiDi format + zero-width) rather than the
+                // narrower `strip_visual_line_breaks`
+                // (CR/LF/NEL/U+2028/U+2029 only). A Windows filename
                 // containing ESC / U+202E would corrupt the warning
                 // line even though CR/LF wouldn't have. Sanitize at
                 // print boundary (path itself stays operational for
@@ -4332,8 +4289,7 @@ fn output_path_exists(globals: &GlobalOptions, path: &Path) -> bool {
     }
 }
 
-// (A-R17-10 / A-R17-11): write_output /
-// copy_file_output / rename_file_output route through
+// write_output / copy_file_output / rename_file_output route through
 // `app_lib::safe_io::*_inner` with a permissive `|_| true` predicate.
 // CLI argv IS the user (P1a authorship); there is no Tauri fs:scope
 // to enforce, so the closure short-circuits the scope check while
@@ -4348,27 +4304,23 @@ fn output_path_exists(globals: &GlobalOptions, path: &Path) -> bool {
 //     remove_file (refuses reparse points there).
 //   - copy / rename additionally enforce `reject_reparse_source` +
 //     `reject_same_canonical_path` (the case-only NTFS self-overwrite
-//     trap Codex a274852e closed for the GUI) + the late re-check
-//     before `File::open` (copy) / `fs::rename` (rename) for the
-//     dst-side reparse swap window (R8 N-R8-N3-1 + R16 W16.2).
-// Pre-W17.1 the CLI replicated only the destination-side reparse
-// pre-check via the local `reject_reparse_destination` helper and
-// missed the source-side defense entirely — Pattern 3 carry-over
-// from W14.10 + W16.2's safe_io.rs hardening. Routing through the
-// single source of truth means future findings against safe_io
-// auto-propagate here instead of needing parallel fixes.
+//     trap closed for the GUI) + the late re-check before
+//     `File::open` (copy) / `fs::rename` (rename) for the dst-side
+//     reparse swap window.
+// Routing through the single source of truth means future findings
+// against safe_io auto-propagate here instead of needing parallel
+// fixes.
 //
 // The `_globals` parameter is preserved on each function for caller-
-// site convention (every other CLI fs-helper takes globals) and to
-// keep the W17.1 diff minimal; safe_io owns all decisions internally.
-// Higher-level callers still use `output_path_exists` (preserved as
-// a standalone CLI helper above) for the cheap-first skip-when-
-// exists check + `--quiet`-respecting stderr WARN on stat failure
-// (N-R1-9 fail-safe). safe_io's `clear_existing_destination` provides
-// the second-layer fail-shut on the race between the higher-level
-// check and the write. Error wording at the safe_io boundary bubbles
-// through `failed_report` and is sanitized at the print boundary by
-// `emit_file_report`'s `sanitize_for_display`.
+// site convention (every other CLI fs-helper takes globals); safe_io
+// owns all decisions internally. Higher-level callers still use
+// `output_path_exists` (preserved as a standalone CLI helper above)
+// for the cheap-first skip-when-exists check + `--quiet`-respecting
+// stderr WARN on stat failure. safe_io's `clear_existing_destination`
+// provides the second-layer fail-shut on the race between the higher-
+// level check and the write. Error wording at the safe_io boundary
+// bubbles through `failed_report` and is sanitized at the print
+// boundary by `emit_file_report`'s `sanitize_for_display`.
 fn write_output(
     _globals: &GlobalOptions,
     path: &Path,
@@ -4418,11 +4370,10 @@ fn display_path(path: &Path) -> String {
     // The returned string is canonical for OS-level filesystem
     // operations — `read_text_detect_encoding_inner`, engine path
     // resolution, FileReport.input field. Character filtering MUST
-    // NOT happen here (R14 W14.1 reverting the R13 W13.5 regression
-    // Codex finding 6b2089f3 caught): sanitizing destructively at
-    // this layer made `evil\u{202e}.ass` silently resolve to a
-    // sibling `evil.ass`, picking the wrong file at read / write
-    // time. Display-time sanitization belongs at the print sites
+    // NOT happen here: sanitizing destructively at this layer would
+    // make `evil\u{202e}.ass` silently resolve to a sibling
+    // `evil.ass`, picking the wrong file at read / write time.
+    // Display-time sanitization belongs at the print sites
     // (`emit_file_report`, `format_oversized_skipped_warning`, etc.)
     // via `sanitize_for_display`.
     let raw = path.to_string_lossy().into_owned();
@@ -4435,8 +4386,8 @@ fn display_path(path: &Path) -> String {
 
 /// Strip control + BiDi + zero-width characters from a path string
 /// for safe interpolation into human-readable output (stderr/println).
-/// R14 W14.1 — the same filter set as `validate_ipc_path` rejects, but
-/// here we strip rather than refuse: argv-supplied filenames may
+/// The same filter set as `validate_ipc_path` rejects, but here we
+/// strip rather than refuse: argv-supplied filenames may
 /// legitimately contain these characters on POSIX (Linux filenames
 /// accept any byte except `/` and NUL), so the conservative choice is
 /// to launder them at display time rather than fail the whole batch.
@@ -4744,11 +4695,10 @@ mod tests {
     };
     // Import the canonical filename literal directly from app_lib so the
     // test pins the same name `TempFontDbDir::drop`'s remove_dir_all
-    // sees on disk . Round 7 Wave 7.6 :
-    // dropped the `as USER_FONT_DB_FILENAME` alias — the test no longer
-    // pretends to have its own filename literal; `USER_FONT_DB_FILENAME`
-    // is the canonical name everywhere, and the alias only added
-    // indirection.
+    // sees on disk. No `as USER_FONT_DB_FILENAME` alias here — the
+    // test doesn't pretend to have its own filename literal;
+    // `USER_FONT_DB_FILENAME` is the canonical name everywhere, and an
+    // alias would only add indirection.
     use app_lib::fonts::USER_FONT_DB_FILENAME;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -4866,8 +4816,8 @@ mod tests {
 
     #[test]
     fn rejects_repeated_or_out_of_order_units() {
-        // Same-unit repetition: silent-sum bug from Round 1 review
-        // (A-R1-14 / N-R2-1 / A-R2-1).
+        // Same-unit repetition: guards against a silent-sum bug
+        // where `1s2s` would parse as 3 seconds.
         assert!(parse_duration_ms("+1s2s").is_err());
         assert!(parse_duration_ms("-30s1s").is_err());
         assert!(parse_duration_ms("+1m1m").is_err());
@@ -4954,7 +4904,7 @@ mod tests {
 
     #[test]
     fn rename_dedup_flags_non_no_op_against_no_op_with_same_target() {
-        // Concrete repro for round-2 N-R2-1: row 0 is a no-op (subtitle
+        // Concrete repro: row 0 is a no-op (subtitle
         // already correctly named), row 1 wants to rename a different
         // subtitle onto that same target. The dedup must flag the
         // collision so process_rename_pair's --overwrite path doesn't
@@ -5098,7 +5048,7 @@ mod tests {
 
     #[test]
     fn relocate_output_path_counts_utf16_units_not_utf8_bytes_for_cjk() {
-        // Pin the round-4 N-R4-1 fix: a CJK directory path is 200
+        // A CJK directory path is 200
         // UTF-16 code units (well under 259) but ~600 UTF-8 bytes
         // (over 259). The cap must accept this.
         let cjk_dir: String = "字".repeat(200);
@@ -5141,11 +5091,12 @@ mod tests {
         assert!(!dir.exists());
     }
 
-    // ── substitute_template — Codex bd782f90 regression coverage ──
+    // ── substitute_template — regression coverage ──
 
     #[test]
     fn substitute_template_preserves_double_dots_inside_user_content() {
-        // Old blanket `replace("..", ".")` mangled this — Codex bd782f90.
+        // Old blanket `replace("..", ".")` mangled this; segment-based
+        // substitution keeps user-content `..` intact.
         let got = substitute_template(
             "{name}.shifted{ext}",
             &[("name", "Show..special"), ("ext", ".ass")],
@@ -5226,10 +5177,9 @@ mod tests {
     fn substitute_template_token_over_cap_falls_through_as_literal() {
         // Boundary-pin pair (c): 33-char identifier exceeds the lexer
         // bound → not matched as a token → stays as literal text.
-        // Closes the Codex 08c3a51c bypass: pre-fix this silently
-        // collapsed via the unbounded lexer; post-fix the literal
-        // `{aaa...}` survives so the downstream brace-reject path
-        // surfaces the failure.
+        // An unbounded lexer would silently collapse this; with the
+        // bounded lexer the literal `{aaa...}` survives so the
+        // downstream brace-reject path surfaces the failure.
         let long_name = "a".repeat(33);
         let template = format!("{{{long_name}}}.ass");
         let expected = format!("{{{long_name}}}.ass");
@@ -5251,8 +5201,7 @@ mod tests {
         assert_eq!(file_name, "Show..special.shifted.ass");
     }
 
-    // R16 W16.4 / R17 W17.6 (N-R17-27, doc clarification):
-    // each test below pins one rejection CODEPOINT-CLASS — the input
+    // Each test below pins one rejection CODEPOINT-CLASS — the input
     // exercises a distinct character / structural class
     // (Windows-reserved, superscript-COM, drive-letter, NTFS-illegal,
     // control, BiDi, zero-width, U+2028, whitespace-only, `..`,
@@ -5370,8 +5319,8 @@ mod tests {
     #[test]
     fn predict_chain_output_path_rejects_whitespace_only_name() {
         // Template `{name}` with a whitespace-only stem produces
-        // a whitespace-only output_name. R10 N-R10-012: TS rejects
-        // via `!filename.trim()`; predictor mirrors. (Template must
+        // a whitespace-only output_name. TS rejects via
+        // `!filename.trim()`; predictor mirrors. (Template must
         // omit `{ext}` so the trim-empty branch fires — `"   .ass"`
         // would trim to `".ass"` not empty.)
         let input = PathBuf::from("/subs/   .ass");
@@ -5397,17 +5346,16 @@ mod tests {
 
     #[test]
     fn predict_chain_output_path_rejects_empty_output_name_after_substitution() {
-        // the `output_name.is_empty()` gate
-        // at the head of predict_chain_output_path was the lone
-        // un-pinned branch in the R16 W16.4 equivalence-class
-        // sweep. An empty template substitutes to `""` for any
-        // input (no tokens to expand). The predictor must reject
-        // so the caller falls back to V8 + TS for the authoritative
-        // empty-name error — without this test, a refactor that
-        // dropped the `.is_empty()` arm would let the cheap-first
-        // path build a `parent/` path which `parent.join("")`
-        // normalizes back to `parent`, and the existence check
-        // would skip the whole batch as "already exists."
+        // The `output_name.is_empty()` gate at the head of
+        // predict_chain_output_path needs explicit coverage: an empty
+        // template substitutes to `""` for any input (no tokens to
+        // expand). The predictor must reject so the caller falls back
+        // to V8 + TS for the authoritative empty-name error — without
+        // this test, a refactor that dropped the `.is_empty()` arm
+        // would let the cheap-first path build a `parent/` path which
+        // `parent.join("")` normalizes back to `parent`, and the
+        // existence check would skip the whole batch as "already
+        // exists."
         let input = PathBuf::from("/subs/Show.ass");
         let predicted = predict_chain_output_path(&input, "", None);
         assert!(
@@ -5416,21 +5364,20 @@ mod tests {
         );
     }
 
-    // ── R14 W14.1: display_path is a PURE FORMATTER (operational) ──
+    // ── display_path is a PURE FORMATTER (operational) ──
 
     #[test]
     fn display_path_preserves_control_chars_for_filesystem_correctness() {
-        // R14 W14.1 (Codex finding 6b2089f3): display_path's return
-        // value is used operationally — as the input to
-        // `read_text_detect_encoding_inner` and as the
-        // `HdrPathRequest.input_path` field sent to the engine. If
-        // a POSIX filename legitimately contains a control char or
-        // U+202E, stripping at display_path makes the CLI open a
+        // display_path's return value is used operationally — as the
+        // input to `read_text_detect_encoding_inner` and as the
+        // `HdrPathRequest.input_path` field sent to the engine. If a
+        // POSIX filename legitimately contains a control char or
+        // U+202E, stripping at display_path would make the CLI open a
         // DIFFERENT file (or the same name minus the special char,
-        // which may also exist). Path-confusion bug. The R13 W13.5
-        // intent was display-time sanitization; that responsibility
-        // moved to `sanitize_for_display` and is applied only at
-        // print sites. display_path itself stays operational-pure.
+        // which may also exist) — a path-confusion bug. Display-time
+        // sanitization belongs in `sanitize_for_display` and is
+        // applied only at print sites; display_path itself stays
+        // operational-pure.
         let evil = PathBuf::from("/subs/evil\u{202e}.ass");
         let got = display_path(&evil);
         assert!(

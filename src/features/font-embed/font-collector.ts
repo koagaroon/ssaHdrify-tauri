@@ -17,22 +17,22 @@ import { ASCII_CONTROL_CHARS, BIDI_AND_ZERO_WIDTH_CHARS } from "../../lib/unicod
 // override block) avoids `\p{L}` Unicode-property recompilation cost
 // .
 //
-// REFACTOR NOTE (R6 W2 / A-R6-2): the previous design had a separate
-// `R_RESET_RE` here that `walkText` used to detect "did this block
-// contain a `\r` → reset isDrawing", plus a different `\r` matchAll
-// regex inside `applyOverrideTags`. The two regexes disagreed on
-// digit-led names and silently broke state (N-R6-1 / A-R6-1, fixed in
-// R6 W1). More structurally, the four tag-family matchAll passes
-// inside `applyOverrideTags` each picked their own `.at(-1)`
-// independently, ignoring relative position between families — so
-// `{\fnArial\r}` set family=Arial then style=initial (correct), but
-// `{\rStyleA\fn…}` came out STYLE=StyleA + family=… (also correct),
-// while `{\fnArial\r}` from a left-to-right libass POV should end at
-// font=initialFont. R6 W2 consolidates: a single position-sorted pass
-// over all five tag families inside `applyOverrideTags`, returning
-// `{font, isDrawing}` together. `R_RESET_RE` is no longer needed —
-// the `\r` handler in `applyOverrideTags` does the drawing reset
-// inline alongside the style reset.
+// REFACTOR NOTE: an earlier design had a separate `R_RESET_RE` here
+// that `walkText` used to detect "did this block contain a `\r` →
+// reset isDrawing", plus a different `\r` matchAll regex inside
+// `applyOverrideTags`. The two regexes disagreed on digit-led names
+// and silently broke state. More structurally, the four tag-family
+// matchAll passes inside `applyOverrideTags` each picked their own
+// `.at(-1)` independently, ignoring relative position between
+// families — so `{\fnArial\r}` set family=Arial then style=initial
+// (correct), but `{\rStyleA\fn…}` came out STYLE=StyleA + family=…
+// (also correct), while `{\fnArial\r}` from a left-to-right libass
+// POV should end at font=initialFont. The current design consolidates
+// into a single position-sorted pass over all five tag families
+// inside `applyOverrideTags`, returning `{font, isDrawing}` together.
+// `R_RESET_RE` is no longer needed — the `\r` handler in
+// `applyOverrideTags` does the drawing reset inline alongside the
+// style reset.
 // Overlong-branch upper bound made explicit. Transitively bounded by
 // MAX_DIALOGUE_TEXT_LEN = 1_000_000 upstream; 200_000 leaves comfortable
 // headroom while still being a concrete cap reviewers can audit without
@@ -64,16 +64,16 @@ const FN_TAG_RE = new RegExp(
   `\\\\fn(?:(${FN_CHAR_SET}{0,128})(?!${FN_CHAR_SET})|${FN_CHAR_SET}{129,200000}(?!${FN_CHAR_SET}))`,
   "gu"
 );
-// Codex ff5b69f5 (post-R7 W1): the three numeric tag regexes must
-// capture the FULL digit run, not a bounded prefix. The R7 W1 attempt
-// to bound them to `\d{1,4}` / `\d{1,2}` / `\d{1,4}` introduced
-// prefix-truncation divergence from ass-compiler's full numeric parse:
-// `\b00700` captured `0070` (weight 70, NOT bold) instead of 700 (bold);
-// `\i001` captured `00` (not italic) instead of 1 (italic); `\p00001`
-// captured `0000` (drawing OFF) instead of 1 (drawing ON). Each path
-// silently mis-attributes embedded fonts vs what libass renders.
+// The three numeric tag regexes must capture the FULL digit run, not
+// a bounded prefix. An earlier attempt to bound them to `\d{1,4}` /
+// `\d{1,2}` / `\d{1,4}` introduced prefix-truncation divergence from
+// ass-compiler's full numeric parse: `\b00700` captured `0070`
+// (weight 70, NOT bold) instead of 700 (bold); `\i001` captured `00`
+// (not italic) instead of 1 (italic); `\p00001` captured `0000`
+// (drawing OFF) instead of 1 (drawing ON). Each path silently
+// mis-attributes embedded fonts vs what libass renders.
 //
-// The original R7 W1 rationale ("avoids match-object pressure under
+// The bounded-form rationale ("avoids match-object pressure under
 // `\b1\b1\b1...` packed into 1 MB ~330k match objects") didn't hold:
 // every `\b<N>` produces one match regardless of digit bound, so the
 // match-object count is identical with or without the bound; only the
@@ -159,8 +159,8 @@ function normalizeFamily(raw: string): string {
 /** Strip control characters and cap length — applied to every family name
  *  captured from a subtitle file before it flows into matching or output.
  *
- *  Round 10 A-R10-010 note on naming: despite the `sanitize` prefix,
- *  this helper performs NORMALIZATION (strip + truncate) — it never
+ *  Note on naming: despite the `sanitize` prefix, this helper
+ *  performs NORMALIZATION (strip + truncate) — it never
  *  rejects, only transforms. Compare to Rust-side `validate_font_family`
  *  which throws on the same codepoint set. The two roles are
  *  intentionally different:
@@ -183,14 +183,14 @@ function normalizeFamily(raw: string): string {
  *
  *  Range covers C0 (0x00-0x1F), DEL (0x7F), C1 (0x80-0x9F), the Unicode
  *  line/paragraph separators (U+2028 / U+2029), AND the full
- *  BiDi / zero-width control set from `unicode-controls.ts` (Round 6
- *  Wave 6.2 parity sweep — previously a family name carrying U+202E
- *  could flow through `sanitizeFamily` into detection-grid labels, log
- *  lines, and chain progress text where the visual-reversal attack
- *  re-surfaced after the inline `safeName` regex inside
- *  `buildFontEntry` (ass-uuencode.ts) had already scrubbed it on the
- *  [Fonts] header path). Full parity with that inline regex on the
- *  shared codepoints — see `sanitization.test.ts` for the pin.
+ *  BiDi / zero-width control set from `unicode-controls.ts`.
+ *  Previously a family name carrying U+202E could flow through
+ *  `sanitizeFamily` into detection-grid labels, log lines, and chain
+ *  progress text where the visual-reversal attack re-surfaced after
+ *  the inline `safeName` regex inside `buildFontEntry`
+ *  (ass-uuencode.ts) had already scrubbed it on the [Fonts] header
+ *  path. Full parity with that inline regex on the shared codepoints
+ *  — see `sanitization.test.ts` for the pin.
  *
  *  Exported for the cross-helper symmetry pin test: the parity claim
  *  between this helper and the inline regex inside
@@ -359,8 +359,8 @@ function processDialogueText(
   if (text.length > MAX_DIALOGUE_TEXT_LEN) {
     // throw rather than silently truncate
     // — parity with MAX_FONT_VARIANTS / MAX_CODEPOINTS_PER_VARIANT /
-    // MAX_TOTAL_CODEPOINTS (the R10 N-R10-034 precedent). Pre-R11 the
-    // slice() form lost glyphs from the font analysis, producing a
+    // MAX_TOTAL_CODEPOINTS. An earlier slice() form lost glyphs from
+    // the font analysis, producing a
     // subsetted font that silently missed characters present in the
     // source dialogue. The cap is 1 MB; legitimate ASS dialogues are
     // 50-500 chars, so hitting it means hostile or corrupt input
@@ -402,8 +402,8 @@ function processDialogueText(
       }
 
       const block = text.slice(i + 1, closeIdx);
-      // Position-sorted single-pass override handling (R6 W2 / A-R6-2):
-      // applyOverrideTags now processes all five tag families
+      // Position-sorted single-pass override handling:
+      // applyOverrideTags processes all five tag families
       // (\r / \fn / \b / \i / \p) in source order and returns both the
       // updated font state AND the new drawing-mode flag. The previous
       // walkText design ran three independent passes — applyOverrideTags
@@ -463,26 +463,26 @@ type OverrideTag =
  * **Tag-family regex history** (preserved for archeology — git log has
  * the per-commit detail):
  *
- * - `\r` capture-group leading class: `[A-Za-z]` → `[\p{L}_]` (Codex
- *   52379e14: accept CJK / `_Alt` / `José`) → `[\p{L}\p{N}_]` (R5 W1
- *   A-R5-1: accept digit-led style names that ass-compiler stores in
- *   styleMap without validation). The continuation class is
- *   `[\p{L}\p{N}_-]` — leading + continuation now differ only on dash
- *   (dash-at-start is a typo trap). Pattern 3 sub-question 2 lesson
- *   from R4 W1 / R5 W1: when a regex change alters what `matchAll`
- *   returns for some input shape, audit every caller that walks the
- *   matches for state-machine effects, AND audit the ENTIRE
- *   input-shape catalog before declaring the fix complete (one shape
- *   closed is not the whole catalog).
+ * - `\r` capture-group leading class: progressively widened from
+ *   `[A-Za-z]` → `[\p{L}_]` (accept CJK / `_Alt` / `José`) →
+ *   `[\p{L}\p{N}_]` (accept digit-led style names that ass-compiler
+ *   stores in styleMap without validation). The continuation class
+ *   is `[\p{L}\p{N}_-]` — leading + continuation now differ only on
+ *   dash (dash-at-start is a typo trap). Pattern 3 sub-question 2
+ *   lesson: when a regex change alters what `matchAll` returns for
+ *   some input shape, audit every caller that walks the matches for
+ *   state-machine effects, AND audit the ENTIRE input-shape catalog
+ *   before declaring the fix complete (one shape closed is not the
+ *   whole catalog).
  *
  * - `\r` overlong handling: bare `{0,127}` upper bound + boundary
- *   lookahead `(?![\p{L}\p{N}_-])` (Codex 994c42d1) → SECOND alternation
- *   branch `[\p{L}\p{N}_][\p{L}\p{N}_-]{128,}` matching overlong runs
- *   WITHOUT a capture group (Codex f871d0cc / R4 W1). Without the
- *   second branch, `matchAll` simply skipped overlong tokens, letting
- *   a prior `\r<valid>` in the same block leave its state in force.
- *   With it, overlong matches with undefined capture → falls through
- *   the `styleName && …` check to `font = initialFont`.
+ *   lookahead `(?![\p{L}\p{N}_-])` → SECOND alternation branch
+ *   `[\p{L}\p{N}_][\p{L}\p{N}_-]{128,}` matching overlong runs
+ *   WITHOUT a capture group. Without the second branch, `matchAll`
+ *   simply skipped overlong tokens, letting a prior `\r<valid>` in
+ *   the same block leave its state in force. With it, overlong
+ *   matches with undefined capture → falls through the
+ *   `styleName && …` check to `font = initialFont`.
  *
  * - `\rdefault`: canonical "reset to dialogue initial" form, handled
  *   by the literal-string check `styleName.toLowerCase() !== "default"`.
@@ -490,41 +490,39 @@ type OverrideTag =
  *   that would otherwise shadow the dialogue's initial style.
  *
  * - `\fn` family capture: sibling-parity with `\r` for the boundary
- *   lookahead and overlong-alternation patterns; same Codex finding
- *   IDs. Exclusion class `[^\\}{C0/DEL/C1/BiDi]` (Round 6 Wave 6.2 +
- *   Round 8 A-R8-A1-3) stops the capture at a literal `{` so
+ *   lookahead and overlong-alternation patterns. Exclusion class
+ *   `[^\\}{C0/DEL/C1/BiDi]` stops the capture at a literal `{` so
  *   `\fn{Evil}` doesn't carry the brace into match keys, and stops
  *   at control chars so `\fn<U+202E>evil` doesn't make the embed
  *   family diverge from the libass-rendered family.
  *
  * - `\b`: relies on `\b` being followed strictly by a digit; ASS spec
  *   tags `\blur<n>` / `\bord<n>` start with `\b` but follow with a
- *   letter, so the regex won't false-match (Round 2 N-R2-12). If a
- *   future ASS extension adds a `\b<word>` tag, tighten the regex.
+ *   letter, so the regex won't false-match. If a future ASS extension
+ *   adds a `\b<word>` tag, tighten the regex.
  *
- * - **Position-sorted single-pass** (R6 W2 / A-R6-2): the previous
- *   design ran four independent `matchAll().at(-1)` passes (one per
- *   tag family) and the walkText caller ran two more passes for `\r`
- *   reset detection and `\p` drawing-mode toggle. Family-independent
- *   last-wins ignored relative position between families: e.g.
+ * - **Position-sorted single-pass**: an earlier design ran four
+ *   independent `matchAll().at(-1)` passes (one per tag family) and
+ *   the walkText caller ran two more passes for `\r` reset detection
+ *   and `\p` drawing-mode toggle. Family-independent last-wins
+ *   ignored relative position between families: e.g.
  *   `{\fnArial\r}` would set family=Arial AND style=initial because
  *   the `\fn` pass ran after `\r` and overwrote `result.family`; but
  *   libass / xy-VSFilter process tags left-to-right and `\r` should
  *   reset family back to initialFont. Same shape applied to
  *   `{\p1\r}` (drawing-on then reset → libass renders, our code
- *   dropped glyphs), `{\b1\r}`, `{\i1\r}`. Refactor collects all
- *   five tag families into one position-sorted list and walks them
- *   left-to-right; `\r` resets both font state AND drawing-mode in
- *   the same handler. Tests pinning previous edge-case behavior
+ *   dropped glyphs), `{\b1\r}`, `{\i1\r}`. The current code collects
+ *   all five tag families into one position-sorted list and walks
+ *   them left-to-right; `\r` resets both font state AND drawing-mode
+ *   in the same handler. Tests pinning previous edge-case behavior
  *   (`current.family` fallback in `\fn` sanitize-failure path) are
  *   preserved by referencing the function parameter `current` (the
  *   pre-block snapshot) rather than the running `font` state.
  *
- * - **W7.5 / R7 W7.5 last-wins per family** is preserved by the
- *   sort being stable per family: when the same family appears
- *   twice in one block (`{\fnArial\fnTimes}`), the later match
- *   simply overwrites in the walk and the family-final = last
- *   occurrence.
+ * - **Last-wins per family** is preserved by the sort being stable
+ *   per family: when the same family appears twice in one block
+ *   (`{\fnArial\fnTimes}`), the later match simply overwrites in the
+ *   walk and the family-final = last occurrence.
  */
 function applyOverrideTags(
   block: string,
@@ -584,22 +582,21 @@ function applyOverrideTags(
         // both produce `tag.family === undefined`; the `?? ""` keeps
         // the existing fall-through-to-initialFont semantic.
         //
-        // (A-R7-2 / A-R7-5): the previous
-        // `sanitizeFamily(rawFamily) || current.family` fallback was
-        // STRUCTURALLY UNREACHABLE. FN_CHAR_SET excludes the same
-        // codepoints `sanitizeFamily` strips (C0 / DEL / C1 / BiDi /
-        // zero-width) plus `\` `{` `}`, AND the first FN_TAG_RE
-        // alternation branch caps at 128 chars — exactly what
-        // `sanitizeFamily` truncates to. So once `rawFamily` is
-        // non-empty after `normalizeFamily`, `sanitizeFamily(rawFamily)`
-        // is byte-equal to `rawFamily` itself and never returns "".
-        // The `|| current.family` clause could only fire if FN_CHAR_SET
-        // were ever loosened to admit chars `sanitizeFamily` strips —
-        // in that future scenario, the right reference frame is
-        // ambiguous (running font vs pre-block snapshot vs initial)
-        // and would need libass verification at that time. Drop the
-        // dead fallback today; the post-R6-W2 position-sorted walk
-        // doesn't need it.
+        // The previous `sanitizeFamily(rawFamily) || current.family`
+        // fallback was STRUCTURALLY UNREACHABLE. FN_CHAR_SET excludes
+        // the same codepoints `sanitizeFamily` strips (C0 / DEL / C1 /
+        // BiDi / zero-width) plus `\` `{` `}`, AND the first
+        // FN_TAG_RE alternation branch caps at 128 chars — exactly
+        // what `sanitizeFamily` truncates to. So once `rawFamily` is
+        // non-empty after `normalizeFamily`,
+        // `sanitizeFamily(rawFamily)` is byte-equal to `rawFamily`
+        // itself and never returns "". The `|| current.family` clause
+        // could only fire if FN_CHAR_SET were ever loosened to admit
+        // chars `sanitizeFamily` strips — in that future scenario,
+        // the right reference frame is ambiguous (running font vs
+        // pre-block snapshot vs initial) and would need libass
+        // verification at that time. The position-sorted walk doesn't
+        // need the dead fallback.
         const rawFamily = normalizeFamily(tag.family ?? "");
         if (!rawFamily) {
           font.family = initialFont.family;
@@ -614,7 +611,7 @@ function applyOverrideTags(
         // `\b700+` = bold by font weight value (CSS-style weight scale).
         // middle range named explicitly so the contract
         // matches the predicate. B_TAG_RE captures the full digit run
-        // (see Codex ff5b69f5 WHY block at the regex const); overlong
+        // (see WHY block at the regex const); overlong
         // values like `\b00700` parse as 700 → bold-on per libass.
         font.bold = tag.weight === 1 || tag.weight >= 700;
         break;

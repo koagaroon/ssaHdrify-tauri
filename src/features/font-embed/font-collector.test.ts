@@ -65,8 +65,8 @@ describe("font-collector \\p drawing-tag whitespace handling", () => {
   });
 
   it("multi-\\p block uses LAST tag's drawing state (libass parity)", async () => {
-    // Round 4 A-R4-07 / Codex 1: `{\p1\p0}` resolves to drawing-OFF
-    // because the LAST `\p` wins. Text after the block is regular
+    // `{\p1\p0}` resolves to drawing-OFF because the LAST `\p` wins.
+    // Text after the block is regular
     // glyphs and must be collected. A regression to first-match-only
     // would set drawing-on and skip the text.
     await ensureLoaded();
@@ -77,11 +77,11 @@ describe("font-collector \\p drawing-tag whitespace handling", () => {
   });
 });
 
-// ── Round 9 N-R9-N2-3 — last-wins parity for the other 4 override
-// tags that Wave 7.5 fixed (\fn / \b / \i / \r). The \p test above
-// pins libass parity for one tag; the other four were unanchored,
-// so a regression flipping any back to .match() (first-wins) would
-// silently mis-attribute fonts / styles between embed and render. ──
+// ── Last-wins parity for the other 4 override tags (\fn / \b / \i /
+// \r). The \p test above pins libass parity for one tag; the other
+// four were unanchored, so a regression flipping any back to
+// .match() (first-wins) would silently mis-attribute fonts / styles
+// between embed and render. ──
 
 describe("font-collector multi-tag last-wins parity (W7.5 regression anchor)", () => {
   it("multi-\\fn block uses LAST family (libass parity)", async () => {
@@ -119,19 +119,18 @@ describe("font-collector multi-tag last-wins parity (W7.5 regression anchor)", (
     expect(italicOff!.codepoints.has(0x43), "C must land in the non-italic bucket").toBe(true);
   });
 
-  // ── Codex ff5b69f5 — overlong numeric tags must parse the FULL
-  // digit run, not a bounded prefix. R7 W1 attempted to bound the
-  // three numeric tag regexes (\b → \d{1,4}, \i → \d{1,2}, \p →
-  // \d{1,4}) without a (?!\d) boundary, which caused JS global
-  // matchAll to capture the leading prefix of any longer digit run.
-  // The truncated value then fed parseInt → wrong bold / italic /
-  // drawing state, diverging from what ass-compiler (and libass)
-  // resolve. These three overlong cases are the exact PoC inputs
-  // from Codex ff5b69f5; the canonical short-form siblings pair
-  // with them as baseline coherence checks — a re-bounding
-  // regression lights up the overlong test (truncated prefix gives
-  // the wrong state), and the canonical short-form pin makes sure
-  // the regex still handles well-formed short inputs correctly.
+  // ── Overlong numeric tags must parse the FULL digit run, not a
+  // bounded prefix. An earlier bounded form for the three numeric
+  // tag regexes (\b → \d{1,4}, \i → \d{1,2}, \p → \d{1,4}) without
+  // a (?!\d) boundary caused JS global matchAll to capture the
+  // leading prefix of any longer digit run. The truncated value
+  // then fed parseInt → wrong bold / italic / drawing state,
+  // diverging from what ass-compiler (and libass) resolve. The
+  // canonical short-form siblings pair with the overlong cases as
+  // baseline coherence checks — a re-bounding regression lights up
+  // the overlong test (truncated prefix gives the wrong state), and
+  // the canonical short-form pin makes sure the regex still handles
+  // well-formed short inputs correctly.
 
   it("\\b00700 (5 digits, overlong) parses as weight=700 → bold (Codex ff5b69f5)", async () => {
     // Truncated `0070` would give weight 70 → NOT bold; full `00700`
@@ -237,12 +236,12 @@ Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\rStyleA\rStyleB}DDDD`}
   });
 });
 
-// ── Codex 994c42d1 — boundary-pin for \r and \fn capture caps.
-// R2 W2 added {0,127}/{0,128} caps for Pattern 2 symmetry, but
-// without a trailing boundary the bounded regex silently TRUNCATED
-// overlong names to the prefix, then performed styleMap.has(prefix).
-// An attacker-crafted ASS defining both a 128-char prefix style and
-// a longer same-prefix style would mis-attribute glyphs to PrefixFont
+// ── Boundary-pin for \r and \fn capture caps. An earlier change
+// added {0,127}/{0,128} caps for Pattern 2 symmetry, but without a
+// trailing boundary the bounded regex silently TRUNCATED overlong
+// names to the prefix, then performed styleMap.has(prefix). An
+// attacker-crafted ASS defining both a 128-char prefix style and a
+// longer same-prefix style would mis-attribute glyphs to PrefixFont
 // while libass renders LongFont — embedded subsets diverge from
 // what's drawn. The fix adds a negative-lookahead boundary so
 // overlong names fail to match outright and fall through to the
@@ -345,17 +344,17 @@ Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\r` + longer + `}F`}
   });
 });
 
-// ── Codex f871d0cc — state-retention pair for the 994c42d1 boundary fix.
-// 994c42d1's boundary lookahead alone made overlong \r / \fn silently
-// disappear from matchAll. The if-block at the caller doesn't execute
-// when matchAll returns no token, so a PRIOR valid \r / \fn in the same
-// override block leaves its state in `result` — X / Y get attributed to
-// the prior style / family instead of being reset to the dialogue
-// initial (libass semantics). R4 W1 fixed it via a second alternation
-// that matches overlong runs with undefined capture, so the if-block
-// runs and falls through to the initialFont path. These tests pin the
-// state-retention contract specifically, complementing the 994c42d1
-// boundary tests above which only cover the no-prior-override case.
+// ── State-retention pair for the boundary fix above. A boundary
+// lookahead alone made overlong \r / \fn silently disappear from
+// matchAll. The if-block at the caller doesn't execute when matchAll
+// returns no token, so a PRIOR valid \r / \fn in the same override
+// block leaves its state in `result` — X / Y get attributed to the
+// prior style / family instead of being reset to the dialogue initial
+// (libass semantics). The fix uses a second alternation that matches
+// overlong runs with undefined capture, so the if-block runs and
+// falls through to the initialFont path. These tests pin the
+// state-retention contract specifically, complementing the boundary
+// tests above which only cover the no-prior-override case.
 describe("font-collector \\r / \\fn overlong state-retention (Codex f871d0cc)", () => {
   it("\\r overlong after a valid prior \\r resets to initial style", async () => {
     // PoC: `{\rStyleA\r<overlong>}X` — the FIRST tag sets state to
@@ -418,18 +417,18 @@ Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\rStyleA\r` + overlong +
   });
 });
 
-// ── R5 W1 — digit-led style name pair for the f871d0cc
-// state-retention fix. R4 W1's alternation closed the overlong-run
-// shape but kept the original `[\p{L}_]` leading-char class on BOTH
-// branches, so a digit-led style name (`1MainTitle`) still failed both
-// alternation branches — same state-retention divergence in a
-// different input shape. ass-compiler accepts digit-led names and
-// stores them in styleMap unchanged; the parser-vs-override-tag
-// asymmetry was an internal inconsistency regardless of libass
-// behavior. Fix extends both leading classes to `[\p{L}\p{N}_]`.
-// Tests below cover both directions: digit-led name DEFINED in
-// V4+ Styles (must switch to that style) and digit-led name
-// UNDEFINED (must reset to initial, matching the overlong path).
+// ── Digit-led style name pair for the state-retention fix. The
+// earlier alternation closed the overlong-run shape but kept the
+// original `[\p{L}_]` leading-char class on BOTH branches, so a
+// digit-led style name (`1MainTitle`) still failed both alternation
+// branches — same state-retention divergence in a different input
+// shape. ass-compiler accepts digit-led names and stores them in
+// styleMap unchanged; the parser-vs-override-tag asymmetry was an
+// internal inconsistency regardless of libass behavior. Fix extends
+// both leading classes to `[\p{L}\p{N}_]`. Tests below cover both
+// directions: digit-led name DEFINED in V4+ Styles (must switch to
+// that style) and digit-led name UNDEFINED (must reset to initial,
+// matching the overlong path).
 describe("font-collector \\r digit-led style name (A-R5-1)", () => {
   it("\\r1MainTitle resolves to the digit-led style when defined", async () => {
     // ass-compiler accepts `Style: 1MainTitle,...`; our \r regex
@@ -470,11 +469,12 @@ Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\rStyleA\r1MainTitle}X`}
 
   it("\\r9NonexistentStyle (digit-led, undefined) falls through to initial style", async () => {
     // Sibling counter-test for the undefined case: `\r<digit-led-name>`
-    // where the name is NOT in styleMap. Pre-R5-W1 fix, both alternation
-    // branches rejected the digit-led leading char, so matchAll missed
-    // the token and prior state stayed in force. Post-fix, the first
-    // branch matches with capture = "9NonexistentStyle", styleMap.has
-    // returns false, the else-arm resets to initialFont.
+    // where the name is NOT in styleMap. Before the digit-led fix,
+    // both alternation branches rejected the digit-led leading char,
+    // so matchAll missed the token and prior state stayed in force.
+    // Post-fix, the first branch matches with capture =
+    // "9NonexistentStyle", styleMap.has returns false, the else-arm
+    // resets to initialFont.
     await ensureLoaded();
     const ass = `[Script Info]
 ScriptType: v4.00+
@@ -505,19 +505,20 @@ Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\rStyleA\r9NonexistentSt
   });
 });
 
-// ── R6 W1 (N-R6-1 / A-R6-1) — drawing-reset parity for digit-led \r.
-// R5 W1 widened the \r alternation regex inside applyOverrideTags to
-// accept digit-led style names, but the SIBLING regex R_RESET_RE at
-// module top (which the walkText loop uses to decide whether \r was
-// present → reset isDrawing) still used the old [\p{L}_] leading class.
-// When an attacker-controlled ASS pairs \p1 with \r<digit-led>, the two
-// regexes disagree: applyOverrideTags switches style correctly but
-// R_RESET_RE.test() returns false, so isDrawing stays true from the
-// prior \p1. Plain text after the block becomes drawing-mode commands
-// → glyphs missing from the embedded subset. libass renders normally
-// (\r resets drawing-off). Same regex-pair coherence failure mode the
-// R5 W1 WHY comment predicted; the hiding spot was 458 lines above in
-// the same file.
+// ── Drawing-reset parity for digit-led \r. Widening the \r
+// alternation regex inside applyOverrideTags to accept digit-led
+// style names was incomplete because the SIBLING regex R_RESET_RE at
+// module top (which the walkText loop used to decide whether \r was
+// present → reset isDrawing) still used the old [\p{L}_] leading
+// class. When an attacker-controlled ASS pairs \p1 with
+// \r<digit-led>, the two regexes disagree: applyOverrideTags
+// switches style correctly but R_RESET_RE.test() returns false, so
+// isDrawing stays true from the prior \p1. Plain text after the
+// block becomes drawing-mode commands → glyphs missing from the
+// embedded subset. libass renders normally (\r resets drawing-off).
+// Same regex-pair coherence failure mode predicted by the WHY
+// comment for the alternation widening; the hiding spot was 458
+// lines above in the same file.
 //
 // Tests below pair the two halves of the contract:
 //   1. Drawing-mode reset fires for digit-led \r (so subsequent text
@@ -533,19 +534,19 @@ describe("font-collector \\r digit-led drawing-mode reset (A-R6-1)", () => {
     // (via applyOverrideTags's matchAll). Then X is collected under
     // Courier New.
     //
-    // Pre-R6-W1: R_RESET_RE used [\p{L}_] which rejected the digit
-    // leading char; .test returned false; isDrawing stayed true from
-    // block 1; X was treated as drawing-mode commands and DROPPED.
-    // applyOverrideTags still switched style correctly (R5 W1 widened
-    // its alternation regex), but Courier New's bucket would be empty
-    // because no glyphs reached recordChars.
+    // Before the fix: R_RESET_RE used [\p{L}_] which rejected the
+    // digit leading char; .test returned false; isDrawing stayed
+    // true from block 1; X was treated as drawing-mode commands and
+    // DROPPED. applyOverrideTags still switched style correctly
+    // (alternation regex was widened separately), but Courier New's
+    // bucket would be empty because no glyphs reached recordChars.
     //
-    // Single-block {\p1\r1MainTitle}X is NOT used here — the existing
-    // walkText drawing-mode pass runs pTags AFTER R_RESET_RE, so the
-    // \p1 in the same block always wins regardless of R_RESET_RE's
-    // result. That positional-order defect is A-R6-2 / R6 W2's
-    // refactor target; this W1-only test must isolate the R_RESET_RE
-    // contract via cross-block state propagation.
+    // Single-block {\p1\r1MainTitle}X is NOT used here — the
+    // earlier walkText drawing-mode pass ran pTags AFTER
+    // R_RESET_RE, so the \p1 in the same block always wins
+    // regardless of R_RESET_RE's result. That positional-order
+    // defect was a separate refactor target; this test isolates the
+    // R_RESET_RE contract via cross-block state propagation.
     await ensureLoaded();
     const ass = `[Script Info]
 ScriptType: v4.00+
@@ -577,12 +578,12 @@ Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\p1}{\r1MainTitle}X`}
     // (via R_RESET_RE.test) AND fall through to initialFont (style
     // name not in styleMap). Y is collected under Arial.
     //
-    // Pre-R6-W1 + R5-W1: applyOverrideTags's alternation rejected
-    // digit-led → state retained block 1's style. Pre-R6-W1 alone:
-    // R_RESET_RE rejected digit-led → isDrawing stayed true → Y
-    // dropped. Post-R6-W1 + R5-W1: both regexes accept digit-led;
-    // style resets to initial AND isDrawing resets; Y collected
-    // under Arial.
+    // Before any digit-led fix: applyOverrideTags's alternation
+    // rejected digit-led → state retained block 1's style. After
+    // only the alternation fix: R_RESET_RE still rejected digit-led
+    // → isDrawing stayed true → Y dropped. After both fixes: both
+    // regexes accept digit-led; style resets to initial AND
+    // isDrawing resets; Y collected under Arial.
     await ensureLoaded();
     const ass = `[Script Info]
 ScriptType: v4.00+
@@ -606,25 +607,25 @@ Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\p1}{\r9NonexistentStyle
   });
 });
 
-// ── R6 W2 — position-sorted single-pass override handling.
-// Pre-R6-W2 applyOverrideTags ran four independent matchAll().at(-1)
-// passes (one per tag family) and walkText ran two more (R_RESET_RE +
+// ── Position-sorted single-pass override handling. An earlier
+// applyOverrideTags ran four independent matchAll().at(-1) passes
+// (one per tag family) and walkText ran two more (R_RESET_RE +
 // pTags). Family-independent last-wins ignored relative position
 // between families: e.g. `{\fnArial\r}` would set family=Arial AND
 // style=initial because the \fn pass ran after \r and overwrote
 // `result.family`; libass / xy-VSFilter process tags left-to-right,
 // so \r should reset family back to initialFont. Same shape applied
-// to `{\b1\r}`, `{\i1\r}`, `{\p1\r}`. R6 W2 consolidates into one
-// position-sorted walk; these tests pin libass-parity for each
-// divergent shape.
+// to `{\b1\r}`, `{\i1\r}`, `{\p1\r}`. The current code consolidates
+// into one position-sorted walk; these tests pin libass-parity for
+// each divergent shape.
 describe("font-collector \\r resets siblings within the same block (A-R6-2)", () => {
   it("{\\fnTimes\\r}X resets family to initial — \\fn-then-\\r positional order", async () => {
     // libass: \fn sets family=Times, then \r resets EVERYTHING
     // including family to dialogue initial (Arial). X collected
-    // under Arial, NOT Times. Pre-R6-W2: \fn matchAll.at(-1)
-    // ran AFTER \r matchAll.at(-1), so family=Times overrode \r's
-    // style reset → embed attributed X to Times while libass
-    // rendered it under Arial.
+    // under Arial, NOT Times. Before the position-sorted fix: \fn
+    // matchAll.at(-1) ran AFTER \r matchAll.at(-1), so family=Times
+    // overrode \r's style reset → embed attributed X to Times while
+    // libass rendered it under Arial.
     await ensureLoaded();
     const usage = collectFonts(makeASS(String.raw`{\fnTimes New Roman\r}X`));
     const times = usage.find((u) => u.key.family === "Times New Roman");
@@ -645,8 +646,9 @@ describe("font-collector \\r resets siblings within the same block (A-R6-2)", ()
   it("{\\b1\\r}X resets bold to initial — \\b-then-\\r positional order", async () => {
     // libass: \b1 sets bold-on, then \r resets to dialogue initial
     // (Default style is bold=0). X collected under Arial NON-bold,
-    // not Arial-Bold. Pre-R6-W2: \b matchAll.at(-1) ran independently
-    // and set bold=true regardless of \r's relative position.
+    // not Arial-Bold. Before the position-sorted fix: \b
+    // matchAll.at(-1) ran independently and set bold=true regardless
+    // of \r's relative position.
     await ensureLoaded();
     const usage = collectFonts(makeASS(String.raw`{\b1\r}X`));
     const arialBold = usage.find((u) => u.key.family === "Arial" && u.key.bold);
@@ -680,11 +682,11 @@ describe("font-collector \\r resets siblings within the same block (A-R6-2)", ()
   it("{\\p1\\r}X resets drawing-mode to OFF — \\p-then-\\r positional order", async () => {
     // libass: \p1 enables drawing, then \r resets drawing-off
     // (libass treats \r as a full state reset including drawing
-    // mode). X collected under Arial. Pre-R6-W2: walkText ran
-    // R_RESET_RE first (drawing=false from \r), THEN pTags
-    // matchAll.at(-1) (drawing=true from \p1) — the \p pass
-    // clobbered the \r reset, so X was treated as drawing-mode
-    // commands and dropped from glyph collection.
+    // mode). X collected under Arial. Before the position-sorted
+    // fix: walkText ran R_RESET_RE first (drawing=false from \r),
+    // THEN pTags matchAll.at(-1) (drawing=true from \p1) — the \p
+    // pass clobbered the \r reset, so X was treated as
+    // drawing-mode commands and dropped from glyph collection.
     await ensureLoaded();
     const usage = collectFonts(makeASS(String.raw`{\p1\r}X`));
     const arial = usage.find((u) => u.key.family === "Arial");
@@ -698,10 +700,10 @@ describe("font-collector \\r resets siblings within the same block (A-R6-2)", ()
   it("{\\r\\fnTimes}X — \\r-then-\\fn keeps the later \\fn family (libass parity, sanity check)", async () => {
     // Counter-direction: when \fn comes AFTER \r in source order,
     // \fn correctly overrides the reset's family choice. This was
-    // already the behavior pre-R6-W2 (\r matchAll then \fn matchAll
-    // gave the same end state), but pin it explicitly so a future
-    // refactor that flips the position-walk direction doesn't
-    // silently regress.
+    // already the behavior before the position-sorted refactor (\r
+    // matchAll then \fn matchAll gave the same end state), but pin
+    // it explicitly so a future refactor that flips the
+    // position-walk direction doesn't silently regress.
     await ensureLoaded();
     const usage = collectFonts(makeASS(String.raw`{\r\fnTimes New Roman}X`));
     const times = usage.find((u) => u.key.family === "Times New Roman");
