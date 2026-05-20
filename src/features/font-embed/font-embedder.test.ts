@@ -744,4 +744,36 @@ Dialogue: 0,0:00:00.00,0:00:05.00,Default,Hello
       expect(codepoints.length).toBe(50_001);
     }
   });
+
+  it("merged union at exactly MAX_SUBSET_CODEPOINTS + 1 falls back to per-alias", async () => {
+    // Off-by-one boundary pin: a regression flipping `>` to `>=` on
+    // `mergedCodepoints.size > MAX_SUBSET_CODEPOINTS_FOR_DEDUP`
+    // would silently bail dedup one entry early — both this test
+    // (size = cap + 1) and the at-cap test above (size = cap, takes
+    // dedup) light up. The earlier "over by 4" test wouldn't
+    // distinguish a `>=` regression because both flavors of the
+    // condition agree at 200004.
+    subsetFontMock.mockResolvedValue(new Uint8Array([1, 2, 3, 4]));
+
+    // 50,001 + 50,000 × 3 = 200,001 (cap + 1). Offsets are well
+    // separated to keep ranges disjoint.
+    const aliases = [
+      makeInfoCap("A", "/fonts/face.ttf", 0),
+      makeInfoCap("B", "/fonts/face.ttf", 0),
+      makeInfoCap("C", "/fonts/face.ttf", 0),
+      makeInfoCap("D", "/fonts/face.ttf", 0),
+    ];
+    const sizes = [50_001, 50_000, 50_000, 50_000];
+    const usages = aliases.map((info, k) => ({
+      key: info.key,
+      codepoints: makeCodepointRange(0x010000 + k * 0x010000, sizes[k]!),
+    }));
+
+    const result = await embedFonts(SHELL_ASS_2, aliases, usages);
+
+    expect(result).not.toBeNull();
+    expect(result!.embeddedCount).toBe(4);
+    // Fallback path: one subset call per alias, not one dedup call.
+    expect(subsetFontMock).toHaveBeenCalledTimes(4);
+  });
 });

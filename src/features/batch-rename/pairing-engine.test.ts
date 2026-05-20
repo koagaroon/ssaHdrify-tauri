@@ -340,6 +340,36 @@ describe("buildPairings — common shapes", () => {
     expect(rows[1]!.video?.path).toBe(nonEpisodeName.path);
     expect(rows[1]!.key).toBe("unmatched");
   });
+
+  it("ambiguous overflow (3 videos + 2 subs) → vs[2] sources unmatched AND keys unmatched", () => {
+    // Boundary pin for the overflow branch in buildPairings: when
+    // the ambiguous bucket has more videos than subs, the overflow
+    // videos (vs[i] with i >= ss.length) fall to source="unmatched".
+    // The row's `key` must also flip to "unmatched" — without it the
+    // overflow row carries its real `<season>|<episode>` key but
+    // sources as "unmatched", and downstream sort groups it by
+    // episode instead of clustering at the tail with the other
+    // unmatched entries. The equal-count test above (2v+2s) only
+    // exercises the index-pair branch; this one specifically pins
+    // the source/key-flip pair.
+    const v1 = parse("[G1][Show][01][1080p].mkv");
+    const v2 = parse("[G2][Show][01][1080p].mkv");
+    const v3 = parse("[G3][Show][01][1080p].mkv");
+    const s1 = parse("[G1][Show][01][1080p].sc.ass");
+    const s2 = parse("[G2][Show][01][1080p].sc.ass");
+    const rows = buildPairings([v1, v2, v3], [s1, s2]);
+    expect(rows.length).toBe(3);
+    // First two videos pair off via the ambiguous-warning path.
+    expect(rows[0]!.source).toBe("warning");
+    expect(rows[0]!.subtitle?.path).toBe(s1.path);
+    expect(rows[1]!.source).toBe("warning");
+    expect(rows[1]!.subtitle?.path).toBe(s2.path);
+    // Third video gets the overflow treatment — both source AND key
+    // flipped to "unmatched" so the sort clusters it at the tail.
+    expect(rows[2]!.source).toBe("unmatched");
+    expect(rows[2]!.subtitle).toBeNull();
+    expect(rows[2]!.key).toBe("unmatched");
+  });
 });
 
 describe("deriveRenameOutputPath — exact basename match (no lang suffix)", () => {

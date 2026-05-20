@@ -33,24 +33,35 @@ import { BIDI_AND_ZERO_WIDTH_CHARS } from "../../lib/unicode-controls";
 // `{font, isDrawing}` together. `R_RESET_RE` is no longer needed —
 // the `\r` handler in `applyOverrideTags` does the drawing reset
 // inline alongside the style reset.
-// R7 W1 A-R7-3: overlong-branch upper bound made explicit. Transitively
-// bounded by MAX_DIALOGUE_TEXT_LEN = 1_000_000 upstream; 200_000 leaves
-// comfortable headroom while still being a concrete cap reviewers can
-// audit without chasing the upstream transitive bound. R8 W2 N-R8-10:
-// the R_TAG_RE overlong upper {128,199999} (1 leading char + 199999
-// continuation = 200000 total) is set so the total-char ceiling of the
-// overlong branch equals FN_TAG_RE's {129,200000} (200000 chars). The
-// two used to differ by 1 (R_TAG total 200001 vs FN_TAG total 200000);
-// cosmetic but the symmetry is the contract reviewers grep for.
+// Overlong-branch upper bound made explicit. Transitively bounded by
+// MAX_DIALOGUE_TEXT_LEN = 1_000_000 upstream; 200_000 leaves comfortable
+// headroom while still being a concrete cap reviewers can audit without
+// chasing the upstream transitive bound. R_TAG_RE overlong upper
+// {128,199999} (1 leading + 199999 continuation = 200000 total) matches
+// FN_TAG_RE's {129,200000} total ceiling; the symmetry is the contract
+// reviewers grep for.
+//
+// Both alternations now carry the trailing boundary lookahead — the
+// first alt (1-128 chars) AND the overlong second alt (129-200000
+// chars) require a non-identifier char after the match. Pre-fix the
+// second alt lacked the lookahead and relied on having no capture
+// group (m[1] = undefined → libass parity reset-to-initial-style) for
+// its safety; a future refactor adding a capture or unifying the two
+// alts would have silently re-created the f871d0cc-class
+// state-retention / prefix-truncation bug. Shape parity with the
+// first alt removes the "safe-by-accident" footgun. Inputs longer
+// than 200000 chars can't reach this regex in practice (upstream
+// MAX_CAPTION_TEXT_LEN caps captions at 64,000 bytes), so the
+// behavior change is unreachable for legitimate or malformed input.
 const R_TAG_RE =
-  /\\r(?:([\p{L}\p{N}_][\p{L}\p{N}_-]{0,127})?(?![\p{L}\p{N}_-])|[\p{L}\p{N}_][\p{L}\p{N}_-]{128,199999})/gu;
+  /\\r(?:([\p{L}\p{N}_][\p{L}\p{N}_-]{0,127})?(?![\p{L}\p{N}_-])|[\p{L}\p{N}_][\p{L}\p{N}_-]{128,199999}(?![\p{L}\p{N}_-]))/gu;
 // `\fn` regex constructed dynamically because the exclusion class
 // interpolates `BIDI_AND_ZERO_WIDTH_CHARS`. Hoisted to a module-level
 // const just like the literal regexes above so the compile cost is
 // paid once per process, not per override block.
 const FN_CHAR_SET = `[^\\\\}{\\x00-\\x1f\\x7f-\\x9f${BIDI_AND_ZERO_WIDTH_CHARS}]`;
 const FN_TAG_RE = new RegExp(
-  `\\\\fn(?:(${FN_CHAR_SET}{0,128})(?!${FN_CHAR_SET})|${FN_CHAR_SET}{129,200000})`,
+  `\\\\fn(?:(${FN_CHAR_SET}{0,128})(?!${FN_CHAR_SET})|${FN_CHAR_SET}{129,200000}(?!${FN_CHAR_SET}))`,
   "gu"
 );
 // Codex ff5b69f5 (post-R7 W1): the three numeric tag regexes must

@@ -715,3 +715,55 @@ describe("font-collector \\r resets siblings within the same block (A-R6-2)", ()
     ).toBe(true);
   });
 });
+
+// ── Overlong second-alternation cap (1 leading + {128,199999}
+// continuation = 200000 total). The earlier 129-char test pins the
+// LOWER bound of the overlong branch; these two pin the UPPER bound
+// from both sides per code_review.md § "Fixture must exercise what
+// the title names. For boundary-named tests, pair the at-limit test
+// with an over-limit counter-test." Both alternations now carry the
+// trailing boundary lookahead; the 200001-char case relies on the
+// lookahead to refuse rather than silently prefix-matching. ──
+describe("font-collector R_TAG overlong-cap boundary (200000 / 200001)", () => {
+  it("\\r at 200000-char overlong cap matches and resets to initial style", async () => {
+    // At-limit: 1 leading + 199999 continuation = 200000 total, the
+    // exact ceiling of the overlong second alt. m[1] is undefined
+    // (second alt has no capture group), applyOverrideTags treats
+    // the match as "\r with no name" — reset-to-initial-style per
+    // libass parity. F lands under Arial (the dialogue's initial
+    // style), NOT under the prior `\fn Times` family.
+    await ensureLoaded();
+    const longName = "A".repeat(200000);
+    const usage = collectFonts(makeASS(String.raw`{\fnTimes\r` + longName + String.raw`}F`));
+    const arial = usage.find((u) => u.key.family === "Arial");
+    expect(arial, "Arial (Default initial) FontUsage must exist").toBeDefined();
+    expect(
+      arial!.codepoints.has(0x46),
+      "F must land in Arial — 200000-char overlong \\r resets to initial"
+    ).toBe(true);
+  });
+
+  it("\\r over 200000-char cap: \\r fails to match, prior \\fn family persists", async () => {
+    // Over-limit: 200001 chars can't satisfy either alternation
+    // under the new boundary lookahead — alt 1 caps at 128, alt 2
+    // can't terminate with a non-identifier inside the run of 'A's.
+    // The `\r` is unmatched, the override block is parsed without a
+    // reset, and the prior `\fn Times` family persists through to
+    // the trailing text. Pinned even though MAX_DIALOGUE_TEXT_LEN +
+    // MAX_CAPTION_TEXT_LEN make the over-cap case mostly unreachable
+    // for legitimate input — the contract is what we're locking, not
+    // a likely runtime path.
+    await ensureLoaded();
+    const tooLong = "A".repeat(200001);
+    const usage = collectFonts(makeASS(String.raw`{\fnTimes\r` + tooLong + String.raw`}F`));
+    const times = usage.find((u) => u.key.family === "Times");
+    expect(
+      times,
+      "Times FontUsage must exist — \\fn applied before the unmatched \\r"
+    ).toBeDefined();
+    expect(
+      times!.codepoints.has(0x46),
+      "F must land in Times — over-cap \\r is unrecognized, prior \\fn persists"
+    ).toBe(true);
+  });
+});

@@ -4687,7 +4687,8 @@ mod tests {
         duplicate_rename_output_keys, engine, group_resolved_fonts_by_face, normalize_output_key,
         parse_duration_ms, parse_timestamp_ms, predict_chain_output_path, relocate_output_path,
         sanitize_for_display, substitute_template, write_output, GlobalOptions, OutputLang,
-        ResolvedEmbedFont, TempFontDbDir, MAX_SHIFT_OFFSET_MS, MAX_SUBSET_CODEPOINTS_FOR_DEDUP,
+        ResolvedEmbedFont, TempFontDbDir, MAX_RESOLVED_FONT_CODEPOINTS, MAX_SHIFT_OFFSET_MS,
+        MAX_SUBSET_CODEPOINTS_FOR_DEDUP,
     };
     // Import the canonical filename literal directly from app_lib so the
     // test pins the same name `TempFontDbDir::drop`'s remove_dir_all
@@ -4718,6 +4719,30 @@ mod tests {
              fallback path is bounded by what subset_font accepts. \
              If you change one, change both AND update the TS sibling \
              at src/features/font-embed/font-embedder.ts."
+        );
+    }
+
+    /// Pin the per-alias resolved cap < dedup cap inequality the
+    /// fallback path's safety claim depends on. The cap-busting
+    /// fallback subsets each alias independently — each alias's
+    /// codepoints is bounded by `MAX_RESOLVED_FONT_CODEPOINTS`
+    /// upstream in `resolve_embed_fonts`, and that bound MUST be
+    /// strictly less than the subset cap or the per-alias call could
+    /// itself overflow `subset_font`. Same cross-language drift
+    /// defense rationale that motivated `dedup_cap_matches_ipc_cap`:
+    /// the relationship is load-bearing, written down in one prose
+    /// comment, and there is no compiler check today.
+    #[test]
+    fn resolved_font_cap_fits_subset_cap() {
+        assert!(
+            MAX_RESOLVED_FONT_CODEPOINTS < MAX_SUBSET_CODEPOINTS_FOR_DEDUP,
+            "MAX_RESOLVED_FONT_CODEPOINTS ({}) must be strictly less \
+             than MAX_SUBSET_CODEPOINTS_FOR_DEDUP ({}) — the cap-busting \
+             fallback subsets each alias independently and its safety \
+             claim depends on per-alias codepoints fitting under the \
+             subset cap.",
+            MAX_RESOLVED_FONT_CODEPOINTS,
+            MAX_SUBSET_CODEPOINTS_FOR_DEDUP,
         );
     }
 

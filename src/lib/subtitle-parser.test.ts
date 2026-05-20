@@ -352,6 +352,36 @@ describe("parseSubtitle / shiftSubtitle — oversized-ASS-Dialogue placeholder a
     expect(result.captions).toHaveLength(0);
   });
 
+  // parseSub frame-number boundary pair — `\d{1,12}` in subLineRe.
+  // Sibling to the SRT / VTT / ASS hour-digit pairs above. Without an
+  // over-limit counter-test, a refactor relaxing the bound to
+  // `\d{1,13}` would silently slip through.
+
+  it("parses 12-digit-frame MicroDVD entry (upper bound)", () => {
+    const longFrame = "999999999999"; // 12 digits, at the {1,12} cap
+    const content = `{${longFrame}}{${longFrame}}Line at limit\n`;
+    const result = parseSubtitle(content);
+    expect(result.format).toBe("sub");
+    expect(result.captions).toHaveLength(1);
+    expect(result.captions[0]!.text).toBe("Line at limit");
+  });
+
+  it("rejects 13-digit-frame MicroDVD entry (upper bound enforced)", () => {
+    const tooLong = "9999999999999"; // 13 digits
+    const content = `{${tooLong}}{${tooLong}}Over the limit\n`;
+    // subLineRe requires `\d{1,12}` frame numbers — the 13-digit
+    // form fails to match the per-line regex. detectFormat's
+    // SUB_LINE uses `\d+` (no cap), so detection still classifies
+    // this as `sub`, but parseSub yields zero captions. Asymmetry
+    // is intentional today: detection cap mirrors per-line cap
+    // would be tighter, but the format-detect ceiling is bounded
+    // by 2 KB of `head` text and the per-line extractor is the
+    // real semantic boundary.
+    const result = parseSubtitle(content);
+    expect(result.format).toBe("sub");
+    expect(result.captions).toHaveLength(0);
+  });
+
   // Round 11 W11.6 (N3-R11-08): direct pins on R10 N-R10-006 (parseSub
   // skipped-placeholder) + N-R10-007 / Round 11 W11.1 N1-R11-01
   // (parseSrt/parseVtt skipped-placeholder). Pre-W11.6 these contracts

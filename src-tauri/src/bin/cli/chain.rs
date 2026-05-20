@@ -613,29 +613,12 @@ mod tests {
         }
     }
 
-    #[test]
-    fn parse_terminal_embed_step_with_repeatable_font_flags() {
-        let segment = argv_of(&[
-            "embed",
-            "--font-dir",
-            "./fonts",
-            "--font-dir",
-            "C:/MyFonts",
-            "--font-file",
-            "./SmileySans.ttf",
-            "cat.ass",
-        ]);
-        let step = parse_one_step(&segment, true).unwrap();
-        match step {
-            ParsedStep::Embed(args) => {
-                assert_eq!(args.files, vec![PathBuf::from("cat.ass")]);
-                // Other field accesses would require pub(crate) on
-                // those fields too; for now the file extraction is
-                // sufficient to prove the wrapper-flatten pattern works.
-            }
-            _ => panic!("expected Embed"),
-        }
-    }
+    // `parse_terminal_embed_step_with_repeatable_font_flags` previously
+    // lived here, but it only asserted `files` — accumulation behavior
+    // for `--font-dir` / `--font-file` is covered by
+    // `marshal_embed_step_renames_to_camel_case` below where the per-Args
+    // fields are visible. Test-name-as-contract: the deleted title
+    // promised repeatable-flag coverage it didn't actually exercise.
 
     #[test]
     fn parse_unknown_kind_errors() {
@@ -800,11 +783,14 @@ mod tests {
     }
 
     #[test]
-    fn full_parse_no_warning_for_subjective_unusual_orderings() {
+    fn full_parse_no_warning_for_hdr_after_embed() {
         // HDR after embed is "unusual" but not mathematically wrong
         // — the v1 catalog deliberately doesn't warn on this to
-        // avoid false positives. If real users complain about it,
-        // we'd add the warning later.
+        // avoid false positives. Pinning the EXACT excluded ordering
+        // (HDR-after-embed) so a future "widen the warn catalog"
+        // patch trips the test before it ships. Sibling to
+        // `full_parse_warns_on_shift_after_embed` which pins the
+        // ordering that DOES warn.
         let argv = argv_of(&[
             "embed",
             "--font-dir",

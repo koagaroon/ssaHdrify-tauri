@@ -483,6 +483,32 @@ mod tests {
     }
 
     #[test]
+    fn validate_rejects_unicode_superscript_com_lpt_variants() {
+        // Pin the explicit Unicode superscript arms in has_reserved_segment.
+        // `is_ascii_digit()` rejects multi-byte UTF-8 (U+00B9 / U+00B2 /
+        // U+00B3) so the generic COM/LPT + digit fallback never matches
+        // these. A refactor dropping the explicit Unicode arms would
+        // re-open the parity gap with TS-side WINDOWS_RESERVED_NAMES,
+        // letting a P1b hostile path slip through Rust IPC validation
+        // while TS rejected it downstream.
+        for name in [
+            "COM\u{00B9}",
+            "COM\u{00B2}",
+            "COM\u{00B3}",
+            "LPT\u{00B9}",
+            "LPT\u{00B2}",
+            "LPT\u{00B3}",
+        ] {
+            let path = format!(r"C:\foo\{name}.ass");
+            let err = validate_ipc_path(&path, "Test").unwrap_err();
+            assert!(
+                err.to_lowercase().contains("reserved"),
+                "{path} should reject as reserved (Unicode superscript variant)"
+            );
+        }
+    }
+
+    #[test]
     fn validate_accepts_non_reserved_lookalikes() {
         // Names that LOOK reserved but aren't (CON has 3 chars; CONS is
         // 4; COMA isn't COM+digit; LPTX isn't LPT+digit). Pin so a
