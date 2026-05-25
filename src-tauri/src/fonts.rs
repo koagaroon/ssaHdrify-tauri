@@ -2734,11 +2734,13 @@ pub fn clear_cache_provenance() {
 ///   change rejected them as untrusted, breaking the documented
 ///   behavior.
 ///
-/// - Per project P1a (single-user desktop, AppData-local SQLite, no
-///   hostile-local-process model), trusting cache rows opened by THIS
-///   process is the right tradeoff for the project's actual threat
-///   surface. If the project later ships a server / multi-user mode,
-///   revisit per the design doc's "Revisit triggers" section.
+/// - Per the personal-desktop threat model, a cache file can be stale,
+///   corrupt, or same-user modified. Trust is therefore limited to rows
+///   returned by `lookup_family` in THIS process, after path and
+///   face-index validation. This is basic fail-safe protection, not a
+///   high-assurance defense against a process that can race every
+///   filesystem operation. Revisit if the project later ships a server
+///   or multi-user mode.
 ///
 /// Routes to `ALLOWED_CACHE_FONT_PATHS` — kept apart from the system-
 /// font set so the system-fonts-dir defense still applies to
@@ -3112,9 +3114,10 @@ pub fn subset_font(
     // set, ALLOWED_CACHE_FONT_PATHS). Nothing accepts a path that
     // merely appears in the SQLite file but was not actually looked up
     // this run. An earlier gate rejected all cache rows, which broke
-    // the design-locked CLI Situation B and GUI lookup tier 2. P1a
-    // accepts the in-process trust under the project's single-user-
-    // desktop threat model.
+    // the design-locked CLI Situation B and GUI lookup tier 2. The
+    // personal-desktop threat model accepts this in-process trust only
+    // after lookup-time path / face-index validation; it is not a
+    // server-grade hostile-process boundary.
     let canonical_string = normalize_canonical_path(&canonical.to_string_lossy());
     let registered_key = (canonical_string.clone(), font_index);
     // (readability): name each tier flag for what
