@@ -111,9 +111,10 @@ struct GlobalOptions {
     /// always named `cli_font_cache.sqlite3`. Useful for testing or
     /// non-default layouts. 覆盖字体缓存文件路径。
     ///
-    /// Same `global = true` rationale as `no_cache` above
-    /// : one declaration, cross-subcommand visible,
-    /// ignored where unread.
+    /// Same `global = true` rationale as `no_cache` above: one
+    /// declaration, cross-subcommand visible. Commands that read the
+    /// cache validate the path before opening it; chain reports that
+    /// the flag has no effect because chain v1 never uses the cache.
     #[arg(long, global = true, value_name = "PATH")]
     cache_file: Option<PathBuf>,
 
@@ -672,34 +673,6 @@ fn init_logger() {
 fn run() -> Result<ExitCode, String> {
     let Cli { globals, command } = Cli::parse();
 
-    // validate `--cache-file` through the IPC
-    // validator before any consumer (`run_refresh_fonts`,
-    // `prepare_embed_cache`) opens / stat's the file. The cache file
-    // is user-supplied argv and explicitly P1b per the design doc —
-    // without validation, a value like `\\.\PhysicalDrive0` (DOS
-    // device) or `C:\dir\..\elsewhere\cache.sqlite3` (traversal)
-    // would reach SQLite open. The stderr drift report also
-    // interpolates this path; rejecting BiDi / line-break chars at
-    // the entry point closes the smuggling vector symmetrically with
-    // every other IPC path.
-    //
-    // refuse non-UTF-8 paths via `to_str()`
-    // rather than passing `to_string_lossy()` through the validator.
-    // A path with non-UTF-8 / WTF-16-surrogate bytes would otherwise
-    // lossy-substitute into U+FFFD for the validate call, then
-    // `FontCache::open_or_create` (downstream) opened the PathBuf
-    // with the ORIGINAL byte sequence — different bytes than what
-    // validate_ipc_path checked. Refusing upfront keeps the
-    // validated string and the opened path byte-identical.
-    if let Some(ref cache_file) = globals.cache_file {
-        let cache_str = cache_file.to_str().ok_or_else(|| {
-            "--cache-file: path contains non-UTF-8 bytes; refuse upfront so the IPC \
-             validator and the subsequent SQLite open agree on the same byte sequence"
-                .to_string()
-        })?;
-        app_lib::util::validate_ipc_path(cache_str, "--cache-file")?;
-    }
-
     match command {
         Command::Hdr(args) => run_hdr(&globals, args),
         Command::Shift(args) => run_shift(&globals, args),
@@ -708,6 +681,18 @@ fn run() -> Result<ExitCode, String> {
         Command::Chain(args) => run_chain(&globals, args),
         Command::RefreshFonts(args) => run_refresh_fonts(&globals, args),
     }
+}
+
+fn validate_cache_file_arg(globals: &GlobalOptions) -> Result<(), String> {
+    if let Some(ref cache_file) = globals.cache_file {
+        let cache_str = cache_file.to_str().ok_or_else(|| {
+            "--cache-file: path contains non-UTF-8 bytes; refuse upfront so the IPC \
+             validator and the subsequent SQLite open agree on the same byte sequence"
+                .to_string()
+        })?;
+        app_lib::util::validate_ipc_path(cache_str, "--cache-file")?;
+    }
+    Ok(())
 }
 
 fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<ExitCode, String> {
@@ -720,6 +705,8 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
              different subcommand."
             .to_string());
     }
+
+    validate_cache_file_arg(globals)?;
 
     // validate each --font-dir argv early —
     // fail-fast before opening the cache or starting any scan. The
@@ -1013,6 +1000,16 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
             )
         );
     }
+    if globals.cache_file.is_some() && !globals.quiet {
+        eprintln!(
+            "{}",
+            localize(
+                globals,
+                "ℹ --cache-file has no effect in chain mode; chain v1 doesn't use the persistent cache.".to_string(),
+                "ℹ chain 模式下 --cache-file 不生效；chain v1 不读取持久缓存。".to_string(),
+            )
+        );
+    }
 
     // chain v1 doesn't implement the --json output shape
     // that hdr / shift / embed / rename support; reporting loop below
@@ -1284,12 +1281,11 @@ fn emit_chain_warnings(globals: &GlobalOptions, warnings: &[String]) {
 /// differently.
 ///
 /// Token shape `[a-z_][a-z0-9_]{0,31}` mirrors the TS regex
-/// (32-char identifier cap). Returns `None` when a
-/// token's name is not present in `vars` — this matches the TS
-/// strict-throw behavior at the prediction layer: the caller
-/// (`predict_chain_output_path`) defers to V8 + TS for the
-/// authoritative `unknown token` error, avoiding a permissive
-/// silent-empty prediction that diverges from TS resolution.
+/// (32-char identifier cap). Returns `None` when a token's name is not
+/// present in `vars`. Current chain parsing rejects unsupported
+/// chain-level template tokens before V8 starts; this helper stays
+/// fail-closed in case a future caller bypasses that validator or adds
+/// a token without updating this prediction layer.
 ///
 /// Case asymmetry note : this lexer is lowercase-only
 /// (matches the TS substituteTemplate lexer). The TS chain validator
@@ -1424,11 +1420,10 @@ fn predict_chain_output_path(
         .and_then(|e| e.to_str())
         .map(|e| format!(".{e}"))
         .unwrap_or_default();
-    // `substitute_template` returns None for unknown tokens. `?`
-    // propagates: predict returns None → caller falls
-    // back to V8 + TS, which throws the authoritative `unknown token`
-    // error. Matches the "defer to V8 on divergence" pattern used
-    // elsewhere in this function.
+    // Unsupported tokens are rejected at chain-parse time before this
+    // function runs. If vars ever drift from that validator, returning
+    // None here keeps the cheap-first predictor fail-closed instead of
+    // silently producing a different output path.
     let output_name = substitute_template(output_template, &[("name", stem), ("ext", &ext)])?;
     // Reject shapes TS-side `assertSafeOutputFilename` would reject:
     // path separators (chain output is a single filename in input's
@@ -1935,19 +1930,12 @@ fn emit_chain_dry_run(plan: &chain::ChainPlan, globals: &GlobalOptions) {
     // silently print both rows pointing at the same output, hiding the
     // future failure from the user.
     //
-    // Fidelity caveat: this mirrors the real-run dedup key ONLY when
-    // `predict_chain_output_path` produces a key that
-    // matches what V8's `resolveChainOutputPath` will return. Today
-    // chain templates only support {name} and {ext} and both
-    // predictors agree byte-for-byte, so the mirror is complete. If a
-    // future chain template feature adds a token the Rust predictor
-    // doesn't model, prediction returns None for that input → dry-run
-    // shows no `→ outpath` line and the dedup set never sees the key.
-    // The real run has a post-V8 reconcile step
-    // (`process_one_chain_input` line ~1357) that dry-run can't
-    // replay without invoking V8. So the preview is "faithful for
-    // currently-supported templates"; when prediction abstains, the
-    // user should expect possible divergence at write time.
+    // Fidelity caveat: chain parsing currently limits templates to
+    // {name} and {ext}, and this predictor mirrors those tokens byte
+    // for byte. If a future template feature adds a token, that work
+    // must update both the parser and this predictor; otherwise dry-run
+    // would omit the `→ outpath` line and miss duplicate-output
+    // detection for that input.
     let mut seen_outputs: HashSet<String> = HashSet::new();
     for input in &plan.input_files {
         let input_disp = sanitize_for_display(&input.display().to_string());
@@ -2559,6 +2547,7 @@ fn run_embed(globals: &GlobalOptions, args: EmbedArgs) -> Result<ExitCode, Strin
         }
         None
     } else {
+        validate_cache_file_arg(globals)?;
         prepare_embed_cache(globals, &args)
     };
 
@@ -5133,10 +5122,9 @@ mod tests {
 
     #[test]
     fn substitute_template_unknown_token_returns_none() {
-        // unknown token (vars has name + ext, template
-        // uses {lang}) returns None so the caller defers to V8 + TS for
-        // the authoritative `unknown token` error. Pre-fix this returned
-        // Some("Show.ass") via silent-empty substitution.
+        // Unknown token (vars has name + ext, template uses {lang})
+        // returns None. Chain parsing now rejects this before runtime,
+        // but the helper still fails closed if called directly.
         let got = substitute_template("{name}.{lang}{ext}", &[("name", "Show"), ("ext", ".ass")]);
         assert!(got.is_none());
     }

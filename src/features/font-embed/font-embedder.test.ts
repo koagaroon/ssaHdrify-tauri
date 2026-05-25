@@ -433,6 +433,25 @@ describe("analyzeFonts — useRustUserFonts production path", () => {
     expect(arial?.source).toBe("system");
     expect(arial?.filePath).toBe("C:/Windows/Fonts/arialbd.ttf");
   });
+
+  it("falls through to system fonts when persistent cache lookup rejects", async () => {
+    resolveUserFontMock.mockResolvedValue(null);
+    lookupFontFamilyMock.mockRejectedValue(new Error("corrupt cache"));
+    findSystemFontMock.mockImplementation(async (family: string, bold: boolean) => {
+      if (family === "FZLanTingHei" && !bold) return { path: "C:/Windows/Fonts/FZ.ttf", index: 0 };
+      if (family === "Arial" && bold) return { path: "C:/Windows/Fonts/arialbd.ttf", index: 0 };
+      throw new Error("Font not found");
+    });
+
+    const { infos } = await analyzeFonts(MINIMAL_ASS, null, undefined, true);
+    const fz = infos.find((i) => i.key.family === "FZLanTingHei");
+    const arial = infos.find((i) => i.key.family === "Arial" && i.key.bold);
+
+    expect(fz?.source).toBe("system");
+    expect(fz?.filePath).toBe("C:/Windows/Fonts/FZ.ttf");
+    expect(arial?.source).toBe("system");
+    expect(arial?.filePath).toBe("C:/Windows/Fonts/arialbd.ttf");
+  });
 });
 
 describe("userFontKey", () => {

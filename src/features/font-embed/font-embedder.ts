@@ -217,7 +217,13 @@ export async function analyzeFonts(
     // same per-font IPC N times (mirrors systemFontCache below).
     let cacheResult = cacheLookupCache?.get(key);
     if (cacheResult === undefined) {
-      cacheResult = await lookupFontFamily(usage.key.family, usage.key.bold, usage.key.italic);
+      try {
+        cacheResult = await lookupFontFamily(usage.key.family, usage.key.bold, usage.key.italic);
+      } catch (error) {
+        if (isDev)
+          console.debug(`[ssaHdrify] persistent cache lookup failed; falling through`, error);
+        cacheResult = null;
+      }
       cacheLookupCache?.set(key, cacheResult);
     }
     if (cacheResult) {

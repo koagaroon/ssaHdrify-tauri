@@ -50,6 +50,7 @@ await build({
   outfile: resolve(projectRoot, "dist-engine/engine.js"),
   define: {
     __APP_VERSION__: JSON.stringify(APP_VERSION),
+    "import.meta.env.DEV": "false",
   },
 });
 

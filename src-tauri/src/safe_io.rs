@@ -56,7 +56,7 @@ use crate::encoding::ALLOWED_TEXT_EXTENSIONS;
 use crate::util::{is_reparse_point, validate_ipc_path};
 use std::fs;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tauri_plugin_fs::FsExt;
 
 fn check_subtitle_extension(path: &Path, label: &str) -> Result<(), String> {
@@ -93,6 +93,61 @@ fn check_scope_allows(
         ));
     }
     Ok(())
+}
+
+fn scope_resolved_path(path: &Path, label: &str) -> Result<PathBuf, String> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|e| format!("Failed to resolve current directory for {label}: {e}"))?
+            .join(path)
+    };
+
+    let mut existing = absolute.as_path();
+    let mut missing = Vec::new();
+    loop {
+        match fs::symlink_metadata(existing) {
+            Ok(_) => break,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let file_name = existing.file_name().ok_or_else(|| {
+                    format!(
+                        "Cannot resolve {label} path for filesystem scope policy: {}",
+                        path.display()
+                    )
+                })?;
+                missing.push(file_name.to_os_string());
+                existing = existing.parent().ok_or_else(|| {
+                    format!(
+                        "Cannot resolve {label} path for filesystem scope policy: {}",
+                        path.display()
+                    )
+                })?;
+            }
+            Err(e) => {
+                return Err(format!(
+                    "Failed to stat {label} path for filesystem scope policy: {e}"
+                ));
+            }
+        }
+    }
+
+    let mut resolved = existing
+        .canonicalize()
+        .map_err(|e| format!("Failed to resolve {label} path for filesystem scope policy: {e}"))?;
+    for component in missing.iter().rev() {
+        resolved.push(component);
+    }
+    Ok(resolved)
+}
+
+fn check_scope_allows_resolved(
+    is_allowed: &impl Fn(&Path) -> bool,
+    path: &Path,
+    label: &str,
+) -> Result<(), String> {
+    let resolved = scope_resolved_path(path, label)?;
+    check_scope_allows(is_allowed, &resolved, label)
 }
 
 fn ensure_parent_dir(path: &Path) -> Result<(), String> {
@@ -332,6 +387,7 @@ pub fn safe_write_text_file_inner(
     let path_ref = Path::new(path);
     check_subtitle_extension(path_ref, "Output")?;
     check_scope_allows(&is_allowed, path_ref, "Output")?;
+    check_scope_allows_resolved(&is_allowed, path_ref, "Output")?;
     ensure_parent_dir(path_ref)?;
     clear_existing_destination(path_ref, overwrite)?;
     create_new_and_write_bytes(path_ref, content.as_bytes())
@@ -351,6 +407,8 @@ pub fn safe_copy_file_inner(
     check_subtitle_extension(dst_ref, "Destination")?;
     check_scope_allows(&is_allowed, src_ref, "Source")?;
     check_scope_allows(&is_allowed, dst_ref, "Destination")?;
+    check_scope_allows_resolved(&is_allowed, src_ref, "Source")?;
+    check_scope_allows_resolved(&is_allowed, dst_ref, "Destination")?;
     reject_reparse_source(src_ref, "copy")?;
     reject_same_canonical_path(src_ref, dst_ref)?;
     ensure_parent_dir(dst_ref)?;
@@ -398,6 +456,8 @@ pub fn safe_rename_file_inner(
     check_subtitle_extension(dst_ref, "Destination")?;
     check_scope_allows(&is_allowed, src_ref, "Source")?;
     check_scope_allows(&is_allowed, dst_ref, "Destination")?;
+    check_scope_allows_resolved(&is_allowed, src_ref, "Source")?;
+    check_scope_allows_resolved(&is_allowed, dst_ref, "Destination")?;
     reject_reparse_source(src_ref, "rename")?;
     reject_same_canonical_path(src_ref, dst_ref)?;
     ensure_parent_dir(dst_ref)?;
@@ -573,6 +633,20 @@ mod tests {
     }
 
     #[test]
+    fn write_rechecks_scope_after_canonicalizing_existing_parent() {
+        let dir = temp_dir("write_scope_canonical_parent");
+        let raw_path = dir.join(".").join("out.ass");
+        let resolved_path = dir.canonicalize().unwrap().join("out.ass");
+
+        let err = safe_write_text_file_inner(&raw_path.to_string_lossy(), "x", false, move |p| {
+            p != resolved_path
+        })
+        .unwrap_err();
+        assert!(err.contains("denied by"), "got: {err}");
+        assert!(!dir.join("out.ass").exists());
+    }
+
+    #[test]
     fn copy_preserves_source_and_creates_destination() {
         let dir = temp_dir("copy_basic");
         let src = dir.join("src.ass");
@@ -611,6 +685,25 @@ mod tests {
     }
 
     #[test]
+    fn copy_rechecks_destination_scope_after_canonicalizing_existing_parent() {
+        let dir = temp_dir("copy_scope_canonical_parent");
+        let src = dir.join("src.ass");
+        let raw_dst = dir.join(".").join("dst.ass");
+        let resolved_dst = dir.canonicalize().unwrap().join("dst.ass");
+        fs::write(&src, b"payload").unwrap();
+
+        let err = safe_copy_file_inner(
+            &src.to_string_lossy(),
+            &raw_dst.to_string_lossy(),
+            false,
+            move |p| p != resolved_dst,
+        )
+        .unwrap_err();
+        assert!(err.contains("denied by"), "got: {err}");
+        assert!(!dir.join("dst.ass").exists());
+    }
+
+    #[test]
     fn rename_moves_source_to_destination() {
         let dir = temp_dir("rename_basic");
         let src = dir.join("src.ass");
@@ -625,6 +718,26 @@ mod tests {
         .unwrap();
         assert!(!src.exists());
         assert_eq!(fs::read(&dst).unwrap(), b"payload");
+    }
+
+    #[test]
+    fn rename_rechecks_destination_scope_after_canonicalizing_existing_parent() {
+        let dir = temp_dir("rename_scope_canonical_parent");
+        let src = dir.join("src.ass");
+        let raw_dst = dir.join(".").join("dst.ass");
+        let resolved_dst = dir.canonicalize().unwrap().join("dst.ass");
+        fs::write(&src, b"payload").unwrap();
+
+        let err = safe_rename_file_inner(
+            &src.to_string_lossy(),
+            &raw_dst.to_string_lossy(),
+            false,
+            move |p| p != resolved_dst,
+        )
+        .unwrap_err();
+        assert!(err.contains("denied by"), "got: {err}");
+        assert!(src.exists());
+        assert!(!dir.join("dst.ass").exists());
     }
 
     // Symlink tests are POSIX-only because Windows symlink creation

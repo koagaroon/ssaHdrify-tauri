@@ -143,6 +143,29 @@ fn platform_data_dir() -> Result<PathBuf, String> {
     }
 }
 
+fn cache_sidecar_path(cache_path: &Path, suffix: &str) -> PathBuf {
+    let mut path = cache_path.as_os_str().to_os_string();
+    path.push(suffix);
+    PathBuf::from(path)
+}
+
+fn reject_cache_reparse_paths(cache_path: &Path) -> Result<(), CacheError> {
+    for path in std::iter::once(cache_path.to_path_buf()).chain(
+        ["-journal", "-wal", "-shm"]
+            .into_iter()
+            .map(|suffix| cache_sidecar_path(cache_path, suffix)),
+    ) {
+        if crate::util::is_reparse_point(&path) {
+            return Err(CacheError::Io(format!(
+                "refusing to open cache at a reparse point (symlink / junction): {}. \
+                 Inspect and remove the link manually before relaunching.",
+                path.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Schema version. Bumped when any table layout changes; mismatch on
 /// open returns `CacheError::SchemaVersionMismatch` so the caller
 /// can rebuild (CLI: drift-equivalent fallback to no-cache; GUI:
@@ -418,26 +441,7 @@ impl FontCache {
             }
         }
 
-        // Refuse a reparse point at the cache file path.
-        // `Connection::open` follows symlinks, so a planted symlink
-        // (dangling or not) would otherwise be followed and SQLite
-        // would create / open a database at the attacker's chosen
-        // target. An earlier fix to `migrate_legacy_gui_cache` made
-        // dangling-symlink handling worse: previously the migration's
-        // `fs::rename` would have replaced the symlink itself with
-        // the legacy cache; now `symlink_metadata().is_ok()` treats
-        // the dangling symlink as "occupied" and skips migration,
-        // leaving the symlink for `open_or_create` to follow. Closing
-        // the gap here means ALL callers (migrate + direct startup +
-        // future) are defended at the SQLite open boundary, not just
-        // the migration helper.
-        if crate::util::is_reparse_point(cache_path) {
-            return Err(CacheError::Io(format!(
-                "refusing to open cache at a reparse point (symlink / junction): {}. \
-                 Inspect and remove the link manually before relaunching.",
-                cache_path.display()
-            )));
-        }
+        reject_cache_reparse_paths(cache_path)?;
 
         // Residual TOCTOU window between the `is_reparse_point`
         // check above and the `Connection::open` below — an attacker
@@ -805,6 +809,10 @@ impl FontCache {
         let row: Result<(String, i32), _> = self.conn.query_row(
             "SELECT k.font_path, k.face_index \
              FROM cached_family_keys k \
+             INNER JOIN cached_fonts f \
+               ON f.font_path = k.font_path AND f.face_index = k.face_index \
+             INNER JOIN cached_folders d \
+               ON d.folder_path = f.folder_path \
              WHERE k.family_name_key = ?1 AND k.bold = ?2 AND k.italic = ?3 \
              ORDER BY k.font_path, k.face_index \
              LIMIT 1",
@@ -1040,6 +1048,23 @@ mod tests {
             )
             .expect("query schema_version");
         assert_eq!(version, SCHEMA_VERSION.to_string());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_refuses_reparse_sidecar_paths() {
+        use std::os::unix::fs::symlink;
+
+        let (_guard, path) = temp_cache_path();
+        let target = path.with_extension("wal-target");
+        fs::write(&target, b"not sqlite").unwrap();
+        symlink(&target, cache_sidecar_path(&path, "-wal")).unwrap();
+
+        let err = FontCache::open_or_create(&path).unwrap_err();
+        assert!(
+            err.to_string().contains("reparse point"),
+            "expected sidecar reparse refusal, got {err}"
+        );
     }
 
     #[test]
@@ -1542,6 +1567,44 @@ mod tests {
             .lookup_family("Helvetica", false, false)
             .expect("lookup ok");
         assert!(result.is_none(), "expected None, got {result:?}");
+    }
+
+    #[test]
+    fn lookup_family_ignores_orphan_family_key_rows() {
+        let (_guard, path) = temp_cache_path();
+        let cache = FontCache::open_or_create(&path).expect("open");
+        cache
+            .conn
+            .pragma_update(None, "foreign_keys", "OFF")
+            .unwrap();
+        cache
+            .conn
+            .execute(
+                "INSERT INTO cached_family_keys(\
+                    font_path, face_index, family_name, family_name_key, bold, italic\
+                 ) VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    "/orphan/arial.ttf",
+                    0,
+                    "Arial",
+                    family_lookup_key("Arial"),
+                    0,
+                    0,
+                ],
+            )
+            .unwrap();
+        cache
+            .conn
+            .pragma_update(None, "foreign_keys", "ON")
+            .unwrap();
+
+        let result = cache
+            .lookup_family("Arial", false, false)
+            .expect("lookup ok");
+        assert!(
+            result.is_none(),
+            "orphan family key row must not bypass cached_fonts/cached_folders anchoring"
+        );
     }
 
     #[test]

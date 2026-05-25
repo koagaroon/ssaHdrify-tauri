@@ -299,6 +299,7 @@ export function planRename(request: RenamePlanRequest): RenamePlanResult {
 }
 
 export function planFontEmbed(request: FontEmbedPlanRequest): FontEmbedPlanResult {
+  assertAssShape(request.content);
   const usages = collectFontsWithParser(request.content, parseAss);
 
   return {

@@ -769,3 +769,23 @@ describe("font-collector R_TAG overlong-cap boundary (200000 / 200001)", () => {
     ).toBe(true);
   });
 });
+
+describe("font-collector per-variant codepoint cap boundary", () => {
+  function makeUniqueGlyphRun(count: number): string {
+    return Array.from({ length: count }, (_, i) => String.fromCodePoint(0x10000 + i)).join("");
+  }
+
+  it("allows duplicate glyphs after the per-variant cap is exactly full", async () => {
+    await ensureLoaded();
+    const atCap = makeUniqueGlyphRun(65536);
+    const usage = collectFonts(makeASS(`${atCap}${String.fromCodePoint(0x10000)}`));
+    const arial = usage.find((u) => u.key.family === "Arial");
+    expect(arial?.codepoints.size).toBe(65536);
+  });
+
+  it("rejects a new glyph just beyond the per-variant cap", async () => {
+    await ensureLoaded();
+    const overCap = makeUniqueGlyphRun(65537);
+    expect(() => collectFonts(makeASS(overCap))).toThrow(/Too many codepoints for one font/);
+  });
+});

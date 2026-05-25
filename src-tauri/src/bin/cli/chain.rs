@@ -19,7 +19,7 @@
 //! See `docs/architecture/ssahdrify_cli_design.md` § "v1.4.1 stable
 //! 后续用户反馈" feature #4 for the locked design decisions.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::Parser;
 
@@ -257,8 +257,9 @@ pub fn parse_chain_argv(
         ));
     }
 
-    let warnings = collect_suspicious_orderings(&steps);
     let output_template = user_output_template.unwrap_or_else(|| derive_stacked_default(&steps));
+    validate_chain_output_template(&output_template)?;
+    let warnings = collect_suspicious_orderings(&steps);
 
     Ok(ChainPlan {
         steps,
@@ -376,6 +377,7 @@ fn parse_one_step(segment: &[String], is_terminal: bool) -> Result<ParsedStep, S
             let mut wrapper = HdrStepWrapper::try_parse_from(&tokens)
                 .map_err(|e| format_step_parse_error("hdr", &e))?;
             if !is_terminal {
+                reject_nonterminal_files("hdr", &wrapper.inner.files)?;
                 wrapper.inner.files.clear();
             }
             Ok(ParsedStep::Hdr(wrapper.inner))
@@ -384,6 +386,7 @@ fn parse_one_step(segment: &[String], is_terminal: bool) -> Result<ParsedStep, S
             let mut wrapper = ShiftStepWrapper::try_parse_from(&tokens)
                 .map_err(|e| format_step_parse_error("shift", &e))?;
             if !is_terminal {
+                reject_nonterminal_files("shift", &wrapper.inner.files)?;
                 wrapper.inner.files.clear();
             }
             Ok(ParsedStep::Shift(wrapper.inner))
@@ -392,6 +395,7 @@ fn parse_one_step(segment: &[String], is_terminal: bool) -> Result<ParsedStep, S
             let mut wrapper = EmbedStepWrapper::try_parse_from(&tokens)
                 .map_err(|e| format_step_parse_error("embed", &e))?;
             if !is_terminal {
+                reject_nonterminal_files("embed", &wrapper.inner.files)?;
                 wrapper.inner.files.clear();
             }
             Ok(ParsedStep::Embed(wrapper.inner))
@@ -401,6 +405,18 @@ fn parse_one_step(segment: &[String], is_terminal: bool) -> Result<ParsedStep, S
             "unknown chain step '{other}' (expected: hdr, shift, embed)"
         )),
     }
+}
+
+fn reject_nonterminal_files(kind: &str, files: &[PathBuf]) -> Result<(), String> {
+    let only_placeholder =
+        files.len() == 1 && files[0].as_path() == Path::new(CHAIN_NONTERMINAL_PLACEHOLDER);
+    if only_placeholder {
+        return Ok(());
+    }
+    Err(format!(
+        "step '{kind}': input files are only allowed on the terminal chain step; \
+         move file paths after the final step"
+    ))
 }
 
 fn take_step_files(step: &mut ParsedStep) -> Vec<PathBuf> {
@@ -415,6 +431,49 @@ fn segment_has_output_template_token(segment: &[String]) -> bool {
     segment
         .iter()
         .any(|tok| tok == "--output-template" || tok.starts_with("--output-template="))
+}
+
+fn validate_chain_output_template(template: &str) -> Result<(), String> {
+    let bytes = template.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'{' => {
+                let name_start = i + 1;
+                if name_start >= bytes.len()
+                    || !(bytes[name_start].is_ascii_alphabetic() || bytes[name_start] == b'_')
+                {
+                    return Err(chain_template_token_error());
+                }
+                let mut j = name_start + 1;
+                while j < bytes.len()
+                    && (j - name_start) < 32
+                    && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_')
+                {
+                    j += 1;
+                }
+                if j >= bytes.len() || bytes[j] != b'}' {
+                    return Err(chain_template_token_error());
+                }
+                let name = &template[name_start..j];
+                if name != "name" && name != "ext" {
+                    return Err(format!(
+                        "chain output template references unknown token '{{{name}}}'; \
+                         chain-level templates support {{name}} and {{ext}} only"
+                    ));
+                }
+                i = j + 1;
+            }
+            b'}' => return Err(chain_template_token_error()),
+            _ => i += 1,
+        }
+    }
+    Ok(())
+}
+
+fn chain_template_token_error() -> String {
+    "chain output template supports only {name} and {ext}; remove unsupported brace syntax"
+        .to_string()
 }
 
 fn first_token_or<'a>(segment: &'a [String], fallback: &'a str) -> &'a str {
@@ -604,6 +663,13 @@ mod tests {
     }
 
     #[test]
+    fn parse_nonterminal_hdr_step_rejects_user_file() {
+        let segment = argv_of(&["hdr", "--eotf", "pq", "early.ass"]);
+        let err = parse_one_step(&segment, false).unwrap_err();
+        assert!(err.contains("terminal chain step"), "got: {err}");
+    }
+
+    #[test]
     fn parse_terminal_shift_step_with_multiple_files() {
         let segment = argv_of(&["shift", "--offset", "+2s", "a.ass", "b.ass", "c.ass"]);
         let step = parse_one_step(&segment, true).unwrap();
@@ -656,6 +722,20 @@ mod tests {
         assert!(!segment_has_output_template_token(&segment));
     }
 
+    #[test]
+    fn validates_chain_output_template_tokens() {
+        validate_chain_output_template("{name}.processed{ext}").unwrap();
+        let err = validate_chain_output_template("{name}.{format}.ass").unwrap_err();
+        assert!(err.contains("unknown token '{format}'"), "got: {err}");
+    }
+
+    #[test]
+    fn rejects_malformed_chain_output_template_braces() {
+        let err = validate_chain_output_template("{name}.{toolong_token_name_over_32_chars}.ass")
+            .unwrap_err();
+        assert!(err.contains("{name} and {ext}"), "got: {err}");
+    }
+
     // ── parse_chain_argv (full pipeline) ──────────────────────
 
     #[test]
@@ -702,6 +782,30 @@ mod tests {
         let err = parse_chain_argv(&argv, None).unwrap_err();
         assert!(err.contains("--output-template"), "got: {err}");
         assert!(err.contains("chain-level flag"), "got: {err}");
+    }
+
+    #[test]
+    fn full_parse_rejects_nonterminal_input_files() {
+        let argv = argv_of(&[
+            "hdr",
+            "--eotf",
+            "pq",
+            "early.ass",
+            "+",
+            "shift",
+            "--offset",
+            "+2s",
+            "cat.ass",
+        ]);
+        let err = parse_chain_argv(&argv, None).unwrap_err();
+        assert!(err.contains("terminal chain step"), "got: {err}");
+    }
+
+    #[test]
+    fn full_parse_rejects_unknown_chain_template_tokens() {
+        let argv = argv_of(&["shift", "--offset", "+2s", "cat.ass"]);
+        let err = parse_chain_argv(&argv, Some("{name}.{format}.ass".into())).unwrap_err();
+        assert!(err.contains("unknown token '{format}'"), "got: {err}");
     }
 
     #[test]
