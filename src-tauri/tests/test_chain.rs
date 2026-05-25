@@ -612,3 +612,98 @@ fn chain_rejects_in_step_output_template() {
         "stderr should explain chain-level requirement: {stderr}"
     );
 }
+
+#[test]
+fn chain_cache_file_reports_no_effect() {
+    if let Some(reason) = engine_bundle_missing() {
+        panic!("engine bundle missing — run `npm run build:engine` first ({reason})");
+    }
+
+    let dir = temp_dir("cache_file_no_effect");
+    let input = write_fixture(&dir, "cat.ass");
+    let cache_file = dir.join("custom-cache.sqlite3");
+
+    let output = Command::new(cli_path())
+        .arg("--cache-file")
+        .arg(&cache_file)
+        .args(["chain", "shift", "--offset", "+2s"])
+        .arg(&input)
+        .output()
+        .expect("failed to run chain");
+
+    assert!(
+        output.status.success(),
+        "chain should succeed; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--cache-file")
+            && (stderr.contains("no effect") || stderr.contains("不生效")),
+        "expected --cache-file no-effect notice: {stderr}"
+    );
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn chain_rejects_nonterminal_input_files() {
+    let dir = temp_dir("nonterminal_input");
+    let early = write_fixture(&dir, "early.ass");
+    let terminal = write_fixture(&dir, "terminal.ass");
+
+    let output = Command::new(cli_path())
+        .args(["chain", "hdr", "--eotf", "pq"])
+        .arg(&early)
+        .args(["+", "shift", "--offset", "+2s"])
+        .arg(&terminal)
+        .output()
+        .expect("failed to spawn");
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "expected exit code 2; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("terminal chain step"),
+        "stderr should explain terminal-step-only inputs: {stderr}"
+    );
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn chain_rejects_unknown_template_before_engine() {
+    let dir = temp_dir("unknown_template");
+    let input = write_fixture(&dir, "cat.ass");
+
+    let output = Command::new(cli_path())
+        .args([
+            "chain",
+            "--output-template",
+            "{name}.{format}.ass",
+            "shift",
+            "--offset",
+            "+2s",
+        ])
+        .arg(&input)
+        .output()
+        .expect("failed to spawn");
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "expected exit code 2; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unknown token '{format}'"),
+        "stderr should report the unsupported token before engine work: {stderr}"
+    );
+
+    let _ = fs::remove_dir_all(dir);
+}

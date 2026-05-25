@@ -63,12 +63,12 @@ macOS / Linux users, see "Build from Source" below.
 
 ## 功能 | Features
 
-| 标签页 / Tab                            | 功能 / Description                                                                                                                                                                                                                                                                                                     |
-| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **HDR 色彩转换 / HDR Color Conversion** | 将字幕颜色转换为匹配 BT.2100 PQ 或 HLG 的 HDR 色彩值 / Convert subtitle colors to HDR-ready BT.2100 PQ or HLG values                                                                                                                                                                                                   |
-| **时间轴偏移 / Timing Shift**           | 批量调整字幕时间戳；可从指定时间点之后开始偏移，并实时预览效果 / Batch-adjust subtitle timestamps; optionally start after a chosen timestamp, with live preview                                                                                                                                                         |
-| **字体嵌入 / Font Embedding**           | 自动检测字幕引用的字体，在系统字体库或本地字体源中匹配，并把子集化后的字体嵌入 ASS 文件 / Detect fonts referenced by the subtitle, match them from system or local font sources, and embed subset fonts into the ASS file                                                                                              |
-| **批量重命名 / Batch Rename**           | 自动匹配视频和字幕，并按视频文件名重命名字幕；如果同一视频匹配到多个字幕候选，可手动选择并调整配对 / Automatically match videos with subtitles and rename subtitles to match the video filename; when multiple subtitle candidates match the same video, choose and adjust the pairing manually                         |
+| 标签页 / Tab                            | 功能 / Description                                                                                                                                                                                                                                                                              |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **HDR 色彩转换 / HDR Color Conversion** | 将字幕颜色转换为匹配 BT.2100 PQ 或 HLG 的 HDR 色彩值 / Convert subtitle colors to HDR-ready BT.2100 PQ or HLG values                                                                                                                                                                            |
+| **时间轴偏移 / Timing Shift**           | 批量调整字幕时间戳；可从指定时间点之后开始偏移，并实时预览效果 / Batch-adjust subtitle timestamps; optionally start after a chosen timestamp, with live preview                                                                                                                                 |
+| **字体嵌入 / Font Embedding**           | 自动检测字幕引用的字体，在系统字体库或本地字体源中匹配，并把子集化后的字体嵌入 ASS 文件 / Detect fonts referenced by the subtitle, match them from system or local font sources, and embed subset fonts into the ASS file                                                                       |
+| **批量重命名 / Batch Rename**           | 自动匹配视频和字幕，并按视频文件名重命名字幕；如果同一视频匹配到多个字幕候选，可手动选择并调整配对 / Automatically match videos with subtitles and rename subtitles to match the video filename; when multiple subtitle candidates match the same video, choose and adjust the pairing manually |
 
 > [!TIP]
 > **完整支持中文路径** — 包含中文、日文或其他非 ASCII 字符的文件路径都可以正常处理。Tauri 和 Rust 底层使用 Unicode API，不受传统 ANSI 编码限制。
@@ -89,9 +89,9 @@ macOS / Linux users, see "Build from Source" below.
 
 > **参数说明 | Parameter Guide**
 >
-> | 参数 / Parameter  | 默认值 / Default | 说明 / Description                                                                                                                        |
-> | ----------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-> | EOTF curve        | PQ               | PQ (ST 2084) 用于 HDR10/杜比视界；HLG 用于广播 HDR / PQ for HDR10/Dolby Vision; HLG for broadcast HDR                                                  |
+> | 参数 / Parameter  | 默认值 / Default | 说明 / Description                                                                                                                                                       |
+> | ----------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+> | EOTF curve        | PQ               | PQ (ST 2084) 用于 HDR10/杜比视界；HLG 用于广播 HDR / PQ for HDR10/Dolby Vision; HLG for broadcast HDR                                                                    |
 > | Target brightness | 203 nits         | SDR 字幕峰值亮度（BT.2408 标准值）。如果字幕太亮就调低，太暗就调高 / Peak SDR subtitle brightness (BT.2408 reference value). Lower it if too bright; raise it if too dim |
 
 ### 时间轴偏移 / Timing Shift
@@ -186,17 +186,17 @@ ssahdrify-cli chain          --help
 
 ### 全局选项 | Global Options
 
-| 选项 / Option         | 说明 / Description                                                                                                                                                                                                                                  |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--lang <en\|zh>`     | 输出语言；不指定时按系统区域设置自动检测（zh\* → zh，否则 en）/ Output language; auto-detected from OS locale when omitted (zh\* → zh, otherwise en)                                                                                                |
-| `--json`              | 为支持的子命令输出机器可读 JSON 报告；详见下方 JSON 模式 / Emit machine-readable JSON for supported subcommands; see JSON Mode below                                                                                                              |
-| `--verbose`           | 显示更详细的进度 / Show more detailed progress                                                                                                                                                                                                      |
-| `--quiet`             | 隐藏常规进度输出 / Suppress normal progress output                                                                                                                                                                                                  |
-| `--dry-run`           | 预览计划执行的操作，不写入文件 / Preview planned work without writing files                                                                                                                                                                         |
-| `--overwrite`         | 允许覆盖已存在的输出文件 / Replace existing output files instead of skipping                                                                                                                                                                        |
-| `--output-dir <DIR>`  | 将输出重定向到指定目录 / Redirect output to a specific directory                                                                                                                                                                                    |
-| `--no-cache`          | 跳过本次运行的字体缓存；缓存文件本身保持不变 / Skip the font cache for this run; leave the cache file untouched                                                                                                                                     |
-| `--cache-file <PATH>` | 使用指定缓存文件路径，覆盖默认路径 / Use a specific cache file path instead of the OS default (see Cache Location below)                                                                                                                           |
+| 选项 / Option         | 说明 / Description                                                                                                                                                                                                                                           |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--lang <en\|zh>`     | 输出语言；不指定时按系统区域设置自动检测（zh\* → zh，否则 en）/ Output language; auto-detected from OS locale when omitted (zh\* → zh, otherwise en)                                                                                                         |
+| `--json`              | 为支持的子命令输出机器可读 JSON 报告；详见下方 JSON 模式 / Emit machine-readable JSON for supported subcommands; see JSON Mode below                                                                                                                         |
+| `--verbose`           | 显示更详细的进度 / Show more detailed progress                                                                                                                                                                                                               |
+| `--quiet`             | 隐藏常规进度输出 / Suppress normal progress output                                                                                                                                                                                                           |
+| `--dry-run`           | 预览计划执行的操作，不写入文件 / Preview planned work without writing files                                                                                                                                                                                  |
+| `--overwrite`         | 允许覆盖已存在的输出文件 / Replace existing output files instead of skipping                                                                                                                                                                                 |
+| `--output-dir <DIR>`  | 将输出重定向到指定目录 / Redirect output to a specific directory                                                                                                                                                                                             |
+| `--no-cache`          | 跳过本次运行的字体缓存；缓存文件本身保持不变 / Skip the font cache for this run; leave the cache file untouched                                                                                                                                              |
+| `--cache-file <PATH>` | 使用指定缓存文件路径，覆盖默认路径 / Use a specific cache file path instead of the OS default (see Cache Location below)                                                                                                                                     |
 | `--fail-fast`         | 任一文件失败即停止处理后续输入；已成功写出的文件会保留，失败文件的目标位置可能留下部分写入产物 / Abort the batch on the first failed file; previously-succeeded outputs are kept, but the failed input may leave a partial-write artifact at its destination |
 
 > **JSON 模式 | JSON Mode**
@@ -465,29 +465,29 @@ The tables below list the main direct dependencies and bundled assets; the full 
 
 #### 运行时依赖（随应用分发）| Runtime (shipped with the application)
 
-| 组件 / Component                                          | 许可证 / License  | 用途 / Usage                                                                                                   |
-| --------------------------------------------------------- | ----------------- | -------------------------------------------------------------------------------------------------------------- |
-| [Tauri](https://tauri.app/)                               | Apache-2.0 OR MIT | 桌面应用框架 / Desktop app framework                                                                           |
-| [Tauri plugins](https://v2.tauri.app/plugin/)             | Apache-2.0 OR MIT | 对话框、文件访问和日志插件 / Dialog, filesystem, and logging plugins                                           |
-| [React](https://react.dev/) / React DOM                   | MIT               | UI 框架 / UI framework                                                                                         |
-| [React Window](https://github.com/bvaughn/react-window)   | MIT               | 大列表虚拟滚动 / Virtualized large lists                                                                       |
-| [Color.js](https://colorjs.io/)                           | MIT               | HDR 色彩空间转换 (PQ/HLG) / HDR color space conversion                                                         |
-| [ass-compiler](https://github.com/weizhenye/ass-compiler) | MIT               | ASS 字幕解析（字体收集）/ ASS subtitle parsing for font collection                                             |
-| [js-base64](https://github.com/dankogai/js-base64)        | BSD-3-Clause      | 前端与 CLI chain 字体载荷 base64 解码 / Base64 decoding for frontend and CLI chain font payloads               |
-| [font-kit](https://github.com/servo/font-kit)             | MIT OR Apache-2.0 | 跨平台系统字体发现 (Rust) / Cross-platform system font discovery                                               |
-| [fontcull](https://github.com/bearcove/fontcull)          | MIT / MIT OR Apache-2.0 | 字体子集化（含 fontcull-klippa、fontcull-skrifa）/ Font subsetting (includes fontcull-klippa, fontcull-skrifa) |
-| [chardetng](https://github.com/hsivonen/chardetng)        | MIT OR Apache-2.0 | 编码检测 (Firefox 引擎) / Encoding detection (Firefox's engine)                                                |
-| [encoding_rs](https://github.com/hsivonen/encoding_rs)    | (Apache-2.0 OR MIT) AND BSD-3-Clause | 编码转换 / Encoding conversion                                                                 |
-| [rusqlite](https://github.com/rusqlite/rusqlite)          | MIT               | 字体缓存和本地字体索引 / Font cache and local font index                                                       |
-| [serde](https://serde.rs/) / serde_json                   | MIT OR Apache-2.0 | Rust 序列化 / Rust serialization                                                                               |
-| [deno_core](https://github.com/denoland/deno)             | MIT               | 嵌入式 V8 JS 运行时（CLI）/ Embedded V8 JS runtime (CLI)                                                       |
-| [V8](https://v8.dev/)                                     | BSD-3-Clause      | JavaScript 引擎（经 deno_core 嵌入，CLI）/ JavaScript engine via deno_core (CLI)                               |
-| [clap](https://github.com/clap-rs/clap)                   | MIT OR Apache-2.0 | CLI 参数解析（CLI）/ CLI argument parsing (CLI)                                                                |
-| [env_logger](https://github.com/rust-cli/env_logger)      | MIT OR Apache-2.0 | CLI 日志后端 stderr（CLI）/ CLI logging backend on stderr (CLI)                                                |
-| [sys-locale](https://github.com/1Password/sys-locale)     | MIT OR Apache-2.0 | OS 区域设置检测（驱动 `--lang` 自动检测，CLI）/ OS locale detection driving `--lang` auto (CLI)                |
-| [base64](https://github.com/marshallpierce/rust-base64)   | MIT OR Apache-2.0 | Rust 侧字体载荷 base64 编码 / Base64 encoding for Rust-side font payloads                                      |
-| [unicode-normalization](https://github.com/unicode-rs/unicode-normalization) | MIT OR Apache-2.0 | Unicode 路径 / 输出键规范化 / Unicode path and output-key normalization                         |
-| [rfd](https://github.com/PolyMeilex/rfd)                  | MIT               | 启动失败时的原生错误对话框 / Native error dialog for startup failures                                          |
+| 组件 / Component                                                             | 许可证 / License                     | 用途 / Usage                                                                                                   |
+| ---------------------------------------------------------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| [Tauri](https://tauri.app/)                                                  | Apache-2.0 OR MIT                    | 桌面应用框架 / Desktop app framework                                                                           |
+| [Tauri plugins](https://v2.tauri.app/plugin/)                                | Apache-2.0 OR MIT                    | 对话框、文件访问和日志插件 / Dialog, filesystem, and logging plugins                                           |
+| [React](https://react.dev/) / React DOM                                      | MIT                                  | UI 框架 / UI framework                                                                                         |
+| [React Window](https://github.com/bvaughn/react-window)                      | MIT                                  | 大列表虚拟滚动 / Virtualized large lists                                                                       |
+| [Color.js](https://colorjs.io/)                                              | MIT                                  | HDR 色彩空间转换 (PQ/HLG) / HDR color space conversion                                                         |
+| [ass-compiler](https://github.com/weizhenye/ass-compiler)                    | MIT                                  | ASS 字幕解析（字体收集）/ ASS subtitle parsing for font collection                                             |
+| [js-base64](https://github.com/dankogai/js-base64)                           | BSD-3-Clause                         | 前端与 CLI chain 字体载荷 base64 解码 / Base64 decoding for frontend and CLI chain font payloads               |
+| [font-kit](https://github.com/servo/font-kit)                                | MIT OR Apache-2.0                    | 跨平台系统字体发现 (Rust) / Cross-platform system font discovery                                               |
+| [fontcull](https://github.com/bearcove/fontcull)                             | MIT / MIT OR Apache-2.0              | 字体子集化（含 fontcull-klippa、fontcull-skrifa）/ Font subsetting (includes fontcull-klippa, fontcull-skrifa) |
+| [chardetng](https://github.com/hsivonen/chardetng)                           | MIT OR Apache-2.0                    | 编码检测 (Firefox 引擎) / Encoding detection (Firefox's engine)                                                |
+| [encoding_rs](https://github.com/hsivonen/encoding_rs)                       | (Apache-2.0 OR MIT) AND BSD-3-Clause | 编码转换 / Encoding conversion                                                                                 |
+| [rusqlite](https://github.com/rusqlite/rusqlite)                             | MIT                                  | 字体缓存和本地字体索引 / Font cache and local font index                                                       |
+| [serde](https://serde.rs/) / serde_json                                      | MIT OR Apache-2.0                    | Rust 序列化 / Rust serialization                                                                               |
+| [deno_core](https://github.com/denoland/deno)                                | MIT                                  | 嵌入式 V8 JS 运行时（CLI）/ Embedded V8 JS runtime (CLI)                                                       |
+| [V8](https://v8.dev/)                                                        | BSD-3-Clause                         | JavaScript 引擎（经 deno_core 嵌入，CLI）/ JavaScript engine via deno_core (CLI)                               |
+| [clap](https://github.com/clap-rs/clap)                                      | MIT OR Apache-2.0                    | CLI 参数解析（CLI）/ CLI argument parsing (CLI)                                                                |
+| [env_logger](https://github.com/rust-cli/env_logger)                         | MIT OR Apache-2.0                    | CLI 日志后端 stderr（CLI）/ CLI logging backend on stderr (CLI)                                                |
+| [sys-locale](https://github.com/1Password/sys-locale)                        | MIT OR Apache-2.0                    | OS 区域设置检测（驱动 `--lang` 自动检测，CLI）/ OS locale detection driving `--lang` auto (CLI)                |
+| [base64](https://github.com/marshallpierce/rust-base64)                      | MIT OR Apache-2.0                    | Rust 侧字体载荷 base64 编码 / Base64 encoding for Rust-side font payloads                                      |
+| [unicode-normalization](https://github.com/unicode-rs/unicode-normalization) | MIT OR Apache-2.0                    | Unicode 路径 / 输出键规范化 / Unicode path and output-key normalization                                        |
+| [rfd](https://github.com/PolyMeilex/rfd)                                     | MIT                                  | 启动失败时的原生错误对话框 / Native error dialog for startup failures                                          |
 
 #### 捆绑字体（随应用分发）| Bundled Fonts (shipped with the application)
 
@@ -502,14 +502,14 @@ The tables below list the main direct dependencies and bundled assets; the full 
 
 #### 构建时依赖（不随应用分发）| Build-time only (not shipped)
 
-| 组件 / Component                              | 许可证 / License | 用途 / Usage                                                      |
-| --------------------------------------------- | ---------------- | ----------------------------------------------------------------- |
-| [Tailwind CSS](https://tailwindcss.com/)      | MIT              | CSS 工具框架 / CSS utility framework                              |
-| [TypeScript](https://www.typescriptlang.org/) | Apache-2.0       | 类型检查 / Type checking                                          |
-| [Vite](https://vite.dev/)                     | MIT              | 构建工具 / Build tool                                             |
-| [Tauri CLI](https://tauri.app/)               | MIT OR Apache-2.0 | Tauri 构建入口 / Tauri build entry point                          |
-| [ESLint](https://eslint.org/)                 | MIT              | 代码检查 / Linting                                                |
-| [Stylelint](https://stylelint.io/)            | MIT              | CSS 代码检查 / CSS linting                                        |
-| [Prettier](https://prettier.io/)              | MIT              | 代码格式化 / Code formatter                                       |
-| [Vitest](https://vitest.dev/)                 | MIT              | 单元测试 / Unit testing                                           |
-| [esbuild](https://esbuild.github.io/)         | MIT              | 为 CLI 嵌入打包 engine.js / Bundles engine.js for CLI embedding |
+| 组件 / Component                              | 许可证 / License  | 用途 / Usage                                                    |
+| --------------------------------------------- | ----------------- | --------------------------------------------------------------- |
+| [Tailwind CSS](https://tailwindcss.com/)      | MIT               | CSS 工具框架 / CSS utility framework                            |
+| [TypeScript](https://www.typescriptlang.org/) | Apache-2.0        | 类型检查 / Type checking                                        |
+| [Vite](https://vite.dev/)                     | MIT               | 构建工具 / Build tool                                           |
+| [Tauri CLI](https://tauri.app/)               | MIT OR Apache-2.0 | Tauri 构建入口 / Tauri build entry point                        |
+| [ESLint](https://eslint.org/)                 | MIT               | 代码检查 / Linting                                              |
+| [Stylelint](https://stylelint.io/)            | MIT               | CSS 代码检查 / CSS linting                                      |
+| [Prettier](https://prettier.io/)              | MIT               | 代码格式化 / Code formatter                                     |
+| [Vitest](https://vitest.dev/)                 | MIT               | 单元测试 / Unit testing                                         |
+| [esbuild](https://esbuild.github.io/)         | MIT               | 为 CLI 嵌入打包 engine.js / Bundles engine.js for CLI embedding |

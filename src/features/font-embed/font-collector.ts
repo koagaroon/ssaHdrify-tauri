@@ -277,22 +277,6 @@ export function collectFontsWithParser(assContent: string, parser: AssParseFunct
       }
     }
     for (const char of text) {
-      if (usage.codepoints.size >= MAX_CODEPOINTS_PER_VARIANT) {
-        // throw on per-variant cap for parity
-        // with MAX_FONT_VARIANTS (above) and MAX_TOTAL_CODEPOINTS
-        // (below). Pre-R10 this branch silently `break`ed,
-        // truncating the variant's glyph set without surfacing the
-        // limit — under adversarial input (a crafted ASS that
-        // sprays a million unique codepoints into one font) the
-        // user would receive a subsetted font missing characters
-        // they could see in the source. Aligning to throw makes
-        // the cap-hit a hard failure (visible error message) that
-        // the user can act on by splitting the input or excluding
-        // the offending file.
-        throw new Error(
-          `Too many codepoints for one font variant: ${usage.codepoints.size}+ (max ${MAX_CODEPOINTS_PER_VARIANT})`
-        );
-      }
       const cp = char.codePointAt(0);
       // Skip control chars (incl. U+007F DEL), ASCII space, and invalid
       // codepoints. Space is dropped here because the Rust subset always
@@ -303,17 +287,25 @@ export function collectFontsWithParser(assContent: string, parser: AssParseFunct
       // for them harmlessly, so the leak (1 extra codepoint per C1 char
       // in MAX_CODEPOINTS_PER_VARIANT accounting) is bounded and benign
       // .
-      if (cp !== undefined && cp > 32 && cp !== 0x7f && cp <= 0x10ffff) {
-        const before = usage.codepoints.size;
-        usage.codepoints.add(cp);
-        if (usage.codepoints.size !== before) {
-          totalCodepoints++;
-          if (totalCodepoints > MAX_TOTAL_CODEPOINTS) {
-            throw new Error(
-              `Too many codepoints across fonts: ${totalCodepoints} (max ${MAX_TOTAL_CODEPOINTS})`
-            );
-          }
-        }
+      if (cp === undefined || cp <= 32 || cp === 0x7f || cp > 0x10ffff) {
+        continue;
+      }
+      if (usage.codepoints.has(cp)) {
+        continue;
+      }
+      if (usage.codepoints.size >= MAX_CODEPOINTS_PER_VARIANT) {
+        // Throw only for a NEW glyph beyond the cap. Duplicates and
+        // skipped characters remain harmless at the boundary.
+        throw new Error(
+          `Too many codepoints for one font variant: ${usage.codepoints.size}+ (max ${MAX_CODEPOINTS_PER_VARIANT})`
+        );
+      }
+      usage.codepoints.add(cp);
+      totalCodepoints++;
+      if (totalCodepoints > MAX_TOTAL_CODEPOINTS) {
+        throw new Error(
+          `Too many codepoints across fonts: ${totalCodepoints} (max ${MAX_TOTAL_CODEPOINTS})`
+        );
       }
     }
   }

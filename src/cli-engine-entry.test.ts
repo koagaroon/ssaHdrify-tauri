@@ -112,6 +112,35 @@ describe("font embed engine helpers", () => {
     expect(plan.fonts[0]!.codepoints).toEqual([72, 101, 108, 111]);
   });
 
+  it("rejects malformed ASS before font collection", () => {
+    const noScriptInfo = `[V4+ Styles]
+Format: Name, Fontname, Fontsize, Bold, Italic
+Style: Default,Arial,20,0,0
+
+[Events]
+Format: Layer, Start, End, Style, Text
+Dialogue: 0,0:00:00.00,0:00:01.00,Default,Hello
+`;
+
+    expect(() =>
+      planFontEmbed({
+        inputPath: "C:\\subs\\malformed.ass",
+        content: noScriptInfo,
+      })
+    ).toThrow(/\[Script Info\]/);
+  });
+
+  it("rejects line-heavy ASS before font collection", () => {
+    const lineHeavyAss = `[Script Info]\n${"x\n".repeat(501_100)}`;
+
+    expect(() =>
+      planFontEmbed({
+        inputPath: "C:\\subs\\line-heavy.ass",
+        content: lineHeavyAss,
+      })
+    ).toThrow(/File too large: >501024 lines/);
+  });
+
   it("applies uuencoded font entries before the events section", () => {
     const result = applyFontEmbed({
       content: SIMPLE_ASS,
