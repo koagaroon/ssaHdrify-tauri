@@ -1003,6 +1003,38 @@ pub fn clear_font_cache() -> Result<(), String> {
         .clone()
         .ok_or_else(|| "Cache path not initialized; setup did not run".to_string())?;
 
+    // Build the main-file + sidecar set and reject reparse points
+    // BEFORE dropping the live cache handle. If a planted sidecar is
+    // found, clear must fail without making the current in-memory
+    // cache unavailable or clearing the provenance set.
+    let paths: Vec<PathBuf> = ["", "-journal", "-wal", "-shm"]
+        .iter()
+        .map(|suffix| {
+            let mut p = path.clone().into_os_string();
+            p.push(suffix);
+            PathBuf::from(p)
+        })
+        .collect();
+    let reparse_skipped: Vec<String> = paths
+        .iter()
+        .filter(|p| crate::util::is_reparse_point(p))
+        .map(|p| {
+            log::warn!(
+                "clear_font_cache: refusing to remove reparse-point {}; aborting clear.",
+                p.display()
+            );
+            p.display().to_string()
+        })
+        .collect();
+    if !reparse_skipped.is_empty() {
+        return Err(format!(
+            "Refusing to clear font cache: the following path(s) are reparse points \
+             (symlinks / junctions) and were left in place to avoid following the link. \
+             Inspect and remove manually: {}",
+            reparse_skipped.join(", ")
+        ));
+    }
+
     // Two-lock pattern: the slot lock is taken, released, then
     // re-taken — bracketed by the CacheMutationGuard
     // above. The interleaved drop is intentional so the SQLite file
@@ -1072,7 +1104,10 @@ pub fn clear_font_cache() -> Result<(), String> {
     // set as init_user_font_db so a partially-cleared state from an
     // earlier crash gets fully wiped here.
     //
-    // Two-phase pre-scan + remove for atomic semantics. An earlier
+    // Two-phase pre-scan + remove for atomic semantics. The pre-scan
+    // above runs before the live handle/provenance are dropped; this
+    // loop is Phase 2 and only runs once every path is known clean.
+    // An earlier
     // version of the loop detected reparse and continued — but ALSO
     // continued removing any subsequent non-reparse sidecars, leaving
     // partial state (e.g., [main, JOURNAL-reparse, wal, shm] → main +
@@ -1113,33 +1148,6 @@ pub fn clear_font_cache() -> Result<(), String> {
     // there is no user-content tributary. The threat is purely the
     // P1a actor model (process with filesystem write access to the
     // defender's AppData parent), not a content-tainted input.
-    let paths: Vec<PathBuf> = ["", "-journal", "-wal", "-shm"]
-        .iter()
-        .map(|suffix| {
-            let mut p = path.clone().into_os_string();
-            p.push(suffix);
-            PathBuf::from(p)
-        })
-        .collect();
-    let reparse_skipped: Vec<String> = paths
-        .iter()
-        .filter(|p| crate::util::is_reparse_point(p))
-        .map(|p| {
-            log::warn!(
-                "clear_font_cache: refusing to remove reparse-point {}; aborting clear.",
-                p.display()
-            );
-            p.display().to_string()
-        })
-        .collect();
-    if !reparse_skipped.is_empty() {
-        return Err(format!(
-            "Refusing to clear font cache: the following path(s) are reparse points \
-             (symlinks / junctions) and were left in place to avoid following the link. \
-             Inspect and remove manually: {}",
-            reparse_skipped.join(", ")
-        ));
-    }
     for p in &paths {
         match std::fs::remove_file(p) {
             Ok(()) => {}
@@ -1765,6 +1773,42 @@ mod tests {
         fs::write(&main, b"x").unwrap();
         migrate_legacy_gui_cache(&dir.0, &dir.0);
         assert!(main.exists(), "self-rename must not destroy the file");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn clear_font_cache_reparse_error_preserves_live_handle() {
+        use std::os::unix::fs::symlink;
+
+        let dir = TempCacheDir::new("clear_reparse_preserve");
+        let cache_path = dir.0.join(GUI_CACHE_FILE_NAME);
+        let cache = FontCache::open_or_create(&cache_path).expect("open cache");
+        let target = dir.0.join("wal-target");
+        fs::write(&target, b"not sqlite").unwrap();
+        let wal = {
+            let mut p = cache_path.clone().into_os_string();
+            p.push("-wal");
+            PathBuf::from(p)
+        };
+        symlink(&target, &wal).unwrap();
+
+        {
+            let mut path_slot = GUI_FONT_CACHE_PATH.lock().unwrap();
+            *path_slot = Some(cache_path.clone());
+            let mut cache_slot = GUI_FONT_CACHE.lock().unwrap();
+            *cache_slot = Some(cache);
+        }
+
+        let err = clear_font_cache().unwrap_err();
+        assert!(err.contains("reparse points"), "got: {err}");
+        assert!(
+            GUI_FONT_CACHE.lock().unwrap().is_some(),
+            "failed clear must leave the old cache handle available"
+        );
+
+        *GUI_FONT_CACHE.lock().unwrap() = None;
+        *GUI_FONT_CACHE_PATH.lock().unwrap() = None;
+        crate::fonts::clear_cache_provenance();
     }
 
     // ── finalize_drift generation check ──
