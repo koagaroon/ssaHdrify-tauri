@@ -2,9 +2,9 @@
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](LICENSE) [![GitHub release](https://img.shields.io/github/v/release/koagaroon/ssaHdrify-tauri?include_prereleases)](https://github.com/koagaroon/ssaHdrify-tauri/releases) ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)
 
-> **SSA HDRify 是一款桌面工具，用于将正确的 HDR 色彩数据写入 SSA/ASS 字幕，同时附带有时间轴偏移、字体嵌入和批量重命名功能。** 本工具是基于 [gky99/ssaHdrify](https://github.com/gky99/ssaHdrify)（Python 原版）的 Tauri 桌面重写版。
+> **SSA HDRify 是一款桌面工具，可为 SSA/ASS 字幕写入适合 HDR 播放的色彩值，并提供时间轴偏移、字体嵌入和批量重命名等辅助功能。** 它是 [gky99/ssaHdrify](https://github.com/gky99/ssaHdrify)（Python 原版）的 Tauri 桌面重写版。
 >
-> _SSA HDRify is a desktop tool that writes the correct HDR color data into SSA/ASS subtitles, along with timing shift, font embedding, and batch rename._ It is a Tauri desktop rewrite of [gky99/ssaHdrify](https://github.com/gky99/ssaHdrify) (the original Python version).
+> _SSA HDRify is a desktop tool for writing HDR-ready color values into SSA/ASS subtitles, with companion tools for timing shift, font embedding, and batch renaming._ It is a Tauri desktop rewrite of [gky99/ssaHdrify](https://github.com/gky99/ssaHdrify) (the original Python version).
 
 ### 浅色主题（中文）/ Light Theme (Chinese)
 
@@ -45,17 +45,17 @@
 
 ## 下载 | Download
 
-Windows 用户可从 [Releases](https://github.com/koagaroon/ssaHdrify-tauri/releases/latest) 页面下载便携式 exe 文件：
+Windows 用户可从 [Releases](https://github.com/koagaroon/ssaHdrify-tauri/releases/latest) 页面下载免安装的便携版 exe：
 
 - **`ssahdrify*.exe`** — 图形界面（GUI），适合手动操作
-- **`ssahdrify-cli*.exe`** — 命令行（CLI），适合 pipeline / 批处理 / 脚本化场景
+- **`ssahdrify-cli*.exe`** — 命令行（CLI），适合自动化流水线、批处理和脚本化场景
 
 macOS / Linux 用户请参考下方「从源码构建」。
 
-Windows users can download portable exe files from [Releases](https://github.com/koagaroon/ssaHdrify-tauri/releases/latest):
+Windows users can download portable, no-installer exe files from [Releases](https://github.com/koagaroon/ssaHdrify-tauri/releases/latest):
 
 - **`ssahdrify*.exe`** — graphical interface (GUI), for manual workflows
-- **`ssahdrify-cli*.exe`** — command line (CLI), for pipeline / batch / scripting
+- **`ssahdrify-cli*.exe`** — command line (CLI), for automation pipelines, batch jobs, and scripts
 
 macOS / Linux users, see "Build from Source" below.
 
@@ -63,17 +63,17 @@ macOS / Linux users, see "Build from Source" below.
 
 ## 功能 | Features
 
-| 标签页 / Tab                            | 功能 / Function                                                                                                                                                                                                                                                                                                        |
+| 标签页 / Tab                            | 功能 / Description                                                                                                                                                                                                                                                                                                     |
 | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **HDR 色彩转换 / HDR Color Conversion** | 为字幕附加对应的 BT.2100 PQ 或 HLG 色彩空间数据 / Attach the matching BT.2100 PQ or HLG color-space data to subtitles                                                                                                                                                                                                  |
-| **时间轴偏移 / Timing Shift**           | 批量偏移字幕时间戳；可指定时间点后才开始偏移，并支持实时预览 / Batch-offset subtitle timestamps; the shift can begin from a chosen timestamp, with live preview                                                                                                                                                        |
-| **字体嵌入 / Font Embedding**           | 自动检测字幕用到的字体，与系统字体库或本地字体源匹配，并以子集化形式嵌入 ASS 文件 / Auto-detect fonts referenced in the subtitle, match against system fonts or local sources, and embed them (subset) into the ASS                                                                                                    |
-| **批量重命名 / Batch Rename**           | 自动匹配视频文件和字幕文件，按视频文件名重命名字幕；同一视频文件有多个对应字幕时，用户可自由选择字幕文件，手动调整配对 / Auto-match video and subtitle files and rename subs to match the video filename; when a video has multiple subtitle candidates, the user can pick the desired one and adjust pairing manually |
+| **HDR 色彩转换 / HDR Color Conversion** | 将字幕颜色转换为匹配 BT.2100 PQ 或 HLG 的 HDR 色彩值 / Convert subtitle colors to HDR-ready BT.2100 PQ or HLG values                                                                                                                                                                                                   |
+| **时间轴偏移 / Timing Shift**           | 批量调整字幕时间戳；可从指定时间点之后开始偏移，并实时预览效果 / Batch-adjust subtitle timestamps; optionally start after a chosen timestamp, with live preview                                                                                                                                                         |
+| **字体嵌入 / Font Embedding**           | 自动检测字幕引用的字体，在系统字体库或本地字体源中匹配，并把子集化后的字体嵌入 ASS 文件 / Detect fonts referenced by the subtitle, match them from system or local font sources, and embed subset fonts into the ASS file                                                                                              |
+| **批量重命名 / Batch Rename**           | 自动匹配视频和字幕，并按视频文件名重命名字幕；如果同一视频匹配到多个字幕候选，可手动选择并调整配对 / Automatically match videos with subtitles and rename subtitles to match the video filename; when multiple subtitle candidates match the same video, choose and adjust the pairing manually                         |
 
 > [!TIP]
-> **中文路径完全支持** — 包含中文或其他非 ASCII 字符的文件路径不会引起任何问题。Tauri 和 Rust 底层使用 Unicode API，不受传统 ANSI 编码限制。
+> **完整支持中文路径** — 包含中文、日文或其他非 ASCII 字符的文件路径都可以正常处理。Tauri 和 Rust 底层使用 Unicode API，不受传统 ANSI 编码限制。
 >
-> **Non-ASCII paths fully supported** — File paths containing Chinese, Japanese, or other non-ASCII characters work correctly. Tauri and Rust use native Unicode APIs under the hood.
+> **Non-ASCII paths are supported** — File paths containing Chinese, Japanese, or other non-ASCII characters are handled correctly. Tauri and Rust use native Unicode APIs under the hood.
 
 ---
 
@@ -84,66 +84,66 @@ macOS / Linux users, see "Build from Source" below.
 1. 选择 EOTF 曲线（PQ 或 HLG）/ Select EOTF curve (PQ or HLG)
 2. 设置字幕目标亮度（默认 203 nits）/ Set target subtitle brightness (default: 203 nits)
 3. 选择字幕文件（支持多选）/ Select subtitle files (multi-select supported)
-4. 点击转换 / Click convert
-5. 默认输出文件扩展名为 `.hdr.ass`（可修改）/ Default output extension is `.hdr.ass` (customizable)
+4. 点击「转换」/ Click **Convert**
+5. 默认输出扩展名为 `.hdr.ass`（可修改）/ Default output extension is `.hdr.ass` (customizable)
 
 > **参数说明 | Parameter Guide**
 >
 > | 参数 / Parameter  | 默认值 / Default | 说明 / Description                                                                                                                        |
 > | ----------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-> | EOTF curve        | PQ               | PQ (ST 2084) 用于 HDR10/杜比视界；HLG 用于广播 HDR / PQ for HDR10/Dolby Vision; HLG for broadcast HDR                                     |
-> | Target brightness | 203 nits         | SDR 字幕亮度峰值（BT.2408 标准值）。字幕太亮就调低，太暗就调高 / Peak brightness per BT.2408. Decrease if too bright, increase if too dim |
+> | EOTF curve        | PQ               | PQ (ST 2084) 用于 HDR10/杜比视界；HLG 用于广播 HDR / PQ for HDR10/Dolby Vision; HLG for broadcast HDR                                                  |
+> | Target brightness | 203 nits         | SDR 字幕峰值亮度（BT.2408 标准值）。如果字幕太亮就调低，太暗就调高 / Peak SDR subtitle brightness (BT.2408 reference value). Lower it if too bright; raise it if too dim |
 
 ### 时间轴偏移 / Timing Shift
 
 1. 选择字幕文件 / Select a subtitle file
-2. 输入偏移量（毫秒），选择方向：「提前」或「延后」/ Enter offset amount (ms), then pick direction: Faster or Slower
-3. 可选：启用阈值过滤，仅偏移特定时间点后的字幕 / Optional: enable threshold to shift only captions after a specific timestamp
-4. 实时预览调整效果 / Preview changes in real time
+2. 输入偏移量（毫秒），并选择「提前」或「延后」/ Enter offset amount (ms), then choose Faster or Slower
+3. 可选：只偏移指定时间点之后的字幕行 / Optionally shift only lines after a specific timestamp
+4. 实时预览调整结果 / Preview the result in real time
 5. 导出 / Export
 
 ### 字体嵌入 / Font Embedding
 
-1. 点击「选择字幕文件 / Select Subtitle File」选择 ASS 字幕文件 / Click **Select Subtitle File** to pick an ASS file
-2. 工具自动检测字幕用到的字体，先尝试从系统字体库匹配 / Tool auto-detects fonts referenced in the subtitle and first tries to match them against the system font library
-3. 主面板实时显示本地来源覆盖（覆盖 N / M）和尚未匹配的字体；每条字体标注来源（本地 / 系统）和匹配状态（已找到 / 缺失）/ The main panel shows live local-source coverage (Coverage: N / M) and lists any still-missing families; each detected font is tagged with its source (Local / System) and status (Found / Missing)
-4. 点击「嵌入已选字体」，字体数据（子集化后）写入 ASS 文件 / Click **Embed Selected Fonts** to write the subset font data into the ASS file
+1. 点击「选择字幕文件 / Select Subtitle File」，选择 ASS 字幕文件 / Click **Select Subtitle File** to pick an ASS file
+2. 工具会自动检测字幕引用的字体，并优先尝试从系统字体库匹配 / The tool detects fonts referenced by the subtitle and first tries to match them against the system font library
+3. 主面板会实时显示本地字体源覆盖情况（覆盖 N / M）和尚未匹配的字体；每个字体都会标注来源（本地 / 系统）和状态（已找到 / 缺失）/ The main panel shows live local-source coverage (Coverage: N / M) and lists any still-missing families; each detected font is tagged with its source (Local / System) and status (Found / Missing)
+4. 点击「嵌入已选字体」，将子集化后的字体数据写入 ASS 文件 / Click **Embed Selected Fonts** to write the subset font data into the ASS file
 
-字幕组排版常用的字体大多未安装在系统中。点击「字体来源 / Font Sources」即可打开本地来源管理面板，添加你想扫描的文件夹，无需安装到系统即可参与匹配。
+字幕组排版常用字体通常没有安装在系统中。打开「字体来源 / Font Sources」面板，添加需要扫描的本地文件夹；这些字体无需系统安装，也可以参与匹配。
 
-Most fonts commonly used in fan-sub typesetting are not installed on the system. Click **Font Sources** to open the local-source manager, then add the folders you want to scan — no system-wide installation needed.
+Fonts used in fan-sub typesetting often are not installed system-wide. Open **Font Sources**, add the local folders you want to scan, and those fonts can be matched without installing them into the OS.
 
-文件夹大小不限，扫描过程会实时显示已读取的字体数量并支持随时取消；选择包含超过 5000 个文件或体积超过 1 GB 的目录前，会弹出确认对话框。
+支持任意大小的文件夹；扫描时会实时显示已读取的字体数量，也可以随时取消。选择包含超过 5000 个文件或容量超过 1 GB 的目录前，程序会先弹出确认对话框。
 
-Any folder size is accepted; the scan shows a real-time count of fonts found and can be cancelled at any time. Before selecting an exceptionally large directory (5000+ files or > 1 GB), a confirmation dialog will appear.
+Folders of any size are accepted; the scan shows a real-time count of fonts found and can be cancelled at any time. Before scanning a directory with over 5000 files or more than 1 GB of content, the app asks for confirmation.
 
 > **字体名称匹配 / Font Name Matching**
 >
-> 工具会读取字体文件的 OpenType `name` 表并索引**所有**语言变体（英文、中文、Typographic 名等）——ASS 脚本引用任何一个名字都能命中同一个字体文件。ASS 的 `@家族名` 竖排前缀也会被正确识别为同一字体。
+> 工具会读取字体文件的 OpenType `name` 表，并索引**所有**语言变体（英文、中文、Typographic 名等）。ASS 脚本无论引用哪个名称，都能匹配到同一个字体文件；`@家族名` 这类竖排前缀也会按同一字体处理。
 >
-> The tool reads each font's OpenType `name` table and indexes **every** localized family-name variant (English, Chinese, Typographic, etc.) — an ASS script referencing any of them resolves to the same file. The ASS `@FamilyName` vertical-writing prefix is correctly treated as the same font.
+> The tool reads each font's OpenType `name` table and indexes **every** localized family-name variant (English, Chinese, Typographic, etc.). An ASS script referencing any of those names resolves to the same font file; the ASS `@FamilyName` vertical-writing prefix is treated as the same font.
 
 ### 批量重命名 / Batch Rename
 
-1. 拖入一个包含视频和字幕的文件夹（或点击「选择文件 / Select Files」手动选择）；程序将按照文件格式自动归类 / Drop a folder containing both videos and subtitles (or click **Select Files** to pick manually); the app categorizes files by format automatically
-2. 系统按字幕组命名习惯做剧集号正则配对，预填配对表 / The app pre-pairs using fan-sub episode regex and fills the pairing table
-3. 若应用错配或漏配，从该行下拉框直接手动选取字幕，选中后自动勾选进入重命名队列 / If the app mispairs or misses a row, swap subtitles via the row's dropdown; the row is auto-checked into the rename queue once selected
-4. 选择输出策略：原文件直接改名 / 复制到当前目录 / 复制到自定义目录 / Pick the output strategy: rename in place, copy to the video's directory, or copy to a custom directory
-5. 点击运行；若目标路径已存在采用相同规则重命名的同名文件，会弹出确认覆盖对话框 / Click Run; if a target path already has a file with the same name produced by the rename rule, an overwrite-confirm dialog appears first
+1. 拖入包含视频和字幕的文件夹（或点击「选择文件 / Select Files」手动选择）；程序会按文件格式自动归类 / Drop a folder containing both videos and subtitles (or click **Select Files** to pick manually); the app categorizes files by format automatically
+2. 应用会按字幕组常见命名方式提取剧集号，并预填配对表 / The app extracts episode numbers from common fan-sub naming patterns and pre-fills the pairing table
+3. 如果出现错配或漏配，可直接在对应行的下拉框中手动选择字幕；选中后该行会自动加入重命名队列 / If the app mispairs or misses a row, choose a subtitle from that row's dropdown; once selected, the row is automatically added to the rename queue
+4. 选择输出策略：原文件直接改名 / 复制到视频所在目录 / 复制到自定义目录 / Pick the output strategy: rename in place, copy to the video's directory, or copy to a custom directory
+5. 点击「运行」；如果目标路径已存在按同一规则生成的同名文件，程序会先弹出覆盖确认对话框 / Click **Run**; if a file with the generated name already exists at the target path, an overwrite confirmation appears first
 
 > **配对算法 | Pairing Algorithm**
 >
-> 流水线：括号清理 → 优先级化的剧集号正则集（`S\d+E\d+`、`][NN][`、`- NN`、`第N话`、`EP\d+`）→ 季度并行扫描 → `(season, episode)` 配对键 → LCS 回退 → 手动选择作为最终安全网。模式覆盖在多组真实的字幕组命名样本（中日双语、外挂多语字幕、季度后缀变体等）上验证过。
+> 处理流程：清理括号内容 → 按优先级尝试剧集号正则（`S\d+E\d+`、`][NN][`、`- NN`、`第N话`、`EP\d+`）→ 分季并行扫描 → `(season, episode)` 配对键 → LCS 回退 → 最后由手动选择兜底。规则已在多组真实字幕组命名样本上验证过，包括中日双语标题、外挂多语字幕、季度后缀变体等。
 >
-> Pipeline: bracket cleanup → priority-ordered episode regex (`S\d+E\d+`, `][NN][`, `- NN`, `第N话`, `EP\d+`) → parallel season scan → `(season, episode)` pairing key → LCS fallback → manual selection as the final safety net. Pattern coverage was validated against representative real-world fan-sub naming variants (bilingual CJK titles, externally-shipped multi-language subs, season-suffix variants, and so on).
+> Pipeline: bracket cleanup → priority-ordered episode regex (`S\d+E\d+`, `][NN][`, `- NN`, `第N话`, `EP\d+`) → parallel season-aware scan → `(season, episode)` pairing key → LCS fallback → manual selection as the final fallback. Pattern coverage was validated against representative real-world fan-sub naming variants, including bilingual CJK titles, externally shipped multi-language subtitles, and season-suffix variants.
 
 ---
 
 ## CLI 使用 | CLI Usage
 
-`ssahdrify-cli` 是 GUI 的命令行（CLI）版本，从同一份源代码构建。四个核心功能（HDR 转换 / 时间轴偏移 / 字体嵌入 / 批量重命名）与 GUI 版对等；CLI 额外提供 `chain`（一次调用串联多步、仅终端步落盘）和 `refresh-fonts`（构建 / 刷新 CLI 字体缓存）两个子命令。
+`ssahdrify-cli` 是 GUI 的命令行版（CLI），与 GUI 从同一份源代码构建。四个核心功能（HDR 转换 / 时间轴偏移 / 字体嵌入 / 批量重命名）和 GUI 版保持对等；CLI 另外提供 `chain`（一次调用串联多个步骤，只有最后一步写入文件）和 `refresh-fonts`（构建或刷新 CLI 字体缓存）两个子命令。
 
-`ssahdrify-cli` is the command-line (CLI) version of the GUI, built from the same source. The four core features (HDR convert / Timing shift / Font embed / Batch rename) match the GUI; the CLI additionally exposes `chain` (multi-step pipeline in one invocation, only the terminal step writes to disk) and `refresh-fonts` (build / refresh the CLI font cache).
+`ssahdrify-cli` is the command-line (CLI) version of the GUI, built from the same source. The four core features (HDR convert / Timing shift / Font embed / Batch rename) stay in parity with the GUI; the CLI additionally exposes `chain` (multiple steps in one invocation, with only the final step writing files) and `refresh-fonts` (build or refresh the CLI font cache).
 
 ### 快速示例 | Quick Examples
 
@@ -154,14 +154,14 @@ ssahdrify-cli hdr --eotf pq input.ass
 # 时间轴偏移 +500ms / Timing shift +500ms
 ssahdrify-cli shift --offset +500ms input.ass
 
-# 字体嵌入：从指定文件夹搜索字体 / Font embed: search a folder for fonts
+# 字体嵌入：从指定文件夹查找字体 / Font embed: search a folder for fonts
 ssahdrify-cli embed --font-dir "C:/Fonts" input.ass
 
-# 持久化字体缓存：先一次性扫描，后续 embed 复用 / Persistent font cache: scan once, reuse on every embed
+# 持久化字体缓存：先扫描一次，后续 embed 复用 / Persistent font cache: scan once, reuse later
 ssahdrify-cli refresh-fonts --font-dir "C:/Fonts"
 ssahdrify-cli embed input.ass            # uses cache automatically
 
-# 链式调用：HDR 转 + 时间轴偏移单次完成，仅终端步落盘 / Chain: HDR + shift in one shot, only terminal step writes
+# 链式调用：一次完成 HDR 转换和时间轴偏移，只有最后一步写文件 / Chain: HDR + shift in one command, only the final step writes
 ssahdrify-cli chain hdr --eotf pq + shift --offset +500ms input.ass
 
 # 批量重命名：默认复制到视频所在目录 / Batch rename (default: copy sub next to video)
@@ -170,7 +170,7 @@ ssahdrify-cli rename "C:/My Series"
 
 ### 全部子命令 | All Subcommands
 
-每个子命令都支持 `--help` 查看完整参数。
+每个子命令都可通过 `--help` 查看完整参数。
 
 Each subcommand supports `--help` for the full parameter reference.
 
@@ -190,32 +190,32 @@ ssahdrify-cli chain          --help
 | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--lang <en\|zh>`     | 输出语言；不指定时按系统区域设置自动检测（zh\* → zh，否则 en）/ Output language; auto-detected from OS locale when omitted (zh\* → zh, otherwise en)                                                                                                |
 | `--json`              | 为支持的子命令输出机器可读 JSON 报告；详见下方 JSON 模式 / Emit machine-readable JSON for supported subcommands; see JSON Mode below                                                                                                              |
-| `--verbose`           | 显示更多进度细节 / Show more progress detail                                                                                                                                                                                                        |
-| `--quiet`             | 抑制常规进度输出 / Suppress normal progress output                                                                                                                                                                                                  |
-| `--dry-run`           | 预演计划工作但不写文件 / Preview planned work without writing files                                                                                                                                                                                 |
+| `--verbose`           | 显示更详细的进度 / Show more detailed progress                                                                                                                                                                                                      |
+| `--quiet`             | 隐藏常规进度输出 / Suppress normal progress output                                                                                                                                                                                                  |
+| `--dry-run`           | 预览计划执行的操作，不写入文件 / Preview planned work without writing files                                                                                                                                                                         |
 | `--overwrite`         | 允许覆盖已存在的输出文件 / Replace existing output files instead of skipping                                                                                                                                                                        |
-| `--output-dir <DIR>`  | 重定向输出到指定目录 / Redirect output to a specific directory                                                                                                                                                                                      |
-| `--no-cache`          | 跳过本次运行的字体缓存；缓存文件保持不变 / Skip the font cache for this run; cache file untouched                                                                                                                                                   |
-| `--cache-file <PATH>` | 覆盖默认的缓存文件路径 / Override the default cache file path (OS default: see Cache Location below)                                                                                                                                                |
-| `--fail-fast`         | 任一文件失败即中止后续输入；已成功写出的文件保留；失败文件可能留下部分写入产物 / Abort the batch on the first failed file; previously-succeeded outputs are kept, but the failed input itself may leave a partial-write artifact at its destination |
+| `--output-dir <DIR>`  | 将输出重定向到指定目录 / Redirect output to a specific directory                                                                                                                                                                                    |
+| `--no-cache`          | 跳过本次运行的字体缓存；缓存文件本身保持不变 / Skip the font cache for this run; leave the cache file untouched                                                                                                                                     |
+| `--cache-file <PATH>` | 使用指定缓存文件路径，覆盖默认路径 / Use a specific cache file path instead of the OS default (see Cache Location below)                                                                                                                           |
+| `--fail-fast`         | 任一文件失败即停止处理后续输入；已成功写出的文件会保留，失败文件的目标位置可能留下部分写入产物 / Abort the batch on the first failed file; previously-succeeded outputs are kept, but the failed input may leave a partial-write artifact at its destination |
 
 > **JSON 模式 | JSON Mode**
 >
-> `--json` 目前适用于 `hdr` / `shift` / `embed` / `rename`。它输出固定 schema 报告，按文件给出 status (`written` / `planned` / `skipped` / `failed`)、output path、encoding、warnings 等字段；stderr 仍可携带人类可读诊断。`chain` v1 会明确提示不支持 JSON 并改用纯文本报告；`refresh-fonts` 使用 stderr 状态输出。
+> `--json` 目前适用于 `hdr` / `shift` / `embed` / `rename`。它会输出固定 schema 的报告，按文件列出 status (`written` / `planned` / `skipped` / `failed`)、output path、encoding、warnings 等字段；stderr 仍可输出供人阅读的诊断信息。`chain` v1 会明确提示不支持 JSON，并改用纯文本报告；`refresh-fonts` 使用 stderr 输出状态。
 >
-> `--json` currently applies to `hdr` / `shift` / `embed` / `rename`. It emits a fixed-schema report listing per-file status (`written` / `planned` / `skipped` / `failed`), output path, encoding, warnings, etc.; stderr still carries human-readable diagnostics. `chain` v1 explicitly reports that JSON output is not supported and falls back to plain text; `refresh-fonts` uses stderr status output.
+> `--json` currently applies to `hdr` / `shift` / `embed` / `rename`. It emits a fixed-schema report listing per-file status (`written` / `planned` / `skipped` / `failed`), output path, encoding, warnings, and related fields; stderr can still carry human-readable diagnostics. `chain` v1 explicitly reports that JSON output is not supported and falls back to plain text; `refresh-fonts` reports status on stderr.
 >
-> **终端再插值的安全提示 | Terminal-interpolation safety note**
+> **终端再插值安全提示 | Terminal-interpolation safety note**
 >
-> `--json` 输出按 RFC 8259 编码，但 BiDi 控制符（U+200E/U+202E 等）、零宽字符与 U+2028/U+2029 行分隔符在 JSON 字符串里是合法字符，不会被转义。如果你通过 `jq -r` 把 `.input` / `.output` 等字段还原成原始字节再插到终端（`echo`、提示符、其他 CLI 的参数等），来自构造文件名的控制字符可能会污染终端显示。下游脚本应在终端边界自行做一次过滤（jq 的 `gsub` 或包装 shell 工具均可）。CLI 自己的人类可读输出（不带 `--json`）已在打印点统一调用 `sanitize_for_display`，不受此影响。
+> `--json` 按 RFC 8259 输出；BiDi 控制符（U+200E/U+202E 等）、零宽字符，以及 U+2028/U+2029 行分隔符在 JSON 字符串中都是合法字符，因此不会额外转义。如果用 `jq -r` 将 `.input` / `.output` 等字段还原后再插回终端（例如 `echo`、提示符或其他 CLI 参数），恶意构造的文件名可能影响终端显示。下游脚本应在终端输出边界自行过滤（如 jq 的 `gsub` 或 shell 包装工具）。CLI 自身供人阅读的输出（未启用 `--json`）已在所有打印点调用 `sanitize_for_display`，不受此问题影响。
 >
-> `--json` output follows RFC 8259, but BiDi format characters (U+200E/U+202E etc.), zero-width characters, and the U+2028/U+2029 line separators are valid in JSON strings and aren't escaped. If you pipe to `jq -r` to extract `.input` / `.output` as raw bytes and then interpolate into a terminal (echo, prompts, another CLI's arguments), control characters from crafted filenames can corrupt the terminal display. Downstream scripts should sanitize at the terminal boundary (jq's `gsub` or a wrapping shell tool). The CLI's own human-readable output (without `--json`) already passes every print site through `sanitize_for_display` and isn't affected.
+> `--json` output follows RFC 8259, but BiDi format characters (U+200E/U+202E etc.), zero-width characters, and the U+2028/U+2029 line separators are valid in JSON strings and are not additionally escaped. If you pipe to `jq -r` to extract `.input` / `.output` and then interpolate those values back into a terminal (`echo`, prompts, or another CLI's arguments), crafted filenames may affect terminal display. Downstream scripts should sanitize at the terminal boundary (for example with jq's `gsub` or a wrapping shell tool). The CLI's own human-readable output (without `--json`) already passes every print site through `sanitize_for_display` and is not affected.
 
 ### 字体缓存 | Font Cache
 
-`embed` 子命令每次启动都需要扫描 `--font-dir` 里的所有字体文件来构建查表（通常几秒到几十秒，5000+ 字体级别可达分钟级）。**持久化字体缓存**让你只扫描一次：第一次跑 `refresh-fonts` 把元数据写到磁盘上的 SQLite 文件，之后的 `embed` 调用会在缓存有效时复用它做查表，跳过扫描。fan-sub 团队按集打包时尤其有用。
+`embed` 每次启动通常都要扫描每个 `--font-dir` 下的字体文件，构建查找表（一般几秒到几十秒；5000+ 字体可能需要几分钟）。**持久化字体缓存**用于把这件事变成一次性操作：先运行 `refresh-fonts`，将字体元数据写入磁盘上的 SQLite 文件；之后 `embed` 会在缓存仍有效时直接复用它，跳过扫描。对于字幕组按集批量处理尤其有用。
 
-The `embed` subcommand normally rescans every `--font-dir` on every invocation to build its lookup table (seconds to tens of seconds; minutes for 5000+ font collections). The **persistent font cache** lets you scan once: a first `refresh-fonts` run writes metadata to a SQLite file on disk, and later `embed` calls reuse it when the cache is still valid. Especially useful for fan-sub teams encoding episodes in batches.
+The `embed` subcommand normally rescans every `--font-dir` on each invocation to build its lookup table (usually seconds to tens of seconds; minutes for 5000+ font collections). The **persistent font cache** turns that into a one-time step: run `refresh-fonts` to write font metadata into a SQLite file on disk, then later `embed` calls reuse it while the cache is still valid. This is especially useful for fan-sub teams processing episodes in batches.
 
 #### 工作流 | Workflow
 
@@ -223,61 +223,61 @@ The `embed` subcommand normally rescans every `--font-dir` on every invocation t
 # 一次性扫描字体目录，构建缓存 / Scan once to build the cache
 ssahdrify-cli refresh-fonts --font-dir "C:/Fonts/Anime" --font-dir "C:/Fonts/Latin"
 
-# 后续 embed 自动用缓存（不再扫描） / Subsequent embed uses cache (no scan)
+# 后续 embed 自动复用缓存（不再扫描） / Subsequent embed uses cache (no scan)
 ssahdrify-cli embed input.ass
 
-# 仍可加 --font-dir 临时混入额外字体源（cache + 额外目录合并） /
+# 也可以继续加 --font-dir，临时合并额外字体源（缓存 + 额外目录） /
 # You can still pass --font-dir to merge extra dirs with the cache
 ssahdrify-cli embed --font-dir "C:/Fonts/Project-Specific" input.ass
 
-# 强制不用缓存 / Force no-cache for one run
+# 本次强制不用缓存 / Force no-cache for one run
 ssahdrify-cli --no-cache embed --font-dir "C:/Fonts" input.ass
 
-# 字体目录变了之后刷新缓存 / Refresh cache when fonts changed
+# 字体目录变更后刷新缓存 / Refresh cache after fonts change
 ssahdrify-cli refresh-fonts --font-dir "C:/Fonts/Anime" --font-dir "C:/Fonts/Latin"
 ```
 
 #### 缓存位置 | Cache Location
 
-默认按操作系统选择（与 GUI 缓存独立，避免锁竞争）：
+默认位置按操作系统决定（与 GUI 缓存独立，避免锁竞争）：
 
 - Windows: `%APPDATA%/ssahdrify/cli_font_cache.sqlite3`
 - macOS: `$HOME/Library/Application Support/ssahdrify/cli_font_cache.sqlite3`
 - Linux: `${XDG_DATA_HOME:-$HOME/.local/share}/ssahdrify/cli_font_cache.sqlite3`
 
-`--cache-file <PATH>` 可覆盖。
+`--cache-file <PATH>` 可改用指定路径。
 
-OS-specific defaults (separate from the GUI cache to avoid lock contention):
+Default locations are OS-specific and separate from the GUI cache to avoid lock contention:
 
 - Windows: `%APPDATA%/ssahdrify/cli_font_cache.sqlite3`
 - macOS: `$HOME/Library/Application Support/ssahdrify/cli_font_cache.sqlite3`
 - Linux: `${XDG_DATA_HOME:-$HOME/.local/share}/ssahdrify/cli_font_cache.sqlite3`
 
-Override with `--cache-file <PATH>`.
+Use `--cache-file <PATH>` to choose a different path.
 
 #### 漂移检测 | Drift Detection
 
-`embed` 启动时会对缓存做轻量验证：用 `stat()` 检查每个已缓存文件夹的 mtime，如果跟缓存里记录的不一致（说明你添加 / 删除 / 替换 / 重命名了字体文件），CLI 在 stderr 列出哪些文件夹改了，自动 fallback 到无缓存模式（这次 embed 走 `--font-dir` 或系统字体），并提示你跑 `refresh-fonts` 更新。**永远不会自动重建缓存**——缓存动作必须由 `refresh-fonts` 显式触发。
+`embed` 启动时会对缓存做轻量校验：对每个已缓存文件夹执行一次 `stat()`，检查 mtime 是否变化。如果发现漂移（说明你添加 / 删除 / 替换 / 重命名了字体文件），CLI 会在 stderr 列出发生变化的文件夹，本次运行自动退回无缓存模式（使用 `--font-dir` 或系统字体），并提示你运行 `refresh-fonts` 更新。**缓存不会被静默重建**——缓存写入必须由 `refresh-fonts` 显式触发。
 
-`embed` runs a lightweight cache validation at startup: a single `stat()` per cached folder checks mtime drift. If drift is detected (you added / deleted / replaced / renamed font files), the CLI lists the changed folders on stderr, transparently falls back to no-cache for this run (uses `--font-dir` or system fonts), and tells you to run `refresh-fonts`. **The cache is never silently rebuilt** — cache mutations are always explicit via `refresh-fonts`.
+`embed` runs a lightweight cache validation at startup: one `stat()` per cached folder checks for mtime drift. If drift is detected (you added / deleted / replaced / renamed font files), the CLI lists the changed folders on stderr, falls back to no-cache for this run (using `--font-dir` or system fonts), and tells you to run `refresh-fonts`. **The cache is never silently rebuilt** — cache writes are always explicit via `refresh-fonts`.
 
 #### 限制 | Limitations
 
-- 每个 `--font-dir` 一层深扫描（不递归），与 `embed --font-dir` 语义一致。树状字体目录请逐层显式传入。
-- 每个 binary（GUI / CLI）使用各自独立的缓存文件，避免 SQLite 锁竞争；同一 binary 同时只读写一个缓存文件（默认路径或 `--cache-file` 覆盖路径）。`chain` 当前不调用缓存（embed 步永远走显式 `--font-dir` 或系统字体），未来扩展。
-- Schema 升级（不同 release 之间）不自动 migrate；版本不匹配时 CLI 显式提示删文件重跑 `refresh-fonts`。
+- 每个 `--font-dir` 只扫描一层（不递归），与 `embed --font-dir` 语义一致。树状字体目录需要逐层显式传入。
+- GUI 和 CLI 各自使用独立缓存文件，避免 SQLite 锁竞争；同一个可执行文件同时只会读写一个缓存文件（默认路径或 `--cache-file` 覆盖路径）。`chain` v1 暂不读取缓存（其中的 embed 步始终使用显式 `--font-dir` 或系统字体）。
+- 跨版本不会自动迁移缓存结构；版本不匹配时，CLI 会明确提示删除缓存文件并重新运行 `refresh-fonts`。
 
 - Each `--font-dir` is scanned one level deep (non-recursive), matching `embed --font-dir` semantics. Pass each leaf folder explicitly for tree-shaped collections.
-- Per-binary cache file (GUI / CLI use separate paths to avoid SQLite lock contention); a single binary opens exactly one cache at a time (default path or `--cache-file` override). `chain` doesn't consult the cache in v1 (its embed step always uses explicit `--font-dir` or system fonts); future work.
-- No automatic schema migration across releases — version mismatch surfaces as an explicit "delete the cache file and rerun `refresh-fonts`" prompt.
+- GUI and CLI use separate cache files to avoid SQLite lock contention; a single binary opens exactly one cache at a time (default path or `--cache-file` override). `chain` v1 does not consult the cache; its embed step always uses explicit `--font-dir` or system fonts.
+- There is no automatic schema migration across releases. Version mismatch surfaces as an explicit prompt to delete the cache file and rerun `refresh-fonts`.
 
 ---
 
 ## 使用场景 | Background
 
-SSA/ASS 字幕本身不含色彩空间元数据，因此渲染器会按 SDR 模式处理，使字幕看起来过饱和、过亮。播放 HDR 视频时，显示设备会进入 HDR 模式，但字幕却仍以 SDR 方式呈现，色差问题由此产生。
+SSA/ASS 字幕自身不带色彩空间元数据，渲染器通常会按 SDR 处理，结果是字幕在 HDR 画面里显得过饱和、过亮。播放 HDR 视频时，显示设备会进入 HDR 模式，但字幕仍按 SDR 混合，色差就来自这里。
 
-SSA/ASS subtitles lack embedded color space metadata, so renderers treat them as SDR content — making them appear oversaturated and overly bright. When playing HDR video, the display enters HDR mode, but subtitles are still rendered as SDR, causing a noticeable color mismatch.
+SSA/ASS subtitles do not carry color-space metadata, so renderers usually treat them as SDR content, making subtitles look oversaturated and overly bright in HDR video. When an HDR video plays, the display enters HDR mode, but subtitles are still blended as SDR; that is where the color mismatch comes from.
 
 > 如果你的播放器已经能正确处理字幕亮度（例如 mpv 的 `blend-subtitles=video`，或 madVR 配合 xy-SubFilter 的字幕色彩管理），则不需要本工具。
 >
@@ -285,9 +285,9 @@ SSA/ASS subtitles lack embedded color space metadata, so renderers treat them as
 
 _相关讨论 / Related discussion: [libass/libass#297](https://github.com/libass/libass/issues/297)_
 
-相关工具 / Related tool: 视频与字幕的重命名工作流的另一个选项是 [arition/SubRenamer](https://github.com/arition/SubRenamer)（按字母序+下标配对）。本项目的批量重命名（Tab 4）走基于字幕组命名习惯的正则配对路径，独立实现。
+相关工具 / Related tool: [arition/SubRenamer](https://github.com/arition/SubRenamer) 也是视频与字幕重命名工作流的一个选择（按字母序 + 下标配对）。本项目的批量重命名功能（Tab 4）则使用面向字幕组命名习惯的正则配对流程，代码独立实现。
 
-For the subtitle-and-video rename workflow, [arition/SubRenamer](https://github.com/arition/SubRenamer) is another option (alphabetical-index pairing). This project's Batch Rename (Tab 4) uses a fan-sub-aware regex pairing approach, independently implemented.
+For subtitle-and-video rename workflows, [arition/SubRenamer](https://github.com/arition/SubRenamer) is another option (alphabetical + index pairing). This project's Batch Rename feature (Tab 4) uses an independently implemented regex pairing flow built around common fan-sub naming patterns.
 
 ---
 
@@ -311,13 +311,13 @@ SSA/ASS subtitle colors (sRGB)
 
 ### 精度说明 | Accuracy Note
 
-PQ 模式经过验证，与 Python 原版（colour-science）逐像素一致。HLG 模式使用手动实现的 BT.2100 逆 OOTF + OETF（绕过 Color.js 的 rec2100hlg 空间），同样与 Python 原版完全匹配。
+PQ 模式已验证与 Python 原版（colour-science）逐像素一致。HLG 模式使用手动实现的 BT.2100 逆 OOTF + OETF（绕过 Color.js 的 rec2100hlg 空间），同样与 Python 原版完全一致。
 
-PQ mode is verified pixel-exact against the Python version (colour-science). HLG mode uses a manually implemented BT.2100 inverse OOTF + OETF (bypassing Color.js's rec2100hlg space), also exact-matching the Python version.
+PQ mode is verified pixel-exact against the Python version (colour-science). HLG mode uses a manually implemented BT.2100 inverse OOTF + OETF (bypassing Color.js's rec2100hlg space) and also matches the Python version exactly.
 
-由于字幕混合链路与 HDR 显示环境的复杂性（HDMI 元数据协商、显示器色调映射等），实际效果仅能做到"红是红的，蓝是蓝的"，不适用于严格颜色准确性场景。
+由于字幕混合链路和 HDR 显示环境很复杂（HDMI 元数据协商、显示器色调映射等），实际效果主要保证“红还是红、蓝还是蓝”的基础观感，不适合严格校色场景。
 
-Due to the complexity of subtitle blending pipelines and HDR display environments (HDMI metadata negotiation, display tone mapping, etc.), the actual result can only ensure a "red is red, blue is blue" level of correctness — not suited for strict color accuracy requirements.
+Due to the complexity of subtitle blending pipelines and HDR display environments (HDMI metadata negotiation, display tone mapping, etc.), the result is intended to preserve basic color identity, not to satisfy strict color-accuracy or color-grading requirements.
 
 ---
 
@@ -351,11 +351,11 @@ npm run build:cli
 npm run build:all
 ```
 
-便携式 exe 产出于 `src-tauri/target/release/`，可直接运行——无需安装步骤。`tauri.conf.json` 目前设置了 `bundle.active: false`，因此默认生成便携式二进制文件而不是安装包。
+在 Windows 上，便携式 exe 会生成到 `src-tauri/target/release/`，可直接运行，无需安装。`tauri.conf.json` 目前设置了 `bundle.active: false`，因此默认生成便携式二进制文件，而不是安装包。
 
-Portable executables are produced under `src-tauri/target/release/` and are ready to run directly, with no install step required. `tauri.conf.json` currently sets `bundle.active: false`, so the default output is portable binaries rather than installers.
+On Windows, portable executables are produced under `src-tauri/target/release/` and can be run directly, with no install step required. `tauri.conf.json` currently sets `bundle.active: false`, so the default output is portable binaries rather than installers.
 
-Expected release build outputs:
+Expected Windows release build outputs:
 
 ```text
 src-tauri/target/release/ssahdrify.exe
@@ -389,7 +389,7 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端测试 / Rust bac
                │                                       │
 ┌──────────────┴───────────────┐ ┌─────────────────────┴───────────────────────┐
 │  GUI binary                  │ │  CLI binary                                 │
-│  ssahdrify.exe               │ │  ssahdrify-cli.exe                         │
+│  ssahdrify.exe               │ │  ssahdrify-cli.exe                          │
 │                              │ │                                             │
 │  Tauri 2 + React +           │ │  clap (argv parsing)                        │
 │  Tailwind frontend           │ │  deno_core / V8 (embedded JS bundle)        │
@@ -440,12 +440,12 @@ This is a Tauri desktop rewrite of [ssaHdrify](https://github.com/gky99/ssaHdrif
 originally created by ying (2021) and later maintained by gky99 (2024-2025).
 The original project is also licensed under GPL-3.0.
 
-HDR 色彩转换算法使用 TypeScript（基于 [Color.js](https://colorjs.io/)）重新实现，参考了 Python 版本的方案（使用 [colour-science](https://www.colour-science.org/)）。未逐字复制代码——实现是全新的，但出于许可证目的视为衍生作品。
+HDR 色彩转换算法由 TypeScript（基于 [Color.js](https://colorjs.io/)）重新实现，方案参考了 Python 原版（使用 [colour-science](https://www.colour-science.org/)）。没有逐字复制代码；实现本身是新的，但按许可证语境仍按衍生作品处理。
 
 The HDR color conversion algorithm was reimplemented in TypeScript (using
 [Color.js](https://colorjs.io/)) based on the approach in the Python version
 (which used [colour-science](https://www.colour-science.org/)). No code was
-copied verbatim — the implementation is new, but the project is treated as a
+copied verbatim; the implementation is new, but the project is treated as a
 derivative work for license purposes.
 
 ### 算法归属 | Algorithm Attribution
@@ -459,7 +459,7 @@ original TypeScript written for this project.
 
 ### 第三方依赖 | Third-Party Dependencies
 
-下表列出主要直接依赖与随应用分发的资产；完整传递依赖以 `package-lock.json` 和 `src-tauri/Cargo.lock` 为准。
+下表列出主要直接依赖和随应用分发的资产；完整传递依赖以 `package-lock.json` 和 `src-tauri/Cargo.lock` 为准。
 
 The tables below list the main direct dependencies and bundled assets; the full transitive dependency set is recorded in `package-lock.json` and `src-tauri/Cargo.lock`.
 
@@ -494,9 +494,9 @@ The tables below list the main direct dependencies and bundled assets; the full 
 | 字体 / Font                                                                                                                   | 许可证 / License                                                                | 用途 / Usage                                                                                    |
 | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
 | [Inter](https://rsms.me/inter/) · © The Inter Project Authors                                                                 | [SIL Open Font License 1.1](src/assets/fonts/inter/LICENSE.txt) · OFL-1.1       | 英文界面正文与标题 / English UI body + display face                                             |
-| [Smiley Sans 得意黑](https://github.com/atelier-anchor/smiley-sans) · © 2022–2024 [atelierAnchor](https://atelier-anchor.com) | [SIL Open Font License 1.1](src/assets/fonts/smiley-sans/LICENSE.txt) · OFL-1.1 | 中文界面标题展示字体（仅作标题用）/ Chinese-mode application title display face (headline only) |
+| [Smiley Sans 得意黑](https://github.com/atelier-anchor/smiley-sans) · © 2022–2024 [atelierAnchor](https://atelier-anchor.com) | [SIL Open Font License 1.1](src/assets/fonts/smiley-sans/LICENSE.txt) · OFL-1.1 | 中文界面标题展示字体（仅用于标题）/ Chinese-mode application title display face (headline only) |
 
-> OFL-1.1 允许这些字体与任何软件捆绑、嵌入、再分发，包括 GPL-3.0 项目；字体及其衍生作品必须保留该许可证，且不得单独销售或使用其保留字体名进行衍生命名。
+> OFL-1.1 允许这些字体与任何软件一起捆绑、嵌入和再分发，包括 GPL-3.0 项目；字体及其衍生作品必须继续使用 OFL，且不得单独销售，也不得在修改版本中沿用其保留字体名。
 >
 > OFL-1.1 allows these fonts to be bundled, embedded, and redistributed alongside any software, including GPL-3.0 projects. The fonts and their derivatives must remain under OFL, must not be sold on their own, and must not reuse the Reserved Font Names (`Inter`, `Smiley`, `得意黑`) for modified versions.
 
@@ -512,4 +512,4 @@ The tables below list the main direct dependencies and bundled assets; the full 
 | [Stylelint](https://stylelint.io/)            | MIT              | CSS 代码检查 / CSS linting                                        |
 | [Prettier](https://prettier.io/)              | MIT              | 代码格式化 / Code formatter                                       |
 | [Vitest](https://vitest.dev/)                 | MIT              | 单元测试 / Unit testing                                           |
-| [esbuild](https://esbuild.github.io/)         | MIT              | engine.js 打包（CLI 嵌入用）/ Bundles engine.js for CLI embedding |
+| [esbuild](https://esbuild.github.io/)         | MIT              | 为 CLI 嵌入打包 engine.js / Bundles engine.js for CLI embedding |
