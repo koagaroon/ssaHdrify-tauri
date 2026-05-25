@@ -45,17 +45,17 @@
 
 ## 下载 | Download
 
-从 [Releases](https://github.com/koagaroon/ssaHdrify-tauri/releases/latest) 页面下载最新 exe 文件：
+Windows 用户可从 [Releases](https://github.com/koagaroon/ssaHdrify-tauri/releases/latest) 页面下载便携式 exe 文件：
 
-- **`ssahdrify_*.exe`** — 图形界面（GUI），适合手动操作
-- **`ssahdrify-cli_*.exe`** — 命令行（CLI），适合 pipeline / 批处理 / 脚本化场景
+- **`ssahdrify*.exe`** — 图形界面（GUI），适合手动操作
+- **`ssahdrify-cli*.exe`** — 命令行（CLI），适合 pipeline / 批处理 / 脚本化场景
 
 macOS / Linux 用户请参考下方「从源码构建」。
 
-Download the latest exe files from [Releases](https://github.com/koagaroon/ssaHdrify-tauri/releases/latest):
+Windows users can download portable exe files from [Releases](https://github.com/koagaroon/ssaHdrify-tauri/releases/latest):
 
-- **`ssahdrify_*.exe`** — graphical interface (GUI), for manual workflows
-- **`ssahdrify-cli_*.exe`** — command line (CLI), for pipeline / batch / scripting
+- **`ssahdrify*.exe`** — graphical interface (GUI), for manual workflows
+- **`ssahdrify-cli*.exe`** — command line (CLI), for pipeline / batch / scripting
 
 macOS / Linux users, see "Build from Source" below.
 
@@ -141,9 +141,9 @@ Any folder size is accepted; the scan shows a real-time count of fonts found and
 
 ## CLI 使用 | CLI Usage
 
-`ssahdrify-cli` 是 GUI 的命令行（CLI）版本，从同一份源代码构建。四个核心功能（HDR 转换 / 时间轴偏移 / 字体嵌入 / 批量重命名）与 GUI 版对等；CLI 额外提供 `chain`（一次调用串联多步、仅终端步落盘）和 `refresh-fonts`（持久化字体缓存）两个子命令。
+`ssahdrify-cli` 是 GUI 的命令行（CLI）版本，从同一份源代码构建。四个核心功能（HDR 转换 / 时间轴偏移 / 字体嵌入 / 批量重命名）与 GUI 版对等；CLI 额外提供 `chain`（一次调用串联多步、仅终端步落盘）和 `refresh-fonts`（构建 / 刷新 CLI 字体缓存）两个子命令。
 
-`ssahdrify-cli` is the command-line (CLI) version of the GUI, built from the same source. The four core features (HDR convert / Timing shift / Font embed / Batch rename) match the GUI; the CLI additionally exposes `chain` (multi-step pipeline in one invocation, only the terminal step writes to disk) and `refresh-fonts` (persistent font cache) — both CLI-only for now.
+`ssahdrify-cli` is the command-line (CLI) version of the GUI, built from the same source. The four core features (HDR convert / Timing shift / Font embed / Batch rename) match the GUI; the CLI additionally exposes `chain` (multi-step pipeline in one invocation, only the terminal step writes to disk) and `refresh-fonts` (build / refresh the CLI font cache).
 
 ### 快速示例 | Quick Examples
 
@@ -189,7 +189,7 @@ ssahdrify-cli chain          --help
 | 选项 / Option         | 说明 / Description                                                                                                                                                                                                                                  |
 | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--lang <en\|zh>`     | 输出语言；不指定时按系统区域设置自动检测（zh\* → zh，否则 en）/ Output language; auto-detected from OS locale when omitted (zh\* → zh, otherwise en)                                                                                                |
-| `--json`              | 输出机器可读 JSON 报告 / Emit a machine-readable JSON report                                                                                                                                                                                        |
+| `--json`              | 为支持的子命令输出机器可读 JSON 报告；详见下方 JSON 模式 / Emit machine-readable JSON for supported subcommands; see JSON Mode below                                                                                                              |
 | `--verbose`           | 显示更多进度细节 / Show more progress detail                                                                                                                                                                                                        |
 | `--quiet`             | 抑制常规进度输出 / Suppress normal progress output                                                                                                                                                                                                  |
 | `--dry-run`           | 预演计划工作但不写文件 / Preview planned work without writing files                                                                                                                                                                                 |
@@ -201,9 +201,9 @@ ssahdrify-cli chain          --help
 
 > **JSON 模式 | JSON Mode**
 >
-> `--json` 输出固定 schema 报告，按文件给出 status (`written` / `planned` / `skipped` / `failed`)、output path、encoding、warnings 等字段；stderr 仍可携带人类可读诊断。pipeline 集成场景建议固定使用此模式。
+> `--json` 目前适用于 `hdr` / `shift` / `embed` / `rename`。它输出固定 schema 报告，按文件给出 status (`written` / `planned` / `skipped` / `failed`)、output path、encoding、warnings 等字段；stderr 仍可携带人类可读诊断。`chain` v1 会明确提示不支持 JSON 并改用纯文本报告；`refresh-fonts` 使用 stderr 状态输出。
 >
-> `--json` emits a fixed-schema report listing per-file status (`written` / `planned` / `skipped` / `failed`), output path, encoding, warnings, etc.; stderr still carries human-readable diagnostics. For pipeline integration, prefer this mode.
+> `--json` currently applies to `hdr` / `shift` / `embed` / `rename`. It emits a fixed-schema report listing per-file status (`written` / `planned` / `skipped` / `failed`), output path, encoding, warnings, etc.; stderr still carries human-readable diagnostics. `chain` v1 explicitly reports that JSON output is not supported and falls back to plain text; `refresh-fonts` uses stderr status output.
 >
 > **终端再插值的安全提示 | Terminal-interpolation safety note**
 >
@@ -213,9 +213,9 @@ ssahdrify-cli chain          --help
 
 ### 字体缓存 | Font Cache
 
-`embed` 子命令每次启动都需要扫描 `--font-dir` 里的所有字体文件来构建查表（通常几秒到几十秒，5000+ 字体级别可达分钟级）。**持久化字体缓存**让你只扫描一次：第一次跑 `refresh-fonts` 把元数据写到磁盘上的 SQLite 文件，之后所有 `embed` 调用都自动用这份缓存做查表，跳过扫描。fan-sub 团队按集打包时尤其有用。
+`embed` 子命令每次启动都需要扫描 `--font-dir` 里的所有字体文件来构建查表（通常几秒到几十秒，5000+ 字体级别可达分钟级）。**持久化字体缓存**让你只扫描一次：第一次跑 `refresh-fonts` 把元数据写到磁盘上的 SQLite 文件，之后的 `embed` 调用会在缓存有效时复用它做查表，跳过扫描。fan-sub 团队按集打包时尤其有用。
 
-The `embed` subcommand normally rescans every `--font-dir` on every invocation to build its lookup table (seconds to tens of seconds; minutes for 5000+ font collections). The **persistent font cache** lets you scan once: a first `refresh-fonts` run writes metadata to a SQLite file on disk, and all subsequent `embed` calls reuse it. Especially useful for fan-sub teams encoding episodes in batches.
+The `embed` subcommand normally rescans every `--font-dir` on every invocation to build its lookup table (seconds to tens of seconds; minutes for 5000+ font collections). The **persistent font cache** lets you scan once: a first `refresh-fonts` run writes metadata to a SQLite file on disk, and later `embed` calls reuse it when the cache is still valid. Especially useful for fan-sub teams encoding episodes in batches.
 
 #### 工作流 | Workflow
 
@@ -241,17 +241,17 @@ ssahdrify-cli refresh-fonts --font-dir "C:/Fonts/Anime" --font-dir "C:/Fonts/Lat
 
 默认按操作系统选择（与 GUI 缓存独立，避免锁竞争）：
 
-- Windows: `%APPDATA%/ssaHdrify/cli_font_cache.sqlite3`
-- macOS: `$HOME/Library/Application Support/ssaHdrify/cli_font_cache.sqlite3`
-- Linux: `${XDG_DATA_HOME:-$HOME/.local/share}/ssaHdrify/cli_font_cache.sqlite3`
+- Windows: `%APPDATA%/ssahdrify/cli_font_cache.sqlite3`
+- macOS: `$HOME/Library/Application Support/ssahdrify/cli_font_cache.sqlite3`
+- Linux: `${XDG_DATA_HOME:-$HOME/.local/share}/ssahdrify/cli_font_cache.sqlite3`
 
 `--cache-file <PATH>` 可覆盖。
 
 OS-specific defaults (separate from the GUI cache to avoid lock contention):
 
-- Windows: `%APPDATA%/ssaHdrify/cli_font_cache.sqlite3`
-- macOS: `$HOME/Library/Application Support/ssaHdrify/cli_font_cache.sqlite3`
-- Linux: `${XDG_DATA_HOME:-$HOME/.local/share}/ssaHdrify/cli_font_cache.sqlite3`
+- Windows: `%APPDATA%/ssahdrify/cli_font_cache.sqlite3`
+- macOS: `$HOME/Library/Application Support/ssahdrify/cli_font_cache.sqlite3`
+- Linux: `${XDG_DATA_HOME:-$HOME/.local/share}/ssahdrify/cli_font_cache.sqlite3`
 
 Override with `--cache-file <PATH>`.
 
@@ -341,12 +341,26 @@ npm run tauri dev
 ### 构建 | Production Build
 
 ```bash
+# GUI portable executable
 npm run tauri build
+
+# CLI portable executable
+npm run build:cli
+
+# Build both GUI and CLI
+npm run build:all
 ```
 
-便携式 exe 产出于 `src-tauri/target/release/ssahdrify.exe`，可直接运行——无需安装步骤。
+便携式 exe 产出于 `src-tauri/target/release/`，可直接运行——无需安装步骤。`tauri.conf.json` 目前设置了 `bundle.active: false`，因此默认生成便携式二进制文件而不是安装包。
 
-The portable exe is produced at `src-tauri/target/release/ssahdrify.exe` — ready to run directly, no install step required.
+Portable executables are produced under `src-tauri/target/release/` and are ready to run directly, with no install step required. `tauri.conf.json` currently sets `bundle.active: false`, so the default output is portable binaries rather than installers.
+
+Expected release build outputs:
+
+```text
+src-tauri/target/release/ssahdrify.exe
+src-tauri/target/release/ssahdrify-cli.exe
+```
 
 ### 测试 | Testing
 
@@ -375,17 +389,17 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端测试 / Rust bac
                │                                       │
 ┌──────────────┴───────────────┐ ┌─────────────────────┴───────────────────────┐
 │  GUI binary                  │ │  CLI binary                                 │
-│  ssahdrify.exe  ~10 MB       │ │  ssahdrify-cli.exe  ~37-58 MB               │
+│  ssahdrify.exe               │ │  ssahdrify-cli.exe                         │
 │                              │ │                                             │
 │  Tauri 2 + React +           │ │  clap (argv parsing)                        │
-│  Tailwind frontend           │ │  deno_core / V8 (embedded engine.js)        │
-│  - 4 tabs                    │ │  - 4 subcommands                            │
-│  - i18n (zh/en),             │ │  - --json mode for pipelines                │
+│  Tailwind frontend           │ │  deno_core / V8 (embedded JS bundle)        │
+│  - 4 tabs                    │ │  - 6 subcommands                            │
+│  - i18n (zh/en),             │ │  - JSON reports for hdr/shift/embed/rename  │
 │    dark/light/auto theme     │ │  - env_logger (stderr warnings)             │
 │  - FontSourceModal UI        │ │  - sys-locale (--lang auto)                 │
 └──────────────┬───────────────┘ └─────────────────────┬───────────────────────┘
                │                                       │
-           Tauri IPC                              deno_core ops
+           Tauri IPC                       execute_script + JSON
                │                                       │
                └────────────────────┬──────────────────┘
                                     │
@@ -395,7 +409,7 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端测试 / Rust bac
 │  - fontcull / fontcull-skrifa (subsetting + name-table reader)               │
 │  - chardetng + encoding_rs (encoding detection + conversion)                 │
 │  - serde / serde_json (serialization)                                        │
-│  - rusqlite (user font index)                                                │
+│  - rusqlite (font cache + user font index)                                   │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -445,28 +459,35 @@ original TypeScript written for this project.
 
 ### 第三方依赖 | Third-Party Dependencies
 
-所有依赖均使用与 GPL-3.0 兼容的许可证。
+下表列出主要直接依赖与随应用分发的资产；完整传递依赖以 `package-lock.json` 和 `src-tauri/Cargo.lock` 为准。
 
-All dependencies use licenses compatible with GPL-3.0.
+The tables below list the main direct dependencies and bundled assets; the full transitive dependency set is recorded in `package-lock.json` and `src-tauri/Cargo.lock`.
 
 #### 运行时依赖（随应用分发）| Runtime (shipped with the application)
 
 | 组件 / Component                                          | 许可证 / License  | 用途 / Usage                                                                                                   |
 | --------------------------------------------------------- | ----------------- | -------------------------------------------------------------------------------------------------------------- |
-| [Tauri](https://tauri.app/)                               | MIT OR Apache-2.0 | 桌面应用框架 / Desktop app framework                                                                           |
-| [React](https://react.dev/)                               | MIT               | UI 框架 / UI framework                                                                                         |
+| [Tauri](https://tauri.app/)                               | Apache-2.0 OR MIT | 桌面应用框架 / Desktop app framework                                                                           |
+| [Tauri plugins](https://v2.tauri.app/plugin/)             | Apache-2.0 OR MIT | 对话框、文件访问和日志插件 / Dialog, filesystem, and logging plugins                                           |
+| [React](https://react.dev/) / React DOM                   | MIT               | UI 框架 / UI framework                                                                                         |
+| [React Window](https://github.com/bvaughn/react-window)   | MIT               | 大列表虚拟滚动 / Virtualized large lists                                                                       |
 | [Color.js](https://colorjs.io/)                           | MIT               | HDR 色彩空间转换 (PQ/HLG) / HDR color space conversion                                                         |
 | [ass-compiler](https://github.com/weizhenye/ass-compiler) | MIT               | ASS 字幕解析（字体收集）/ ASS subtitle parsing for font collection                                             |
+| [js-base64](https://github.com/dankogai/js-base64)        | BSD-3-Clause      | 前端与 CLI chain 字体载荷 base64 解码 / Base64 decoding for frontend and CLI chain font payloads               |
 | [font-kit](https://github.com/servo/font-kit)             | MIT OR Apache-2.0 | 跨平台系统字体发现 (Rust) / Cross-platform system font discovery                                               |
-| [fontcull](https://github.com/bearcove/fontcull)          | MIT               | 字体子集化（含 fontcull-klippa、fontcull-skrifa）/ Font subsetting (includes fontcull-klippa, fontcull-skrifa) |
+| [fontcull](https://github.com/bearcove/fontcull)          | MIT / MIT OR Apache-2.0 | 字体子集化（含 fontcull-klippa、fontcull-skrifa）/ Font subsetting (includes fontcull-klippa, fontcull-skrifa) |
 | [chardetng](https://github.com/hsivonen/chardetng)        | MIT OR Apache-2.0 | 编码检测 (Firefox 引擎) / Encoding detection (Firefox's engine)                                                |
-| [encoding_rs](https://github.com/hsivonen/encoding_rs)    | MIT OR Apache-2.0 | 编码转换 / Encoding conversion                                                                                 |
-| [serde](https://serde.rs/)                                | MIT OR Apache-2.0 | Rust 序列化 / Rust serialization                                                                               |
+| [encoding_rs](https://github.com/hsivonen/encoding_rs)    | (Apache-2.0 OR MIT) AND BSD-3-Clause | 编码转换 / Encoding conversion                                                                 |
+| [rusqlite](https://github.com/rusqlite/rusqlite)          | MIT               | 字体缓存和本地字体索引 / Font cache and local font index                                                       |
+| [serde](https://serde.rs/) / serde_json                   | MIT OR Apache-2.0 | Rust 序列化 / Rust serialization                                                                               |
 | [deno_core](https://github.com/denoland/deno)             | MIT               | 嵌入式 V8 JS 运行时（CLI）/ Embedded V8 JS runtime (CLI)                                                       |
 | [V8](https://v8.dev/)                                     | BSD-3-Clause      | JavaScript 引擎（经 deno_core 嵌入，CLI）/ JavaScript engine via deno_core (CLI)                               |
 | [clap](https://github.com/clap-rs/clap)                   | MIT OR Apache-2.0 | CLI 参数解析（CLI）/ CLI argument parsing (CLI)                                                                |
 | [env_logger](https://github.com/rust-cli/env_logger)      | MIT OR Apache-2.0 | CLI 日志后端 stderr（CLI）/ CLI logging backend on stderr (CLI)                                                |
 | [sys-locale](https://github.com/1Password/sys-locale)     | MIT OR Apache-2.0 | OS 区域设置检测（驱动 `--lang` 自动检测，CLI）/ OS locale detection driving `--lang` auto (CLI)                |
+| [base64](https://github.com/marshallpierce/rust-base64)   | MIT OR Apache-2.0 | Rust 侧字体载荷 base64 编码 / Base64 encoding for Rust-side font payloads                                      |
+| [unicode-normalization](https://github.com/unicode-rs/unicode-normalization) | MIT OR Apache-2.0 | Unicode 路径 / 输出键规范化 / Unicode path and output-key normalization                         |
+| [rfd](https://github.com/PolyMeilex/rfd)                  | MIT               | 启动失败时的原生错误对话框 / Native error dialog for startup failures                                          |
 
 #### 捆绑字体（随应用分发）| Bundled Fonts (shipped with the application)
 
@@ -486,7 +507,9 @@ All dependencies use licenses compatible with GPL-3.0.
 | [Tailwind CSS](https://tailwindcss.com/)      | MIT              | CSS 工具框架 / CSS utility framework                              |
 | [TypeScript](https://www.typescriptlang.org/) | Apache-2.0       | 类型检查 / Type checking                                          |
 | [Vite](https://vite.dev/)                     | MIT              | 构建工具 / Build tool                                             |
+| [Tauri CLI](https://tauri.app/)               | MIT OR Apache-2.0 | Tauri 构建入口 / Tauri build entry point                          |
 | [ESLint](https://eslint.org/)                 | MIT              | 代码检查 / Linting                                                |
+| [Stylelint](https://stylelint.io/)            | MIT              | CSS 代码检查 / CSS linting                                        |
 | [Prettier](https://prettier.io/)              | MIT              | 代码格式化 / Code formatter                                       |
 | [Vitest](https://vitest.dev/)                 | MIT              | 单元测试 / Unit testing                                           |
 | [esbuild](https://esbuild.github.io/)         | MIT              | engine.js 打包（CLI 嵌入用）/ Bundles engine.js for CLI embedding |
