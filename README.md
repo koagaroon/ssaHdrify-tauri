@@ -147,7 +147,7 @@ Folders of any size are accepted; the scan shows a real-time count of fonts foun
 
 ### 快速示例 | Quick Examples
 
-```bash
+```text
 # HDR 色彩转换（PQ 曲线）/ HDR conversion (PQ curve)
 ssahdrify-cli hdr --eotf pq input.ass
 
@@ -159,7 +159,7 @@ ssahdrify-cli embed --font-dir "C:/Fonts" input.ass
 
 # 持久化字体缓存：先扫描一次，后续 embed 复用 / Persistent font cache: scan once, reuse later
 ssahdrify-cli refresh-fonts --font-dir "C:/Fonts"
-ssahdrify-cli embed input.ass            # uses cache automatically
+ssahdrify-cli embed input.ass            # 自动使用缓存 / uses cache automatically
 
 # 链式调用：一次完成 HDR 转换和时间轴偏移，只有最后一步写文件 / Chain: HDR + shift in one command, only the final step writes
 ssahdrify-cli chain hdr --eotf pq + shift --offset +500ms input.ass
