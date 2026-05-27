@@ -4054,8 +4054,21 @@ mod tests {
     fn full_face_names_match_without_weakening_family_style_matching() {
         let _guard = SCAN_TEST_LOCK.lock().unwrap();
         init_test_user_font_db("face-name-alias");
+        let temp_font_dir = std::env::temp_dir().join(format!(
+            "ssahdrify-face-name-alias-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&temp_font_dir);
+        fs::create_dir_all(&temp_font_dir).expect("test font dir should be created");
+        let temp_font_path = temp_font_dir.join("DreamHanSerif-W22.ttc");
+        fs::write(&temp_font_path, b"fake Dream Han cache metadata fixture")
+            .expect("test font file should be written");
+        let temp_font_path_str = temp_font_path.to_string_lossy().into_owned();
+        let temp_font_size = fs::metadata(&temp_font_path)
+            .expect("test font metadata should be readable")
+            .len();
         let entry = LocalFontEntry {
-            path: "C:\\Fonts\\DreamHanSerif-W22.ttc".to_string(),
+            path: temp_font_path_str.clone(),
             index: 3,
             families: vec!["Dream Han Serif SC".to_string(), "梦源宋体 SC".to_string()],
             face_names: vec![
@@ -4064,9 +4077,10 @@ mod tests {
             ],
             bold: true,
             italic: false,
-            size_bytes: 42_000_000,
+            size_bytes: temp_font_size,
         };
         let metadata = entries_to_cache_metadata(&[entry.clone()]);
+        assert_eq!(metadata.len(), 1);
         let keys: HashSet<String> = metadata[0]
             .family_keys
             .iter()
@@ -4089,13 +4103,13 @@ mod tests {
             resolve_user_font("Dream Han Serif SC W22".to_string(), false, false)
                 .unwrap()
                 .expect("full face name should resolve regardless of ASS bold flag");
-        assert_eq!(direct_face_name.path, "C:\\Fonts\\DreamHanSerif-W22.ttc");
+        assert_eq!(direct_face_name.path.as_str(), temp_font_path_str.as_str());
         assert_eq!(direct_face_name.index, 3);
 
         let postscript_name = resolve_user_font("DreamHanSerifSC-W22".to_string(), false, true)
             .unwrap()
             .expect("PostScript face alias should resolve regardless of ASS italic flag");
-        assert_eq!(postscript_name.path, "C:\\Fonts\\DreamHanSerif-W22.ttc");
+        assert_eq!(postscript_name.path.as_str(), temp_font_path_str.as_str());
         assert_eq!(postscript_name.index, 3);
 
         assert!(
@@ -4108,6 +4122,8 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+
+        let _ = fs::remove_dir_all(&temp_font_dir);
     }
 
     #[test]
