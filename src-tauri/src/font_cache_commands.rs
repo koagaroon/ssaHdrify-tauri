@@ -6,9 +6,9 @@
 //! during Tauri setup, plus the five commands the React drift modal +
 //! embed-time lookup tier call into.
 //!
-//! See `docs/architecture/ssahdrify_cli_design.md` § "v1.4.1 stable
-//! 后续用户反馈" #5 for the locked design (5 commands + 3-button modal +
-//! lookup tier ordering).
+//! The GUI command surface stays deliberately small: cache status,
+//! drift detection, drift rescan, clear/rebuild, and lookup. The
+//! frontend owns presentation; this layer owns cache mutation ordering.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};

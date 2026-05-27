@@ -2309,8 +2309,7 @@ fn run_hdr(
     // transformations (HDR/Shift/Embed): the second input's work is
     // wasted but no source data is lost. Rename takes the opposite
     // all-fail policy (see duplicate_rename_output_keys) because
-    // picking a "winner" there could move the wrong file. See
-    // ssahdrify_cli_design.md § Cross-cutting 行为.
+    // picking a "winner" there could move the wrong file.
     let mut seen_outputs = HashSet::new();
 
     for (idx, file) in args.files.iter().enumerate() {
@@ -4774,8 +4773,7 @@ fn duplicate_rename_output_keys(rows: &[engine::RenamePlanRow]) -> HashSet<Strin
     // All-fail dedup (not first-wins) for rename: rename is destructive,
     // so picking a "winner" among duplicates risks moving the wrong
     // file into a stable name. Every participant in a duplicate set is
-    // flagged here and refuses to act in process_rename_pair. See
-    // ssahdrify_cli_design.md § Cross-cutting 行为.
+    // flagged here and refuses to act in process_rename_pair.
     //
     // No-op rows DO claim their output key — a no-op row's output is a
     // real file already on disk, so a non-no-op row targeting the same

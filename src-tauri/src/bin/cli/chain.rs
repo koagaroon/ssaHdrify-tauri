@@ -16,8 +16,9 @@
 //!      `runChain` via the engine per file, and writes the terminal
 //!      output via existing fs primitives.
 //!
-//! See `docs/architecture/ssahdrify_cli_design.md` § "v1.4.1 stable
-//! 后续用户反馈" feature #4 for the locked design decisions.
+//! Keep this side limited to parsing and validation; the transform
+//! executor stays in TS so CLI chain behavior uses the same feature
+//! implementations as the GUI-oriented engine layer.
 
 use std::path::{Path, PathBuf};
 

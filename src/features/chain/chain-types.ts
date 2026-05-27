@@ -6,9 +6,6 @@
  * The AST is flat by design: an ordered list of steps, no nesting.
  * Future complexity (conditionals, sub-pipelines) can extend this
  * schema without breaking the v1 shape.
- *
- * See `docs/architecture/ssahdrify_cli_design.md` § "Project design
- * locks → chain feature" for the locked design decisions.
  */
 
 import type { Eotf } from "../hdr-convert/color-engine";

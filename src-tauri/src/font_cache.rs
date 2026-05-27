@@ -12,9 +12,6 @@
 //! storage at the caller-supplied path so GUI and CLI run independently
 //! without lock contention.
 //!
-//! See `docs/architecture/ssahdrify_cli_design.md` § "v1.4.1 stable
-//! 后续用户反馈" #5 for the full design lock.
-//!
 //! This file owns the Tauri-free cache module: schema (NFC +
 //! Unicode-lowercase lookup key + exact-family/face-alias key kind),
 //! open / create / version check, per-folder scan write, drift detection,

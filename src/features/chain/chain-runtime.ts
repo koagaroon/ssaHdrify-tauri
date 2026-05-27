@@ -8,10 +8,6 @@
  * (chain CLI keyword + `+` separator, current target) and Shape C
  * (recipe YAML, future). Both UIs produce a `ChainPlan`; the
  * runtime doesn't know which produced it.
- *
- * See `docs/architecture/ssahdrify_cli_design.md` § "Project design
- * locks → chain feature" for the locked architectural decisions
- * (Shape A / Shape C separation, embed-cap, step-order check, etc.).
  */
 
 import { Base64 } from "js-base64";
