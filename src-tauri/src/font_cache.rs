@@ -218,7 +218,7 @@ const KEY_KIND_FACE_ALIAS: i32 = 1;
 /// stat-storm budget.
 pub const MAX_CACHED_FOLDERS: usize = 256;
 
-fn reject_unsupported_cached_folder_path(path: &str) -> Result<(), CacheError> {
+fn reject_unsupported_cached_namespace_path(path: &str, source: &str) -> Result<(), CacheError> {
     let normalized = path.replace('/', "\\").to_ascii_lowercase();
     let bytes = normalized.as_bytes();
     let is_extended_local_drive = normalized.starts_with("\\\\?\\")
@@ -227,13 +227,20 @@ fn reject_unsupported_cached_folder_path(path: &str) -> Result<(), CacheError> {
         && bytes.get(6) == Some(&b'\\');
     let uses_unc_or_device_namespace = normalized.starts_with("\\\\") && !is_extended_local_drive;
     if uses_unc_or_device_namespace {
-        return Err(CacheError::Io(
-            "cached_folders contains a network or device-namespace folder path; \
+        return Err(CacheError::Io(format!(
+            "{source} contains a network or device-namespace path; \
              rebuild the cache from local font folders or run with --no-cache"
-                .to_string(),
-        ));
+        )));
     }
     Ok(())
+}
+
+fn reject_unsupported_cached_folder_path(path: &str) -> Result<(), CacheError> {
+    reject_unsupported_cached_namespace_path(path, "cached_folders.folder_path")
+}
+
+fn reject_unsupported_cached_font_path(path: &str) -> Result<(), CacheError> {
+    reject_unsupported_cached_namespace_path(path, "cached_fonts.font_path")
 }
 
 /// Normalize a family-name string into the lookup key used by
@@ -638,8 +645,11 @@ impl FontCache {
         // the normal write flow. The CLI-side untrusted boundary is at
         // `run_refresh_fonts` (--font-dir argv validated pre-canonicalize);
         // the GUI side validates at scan_font_directory IPC entry.
-        // SQLite stored values are trusted because their writers are
-        // internal canonicalize()-output, not user input.
+        // Rows written through this function are internal
+        // canonicalize()-output. Rows read back from an existing cache
+        // are still validated at list/lookup boundaries because
+        // --cache-file and local cache tampering make persisted SQLite
+        // state attacker-influenced.
         let tx = self
             .conn
             .transaction()
@@ -915,10 +925,13 @@ impl FontCache {
             |r| Ok((r.get(0)?, r.get(1)?)),
         );
         match row {
-            Ok((font_path, face_index)) => Ok(Some(FontLookupResult {
-                font_path,
-                face_index,
-            })),
+            Ok((font_path, face_index)) => {
+                reject_unsupported_cached_font_path(&font_path)?;
+                Ok(Some(FontLookupResult {
+                    font_path,
+                    face_index,
+                }))
+            }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(CacheError::Io(format!("lookup_family: {e}"))),
         }
@@ -1591,8 +1604,8 @@ mod tests {
         let err = cache.list_folders().unwrap_err();
         assert!(
             err.to_string()
-                .contains("network or device-namespace folder path"),
-            "expected network/device namespace rejection, got: {err}"
+                .contains("cached_folders.folder_path contains a network or device-namespace path"),
+            "expected cached folder namespace rejection, got: {err}"
         );
     }
 
@@ -1833,6 +1846,59 @@ mod tests {
         assert!(
             result.is_none(),
             "orphan family key row must not bypass cached_fonts/cached_folders anchoring"
+        );
+    }
+
+    #[test]
+    fn lookup_family_rejects_network_namespace_font_path_rows() {
+        let (_guard, path) = temp_cache_path();
+        let cache = FontCache::open_or_create(&path).expect("open");
+        let bad_font_path = r"\\?\UNC\dead-host\Fonts\arial.ttf";
+        cache
+            .conn
+            .execute(
+                "INSERT INTO cached_folders(folder_path, folder_mtime, last_scanned_at) \
+                 VALUES(?1, ?2, ?3)",
+                params!["/test/dir", 1_700_000_000, 1_700_000_000],
+            )
+            .unwrap();
+        cache
+            .conn
+            .execute(
+                "INSERT INTO cached_fonts(font_path, folder_path, file_size, file_mtime, face_index) \
+                 VALUES(?1, ?2, ?3, ?4, ?5)",
+                params![
+                    bad_font_path,
+                    "/test/dir",
+                    100_000,
+                    1_700_000_000,
+                    0,
+                ],
+            )
+            .unwrap();
+        cache
+            .conn
+            .execute(
+                "INSERT INTO cached_family_keys(\
+                    font_path, face_index, family_name, family_name_key, key_kind, bold, italic\
+                 ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    bad_font_path,
+                    0,
+                    "Arial",
+                    family_lookup_key("Arial"),
+                    KEY_KIND_FAMILY,
+                    0,
+                    0,
+                ],
+            )
+            .unwrap();
+
+        let err = cache.lookup_family("Arial", false, false).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("cached_fonts.font_path contains a network or device-namespace path"),
+            "expected cached font namespace rejection, got: {err}"
         );
     }
 

@@ -117,6 +117,25 @@ export function insertFontsSection(content: string, fontsSection: string): strin
   }
   const existingFontsIdx = fontsHeaderIndices[0] ?? -1;
 
+  // Validate [Events] cardinality before any rewrite branch. The
+  // existing-[Fonts] replacement path returns early below, so this
+  // guard must not live only in the "insert before [Events]" branch.
+  // A single ASS with two [Events] sections produces a corrupted file
+  // either way — libass reads only the first, every other consumer
+  // (Aegisub / mpv) may pick the second — and inserting/replacing
+  // [Fonts] while leaving both sections intact would silently preserve
+  // malformed dialogue data.
+  const eventsHeaderIndices: number[] = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    if (HEADER_EVENTS_RE.test(lines[i]!)) eventsHeaderIndices.push(i);
+  }
+  if (eventsHeaderIndices.length > 1) {
+    throw new Error(
+      `Cannot embed: input ASS has ${eventsHeaderIndices.length} [Events] sections; expected at most one`
+    );
+  }
+  const eventsIdx = eventsHeaderIndices[0] ?? -1;
+
   // Build "before" from a line slice: strip trailing blank lines so we control
   // the separator ourselves. Array.join() absorbs trailing "" elements into a
   // single lineEnding, making blank separator lines invisible — so we strip them
@@ -170,24 +189,6 @@ export function insertFontsSection(content: string, fontsSection: string): strin
   // shares the column-0 + ASCII-space-only shape with HEADER_FONTS_RE
   // for the same UUEncode-false-positive + Unicode-line-sep reasons
   // (see module-scope definitions).
-  const eventsHeaderIndices: number[] = [];
-  for (let i = 0; i < lines.length; i += 1) {
-    if (HEADER_EVENTS_RE.test(lines[i]!)) eventsHeaderIndices.push(i);
-  }
-  // parity with the [Fonts]-duplicate reject above.
-  // A single ASS with two [Events] sections produces a corrupted file
-  // either way — libass reads only the first, every other consumer
-  // (Aegisub / mpv) may pick the second — and inserting [Fonts] before
-  // the FIRST [Events] silently leaves the second's dialogues intact
-  // downstream. Surface the malformed input the same way [Fonts]
-  // duplicates are surfaced.
-  if (eventsHeaderIndices.length > 1) {
-    throw new Error(
-      `Cannot embed: input ASS has ${eventsHeaderIndices.length} [Events] sections; expected at most one`
-    );
-  }
-  const eventsIdx = eventsHeaderIndices[0] ?? -1;
-
   if (eventsIdx >= 0) {
     const { text: before, sep } = buildBefore(eventsIdx);
     const after = lines.slice(eventsIdx).join(lineEnding);

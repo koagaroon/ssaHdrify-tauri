@@ -307,6 +307,34 @@ Dialogue: 0,0:00:02.00,0:00:03.00,Default,B
     ).toThrow(/2 \[Events\] sections/);
   });
 
+  it("applyFontEmbed rejects duplicate [Events] even when replacing existing [Fonts]", () => {
+    const existingFontsWithTwoEvents = `[Script Info]
+Title: Existing Fonts Two Events
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, Bold, Italic
+Style: Default,Arial,20,0,0
+
+[Fonts]
+fontname: stale.ttf
+abc==
+
+[Events]
+Format: Layer, Start, End, Style, Text
+Dialogue: 0,0:00:00.00,0:00:01.00,Default,A
+
+[Events]
+Format: Layer, Start, End, Style, Text
+Dialogue: 0,0:00:02.00,0:00:03.00,Default,B
+`;
+    expect(() =>
+      applyFontEmbed({
+        content: existingFontsWithTwoEvents,
+        fonts: [{ fontName: "arial.ttf", data: [0, 1, 2] }],
+      })
+    ).toThrow(/2 \[Events\] sections/);
+  });
+
   it("applyFontEmbed replaces existing [Fonts] section even when [Events] is absent", () => {
     const noEventsAss = `[Script Info]
 Title: No Events
