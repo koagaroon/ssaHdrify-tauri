@@ -299,6 +299,10 @@ export interface LocalFontEntry {
   index: number;
   /** All localized family names for this face (display name first). */
   families: string[];
+  /** Full-face / PostScript aliases that identify this exact face. */
+  faceNames?: string[];
+  /** Rust serde field name; kept for legacy direct IPC/test callers. */
+  face_names?: string[];
   /** True when OS/2 weight >= 600 */
   bold: boolean;
   /** True for Italic/Oblique styles */

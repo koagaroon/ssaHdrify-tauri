@@ -179,6 +179,11 @@ fn reject_cache_reparse_paths(cache_path: &Path) -> Result<(), CacheError> {
 /// Without it, CJK fonts whose name-table form differs from the
 /// ASS \fn / Style Fontname spelling missed every cache lookup.
 ///
+/// v2 → v3: cache population now stores full-face / PostScript aliases
+/// such as `Dream Han Serif SC W22` under all bold/italic lookup states.
+/// Old cache files do not have these alias rows, so they would silently
+/// keep missing TTC faces until rebuilt.
+///
 /// BUMP this constant when the `family_name_key` normalization or
 /// any other on-disk shape changes — even if no DDL changes
 /// . The verifier only checks numeric equality, so
@@ -188,7 +193,7 @@ fn reject_cache_reparse_paths(cache_path: &Path) -> Result<(), CacheError> {
 /// rules, or face-index encoding, bump first. Long-term: persist a
 /// git-describe-derived build_id in cache_meta alongside the
 /// version number to catch unbumped semantic shifts.
-pub const SCHEMA_VERSION: i32 = 2;
+pub const SCHEMA_VERSION: i32 = 3;
 
 /// DoS-class sanity cap on the number of `cached_folders` rows
 /// `list_folders` / `diff_against` will return. Paralleling

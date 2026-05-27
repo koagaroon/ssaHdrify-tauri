@@ -109,8 +109,20 @@ export interface EmbedProgress {
 export function buildUserFontMap(faces: LocalFontEntry[]): Map<string, LocalFontEntry> {
   const map = new Map<string, LocalFontEntry>();
   for (const face of faces) {
+    const familyLookupKeys = new Set(
+      face.families.map((family) => family.normalize("NFC").toLowerCase())
+    );
     for (const family of face.families) {
       map.set(userFontKey(family, face.bold, face.italic), face);
+    }
+    const faceNames = face.faceNames ?? face.face_names ?? [];
+    for (const faceName of faceNames) {
+      if (familyLookupKeys.has(faceName.normalize("NFC").toLowerCase())) continue;
+      for (const bold of [false, true]) {
+        for (const italic of [false, true]) {
+          map.set(userFontKey(faceName, bold, italic), face);
+        }
+      }
     }
   }
   return map;

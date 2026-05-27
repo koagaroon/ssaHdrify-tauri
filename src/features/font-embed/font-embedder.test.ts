@@ -291,6 +291,29 @@ Dialogue: 0,0:00:05.00,0:00:10.00,Default,{\\fn青鸟华光简粗黑}horizontal
     );
     expect(map.get(userFontKey("JCUH", false, false))?.path).toContain("青鸟华光简粗黑.TTF");
   });
+
+  it("matches full face aliases without weakening ordinary family style matching", () => {
+    const dreamHanW22: LocalFontEntry = {
+      path: "D:/Fonts/DreamHanSerif-W22.ttc",
+      index: 2,
+      families: ["Dream Han Serif SC", "梦源宋体 SC"],
+      faceNames: ["Dream Han Serif SC W22", "DreamHanSerifSC-W22"],
+      bold: true,
+      italic: false,
+      sizeBytes: 42_000_000,
+    };
+
+    const map = buildUserFontMap([dreamHanW22]);
+
+    expect(map.get(userFontKey("Dream Han Serif SC W22", false, false))?.path).toBe(
+      "D:/Fonts/DreamHanSerif-W22.ttc"
+    );
+    expect(map.get(userFontKey("DreamHanSerifSC-W22", false, true))?.index).toBe(2);
+    expect(map.get(userFontKey("Dream Han Serif SC", true, false))?.path).toBe(
+      "D:/Fonts/DreamHanSerif-W22.ttc"
+    );
+    expect(map.get(userFontKey("Dream Han Serif SC", false, false))).toBeUndefined();
+  });
 });
 
 describe("analyzeFonts — useRustUserFonts production path", () => {

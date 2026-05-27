@@ -670,6 +670,11 @@ pub struct FontLookupResult {
 /// script chose to reference, so the matcher indexes the face under every
 /// variant.
 ///
+/// `face_names` holds full-face aliases such as `Dream Han Serif SC W22` or a
+/// PostScript name. These identify a specific face/weight, so lookup indexes
+/// them style-insensitively: an ASS file can name the W22 face directly even
+/// when its separate Bold column is `0`.
+///
 /// The entry count reported to users reflects font files/faces (not variants),
 /// so a folder with 3 TTFs shows as "3 fonts" even if we pulled 8 matchable
 /// name variants from them.
@@ -688,6 +693,8 @@ pub struct LocalFontEntry {
     /// All localized family-name variants for this face. The primary (the one
     /// shown in the UI) is `families[0]`; the rest exist for matching only.
     pub families: Vec<String>,
+    /// Full-face / PostScript aliases that identify this exact face.
+    pub face_names: Vec<String>,
     /// True when OS/2 weight >= 600 (SemiBold+). Matches ASS \b1 semantics.
     pub bold: bool,
     /// True for Italic or Oblique styles.
@@ -747,20 +754,32 @@ pub fn entries_to_cache_metadata(
             let mtime = *mtime_cache.entry(e.path.as_str()).or_insert_with(|| {
                 crate::font_cache::try_modified_at(Path::new(e.path.as_str())).unwrap_or(0)
             });
+            let mut family_keys: Vec<crate::font_cache::FamilyKey> = Vec::new();
+            for family_name in &e.families {
+                family_keys.push(crate::font_cache::FamilyKey {
+                    family_name: family_name.clone(),
+                    bold: e.bold,
+                    italic: e.italic,
+                });
+            }
+            for face_name in &e.face_names {
+                for bold in [false, true] {
+                    for italic in [false, true] {
+                        family_keys.push(crate::font_cache::FamilyKey {
+                            family_name: face_name.clone(),
+                            bold,
+                            italic,
+                        });
+                    }
+                }
+            }
+
             crate::font_cache::FontMetadata {
                 file_path: e.path.clone(),
                 file_size: i64::try_from(e.size_bytes).unwrap_or(i64::MAX),
                 file_mtime: mtime,
                 face_index: i32::try_from(e.index).unwrap_or(i32::MAX),
-                family_keys: e
-                    .families
-                    .iter()
-                    .map(|family_name| crate::font_cache::FamilyKey {
-                        family_name: family_name.clone(),
-                        bold: e.bold,
-                        italic: e.italic,
-                    })
-                    .collect(),
+                family_keys,
             }
         })
         .collect()
@@ -939,6 +958,19 @@ fn import_user_font_batch_tx(
                 ])
                 .map_err(|e| db_error("family-key insert failed", e))?;
         }
+        for face_name in entry.face_names {
+            for bold in [false, true] {
+                for italic in [false, true] {
+                    insert_key
+                        .execute(params![
+                            user_font_key(&face_name, bold, italic),
+                            face_id,
+                            source_order
+                        ])
+                        .map_err(|e| db_error("face-name key insert failed", e))?;
+                }
+            }
+        }
     }
 
     Ok(ImportOutcome { added, duplicated })
@@ -1079,6 +1111,7 @@ pub fn find_system_font(
 /// worst case to ~800 MB and combines with MAX_CACHE_POPULATE_FACES for
 /// ~160 MB peak in practice.
 const MAX_FAMILY_VARIANTS_PER_FACE: usize = 8;
+const MAX_FACE_NAME_VARIANTS_PER_FACE: usize = 8;
 
 /// Cap on the number of font faces a single directory scan will
 /// snapshot into the GUI / CLI persistent cache. Above this threshold
@@ -1286,6 +1319,7 @@ fn parse_local_font_file(canonical: &Path, scan_id: u64) -> Vec<LocalFontEntry> 
             let italic = !matches!(attrs.style, fontcull_skrifa::attribute::Style::Normal);
 
             let mut family_variants: HashSet<String> = HashSet::new();
+            let mut face_name_variants: HashSet<String> = HashSet::new();
             let mut primary_hint: Option<String> = None;
             for id in [StringId::FAMILY_NAME, StringId::TYPOGRAPHIC_FAMILY_NAME] {
                 if primary_hint.is_none() {
@@ -1308,26 +1342,39 @@ fn parse_local_font_file(canonical: &Path, scan_id: u64) -> Vec<LocalFontEntry> 
                 }
             }
 
+            for id in [StringId::FULL_NAME, StringId::POSTSCRIPT_NAME] {
+                for localized in font_ref.localized_strings(id) {
+                    if let Some(name) = bounded_font_family_name(localized.chars()) {
+                        face_name_variants.insert(name);
+                        if face_name_variants.len() >= MAX_FACE_NAME_VARIANTS_PER_FACE {
+                            break;
+                        }
+                    }
+                }
+                if face_name_variants.len() >= MAX_FACE_NAME_VARIANTS_PER_FACE {
+                    break;
+                }
+            }
+
             // Last-resort fallback: malformed fonts may have no family IDs but
             // still have a full name. Indexing that is better than silently
             // dropping the face, and it avoids re-entering font-kit/DirectWrite.
             if family_variants.is_empty() {
-                for id in [StringId::FULL_NAME, StringId::POSTSCRIPT_NAME] {
-                    if let Some(name) = font_ref
-                        .localized_strings(id)
-                        .english_or_first()
-                        .and_then(|localized| bounded_font_family_name(localized.chars()))
-                    {
-                        primary_hint = Some(name.clone());
-                        family_variants.insert(name);
-                        break;
-                    }
+                if let Some(name) = face_name_variants.iter().min().cloned() {
+                    primary_hint = Some(name.clone());
+                    family_variants.insert(name);
                 }
             }
 
-            (family_variants, primary_hint, bold, italic)
+            (
+                family_variants,
+                face_name_variants,
+                primary_hint,
+                bold,
+                italic,
+            )
         }));
-        let (family_variants, primary_hint, bold, italic) = match face_result {
+        let (family_variants, face_name_variants, primary_hint, bold, italic) = match face_result {
             Ok(t) => t,
             Err(_) => {
                 log::warn!(
@@ -1389,10 +1436,23 @@ fn parse_local_font_file(canonical: &Path, scan_id: u64) -> Vec<LocalFontEntry> 
             }
         }
 
+        let family_lookup_keys: HashSet<String> = families
+            .iter()
+            .map(|name| crate::font_cache::family_lookup_key(name))
+            .collect();
+        let mut face_names: Vec<String> = face_name_variants
+            .into_iter()
+            .filter(|name| {
+                !family_lookup_keys.contains(&crate::font_cache::family_lookup_key(name))
+            })
+            .collect();
+        face_names.sort();
+
         entries.push(LocalFontEntry {
             path: canonical_string.clone(),
             index: i,
             families,
+            face_names,
             bold,
             italic,
             size_bytes,
@@ -3573,6 +3633,11 @@ mod tests {
     }
 
     #[test]
+    fn max_face_name_variants_per_face_cap_value() {
+        assert_eq!(MAX_FACE_NAME_VARIANTS_PER_FACE, 8);
+    }
+
+    #[test]
     fn is_ttc_data_recognizes_ttcf_magic() {
         // Minimal valid TTC header: `ttcf` magic + version + numFonts.
         let data = b"ttcf\x00\x01\x00\x00\x00\x00\x00\x02";
@@ -3788,6 +3853,7 @@ mod tests {
             path: path.to_string(),
             index,
             families: vec![family.to_string()],
+            face_names: Vec::new(),
             bold: false,
             italic: false,
             size_bytes: 123,
@@ -3969,6 +4035,61 @@ mod tests {
         // the subset_font gate against face-index forgery on TTC files
         // where only one face was actually scanned.
         assert!(!is_user_font_face_registered("C:\\Fonts\\A.ttf", 1).unwrap());
+    }
+
+    #[test]
+    fn full_face_names_match_without_weakening_family_style_matching() {
+        let _guard = SCAN_TEST_LOCK.lock().unwrap();
+        init_test_user_font_db("face-name-alias");
+        let entry = LocalFontEntry {
+            path: "C:\\Fonts\\DreamHanSerif-W22.ttc".to_string(),
+            index: 3,
+            families: vec!["Dream Han Serif SC".to_string(), "梦源宋体 SC".to_string()],
+            face_names: vec![
+                "Dream Han Serif SC W22".to_string(),
+                "DreamHanSerifSC-W22".to_string(),
+            ],
+            bold: true,
+            italic: false,
+            size_bytes: 42_000_000,
+        };
+        let metadata = entries_to_cache_metadata(&[entry.clone()]);
+        let keys: HashSet<String> = metadata[0]
+            .family_keys
+            .iter()
+            .map(|key| user_font_key(&key.family_name, key.bold, key.italic))
+            .collect();
+
+        assert!(keys.contains(&user_font_key("Dream Han Serif SC", true, false)));
+        assert!(!keys.contains(&user_font_key("Dream Han Serif SC", false, false)));
+        assert!(keys.contains(&user_font_key("Dream Han Serif SC W22", false, false)));
+        assert!(keys.contains(&user_font_key("Dream Han Serif SC W22", true, true)));
+
+        commit_entries("source-dream-han", vec![entry]);
+
+        let direct_face_name =
+            resolve_user_font("Dream Han Serif SC W22".to_string(), false, false)
+                .unwrap()
+                .expect("full face name should resolve regardless of ASS bold flag");
+        assert_eq!(direct_face_name.path, "C:\\Fonts\\DreamHanSerif-W22.ttc");
+        assert_eq!(direct_face_name.index, 3);
+
+        let postscript_name = resolve_user_font("DreamHanSerifSC-W22".to_string(), false, true)
+            .unwrap()
+            .expect("PostScript face alias should resolve regardless of ASS italic flag");
+        assert_eq!(postscript_name.path, "C:\\Fonts\\DreamHanSerif-W22.ttc");
+        assert_eq!(postscript_name.index, 3);
+
+        assert!(
+            resolve_user_font("Dream Han Serif SC".to_string(), true, false)
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            resolve_user_font("Dream Han Serif SC".to_string(), false, false)
+                .unwrap()
+                .is_none()
+        );
     }
 
     // ── cache provenance gate pins ──
