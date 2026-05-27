@@ -39,11 +39,14 @@ export function assertAssShape(content: string): void {
   // Gated on content.length to keep the
   // small-file fast path zero-overhead. The 1 MB gate is well above
   // realistic small subtitles (5-200 KB) and well below the attack
-  // threshold (tens of MB).
+  // threshold (tens of MB). Count every separator that
+  // insertFontsSection normalizes into an ASCII newline before
+  // splitting, otherwise U+2028 / U+2029 can bypass the guard.
   if (content.length > LINE_PROBE_BYTE_GATE) {
     let nl = 1;
     for (let i = 0; i < content.length; i++) {
-      if (content.charCodeAt(i) === 10 /* '\n' */) {
+      const code = content.charCodeAt(i);
+      if (code === 10 /* '\n' */ || code === 0x2028 || code === 0x2029) {
         nl++;
         if (nl > MAX_INSERT_LINES) {
           throw new Error(`File too large: >${MAX_INSERT_LINES} lines`);

@@ -206,17 +206,17 @@ const KEY_KIND_FAMILY: i32 = 0;
 const KEY_KIND_FACE_ALIAS: i32 = 1;
 
 /// DoS-class sanity cap on the number of `cached_folders` rows
-/// `list_folders` / `diff_against` will return. Paralleling
-/// `fonts.rs::MAX_PROVENANCE_CACHE_SIZE` (100,000): a hostile cache
-/// file (P1b via `--cache-file`) populated with tens of thousands of
-/// fabricated folder rows — especially UNC paths to dead servers —
-/// would otherwise spin every detect call through a per-row stat
-/// loop, bounded only by per-stat OS timeout. The cap fires inside
-/// `list_folders` and refuses to return the result; downstream
-/// `diff_against` / `detect_font_cache_drift` surface the error and
-/// the user is pointed at rebuilding the cache. Realistic working
-/// caches hold dozens to hundreds of folders.
-pub const MAX_CACHED_FOLDERS: usize = 100_000;
+/// `list_folders` / `diff_against` will return. A hostile cache file
+/// (P1b via `--cache-file`) populated with thousands of fabricated
+/// folder rows — especially UNC paths to dead servers — would otherwise
+/// spin every detect call through a per-row stat loop, bounded only by
+/// per-stat OS timeout. The cap fires inside `list_folders` and refuses
+/// to return the result; downstream `diff_against` /
+/// `detect_font_cache_drift` surface the error and the user is pointed
+/// at rebuilding the cache. Realistic working caches hold dozens to
+/// hundreds of folders, so 4096 is intentionally generous without being
+/// a practical hang budget.
+pub const MAX_CACHED_FOLDERS: usize = 4096;
 
 /// Normalize a family-name string into the lookup key used by
 /// `cached_family_keys.family_name_key`: NFC-normalize then full
@@ -1546,6 +1546,25 @@ mod tests {
         let folders = cache.list_folders().expect("list");
         let paths: Vec<&str> = folders.iter().map(|f| f.folder_path.as_str()).collect();
         assert_eq!(paths, vec!["/test/aaa", "/test/mmm", "/test/zzz"]);
+    }
+
+    #[test]
+    fn list_folders_rejects_over_sanity_cap_before_stat_callers() {
+        let (_guard, path) = temp_cache_path();
+        let mut cache = FontCache::open_or_create(&path).expect("open");
+        for i in 0..=MAX_CACHED_FOLDERS {
+            cache
+                .replace_folder(&format!("/hostile/{i:04}"), 1_700_000_000, &[])
+                .unwrap();
+        }
+
+        let err = cache.list_folders().unwrap_err();
+        assert!(
+            err.to_string().contains(&format!(
+                "cached_folders table exceeds {MAX_CACHED_FOLDERS}-row sanity cap"
+            )),
+            "expected cached_folders sanity-cap error, got: {err}"
+        );
     }
 
     #[test]

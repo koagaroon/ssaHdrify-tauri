@@ -429,7 +429,7 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端测试 / Rust bac
 │                              │ │                                             │
 │  Tauri 2 + React +           │ │  clap (argv parsing)                        │
 │  Tailwind frontend           │ │  deno_core / V8 (embedded JS bundle)        │
-│  - 4 tabs                    │ │  - 6 subcommands                            │
+│  - 4 tabs                    │ │  - feature and utility subcommands          │
 │  - i18n (zh/en),             │ │  - JSON reports for hdr/shift/embed/rename  │
 │    dark/light/auto theme     │ │  - env_logger (stderr warnings)             │
 │  - FontSourceModal UI        │ │  - sys-locale (--lang auto)                 │
