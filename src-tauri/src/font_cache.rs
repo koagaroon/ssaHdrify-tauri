@@ -240,6 +240,66 @@ fn reject_unsupported_cached_font_path(path: &str) -> Result<(), CacheError> {
     reject_unsupported_cached_namespace_path(path, "cached_fonts.font_path")
 }
 
+fn validate_cached_font_hit(
+    font_path: &str,
+    folder_path: &str,
+    cached_file_size: i64,
+    cached_file_mtime: i64,
+) -> Result<(), CacheError> {
+    let folder_canonical = Path::new(folder_path).canonicalize().map_err(|e| {
+        CacheError::Io(format!(
+            "cached_folders.folder_path no longer points at a readable folder; rebuild required: {e}"
+        ))
+    })?;
+    let folder_metadata = std::fs::metadata(&folder_canonical).map_err(|e| {
+        CacheError::Io(format!(
+            "cached_folders.folder_path no longer points at a readable folder; rebuild required: {e}"
+        ))
+    })?;
+    if !folder_metadata.is_dir() {
+        return Err(CacheError::Io(
+            "cached_folders.folder_path no longer points at a folder; rebuild required".to_string(),
+        ));
+    }
+
+    let font_canonical = Path::new(font_path).canonicalize().map_err(|e| {
+        CacheError::Io(format!(
+            "cached_fonts.font_path no longer points at a readable file; rebuild required: {e}"
+        ))
+    })?;
+    if !font_canonical.starts_with(&folder_canonical) {
+        return Err(CacheError::Io(
+            "cached_fonts.font_path is outside cached_folders.folder_path; \
+             cache file appears corrupted or hostile — rebuild required"
+                .to_string(),
+        ));
+    }
+
+    let font_metadata = std::fs::metadata(&font_canonical).map_err(|e| {
+        CacheError::Io(format!(
+            "cached_fonts.font_path no longer points at a readable file; rebuild required: {e}"
+        ))
+    })?;
+    if !font_metadata.is_file() {
+        return Err(CacheError::Io(
+            "cached_fonts.font_path no longer points at a file; rebuild required".to_string(),
+        ));
+    }
+
+    let live_file_size = i64::try_from(font_metadata.len()).unwrap_or(i64::MAX);
+    let live_file_mtime = try_modified_at(&font_canonical).ok_or_else(|| {
+        CacheError::Io("cached_fonts.font_path mtime is unreadable; rebuild required".to_string())
+    })?;
+    if live_file_size != cached_file_size || live_file_mtime != cached_file_mtime {
+        return Err(CacheError::Io(
+            "cached_fonts metadata no longer matches the live font file; rebuild required"
+                .to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
 /// Normalize a family-name string into the lookup key used by
 /// `cached_family_keys.family_name_key`: NFC-normalize then full
 /// Unicode lowercase (so `É`→`é`, not just ASCII-only `A`→`a`).
@@ -918,8 +978,8 @@ impl FontCache {
         italic: bool,
     ) -> Result<Option<FontLookupResult>, CacheError> {
         let lookup_key = family_lookup_key(family_name);
-        let row: Result<(String, i32, String), _> = self.conn.query_row(
-            "SELECT k.font_path, k.face_index, d.folder_path \
+        let row: Result<(String, i32, String, i64, i64), _> = self.conn.query_row(
+            "SELECT k.font_path, k.face_index, d.folder_path, f.file_size, f.file_mtime \
              FROM cached_family_keys k \
              INNER JOIN cached_fonts f \
                ON f.font_path = k.font_path AND f.face_index = k.face_index \
@@ -937,12 +997,13 @@ impl FontCache {
                 i32::from(italic),
                 KEY_KIND_FACE_ALIAS
             ],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
         );
         match row {
-            Ok((font_path, face_index, folder_path)) => {
+            Ok((font_path, face_index, folder_path, file_size, file_mtime)) => {
                 reject_unsupported_cached_folder_path(&folder_path)?;
                 reject_unsupported_cached_font_path(&font_path)?;
+                validate_cached_font_hit(&font_path, &folder_path, file_size, file_mtime)?;
                 Ok(Some(FontLookupResult {
                     font_path,
                     face_index,
@@ -1076,7 +1137,7 @@ CREATE TABLE cache_meta (
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
+    use std::{fs, path::Path};
 
     /// RAII guard for one test's temporary cache directory. Drop
     /// removes the entire dir + WAL sidecars, even on test panic —
@@ -1362,6 +1423,52 @@ mod tests {
                 italic: false,
             }],
             face_name_aliases: Vec::new(),
+        }
+    }
+
+    fn family_key(family_name: &str, bold: bool, italic: bool) -> FamilyKey {
+        FamilyKey {
+            family_name: family_name.to_string(),
+            bold,
+            italic,
+        }
+    }
+
+    fn canonical_path_string(path: &Path) -> String {
+        path.canonicalize()
+            .expect("canonicalize test path")
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    fn real_folder_path(folder: &Path) -> String {
+        fs::create_dir_all(folder).expect("create test font folder");
+        canonical_path_string(folder)
+    }
+
+    fn real_font_metadata(
+        folder: &Path,
+        file_name: &str,
+        face_index: i32,
+        family_keys: Vec<FamilyKey>,
+        face_name_aliases: Vec<String>,
+    ) -> FontMetadata {
+        fs::create_dir_all(folder).expect("create test font folder");
+        let file_path = folder.join(file_name);
+        fs::write(
+            &file_path,
+            format!("fake font cache fixture: {file_name}:{face_index}"),
+        )
+        .expect("write test font file");
+        let metadata = fs::metadata(&file_path).expect("stat test font file");
+        let file_mtime = try_modified_at(&file_path).expect("test font mtime");
+        FontMetadata {
+            file_path: canonical_path_string(&file_path),
+            file_size: i64::try_from(metadata.len()).unwrap_or(i64::MAX),
+            file_mtime,
+            face_index,
+            family_keys,
+            face_name_aliases,
         }
     }
 
@@ -1826,33 +1933,41 @@ mod tests {
 
     #[test]
     fn lookup_family_returns_match() {
-        let (_guard, path) = temp_cache_path();
+        let (guard, path) = temp_cache_path();
         let mut cache = FontCache::open_or_create(&path).expect("open");
+        let font_dir = guard.0.join("lookup-match");
+        let arial = real_font_metadata(
+            &font_dir,
+            "arial.ttf",
+            0,
+            vec![family_key("Arial", false, false)],
+            Vec::new(),
+        );
         cache
-            .replace_folder(
-                "/test/dir",
-                100,
-                &[synthetic_font("/test/dir/arial.ttf", "Arial")],
-            )
+            .replace_folder(&real_folder_path(&font_dir), 100, &[arial.clone()])
             .unwrap();
         let result = cache
             .lookup_family("Arial", false, false)
             .expect("lookup")
             .expect("hit expected");
-        assert_eq!(result.font_path, "/test/dir/arial.ttf");
+        assert_eq!(result.font_path, arial.file_path);
         assert_eq!(result.face_index, 0);
     }
 
     #[test]
     fn lookup_family_returns_none_for_missing_family() {
-        let (_guard, path) = temp_cache_path();
+        let (guard, path) = temp_cache_path();
         let mut cache = FontCache::open_or_create(&path).expect("open");
+        let font_dir = guard.0.join("lookup-miss");
+        let arial = real_font_metadata(
+            &font_dir,
+            "arial.ttf",
+            0,
+            vec![family_key("Arial", false, false)],
+            Vec::new(),
+        );
         cache
-            .replace_folder(
-                "/test/dir",
-                100,
-                &[synthetic_font("/test/dir/arial.ttf", "Arial")],
-            )
+            .replace_folder(&real_folder_path(&font_dir), 100, &[arial])
             .unwrap();
         let result = cache
             .lookup_family("Helvetica", false, false)
@@ -2007,36 +2122,122 @@ mod tests {
     }
 
     #[test]
-    fn lookup_family_distinguishes_bold_and_italic() {
-        let (_guard, path) = temp_cache_path();
-        let mut cache = FontCache::open_or_create(&path).expect("open");
-        // Two synthetic faces of "Source Han Sans": regular and bold.
-        let regular = FontMetadata {
-            file_path: "/test/dir/SHS-Regular.otf".into(),
-            file_size: 1_000_000,
-            file_mtime: 100,
-            face_index: 0,
-            family_keys: vec![FamilyKey {
-                family_name: "Source Han Sans".into(),
-                bold: false,
-                italic: false,
-            }],
-            face_name_aliases: Vec::new(),
-        };
-        let bold = FontMetadata {
-            file_path: "/test/dir/SHS-Bold.otf".into(),
-            file_size: 1_000_000,
-            file_mtime: 100,
-            face_index: 0,
-            family_keys: vec![FamilyKey {
-                family_name: "Source Han Sans".into(),
-                bold: true,
-                italic: false,
-            }],
-            face_name_aliases: Vec::new(),
-        };
+    fn lookup_family_rejects_font_path_outside_cached_folder() {
+        let (guard, path) = temp_cache_path();
+        let cache = FontCache::open_or_create(&path).expect("open");
+        let trusted_dir = guard.0.join("trusted-fonts");
+        let outside_dir = guard.0.join("outside-fonts");
+        let trusted_folder_path = real_folder_path(&trusted_dir);
+        let outside_font = real_font_metadata(
+            &outside_dir,
+            "private.ttf",
+            0,
+            vec![family_key("Private Sans", false, false)],
+            Vec::new(),
+        );
+        let outside_font_path = outside_font.file_path.clone();
+
         cache
-            .replace_folder("/test/dir", 100, &[regular, bold])
+            .conn
+            .execute(
+                "INSERT INTO cached_folders(folder_path, folder_mtime, last_scanned_at) \
+                 VALUES(?1, ?2, ?3)",
+                params![trusted_folder_path.as_str(), 1_700_000_000, 1_700_000_000],
+            )
+            .unwrap();
+        cache
+            .conn
+            .execute(
+                "INSERT INTO cached_fonts(font_path, folder_path, file_size, file_mtime, face_index) \
+                 VALUES(?1, ?2, ?3, ?4, ?5)",
+                params![
+                    outside_font_path.as_str(),
+                    trusted_folder_path.as_str(),
+                    outside_font.file_size,
+                    outside_font.file_mtime,
+                    0,
+                ],
+            )
+            .unwrap();
+        cache
+            .conn
+            .execute(
+                "INSERT INTO cached_family_keys(\
+                    font_path, face_index, family_name, family_name_key, key_kind, bold, italic\
+                 ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    outside_font_path.as_str(),
+                    0,
+                    "Private Sans",
+                    family_lookup_key("Private Sans"),
+                    KEY_KIND_FAMILY,
+                    0,
+                    0,
+                ],
+            )
+            .unwrap();
+
+        let err = cache
+            .lookup_family("Private Sans", false, false)
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("cached_fonts.font_path is outside cached_folders.folder_path"),
+            "expected outside-folder cache rejection, got: {err}"
+        );
+    }
+
+    #[test]
+    fn lookup_family_rejects_stale_cached_font_metadata() {
+        let (guard, path) = temp_cache_path();
+        let mut cache = FontCache::open_or_create(&path).expect("open");
+        let font_dir = guard.0.join("stale-fonts");
+        let font = real_font_metadata(
+            &font_dir,
+            "arial.ttf",
+            0,
+            vec![family_key("Arial", false, false)],
+            Vec::new(),
+        );
+        cache
+            .replace_folder(&real_folder_path(&font_dir), 100, &[font.clone()])
+            .unwrap();
+
+        fs::write(Path::new(&font.file_path), b"changed font fixture bytes")
+            .expect("mutate font file");
+
+        let err = cache.lookup_family("Arial", false, false).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("cached_fonts metadata no longer matches the live font file"),
+            "expected stale cached font metadata rejection, got: {err}"
+        );
+    }
+
+    #[test]
+    fn lookup_family_distinguishes_bold_and_italic() {
+        let (guard, path) = temp_cache_path();
+        let mut cache = FontCache::open_or_create(&path).expect("open");
+        let font_dir = guard.0.join("lookup-style");
+        // Two synthetic faces of "Source Han Sans": regular and bold.
+        let regular = real_font_metadata(
+            &font_dir,
+            "SHS-Regular.otf",
+            0,
+            vec![family_key("Source Han Sans", false, false)],
+            Vec::new(),
+        );
+        let bold = real_font_metadata(
+            &font_dir,
+            "SHS-Bold.otf",
+            0,
+            vec![family_key("Source Han Sans", true, false)],
+            Vec::new(),
+        );
+        let regular_path = regular.file_path.clone();
+        let bold_path = bold.file_path.clone();
+        cache
+            .replace_folder(&real_folder_path(&font_dir), 100, &[regular, bold])
             .unwrap();
 
         // Regular query hits regular file.
@@ -2044,13 +2245,13 @@ mod tests {
             .lookup_family("Source Han Sans", false, false)
             .unwrap()
             .unwrap();
-        assert_eq!(r.font_path, "/test/dir/SHS-Regular.otf");
+        assert_eq!(r.font_path, regular_path);
         // Bold query hits bold file.
         let b = cache
             .lookup_family("Source Han Sans", true, false)
             .unwrap()
             .unwrap();
-        assert_eq!(b.font_path, "/test/dir/SHS-Bold.otf");
+        assert_eq!(b.font_path, bold_path);
         // Italic-not-present query misses.
         let i = cache.lookup_family("Source Han Sans", false, true).unwrap();
         assert!(i.is_none());
@@ -2058,50 +2259,40 @@ mod tests {
 
     #[test]
     fn lookup_family_prefers_exact_family_before_face_alias() {
-        let (_guard, path) = temp_cache_path();
+        let (guard, path) = temp_cache_path();
         let mut cache = FontCache::open_or_create(&path).expect("open");
-        let exact = FontMetadata {
-            file_path: "/test/dir/zzz-exact-shared-sans.otf".into(),
-            file_size: 1_000_000,
-            file_mtime: 100,
-            face_index: 0,
-            family_keys: vec![FamilyKey {
-                family_name: "Shared Sans".into(),
-                bold: false,
-                italic: false,
-            }],
-            face_name_aliases: Vec::new(),
-        };
-        let alias = FontMetadata {
-            file_path: "/test/dir/aaa-alias-face.otf".into(),
-            file_size: 1_000_000,
-            file_mtime: 100,
-            face_index: 0,
-            family_keys: vec![FamilyKey {
-                family_name: "Other Sans".into(),
-                bold: true,
-                italic: false,
-            }],
-            face_name_aliases: vec!["Shared Sans".into()],
-        };
+        let font_dir = guard.0.join("lookup-alias");
+        let exact = real_font_metadata(
+            &font_dir,
+            "zzz-exact-shared-sans.otf",
+            0,
+            vec![family_key("Shared Sans", false, false)],
+            Vec::new(),
+        );
+        let alias = real_font_metadata(
+            &font_dir,
+            "aaa-alias-face.otf",
+            0,
+            vec![family_key("Other Sans", true, false)],
+            vec!["Shared Sans".into()],
+        );
+        let exact_path = exact.file_path.clone();
+        let alias_path = alias.file_path.clone();
         cache
-            .replace_folder("/test/dir", 100, &[exact, alias])
+            .replace_folder(&real_folder_path(&font_dir), 100, &[exact, alias])
             .unwrap();
 
         let exact_result = cache
             .lookup_family("Shared Sans", false, false)
             .unwrap()
             .unwrap();
-        assert_eq!(
-            exact_result.font_path,
-            "/test/dir/zzz-exact-shared-sans.otf"
-        );
+        assert_eq!(exact_result.font_path, exact_path);
 
         let alias_result = cache
             .lookup_family("Shared Sans", true, true)
             .unwrap()
             .unwrap();
-        assert_eq!(alias_result.font_path, "/test/dir/aaa-alias-face.otf");
+        assert_eq!(alias_result.font_path, alias_path);
 
         let alias_row_count: i32 = cache
             .conn
@@ -2122,40 +2313,31 @@ mod tests {
     fn lookup_family_finds_cjk_alias() {
         // CJK font advertises multiple family aliases on the same face.
         // Lookup must hit any of them.
-        let (_guard, path) = temp_cache_path();
+        let (guard, path) = temp_cache_path();
         let mut cache = FontCache::open_or_create(&path).expect("open");
-        let cjk = FontMetadata {
-            file_path: "/test/dir/SourceHanSans.otf".into(),
-            file_size: 10_000_000,
-            file_mtime: 100,
-            face_index: 0,
-            family_keys: vec![
-                FamilyKey {
-                    family_name: "Source Han Sans CN".into(),
-                    bold: false,
-                    italic: false,
-                },
-                FamilyKey {
-                    family_name: "思源黑体 CN".into(),
-                    bold: false,
-                    italic: false,
-                },
-                FamilyKey {
-                    family_name: "Noto Sans CJK SC".into(),
-                    bold: false,
-                    italic: false,
-                },
+        let font_dir = guard.0.join("lookup-cjk");
+        let cjk = real_font_metadata(
+            &font_dir,
+            "SourceHanSans.otf",
+            0,
+            vec![
+                family_key("Source Han Sans CN", false, false),
+                family_key("思源黑体 CN", false, false),
+                family_key("Noto Sans CJK SC", false, false),
             ],
-            face_name_aliases: Vec::new(),
-        };
-        cache.replace_folder("/test/dir", 100, &[cjk]).unwrap();
+            Vec::new(),
+        );
+        let cjk_path = cjk.file_path.clone();
+        cache
+            .replace_folder(&real_folder_path(&font_dir), 100, &[cjk])
+            .unwrap();
 
         for name in &["Source Han Sans CN", "思源黑体 CN", "Noto Sans CJK SC"] {
             let result = cache
                 .lookup_family(name, false, false)
                 .unwrap()
                 .unwrap_or_else(|| panic!("expected hit for {name}"));
-            assert_eq!(result.font_path, "/test/dir/SourceHanSans.otf");
+            assert_eq!(result.font_path, cjk_path);
         }
     }
 
@@ -2164,34 +2346,26 @@ mod tests {
         // TrueType Collection: one file, multiple faces, each its
         // own family. Schema's composite PK on (font_path,
         // face_index) lets all faces coexist.
-        let (_guard, path) = temp_cache_path();
+        let (guard, path) = temp_cache_path();
         let mut cache = FontCache::open_or_create(&path).expect("open");
-        let mingliu_face0 = FontMetadata {
-            file_path: "/test/dir/MingLiU.ttc".into(),
-            file_size: 5_000_000,
-            file_mtime: 100,
-            face_index: 0,
-            family_keys: vec![FamilyKey {
-                family_name: "MingLiU".into(),
-                bold: false,
-                italic: false,
-            }],
-            face_name_aliases: Vec::new(),
-        };
-        let mingliu_face1 = FontMetadata {
-            file_path: "/test/dir/MingLiU.ttc".into(), // same path
-            file_size: 5_000_000,
-            file_mtime: 100,
-            face_index: 1,
-            family_keys: vec![FamilyKey {
-                family_name: "PMingLiU".into(),
-                bold: false,
-                italic: false,
-            }],
-            face_name_aliases: Vec::new(),
-        };
+        let font_dir = guard.0.join("lookup-ttc");
+        let mingliu_face0 = real_font_metadata(
+            &font_dir,
+            "MingLiU.ttc",
+            0,
+            vec![family_key("MingLiU", false, false)],
+            Vec::new(),
+        );
+        let mut mingliu_face1 = mingliu_face0.clone();
+        mingliu_face1.face_index = 1;
+        mingliu_face1.family_keys = vec![family_key("PMingLiU", false, false)];
+        let mingliu_path = mingliu_face0.file_path.clone();
         cache
-            .replace_folder("/test/dir", 100, &[mingliu_face0, mingliu_face1])
+            .replace_folder(
+                &real_folder_path(&font_dir),
+                100,
+                &[mingliu_face0, mingliu_face1],
+            )
             .expect("TTC with 2 faces inserts cleanly");
 
         // Both family names resolve, each to the right face.
@@ -2199,13 +2373,13 @@ mod tests {
             .lookup_family("MingLiU", false, false)
             .unwrap()
             .unwrap();
-        assert_eq!(m0.font_path, "/test/dir/MingLiU.ttc");
+        assert_eq!(m0.font_path, mingliu_path);
         assert_eq!(m0.face_index, 0);
         let m1 = cache
             .lookup_family("PMingLiU", false, false)
             .unwrap()
             .unwrap();
-        assert_eq!(m1.font_path, "/test/dir/MingLiU.ttc");
+        assert_eq!(m1.font_path, mingliu_path);
         assert_eq!(m1.face_index, 1);
     }
 
@@ -2214,21 +2388,30 @@ mod tests {
         // Two different files claim the same family name (rare in
         // practice — alternate vendor's "Arial" — but the API must
         // produce the same answer across runs).
-        let (_guard, path) = temp_cache_path();
+        let (guard, path) = temp_cache_path();
         let mut cache = FontCache::open_or_create(&path).expect("open");
+        let font_dir = guard.0.join("lookup-collision");
+        let zzz = real_font_metadata(
+            &font_dir,
+            "zzz_arial.ttf",
+            0,
+            vec![family_key("Arial", false, false)],
+            Vec::new(),
+        );
+        let aaa = real_font_metadata(
+            &font_dir,
+            "aaa_arial.ttf",
+            0,
+            vec![family_key("Arial", false, false)],
+            Vec::new(),
+        );
+        let aaa_path = aaa.file_path.clone();
         cache
-            .replace_folder(
-                "/test/dir",
-                100,
-                &[
-                    synthetic_font("/test/dir/zzz_arial.ttf", "Arial"),
-                    synthetic_font("/test/dir/aaa_arial.ttf", "Arial"),
-                ],
-            )
+            .replace_folder(&real_folder_path(&font_dir), 100, &[zzz, aaa])
             .unwrap();
         // ORDER BY font_path → "aaa..." comes first.
         let result = cache.lookup_family("Arial", false, false).unwrap().unwrap();
-        assert_eq!(result.font_path, "/test/dir/aaa_arial.ttf");
+        assert_eq!(result.font_path, aaa_path);
     }
 
     #[test]
@@ -2237,15 +2420,19 @@ mod tests {
         // key and the query so a font's name-table form (often NFC)
         // matches an ASS file's `\fn` reference regardless of NFD/NFC
         // or case.
-        let (_guard, path) = temp_cache_path();
+        let (guard, path) = temp_cache_path();
         let mut cache = FontCache::open_or_create(&path).expect("open");
+        let font_dir = guard.0.join("lookup-normalized");
         // Store an NFC-form precomposed family name.
+        let cafe = real_font_metadata(
+            &font_dir,
+            "cafe.ttf",
+            0,
+            vec![family_key("Café", false, false)],
+            Vec::new(),
+        );
         cache
-            .replace_folder(
-                "/test/dir",
-                100,
-                &[synthetic_font("/test/dir/cafe.ttf", "Café")],
-            )
+            .replace_folder(&real_folder_path(&font_dir), 100, &[cafe])
             .unwrap();
         // Query in different case → hits.
         let by_case = cache.lookup_family("CAFÉ", false, false).unwrap();

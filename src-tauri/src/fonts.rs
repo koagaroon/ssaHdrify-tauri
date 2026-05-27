@@ -733,7 +733,7 @@ pub fn entries_to_cache_metadata(
     let mut mtime_cache: std::collections::HashMap<&str, i64> = std::collections::HashMap::new();
     entries
         .iter()
-        .map(|e| {
+        .filter_map(|e| {
             // Route through the shared `try_modified_at` helper in
             // `font_cache.rs` so every stat-time extraction site stays
             // single-source. An earlier version reproduced the helper
@@ -746,17 +746,18 @@ pub fn entries_to_cache_metadata(
             // returns None (avoids epoch-zero re-trigger of refresh on
             // next run); the FILE mtime path here still falls back to
             // 0, persisting epoch-zero into SQLite's
-            // cached_fonts.file_mtime. NO current bug — drift detection
-            // uses folder mtime only; per-file mtime is stored but not
-            // consulted. If future drift work hooks per-file mtime,
-            // that work owns either (a) filtering entries with None
-            // like the folder path, OR (b) sentinelizing differently
-            // (e.g., NULL via Option<i64>) so consumers can distinguish
-            // stat-failed from legitimately-epoch-zero. Cheap WHY-comment
-            // instead of pre-emptive contract change keeps the noise down.
+            // cached_fonts.file_mtime. Lookups now verify the cached
+            // row against the live file before trusting a cache hit,
+            // so rows with unreadable mtimes would be unusable. Drop
+            // them at write time instead of persisting an epoch-zero
+            // sentinel that cannot be distinguished from a real
+            // 1970-01-01 timestamp later.
             let mtime = *mtime_cache.entry(e.path.as_str()).or_insert_with(|| {
-                crate::font_cache::try_modified_at(Path::new(e.path.as_str())).unwrap_or(0)
+                crate::font_cache::try_modified_at(Path::new(e.path.as_str())).unwrap_or(-1)
             });
+            if mtime < 0 {
+                return None;
+            }
             let mut family_keys: Vec<crate::font_cache::FamilyKey> = Vec::new();
             for family_name in &e.families {
                 family_keys.push(crate::font_cache::FamilyKey {
@@ -766,14 +767,14 @@ pub fn entries_to_cache_metadata(
                 });
             }
 
-            crate::font_cache::FontMetadata {
+            Some(crate::font_cache::FontMetadata {
                 file_path: e.path.clone(),
                 file_size: i64::try_from(e.size_bytes).unwrap_or(i64::MAX),
                 file_mtime: mtime,
                 face_index: i32::try_from(e.index).unwrap_or(i32::MAX),
                 family_keys,
                 face_name_aliases: e.face_names.clone(),
-            }
+            })
         })
         .collect()
 }
