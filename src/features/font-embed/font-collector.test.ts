@@ -132,7 +132,7 @@ describe("font-collector multi-tag last-wins parity (W7.5 regression anchor)", (
   // the canonical short-form pin makes sure the regex still handles
   // well-formed short inputs correctly.
 
-  it("\\b00700 (5 digits, overlong) parses as weight=700 → bold (Codex ff5b69f5)", async () => {
+  it("\\b00700 (5 digits, overlong) parses as weight=700 → bold", async () => {
     // Truncated `0070` would give weight 70 → NOT bold; full `00700`
     // gives weight 700 → bold-on per libass. B must land in the
     // Arial Bold bucket.
@@ -157,7 +157,7 @@ describe("font-collector multi-tag last-wins parity (W7.5 regression anchor)", (
     expect(boldOn!.codepoints.has(0x42), "B must land in the Arial Bold bucket").toBe(true);
   });
 
-  it("\\i001 (3 digits, overlong) parses as flag=1 → italic (Codex ff5b69f5)", async () => {
+  it("\\i001 (3 digits, overlong) parses as flag=1 → italic", async () => {
     // Truncated `00` would give flag 0 → NOT italic; full `001`
     // gives flag 1 → italic-on per libass.
     await ensureLoaded();
@@ -167,7 +167,7 @@ describe("font-collector multi-tag last-wins parity (W7.5 regression anchor)", (
     expect(italicOn!.codepoints.has(0x43), "C must land in the Arial Italic bucket").toBe(true);
   });
 
-  it("\\p00001 (5 digits, overlong) parses as scale=1 → drawing-on (Codex ff5b69f5)", async () => {
+  it("\\p00001 (5 digits, overlong) parses as scale=1 → drawing-on", async () => {
     // Truncated `0000` would give scale 0 → drawing OFF, so the
     // sentinel `X` (0x58) would be collected as a glyph; full `00001`
     // gives scale 1 → drawing ON, so `X` is dropped as a drawing
@@ -249,7 +249,7 @@ Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\rStyleA\rStyleB}DDDD`}
 // Tests below pin both sides of the boundary: at-cap match works,
 // over-cap match does NOT mis-attribute. \fn sibling parity is
 // tested though it has no demonstrated real-world exploit.
-describe("font-collector \\r / \\fn overlong-name boundary (Codex 994c42d1)", () => {
+describe("font-collector \\r / \\fn overlong-name boundary", () => {
   it("\\r at 128-char cap matches and selects the named style", async () => {
     await ensureLoaded();
     // {0,127} = leading letter + up to 127 continuation chars = 128 total.
@@ -273,7 +273,7 @@ Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\r` + styleName + `}E`}
   });
 
   it("\\r overlong name with prefix-sharing sibling falls through to default", async () => {
-    // The Codex PoC: pre-fix the 128-char prefix style would absorb F.
+    // Regression PoC: pre-fix the 128-char prefix style would absorb F.
     // Post-fix the overlong \r fails to match, so F stays under the
     // dialogue's initial style (Arial). The 128-char prefix style
     // FontUsage may exist (registered in styleMap) but must NOT carry F.
@@ -297,10 +297,9 @@ Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\r` + longer + `}F`}
     // F (0x46) MUST land in Arial (initial style), NOT Times New Roman.
     const times = usage.find((u) => u.key.family === "Times New Roman");
     if (times) {
-      expect(
-        times.codepoints.has(0x46),
-        "F must NOT mis-attribute to PrefixFont (Times) — Codex 994c42d1"
-      ).toBe(false);
+      expect(times.codepoints.has(0x46), "F must NOT mis-attribute to PrefixFont (Times)").toBe(
+        false
+      );
     }
     const arial = usage.find((u) => u.key.family === "Arial");
     expect(arial, "Arial (Default) FontUsage must exist").toBeDefined();
@@ -355,7 +354,7 @@ Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\r` + longer + `}F`}
 // falls through to the initialFont path. These tests pin the
 // state-retention contract specifically, complementing the boundary
 // tests above which only cover the no-prior-override case.
-describe("font-collector \\r / \\fn overlong state-retention (Codex f871d0cc)", () => {
+describe("font-collector \\r / \\fn overlong state-retention", () => {
   it("\\r overlong after a valid prior \\r resets to initial style", async () => {
     // PoC: `{\rStyleA\r<overlong>}X` — the FIRST tag sets state to
     // StyleA, the SECOND (overlong) must reset to dialogue initial per

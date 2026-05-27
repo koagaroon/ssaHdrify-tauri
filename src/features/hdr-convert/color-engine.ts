@@ -191,9 +191,8 @@ export function sRgbToHdr(
   } catch (e) {
     // Any conversion error → black. The conversion always returns a
     // valid [0,0,0] triple — operation succeeds for the caller — so
-    // per the log-discipline rule (~/.claude/rules/vibe-coding.md
-    // "log-level discipline"), the success-of-degradation site uses
-    // DEBUG, not WARN. Stays visible with `localStorage.debug = '*'`
+    // per the app's log-level policy, the success-of-degradation site
+    // uses DEBUG, not WARN. Stays visible with `localStorage.debug = '*'`
     // or DevTools verbose-logging when actually investigating
     // malformed-color edge cases.
     console.debug(`[ssaHdrify] sRgbToHdr failed for (${r},${g},${b}):`, e);

@@ -119,8 +119,7 @@
      Round 6 Wave 6.5 #27: appended "Noto Sans CJK SC" so Linux
      installs without Microsoft YaHei / PingFang SC (both Windows /
      macOS proprietary) still get a CJK-capable font before falling
-     to system-ui (which often lacks CJK on minimal Linux distros).
-     ~/.claude/rules/cross-platform.md mandates a CJK terminator. */
+     to system-ui (which often lacks CJK on minimal Linux distros). */
   --font-sans: "Inter", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif;
   --font-display:
     "Inter", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif;

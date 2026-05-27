@@ -103,8 +103,7 @@ impl ParsedStep {
 // fields are `pub(crate)`, not `pub`. ChainPlan's eager
 // Shift-validation contract is enforced by
 // "all construction goes through `parse_chain_argv`" — that's a
-// single-entry-point composition (per ~/.claude/rules/code_review.md §
-// Multi-step contracts). Fully-pub fields would let a future sibling
+// single-entry-point composition. Fully-pub fields would let a future sibling
 // module in this bin construct ChainPlan directly with un-validated
 // Shift args, bypassing `parse_duration_ms` / `parse_timestamp_ms`;
 // the `.expect("validated upstream in chain::parse_chain_argv")` in
@@ -177,8 +176,8 @@ pub fn parse_chain_argv(
         // it inside any step segment (terminal or not) is a parse-time
         // error. Without this, the terminal step's wrapper would parse
         // the value into its inner Args and silently drop it (the
-        // chain-level plan.output_template wins downstream), violating
-        // ~/.claude/rules/vibe-coding.md "no silent fallback".
+        // chain-level plan.output_template wins downstream), creating
+        // a silent fallback.
         if segment_has_output_template_token(segment) {
             return Err(format!(
                 "step {} ({}): --output-template is a chain-level flag. \

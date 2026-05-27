@@ -113,8 +113,8 @@ function hdrTransform(ctx: TransformContext, params: HdrStepParams): TransformRe
   // Real ASS headers carry no leading whitespace, and renderers
   // tolerate at most a tab or two before / inside the bracket. {0,16}
   // is generous past anything legitimate and keeps the regex out of
-  // catastrophic-backtracking territory for crafted inputs (per the
-  // chain `.replace(timingRe)` Codex ReDoS class). Same shape applies
+  // catastrophic-backtracking territory for crafted inputs (the
+  // chain `.replace(timingRe)` ReDoS regression class). Same shape applies
   // to the embed preflight regex above; both share this bound.
   if (!/^\s{0,16}\[\s{0,16}(Script Info|V4\+? Styles)\s{0,16}\]/im.test(ctx.content)) {
     throw new Error(

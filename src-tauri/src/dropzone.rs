@@ -29,16 +29,14 @@ pub const MAX_RESULT_FILES: usize = 5000;
 /// expansion stopped at `MAX_RESULT_FILES` so the frontend can render
 /// a banner instead of silently presenting an incomplete list (the
 /// earlier shape was a bare `Vec<String>` return with a `log::warn`
-/// the frontend couldn't see, in violation of
-/// `~/.claude/rules/vibe-coding.md` "no silent action").
+/// the frontend couldn't see, which made truncation too easy to miss.
 ///
 /// `max_files` carries `MAX_RESULT_FILES` to the frontend so the
 /// truncation banner shows the correct number without a TS-side
 /// mirrored constant. Previously the frontend hardcoded 5000 with a
 /// WHY comment pointing at this Rust const; a bump on this side
 /// would have silently drifted the user-facing wording. Threading
-/// the value matches workflow-design.md "automation over checklist
-/// items".
+/// the value keeps the UI text derived from the Rust source of truth.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExpandedPaths {
@@ -135,8 +133,8 @@ pub fn expand_dropped_paths(paths: Vec<String>) -> Result<ExpandedPaths, String>
             // Already-added entries pass through unchanged; the rest
             // of the drop is silently dropped on the floor from the
             // path-walk perspective. Set `truncated` for the
-            // cross-input case (`idx + 1 < total_inputs`) — Codex
-            // finding 2 : exactly hitting the cap with no
+            // cross-input case (`idx + 1 < total_inputs`) — exactly
+            // hitting the cap with no
             // remainder ("exactly 5000 files in one folder, no more
             // inputs") would otherwise produce a false-positive
             // banner / stderr warning. Intra-folder mid-walk
@@ -150,8 +148,7 @@ pub fn expand_dropped_paths(paths: Vec<String>) -> Result<ExpandedPaths, String>
         }
     }
     // surface the per-path rejection count at WARN, not INFO.
-    // Per `~/.claude/rules/vibe-coding.md` § Log-level discipline, this
-    // aggregate IS the user-visible consequence (N drops of M dropped);
+    // This aggregate IS the user-visible consequence (N drops of M dropped);
     // the per-failure warnings above are the function-name-leak class.
     // Release builds default to LevelFilter::Warn (see lib.rs), so
     // pre-W3 the per-failure noise was visible but the synthesis that
@@ -448,7 +445,7 @@ mod tests {
 
     #[test]
     fn exact_cap_with_no_remainder_does_not_set_truncated() {
-        // Codex finding 2 : a single folder containing
+        // Regression case: a single folder containing
         // EXACTLY MAX_RESULT_FILES regular files, no more inputs to
         // process — nothing was dropped on the floor, so `truncated`
         // must stay false. Pre-fix, the `>= cap` check fired on

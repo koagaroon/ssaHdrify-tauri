@@ -1,7 +1,7 @@
 //! Symlink-safe + scope-honoring file write / copy / rename commands for
 //! the GUI.
 //!
-//! Codex security scan (2026-05-11) flagged two reachable paths where a
+//! A security review flagged two reachable paths where a
 //! malicious or accidental symlink in an attacker-influenced subtitle
 //! pack could redirect Tauri's `@tauri-apps/plugin-fs` write/copy/rename
 //! calls to an arbitrary destination: plain `fs::write` and the
@@ -11,7 +11,7 @@
 //!
 //! Initial migration moved the write/copy/rename operations onto these
 //! commands, dropping the `fs:allow-write-text-file` / `-copy-file` /
-//! `-rename` plugin-fs permission grants. A follow-up Codex finding
+//! `-rename` plugin-fs permission grants. A follow-up review
 //! (2ec537b0, HIGH) noticed that move ALSO dropped the `fs:scope` deny
 //! list as a side effect: the policy was tied to plugin-fs callsites,
 //! not to the new commands. A compromised WebView could call
@@ -183,7 +183,7 @@ fn clear_existing_destination(path: &Path, overwrite: bool) -> Result<(), String
     // `symlink_metadata` (= lstat) returns the link's own metadata
     // without following it. Path::exists() follows symlinks on Unix
     // and would return false for a dangling shortcut, which is the
-    // exact case Codex flagged (the chain CLI write path bypassed
+    // exact case the review flagged (the chain CLI write path bypassed
     // this check the same way before commit b7d9d21).
     //
     // the back-to-back syscalls
@@ -344,8 +344,8 @@ fn reject_same_canonical_path(src: &Path, dst: &Path) -> Result<(), String> {
 /// quarantine, power loss), the destination is left as a partial file
 /// while the user's prior data is already gone — they get the error
 /// but no recovery path. A tmp-file + atomic-rename pattern would
-/// close this gap, but the vibe-coded desktop scope (~/.claude/rules/
-/// vibe-coding.md) accepts the simpler shape: subtitle files are
+/// close this gap, but this desktop app's current scope accepts the
+/// simpler shape: subtitle files are
 /// small (under 100 MB hard cap), local disks are reliable, the user
 /// can rerun the conversion. Don't refactor to tmp+rename without
 /// re-checking the scope — the create_new gate ABOVE is load-bearing

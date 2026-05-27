@@ -241,7 +241,7 @@ pub fn read_text_detect_encoding_inner(
             canonical
         }
         Err(e) => {
-            // Log-level discrimination per ~/.claude/rules/vibe-coding.md.
+            // Log-level discrimination: warn only when the read is refused.
             // Reparse-point + canonicalize-failure is the path that
             // genuinely refuses the read; WARN names the user-visible
             // action. The non-reparse fallback succeeds with the raw

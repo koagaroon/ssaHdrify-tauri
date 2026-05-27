@@ -244,8 +244,8 @@ impl CliEngine {
             ..Default::default()
         });
 
-        // Inject platform globals BEFORE the engine bundle runs (Codex
-        // 47c58c78): `src/lib/platform.ts` defaults to POSIX /
+        // Inject platform globals BEFORE the engine bundle runs:
+        // `src/lib/platform.ts` defaults to POSIX /
         // case-sensitive when neither Node's `process` nor a browser
         // `navigator` is available. The bare deno_core JsRuntime
         // provides neither, so without this injection the CLI would

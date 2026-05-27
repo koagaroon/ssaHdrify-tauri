@@ -406,7 +406,7 @@ describe("decomposeInputPath — Round 5 BiDi / zero-width hardening", () => {
   });
 });
 
-describe("substituteTemplate — Codex 08c3a51c (identifier cap + strict)", () => {
+describe("substituteTemplate — identifier cap + strict mode", () => {
   // Three behaviors land together: 32-char identifier cap (closes the
   // chain-validator-vs-substituter regex asymmetry); strict-throw on
   // unknown tokens (no-silent-action); uppercase / non-lowercase

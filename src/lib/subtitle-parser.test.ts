@@ -134,7 +134,7 @@ describe("parseSubtitle", () => {
 // (it never does; junk blocks skip the cap check via timingIdx === -1).
 // An earlier refactor introduced the regression; MAX_RAW_BLOCKS is
 // the defense-in-depth alongside MAX_PARSED_ENTRIES.
-describe("parseSubtitle — Wave 6.8 raw-block junk-flood ceiling (Codex Finding 1)", () => {
+describe("parseSubtitle — raw-block junk-flood ceiling", () => {
   it("rejects SRT with > MAX_RAW_BLOCKS junk blocks before the parse loop scans them", () => {
     // One valid cue at the head so format detection fires SRT, followed
     // by junk blocks that have no timing line. An earlier version
