@@ -142,7 +142,7 @@ Dialogue: 0,0:00:00.00,0:00:01.00,Default,Hello
   });
 
   it("rejects separator-only ASS over the line cap before [Fonts] rewriting", () => {
-    for (const separator of ["\n", "\u2028", "\u2029"]) {
+    for (const separator of ["\n", "\r", "\u2028", "\u2029"]) {
       const lineHeavyAss = `[Script Info]\n${separator.repeat(501_100)}`;
 
       expect(() =>
@@ -157,6 +157,17 @@ Dialogue: 0,0:00:00.00,0:00:01.00,Default,Hello
   it("applies uuencoded font entries before the events section", () => {
     const result = applyFontEmbed({
       content: SIMPLE_ASS,
+      fonts: [{ fontName: "arial.ttf", data: [0, 1, 2] }],
+    });
+
+    expect(result.embeddedCount).toBe(1);
+    expect(result.content.indexOf("[Fonts]")).toBeLessThan(result.content.indexOf("[Events]"));
+    expect(result.content).toContain("fontname: arial.ttf");
+  });
+
+  it("applies uuencoded font entries before the events section in bare-CR ASS", () => {
+    const result = applyFontEmbed({
+      content: SIMPLE_ASS.replace(/\n/g, "\r"),
       fonts: [{ fontName: "arial.ttf", data: [0, 1, 2] }],
     });
 
@@ -349,6 +360,17 @@ Format: Layer, Start, End, Style, Text
 [Events]
 Format: Layer, Start, End, Style, Text
 `;
+    expect(() =>
+      applyFontEmbed({
+        content: twoEventsNoFonts,
+        fonts: [],
+      })
+    ).toThrow(/2 \[Events\] sections/);
+  });
+
+  it("applyFontEmbed rejects bare-CR duplicate [Events] on the zero-font path", () => {
+    const twoEventsNoFonts = `[Script Info]\r[Events]\r[Events]\r`;
+
     expect(() =>
       applyFontEmbed({
         content: twoEventsNoFonts,

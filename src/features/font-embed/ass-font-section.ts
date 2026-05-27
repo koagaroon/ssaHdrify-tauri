@@ -37,29 +37,36 @@ function assertUniqueEmbedSections(content: string): void {
   let lineStart = 0;
   for (let i = 0; i <= content.length; i++) {
     const code = i < content.length ? content.charCodeAt(i) : 10;
-    if (i < content.length && code !== 10 /* '\n' */ && code !== 0x2028 && code !== 0x2029) {
+    if (
+      i < content.length &&
+      code !== 13 /* '\r' */ &&
+      code !== 10 /* '\n' */ &&
+      code !== 0x2028 &&
+      code !== 0x2029
+    ) {
       continue;
     }
 
-    let lineEnd = i;
-    if (lineEnd > lineStart && content.charCodeAt(lineEnd - 1) === 13 /* '\r' */) {
-      lineEnd -= 1;
+    if (content.charCodeAt(lineStart) === 91 /* '[' */) {
+      const line = content.slice(lineStart, i);
+      if (HEADER_FONTS_RE.test(line)) {
+        fonts += 1;
+        if (fonts > 1) {
+          throw new Error(
+            `Cannot embed: input ASS has ${fonts} [Fonts] sections; expected at most one`
+          );
+        }
+      } else if (HEADER_EVENTS_RE.test(line)) {
+        events += 1;
+        if (events > 1) {
+          throw new Error(
+            `Cannot embed: input ASS has ${events} [Events] sections; expected at most one`
+          );
+        }
+      }
     }
-    const line = content.slice(lineStart, lineEnd);
-    if (HEADER_FONTS_RE.test(line)) {
-      fonts += 1;
-      if (fonts > 1) {
-        throw new Error(
-          `Cannot embed: input ASS has ${fonts} [Fonts] sections; expected at most one`
-        );
-      }
-    } else if (HEADER_EVENTS_RE.test(line)) {
-      events += 1;
-      if (events > 1) {
-        throw new Error(
-          `Cannot embed: input ASS has ${events} [Events] sections; expected at most one`
-        );
-      }
+    if (code === 13 /* '\r' */ && content.charCodeAt(i + 1) === 10 /* '\n' */) {
+      i += 1;
     }
     lineStart = i + 1;
   }
@@ -75,15 +82,19 @@ export function assertAssShape(content: string): void {
   // exceed MAX_INSERT_LINES split lines because each line needs at
   // least one separator code point. Count every separator that
   // insertFontsSection normalizes into an ASCII newline before
-  // splitting, otherwise U+2028 / U+2029 can bypass the guard.
+  // splitting, otherwise bare CR / U+2028 / U+2029 can bypass the
+  // guard.
   if (content.length >= LINE_PROBE_LENGTH_GATE) {
     let nl = 1;
     for (let i = 0; i < content.length; i++) {
       const code = content.charCodeAt(i);
-      if (code === 10 /* '\n' */ || code === 0x2028 || code === 0x2029) {
+      if (code === 13 /* '\r' */ || code === 10 /* '\n' */ || code === 0x2028 || code === 0x2029) {
         nl++;
         if (nl > MAX_INSERT_LINES) {
           throw new Error(`File too large: >${MAX_INSERT_LINES} lines`);
+        }
+        if (code === 13 /* '\r' */ && content.charCodeAt(i + 1) === 10 /* '\n' */) {
+          i += 1;
         }
       }
     }
@@ -114,17 +125,16 @@ export function insertFontsSection(content: string, fontsSection: string): strin
   // early-return) and direct callers run the same gate.
   assertAssShape(content);
   const lineEnding = content.includes("\r\n") ? "\r\n" : "\n";
-  // Normalize Unicode line separators (U+2028 LINE SEPARATOR,
-  // U+2029 PARAGRAPH SEPARATOR) to ASCII newlines BEFORE the split.
-  // Without this, an ASS using U+2028 between sections collapses to
-  // one giant line under `split(/\r?\n/)` — the column-0 [Fonts]
-  // header regex can't match (header is now mid-line) and the new
-  // section gets appended at end-of-file even though one already
-  // exists. srt-converter does the same strip upstream; doing it
-  // here keeps the section-rewrite path safe for direct callers
-  // that bypass that converter.
-  const normalized = content.replace(/[\u2028\u2029]/g, "\n");
-  const lines = normalized.split(/\r?\n/);
+  // Normalize every line-break spelling we accept in assertAssShape
+  // BEFORE splitting. Without this, an ASS using bare CR or U+2028
+  // between sections collapses to one giant line under `split(/\r?\n/)`
+  // — the column-0 [Fonts] header regex can't match (header is now
+  // mid-line) and the new section gets appended at end-of-file even
+  // though one already exists. srt-converter does the same strip
+  // upstream; doing it here keeps the section-rewrite path safe for
+  // direct callers that bypass that converter.
+  const normalized = content.replace(/\r\n?|\n|[\u2028\u2029]/g, "\n");
+  const lines = normalized.split("\n");
 
   // Adapt fontsSection to match the file's line ending
   const adaptedFontsSection = fontsSection.replace(/\n/g, lineEnding);
@@ -230,6 +240,6 @@ export function insertFontsSection(content: string, fontsSection: string): strin
 
   // No [Events] section found — append at end with a blank line separator.
   // Strip trailing newlines from content to avoid double blank line.
-  const trimmedContent = content.replace(/(\r\n|\n)+$/, "");
+  const trimmedContent = normalized.replace(/\n+$/, "").replace(/\n/g, lineEnding);
   return `${trimmedContent}${lineEnding}${lineEnding}${adaptedFontsSection}`;
 }
