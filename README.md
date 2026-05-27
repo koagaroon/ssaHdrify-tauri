@@ -141,9 +141,9 @@ Folders of any size are accepted; the scan shows a real-time count of fonts foun
 
 ## CLI 使用 | CLI Usage
 
-`ssahdrify-cli` 是 GUI 的命令行版（CLI），与 GUI 从同一份源代码构建。四个核心功能（HDR 转换 / 时间轴偏移 / 字体嵌入 / 批量重命名）和 GUI 版保持对等；CLI 另外提供 `chain`（一次调用串联多个步骤，只有最后一步写入文件）和 `refresh-fonts`（构建或刷新 CLI 字体缓存）两个子命令。
+`ssahdrify-cli` 是 GUI 的命令行版（CLI），与 GUI 从同一份源代码构建。四个核心功能（HDR 转换 / 时间轴偏移 / 字体嵌入 / 批量重命名）和 GUI 版保持对等；CLI 另外提供 `chain`（一次调用串联多个步骤，只有最后一步写入文件）、`refresh-fonts`（构建或刷新 CLI 字体缓存）和 `diagnose-fonts`（只诊断字体解析，不写字幕）等子命令。
 
-`ssahdrify-cli` is the command-line (CLI) version of the GUI, built from the same source. The four core features (HDR convert / Timing shift / Font embed / Batch rename) stay in parity with the GUI; the CLI additionally exposes `chain` (multiple steps in one invocation, with only the final step writing files) and `refresh-fonts` (build or refresh the CLI font cache).
+`ssahdrify-cli` is the command-line (CLI) version of the GUI, built from the same source. The four core features (HDR convert / Timing shift / Font embed / Batch rename) stay in parity with the GUI; the CLI additionally exposes `chain` (multiple steps in one invocation, with only the final step writing files), `refresh-fonts` (build or refresh the CLI font cache), and `diagnose-fonts` (diagnose font resolution without writing subtitles).
 
 ### 快速示例 | Quick Examples
 
@@ -156,6 +156,9 @@ ssahdrify-cli shift --offset +500ms input.ass
 
 # 字体嵌入：从指定文件夹查找字体 / Font embed: search a folder for fonts
 ssahdrify-cli embed --font-dir "C:/Fonts" input.ass
+
+# 字体解析诊断：不写输出文件 / Font diagnostics: no output subtitle writes
+ssahdrify-cli diagnose-fonts --font-dir "C:/Fonts" input.ass
 
 # 持久化字体缓存：先扫描一次，后续 embed 复用 / Persistent font cache: scan once, reuse later
 ssahdrify-cli refresh-fonts --font-dir "C:/Fonts"
@@ -180,6 +183,7 @@ ssahdrify-cli hdr            --help
 ssahdrify-cli shift          --help
 ssahdrify-cli embed          --help
 ssahdrify-cli rename         --help
+ssahdrify-cli diagnose-fonts --help
 ssahdrify-cli refresh-fonts  --help
 ssahdrify-cli chain          --help
 ```
@@ -201,15 +205,47 @@ ssahdrify-cli chain          --help
 
 > **JSON 模式 | JSON Mode**
 >
-> `--json` 目前适用于 `hdr` / `shift` / `embed` / `rename`。它会输出固定 schema 的报告，按文件列出 status (`written` / `planned` / `skipped` / `failed`)、output path、encoding、warnings 等字段；stderr 仍可输出供人阅读的诊断信息。`chain` v1 会明确提示不支持 JSON，并改用纯文本报告；`refresh-fonts` 使用 stderr 输出状态。
+> `--json` 目前适用于 `hdr` / `shift` / `embed` / `rename` 和 `diagnose-fonts`。常规子命令会输出固定 schema 的报告，按文件列出 status (`written` / `planned` / `skipped` / `failed`)、output path、encoding、warnings 等字段；stderr 仍可输出供人阅读的诊断信息。`diagnose-fonts --json` 直接输出诊断报告。`chain` v1 会明确提示不支持 JSON，并改用纯文本报告；`refresh-fonts` 使用 stderr 输出状态。
 >
-> `--json` currently applies to `hdr` / `shift` / `embed` / `rename`. It emits a fixed-schema report listing per-file status (`written` / `planned` / `skipped` / `failed`), output path, encoding, warnings, and related fields; stderr can still carry human-readable diagnostics. `chain` v1 explicitly reports that JSON output is not supported and falls back to plain text; `refresh-fonts` reports status on stderr.
+> `--json` currently applies to `hdr` / `shift` / `embed` / `rename` and `diagnose-fonts`. Normal subcommands emit a fixed-schema report listing per-file status (`written` / `planned` / `skipped` / `failed`), output path, encoding, warnings, and related fields; stderr can still carry human-readable diagnostics. `diagnose-fonts --json` emits the diagnostic report directly. `chain` v1 explicitly reports that JSON output is not supported and falls back to plain text; `refresh-fonts` reports status on stderr.
+>
+> 启用 `--diagnose` 时，JSON 会额外包含完整 `diagnostics` 对象，即使人类输出模式是默认的 summary。未启用 `--diagnose` 时，常规 JSON schema 保持不变。
+>
+> When `--diagnose` is enabled, JSON includes a full `diagnostics` object even when human output is the default summary mode. Without `--diagnose`, the normal JSON schema is unchanged.
 >
 > **终端再插值安全提示 | Terminal-interpolation safety note**
 >
 > `--json` 按 RFC 8259 输出；BiDi 控制符（U+200E/U+202E 等）、零宽字符，以及 U+2028/U+2029 行分隔符在 JSON 字符串中都是合法字符，因此不会额外转义。如果用 `jq -r` 将 `.input` / `.output` 等字段还原后再插回终端（例如 `echo`、提示符或其他 CLI 参数），恶意构造的文件名可能影响终端显示。下游脚本应在终端输出边界自行过滤（如 jq 的 `gsub` 或 shell 包装工具）。CLI 自身供人阅读的输出（未启用 `--json`）已在所有打印点调用 `sanitize_for_display`，不受此问题影响。
 >
 > `--json` output follows RFC 8259, but BiDi format characters (U+200E/U+202E etc.), zero-width characters, and the U+2028/U+2029 line separators are valid in JSON strings and are not additionally escaped. If you pipe to `jq -r` to extract `.input` / `.output` and then interpolate those values back into a terminal (`echo`, prompts, or another CLI's arguments), crafted filenames may affect terminal display. Downstream scripts should sanitize at the terminal boundary (for example with jq's `gsub` or a wrapping shell tool). The CLI's own human-readable output (without `--json`) already passes every print site through `sanitize_for_display` and is not affected.
+
+### 诊断输出 | Diagnostics
+
+`hdr` / `shift` / `embed` / `rename` 支持 `--diagnose[=summary|full]`。`--diagnose` 与 `--diagnose=summary` 等价，会在命令完成后附加紧凑诊断；`--diagnose=full` 会列出逐文件细节，`embed` 还会列出字体解析层级（本次传入的字体源、持久化缓存、系统字体）和缓存状态。`chain` 与 `refresh-fonts` 不支持 `--diagnose`，传入会报错而不是静默忽略。
+
+`hdr` / `shift` / `embed` / `rename` support `--diagnose[=summary|full]`. `--diagnose` and `--diagnose=summary` are equivalent and attach compact diagnostics after the command finishes; `--diagnose=full` lists per-file details, and `embed` also lists font-resolution tiers (current run sources, persistent cache, system fonts) plus cache status. `chain` and `refresh-fonts` do not support `--diagnose`; passing it errors instead of being silently ignored.
+
+`diagnose-fonts` 是独立的详细诊断命令，默认输出 verbose 报告，而且只读：不写输出字幕、不刷新或修改字体缓存。它接受字幕输入和字体解析选项：`--font-dir`、`--font-file`、`--no-system-fonts`、`--no-cache`、`--cache-file`、`--lang`、`--json`。
+
+`diagnose-fonts` is the standalone detailed diagnostic command. It is verbose by default and read-only: it does not write output subtitles and does not refresh or mutate the font cache. It accepts subtitle inputs plus font-resolution options: `--font-dir`, `--font-file`, `--no-system-fonts`, `--no-cache`, `--cache-file`, `--lang`, and `--json`.
+
+```bash
+# 附加紧凑诊断 / Attach compact diagnostics
+ssahdrify-cli embed --diagnose input.ass
+
+# 附加完整诊断 / Attach full diagnostics
+ssahdrify-cli embed --diagnose=full --font-dir "C:/Fonts" input.ass
+
+# 只诊断字体解析，不写字幕 / Diagnose font resolution only, no subtitle writes
+ssahdrify-cli diagnose-fonts --font-dir "C:/Fonts" input.ass
+
+# 下游打包必须完整嵌入字体时推荐 / Recommended when downstream packaging requires every font
+ssahdrify-cli embed --font-dir "C:/Fonts" --on-missing fail --fail-fast --diagnose input.ass
+```
+
+`embed` 默认仍使用 `--on-missing warn`：能嵌入的字体会继续嵌入，缺失或子集化失败的字体会变成 warning。此时输出文件可能已经写出，但 summary 会明确显示 `written with warnings / incomplete`，避免把部分成功误读成“全部字体都成功”。
+
+`embed` still defaults to `--on-missing warn`: fonts that can be embedded are embedded, and missing or failed-to-subset fonts become warnings. In that case the output file may be written, but the summary explicitly says `written with warnings / incomplete` so partial success is not mistaken for “all fonts succeeded.”
 
 ### 字体缓存 | Font Cache
 

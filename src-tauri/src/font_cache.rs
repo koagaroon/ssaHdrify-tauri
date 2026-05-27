@@ -24,7 +24,7 @@
 
 use std::path::{Path, PathBuf};
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OpenFlags};
 
 /// Read a folder's mtime as Unix seconds, returning None when either
 /// the metadata stat or the `modified()` call fails. This is the
@@ -485,6 +485,27 @@ impl FontCache {
         } else {
             cache.init_schema()?;
         }
+        Ok(cache)
+    }
+
+    /// Open an existing cache for lookup-only diagnostics.
+    ///
+    /// Unlike `open_or_create`, this does not create parent
+    /// directories, initialize schema, or set WAL mode. Callers use it
+    /// when the command contract is read-only (`diagnose-fonts`).
+    pub fn open_existing_read_only(cache_path: &Path) -> Result<Self, CacheError> {
+        reject_cache_reparse_paths(cache_path)?;
+        let conn = Connection::open_with_flags(cache_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| {
+                CacheError::Io(format!("opening {} read-only: {e}", cache_path.display()))
+            })?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))
+            .map_err(|e| CacheError::Io(format!("setting busy_timeout: {e}")))?;
+        conn.pragma_update(None, "foreign_keys", "ON")
+            .map_err(|e| CacheError::Io(format!("enabling foreign_keys: {e}")))?;
+
+        let cache = Self { conn };
+        cache.verify_schema_version()?;
         Ok(cache)
     }
 

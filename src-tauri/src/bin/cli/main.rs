@@ -94,7 +94,7 @@ struct GlobalOptions {
     /// the cached state. 本次运行跳过持久化字体缓存；缓存文件保持不变。
     ///
     /// `global = true` is intentional even though only `embed` /
-    /// `refresh-fonts` / `chain` consume the flag.
+    /// `diagnose-fonts` / `refresh-fonts` / `chain` consume the flag.
     /// The clap idiom for cross-subcommand flags is one declaration
     /// here; per-subcommand declaration would mean N duplicates +
     /// drift surface. Subcommands that don't read the flag (hdr /
@@ -146,12 +146,41 @@ enum OutputLang {
     Zh,
 }
 
+#[derive(Args, Debug, Clone, Default)]
+struct DiagnoseOptions {
+    /// Attach diagnostics to this command. `--diagnose` is the same as
+    /// `--diagnose=summary`; use `--diagnose=full` for per-file and
+    /// per-font tier detail. 附加诊断输出；`--diagnose` 等同 summary。
+    #[arg(
+        long,
+        value_enum,
+        value_name = "MODE",
+        num_args = 0..=1,
+        default_missing_value = "summary",
+        require_equals = true
+    )]
+    diagnose: Option<DiagnoseMode>,
+}
+
+impl DiagnoseOptions {
+    fn mode(&self) -> Option<DiagnoseMode> {
+        self.diagnose
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum DiagnoseMode {
+    Summary,
+    Full,
+}
+
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Convert SDR subtitle colors to HDR. 将 SDR 字幕颜色转换为 HDR。
-    Hdr(HdrArgs),
+    Hdr(HdrCommandArgs),
     /// Shift subtitle timings by an offset. 按偏移量平移字幕时间轴。
-    Shift(ShiftArgs),
+    Shift(ShiftCommandArgs),
     /// Embed fonts into ASS subtitle files. 将字体嵌入 ASS 字幕文件。
     ///
     /// Tips / 提示:
@@ -164,9 +193,13 @@ enum Command {
     ///   cache for one run, or run `refresh-fonts` to rebuild it.
     ///   字体缓存（如已存在）：自动使用。提供 --font-dir 时与缓存合并；
     ///   不提供时缓存为主源。--no-cache 跳过本次；refresh-fonts 重建。
-    Embed(EmbedArgs),
+    Embed(EmbedCommandArgs),
     /// Pair subtitles with videos and rename subtitles to match. 配对视频和字幕，按视频名重命名字幕。
-    Rename(RenameArgs),
+    Rename(RenameCommandArgs),
+
+    /// Diagnose ASS/SSA font resolution without writing subtitle files.
+    /// 诊断 ASS/SSA 字体解析，不写出字幕文件。
+    DiagnoseFonts(DiagnoseFontsArgs),
 
     /// Build or refresh the persistent font cache. Always requires
     /// at least one --font-dir (cache-recorded source roots are not
@@ -223,6 +256,14 @@ pub(crate) struct HdrArgs {
     pub(crate) files: Vec<PathBuf>,
 }
 
+#[derive(Args, Debug)]
+struct HdrCommandArgs {
+    #[command(flatten)]
+    args: HdrArgs,
+    #[command(flatten)]
+    diagnose: DiagnoseOptions,
+}
+
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum EotfArg {
     Pq,
@@ -258,6 +299,14 @@ pub(crate) struct ShiftArgs {
     // See note on HdrArgs.files.
     #[arg(required = true)]
     pub(crate) files: Vec<PathBuf>,
+}
+
+#[derive(Args, Debug)]
+struct ShiftCommandArgs {
+    #[command(flatten)]
+    args: ShiftArgs,
+    #[command(flatten)]
+    diagnose: DiagnoseOptions,
 }
 
 #[derive(Args, Debug)]
@@ -313,6 +362,14 @@ pub(crate) struct EmbedArgs {
     pub(crate) files: Vec<PathBuf>,
 }
 
+#[derive(Args, Debug)]
+struct EmbedCommandArgs {
+    #[command(flatten)]
+    args: EmbedArgs,
+    #[command(flatten)]
+    diagnose: DiagnoseOptions,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 enum MissingFontAction {
     Warn,
@@ -332,6 +389,46 @@ struct RenameArgs {
     /// Video/subtitle files or folders to pair. 要配对的视频/字幕文件或文件夹。
     #[arg(required = true)]
     paths: Vec<PathBuf>,
+}
+
+#[derive(Args, Debug)]
+struct RenameCommandArgs {
+    #[command(flatten)]
+    args: RenameArgs,
+    #[command(flatten)]
+    diagnose: DiagnoseOptions,
+}
+
+#[derive(Args, Debug)]
+struct DiagnoseFontsArgs {
+    /// Add a font folder for this diagnostic run (repeatable). 添加本次诊断使用的字体目录（可重复传入）。
+    #[arg(long = "font-dir", value_name = "DIR")]
+    font_dirs: Vec<PathBuf>,
+
+    /// Add a specific font file for this diagnostic run (repeatable). 添加本次诊断使用的字体文件（可重复传入）。
+    #[arg(long = "font-file", value_name = "FILE")]
+    font_files: Vec<PathBuf>,
+
+    /// Do not use system-installed fonts. 不使用系统已安装的字体。
+    #[arg(long)]
+    no_system_fonts: bool,
+
+    /// ASS/SSA files to diagnose. 要诊断的 ASS/SSA 文件。
+    #[arg(required = true)]
+    files: Vec<PathBuf>,
+}
+
+impl DiagnoseFontsArgs {
+    fn to_embed_args(&self) -> EmbedArgs {
+        EmbedArgs {
+            font_dirs: self.font_dirs.clone(),
+            font_files: self.font_files.clone(),
+            no_system_fonts: self.no_system_fonts,
+            on_missing: MissingFontAction::Warn,
+            output_template: "{name}.embed.ass".to_string(),
+            files: self.files.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -500,6 +597,8 @@ struct CommandReport {
     skipped: usize,
     failed: usize,
     results: Vec<FileReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    diagnostics: Option<CommandDiagnostics>,
     /// True when `--fail-fast` short-circuited the per-file loop after
     /// a failure. JSON consumers use this to distinguish "all remaining
     /// inputs tried and failed" from "first failure aborted the rest";
@@ -542,6 +641,209 @@ enum FileStatus {
     Failed,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CommandDiagnostics {
+    mode: DiagnoseMode,
+    files_with_warnings: usize,
+    warning_count: usize,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    notes: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    files: Vec<FileDiagnostic>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cache: Option<CacheDiagnostic>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    fonts: Vec<FontDiagnostic>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FileDiagnostic {
+    input: String,
+    output: Option<String>,
+    encoding: Option<String>,
+    status: FileStatus,
+    error: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct CacheDiagnostic {
+    path: Option<String>,
+    status: CacheDiagnosticStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    found_schema: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expected_schema: Option<i64>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    modified_folders: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    removed_folders: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Clone, Copy)]
+#[serde(rename_all = "kebab-case")]
+enum CacheDiagnosticStatus {
+    Disabled,
+    DryRun,
+    Missing,
+    Usable,
+    SchemaMismatch,
+    OpenError,
+    ValidationError,
+    Drift,
+    PathError,
+}
+
+impl CacheDiagnostic {
+    fn new(path: Option<String>, status: CacheDiagnosticStatus, message: Option<String>) -> Self {
+        Self {
+            path,
+            status,
+            message,
+            found_schema: None,
+            expected_schema: None,
+            modified_folders: Vec::new(),
+            removed_folders: Vec::new(),
+        }
+    }
+}
+
+struct PreparedFontCache {
+    cache: Option<app_lib::font_cache::FontCache>,
+    diagnostic: CacheDiagnostic,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct FontDiagnostic {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file: Option<String>,
+    label: String,
+    family: String,
+    bold: bool,
+    italic: bool,
+    glyph_count: usize,
+    result: FontResolutionResult,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    index: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    tiers: Vec<FontTierDiagnostic>,
+}
+
+#[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum FontResolutionResult {
+    Resolved,
+    Missing,
+    Error,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct FontTierDiagnostic {
+    tier: FontResolveTier,
+    status: FontTierStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    index: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone, Copy)]
+#[serde(rename_all = "kebab-case")]
+enum FontResolveTier {
+    Local,
+    Cache,
+    System,
+}
+
+#[derive(Debug, Serialize, Clone, Copy)]
+#[serde(rename_all = "kebab-case")]
+enum FontTierStatus {
+    Hit,
+    Miss,
+    Disabled,
+    Unavailable,
+    Error,
+}
+
+impl FontDiagnostic {
+    fn new(font: &engine::FontEmbedUsage) -> Self {
+        Self {
+            file: None,
+            label: font.label.clone(),
+            family: font.family.clone(),
+            bold: font.bold,
+            italic: font.italic,
+            glyph_count: font.glyph_count,
+            result: FontResolutionResult::Missing,
+            path: None,
+            index: None,
+            error: None,
+            tiers: Vec::new(),
+        }
+    }
+
+    fn add_tier(
+        &mut self,
+        tier: FontResolveTier,
+        status: FontTierStatus,
+        path: Option<String>,
+        index: Option<u32>,
+        reason: Option<String>,
+    ) {
+        self.tiers.push(FontTierDiagnostic {
+            tier,
+            status,
+            path,
+            index,
+            reason,
+        });
+    }
+
+    fn mark_resolved(&mut self, path: String, index: u32) {
+        self.result = FontResolutionResult::Resolved;
+        self.path = Some(path);
+        self.index = Some(index);
+        self.error = None;
+    }
+
+    fn mark_error(&mut self, error: String) {
+        self.result = FontResolutionResult::Error;
+        self.error = Some(error);
+    }
+}
+
+struct FontLookupOutcome {
+    found: Option<(String, u32)>,
+    error: Option<String>,
+    diagnostic: FontDiagnostic,
+}
+
+struct ResolveEmbedFontsOutcome {
+    resolved: Vec<ResolvedEmbedFont>,
+    warnings: Vec<String>,
+    diagnostics: Vec<FontDiagnostic>,
+}
+
+struct ResolveEmbedFontsError {
+    error: String,
+    diagnostics: Vec<FontDiagnostic>,
+}
+
+type EmbedFileOutcome = (FileReport, Vec<FontDiagnostic>);
+
 struct ResolvedEmbedFont {
     label: String,
     font_name: String,
@@ -579,6 +881,7 @@ impl CommandReport {
             skipped: 0,
             failed: 0,
             results: Vec::new(),
+            diagnostics: None,
             aborted_by_fail_fast: false,
         }
     }
@@ -674,10 +977,11 @@ fn run() -> Result<ExitCode, String> {
     let Cli { globals, command } = Cli::parse();
 
     match command {
-        Command::Hdr(args) => run_hdr(&globals, args),
-        Command::Shift(args) => run_shift(&globals, args),
-        Command::Embed(args) => run_embed(&globals, args),
-        Command::Rename(args) => run_rename(&globals, args),
+        Command::Hdr(args) => run_hdr(&globals, args.args, args.diagnose.mode()),
+        Command::Shift(args) => run_shift(&globals, args.args, args.diagnose.mode()),
+        Command::Embed(args) => run_embed(&globals, args.args, args.diagnose.mode()),
+        Command::Rename(args) => run_rename(&globals, args.args, args.diagnose.mode()),
+        Command::DiagnoseFonts(args) => run_diagnose_fonts(&globals, args),
         Command::Chain(args) => run_chain(&globals, args),
         Command::RefreshFonts(args) => run_refresh_fonts(&globals, args),
     }
@@ -1987,7 +2291,11 @@ fn emit_chain_dry_run(plan: &chain::ChainPlan, globals: &GlobalOptions) {
     }
 }
 
-fn run_hdr(globals: &GlobalOptions, args: HdrArgs) -> Result<ExitCode, String> {
+fn run_hdr(
+    globals: &GlobalOptions,
+    args: HdrArgs,
+    diagnose: Option<DiagnoseMode>,
+) -> Result<ExitCode, String> {
     let mut engine = engine::CliEngine::new()?;
     let output_dir = globals
         .output_dir
@@ -2023,7 +2331,7 @@ fn run_hdr(globals: &GlobalOptions, args: HdrArgs) -> Result<ExitCode, String> {
         }
     }
 
-    emit_report_summary(globals, &report)?;
+    finish_command_report(globals, &mut report, diagnose, Vec::new(), None)?;
     Ok(report.exit_code())
 }
 
@@ -2172,7 +2480,11 @@ fn format_oversized_skipped_warning(
     )])
 }
 
-fn run_shift(globals: &GlobalOptions, args: ShiftArgs) -> Result<ExitCode, String> {
+fn run_shift(
+    globals: &GlobalOptions,
+    args: ShiftArgs,
+    diagnose: Option<DiagnoseMode>,
+) -> Result<ExitCode, String> {
     let offset_ms = parse_duration_ms(&args.offset)?;
     let threshold_ms = args.after.as_deref().map(parse_timestamp_ms).transpose()?;
     let mut engine = engine::CliEngine::new()?;
@@ -2213,7 +2525,7 @@ fn run_shift(globals: &GlobalOptions, args: ShiftArgs) -> Result<ExitCode, Strin
         }
     }
 
-    emit_report_summary(globals, &report)?;
+    finish_command_report(globals, &mut report, diagnose, Vec::new(), None)?;
     Ok(report.exit_code())
 }
 
@@ -2514,7 +2826,11 @@ fn process_shift_file_heavy_first(
     }
 }
 
-fn run_embed(globals: &GlobalOptions, args: EmbedArgs) -> Result<ExitCode, String> {
+fn run_embed(
+    globals: &GlobalOptions,
+    args: EmbedArgs,
+    diagnose: Option<DiagnoseMode>,
+) -> Result<ExitCode, String> {
     app_lib::fonts::init_system_dirs();
     let use_user_fonts = !args.font_dirs.is_empty() || !args.font_files.is_empty();
     // Skip the user-font scan in dry-run mode. process_embed_file's
@@ -2541,15 +2857,8 @@ fn run_embed(globals: &GlobalOptions, args: EmbedArgs) -> Result<ExitCode, Strin
     //   5. Drift-check by listing cached folders + stat()-ing each.
     //      If drift detected, verbose stderr report, fall back to
     //      no-cache for this run, suggest `refresh-fonts`.
-    let cache = if globals.no_cache || globals.dry_run {
-        if globals.no_cache && !globals.quiet {
-            eprintln!("ℹ Cache disabled (--no-cache). Using --font-dir / system fonts only.");
-        }
-        None
-    } else {
-        validate_cache_file_arg(globals)?;
-        prepare_embed_cache(globals, &args)
-    };
+    let prepared_cache = prepare_font_cache_for_resolution(globals, &args, true, false)?;
+    let cache = prepared_cache.cache.as_ref();
 
     let mut engine = engine::CliEngine::new()?;
     let output_dir = globals
@@ -2558,22 +2867,27 @@ fn run_embed(globals: &GlobalOptions, args: EmbedArgs) -> Result<ExitCode, Strin
         .map(absolute_path)
         .transpose()?;
     let mut report = CommandReport::new("embed");
+    let mut font_diagnostics = Vec::new();
     // Same first-wins dedup policy as run_hdr. Embed already orders
     // dedup correctly (cheap plan_font_embed → dedup → expensive
     // subset+apply), so no JS work is wasted on duplicate batches.
     let mut seen_outputs = HashSet::new();
 
     for (idx, file) in args.files.iter().enumerate() {
-        let result = process_embed_file(
+        let (result, mut diagnostics) = process_embed_file(
             globals,
             &args,
             use_user_fonts,
-            cache.as_ref(),
+            cache,
             output_dir.as_deref(),
             &mut engine,
             file,
             &mut seen_outputs,
         );
+        for diagnostic in &mut diagnostics {
+            diagnostic.file = Some(result.input.clone());
+        }
+        font_diagnostics.append(&mut diagnostics);
         let failed = result.status == FileStatus::Failed;
         emit_file_report(globals, &result);
         report.push(result);
@@ -2585,8 +2899,279 @@ fn run_embed(globals: &GlobalOptions, args: EmbedArgs) -> Result<ExitCode, Strin
         }
     }
 
-    emit_report_summary(globals, &report)?;
+    finish_command_report(
+        globals,
+        &mut report,
+        diagnose,
+        font_diagnostics,
+        Some(prepared_cache.diagnostic),
+    )?;
     Ok(report.exit_code())
+}
+
+fn prepare_font_cache_for_resolution(
+    globals: &GlobalOptions,
+    args: &EmbedArgs,
+    skip_for_dry_run: bool,
+    read_only: bool,
+) -> Result<PreparedFontCache, String> {
+    if globals.no_cache {
+        if !globals.quiet {
+            eprintln!("ℹ Cache disabled (--no-cache). Using --font-dir / system fonts only.");
+        }
+        return Ok(PreparedFontCache {
+            cache: None,
+            diagnostic: CacheDiagnostic::new(
+                globals.cache_file.as_ref().map(|path| display_path(path)),
+                CacheDiagnosticStatus::Disabled,
+                Some("disabled by --no-cache".to_string()),
+            ),
+        });
+    }
+
+    if skip_for_dry_run && globals.dry_run {
+        return Ok(PreparedFontCache {
+            cache: None,
+            diagnostic: CacheDiagnostic::new(
+                globals.cache_file.as_ref().map(|path| display_path(path)),
+                CacheDiagnosticStatus::DryRun,
+                Some("skipped because --dry-run does not resolve fonts".to_string()),
+            ),
+        });
+    }
+
+    validate_cache_file_arg(globals)?;
+    Ok(prepare_embed_cache(globals, args, read_only))
+}
+
+fn run_diagnose_fonts(
+    globals: &GlobalOptions,
+    args: DiagnoseFontsArgs,
+) -> Result<ExitCode, String> {
+    validate_diagnose_fonts_globals(globals)?;
+    app_lib::fonts::init_system_dirs();
+    let embed_args = args.to_embed_args();
+    let use_user_fonts = !embed_args.font_dirs.is_empty() || !embed_args.font_files.is_empty();
+    let _font_db_dir = if use_user_fonts {
+        Some(init_cli_font_sources(globals, &embed_args)?)
+    } else {
+        None
+    };
+    let prepared_cache = prepare_font_cache_for_resolution(globals, &embed_args, false, true)?;
+    let cache = prepared_cache.cache.as_ref();
+
+    let mut engine = engine::CliEngine::new()?;
+    let mut report = CommandReport::new("diagnose-fonts");
+    let mut font_diagnostics = Vec::new();
+
+    for file in &embed_args.files {
+        let (result, mut diagnostics) = diagnose_font_file(
+            globals,
+            &embed_args,
+            use_user_fonts,
+            cache,
+            &mut engine,
+            file,
+        );
+        for diagnostic in &mut diagnostics {
+            diagnostic.file = Some(result.input.clone());
+        }
+        font_diagnostics.append(&mut diagnostics);
+        report.push(result);
+    }
+
+    let diagnostics = build_command_diagnostics(
+        &report,
+        DiagnoseMode::Full,
+        font_diagnostics,
+        Some(prepared_cache.diagnostic),
+    );
+
+    if globals.json {
+        let json = serde_json::to_string_pretty(&diagnostics)
+            .map_err(|err| format!("failed to encode JSON diagnostics: {err}"))?;
+        println!("{json}");
+    } else {
+        emit_standalone_font_diagnostics(globals, &diagnostics);
+    }
+
+    Ok(report.exit_code())
+}
+
+fn validate_diagnose_fonts_globals(globals: &GlobalOptions) -> Result<(), String> {
+    if globals.output_dir.is_some() {
+        return Err(
+            "diagnose-fonts is read-only and does not write subtitle outputs; remove --output-dir"
+                .to_string(),
+        );
+    }
+    if globals.overwrite {
+        return Err(
+            "diagnose-fonts is read-only and does not write subtitle outputs; remove --overwrite"
+                .to_string(),
+        );
+    }
+    if globals.dry_run {
+        return Err("diagnose-fonts is already read-only; remove --dry-run".to_string());
+    }
+    if globals.fail_fast {
+        return Err(
+            "diagnose-fonts reports every input it can inspect; remove --fail-fast".to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn diagnose_font_file(
+    globals: &GlobalOptions,
+    args: &EmbedArgs,
+    use_user_fonts: bool,
+    cache: Option<&app_lib::font_cache::FontCache>,
+    engine: &mut engine::CliEngine,
+    file: &Path,
+) -> EmbedFileOutcome {
+    let input_path = match absolute_path(file) {
+        Ok(path) => path,
+        Err(error) => return (failed_report(file, None, None, error), Vec::new()),
+    };
+    let input = display_path(&input_path);
+
+    if !has_ass_extension(&input_path) {
+        return (
+            failed_report(
+                &input_path,
+                None,
+                None,
+                "font diagnostics only supports ASS/SSA subtitle files".to_string(),
+            ),
+            Vec::new(),
+        );
+    }
+
+    let read_result = match app_lib::encoding::read_text_detect_encoding_inner(&input, |_| true) {
+        Ok(result) => result,
+        Err(error) => return (failed_report(&input_path, None, None, error), Vec::new()),
+    };
+
+    let plan_request = engine::FontEmbedPlanRequest {
+        input_path: input.clone(),
+        content: read_result.text,
+        output_template: args.output_template.clone(),
+    };
+    let plan = match engine.plan_font_embed(&plan_request) {
+        Ok(result) => result,
+        Err(error) => {
+            return (
+                failed_report(&input_path, None, Some(read_result.encoding), error),
+                Vec::new(),
+            );
+        }
+    };
+
+    match resolve_embed_fonts(globals, args, use_user_fonts, cache, &plan.fonts) {
+        Ok(outcome) => (
+            FileReport {
+                input,
+                output: None,
+                encoding: Some(read_result.encoding),
+                status: FileStatus::Planned,
+                error: None,
+                warnings: if outcome.warnings.is_empty() {
+                    None
+                } else {
+                    Some(outcome.warnings)
+                },
+            },
+            outcome.diagnostics,
+        ),
+        Err(error) => (
+            failed_report(&input_path, None, Some(read_result.encoding), error.error),
+            error.diagnostics,
+        ),
+    }
+}
+
+fn emit_standalone_font_diagnostics(globals: &GlobalOptions, diagnostics: &CommandDiagnostics) {
+    let unresolved = diagnostics
+        .fonts
+        .iter()
+        .filter(|font| font.result != FontResolutionResult::Resolved)
+        .count();
+    println!(
+        "{}",
+        localize(
+            globals,
+            format!(
+                "Font diagnostics: {} file(s), {} font reference(s), {} unresolved",
+                diagnostics.files.len(),
+                diagnostics.fonts.len(),
+                unresolved
+            ),
+            format!(
+                "字体诊断：{} 个文件，{} 个字体引用，{} 个未解析",
+                diagnostics.files.len(),
+                diagnostics.fonts.len(),
+                unresolved
+            ),
+        )
+    );
+
+    if let Some(cache) = &diagnostics.cache {
+        let path = cache
+            .path
+            .as_deref()
+            .map(sanitize_for_display)
+            .unwrap_or_else(|| "<default path unavailable>".to_string());
+        println!("cache: {:?} ({path})", cache.status);
+        if let Some(message) = &cache.message {
+            println!("  {}", sanitize_for_display(message));
+        }
+    }
+
+    for file in &diagnostics.files {
+        println!(
+            "file: {} [{:?}]",
+            sanitize_for_display(&file.input),
+            file.status
+        );
+        if let Some(error) = &file.error {
+            println!("  error: {}", sanitize_for_display(error));
+        }
+        for warning in &file.warnings {
+            println!("  warning: {}", sanitize_for_display(warning));
+        }
+    }
+
+    for font in &diagnostics.fonts {
+        println!(
+            "font: {} [{:?}]",
+            sanitize_for_display(&font.label),
+            font.result
+        );
+        if let Some(path) = &font.path {
+            println!(
+                "  resolved: {}#{}",
+                sanitize_for_display(path),
+                font.index.unwrap_or(0)
+            );
+        }
+        if let Some(error) = &font.error {
+            println!("  error: {}", sanitize_for_display(error));
+        }
+        for tier in &font.tiers {
+            let mut line = format!("  {:?}: {:?}", tier.tier, tier.status);
+            if let Some(path) = &tier.path {
+                line.push_str(&format!(" {}", sanitize_for_display(path)));
+                if let Some(index) = tier.index {
+                    line.push_str(&format!("#{index}"));
+                }
+            }
+            if let Some(reason) = &tier.reason {
+                line.push_str(&format!(" ({})", sanitize_for_display(reason)));
+            }
+            println!("{line}");
+        }
+    }
 }
 
 /// Resolve cache path, open the cache, detect drift, announce status
@@ -2594,12 +3179,15 @@ fn run_embed(globals: &GlobalOptions, args: EmbedArgs) -> Result<ExitCode, Strin
 /// `Some(cache)` if usable for this run, or `None` to fall back to
 /// no-cache mode.
 ///
-/// Never writes to the cache file — read-only operation. Refresh is
-/// the user's explicit `refresh-fonts` invocation.
+/// `read_only` is true for `diagnose-fonts`, which must inspect an
+/// existing cache without creating schema or changing SQLite journal
+/// mode. `embed` uses the normal opener, matching the historical cache
+/// behavior. Cache content writes remain exclusive to `refresh-fonts`.
 fn prepare_embed_cache(
     globals: &GlobalOptions,
     args: &EmbedArgs,
-) -> Option<app_lib::font_cache::FontCache> {
+    read_only: bool,
+) -> PreparedFontCache {
     // Resolve path: --cache-file override or default Windows path.
     let cache_path = match &globals.cache_file {
         Some(p) => p.clone(),
@@ -2638,10 +3226,18 @@ fn prepare_embed_cache(
                         )
                     );
                 }
-                return None;
+                return PreparedFontCache {
+                    cache: None,
+                    diagnostic: CacheDiagnostic::new(
+                        None,
+                        CacheDiagnosticStatus::PathError,
+                        Some(format!("cannot resolve cache path: {e}")),
+                    ),
+                };
             }
         },
     };
+    let cache_path_json = display_path(&cache_path);
 
     // Pre-compute the sanitized cache-path display once; reused at
     // every stderr site below. cache_path itself stays operational.
@@ -2669,10 +3265,22 @@ fn prepare_embed_cache(
                 )
             );
         }
-        return None;
+        return PreparedFontCache {
+            cache: None,
+            diagnostic: CacheDiagnostic::new(
+                Some(cache_path_json),
+                CacheDiagnosticStatus::Missing,
+                Some("no font cache exists yet".to_string()),
+            ),
+        };
     }
 
-    let cache = match app_lib::font_cache::FontCache::open_or_create(&cache_path) {
+    let cache_result = if read_only {
+        app_lib::font_cache::FontCache::open_existing_read_only(&cache_path)
+    } else {
+        app_lib::font_cache::FontCache::open_or_create(&cache_path)
+    };
+    let cache = match cache_result {
         Ok(c) => c,
         Err(app_lib::font_cache::CacheError::SchemaVersionMismatch { found, expected }) => {
             if !globals.quiet {
@@ -2703,7 +3311,17 @@ fn prepare_embed_cache(
                     )
                 );
             }
-            return None;
+            let mut diagnostic = CacheDiagnostic::new(
+                Some(cache_path_json),
+                CacheDiagnosticStatus::SchemaMismatch,
+                Some("font cache schema mismatch".to_string()),
+            );
+            diagnostic.found_schema = Some(i64::from(found));
+            diagnostic.expected_schema = Some(i64::from(expected));
+            return PreparedFontCache {
+                cache: None,
+                diagnostic,
+            };
         }
         Err(e) => {
             if !globals.quiet {
@@ -2725,7 +3343,14 @@ fn prepare_embed_cache(
                     )
                 );
             }
-            return None;
+            return PreparedFontCache {
+                cache: None,
+                diagnostic: CacheDiagnostic::new(
+                    Some(cache_path_json),
+                    CacheDiagnosticStatus::OpenError,
+                    Some(format!("cannot open font cache: {e}")),
+                ),
+            };
         }
     };
 
@@ -2755,7 +3380,14 @@ fn prepare_embed_cache(
                     )
                 );
             }
-            return None;
+            return PreparedFontCache {
+                cache: None,
+                diagnostic: CacheDiagnostic::new(
+                    Some(cache_path_json),
+                    CacheDiagnosticStatus::ValidationError,
+                    Some(format!("cannot validate cache: {e}")),
+                ),
+            };
         }
     };
 
@@ -2815,7 +3447,17 @@ fn prepare_embed_cache(
                 )
             );
         }
-        return None;
+        let mut diagnostic = CacheDiagnostic::new(
+            Some(cache_path_json),
+            CacheDiagnosticStatus::Drift,
+            Some("cached font folders changed since last refresh".to_string()),
+        );
+        diagnostic.modified_folders = drift.modified.clone();
+        diagnostic.removed_folders = drift.removed.clone();
+        return PreparedFontCache {
+            cache: None,
+            diagnostic,
+        };
     }
 
     // Cache is valid. Announce per locked transparency design:
@@ -2856,7 +3498,14 @@ fn prepare_embed_cache(
             );
         }
     }
-    Some(cache)
+    PreparedFontCache {
+        cache: Some(cache),
+        diagnostic: CacheDiagnostic::new(
+            Some(cache_path_json),
+            CacheDiagnosticStatus::Usable,
+            Some("font cache usable for this run".to_string()),
+        ),
+    }
 }
 
 /// Walk every folder the cache has indexed, stat() each one, and
@@ -3033,19 +3682,22 @@ fn process_embed_file(
     engine: &mut engine::CliEngine,
     file: &Path,
     seen_outputs: &mut HashSet<String>,
-) -> FileReport {
+) -> EmbedFileOutcome {
     let input_path = match absolute_path(file) {
         Ok(path) => path,
-        Err(error) => return failed_report(file, None, None, error),
+        Err(error) => return (failed_report(file, None, None, error), Vec::new()),
     };
     let input = display_path(&input_path);
 
     if !has_ass_extension(&input_path) {
-        return failed_report(
-            &input_path,
-            None,
-            None,
-            "font embed only supports ASS/SSA subtitle files".to_string(),
+        return (
+            failed_report(
+                &input_path,
+                None,
+                None,
+                "font embed only supports ASS/SSA subtitle files".to_string(),
+            ),
+            Vec::new(),
         );
     }
 
@@ -3063,12 +3715,12 @@ fn process_embed_file(
     };
     let resolved_output_path = match engine.resolve_embed_output_path(&path_request) {
         Ok(path) => path,
-        Err(error) => return failed_report(&input_path, None, None, error),
+        Err(error) => return (failed_report(&input_path, None, None, error), Vec::new()),
     };
 
     let output_path = match relocate_output_path(&resolved_output_path, output_dir) {
         Ok(path) => path,
-        Err(error) => return failed_report(&input_path, None, None, error),
+        Err(error) => return (failed_report(&input_path, None, None, error), Vec::new()),
     };
     let output = display_path(&output_path);
 
@@ -3080,7 +3732,7 @@ fn process_embed_file(
         None,
         seen_outputs,
     ) {
-        return early;
+        return (early, Vec::new());
     }
 
     if globals.dry_run {
@@ -3088,12 +3740,17 @@ fn process_embed_file(
         // doing font discovery or content parsing — matches HDR/Shift
         // dry-run behavior and avoids the surprise of "dry-run scanned
         // 17k fonts then planned no actual write."
-        return planned_report(&input_path, Some(output), None);
+        return (planned_report(&input_path, Some(output), None), Vec::new());
     }
 
     let read_result = match app_lib::encoding::read_text_detect_encoding_inner(&input, |_| true) {
         Ok(result) => result,
-        Err(error) => return failed_report(&input_path, Some(output), None, error),
+        Err(error) => {
+            return (
+                failed_report(&input_path, Some(output), None, error),
+                Vec::new(),
+            )
+        }
     };
 
     let plan_request = engine::FontEmbedPlanRequest {
@@ -3104,20 +3761,34 @@ fn process_embed_file(
     let plan = match engine.plan_font_embed(&plan_request) {
         Ok(result) => result,
         Err(error) => {
-            return failed_report(&input_path, Some(output), Some(read_result.encoding), error);
+            return (
+                failed_report(&input_path, Some(output), Some(read_result.encoding), error),
+                Vec::new(),
+            );
         }
     };
 
     let mut warnings: Vec<String> = Vec::new();
 
+    let mut font_diagnostics = Vec::new();
     let resolved_fonts =
         match resolve_embed_fonts(globals, args, use_user_fonts, cache, &plan.fonts) {
-            Ok((fonts, mut resolve_warnings)) => {
-                warnings.append(&mut resolve_warnings);
-                fonts
+            Ok(mut outcome) => {
+                warnings.append(&mut outcome.warnings);
+                font_diagnostics.append(&mut outcome.diagnostics);
+                outcome.resolved
             }
-            Err(error) => {
-                return failed_report(&input_path, Some(output), Some(read_result.encoding), error);
+            Err(mut error) => {
+                font_diagnostics.append(&mut error.diagnostics);
+                return (
+                    failed_report(
+                        &input_path,
+                        Some(output),
+                        Some(read_result.encoding),
+                        error.error,
+                    ),
+                    font_diagnostics,
+                );
             }
         };
 
@@ -3156,9 +3827,12 @@ fn process_embed_file(
             payloads
         }
         Err(error) => {
-            return attach_warnings(
-                failed_report(&input_path, Some(output), Some(read_result.encoding), error),
-                &warnings,
+            return (
+                attach_warnings(
+                    failed_report(&input_path, Some(output), Some(read_result.encoding), error),
+                    &warnings,
+                ),
+                font_diagnostics,
             );
         }
     };
@@ -3180,9 +3854,12 @@ fn process_embed_file(
         match engine.apply_font_embed(&apply_request) {
             Ok(result) => result,
             Err(error) => {
-                return attach_warnings(
-                    failed_report(&input_path, Some(output), Some(read_result.encoding), error),
-                    &warnings,
+                return (
+                    attach_warnings(
+                        failed_report(&input_path, Some(output), Some(read_result.encoding), error),
+                        &warnings,
+                    ),
+                    font_diagnostics,
                 );
             }
         }
@@ -3196,24 +3873,30 @@ fn process_embed_file(
     );
 
     if let Err(error) = write_output(globals, &output_path, &applied.content, globals.overwrite) {
-        return attach_warnings(
-            failed_report(&input_path, Some(output), Some(read_result.encoding), error),
-            &warnings,
+        return (
+            attach_warnings(
+                failed_report(&input_path, Some(output), Some(read_result.encoding), error),
+                &warnings,
+            ),
+            font_diagnostics,
         );
     }
 
-    FileReport {
-        input,
-        output: Some(output),
-        encoding: Some(read_result.encoding),
-        status: FileStatus::Written,
-        error: None,
-        warnings: if warnings.is_empty() {
-            None
-        } else {
-            Some(warnings)
+    (
+        FileReport {
+            input,
+            output: Some(output),
+            encoding: Some(read_result.encoding),
+            status: FileStatus::Written,
+            error: None,
+            warnings: if warnings.is_empty() {
+                None
+            } else {
+                Some(warnings)
+            },
         },
-    }
+        font_diagnostics,
+    )
 }
 
 /// Pre-resolve fonts for an embed step in a chain. Reuses the same
@@ -3286,19 +3969,20 @@ fn resolve_chain_embed_subsets(
     // standalone embed produce equivalent diagnostics. Standalone embed
     // surfaces these as FileReport.warnings; chain wraps them into
     // ChainFileOutcome::Written(_, warnings).
-    let (resolved, missing_warnings) = resolve_embed_fonts(
+    let resolved_outcome = resolve_embed_fonts(
         globals,
         embed_args,
         use_user_fonts,
         None,
         &plan_result.fonts,
     )
-    .map_err(|e| (e, Vec::new()))?;
-    let (subsets, skipped_warnings) = match subset_resolved_fonts(globals, embed_args, &resolved) {
-        Ok(result) => result,
-        Err(e) => return Err((e, missing_warnings)),
-    };
-    let mut warnings = missing_warnings;
+    .map_err(|e| (e.error, Vec::new()))?;
+    let (subsets, skipped_warnings) =
+        match subset_resolved_fonts(globals, embed_args, &resolved_outcome.resolved) {
+            Ok(result) => result,
+            Err(e) => return Err((e, resolved_outcome.warnings)),
+        };
+    let mut warnings = resolved_outcome.warnings;
     warnings.extend(skipped_warnings);
     Ok((subsets, warnings))
 }
@@ -3313,9 +3997,10 @@ fn resolve_embed_fonts(
     use_user_fonts: bool,
     cache: Option<&app_lib::font_cache::FontCache>,
     fonts: &[engine::FontEmbedUsage],
-) -> Result<(Vec<ResolvedEmbedFont>, Vec<String>), String> {
+) -> Result<ResolveEmbedFontsOutcome, ResolveEmbedFontsError> {
     let mut resolved = Vec::new();
     let mut missing = Vec::new();
+    let mut diagnostics = Vec::new();
 
     for font in fonts {
         // Cap font.codepoints BEFORE the lookup + clone into
@@ -3330,6 +4015,14 @@ fn resolve_embed_fonts(
         // existing --on-missing surface (warning + counted in skipped
         // / Failed under `fail`).
         if font.codepoints.len() > MAX_RESOLVED_FONT_CODEPOINTS {
+            let mut diagnostic = FontDiagnostic::new(font);
+            let error = format!(
+                "too many codepoints: {} > cap {}",
+                font.codepoints.len(),
+                MAX_RESOLVED_FONT_CODEPOINTS
+            );
+            diagnostic.mark_error(error.clone());
+            diagnostics.push(diagnostic);
             missing.push(format!(
                 "{} (too many codepoints: {} > cap {})",
                 font.label,
@@ -3339,17 +4032,20 @@ fn resolve_embed_fonts(
             continue;
         }
         let lookup = resolve_embed_font(args, use_user_fonts, cache, font);
-        let (path, index) = match lookup {
-            Ok(Some(found)) => found,
-            Ok(None) => {
+        let (path, index) = match (lookup.found.clone(), lookup.error.clone()) {
+            (Some(found), _) => found,
+            (None, None) => {
                 missing.push(font.label.clone());
+                diagnostics.push(lookup.diagnostic);
                 continue;
             }
-            Err(error) => {
+            (None, Some(error)) => {
                 missing.push(format!("{} ({error})", font.label));
+                diagnostics.push(lookup.diagnostic);
                 continue;
             }
         };
+        diagnostics.push(lookup.diagnostic);
 
         resolved.push(ResolvedEmbedFont {
             label: font.label.clone(),
@@ -3368,7 +4064,10 @@ fn resolve_embed_fonts(
             format!("字体嵌入：缺失/跳过的字体：{joined}"),
         );
         if args.on_missing == MissingFontAction::Fail {
-            return Err(format!("missing/skipped fonts: {joined}"));
+            return Err(ResolveEmbedFontsError {
+                error: format!("missing/skipped fonts: {joined}"),
+                diagnostics,
+            });
         }
     }
 
@@ -3376,7 +4075,11 @@ fn resolve_embed_fonts(
         .into_iter()
         .map(|m| format!("missing font: {m}"))
         .collect();
-    Ok((resolved, warnings))
+    Ok(ResolveEmbedFontsOutcome {
+        resolved,
+        warnings,
+        diagnostics,
+    })
 }
 
 /// Subset fonts. Under `--on-missing warn`, returns the payloads
@@ -3588,7 +4291,9 @@ fn resolve_embed_font(
     use_user_fonts: bool,
     cache: Option<&app_lib::font_cache::FontCache>,
     font: &engine::FontEmbedUsage,
-) -> Result<Option<(String, u32)>, String> {
+) -> FontLookupOutcome {
+    let mut diagnostic = FontDiagnostic::new(font);
+
     // validate font.family once upfront.
     // The GUI sibling `font_cache_commands::lookup_font_family`
     // validates at the IPC boundary; the CLI's resolve_embed_font is
@@ -3603,16 +4308,67 @@ fn resolve_embed_font(
     // boundary uniform across all three tiers; the tier-1 / tier-3
     // internal validate calls become redundant but stay as
     // defense-in-depth.
-    app_lib::util::validate_font_family(&font.family)?;
+    if let Err(error) = app_lib::util::validate_font_family(&font.family) {
+        diagnostic.mark_error(error.clone());
+        return FontLookupOutcome {
+            found: None,
+            error: Some(error),
+            diagnostic,
+        };
+    }
 
     // Lookup tier 1: session DB populated by --font-dir for THIS run
     // (Situation A's explicit "merge in these dirs" inputs).
     if use_user_fonts {
-        if let Some(found) =
-            app_lib::fonts::resolve_user_font(font.family.clone(), font.bold, font.italic)?
-        {
-            return Ok(Some((found.path, found.index)));
+        match app_lib::fonts::resolve_user_font(font.family.clone(), font.bold, font.italic) {
+            Ok(Some(found)) => {
+                diagnostic.add_tier(
+                    FontResolveTier::Local,
+                    FontTierStatus::Hit,
+                    Some(found.path.clone()),
+                    Some(found.index),
+                    None,
+                );
+                diagnostic.mark_resolved(found.path.clone(), found.index);
+                return FontLookupOutcome {
+                    found: Some((found.path, found.index)),
+                    error: None,
+                    diagnostic,
+                };
+            }
+            Ok(None) => {
+                diagnostic.add_tier(
+                    FontResolveTier::Local,
+                    FontTierStatus::Miss,
+                    None,
+                    None,
+                    None,
+                );
+            }
+            Err(error) => {
+                diagnostic.add_tier(
+                    FontResolveTier::Local,
+                    FontTierStatus::Error,
+                    None,
+                    None,
+                    Some(error.clone()),
+                );
+                diagnostic.mark_error(error.clone());
+                return FontLookupOutcome {
+                    found: None,
+                    error: Some(error),
+                    diagnostic,
+                };
+            }
         }
+    } else {
+        diagnostic.add_tier(
+            FontResolveTier::Local,
+            FontTierStatus::Disabled,
+            None,
+            None,
+            Some("no --font-dir or --font-file source was provided".to_string()),
+        );
     }
 
     // Lookup tier 2: persistent cache. Implements Situation A's
@@ -3651,8 +4407,29 @@ fn resolve_embed_font(
                 // face_index via try_from.
                 match app_lib::fonts::register_cache_provenance(&result) {
                     Ok(()) => match result.into_parts() {
-                        Ok(parts) => return Ok(Some(parts)),
+                        Ok((path, index)) => {
+                            diagnostic.add_tier(
+                                FontResolveTier::Cache,
+                                FontTierStatus::Hit,
+                                Some(path.clone()),
+                                Some(index),
+                                None,
+                            );
+                            diagnostic.mark_resolved(path.clone(), index);
+                            return FontLookupOutcome {
+                                found: Some((path, index)),
+                                error: None,
+                                diagnostic,
+                            };
+                        }
                         Err(e) => {
+                            diagnostic.add_tier(
+                                FontResolveTier::Cache,
+                                FontTierStatus::Error,
+                                None,
+                                None,
+                                Some(format!("malformed cache result: {e}")),
+                            );
                             log::warn!(
                                 "Font '{}' cache lookup returned a malformed result; \
                                  falling back to system fonts: {e}",
@@ -3661,6 +4438,13 @@ fn resolve_embed_font(
                         }
                     },
                     Err(e) => {
+                        diagnostic.add_tier(
+                            FontResolveTier::Cache,
+                            FontTierStatus::Error,
+                            None,
+                            None,
+                            Some(format!("cache path failed provenance validation: {e}")),
+                        );
                         log::warn!(
                             "Font '{}' cache lookup hit a path that failed provenance \
                              validation; falling back to system fonts: {e}",
@@ -3672,34 +4456,105 @@ fn resolve_embed_font(
                 }
             }
             Ok(None) => {
+                diagnostic.add_tier(
+                    FontResolveTier::Cache,
+                    FontTierStatus::Miss,
+                    None,
+                    None,
+                    None,
+                );
                 // Cache miss; fall through to system fonts.
             }
             Err(e) => {
+                diagnostic.add_tier(
+                    FontResolveTier::Cache,
+                    FontTierStatus::Error,
+                    None,
+                    None,
+                    Some(e.to_string()),
+                );
                 // Cache read error; log but don't fail the whole
                 // embed — fall through to system fonts.
                 log::warn!("font cache lookup failed for {}: {e}", font.family);
             }
         }
+    } else {
+        diagnostic.add_tier(
+            FontResolveTier::Cache,
+            FontTierStatus::Unavailable,
+            None,
+            None,
+            Some("no usable cache for this run".to_string()),
+        );
     }
 
     if args.no_system_fonts {
-        return Ok(None);
+        diagnostic.add_tier(
+            FontResolveTier::System,
+            FontTierStatus::Disabled,
+            None,
+            None,
+            Some("--no-system-fonts was set".to_string()),
+        );
+        return FontLookupOutcome {
+            found: None,
+            error: None,
+            diagnostic,
+        };
     }
 
-    app_lib::fonts::find_system_font(font.family.clone(), font.bold, font.italic)
-        .map(|found| Some((found.path, found.index)))
-        .or_else(|error| {
+    match app_lib::fonts::find_system_font(font.family.clone(), font.bold, font.italic) {
+        Ok(found) => {
+            diagnostic.add_tier(
+                FontResolveTier::System,
+                FontTierStatus::Hit,
+                Some(found.path.clone()),
+                Some(found.index),
+                None,
+            );
+            diagnostic.mark_resolved(found.path.clone(), found.index);
+            FontLookupOutcome {
+                found: Some((found.path, found.index)),
+                error: None,
+                diagnostic,
+            }
+        }
+        Err(error) => {
             // String-coupled to fonts.rs's `format!("Font not found: ...)`.
             // Any change to that prefix in fonts.rs MUST update this
             // matcher; otherwise a "miss" becomes a hard Err and breaks
             // --on-missing warn semantics. fonts.rs has the matching
             // WHY comment at the format-string site.
             if error.starts_with("Font not found:") {
-                Ok(None)
+                diagnostic.add_tier(
+                    FontResolveTier::System,
+                    FontTierStatus::Miss,
+                    None,
+                    None,
+                    Some(error),
+                );
+                FontLookupOutcome {
+                    found: None,
+                    error: None,
+                    diagnostic,
+                }
             } else {
-                Err(error)
+                diagnostic.add_tier(
+                    FontResolveTier::System,
+                    FontTierStatus::Error,
+                    None,
+                    None,
+                    Some(error.clone()),
+                );
+                diagnostic.mark_error(error.clone());
+                FontLookupOutcome {
+                    found: None,
+                    error: Some(error),
+                    diagnostic,
+                }
             }
-        })
+        }
+    }
 }
 
 fn has_ass_extension(path: &Path) -> bool {
@@ -3709,7 +4564,11 @@ fn has_ass_extension(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn run_rename(globals: &GlobalOptions, args: RenameArgs) -> Result<ExitCode, String> {
+fn run_rename(
+    globals: &GlobalOptions,
+    args: RenameArgs,
+    diagnose: Option<DiagnoseMode>,
+) -> Result<ExitCode, String> {
     let output_dir = globals
         .output_dir
         .as_deref()
@@ -3764,7 +4623,7 @@ fn run_rename(globals: &GlobalOptions, args: RenameArgs) -> Result<ExitCode, Str
         };
         emit_file_report(globals, &result);
         report.push(result);
-        emit_report_summary(globals, &report)?;
+        finish_command_report(globals, &mut report, diagnose, Vec::new(), None)?;
         return Ok(report.exit_code());
     }
 
@@ -3782,7 +4641,7 @@ fn run_rename(globals: &GlobalOptions, args: RenameArgs) -> Result<ExitCode, Str
         }
     }
 
-    emit_report_summary(globals, &report)?;
+    finish_command_report(globals, &mut report, diagnose, Vec::new(), None)?;
     Ok(report.exit_code())
 }
 
@@ -3922,6 +4781,217 @@ fn duplicate_rename_output_keys(rows: &[engine::RenamePlanRow]) -> HashSet<Strin
     duplicates
 }
 
+fn finish_command_report(
+    globals: &GlobalOptions,
+    report: &mut CommandReport,
+    diagnose: Option<DiagnoseMode>,
+    fonts: Vec<FontDiagnostic>,
+    cache: Option<CacheDiagnostic>,
+) -> Result<(), String> {
+    if let Some(mode) = diagnose {
+        report.diagnostics = Some(build_command_diagnostics(report, mode, fonts, cache));
+    }
+
+    emit_report_summary(globals, report)?;
+
+    if !globals.json {
+        if let Some(mode) = diagnose {
+            if let Some(diagnostics) = &report.diagnostics {
+                emit_attached_diagnostics(globals, diagnostics, mode);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn build_command_diagnostics(
+    report: &CommandReport,
+    mode: DiagnoseMode,
+    fonts: Vec<FontDiagnostic>,
+    cache: Option<CacheDiagnostic>,
+) -> CommandDiagnostics {
+    let files_with_warnings = report
+        .results
+        .iter()
+        .filter(|result| {
+            result
+                .warnings
+                .as_ref()
+                .is_some_and(|warnings| !warnings.is_empty())
+        })
+        .count();
+    let warning_count = report
+        .results
+        .iter()
+        .filter_map(|result| result.warnings.as_ref())
+        .map(Vec::len)
+        .sum();
+
+    let mut notes = Vec::new();
+    if report.aborted_by_fail_fast {
+        notes.push("--fail-fast aborted the batch after the first failed file".to_string());
+    }
+    if warning_count > 0 {
+        notes.push(
+            "one or more files completed with warnings; inspect results[].warnings".to_string(),
+        );
+    }
+
+    CommandDiagnostics {
+        mode,
+        files_with_warnings,
+        warning_count,
+        notes,
+        files: report
+            .results
+            .iter()
+            .map(|result| FileDiagnostic {
+                input: result.input.clone(),
+                output: result.output.clone(),
+                encoding: result.encoding.clone(),
+                status: result.status,
+                error: result.error.clone(),
+                warnings: result.warnings.clone().unwrap_or_default(),
+            })
+            .collect(),
+        cache,
+        fonts,
+    }
+}
+
+fn warning_counts(report: &CommandReport) -> (usize, usize, usize) {
+    let mut files = 0;
+    let mut warnings = 0;
+    let mut written_files = 0;
+
+    for result in &report.results {
+        let count = result.warnings.as_ref().map_or(0, Vec::len);
+        if count == 0 {
+            continue;
+        }
+        files += 1;
+        warnings += count;
+        if result.status == FileStatus::Written {
+            written_files += 1;
+        }
+    }
+
+    (files, warnings, written_files)
+}
+
+fn emit_attached_diagnostics(
+    globals: &GlobalOptions,
+    diagnostics: &CommandDiagnostics,
+    mode: DiagnoseMode,
+) {
+    let unresolved = diagnostics
+        .fonts
+        .iter()
+        .filter(|font| font.result != FontResolutionResult::Resolved)
+        .count();
+    eprintln!(
+        "{}",
+        localize(
+            globals,
+            format!(
+                "Diagnostics: {} file(s), {} warning(s), {} unresolved font(s)",
+                diagnostics.files.len(),
+                diagnostics.warning_count,
+                unresolved
+            ),
+            format!(
+                "诊断：{} 个文件，{} 条警告，{} 个未解析字体",
+                diagnostics.files.len(),
+                diagnostics.warning_count,
+                unresolved
+            ),
+        )
+    );
+
+    if let Some(cache) = &diagnostics.cache {
+        let path = cache
+            .path
+            .as_deref()
+            .map(sanitize_for_display)
+            .unwrap_or_else(|| "<default path unavailable>".to_string());
+        eprintln!(
+            "{}",
+            localize(
+                globals,
+                format!("  cache: {:?} ({path})", cache.status),
+                format!("  缓存：{:?}（{path}）", cache.status),
+            )
+        );
+    }
+
+    if mode == DiagnoseMode::Summary {
+        if diagnostics.warning_count > 0 {
+            eprintln!(
+                "{}",
+                localize(
+                    globals,
+                    "  rerun with --diagnose=full for per-file and per-font tier details"
+                        .to_string(),
+                    "  重新运行 --diagnose=full 可查看逐文件和逐字体层级细节".to_string(),
+                )
+            );
+        }
+        return;
+    }
+
+    for file in &diagnostics.files {
+        let input = sanitize_for_display(&file.input);
+        eprintln!("  file: {input} [{:?}]", file.status);
+        if let Some(output) = &file.output {
+            eprintln!("    output: {}", sanitize_for_display(output));
+        }
+        if let Some(error) = &file.error {
+            eprintln!("    error: {}", sanitize_for_display(error));
+        }
+        for warning in &file.warnings {
+            eprintln!("    warning: {}", sanitize_for_display(warning));
+        }
+    }
+
+    for font in &diagnostics.fonts {
+        let file_suffix = font
+            .file
+            .as_deref()
+            .map(|file| format!(" in {}", sanitize_for_display(file)))
+            .unwrap_or_default();
+        eprintln!(
+            "  font: {}{} [{:?}]",
+            sanitize_for_display(&font.label),
+            file_suffix,
+            font.result
+        );
+        if let Some(path) = &font.path {
+            eprintln!(
+                "    resolved: {}#{}",
+                sanitize_for_display(path),
+                font.index.unwrap_or(0)
+            );
+        }
+        if let Some(error) = &font.error {
+            eprintln!("    error: {}", sanitize_for_display(error));
+        }
+        for tier in &font.tiers {
+            let mut line = format!("    {:?}: {:?}", tier.tier, tier.status);
+            if let Some(path) = &tier.path {
+                line.push_str(&format!(" {}", sanitize_for_display(path)));
+                if let Some(index) = tier.index {
+                    line.push_str(&format!("#{index}"));
+                }
+            }
+            if let Some(reason) = &tier.reason {
+                line.push_str(&format!(" ({})", sanitize_for_display(reason)));
+            }
+            eprintln!("{line}");
+        }
+    }
+}
+
 fn emit_report_summary(globals: &GlobalOptions, report: &CommandReport) -> Result<(), String> {
     if globals.json {
         let json = serde_json::to_string_pretty(report)
@@ -3936,31 +5006,40 @@ fn emit_report_summary(globals: &GlobalOptions, report: &CommandReport) -> Resul
         // `abortedByFailFast` field — users piping stdout to a log
         // would lose the signal. Chain's sibling Summary does this
         // too; this keeps standalone HDR/Shift/Embed/Rename aligned.
-        let message = if report.aborted_by_fail_fast {
-            localize(
-                globals,
-                format!(
-                    "Done: {} written, {} planned, {} skipped, {} failed (aborted by --fail-fast)",
-                    report.written, report.planned, report.skipped, report.failed
-                ),
-                format!(
-                    "完成：{} 个已写入，{} 个计划写入，{} 个已跳过，{} 个失败（已被 --fail-fast 中止）",
-                    report.written, report.planned, report.skipped, report.failed
-                ),
+        let (_, warning_count, written_warning_files) = warning_counts(report);
+        let warning_suffix_en = if written_warning_files > 0 {
+            format!(
+                ", {written_warning_files} written with warnings / incomplete ({warning_count} warning(s))"
             )
         } else {
-            localize(
-                globals,
-                format!(
-                    "Done: {} written, {} planned, {} skipped, {} failed",
-                    report.written, report.planned, report.skipped, report.failed
-                ),
-                format!(
-                    "完成：{} 个已写入，{} 个计划写入，{} 个已跳过，{} 个失败",
-                    report.written, report.planned, report.skipped, report.failed
-                ),
-            )
+            String::new()
         };
+        let warning_suffix_zh = if written_warning_files > 0 {
+            format!("，{written_warning_files} 个已写入但带警告/不完整（{warning_count} 条警告）")
+        } else {
+            String::new()
+        };
+        let fail_fast_suffix_en = if report.aborted_by_fail_fast {
+            " (aborted by --fail-fast)"
+        } else {
+            ""
+        };
+        let fail_fast_suffix_zh = if report.aborted_by_fail_fast {
+            "（已被 --fail-fast 中止）"
+        } else {
+            ""
+        };
+        let message = localize(
+            globals,
+            format!(
+                "Done: {} written, {} planned, {} skipped, {} failed{warning_suffix_en}{fail_fast_suffix_en}",
+                report.written, report.planned, report.skipped, report.failed
+            ),
+            format!(
+                "完成：{} 个已写入，{} 个计划写入，{} 个已跳过，{} 个失败{warning_suffix_zh}{fail_fast_suffix_zh}",
+                report.written, report.planned, report.skipped, report.failed
+            ),
+        );
         println!("{message}");
     }
     Ok(())
@@ -4678,9 +5757,9 @@ mod tests {
         classify_locale, copy_file_output, create_cli_font_db_dir, display_path,
         duplicate_rename_output_keys, engine, group_resolved_fonts_by_face, normalize_output_key,
         parse_duration_ms, parse_timestamp_ms, predict_chain_output_path, relocate_output_path,
-        sanitize_for_display, substitute_template, write_output, GlobalOptions, OutputLang,
-        ResolvedEmbedFont, TempFontDbDir, MAX_RESOLVED_FONT_CODEPOINTS, MAX_SHIFT_OFFSET_MS,
-        MAX_SUBSET_CODEPOINTS_FOR_DEDUP,
+        sanitize_for_display, substitute_template, write_output, Cli, Command, DiagnoseMode,
+        GlobalOptions, OutputLang, ResolvedEmbedFont, TempFontDbDir, MAX_RESOLVED_FONT_CODEPOINTS,
+        MAX_SHIFT_OFFSET_MS, MAX_SUBSET_CODEPOINTS_FOR_DEDUP,
     };
     // Import the canonical filename literal directly from app_lib so the
     // test pins the same name `TempFontDbDir::drop`'s remove_dir_all
@@ -4689,6 +5768,8 @@ mod tests {
     // `USER_FONT_DB_FILENAME` is the canonical name everywhere, and an
     // alias would only add indirection.
     use app_lib::fonts::USER_FONT_DB_FILENAME;
+    use clap::error::ErrorKind;
+    use clap::Parser;
     use std::fs;
     use std::path::{Path, PathBuf};
 
@@ -4735,6 +5816,81 @@ mod tests {
             MAX_RESOLVED_FONT_CODEPOINTS,
             MAX_SUBSET_CODEPOINTS_FOR_DEDUP,
         );
+    }
+
+    #[test]
+    fn diagnose_without_value_parses_as_summary() {
+        let cli = Cli::try_parse_from([
+            "ssahdrify-cli",
+            "hdr",
+            "--eotf",
+            "pq",
+            "--diagnose",
+            "input.ass",
+        ])
+        .expect("bare --diagnose should parse");
+
+        match cli.command {
+            Command::Hdr(args) => assert_eq!(args.diagnose.mode(), Some(DiagnoseMode::Summary)),
+            other => panic!("expected hdr command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn diagnose_full_parses() {
+        let cli = Cli::try_parse_from([
+            "ssahdrify-cli",
+            "embed",
+            "--diagnose=full",
+            "--no-system-fonts",
+            "input.ass",
+        ])
+        .expect("--diagnose=full should parse");
+
+        match cli.command {
+            Command::Embed(args) => assert_eq!(args.diagnose.mode(), Some(DiagnoseMode::Full)),
+            other => panic!("expected embed command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn diagnose_suffix_after_input_parses() {
+        let cli = Cli::try_parse_from(["ssahdrify-cli", "embed", "input.ass", "--diagnose=full"])
+            .expect("diagnose should parse after command inputs");
+
+        match cli.command {
+            Command::Embed(args) => assert_eq!(args.diagnose.mode(), Some(DiagnoseMode::Full)),
+            other => panic!("expected embed command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn invalid_diagnose_value_fails_at_parse_time() {
+        let err = Cli::try_parse_from([
+            "ssahdrify-cli",
+            "shift",
+            "--offset",
+            "+1s",
+            "--diagnose=short",
+            "input.ass",
+        ])
+        .expect_err("invalid diagnose value should fail");
+
+        assert_eq!(err.kind(), ErrorKind::InvalidValue);
+    }
+
+    #[test]
+    fn refresh_fonts_rejects_diagnose_option() {
+        let err = Cli::try_parse_from([
+            "ssahdrify-cli",
+            "refresh-fonts",
+            "--diagnose",
+            "--font-dir",
+            "fonts",
+        ])
+        .expect_err("unsupported command should reject --diagnose");
+
+        assert_eq!(err.kind(), ErrorKind::UnknownArgument);
     }
 
     /// Construct a default GlobalOptions for tests that need to call
