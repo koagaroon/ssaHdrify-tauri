@@ -419,6 +419,50 @@ impl std::fmt::Display for CacheError {
     }
 }
 
+fn sqlite_immutable_uri(cache_path: &Path) -> Result<String, CacheError> {
+    let path = cache_path.to_str().ok_or_else(|| {
+        CacheError::Io(format!(
+            "cache path is not valid UTF-8 for immutable open: {}",
+            cache_path.display()
+        ))
+    })?;
+    let mut path = path.to_string();
+
+    #[cfg(windows)]
+    {
+        path = path.replace('\\', "/");
+        if path.starts_with("//") {
+            return Err(CacheError::Io(format!(
+                "immutable read-only cache open does not support UNC paths: {}",
+                cache_path.display()
+            )));
+        }
+        let bytes = path.as_bytes();
+        if bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && bytes[2] == b'/'
+        {
+            path.insert(0, '/');
+        }
+    }
+
+    let mut encoded = String::with_capacity(path.len());
+    for byte in path.as_bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(*byte, b'-' | b'.' | b'_' | b'~' | b'/' | b':')
+        {
+            encoded.push(char::from(*byte));
+        } else {
+            encoded.push('%');
+            const HEX: &[u8; 16] = b"0123456789ABCDEF";
+            encoded.push(char::from(HEX[(byte >> 4) as usize]));
+            encoded.push(char::from(HEX[(byte & 0x0F) as usize]));
+        }
+    }
+
+    Ok(format!("file:{encoded}?mode=ro&immutable=1"))
+}
+
 impl FontCache {
     /// Open an existing cache file or create a fresh one. The caller
     /// passes the full file path; choosing AppData / temp / a custom
@@ -491,14 +535,17 @@ impl FontCache {
     /// Open an existing cache for lookup-only diagnostics.
     ///
     /// Unlike `open_or_create`, this does not create parent
-    /// directories, initialize schema, or set WAL mode. Callers use it
-    /// when the command contract is read-only (`diagnose-fonts`).
+    /// directories, initialize schema, set WAL mode, or create WAL
+    /// sidecars. Callers use it when the command contract is
+    /// read-only (`diagnose-fonts`).
     pub fn open_existing_read_only(cache_path: &Path) -> Result<Self, CacheError> {
         reject_cache_reparse_paths(cache_path)?;
-        let conn = Connection::open_with_flags(cache_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .map_err(|e| {
-                CacheError::Io(format!("opening {} read-only: {e}", cache_path.display()))
-            })?;
+        let uri = sqlite_immutable_uri(cache_path)?;
+        let conn = Connection::open_with_flags(
+            &uri,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
+        )
+        .map_err(|e| CacheError::Io(format!("opening {} read-only: {e}", cache_path.display())))?;
         conn.busy_timeout(std::time::Duration::from_secs(5))
             .map_err(|e| CacheError::Io(format!("setting busy_timeout: {e}")))?;
         conn.pragma_update(None, "foreign_keys", "ON")
@@ -1047,6 +1094,12 @@ mod tests {
         (guard, nested_path)
     }
 
+    fn sqlite_sidecar_path(path: &Path, suffix: &str) -> std::path::PathBuf {
+        let mut sidecar = path.as_os_str().to_os_string();
+        sidecar.push(suffix);
+        std::path::PathBuf::from(sidecar)
+    }
+
     #[test]
     fn fresh_open_creates_schema_and_writes_version() {
         let (_guard, path) = temp_cache_path();
@@ -1074,6 +1127,50 @@ mod tests {
             )
             .expect("query schema_version");
         assert_eq!(version, SCHEMA_VERSION.to_string());
+    }
+
+    #[test]
+    fn read_only_open_does_not_create_wal_sidecars() {
+        let (_guard, path) = temp_cache_path();
+        {
+            let cache = FontCache::open_or_create(&path).expect("fresh cache opens");
+            cache
+                .conn
+                .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+                .expect("checkpoint fresh cache");
+        }
+
+        for suffix in ["-wal", "-shm"] {
+            let sidecar = sqlite_sidecar_path(&path, suffix);
+            match fs::remove_file(&sidecar) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => panic!(
+                    "failed to remove setup sidecar {}: {error}",
+                    sidecar.display()
+                ),
+            }
+            assert!(
+                !sidecar.exists(),
+                "setup should start without {suffix} sidecar"
+            );
+        }
+
+        let cache = FontCache::open_existing_read_only(&path).expect("read-only cache opens");
+        assert!(cache
+            .list_folders()
+            .expect("read-only query works")
+            .is_empty());
+        drop(cache);
+
+        for suffix in ["-wal", "-shm"] {
+            let sidecar = sqlite_sidecar_path(&path, suffix);
+            assert!(
+                !sidecar.exists(),
+                "read-only diagnostics must not create {}",
+                sidecar.display()
+            );
+        }
     }
 
     #[cfg(unix)]

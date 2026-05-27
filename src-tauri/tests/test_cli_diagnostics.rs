@@ -51,6 +51,18 @@ fn make_font_dir(dir: &Path) -> PathBuf {
     font_dir
 }
 
+fn sqlite_sidecar_path(path: &Path, suffix: &str) -> PathBuf {
+    let mut sidecar = path.as_os_str().to_os_string();
+    sidecar.push(suffix);
+    PathBuf::from(sidecar)
+}
+
+fn optional_modified(path: &Path) -> Option<std::time::SystemTime> {
+    fs::metadata(path)
+        .ok()
+        .and_then(|metadata| metadata.modified().ok())
+}
+
 fn run_cli(args: &[&str]) -> std::process::Output {
     Command::new(cli_path())
         .args(args)
@@ -150,6 +162,38 @@ fn diagnose_fonts_reports_missing_without_writing_output() {
 }
 
 #[test]
+fn diagnose_fonts_json_reports_successful_files_as_diagnosed() {
+    if let Some(reason) = engine_bundle_missing() {
+        eprintln!("skipping: {reason}");
+        return;
+    }
+
+    let work = temp_dir("standalone-json-status");
+    let input = write_missing_font_ass(&work);
+    let output = run_cli(&[
+        "--lang",
+        "en",
+        "--json",
+        "--no-cache",
+        "diagnose-fonts",
+        "--no-system-fonts",
+        input.to_str().unwrap(),
+    ]);
+
+    assert!(
+        output.status.success(),
+        "diagnose-fonts --json should complete for a readable ASS: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout should be JSON");
+    assert_eq!(value["files"][0]["status"], "diagnosed");
+    assert_eq!(value["files"][0]["output"], serde_json::Value::Null);
+
+    let _ = fs::remove_dir_all(work);
+}
+
+#[test]
 fn diagnose_fonts_does_not_mutate_cache_file() {
     if let Some(reason) = engine_bundle_missing() {
         eprintln!("skipping: {reason}");
@@ -178,6 +222,10 @@ fn diagnose_fonts_does_not_mutate_cache_file() {
         .expect("cache metadata before diagnose")
         .modified()
         .expect("cache mtime before diagnose");
+    let before_wal = sqlite_sidecar_path(&cache, "-wal");
+    let before_shm = sqlite_sidecar_path(&cache, "-shm");
+    let before_wal_modified = optional_modified(&before_wal);
+    let before_shm_modified = optional_modified(&before_shm);
     thread::sleep(Duration::from_millis(20));
 
     let diagnose = run_cli(&[
@@ -201,6 +249,16 @@ fn diagnose_fonts_does_not_mutate_cache_file() {
     assert_eq!(
         before, after,
         "diagnose-fonts must not mutate the cache file"
+    );
+    assert_eq!(
+        before_wal_modified,
+        optional_modified(&before_wal),
+        "diagnose-fonts must not create, remove, or modify the cache WAL sidecar"
+    );
+    assert_eq!(
+        before_shm_modified,
+        optional_modified(&before_shm),
+        "diagnose-fonts must not create, remove, or modify the cache SHM sidecar"
     );
 
     let _ = fs::remove_dir_all(work);

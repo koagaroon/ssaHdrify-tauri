@@ -637,6 +637,7 @@ struct FileReport {
 enum FileStatus {
     Written,
     Planned,
+    Diagnosed,
     Skipped,
     Failed,
 }
@@ -890,6 +891,7 @@ impl CommandReport {
         match result.status {
             FileStatus::Written => self.written += 1,
             FileStatus::Planned => self.planned += 1,
+            FileStatus::Diagnosed => self.planned += 1,
             FileStatus::Skipped => self.skipped += 1,
             FileStatus::Failed => self.failed += 1,
         }
@@ -3074,7 +3076,7 @@ fn diagnose_font_file(
                 input,
                 output: None,
                 encoding: Some(read_result.encoding),
-                status: FileStatus::Planned,
+                status: FileStatus::Diagnosed,
                 error: None,
                 warnings: if outcome.warnings.is_empty() {
                     None
@@ -5136,6 +5138,14 @@ fn emit_file_report(globals: &GlobalOptions, result: &FileReport) {
                         globals,
                         format!("would write: {output_disp}"),
                         format!("将写入：{output_disp}"),
+                    )
+                ),
+                FileStatus::Diagnosed => println!(
+                    "{}",
+                    localize(
+                        globals,
+                        format!("diagnosed: {input_disp}"),
+                        format!("已诊断：{input_disp}"),
                     )
                 ),
                 FileStatus::Skipped => println!(
