@@ -1139,12 +1139,12 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
         // Routed through `font_cache::try_modified_at` — the helper is
         // pub fn for exactly this kind of cross-binary reuse, and an
         // inline duplicate would drift over time.
-        let folder_mtime = match app_lib::font_cache::try_modified_at(&canonical) {
+        let folder_mtime = match app_lib::font_cache::try_modified_at(canonical) {
             Some(m) => m,
             None => {
                 if !globals.quiet {
                     // Sanitize before stderr interpolation, then localize.
-                    let folder_disp = sanitize_for_display(&folder_path_str);
+                    let folder_disp = sanitize_for_display(folder_path_str);
                     eprintln!(
                         "{}",
                         localize(
@@ -1167,7 +1167,7 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
         // populate cap exceeded for malicious / oversized packs) is
         // logged and skipped so one bad source doesn't abort the whole
         // refresh run — refresh-fonts is multi-dir by design.
-        let entries = match app_lib::fonts::scan_directory_collecting(&canonical) {
+        let entries = match app_lib::fonts::scan_directory_collecting(canonical) {
             Ok(e) => e,
             Err(err) => {
                 if !globals.quiet {
@@ -1175,7 +1175,7 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
                     // the boundary. `folder_path_str` is display_path
                     // output (operational); print sites wrap with
                     // sanitize_for_display, then localize.
-                    let folder_disp = sanitize_for_display(&folder_path_str);
+                    let folder_disp = sanitize_for_display(folder_path_str);
                     let err_disp = sanitize_for_display(&err);
                     eprintln!(
                         "{}",
@@ -1198,13 +1198,13 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
 
         let font_count = metadata.len();
         cache
-            .replace_folder(&folder_path_str, folder_mtime, &metadata)
+            .replace_folder(folder_path_str, folder_mtime, &metadata)
             .map_err(|e| format!("writing cache for {}: {e}", folder_path_str))?;
 
         if !globals.quiet {
             // sanitize_for_display on the success line too — same
             // callsite shape as the error path above, then localize.
-            let folder_disp = sanitize_for_display(&folder_path_str);
+            let folder_disp = sanitize_for_display(folder_path_str);
             eprintln!(
                 "{}",
                 localize(
