@@ -647,6 +647,24 @@ impl FontCache {
         // are still validated at list/lookup boundaries because
         // --cache-file and local cache tampering make persisted SQLite
         // state attacker-influenced.
+        let other_folder_count = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM cached_folders WHERE folder_path <> ?1",
+                params![folder_path],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|e| CacheError::Io(format!("count cached_folders: {e}")))?;
+        let other_folder_count = usize::try_from(other_folder_count).map_err(|_| {
+            CacheError::Io("cached_folders row count is negative or too large".to_string())
+        })?;
+        if other_folder_count >= MAX_CACHED_FOLDERS {
+            return Err(CacheError::Io(format!(
+                "cached_folders table is at the {MAX_CACHED_FOLDERS}-row sanity cap; \
+                 cannot add another folder"
+            )));
+        }
+
         let tx = self
             .conn
             .transaction()
@@ -1610,10 +1628,19 @@ mod tests {
     #[test]
     fn list_folders_rejects_over_sanity_cap_before_stat_callers() {
         let (_guard, path) = temp_cache_path();
-        let mut cache = FontCache::open_or_create(&path).expect("open");
+        let cache = FontCache::open_or_create(&path).expect("open");
         for i in 0..=MAX_CACHED_FOLDERS {
             cache
-                .replace_folder(&format!("/hostile/{i:04}"), 1_700_000_000, &[])
+                .conn
+                .execute(
+                    "INSERT INTO cached_folders(folder_path, folder_mtime, last_scanned_at) \
+                     VALUES(?1, ?2, ?3)",
+                    params![
+                        format!("/hostile/{i:04}"),
+                        1_700_000_000_i64,
+                        1_700_000_001_i64
+                    ],
+                )
                 .unwrap();
         }
 
@@ -1623,6 +1650,31 @@ mod tests {
                 "cached_folders table exceeds {MAX_CACHED_FOLDERS}-row sanity cap"
             )),
             "expected cached_folders sanity-cap error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn replace_folder_refuses_to_create_unreadable_over_cap_cache() {
+        let (_guard, path) = temp_cache_path();
+        let mut cache = FontCache::open_or_create(&path).expect("open");
+        for i in 0..MAX_CACHED_FOLDERS {
+            cache
+                .replace_folder(&format!("/cache/{i:04}"), 1_700_000_000, &[])
+                .unwrap();
+        }
+
+        cache
+            .replace_folder("/cache/0000", 1_700_000_123, &[])
+            .expect("replacing an existing folder at the cap should remain legal");
+
+        let err = cache
+            .replace_folder("/cache/overflow", 1_700_000_000, &[])
+            .unwrap_err();
+        assert!(
+            err.to_string().contains(&format!(
+                "cached_folders table is at the {MAX_CACHED_FOLDERS}-row sanity cap"
+            )),
+            "expected replace_folder cap error, got: {err}"
         );
     }
 

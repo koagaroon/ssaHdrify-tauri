@@ -15,11 +15,15 @@
 //! 3. `refresh-fonts --no-cache <whatever>` errors out as
 //!    contradictory (locked design: refresh-fonts requires the cache
 //!    by definition).
-//! 4. `embed --cache-file <existing-cache> --no-cache` runs without
+//! 4. `refresh-fonts` exits non-zero when every requested source is
+//!    skipped, instead of printing a false cache-updated success line.
+//! 5. `refresh-fonts` refuses to create a cache with more folder rows
+//!    than the read-side sanity cap will accept.
+//! 6. `embed --cache-file <existing-cache> --no-cache` runs without
 //!    touching the cache file — file mtime stays unchanged across
 //!    the run. Pairs with #3 to lock in the opt-out semantic from
 //!    both sides.
-//! 5. `embed` against a cache whose folder mtime has drifted prints
+//! 7. `embed` against a cache whose folder mtime has drifted prints
 //!    the drift report on stderr and falls back to no-cache.
 //!
 //! Test doesn't use real font files — empty `.ttf` files in a temp
@@ -38,7 +42,7 @@ use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
-use app_lib::font_cache::FontCache;
+use app_lib::font_cache::{FontCache, MAX_CACHED_FOLDERS};
 
 const FIXTURE_ASS: &str = concat!(
     "[Script Info]\n",
@@ -214,6 +218,83 @@ fn refresh_fonts_with_no_cache_errors() {
     assert!(
         stderr.contains("--no-cache"),
         "stderr should mention --no-cache: {stderr}"
+    );
+
+    let _ = fs::remove_dir_all(work);
+}
+
+#[test]
+fn refresh_fonts_errors_when_every_source_is_skipped() {
+    let work = temp_dir("all_skipped_refresh");
+    let not_a_dir = work.join("not-a-dir.ttf");
+    fs::write(&not_a_dir, b"").expect("failed to write non-directory source");
+    let cache = cache_path(&work);
+
+    let output = run_cli(&[
+        "--cache-file",
+        cache.to_str().unwrap(),
+        "refresh-fonts",
+        "--font-dir",
+        not_a_dir.to_str().unwrap(),
+    ]);
+    assert!(
+        !output.status.success(),
+        "expected non-zero exit when every refresh source is skipped"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Not a directory"),
+        "stderr should show why the source was skipped: {stderr}"
+    );
+    assert!(
+        stderr.contains("could not index any source folders"),
+        "stderr should refuse the all-skipped refresh as a failed run: {stderr}"
+    );
+    assert!(
+        !stderr.contains("Cache updated"),
+        "all-skipped refresh must not print a success summary: {stderr}"
+    );
+
+    let _ = fs::remove_dir_all(work);
+}
+
+#[test]
+fn refresh_fonts_rejects_folder_count_over_cache_cap() {
+    let work = temp_dir("folder_cap_refresh");
+    let cache = cache_path(&work);
+    let mut args = vec![
+        "--cache-file".to_string(),
+        cache.to_string_lossy().into_owned(),
+        "refresh-fonts".to_string(),
+    ];
+
+    for i in 0..=MAX_CACHED_FOLDERS {
+        let dir = work.join(format!("fonts-{i:04}"));
+        fs::create_dir_all(&dir).expect("failed to create font dir");
+        args.push("--font-dir".to_string());
+        args.push(dir.to_string_lossy().into_owned());
+    }
+
+    let output = Command::new(cli_path())
+        .args(&args)
+        .output()
+        .expect("failed to spawn ssahdrify-cli");
+    assert!(
+        !output.status.success(),
+        "expected non-zero exit for too many cached source folders"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&format!(
+            "exceeding the {MAX_CACHED_FOLDERS}-folder cache sanity cap"
+        )),
+        "stderr should explain the cache folder cap: {stderr}"
+    );
+    assert!(
+        !stderr.contains("Cache updated"),
+        "over-cap refresh must not print a success summary: {stderr}"
     );
 
     let _ = fs::remove_dir_all(work);

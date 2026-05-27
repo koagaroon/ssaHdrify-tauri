@@ -1044,6 +1044,25 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
         None => app_lib::font_cache::default_cli_cache_path()?,
     };
 
+    let mut canonical_font_dirs: Vec<(PathBuf, String)> = Vec::with_capacity(args.font_dirs.len());
+    let mut final_folder_paths: HashSet<String> = HashSet::new();
+    for dir in &args.font_dirs {
+        let abs_dir = absolute_path(dir)?;
+        let canonical = abs_dir
+            .canonicalize()
+            .map_err(|e| format!("cannot canonicalize {}: {e}", abs_dir.display()))?;
+        let folder_path_str = display_path(&canonical);
+        final_folder_paths.insert(folder_path_str.clone());
+        canonical_font_dirs.push((canonical, folder_path_str));
+    }
+    if final_folder_paths.len() > app_lib::font_cache::MAX_CACHED_FOLDERS {
+        return Err(format!(
+            "refresh-fonts would track {} unique source folders, exceeding the {}-folder cache sanity cap. Reduce --font-dir inputs and rebuild a smaller cache.",
+            final_folder_paths.len(),
+            app_lib::font_cache::MAX_CACHED_FOLDERS
+        ));
+    }
+
     if !globals.quiet {
         // refresh-fonts stderr now flows through
         // `localize()` for the en/zh switch, matching every other CLI
@@ -1090,18 +1109,24 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
         Err(e) => return Err(format!("opening cache: {e}")),
     };
 
+    for folder in cache
+        .list_folders()
+        .map_err(|e| format!("reading existing cache folders: {e}"))?
+    {
+        final_folder_paths.insert(folder.folder_path);
+    }
+    if final_folder_paths.len() > app_lib::font_cache::MAX_CACHED_FOLDERS {
+        return Err(format!(
+            "refresh-fonts would track {} total cached folders, exceeding the {}-folder cache sanity cap. Delete the cache file or rebuild it with fewer --font-dir sources.",
+            final_folder_paths.len(),
+            app_lib::font_cache::MAX_CACHED_FOLDERS
+        ));
+    }
+
     let mut total_fonts: usize = 0;
     let mut total_folders: usize = 0;
 
-    for dir in &args.font_dirs {
-        // Resolve to absolute path (mirrors embed's behavior so cache
-        // entries are stable across invocations from different cwd's).
-        let abs_dir = absolute_path(dir)?;
-        let canonical = abs_dir
-            .canonicalize()
-            .map_err(|e| format!("cannot canonicalize {}: {e}", abs_dir.display()))?;
-        let folder_path_str = display_path(&canonical);
-
+    for (canonical, folder_path_str) in &canonical_font_dirs {
         // Stat the folder for mtime — drift detection on next run
         // compares this against live stat. None → skip the folder
         // (matches the GUI `stat_mtime` behavior): a transient stat
@@ -1194,6 +1219,14 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
         }
         total_fonts += font_count;
         total_folders += 1;
+    }
+
+    if total_folders == 0 {
+        let source_count = args.font_dirs.len();
+        return Err(format!(
+            "refresh-fonts could not index any source folders; all {source_count} --font-dir argument{} were skipped. Pass at least one readable font directory.",
+            s_if(source_count),
+        ));
     }
 
     if !globals.quiet {
