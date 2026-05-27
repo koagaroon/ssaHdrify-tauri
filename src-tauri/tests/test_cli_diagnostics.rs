@@ -193,6 +193,53 @@ fn diagnose_fonts_json_reports_successful_files_as_diagnosed() {
     let _ = fs::remove_dir_all(work);
 }
 
+#[cfg(target_os = "windows")]
+#[test]
+fn diagnose_fonts_does_not_validate_embed_output_path() {
+    if let Some(reason) = engine_bundle_missing() {
+        eprintln!("skipping: {reason}");
+        return;
+    }
+
+    let work = temp_dir("standalone-output-free");
+    let input = (1..220)
+        .map(|len| {
+            let stem = "a".repeat(len);
+            let input = work.join(format!("{stem}.ass"));
+            let output = work.join(format!("{stem}.embed.ass"));
+            (input, output)
+        })
+        .find(|(input, output)| {
+            input.to_string_lossy().encode_utf16().count() <= 259
+                && output.to_string_lossy().encode_utf16().count() > 259
+        })
+        .map(|(input, _)| input)
+        .expect("test temp path should leave room for a near-MAX_PATH fixture");
+    fs::write(&input, MISSING_FONT_ASS).expect("failed to write long-path ASS fixture");
+
+    let output = run_cli(&[
+        "--lang",
+        "en",
+        "--no-cache",
+        "diagnose-fonts",
+        "--no-system-fonts",
+        input.to_str().unwrap(),
+    ]);
+
+    assert!(
+        output.status.success(),
+        "diagnose-fonts should not fail just because the embed output path would be invalid: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("DefinitelyMissingSsaHdrifyFont") && stdout.contains("Missing"),
+        "standalone diagnostics should still inspect fonts: stdout={stdout}"
+    );
+
+    let _ = fs::remove_dir_all(work);
+}
+
 #[test]
 fn diagnose_fonts_does_not_mutate_cache_file() {
     if let Some(reason) = engine_bundle_missing() {

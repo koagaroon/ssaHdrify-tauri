@@ -3055,12 +3055,10 @@ fn diagnose_font_file(
         Err(error) => return (failed_report(&input_path, None, None, error), Vec::new()),
     };
 
-    let plan_request = engine::FontEmbedPlanRequest {
-        input_path: input.clone(),
+    let plan_request = engine::FontDiagnosticsPlanRequest {
         content: read_result.text,
-        output_template: args.output_template.clone(),
     };
-    let plan = match engine.plan_font_embed(&plan_request) {
+    let plan = match engine.plan_font_diagnostics(&plan_request) {
         Ok(result) => result,
         Err(error) => {
             return (

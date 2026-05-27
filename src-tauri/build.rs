@@ -72,6 +72,7 @@ fn missing_engine_stub() -> String {
         "resolveShiftOutputPath",
         "planRename",
         "planFontEmbed",
+        "planFontDiagnostics",
         "resolveEmbedOutputPath",
         "applyFontEmbed",
         "runChain",

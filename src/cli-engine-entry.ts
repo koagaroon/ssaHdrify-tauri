@@ -129,6 +129,10 @@ export interface FontEmbedPlanRequest {
   outputTemplate?: string;
 }
 
+export interface FontDiagnosticsPlanRequest {
+  content: string;
+}
+
 export interface FontEmbedPlanResult {
   outputPath: string;
   fonts: FontEmbedUsage[];
@@ -304,16 +308,31 @@ export function planFontEmbed(request: FontEmbedPlanRequest): FontEmbedPlanResul
 
   return {
     outputPath: resolveEmbedOutputPathInternal(request.inputPath, request.outputTemplate),
-    fonts: usages.map((usage) => ({
-      family: usage.key.family,
-      bold: usage.key.bold,
-      italic: usage.key.italic,
-      label: fontKeyLabel(usage.key),
-      fontName: buildFontFileName(usage.key),
-      glyphCount: usage.codepoints.size,
-      codepoints: Array.from(usage.codepoints),
-    })),
+    fonts: toFontEmbedUsages(usages),
   };
+}
+
+export function planFontDiagnostics(
+  request: FontDiagnosticsPlanRequest
+): Pick<FontEmbedPlanResult, "fonts"> {
+  assertAssShape(request.content);
+  const usages = collectFontsWithParser(request.content, parseAss);
+
+  return {
+    fonts: toFontEmbedUsages(usages),
+  };
+}
+
+function toFontEmbedUsages(usages: ReturnType<typeof collectFontsWithParser>): FontEmbedUsage[] {
+  return usages.map((usage) => ({
+    family: usage.key.family,
+    bold: usage.key.bold,
+    italic: usage.key.italic,
+    label: fontKeyLabel(usage.key),
+    fontName: buildFontFileName(usage.key),
+    glyphCount: usage.codepoints.size,
+    codepoints: Array.from(usage.codepoints),
+  }));
 }
 
 export function applyFontEmbed(request: FontEmbedApplyRequest): FontEmbedApplyResult {

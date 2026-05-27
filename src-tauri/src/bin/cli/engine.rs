@@ -127,6 +127,12 @@ pub struct FontEmbedPlanRequest {
     pub output_template: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FontDiagnosticsPlanRequest {
+    pub content: String,
+}
+
 /// Plan result from `planFontEmbed`. The JS side also returns
 /// `outputPath`, but the Rust shell now resolves that cheaply via
 /// `resolve_embed_output_path` before invoking `plan_font_embed`, so
@@ -280,10 +286,10 @@ impl CliEngine {
         // `convertHdr`. An earlier bare object-non-null check passed
         // an empty `globalThis.ssaHdrifyCliEngine = {}`; a
         // single-method check ruled out the empty-object case; the
-        // current full 9-method probe ensures a bundle that defines
+        // current full-method probe ensures a bundle that defines
         // `convertHdr` but is missing (e.g.) `runChain` due to a
         // build-script regression surfaces at engine startup instead
-        // of mid-run inside the chain loop. Cost: 8 extra `typeof`
+        // of mid-run inside the chain loop. Cost: a handful of `typeof`
         // checks at process start, each O(1) global property lookup.
         let probe = runtime
             .execute_script(
@@ -293,6 +299,7 @@ impl CliEngine {
                  typeof globalThis.ssaHdrifyCliEngine.convertHdr === 'function' && \
                  typeof globalThis.ssaHdrifyCliEngine.convertShift === 'function' && \
                  typeof globalThis.ssaHdrifyCliEngine.planFontEmbed === 'function' && \
+                 typeof globalThis.ssaHdrifyCliEngine.planFontDiagnostics === 'function' && \
                  typeof globalThis.ssaHdrifyCliEngine.applyFontEmbed === 'function' && \
                  typeof globalThis.ssaHdrifyCliEngine.planRename === 'function' && \
                  typeof globalThis.ssaHdrifyCliEngine.runChain === 'function' && \
@@ -396,6 +403,19 @@ impl CliEngine {
             "planFontEmbed",
             "ssahdrify-cli-plan-font-embed.js",
             "Font Embed",
+            "plan",
+            request,
+        )
+    }
+
+    pub fn plan_font_diagnostics(
+        &mut self,
+        request: &FontDiagnosticsPlanRequest,
+    ) -> Result<FontEmbedPlanResult, String> {
+        self.call_engine(
+            "planFontDiagnostics",
+            "ssahdrify-cli-plan-font-diagnostics.js",
+            "Font Diagnostics",
             "plan",
             request,
         )
