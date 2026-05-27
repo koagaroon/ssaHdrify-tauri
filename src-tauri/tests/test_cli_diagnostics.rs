@@ -154,8 +154,45 @@ fn diagnose_fonts_reports_missing_without_writing_output() {
         "standalone diagnostics should name the missing font: stdout={stdout}"
     );
     assert!(
+        stdout.contains("next actions:")
+            && stdout.contains("pass `--font-dir <DIR>` or `--font-file <FILE>`"),
+        "standalone diagnostics should suggest a concrete font-source next step: stdout={stdout}"
+    );
+    assert!(
         !work.join("missing-font.embed.ass").exists(),
         "diagnose-fonts must not write subtitle outputs"
+    );
+
+    let _ = fs::remove_dir_all(work);
+}
+
+#[test]
+fn diagnose_fonts_next_actions_are_localized() {
+    if let Some(reason) = engine_bundle_missing() {
+        eprintln!("skipping: {reason}");
+        return;
+    }
+
+    let work = temp_dir("standalone-next-actions-zh");
+    let input = write_missing_font_ass(&work);
+    let output = run_cli(&[
+        "--lang",
+        "zh",
+        "--no-cache",
+        "diagnose-fonts",
+        "--no-system-fonts",
+        input.to_str().unwrap(),
+    ]);
+
+    assert!(
+        output.status.success(),
+        "diagnose-fonts should complete for a readable ASS: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("下一步建议：") && stdout.contains("请为字体包传入"),
+        "next-action guidance should be localized under --lang zh: stdout={stdout}"
     );
 
     let _ = fs::remove_dir_all(work);
@@ -189,6 +226,10 @@ fn diagnose_fonts_json_reports_successful_files_as_diagnosed() {
         serde_json::from_slice(&output.stdout).expect("stdout should be JSON");
     assert_eq!(value["files"][0]["status"], "diagnosed");
     assert_eq!(value["files"][0]["output"], serde_json::Value::Null);
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains("next actions"),
+        "human next-action prose must not be mixed into JSON stdout"
+    );
 
     let _ = fs::remove_dir_all(work);
 }
@@ -384,6 +425,42 @@ fn non_font_command_attaches_compact_diagnostics() {
     assert!(
         stderr.contains("Diagnostics:"),
         "attached diagnostics should appear after the command result: stderr={stderr}"
+    );
+
+    let _ = fs::remove_dir_all(work);
+}
+
+#[test]
+fn embed_diagnose_failed_missing_font_suggests_full_details() {
+    if let Some(reason) = engine_bundle_missing() {
+        eprintln!("skipping: {reason}");
+        return;
+    }
+
+    let work = temp_dir("embed-fail-next-actions");
+    let input = write_missing_font_ass(&work);
+    let output = run_cli(&[
+        "--lang",
+        "en",
+        "--no-cache",
+        "embed",
+        "--no-system-fonts",
+        "--on-missing",
+        "fail",
+        "--diagnose",
+        input.to_str().unwrap(),
+    ]);
+
+    assert!(
+        !output.status.success(),
+        "embed --on-missing fail should fail for an unresolved font"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("next actions:")
+            && stderr.contains("Rerun with `--diagnose=full`")
+            && stderr.contains("pass `--font-dir <DIR>` or `--font-file <FILE>`"),
+        "compact diagnostics should give actionable guidance even without warnings: stderr={stderr}"
     );
 
     let _ = fs::remove_dir_all(work);

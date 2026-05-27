@@ -3128,6 +3128,21 @@ fn emit_standalone_font_diagnostics(globals: &GlobalOptions, diagnostics: &Comma
         }
     }
 
+    let actions = diagnostic_next_actions(globals, diagnostics, false);
+    if !actions.is_empty() {
+        println!(
+            "{}",
+            localize(
+                globals,
+                "next actions:".to_string(),
+                "下一步建议：".to_string()
+            )
+        );
+        for action in actions {
+            println!("  - {action}");
+        }
+    }
+
     for file in &diagnostics.files {
         println!(
             "file: {} [{:?}]",
@@ -4880,6 +4895,158 @@ fn warning_counts(report: &CommandReport) -> (usize, usize, usize) {
     (files, warnings, written_files)
 }
 
+fn unresolved_font_count(diagnostics: &CommandDiagnostics) -> usize {
+    diagnostics
+        .fonts
+        .iter()
+        .filter(|font| font.result != FontResolutionResult::Resolved)
+        .count()
+}
+
+fn diagnostic_next_actions(
+    globals: &GlobalOptions,
+    diagnostics: &CommandDiagnostics,
+    include_full_hint: bool,
+) -> Vec<String> {
+    let unresolved = unresolved_font_count(diagnostics);
+    let has_failed_files = diagnostics
+        .files
+        .iter()
+        .any(|file| file.status == FileStatus::Failed);
+    let has_unresolved = unresolved > 0;
+    let has_font_errors = diagnostics
+        .fonts
+        .iter()
+        .any(|font| font.result == FontResolutionResult::Error);
+    let has_local_disabled = diagnostics.fonts.iter().any(|font| {
+        font.result != FontResolutionResult::Resolved
+            && font.tiers.iter().any(|tier| {
+                matches!(tier.tier, FontResolveTier::Local)
+                    && matches!(tier.status, FontTierStatus::Disabled)
+            })
+    });
+    let has_system_disabled = diagnostics.fonts.iter().any(|font| {
+        font.result != FontResolutionResult::Resolved
+            && font.tiers.iter().any(|tier| {
+                matches!(tier.tier, FontResolveTier::System)
+                    && matches!(tier.status, FontTierStatus::Disabled)
+            })
+    });
+    let has_cache_miss_or_unavailable = diagnostics.fonts.iter().any(|font| {
+        font.result != FontResolutionResult::Resolved
+            && font.tiers.iter().any(|tier| {
+                matches!(tier.tier, FontResolveTier::Cache)
+                    && matches!(
+                        tier.status,
+                        FontTierStatus::Miss | FontTierStatus::Unavailable
+                    )
+            })
+    });
+
+    let mut seen = HashSet::new();
+    let mut actions = Vec::new();
+    let mut push_action = |code: &'static str, en: &str, zh: &str| {
+        if seen.insert(code) {
+            actions.push(localize(globals, en.to_string(), zh.to_string()));
+        }
+    };
+
+    if let Some(cache) = &diagnostics.cache {
+        match cache.status {
+            CacheDiagnosticStatus::Missing => {
+                push_action(
+                    "cache-refresh",
+                    "Build a font cache with `ssahdrify-cli refresh-fonts --font-dir <DIR>...`.",
+                    "用 `ssahdrify-cli refresh-fonts --font-dir <DIR>...` 建立字体缓存。",
+                );
+            }
+            CacheDiagnosticStatus::Drift => {
+                push_action(
+                    "cache-refresh",
+                    "Run `ssahdrify-cli refresh-fonts --font-dir <DIR>...` after changing a cached font folder.",
+                    "字体目录变化后，运行 `ssahdrify-cli refresh-fonts --font-dir <DIR>...` 刷新缓存。",
+                );
+            }
+            CacheDiagnosticStatus::SchemaMismatch => {
+                push_action(
+                    "cache-rebuild",
+                    "Rebuild the font cache for this release: delete the old cache file, then run `refresh-fonts` again.",
+                    "为当前版本重建字体缓存：删除旧缓存文件，然后重新运行 `refresh-fonts`。",
+                );
+            }
+            CacheDiagnosticStatus::OpenError
+            | CacheDiagnosticStatus::ValidationError
+            | CacheDiagnosticStatus::PathError => {
+                push_action(
+                    "cache-check",
+                    "Check `--cache-file` and file permissions, or use `--no-cache` for a one-off run.",
+                    "检查 `--cache-file` 和文件权限；临时处理可改用 `--no-cache`。",
+                );
+            }
+            CacheDiagnosticStatus::Disabled if has_unresolved => {
+                push_action(
+                    "cache-disabled",
+                    "Remove `--no-cache` if you want the persistent font cache to help resolve missing fonts.",
+                    "如果想让持久化字体缓存参与解析缺失字体，请移除 `--no-cache`。",
+                );
+            }
+            CacheDiagnosticStatus::DryRun
+            | CacheDiagnosticStatus::Usable
+            | CacheDiagnosticStatus::Disabled => {}
+        }
+    }
+
+    if has_unresolved && (has_local_disabled || has_cache_miss_or_unavailable) {
+        push_action(
+            "font-source",
+            "If you expected these fonts to embed, pass `--font-dir <DIR>` or `--font-file <FILE>` for the font pack.",
+            "如果你希望这些字体被嵌入，请为字体包传入 `--font-dir <DIR>` 或 `--font-file <FILE>`。",
+        );
+    }
+
+    if has_system_disabled {
+        push_action(
+            "system-disabled",
+            "Remove `--no-system-fonts` if installed system fonts are acceptable fallback candidates.",
+            "如果可以使用已安装的系统字体作为兜底候选，请移除 `--no-system-fonts`。",
+        );
+    }
+
+    if has_unresolved {
+        push_action(
+            "font-name",
+            "If the font file is present but still unresolved, check the ASS Style `Fontname` against the font's internal family or full-face name.",
+            "如果字体文件存在但仍未解析，请核对 ASS Style 的 `Fontname` 是否匹配字体内部 family 或 full-face 名称。",
+        );
+    }
+
+    if has_font_errors {
+        push_action(
+            "font-error",
+            "Inspect the per-font tier error details; cache/provenance errors usually need a cache rebuild, while parse/subset errors usually point to a bad font file.",
+            "查看逐字体层级错误；缓存/来源错误通常需要重建缓存，解析/子集化错误通常指向损坏或不兼容的字体文件。",
+        );
+    }
+
+    if include_full_hint && (diagnostics.warning_count > 0 || has_unresolved || has_failed_files) {
+        push_action(
+            "diagnose-full",
+            "Rerun with `--diagnose=full` for per-file and per-font tier details.",
+            "重新运行 `--diagnose=full` 查看逐文件和逐字体层级细节。",
+        );
+    }
+
+    if has_unresolved || (diagnostics.warning_count > 0 && !diagnostics.fonts.is_empty()) {
+        push_action(
+            "strict-embed",
+            "For packaging runs that must embed every font, use `embed --on-missing fail --fail-fast --diagnose=full`.",
+            "如果打包流程要求所有字体都必须嵌入，请使用 `embed --on-missing fail --fail-fast --diagnose=full`。",
+        );
+    }
+
+    actions
+}
+
 fn emit_attached_diagnostics(
     globals: &GlobalOptions,
     diagnostics: &CommandDiagnostics,
@@ -4925,18 +5092,22 @@ fn emit_attached_diagnostics(
         );
     }
 
-    if mode == DiagnoseMode::Summary {
-        if diagnostics.warning_count > 0 {
-            eprintln!(
-                "{}",
-                localize(
-                    globals,
-                    "  rerun with --diagnose=full for per-file and per-font tier details"
-                        .to_string(),
-                    "  重新运行 --diagnose=full 可查看逐文件和逐字体层级细节".to_string(),
-                )
-            );
+    let actions = diagnostic_next_actions(globals, diagnostics, mode == DiagnoseMode::Summary);
+    if !actions.is_empty() {
+        eprintln!(
+            "{}",
+            localize(
+                globals,
+                "  next actions:".to_string(),
+                "  下一步建议：".to_string()
+            )
+        );
+        for action in actions {
+            eprintln!("    - {action}");
         }
+    }
+
+    if mode == DiagnoseMode::Summary {
         return;
     }
 
@@ -5762,11 +5933,12 @@ fn parse_timestamp_part(part: &str, label: &str) -> Result<i64, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_locale, copy_file_output, create_cli_font_db_dir, display_path,
-        duplicate_rename_output_keys, engine, group_resolved_fonts_by_face, normalize_output_key,
-        parse_duration_ms, parse_timestamp_ms, predict_chain_output_path, relocate_output_path,
-        sanitize_for_display, substitute_template, write_output, Cli, Command, DiagnoseMode,
-        GlobalOptions, OutputLang, ResolvedEmbedFont, TempFontDbDir, MAX_RESOLVED_FONT_CODEPOINTS,
+        classify_locale, copy_file_output, create_cli_font_db_dir, diagnostic_next_actions,
+        display_path, duplicate_rename_output_keys, engine, group_resolved_fonts_by_face,
+        normalize_output_key, parse_duration_ms, parse_timestamp_ms, predict_chain_output_path,
+        relocate_output_path, sanitize_for_display, substitute_template, write_output, Cli,
+        Command, CommandDiagnostics, DiagnoseMode, FileDiagnostic, FileStatus, GlobalOptions,
+        OutputLang, ResolvedEmbedFont, TempFontDbDir, MAX_RESOLVED_FONT_CODEPOINTS,
         MAX_SHIFT_OFFSET_MS, MAX_SUBSET_CODEPOINTS_FOR_DEDUP,
     };
     // Import the canonical filename literal directly from app_lib so the
@@ -5917,6 +6089,42 @@ mod tests {
             cache_file: None,
             fail_fast: false,
         }
+    }
+
+    #[test]
+    fn non_font_warnings_do_not_suggest_strict_embed_policy() {
+        let globals = test_globals();
+        let diagnostics = CommandDiagnostics {
+            mode: DiagnoseMode::Summary,
+            files_with_warnings: 1,
+            warning_count: 1,
+            notes: Vec::new(),
+            files: vec![FileDiagnostic {
+                input: "input.ass".to_string(),
+                output: None,
+                encoding: None,
+                status: FileStatus::Written,
+                error: None,
+                warnings: vec!["non-font warning".to_string()],
+            }],
+            cache: None,
+            fonts: Vec::new(),
+        };
+
+        let actions = diagnostic_next_actions(&globals, &diagnostics, true);
+
+        assert!(
+            actions
+                .iter()
+                .any(|action| action.contains("--diagnose=full")),
+            "warning diagnostics should still point users to full detail: {actions:?}"
+        );
+        assert!(
+            actions
+                .iter()
+                .all(|action| !action.contains("embed --on-missing")),
+            "non-font warnings should not suggest strict font-embedding policy: {actions:?}"
+        );
     }
 
     #[test]
