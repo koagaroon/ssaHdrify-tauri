@@ -207,16 +207,34 @@ const KEY_KIND_FACE_ALIAS: i32 = 1;
 
 /// DoS-class sanity cap on the number of `cached_folders` rows
 /// `list_folders` / `diff_against` will return. A hostile cache file
-/// (P1b via `--cache-file`) populated with thousands of fabricated
+/// (P1b via `--cache-file`) populated with hundreds of fabricated
 /// folder rows — especially UNC paths to dead servers — would otherwise
 /// spin every detect call through a per-row stat loop, bounded only by
 /// per-stat OS timeout. The cap fires inside `list_folders` and refuses
 /// to return the result; downstream `diff_against` /
 /// `detect_font_cache_drift` surface the error and the user is pointed
-/// at rebuilding the cache. Realistic working caches hold dozens to
-/// hundreds of folders, so 4096 is intentionally generous without being
-/// a practical hang budget.
-pub const MAX_CACHED_FOLDERS: usize = 4096;
+/// at rebuilding the cache. Realistic working caches hold a handful to
+/// dozens of folders, so 256 stays generous without being a practical
+/// stat-storm budget.
+pub const MAX_CACHED_FOLDERS: usize = 256;
+
+fn reject_unsupported_cached_folder_path(path: &str) -> Result<(), CacheError> {
+    let normalized = path.replace('/', "\\").to_ascii_lowercase();
+    let bytes = normalized.as_bytes();
+    let is_extended_local_drive = normalized.starts_with("\\\\?\\")
+        && bytes.get(4).is_some_and(u8::is_ascii_alphabetic)
+        && bytes.get(5) == Some(&b':')
+        && bytes.get(6) == Some(&b'\\');
+    let uses_unc_or_device_namespace = normalized.starts_with("\\\\") && !is_extended_local_drive;
+    if uses_unc_or_device_namespace {
+        return Err(CacheError::Io(
+            "cached_folders contains a network or device-namespace folder path; \
+             rebuild the cache from local font folders or run with --no-cache"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
 
 /// Normalize a family-name string into the lookup key used by
 /// `cached_family_keys.family_name_key`: NFC-normalize then full
@@ -928,12 +946,14 @@ impl FontCache {
             .map_err(|e| CacheError::Io(format!("execute list_folders: {e}")))?;
         let mut out = Vec::new();
         for row in rows {
-            out.push(row.map_err(|e| CacheError::Io(format!("read row: {e}")))?);
-            // DoS-class sanity cap: a hostile cache file with millions
-            // of fabricated folder rows would otherwise drive every
-            // detect call through a per-stat loop bounded only by OS
-            // timeout. Refuse upfront and let the caller surface a
-            // rebuild prompt.
+            let folder = row.map_err(|e| CacheError::Io(format!("read row: {e}")))?;
+            reject_unsupported_cached_folder_path(&folder.folder_path)?;
+            out.push(folder);
+            // DoS-class sanity cap: a hostile cache file with many
+            // fabricated folder rows would otherwise drive every
+            // drift-detect call through a per-stat loop bounded only
+            // by OS timeout. Refuse upfront and let the caller surface
+            // a rebuild prompt.
             if out.len() > MAX_CACHED_FOLDERS {
                 return Err(CacheError::Io(format!(
                     "cached_folders table exceeds {MAX_CACHED_FOLDERS}-row sanity cap; \
@@ -1546,6 +1566,34 @@ mod tests {
         let folders = cache.list_folders().expect("list");
         let paths: Vec<&str> = folders.iter().map(|f| f.folder_path.as_str()).collect();
         assert_eq!(paths, vec!["/test/aaa", "/test/mmm", "/test/zzz"]);
+    }
+
+    #[test]
+    fn list_folders_accepts_local_extended_windows_paths() {
+        let (_guard, path) = temp_cache_path();
+        let mut cache = FontCache::open_or_create(&path).expect("open");
+        cache
+            .replace_folder(r"\\?\C:\Fonts\Anime", 1_700_000_000, &[])
+            .unwrap();
+
+        let folders = cache.list_folders().expect("list");
+        assert_eq!(folders[0].folder_path, r"\\?\C:\Fonts\Anime");
+    }
+
+    #[test]
+    fn list_folders_rejects_network_namespace_rows_before_stat_callers() {
+        let (_guard, path) = temp_cache_path();
+        let mut cache = FontCache::open_or_create(&path).expect("open");
+        cache
+            .replace_folder(r"\\?\UNC\dead-host\Fonts", 1_700_000_000, &[])
+            .unwrap();
+
+        let err = cache.list_folders().unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("network or device-namespace folder path"),
+            "expected network/device namespace rejection, got: {err}"
+        );
     }
 
     #[test]

@@ -141,15 +141,17 @@ Dialogue: 0,0:00:00.00,0:00:01.00,Default,Hello
     ).toThrow(/File too large: >501024 lines/);
   });
 
-  it("rejects Unicode-line-separator-heavy ASS before [Fonts] rewriting", () => {
-    const lineHeavyAss = `[Script Info]\n${"x\u2028".repeat(501_100)}`;
+  it("rejects separator-only ASS over the line cap before [Fonts] rewriting", () => {
+    for (const separator of ["\n", "\u2028", "\u2029"]) {
+      const lineHeavyAss = `[Script Info]\n${separator.repeat(501_100)}`;
 
-    expect(() =>
-      applyFontEmbed({
-        content: lineHeavyAss,
-        fonts: [{ fontName: "arial.ttf", data: [0, 1, 2] }],
-      })
-    ).toThrow(/File too large: >501024 lines/);
+      expect(() =>
+        applyFontEmbed({
+          content: lineHeavyAss,
+          fonts: [{ fontName: "arial.ttf", data: [0, 1, 2] }],
+        })
+      ).toThrow(/File too large: >501024 lines/);
+    }
   });
 
   it("applies uuencoded font entries before the events section", () => {

@@ -10,16 +10,16 @@ import { MAX_PARSED_ENTRIES } from "../../lib/subtitle-parser";
 ///
 /// The line-count probe is the paired Pattern 2 fix. Without it, the
 /// byte cap would stand alone: a 50 MB pure-newline blob passes the
-/// 100 MB byte gate but then `.split(/\r?\n/)` at line ~660 below
+/// 100 MB byte gate but then `.split(/\r?\n/)` in the rewrite helper
 /// allocates ~50M empty strings (~2 GB V8 heap) BEFORE any downstream
-/// throw can fire. Mirrors ass-processor.ts:282-306's paired cap;
+/// throw can fire. Mirrors `processAssContent`'s paired cap;
 /// `MAX_INSERT_LINES` derived from the same MAX_PARSED_ENTRIES +
 /// header-budget basis so an SRT→ASS upcast that parseSrt accepted
 /// can still re-pass through embed.
 const MAX_INSERT_FONTS_SECTION_CONTENT = 100_000_000;
 const INSERT_FONTS_SECTION_HEADER_BUDGET = 1024;
 const MAX_INSERT_LINES = MAX_PARSED_ENTRIES + INSERT_FONTS_SECTION_HEADER_BUDGET;
-const LINE_PROBE_BYTE_GATE = 1_000_000;
+const LINE_PROBE_LENGTH_GATE = MAX_INSERT_LINES;
 
 // Module-scope to match the project convention (sibling
 // SRT_COLOR_*_RE / WHITESPACE_RE). Anchored at column 0 and trailing
@@ -36,13 +36,13 @@ export function assertAssShape(content: string): void {
     throw new Error(`File too large: ${(content.length / 1_000_000).toFixed(1)} MB (max 100 MB)`);
   }
   // Pre-split line-count probe (mirror of ass-processor.ts:286-306).
-  // Gated on content.length to keep the
-  // small-file fast path zero-overhead. The 1 MB gate is well above
-  // realistic small subtitles (5-200 KB) and well below the attack
-  // threshold (tens of MB). Count every separator that
+  // Gated on content.length to keep the small-file fast path
+  // zero-overhead. An input shorter than MAX_INSERT_LINES cannot
+  // exceed MAX_INSERT_LINES split lines because each line needs at
+  // least one separator code point. Count every separator that
   // insertFontsSection normalizes into an ASCII newline before
   // splitting, otherwise U+2028 / U+2029 can bypass the guard.
-  if (content.length > LINE_PROBE_BYTE_GATE) {
+  if (content.length >= LINE_PROBE_LENGTH_GATE) {
     let nl = 1;
     for (let i = 0; i < content.length; i++) {
       const code = content.charCodeAt(i);
