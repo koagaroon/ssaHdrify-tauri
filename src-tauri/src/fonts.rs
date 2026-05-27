@@ -303,13 +303,16 @@ fn init_user_font_schema(conn: &Connection) -> Result<(), String> {
             UNIQUE(path, face_index)
         );
         CREATE TABLE IF NOT EXISTS font_family_keys (
-            key TEXT NOT NULL,
+            family_name_key TEXT NOT NULL,
+            bold INTEGER NOT NULL,
+            italic INTEGER NOT NULL,
+            key_kind INTEGER NOT NULL CHECK(key_kind IN (0, 1)),
             face_id INTEGER NOT NULL,
             source_order INTEGER NOT NULL,
             FOREIGN KEY(face_id) REFERENCES font_faces(face_id) ON DELETE CASCADE
         );
         CREATE INDEX IF NOT EXISTS idx_font_family_lookup
-            ON font_family_keys(key, source_order DESC, face_id DESC);
+            ON font_family_keys(family_name_key, key_kind, bold, italic, source_order DESC, face_id DESC);
         CREATE INDEX IF NOT EXISTS idx_font_family_face
             ON font_family_keys(face_id);
         CREATE INDEX IF NOT EXISTS idx_font_faces_source
@@ -762,17 +765,6 @@ pub fn entries_to_cache_metadata(
                     italic: e.italic,
                 });
             }
-            for face_name in &e.face_names {
-                for bold in [false, true] {
-                    for italic in [false, true] {
-                        family_keys.push(crate::font_cache::FamilyKey {
-                            family_name: face_name.clone(),
-                            bold,
-                            italic,
-                        });
-                    }
-                }
-            }
 
             crate::font_cache::FontMetadata {
                 file_path: e.path.clone(),
@@ -780,6 +772,7 @@ pub fn entries_to_cache_metadata(
                 file_mtime: mtime,
                 face_index: i32::try_from(e.index).unwrap_or(i32::MAX),
                 family_keys,
+                face_name_aliases: e.face_names.clone(),
             }
         })
         .collect()
@@ -794,6 +787,7 @@ pub fn entries_to_cache_metadata(
 // to `pub(crate)` would invite cross-module callers to skip the
 // bold/italic composition — those callers should use the underlying
 // `family_lookup_key` directly. Kept private as the explicit signal.
+#[cfg(test)]
 fn user_font_key(family: &str, bold: bool, italic: bool) -> String {
     // NFC-normalize before lowercase so HFS+ NFD-form filenames and NFC-form
     // font internal names key identically; otherwise precomposed `é` (U+00E9)
@@ -811,6 +805,9 @@ fn user_font_key(family: &str, bold: bool, italic: bool) -> String {
         if italic { "1" } else { "0" }
     )
 }
+
+const USER_FONT_KEY_KIND_FAMILY: i32 = 0;
+const USER_FONT_KEY_KIND_FACE_ALIAS: i32 = 1;
 
 fn validate_font_source_id(source_id: &str) -> Result<(), String> {
     // `len()` is byte count (O(1)). The frontend always mints source
@@ -896,22 +893,24 @@ fn import_user_font_batch_tx(
         .map_err(|e| db_error("face insert prepare failed", e))?;
     // WHY plain INSERT (not OR IGNORE) for the family_keys table:
     // the `font_family_keys` schema in `init_user_font_db` has NO
-    // UNIQUE constraint on (key, face_id, source_order), so there is
-    // nothing for an IGNORE clause to suppress. A font with multiple
-    // localized family names legitimately produces multiple rows
-    // sharing the same `face_id` — that's the normal case. Any
-    // genuine SQLite error from this INSERT (disk full, table
-    // dropped mid-tx) is a real failure we want to surface via
-    // db_error, not silently swallow. `insert_face` above uses
-    // INSERT OR IGNORE because font_faces DOES have a UNIQUE
-    // constraint on (path, face_index) for cross-source dedup —
-    // the IGNORE there short-circuits the duplicate-source case,
-    // which is intentional. The asymmetry is by design.
+    // UNIQUE constraint on (family_name_key, key_kind, face_id,
+    // source_order), so there is nothing for an IGNORE clause to
+    // suppress. A font with multiple localized family names
+    // legitimately produces multiple rows sharing the same `face_id`
+    // — that's the normal case. Any genuine SQLite error from this
+    // INSERT (disk full, table dropped mid-tx) is a real failure we
+    // want to surface via db_error, not silently swallow.
+    // `insert_face` above uses INSERT OR IGNORE because font_faces
+    // DOES have a UNIQUE constraint on (path, face_index) for
+    // cross-source dedup — the IGNORE there short-circuits the
+    // duplicate-source case, which is intentional. The asymmetry is
+    // by design.
     let mut insert_key = tx
         .prepare(
             "
-            INSERT INTO font_family_keys(key, face_id, source_order)
-            VALUES (?1, ?2, ?3)
+            INSERT INTO font_family_keys(
+                family_name_key, bold, italic, key_kind, face_id, source_order
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
             ",
         )
         .map_err(|e| db_error("family-key insert prepare failed", e))?;
@@ -952,24 +951,26 @@ fn import_user_font_batch_tx(
         for family in entry.families {
             insert_key
                 .execute(params![
-                    user_font_key(&family, entry.bold, entry.italic),
+                    crate::font_cache::family_lookup_key(&family),
+                    i32::from(entry.bold),
+                    i32::from(entry.italic),
+                    USER_FONT_KEY_KIND_FAMILY,
                     face_id,
                     source_order
                 ])
                 .map_err(|e| db_error("family-key insert failed", e))?;
         }
         for face_name in entry.face_names {
-            for bold in [false, true] {
-                for italic in [false, true] {
-                    insert_key
-                        .execute(params![
-                            user_font_key(&face_name, bold, italic),
-                            face_id,
-                            source_order
-                        ])
-                        .map_err(|e| db_error("face-name key insert failed", e))?;
-                }
-            }
+            insert_key
+                .execute(params![
+                    crate::font_cache::family_lookup_key(&face_name),
+                    0,
+                    0,
+                    USER_FONT_KEY_KIND_FACE_ALIAS,
+                    face_id,
+                    source_order
+                ])
+                .map_err(|e| db_error("face-name key insert failed", e))?;
         }
     }
 
@@ -1109,7 +1110,10 @@ pub fn find_system_font(
 /// times 256 codepoints times 4 bytes at roughly 3.2 GB of string data
 /// accumulated during cache-write windows; lowering this to 8 cuts the
 /// worst case to ~800 MB and combines with MAX_CACHE_POPULATE_FACES for
-/// ~160 MB peak in practice.
+/// ~160 MB peak in practice. Full-face aliases have the same per-face
+/// cap but are stored as one style-insensitive key each in SQLite, so
+/// the expanded persistent/session DB ceiling is 16 lookup rows per face
+/// (8 family rows + 8 alias rows), not 8 + (8 × 4 style rows).
 const MAX_FAMILY_VARIANTS_PER_FACE: usize = 8;
 const MAX_FACE_NAME_VARIANTS_PER_FACE: usize = 8;
 
@@ -2497,18 +2501,26 @@ pub fn resolve_user_font(
     // (3 bytes/char) fit the 256-codepoint intent.
     crate::util::validate_font_family(&family)?;
 
-    let key = user_font_key(&family, bold, italic);
+    let family_name_key = crate::font_cache::family_lookup_key(&family);
     let conn = open_user_font_db()?;
     conn.query_row(
         "
         SELECT f.path, f.face_index
         FROM font_family_keys k
         JOIN font_faces f ON f.face_id = k.face_id
-        WHERE k.key = ?1
-        ORDER BY k.source_order DESC, k.face_id DESC
+        WHERE k.family_name_key = ?1
+          AND ((k.key_kind = ?2 AND k.bold = ?3 AND k.italic = ?4)
+               OR (k.key_kind = ?5 AND k.bold = 0 AND k.italic = 0))
+        ORDER BY k.key_kind, k.source_order DESC, k.face_id DESC
         LIMIT 1
         ",
-        params![key],
+        params![
+            family_name_key,
+            USER_FONT_KEY_KIND_FAMILY,
+            i32::from(bold),
+            i32::from(italic),
+            USER_FONT_KEY_KIND_FACE_ALIAS
+        ],
         |row| {
             Ok(FontLookupResult {
                 path: row.get(0)?,
@@ -3624,9 +3636,9 @@ mod tests {
     /// localized name-table entries, which the repo doesn't ship (CJK
     /// font licensing — see `tests/test_subset.rs` for the same
     /// constraint). Pin the constant value so an accidental raise is
-    /// noticed; the math behind the cap (8 variants × bounded name
-    /// length × MAX_CACHE_POPULATE_FACES = OOM-on-crafted-pack ceiling)
-    /// is in the constant's doc comment above.
+    /// noticed; the math behind the cap (bounded names × persisted key
+    /// rows × MAX_CACHE_POPULATE_FACES = OOM-on-crafted-pack ceiling) is
+    /// in the constant's doc comment above.
     #[test]
     fn max_family_variants_per_face_cap_value() {
         assert_eq!(MAX_FAMILY_VARIANTS_PER_FACE, 8);
@@ -4062,8 +4074,13 @@ mod tests {
 
         assert!(keys.contains(&user_font_key("Dream Han Serif SC", true, false)));
         assert!(!keys.contains(&user_font_key("Dream Han Serif SC", false, false)));
-        assert!(keys.contains(&user_font_key("Dream Han Serif SC W22", false, false)));
-        assert!(keys.contains(&user_font_key("Dream Han Serif SC W22", true, true)));
+        assert_eq!(
+            metadata[0].face_name_aliases,
+            vec![
+                "Dream Han Serif SC W22".to_string(),
+                "DreamHanSerifSC-W22".to_string()
+            ]
+        );
 
         commit_entries("source-dream-han", vec![entry]);
 
@@ -4090,6 +4107,43 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn full_face_aliases_do_not_override_exact_family_matches() {
+        let _guard = SCAN_TEST_LOCK.lock().unwrap();
+        init_test_user_font_db("face-name-priority");
+        let exact = LocalFontEntry {
+            path: "C:\\Fonts\\ExactSharedSans-Regular.otf".to_string(),
+            index: 0,
+            families: vec!["Shared Sans".to_string()],
+            face_names: Vec::new(),
+            bold: false,
+            italic: false,
+            size_bytes: 1_000_000,
+        };
+        let alias = LocalFontEntry {
+            path: "C:\\Fonts\\AliasFace-Bold.otf".to_string(),
+            index: 0,
+            families: vec!["Other Sans".to_string()],
+            face_names: vec!["Shared Sans".to_string()],
+            bold: true,
+            italic: false,
+            size_bytes: 1_000_000,
+        };
+
+        commit_entries("source-exact", vec![exact]);
+        commit_entries("source-alias-newer", vec![alias]);
+
+        let exact_result = resolve_user_font("Shared Sans".to_string(), false, false)
+            .unwrap()
+            .expect("exact family should resolve");
+        assert_eq!(exact_result.path, "C:\\Fonts\\ExactSharedSans-Regular.otf");
+
+        let alias_result = resolve_user_font("Shared Sans".to_string(), true, true)
+            .unwrap()
+            .expect("face alias should resolve when exact style is absent");
+        assert_eq!(alias_result.path, "C:\\Fonts\\AliasFace-Bold.otf");
     }
 
     // ── cache provenance gate pins ──

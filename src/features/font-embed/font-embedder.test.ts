@@ -314,6 +314,35 @@ Dialogue: 0,0:00:05.00,0:00:10.00,Default,{\\fn青鸟华光简粗黑}horizontal
     );
     expect(map.get(userFontKey("Dream Han Serif SC", false, false))).toBeUndefined();
   });
+
+  it("keeps exact family matches ahead of full-face aliases from other faces", () => {
+    const exactFamily: LocalFontEntry = {
+      path: "D:/Fonts/ExactSharedSans-Regular.otf",
+      index: 0,
+      families: ["Shared Sans"],
+      bold: false,
+      italic: false,
+      sizeBytes: 1_000_000,
+    };
+    const aliasFace: LocalFontEntry = {
+      path: "D:/Fonts/AliasFace-Bold.otf",
+      index: 0,
+      families: ["Other Sans"],
+      faceNames: ["Shared Sans"],
+      bold: true,
+      italic: false,
+      sizeBytes: 1_000_000,
+    };
+
+    const map = buildUserFontMap([exactFamily, aliasFace]);
+
+    expect(map.get(userFontKey("Shared Sans", false, false))?.path).toBe(
+      "D:/Fonts/ExactSharedSans-Regular.otf"
+    );
+    expect(map.get(userFontKey("Shared Sans", true, true))?.path).toBe(
+      "D:/Fonts/AliasFace-Bold.otf"
+    );
+  });
 });
 
 describe("analyzeFonts — useRustUserFonts production path", () => {

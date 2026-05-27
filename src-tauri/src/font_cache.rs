@@ -15,9 +15,10 @@
 //! See `docs/architecture/ssahdrify_cli_design.md` § "v1.4.1 stable
 //! 后续用户反馈" #5 for the full design lock.
 //!
-//! This file owns the Tauri-free cache module: schema (v2 with NFC +
-//! Unicode-lowercase family lookup key), open / create / version check,
-//! per-folder scan write, drift detection, family-name lookup. The
+//! This file owns the Tauri-free cache module: schema (NFC +
+//! Unicode-lowercase lookup key + exact-family/face-alias key kind),
+//! open / create / version check, per-folder scan write, drift detection,
+//! family-name lookup. The
 //! GUI-only IPC surface lives in `font_cache_commands.rs`; the CLI's
 //! `refresh-fonts` and embed-time cache integration live in
 //! `bin/cli/main.rs`.
@@ -184,6 +185,12 @@ fn reject_cache_reparse_paths(cache_path: &Path) -> Result<(), CacheError> {
 /// Old cache files do not have these alias rows, so they would silently
 /// keep missing TTC faces until rebuilt.
 ///
+/// v3 → v4: full-face / PostScript aliases are stored as style-
+/// insensitive alias rows in a separate key kind. Exact family-name
+/// rows must win before alias rows so an alias cannot override a real
+/// family/style match; aliases are also stored once rather than four
+/// duplicated bold/italic rows.
+///
 /// BUMP this constant when the `family_name_key` normalization or
 /// any other on-disk shape changes — even if no DDL changes
 /// . The verifier only checks numeric equality, so
@@ -193,7 +200,10 @@ fn reject_cache_reparse_paths(cache_path: &Path) -> Result<(), CacheError> {
 /// rules, or face-index encoding, bump first. Long-term: persist a
 /// git-describe-derived build_id in cache_meta alongside the
 /// version number to catch unbumped semantic shifts.
-pub const SCHEMA_VERSION: i32 = 3;
+pub const SCHEMA_VERSION: i32 = 4;
+
+const KEY_KIND_FAMILY: i32 = 0;
+const KEY_KIND_FACE_ALIAS: i32 = 1;
 
 /// DoS-class sanity cap on the number of `cached_folders` rows
 /// `list_folders` / `diff_against` will return. Paralleling
@@ -254,6 +264,11 @@ pub struct FontMetadata {
     /// Chinese + Traditional + Japanese, etc.) — embed-time lookup must
     /// hit whichever locale's name the subtitle author wrote.
     pub family_keys: Vec<FamilyKey>,
+    /// Full-face and PostScript aliases for this exact face. These
+    /// are style-insensitive lookup names: a subtitle that references
+    /// `Dream Han Serif SC W22` is already naming a concrete face, so
+    /// ASS bold/italic flags should not need to match the face attrs.
+    pub face_name_aliases: Vec<String>,
 }
 
 /// One (family_name, bold, italic) tuple advertised by a font face.
@@ -712,9 +727,9 @@ impl FontCache {
                 // INSERT OR IGNORE so two raw family names that normalize
                 // to the same lookup_key (e.g., 'Café' as NFC + 'Cafe\u{301}'
                 // as NFD; or 'Foo' + 'foo' with bold/italic identical)
-                // don't violate the (font_path, face_index, family_name_key,
-                // bold, italic) primary key and abort the whole folder
-                // populate . The first variant lands;
+                // don't violate the (font_path, face_index,
+                // family_name_key, key_kind, bold, italic) primary key
+                // and abort the whole folder populate. The first variant lands;
                 // subsequent normalized-duplicates are dropped — they'd
                 // produce identical lookup results anyway since
                 // family_lookup_key is what later queries match on. A
@@ -722,19 +737,41 @@ impl FontCache {
                 // for the surviving row.
                 tx.execute(
                     "INSERT OR IGNORE INTO cached_family_keys(\
-                        font_path, face_index, family_name, family_name_key, bold, italic\
-                     ) VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+                        font_path, face_index, family_name, family_name_key, key_kind, bold, italic\
+                     ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                     params![
                         font.file_path,
                         font.face_index,
                         key.family_name,
                         lookup_key,
+                        KEY_KIND_FAMILY,
                         i32::from(key.bold),
                         i32::from(key.italic),
                     ],
                 )
                 .map_err(|e| {
                     CacheError::Io(format!("insert family_key for {}: {e}", font.file_path))
+                })?;
+            }
+            for alias in &font.face_name_aliases {
+                let lookup_key = family_lookup_key(alias);
+                tx.execute(
+                    "INSERT OR IGNORE INTO cached_family_keys(\
+                        font_path, face_index, family_name, family_name_key, key_kind, bold, italic\
+                     ) VALUES(?1, ?2, ?3, ?4, ?5, 0, 0)",
+                    params![
+                        font.file_path,
+                        font.face_index,
+                        alias,
+                        lookup_key,
+                        KEY_KIND_FACE_ALIAS,
+                    ],
+                )
+                .map_err(|e| {
+                    CacheError::Io(format!(
+                        "insert face-name alias for {}: {e}",
+                        font.file_path
+                    ))
                 })?;
             }
         }
@@ -852,8 +889,12 @@ impl FontCache {
     ///
     /// Match semantics: NFC-normalize + full Unicode lowercase via
     /// `family_lookup_key` on BOTH the query (here) and the storage
-    /// path (`replace_folder`). Bold/italic must match exactly.
-    /// Mirrors the session DB's `userFontKey` contract so a font's
+    /// path (`replace_folder`). Exact family-name rows must match
+    /// bold/italic exactly; full-face/PostScript alias rows are
+    /// style-insensitive because the alias already names a concrete
+    /// face. Exact family rows sort before alias rows so an alias can
+    /// never override a true family/style hit. Mirrors the session
+    /// DB lookup contract so a font's
     /// name-table form (often NFC) and an ASS file's `\fn` reference
     /// (often macOS-pasted NFD or arbitrary case) match consistently.
     /// (NOT ASCII-only lowercase — `to_ascii_lowercase` would miss
@@ -886,10 +927,18 @@ impl FontCache {
                ON f.font_path = k.font_path AND f.face_index = k.face_index \
              INNER JOIN cached_folders d \
                ON d.folder_path = f.folder_path \
-             WHERE k.family_name_key = ?1 AND k.bold = ?2 AND k.italic = ?3 \
-             ORDER BY k.font_path, k.face_index \
+             WHERE k.family_name_key = ?1 \
+               AND ((k.key_kind = ?2 AND k.bold = ?3 AND k.italic = ?4) \
+                    OR (k.key_kind = ?5 AND k.bold = 0 AND k.italic = 0)) \
+             ORDER BY k.key_kind, k.font_path, k.face_index \
              LIMIT 1",
-            params![lookup_key, i32::from(bold), i32::from(italic)],
+            params![
+                lookup_key,
+                KEY_KIND_FAMILY,
+                i32::from(bold),
+                i32::from(italic),
+                KEY_KIND_FACE_ALIAS
+            ],
             |r| Ok((r.get(0)?, r.get(1)?)),
         );
         match row {
@@ -1006,9 +1055,12 @@ CREATE TABLE cached_family_keys (
     -- the actual lookup key. family_name kept verbatim for
     -- diagnostics + future case-preserving display.
     family_name_key  TEXT NOT NULL,
+    -- v4: 0 = exact family-name row with style-specific match,
+    -- 1 = full-face/PostScript alias row with style-insensitive match.
+    key_kind         INTEGER NOT NULL CHECK(key_kind IN (0, 1)),
     bold             INTEGER NOT NULL,
     italic           INTEGER NOT NULL,
-    PRIMARY KEY (family_name_key, bold, italic, font_path, face_index),
+    PRIMARY KEY (family_name_key, key_kind, bold, italic, font_path, face_index),
     FOREIGN KEY (font_path, face_index) REFERENCES cached_fonts(font_path, face_index)
 );
 CREATE TABLE cache_meta (
@@ -1277,6 +1329,7 @@ mod tests {
                 bold: false,
                 italic: false,
             }],
+            face_name_aliases: Vec::new(),
         }
     }
 
@@ -1389,6 +1442,7 @@ mod tests {
                     italic: false,
                 },
             ],
+            face_name_aliases: Vec::new(),
         };
         cache
             .replace_folder("/test/cjk", 1_700_000_000, &[cjk_font])
@@ -1405,7 +1459,7 @@ mod tests {
     /// raw family names that NFC-normalize + lowercase to the same
     /// `family_name_key` (e.g. the NFC and NFD forms of `Café`, or
     /// two case variants of an English name) don't violate the PK
-    /// `(family_name_key, bold, italic, font_path, face_index)`.
+    /// `(family_name_key, key_kind, bold, italic, font_path, face_index)`.
     /// Without OR IGNORE this would throw, aborting the whole
     /// `replace_folder` transaction.
     #[test]
@@ -1439,6 +1493,7 @@ mod tests {
                     italic: false,
                 },
             ],
+            face_name_aliases: Vec::new(),
         };
         cache
             .replace_folder("/test/dedupe", 1_700_000_000, &[font])
@@ -1704,13 +1759,14 @@ mod tests {
             .conn
             .execute(
                 "INSERT INTO cached_family_keys(\
-                    font_path, face_index, family_name, family_name_key, bold, italic\
-                 ) VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+                    font_path, face_index, family_name, family_name_key, key_kind, bold, italic\
+                 ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![
                     "/orphan/arial.ttf",
                     0,
                     "Arial",
                     family_lookup_key("Arial"),
+                    KEY_KIND_FAMILY,
                     0,
                     0,
                 ],
@@ -1745,6 +1801,7 @@ mod tests {
                 bold: false,
                 italic: false,
             }],
+            face_name_aliases: Vec::new(),
         };
         let bold = FontMetadata {
             file_path: "/test/dir/SHS-Bold.otf".into(),
@@ -1756,6 +1813,7 @@ mod tests {
                 bold: true,
                 italic: false,
             }],
+            face_name_aliases: Vec::new(),
         };
         cache
             .replace_folder("/test/dir", 100, &[regular, bold])
@@ -1776,6 +1834,68 @@ mod tests {
         // Italic-not-present query misses.
         let i = cache.lookup_family("Source Han Sans", false, true).unwrap();
         assert!(i.is_none());
+    }
+
+    #[test]
+    fn lookup_family_prefers_exact_family_before_face_alias() {
+        let (_guard, path) = temp_cache_path();
+        let mut cache = FontCache::open_or_create(&path).expect("open");
+        let exact = FontMetadata {
+            file_path: "/test/dir/zzz-exact-shared-sans.otf".into(),
+            file_size: 1_000_000,
+            file_mtime: 100,
+            face_index: 0,
+            family_keys: vec![FamilyKey {
+                family_name: "Shared Sans".into(),
+                bold: false,
+                italic: false,
+            }],
+            face_name_aliases: Vec::new(),
+        };
+        let alias = FontMetadata {
+            file_path: "/test/dir/aaa-alias-face.otf".into(),
+            file_size: 1_000_000,
+            file_mtime: 100,
+            face_index: 0,
+            family_keys: vec![FamilyKey {
+                family_name: "Other Sans".into(),
+                bold: true,
+                italic: false,
+            }],
+            face_name_aliases: vec!["Shared Sans".into()],
+        };
+        cache
+            .replace_folder("/test/dir", 100, &[exact, alias])
+            .unwrap();
+
+        let exact_result = cache
+            .lookup_family("Shared Sans", false, false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            exact_result.font_path,
+            "/test/dir/zzz-exact-shared-sans.otf"
+        );
+
+        let alias_result = cache
+            .lookup_family("Shared Sans", true, true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(alias_result.font_path, "/test/dir/aaa-alias-face.otf");
+
+        let alias_row_count: i32 = cache
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM cached_family_keys \
+                 WHERE key_kind = ?1 AND family_name_key = ?2",
+                params![KEY_KIND_FACE_ALIAS, family_lookup_key("Shared Sans")],
+                |r| r.get(0),
+            )
+            .expect("count alias rows");
+        assert_eq!(
+            alias_row_count, 1,
+            "style-insensitive face aliases should be stored once"
+        );
     }
 
     #[test]
@@ -1806,6 +1926,7 @@ mod tests {
                     italic: false,
                 },
             ],
+            face_name_aliases: Vec::new(),
         };
         cache.replace_folder("/test/dir", 100, &[cjk]).unwrap();
 
@@ -1835,6 +1956,7 @@ mod tests {
                 bold: false,
                 italic: false,
             }],
+            face_name_aliases: Vec::new(),
         };
         let mingliu_face1 = FontMetadata {
             file_path: "/test/dir/MingLiU.ttc".into(), // same path
@@ -1846,6 +1968,7 @@ mod tests {
                 bold: false,
                 italic: false,
             }],
+            face_name_aliases: Vec::new(),
         };
         cache
             .replace_folder("/test/dir", 100, &[mingliu_face0, mingliu_face1])
