@@ -434,50 +434,6 @@ impl std::fmt::Display for CacheError {
     }
 }
 
-fn sqlite_immutable_uri(cache_path: &Path) -> Result<String, CacheError> {
-    let path = cache_path.to_str().ok_or_else(|| {
-        CacheError::Io(format!(
-            "cache path is not valid UTF-8 for immutable open: {}",
-            cache_path.display()
-        ))
-    })?;
-    let mut path = path.to_string();
-
-    #[cfg(windows)]
-    {
-        path = path.replace('\\', "/");
-        if path.starts_with("//") {
-            return Err(CacheError::Io(format!(
-                "immutable read-only cache open does not support UNC paths: {}",
-                cache_path.display()
-            )));
-        }
-        let bytes = path.as_bytes();
-        if bytes.len() >= 3
-            && bytes[0].is_ascii_alphabetic()
-            && bytes[1] == b':'
-            && bytes[2] == b'/'
-        {
-            path.insert(0, '/');
-        }
-    }
-
-    let mut encoded = String::with_capacity(path.len());
-    for byte in path.as_bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(*byte, b'-' | b'.' | b'_' | b'~' | b'/' | b':')
-        {
-            encoded.push(char::from(*byte));
-        } else {
-            encoded.push('%');
-            const HEX: &[u8; 16] = b"0123456789ABCDEF";
-            encoded.push(char::from(HEX[(byte >> 4) as usize]));
-            encoded.push(char::from(HEX[(byte & 0x0F) as usize]));
-        }
-    }
-
-    Ok(format!("file:{encoded}?mode=ro&immutable=1"))
-}
-
 impl FontCache {
     /// Open an existing cache file or create a fresh one. The caller
     /// passes the full file path; choosing AppData / temp / a custom
@@ -522,13 +478,15 @@ impl FontCache {
         let conn = Connection::open(cache_path)
             .map_err(|e| CacheError::Io(format!("opening {}: {e}", cache_path.display())))?;
 
-        // WAL journal mode + 5s busy_timeout matches the existing GUI
-        // session DB convention. WAL keeps reader/writer concurrency
-        // workable should we ever lift the per-binary-cache locked
-        // decision; for now it costs nothing extra and keeps schema
-        // patterns consistent across the project.
-        conn.pragma_update(None, "journal_mode", "WAL")
-            .map_err(|e| CacheError::Io(format!("setting WAL mode: {e}")))?;
+        // Keep the cross-run persistent cache in rollback-journal mode.
+        // `diagnose-fonts` has a read-only contract, and a read-only WAL
+        // open either needs SQLite sidecar access or an `immutable=1`
+        // lie that can ignore committed WAL content. DELETE mode keeps
+        // lookup-only diagnostics side-effect-free without sacrificing
+        // cache correctness. The session DB in fonts.rs still uses WAL
+        // because it is temp/run-local and write-heavy.
+        conn.pragma_update(None, "journal_mode", "DELETE")
+            .map_err(|e| CacheError::Io(format!("setting DELETE journal mode: {e}")))?;
         conn.busy_timeout(std::time::Duration::from_secs(5))
             .map_err(|e| CacheError::Io(format!("setting busy_timeout: {e}")))?;
         // Per-connection: SQLite ships with foreign_keys=OFF by default,
@@ -550,17 +508,14 @@ impl FontCache {
     /// Open an existing cache for lookup-only diagnostics.
     ///
     /// Unlike `open_or_create`, this does not create parent
-    /// directories, initialize schema, set WAL mode, or create WAL
-    /// sidecars. Callers use it when the command contract is
-    /// read-only (`diagnose-fonts`).
+    /// directories, initialize schema, or change journal mode. Callers
+    /// use it when the command contract is read-only (`diagnose-fonts`).
     pub fn open_existing_read_only(cache_path: &Path) -> Result<Self, CacheError> {
         reject_cache_reparse_paths(cache_path)?;
-        let uri = sqlite_immutable_uri(cache_path)?;
-        let conn = Connection::open_with_flags(
-            &uri,
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
-        )
-        .map_err(|e| CacheError::Io(format!("opening {} read-only: {e}", cache_path.display())))?;
+        let conn = Connection::open_with_flags(cache_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| {
+                CacheError::Io(format!("opening {} read-only: {e}", cache_path.display()))
+            })?;
         conn.busy_timeout(std::time::Duration::from_secs(5))
             .map_err(|e| CacheError::Io(format!("setting busy_timeout: {e}")))?;
         conn.pragma_update(None, "foreign_keys", "ON")
@@ -1182,15 +1137,9 @@ mod tests {
     }
 
     #[test]
-    fn read_only_open_does_not_create_wal_sidecars() {
+    fn read_only_open_does_not_create_sqlite_sidecars() {
         let (_guard, path) = temp_cache_path();
-        {
-            let cache = FontCache::open_or_create(&path).expect("fresh cache opens");
-            cache
-                .conn
-                .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
-                .expect("checkpoint fresh cache");
-        }
+        FontCache::open_or_create(&path).expect("fresh cache opens");
 
         for suffix in ["-wal", "-shm"] {
             let sidecar = sqlite_sidecar_path(&path, suffix);
@@ -1223,6 +1172,40 @@ mod tests {
                 sidecar.display()
             );
         }
+    }
+
+    #[test]
+    fn read_only_open_reads_committed_wal_content_from_older_cache() {
+        let (_guard, path) = temp_cache_path();
+        let writer = Connection::open(&path).expect("open writer");
+        writer
+            .pragma_update(None, "journal_mode", "WAL")
+            .expect("enable WAL for older-cache fixture");
+        writer
+            .pragma_update(None, "wal_autocheckpoint", 0)
+            .expect("disable auto-checkpoint");
+        writer
+            .execute_batch(SCHEMA_SQL)
+            .expect("create schema in WAL");
+        writer
+            .execute(
+                "INSERT INTO cache_meta(key, value) VALUES('schema_version', ?1)",
+                params![SCHEMA_VERSION.to_string()],
+            )
+            .expect("write schema version in WAL");
+
+        assert!(
+            sqlite_sidecar_path(&path, "-wal").exists(),
+            "fixture should keep committed content in a WAL sidecar"
+        );
+
+        let reader = FontCache::open_existing_read_only(&path).expect("read-only cache opens");
+        assert!(reader
+            .list_folders()
+            .expect("read-only query sees WAL schema")
+            .is_empty());
+        drop(reader);
+        drop(writer);
     }
 
     #[cfg(unix)]
