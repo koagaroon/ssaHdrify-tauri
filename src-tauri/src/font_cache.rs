@@ -903,8 +903,8 @@ impl FontCache {
         italic: bool,
     ) -> Result<Option<FontLookupResult>, CacheError> {
         let lookup_key = family_lookup_key(family_name);
-        let row: Result<(String, i32), _> = self.conn.query_row(
-            "SELECT k.font_path, k.face_index \
+        let row: Result<(String, i32, String), _> = self.conn.query_row(
+            "SELECT k.font_path, k.face_index, d.folder_path \
              FROM cached_family_keys k \
              INNER JOIN cached_fonts f \
                ON f.font_path = k.font_path AND f.face_index = k.face_index \
@@ -922,10 +922,11 @@ impl FontCache {
                 i32::from(italic),
                 KEY_KIND_FACE_ALIAS
             ],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         );
         match row {
-            Ok((font_path, face_index)) => {
+            Ok((font_path, face_index, folder_path)) => {
+                reject_unsupported_cached_folder_path(&folder_path)?;
                 reject_unsupported_cached_font_path(&font_path)?;
                 Ok(Some(FontLookupResult {
                     font_path,
@@ -1899,6 +1900,60 @@ mod tests {
             err.to_string()
                 .contains("cached_fonts.font_path contains a network or device-namespace path"),
             "expected cached font namespace rejection, got: {err}"
+        );
+    }
+
+    #[test]
+    fn lookup_family_rejects_network_namespace_folder_path_rows() {
+        let (_guard, path) = temp_cache_path();
+        let cache = FontCache::open_or_create(&path).expect("open");
+        let bad_folder_path = r"\\?\UNC\dead-host\Fonts";
+        let local_font_path = r"C:\Fonts\arial.ttf";
+        cache
+            .conn
+            .execute(
+                "INSERT INTO cached_folders(folder_path, folder_mtime, last_scanned_at) \
+                 VALUES(?1, ?2, ?3)",
+                params![bad_folder_path, 1_700_000_000, 1_700_000_000],
+            )
+            .unwrap();
+        cache
+            .conn
+            .execute(
+                "INSERT INTO cached_fonts(font_path, folder_path, file_size, file_mtime, face_index) \
+                 VALUES(?1, ?2, ?3, ?4, ?5)",
+                params![
+                    local_font_path,
+                    bad_folder_path,
+                    100_000,
+                    1_700_000_000,
+                    0,
+                ],
+            )
+            .unwrap();
+        cache
+            .conn
+            .execute(
+                "INSERT INTO cached_family_keys(\
+                    font_path, face_index, family_name, family_name_key, key_kind, bold, italic\
+                 ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    local_font_path,
+                    0,
+                    "Arial",
+                    family_lookup_key("Arial"),
+                    KEY_KIND_FAMILY,
+                    0,
+                    0,
+                ],
+            )
+            .unwrap();
+
+        let err = cache.lookup_family("Arial", false, false).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("cached_folders.folder_path contains a network or device-namespace path"),
+            "expected cached folder namespace rejection, got: {err}"
         );
     }
 

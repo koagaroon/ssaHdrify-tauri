@@ -335,6 +335,28 @@ Dialogue: 0,0:00:02.00,0:00:03.00,Default,B
     ).toThrow(/2 \[Events\] sections/);
   });
 
+  it("applyFontEmbed rejects duplicate [Events] on the zero-font path", () => {
+    const twoEventsNoFonts = `[Script Info]
+Title: Zero Fonts Two Events
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, Bold, Italic
+Style: Default,Arial,20,0,0
+
+[Events]
+Format: Layer, Start, End, Style, Text
+
+[Events]
+Format: Layer, Start, End, Style, Text
+`;
+    expect(() =>
+      applyFontEmbed({
+        content: twoEventsNoFonts,
+        fonts: [],
+      })
+    ).toThrow(/2 \[Events\] sections/);
+  });
+
   it("applyFontEmbed replaces existing [Fonts] section even when [Events] is absent", () => {
     const noEventsAss = `[Script Info]
 Title: No Events

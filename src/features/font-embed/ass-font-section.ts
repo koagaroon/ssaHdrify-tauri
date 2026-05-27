@@ -31,6 +31,40 @@ const LINE_PROBE_LENGTH_GATE = MAX_INSERT_LINES;
 const HEADER_FONTS_RE = /^\[[Ff][Oo][Nn][Tt][Ss]\][ \t]*$/;
 const HEADER_EVENTS_RE = /^\[[Ee][Vv][Ee][Nn][Tt][Ss]\][ \t]*$/;
 
+function assertUniqueEmbedSections(content: string): void {
+  let fonts = 0;
+  let events = 0;
+  let lineStart = 0;
+  for (let i = 0; i <= content.length; i++) {
+    const code = i < content.length ? content.charCodeAt(i) : 10;
+    if (i < content.length && code !== 10 /* '\n' */ && code !== 0x2028 && code !== 0x2029) {
+      continue;
+    }
+
+    let lineEnd = i;
+    if (lineEnd > lineStart && content.charCodeAt(lineEnd - 1) === 13 /* '\r' */) {
+      lineEnd -= 1;
+    }
+    const line = content.slice(lineStart, lineEnd);
+    if (HEADER_FONTS_RE.test(line)) {
+      fonts += 1;
+      if (fonts > 1) {
+        throw new Error(
+          `Cannot embed: input ASS has ${fonts} [Fonts] sections; expected at most one`
+        );
+      }
+    } else if (HEADER_EVENTS_RE.test(line)) {
+      events += 1;
+      if (events > 1) {
+        throw new Error(
+          `Cannot embed: input ASS has ${events} [Events] sections; expected at most one`
+        );
+      }
+    }
+    lineStart = i + 1;
+  }
+}
+
 export function assertAssShape(content: string): void {
   if (content.length > MAX_INSERT_FONTS_SECTION_CONTENT) {
     throw new Error(`File too large: ${(content.length / 1_000_000).toFixed(1)} MB (max 100 MB)`);
@@ -60,6 +94,7 @@ export function assertAssShape(content: string): void {
         "Re-parse / rebuild the file before embedding fonts."
     );
   }
+  assertUniqueEmbedSections(content);
 }
 
 /**
@@ -101,11 +136,12 @@ export function insertFontsSection(content: string, fontsSection: string): strin
   // closes the false-positive hole that `.trim().toLowerCase()` left
   // open AND blocks the Unicode-line-sep smuggle.
   // HEADER_FONTS_RE / HEADER_EVENTS_RE hoisted to module scope.
-  // Reject malformed input with multiple [Fonts] sections. Mirrors the
-  // CLI's identical guard in cli-engine-entry.ts: the replace path
-  // below only rewrites the first occurrence; silently leaving extra
-  // sections in place would produce a corrupted ASS with conflicting
-  // font data. Pre-Round-3 fix the GUI accepted these.
+  // Reject malformed input with multiple [Fonts] sections. This is
+  // already enforced by assertAssShape above so zero-font paths get the
+  // same contract; this local check keeps the rewrite helper's own
+  // boundary explicit. The replace path below only rewrites the first
+  // occurrence; silently leaving extra sections in place would produce
+  // a corrupted ASS with conflicting font data.
   const fontsHeaderIndices: number[] = [];
   for (let i = 0; i < lines.length; i += 1) {
     if (HEADER_FONTS_RE.test(lines[i]!)) fontsHeaderIndices.push(i);
@@ -117,14 +153,11 @@ export function insertFontsSection(content: string, fontsSection: string): strin
   }
   const existingFontsIdx = fontsHeaderIndices[0] ?? -1;
 
-  // Validate [Events] cardinality before any rewrite branch. The
-  // existing-[Fonts] replacement path returns early below, so this
-  // guard must not live only in the "insert before [Events]" branch.
-  // A single ASS with two [Events] sections produces a corrupted file
-  // either way — libass reads only the first, every other consumer
-  // (Aegisub / mpv) may pick the second — and inserting/replacing
-  // [Fonts] while leaving both sections intact would silently preserve
-  // malformed dialogue data.
+  // Validate [Events] cardinality before any rewrite branch. This is
+  // also enforced by assertAssShape above so zero-font paths cannot
+  // bypass it. The existing-[Fonts] replacement path returns early
+  // below, so this local guard must not live only in the "insert before
+  // [Events]" branch.
   const eventsHeaderIndices: number[] = [];
   for (let i = 0; i < lines.length; i += 1) {
     if (HEADER_EVENTS_RE.test(lines[i]!)) eventsHeaderIndices.push(i);
