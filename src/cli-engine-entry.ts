@@ -20,11 +20,8 @@ import {
   type ParsedFile,
 } from "./features/batch-rename/pairing-engine";
 import { buildFontEntry } from "./features/font-embed/ass-uuencode";
-import {
-  assertAssShape,
-  buildFontFileName,
-  insertFontsSection,
-} from "./features/font-embed/font-embedder";
+import { assertAssShape, insertFontsSection } from "./features/font-embed/ass-font-section";
+import { buildFontFileName } from "./features/font-embed/font-embedder";
 import { collectFontsWithParser, fontKeyLabel } from "./features/font-embed/font-collector";
 import { deriveShiftedPath, shiftSubtitles } from "./features/timing-shift/timing-engine";
 import { extractLangFromBaseName, LANG_TAGS } from "./lib/lang-detection";
@@ -464,10 +461,10 @@ function resolveEmbedOutputPathInternal(inputPath: string, template = "{name}.em
   return usedBackslash ? outputPath.replace(/\//g, "\\") : outputPath;
 }
 
-// buildFontFileName / familyStableHash / insertFontsSection are
-// re-exported from font-embedder so the GUI and CLI paths share one
-// canonical implementation. Previously they were duplicated verbatim
-// here; the duplicates have been removed.
+// Font filename and ASS [Fonts] section helpers are imported from the
+// GUI font-embed modules so GUI and CLI paths share one canonical
+// implementation. Previously they were duplicated verbatim here; the
+// duplicates have been removed.
 
 // VIDEO_EXTS / SUBTITLE_EXTS / IGNORED_EXTS / RenameCategory now live in
 // `src/lib/rename-extensions.ts` — shared with GUI BatchRename and the

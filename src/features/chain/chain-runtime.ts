@@ -19,7 +19,7 @@ import { Base64 } from "js-base64";
 import { processAssContent } from "../hdr-convert/ass-processor";
 import { shiftSubtitles } from "../timing-shift/timing-engine";
 import { buildFontEntry } from "../font-embed/ass-uuencode";
-import { assertAssShape, insertFontsSection } from "../font-embed/font-embedder";
+import { assertAssShape, insertFontsSection } from "../font-embed/ass-font-section";
 import {
   assertSafeOutputFilename,
   assertSafeOutputPath,
