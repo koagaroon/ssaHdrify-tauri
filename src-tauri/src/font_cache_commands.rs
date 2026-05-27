@@ -828,6 +828,32 @@ pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
     })
 }
 
+trait RescanCacheWriter {
+    fn replace_folder(
+        &mut self,
+        folder_path: &str,
+        folder_mtime: i64,
+        fonts: &[FontMetadata],
+    ) -> Result<(), CacheError>;
+
+    fn remove_folder(&mut self, folder_path: &str) -> Result<(), CacheError>;
+}
+
+impl RescanCacheWriter for FontCache {
+    fn replace_folder(
+        &mut self,
+        folder_path: &str,
+        folder_mtime: i64,
+        fonts: &[FontMetadata],
+    ) -> Result<(), CacheError> {
+        FontCache::replace_folder(self, folder_path, folder_mtime, fonts)
+    }
+
+    fn remove_folder(&mut self, folder_path: &str) -> Result<(), CacheError> {
+        FontCache::remove_folder(self, folder_path)
+    }
+}
+
 /// Apply Phase-2 scan outcomes to the cache. Three input lists, three
 /// behaviors:
 ///
@@ -874,8 +900,8 @@ pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
 /// that "deduplicates" by removing the ScanFailed entries from
 /// `skipped` after eviction would silently break the modal's
 /// user-facing failure report.
-fn apply_rescan_to_cache(
-    cache: &mut FontCache,
+fn apply_rescan_to_cache<C: RescanCacheWriter>(
+    cache: &mut C,
     scanned: &[(String, i64, Vec<FontMetadata>)],
     removed: &[String],
     skipped: &mut Vec<SkippedFolder>,
@@ -1527,6 +1553,66 @@ mod tests {
         (guard, cache)
     }
 
+    #[derive(Default)]
+    struct FakeRescanCache {
+        fail_replace_for: Vec<String>,
+        fail_remove_for: Vec<String>,
+        replace_attempts: Vec<String>,
+        remove_attempts: Vec<String>,
+    }
+
+    impl RescanCacheWriter for FakeRescanCache {
+        fn replace_folder(
+            &mut self,
+            folder_path: &str,
+            _folder_mtime: i64,
+            _fonts: &[FontMetadata],
+        ) -> Result<(), CacheError> {
+            self.replace_attempts.push(folder_path.to_string());
+            if self
+                .fail_replace_for
+                .iter()
+                .any(|folder| folder == folder_path)
+            {
+                return Err(CacheError::Io("injected replace failure".to_string()));
+            }
+            Ok(())
+        }
+
+        fn remove_folder(&mut self, folder_path: &str) -> Result<(), CacheError> {
+            self.remove_attempts.push(folder_path.to_string());
+            if self
+                .fail_remove_for
+                .iter()
+                .any(|folder| folder == folder_path)
+            {
+                return Err(CacheError::Io("injected remove failure".to_string()));
+            }
+            Ok(())
+        }
+    }
+
+    fn missing_child_path(guard: &TempCacheDir, name: &str) -> String {
+        guard.0.join(name).display().to_string()
+    }
+
+    fn assert_single_apply_failed(skipped: &[SkippedFolder], folder: &str, reason_part: &str) {
+        let matches: Vec<&SkippedFolder> = skipped
+            .iter()
+            .filter(|entry| entry.folder == folder && entry.kind == SkipKind::ApplyFailed)
+            .collect();
+        assert_eq!(
+            matches.len(),
+            1,
+            "expected one ApplyFailed entry for {folder}, got {skipped:?}"
+        );
+        assert!(
+            matches[0].reason.contains(reason_part),
+            "ApplyFailed reason should mention {reason_part:?}, got {:?}",
+            matches[0].reason
+        );
+    }
+
     #[test]
     fn apply_rescan_evicts_skipped_folder_rows() {
         // Regression pin: a Phase-2 scan failure must drop
@@ -1668,15 +1754,10 @@ mod tests {
 
     #[test]
     fn apply_rescan_preserves_pre_existing_failed_entry_alongside_success() {
-        // Partial coverage: the Phase-3 ApplyFailed push path (Err arm
-        // of `cache.replace_folder` / `remove_folder`) requires real
-        // SQLite-write injection to exercise and is not covered by
-        // this test. What we DO pin here: a pre-existing
-        // `SkippedFolder { kind: ApplyFailed }` in the input vec
-        // survives alongside successful operations — i.e., the helper
-        // doesn't accidentally wipe or rewrite the input vec. Real
-        // mid-loop failure coverage is not yet done — it needs the
-        // repo to gain a FontCache fault-injection seam.
+        // Pins the input-preservation side of ApplyFailed handling:
+        // a pre-existing `SkippedFolder { kind: ApplyFailed }`
+        // survives alongside successful operations instead of being
+        // wiped or rewritten.
         let (_guard, mut cache) = temp_cache("preserves_pre_existing_apply_failed");
         cache.replace_folder("/folder/x", 100, &[]).unwrap();
 
@@ -1694,6 +1775,111 @@ mod tests {
                 .any(|s| s.folder == "/already/failed" && s.kind == SkipKind::ApplyFailed),
             "pre-existing ApplyFailed entry preserved"
         );
+    }
+
+    #[test]
+    fn apply_rescan_continues_after_replace_apply_failed() {
+        let guard = TempCacheDir::new("replace_apply_failed");
+        let first = missing_child_path(&guard, "first");
+        let failing = missing_child_path(&guard, "failing");
+        let third = missing_child_path(&guard, "third");
+        let scanned = vec![
+            (first.clone(), 100, Vec::new()),
+            (failing.clone(), 200, Vec::new()),
+            (third.clone(), 300, Vec::new()),
+        ];
+        let mut fake = FakeRescanCache {
+            fail_replace_for: vec![failing.clone()],
+            ..Default::default()
+        };
+        let mut skipped = Vec::new();
+
+        let (modified, evicted) = apply_rescan_to_cache(&mut fake, &scanned, &[], &mut skipped);
+
+        assert_eq!(modified, 2, "both non-failing replaces should count");
+        assert_eq!(evicted, 0);
+        assert_eq!(
+            fake.replace_attempts,
+            vec![first, failing.clone(), third],
+            "replace failures must not short-circuit later folders"
+        );
+        assert_single_apply_failed(&skipped, &failing, "replace_folder failed");
+    }
+
+    #[test]
+    fn apply_rescan_continues_after_removed_apply_failed() {
+        let guard = TempCacheDir::new("removed_apply_failed");
+        let first = missing_child_path(&guard, "first");
+        let failing = missing_child_path(&guard, "failing");
+        let third = missing_child_path(&guard, "third");
+        let removed = vec![first.clone(), failing.clone(), third.clone()];
+        let mut fake = FakeRescanCache {
+            fail_remove_for: vec![failing.clone()],
+            ..Default::default()
+        };
+        let mut skipped = Vec::new();
+
+        let (modified, evicted) = apply_rescan_to_cache(&mut fake, &[], &removed, &mut skipped);
+
+        assert_eq!(modified, 0);
+        assert_eq!(evicted, 2, "both non-failing evictions should count");
+        assert_eq!(
+            fake.remove_attempts,
+            vec![first, failing.clone(), third],
+            "remove failures must not short-circuit later removed folders"
+        );
+        assert_single_apply_failed(&skipped, &failing, "remove_folder failed");
+    }
+
+    #[test]
+    fn apply_rescan_continues_after_scan_failed_eviction_apply_failed() {
+        let guard = TempCacheDir::new("scan_failed_eviction_apply_failed");
+        let first = missing_child_path(&guard, "first");
+        let failing = missing_child_path(&guard, "failing");
+        let third = missing_child_path(&guard, "third");
+        let mut fake = FakeRescanCache {
+            fail_remove_for: vec![failing.clone()],
+            ..Default::default()
+        };
+        let mut skipped = vec![
+            SkippedFolder {
+                folder: first.clone(),
+                reason: "scan failed first".to_string(),
+                kind: SkipKind::ScanFailed,
+            },
+            SkippedFolder {
+                folder: failing.clone(),
+                reason: "scan failed failing".to_string(),
+                kind: SkipKind::ScanFailed,
+            },
+            SkippedFolder {
+                folder: third.clone(),
+                reason: "scan failed third".to_string(),
+                kind: SkipKind::ScanFailed,
+            },
+        ];
+
+        let (modified, evicted) = apply_rescan_to_cache(&mut fake, &[], &[], &mut skipped);
+
+        assert_eq!(modified, 0);
+        assert_eq!(
+            evicted, 2,
+            "both non-failing stale-row evictions should count"
+        );
+        assert_eq!(
+            fake.remove_attempts,
+            vec![first.clone(), failing.clone(), third.clone()],
+            "scan-failed eviction failures must not short-circuit later folders"
+        );
+        assert_eq!(
+            skipped
+                .iter()
+                .filter(|entry| entry.kind == SkipKind::ScanFailed)
+                .count(),
+            3,
+            "original ScanFailed entries should stay visible to the UI"
+        );
+        assert_single_apply_failed(&skipped, &failing, "remove_folder");
     }
 
     // ── migrate_legacy_gui_cache ──
