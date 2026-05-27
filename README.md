@@ -300,10 +300,12 @@ Use `--cache-file <PATH>` to choose a different path.
 #### 限制 | Limitations
 
 - 每个 `--font-dir` 只扫描一层（不递归），与 `embed --font-dir` 语义一致。树状字体目录需要逐层显式传入。
+- 字体缓存最多记录 256 个源文件夹；更大的字体树请先整理为更少的叶子目录，或拆成多个缓存文件使用。
 - GUI 和 CLI 各自使用独立缓存文件，避免 SQLite 锁竞争；同一个可执行文件同时只会读写一个缓存文件（默认路径或 `--cache-file` 覆盖路径）。`chain` v1 暂不读取缓存（其中的 embed 步始终使用显式 `--font-dir` 或系统字体）。
 - 跨版本不会自动迁移缓存结构；版本不匹配时，CLI 会明确提示删除缓存文件并重新运行 `refresh-fonts`。
 
 - Each `--font-dir` is scanned one level deep (non-recursive), matching `embed --font-dir` semantics. Pass each leaf folder explicitly for tree-shaped collections.
+- The font cache tracks at most 256 source folders. For larger font trees, organize fonts into fewer leaf folders or split work across separate cache files.
 - GUI and CLI use separate cache files to avoid SQLite lock contention; a single binary opens exactly one cache at a time (default path or `--cache-file` override). `chain` v1 does not consult the cache; its embed step always uses explicit `--font-dir` or system fonts.
 - There is no automatic schema migration across releases. Version mismatch surfaces as an explicit prompt to delete the cache file and rerun `refresh-fonts`.
 
