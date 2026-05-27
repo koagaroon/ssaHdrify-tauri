@@ -56,6 +56,10 @@ function keysOfResolvedFonts(infos: FontInfo[]): Set<string> {
   return out;
 }
 
+function missingReferencedFonts(infos: FontInfo[]): FontInfo[] {
+  return infos.filter((info) => !info.filePath);
+}
+
 // Font Embed only operates on ASS / SSA — other subtitle formats don't carry
 // font references. Used by the folder-drop filter so a show folder dropped
 // here keeps videos and SRTs out of the batch.
@@ -119,7 +123,7 @@ export default function FontEmbed() {
     null
   );
   const [lastActionResult, setLastActionResult] = useState<
-    "success" | "error" | "cancelled" | null
+    "success" | "partial" | "error" | "cancelled" | null
   >(null);
   const { logs, addLog, clearLogs, logScrollRef } = useLogPanel();
   const [showFileList, setShowFileList] = useState(false);
@@ -659,6 +663,7 @@ export default function FontEmbed() {
         addLog(t("msg_fonts_start", filePaths.length));
 
         let successCount = 0;
+        let issueCount = skippedPaths.size;
         let processedCount = 0;
         const seenOutputs = new Set<string>();
 
@@ -714,6 +719,7 @@ export default function FontEmbed() {
             const outputPath = deriveEmbeddedPath(filePath);
             const normalizedOut = normalizeOutputKey(outputPath);
             if (seenOutputs.has(normalizedOut)) {
+              issueCount++;
               addLog(t("msg_skipped_duplicate", safeFileName), "error");
               continue;
             }
@@ -729,6 +735,7 @@ export default function FontEmbed() {
             // ingest guards.
             const cached = perFileAnalysisRef.current.get(filePath);
             if (!cached) {
+              issueCount++;
               addLog(t("msg_fonts_error", safeFileName, "analysis cache miss"), "error");
               continue;
             }
@@ -749,6 +756,9 @@ export default function FontEmbed() {
             const selectedFonts = cached.infos.filter(
               (info) => selected.has(fontSelectionKey(info)) && info.filePath
             );
+            const missingFonts = missingReferencedFonts(cached.infos);
+            const missingWarnings =
+              missingFonts.length > 0 ? [t("msg_fonts_missing_warning", missingFonts.length)] : [];
 
             if (selectedFonts.length === 0) {
               // misattributed message correction.
@@ -758,6 +768,11 @@ export default function FontEmbed() {
               // no fonts that the user kept checked" — a per-file,
               // per-batch shape that needs its own message naming the
               // file. `safeFileName` is already sanitized just above.
+              for (const warning of missingWarnings) {
+                addLog(t("msg_fonts_file_warning", safeFileName, warning), "warn");
+              }
+              issueCount += missingWarnings.length;
+              issueCount++;
               addLog(t("msg_no_fonts_for_file", safeFileName), "error");
               continue;
             }
@@ -788,18 +803,46 @@ export default function FontEmbed() {
             // segments.
             const safeOutName = sanitizeForDialog(fileNameFromPath(outputPath));
             if (result.embeddedCount === 0) {
+              const fileWarnings = [...missingWarnings, ...result.warnings];
+              if (fileWarnings.length > 0) {
+                issueCount += fileWarnings.length;
+                for (const warning of fileWarnings) {
+                  addLog(t("msg_fonts_file_warning", safeFileName, warning), "warn");
+                }
+              }
               // Nothing was actually embedded — skip the write so we
               // don't produce a `.embedded.ass` that's identical to the
               // input and log "saved" for a no-op. Surface as a warning
               // so the user knows the file was processed but the output
               // would have been a copy of the source.
-              addLog(t("msg_embed_no_change", safeOutName), "info");
+              addLog(
+                t("msg_embed_no_change", safeOutName),
+                fileWarnings.length > 0 ? "warn" : "info"
+              );
               continue;
             }
             await writeText(outputPath, result.content);
-            addLog(t("msg_embed_saved", safeOutName, result.embeddedCount), "success");
+            const fileWarnings = [...missingWarnings, ...result.warnings];
+            if (fileWarnings.length > 0) {
+              issueCount += fileWarnings.length;
+              for (const warning of fileWarnings) {
+                addLog(t("msg_fonts_file_warning", safeFileName, warning), "warn");
+              }
+              addLog(
+                t(
+                  "msg_embed_saved_partial",
+                  safeOutName,
+                  result.embeddedCount,
+                  fileWarnings.length
+                ),
+                "warn"
+              );
+            } else {
+              addLog(t("msg_embed_saved", safeOutName, result.embeddedCount), "success");
+            }
             successCount++;
           } catch (e) {
+            issueCount++;
             addLog(t("msg_fonts_error", safeFileName, sanitizeError(e)), "error");
           } finally {
             processedCount++;
@@ -817,6 +860,12 @@ export default function FontEmbed() {
         const aborted = !!abortRef.current?.signal.aborted;
         if (aborted) {
           setLastActionResult("cancelled");
+        } else if (successCount > 0 && issueCount > 0) {
+          addLog(
+            t("msg_fonts_complete_partial", successCount, filePaths.length, issueCount),
+            "warn"
+          );
+          setLastActionResult("partial");
         } else if (successCount > 0) {
           addLog(t("msg_fonts_complete", successCount, filePaths.length), "success");
           setLastActionResult("success");
@@ -847,6 +896,9 @@ export default function FontEmbed() {
     }
     if (analyzing) return { kind: "busy", message: t("status_fonts_analyzing") };
     if (lastActionResult === "success") return { kind: "done", message: t("status_fonts_done") };
+    if (lastActionResult === "partial") {
+      return { kind: "pending", message: t("status_fonts_partial") };
+    }
     if (lastActionResult === "error") return { kind: "error", message: t("status_fonts_error") };
     if (lastActionResult === "cancelled") {
       return { kind: "pending", message: t("status_fonts_cancelled") };

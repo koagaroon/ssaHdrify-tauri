@@ -39,6 +39,7 @@ export const strings: Record<string, StringEntry> = {
   },
   status_fonts_busy: { en: "Embedding…", zh: "嵌入中…" },
   status_fonts_done: { en: "Fonts embedded", zh: "字体已嵌入" },
+  status_fonts_partial: { en: "Fonts embedded with warnings", zh: "字体已嵌入，但有警告" },
   status_fonts_error: { en: "Embed failed", zh: "嵌入失败" },
   status_fonts_cancelled: { en: "Embed cancelled", zh: "已取消嵌入" },
   status_fonts_batch_pending: {
@@ -295,12 +296,21 @@ export const strings: Record<string, StringEntry> = {
     en: "Embed complete: {0}/{1} file(s) processed",
     zh: "嵌入完成：已处理 {0}/{1} 个文件",
   },
+  msg_fonts_complete_partial: {
+    en: "Embed incomplete: {0}/{1} file(s) written, {2} issue(s)",
+    zh: "嵌入不完整：已写入 {0}/{1} 个文件，{2} 个问题",
+  },
   msg_fonts_all_failed: {
     en: "Embed failed on all {0} file(s); see errors above",
     zh: "全部 {0} 个文件嵌入失败，详见上方错误",
   },
   msg_fonts_cancelled: { en: "Embed cancelled.", zh: "已取消嵌入。" },
   msg_fonts_error: { en: "Error embedding {0}: {1}", zh: "嵌入 {0} 出错：{1}" },
+  msg_fonts_file_warning: { en: "{0}: {1}", zh: "{0}：{1}" },
+  msg_fonts_missing_warning: {
+    en: "{0} referenced font(s) were missing and were not embedded",
+    zh: "有 {0} 个引用字体缺失，未被嵌入",
+  },
   fonts_drop_hint: {
     en: "Tip: drag .ass / .ssa files or a folder onto the file strip above (other files in the folder are skipped automatically)",
     zh: "提示：可将 .ass / .ssa 文件或文件夹拖到上方文件栏（文件夹内其他类型文件会自动忽略）",
@@ -323,6 +333,10 @@ export const strings: Record<string, StringEntry> = {
   msg_embed_saved: {
     en: "Saved: {0} ({1} font(s) embedded)",
     zh: "已保存：{0}（已嵌入 {1} 个字体）",
+  },
+  msg_embed_saved_partial: {
+    en: "Saved with warnings: {0} ({1} font(s) embedded, {2} warning(s))",
+    zh: "已保存但有警告：{0}（已嵌入 {1} 个字体，{2} 条警告）",
   },
   msg_embed_no_change: {
     en: "Skipped {0} — no fonts were embedded (output would equal input)",

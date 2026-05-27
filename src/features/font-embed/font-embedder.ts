@@ -92,6 +92,12 @@ export interface EmbedProgress {
   total: number;
 }
 
+export interface EmbedFontsResult {
+  content: string;
+  embeddedCount: number;
+  warnings: string[];
+}
+
 // ── Font Discovery ────────────────────────────────────────
 
 /**
@@ -519,8 +525,8 @@ export const MAX_SUBSET_CODEPOINTS_FOR_DEDUP = 200_000;
  * @param t - Optional i18n translator. When omitted, error notes use raw
  *            English keys (test paths); when present, notes are localized
  *            via the same `useI18n` instance the calling tab uses.
- * @returns Modified ASS content with [Fonts] section, or `null` when
- *          isCancelled returned true mid-embed.
+ * @returns Modified ASS content with [Fonts] section and non-fatal
+ *          warnings, or `null` when isCancelled returned true mid-embed.
  */
 export async function embedFonts(
   assContent: string,
@@ -529,8 +535,9 @@ export async function embedFonts(
   onProgress?: (progress: EmbedProgress) => void,
   isCancelled?: () => boolean,
   t?: (key: string, ...args: (string | number)[]) => string
-): Promise<{ content: string; embeddedCount: number } | null> {
+): Promise<EmbedFontsResult | null> {
   const fontEntries: string[] = [];
+  const warnings: string[] = [];
 
   // Index fontUsages by lookup key once (O(N)) instead of linear-scanning
   // for each selected font (O(N²)). For a 40-font subtitle the scan cost
@@ -624,10 +631,12 @@ export async function embedFonts(
       // closed today; the wrap keeps every sibling output consistent
       // if upstream sanitization ever loosens (defense-in-depth).
       const familyDisplay = stripUnicodeControls(info.key.family);
+      const warning =
+        t?.("msg_font_skipped", familyDisplay, "no usage entry") ??
+        `Skipped ${familyDisplay}: no usage entry`;
+      warnings.push(warning);
       onProgress?.({
-        stage:
-          t?.("msg_font_skipped", familyDisplay, "no usage entry") ??
-          `Skipped ${familyDisplay}: no usage entry`,
+        stage: warning,
         current: preIdx + 1,
         total: preTotal,
       });
@@ -747,10 +756,12 @@ export async function embedFonts(
             `Font subsetting failed for ${stripUnicodeControls(alias.info.key.family)}, skipping: ${safeErr}`
           );
           const familyDisplay = stripUnicodeControls(alias.info.key.family);
+          const warning =
+            t?.("msg_font_skipped", familyDisplay, safeErr) ??
+            `Skipped ${familyDisplay}: ${safeErr}`;
+          warnings.push(warning);
           onProgress?.({
-            stage:
-              t?.("msg_font_skipped", familyDisplay, safeErr) ??
-              `Skipped ${familyDisplay}: ${safeErr}`,
+            stage: warning,
             current: i + 1,
             total: groupTotal,
           });
@@ -810,9 +821,11 @@ export async function embedFonts(
       // args + English fallback; same sibling-parity reasoning as the
       // no-usage-entry path above.
       const familyDisplay = stripUnicodeControls(template.key.family);
+      const warning =
+        t?.("msg_font_skipped", familyDisplay, safeErr) ?? `Skipped ${familyDisplay}: ${safeErr}`;
+      warnings.push(warning);
       onProgress?.({
-        stage:
-          t?.("msg_font_skipped", familyDisplay, safeErr) ?? `Skipped ${familyDisplay}: ${safeErr}`,
+        stage: warning,
         current: i + 1,
         total: groupTotal,
       });
@@ -849,7 +862,7 @@ export async function embedFonts(
     // "normalize-on-every-output" refactor doesn't accidentally
     // strip them here, which would inflate diff noise on files the
     // user never asked us to transform.
-    return { content: assContent, embeddedCount: 0 };
+    return { content: assContent, embeddedCount: 0, warnings };
   }
 
   // Build [Fonts] section (no leading \n — insertFontsSection handles the separator)
@@ -859,6 +872,7 @@ export async function embedFonts(
   return {
     content: insertFontsSection(assContent, fontsSection),
     embeddedCount: fontEntries.length,
+    warnings,
   };
 }
 

@@ -712,6 +712,36 @@ Dialogue: 0,0:00:05.00,0:00:10.00,Alt,你好
     expect(result!.embeddedCount).toBe(2);
     expect(subsetFontMock).toHaveBeenCalledTimes(2);
   });
+
+  it("returns subset failure warnings while embedding the remaining fonts", async () => {
+    subsetFontMock.mockImplementation(async (path: string) => {
+      if (path.includes("broken")) throw new Error("broken font");
+      return new Uint8Array([1, 2, 3, 4]);
+    });
+
+    const good = makeInfo("Good", "/fonts/good.ttf", 0);
+    const broken = makeInfo("Broken", "/fonts/broken.ttf", 0);
+    const usages = [makeUsage("Good", [0x41]), makeUsage("Broken", [0x42])];
+
+    const result = await embedFonts(SHELL_ASS, [good, broken], usages);
+
+    expect(result).not.toBeNull();
+    expect(result!.embeddedCount).toBe(1);
+    expect(result!.warnings).toContain("Skipped Broken: broken font");
+    expect(subsetFontMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns no-usage warnings instead of leaving them as transient progress only", async () => {
+    subsetFontMock.mockResolvedValue(new Uint8Array([1, 2, 3, 4]));
+
+    const orphan = makeInfo("MissingUsage", "/fonts/missing-usage.ttf", 0);
+    const result = await embedFonts(SHELL_ASS, [orphan], []);
+
+    expect(result).not.toBeNull();
+    expect(result!.embeddedCount).toBe(0);
+    expect(result!.warnings).toContain("Skipped MissingUsage: no usage entry");
+    expect(subsetFontMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("embedFonts — face dedup cap boundary", () => {
