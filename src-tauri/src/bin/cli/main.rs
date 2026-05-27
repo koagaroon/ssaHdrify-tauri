@@ -4178,17 +4178,30 @@ impl<'a> ResolvedFaceGroup<'a> {
         self.aliases[0]
     }
 
-    /// Lazy union of every alias's codepoints. Used by the
-    /// dedup-happy-path subset call and by the cap-check decision
-    /// in `subset_resolved_fonts`. Returns a new `BTreeSet` so
-    /// the caller owns the allocation and can convert to `Vec<u32>`
-    /// for the `subset_font` call.
-    fn merged_codepoints(&self) -> std::collections::BTreeSet<u32> {
+    /// Lazy union of every alias's codepoints. Returns `Err(len)` as
+    /// soon as the merged set exceeds `cap`, so the fallback decision
+    /// does not allocate/work through the rest of a hostile over-cap
+    /// alias union.
+    fn merged_codepoints_with_cap(
+        &self,
+        cap: usize,
+    ) -> Result<std::collections::BTreeSet<u32>, usize> {
         let mut set: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
         for alias in &self.aliases {
-            set.extend(alias.codepoints.iter().copied());
+            for codepoint in &alias.codepoints {
+                set.insert(*codepoint);
+                if set.len() > cap {
+                    return Err(set.len());
+                }
+            }
         }
-        set
+        Ok(set)
+    }
+
+    #[cfg(test)]
+    fn merged_codepoints(&self) -> std::collections::BTreeSet<u32> {
+        self.merged_codepoints_with_cap(usize::MAX)
+            .expect("usize::MAX cap cannot be exceeded")
     }
 }
 
@@ -4264,38 +4277,39 @@ fn subset_resolved_fonts(
     let mut skipped = Vec::new();
 
     for group in face_groups.values() {
-        let merged = group.merged_codepoints();
-
-        if merged.len() > MAX_SUBSET_CODEPOINTS_FOR_DEDUP {
-            // Cap-busting fallback: subset each alias independently.
-            // Each alias's codepoints is bounded by
-            // `MAX_RESOLVED_FONT_CODEPOINTS` (100,000) upstream in
-            // `resolve_embed_fonts`, which is strictly less than the
-            // subset cap, so individual subset calls always pass.
-            // Output for this face reverts to pre-dedup shape (one
-            // [Fonts] entry per alias, byte-identical payloads under
-            // different filenames); the dedup byte-reduction win is
-            // given up only for this specific group. The face's
-            // family-name records are still preserved at the subset
-            // layer, so libass's per-glyph fallback can traverse the
-            // N entries to find any requested glyph.
-            for alias in &group.aliases {
-                match app_lib::fonts::subset_font(
-                    alias.path.clone(),
-                    alias.index,
-                    alias.codepoints.clone(),
-                ) {
-                    Ok(data) => payloads.push(engine::FontSubsetPayload {
-                        font_name: alias.font_name.clone(),
-                        data,
-                    }),
-                    Err(error) => {
-                        skipped.push(format!("{} ({error})", alias.label));
+        let merged = match group.merged_codepoints_with_cap(MAX_SUBSET_CODEPOINTS_FOR_DEDUP) {
+            Ok(merged) => merged,
+            Err(_) => {
+                // Cap-busting fallback: subset each alias independently.
+                // Each alias's codepoints is bounded by
+                // `MAX_RESOLVED_FONT_CODEPOINTS` (100,000) upstream in
+                // `resolve_embed_fonts`, which is strictly less than the
+                // subset cap, so individual subset calls always pass.
+                // Output for this face reverts to pre-dedup shape (one
+                // [Fonts] entry per alias, byte-identical payloads under
+                // different filenames); the dedup byte-reduction win is
+                // given up only for this specific group. The face's
+                // family-name records are still preserved at the subset
+                // layer, so libass's per-glyph fallback can traverse the
+                // N entries to find any requested glyph.
+                for alias in &group.aliases {
+                    match app_lib::fonts::subset_font(
+                        alias.path.clone(),
+                        alias.index,
+                        alias.codepoints.clone(),
+                    ) {
+                        Ok(data) => payloads.push(engine::FontSubsetPayload {
+                            font_name: alias.font_name.clone(),
+                            data,
+                        }),
+                        Err(error) => {
+                            skipped.push(format!("{} ({error})", alias.label));
+                        }
                     }
                 }
+                continue;
             }
-            continue;
-        }
+        };
 
         let codepoints: Vec<u32> = merged.into_iter().collect();
         let template = group.template();
@@ -6944,7 +6958,9 @@ mod tests {
         let groups = group_resolved_fonts_by_face(&aliases);
         assert_eq!(groups.len(), 1);
         let group = groups.values().next().expect("single group");
-        let merged = group.merged_codepoints();
+        let merged = group
+            .merged_codepoints_with_cap(MAX_SUBSET_CODEPOINTS_FOR_DEDUP)
+            .expect("at-cap union should stay under cap");
         assert_eq!(merged.len(), 200_000);
         assert!(merged.len() <= MAX_SUBSET_CODEPOINTS_FOR_DEDUP);
     }
@@ -6952,13 +6968,12 @@ mod tests {
     #[test]
     fn merged_codepoints_over_cap_signals_fallback() {
         // 4 aliases × 50,001 disjoint codepoints each = 200,004,
-        // one codepoint over the cap. Pinned via the merged-set
-        // size — the actual subset_font fallback can't be unit-
-        // tested without the IPC-bypass setup that the env-var-
-        // gated integration test (subset_with_index_handles_ttc)
-        // already covers. This test guards the contract that the
-        // grouping helper preserves enough per-alias detail for
-        // `subset_resolved_fonts`' cap check to fire correctly.
+        // but the bounded merge must stop at cap+1. The actual
+        // subset_font fallback can't be unit-tested without the IPC-
+        // bypass setup that the env-var-gated integration test
+        // (subset_with_index_handles_ttc) already covers. This test
+        // guards both the early-stop resource bound and the contract
+        // that per-alias detail survives for fallback.
         let aliases = vec![
             make_resolved_range("A", "/fonts/face.ttf", 0x010000, 50_001),
             make_resolved_range("B", "/fonts/face.ttf", 0x020000, 50_001),
@@ -6968,9 +6983,14 @@ mod tests {
         let groups = group_resolved_fonts_by_face(&aliases);
         assert_eq!(groups.len(), 1);
         let group = groups.values().next().expect("single group");
-        let merged = group.merged_codepoints();
-        assert_eq!(merged.len(), 200_004);
-        assert!(merged.len() > MAX_SUBSET_CODEPOINTS_FOR_DEDUP);
+        let over_cap_len = group
+            .merged_codepoints_with_cap(MAX_SUBSET_CODEPOINTS_FOR_DEDUP)
+            .expect_err("over-cap union should signal fallback");
+        assert_eq!(
+            over_cap_len,
+            MAX_SUBSET_CODEPOINTS_FOR_DEDUP + 1,
+            "over-cap union should stop as soon as fallback is known"
+        );
         // Aliases preserved so subset_resolved_fonts can iterate
         // them for the per-alias fallback path. Each alias's
         // codepoint count stays under the cap individually.
