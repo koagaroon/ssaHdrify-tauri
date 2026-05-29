@@ -3049,7 +3049,18 @@ fn prepare_font_cache_for_resolution(
 ) -> Result<PreparedFontCache, String> {
     if globals.no_cache {
         if !globals.quiet {
-            eprintln!("ℹ Cache disabled (--no-cache). Using --font-dir / system fonts only.");
+            // Route through localize() like every sibling cache line — a bare
+            // eprintln! rendered English under --lang zh while the rest of the
+            // cache output was Chinese.
+            eprintln!(
+                "{}",
+                localize(
+                    globals,
+                    "ℹ Cache disabled (--no-cache). Using --font-dir / system fonts only."
+                        .to_string(),
+                    "ℹ 已禁用缓存（--no-cache）。仅使用 --font-dir / 系统字体。".to_string(),
+                )
+            );
         }
         return Ok(PreparedFontCache {
             cache: None,

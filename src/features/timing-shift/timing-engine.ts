@@ -43,11 +43,14 @@ export interface ShiftOptions {
  * `convertShift` and the chain shift transform) reject up front instead, so
  * the failure is loud rather than a silent no-op.
  */
-export function assertFiniteShiftMs(offsetMs: number, thresholdMs?: number): void {
+export function assertFiniteShiftMs(offsetMs: number, thresholdMs?: number | null): void {
   if (!Number.isFinite(offsetMs)) {
     throw new Error(`Invalid offsetMs: expected a finite number, got ${String(offsetMs)}`);
   }
-  if (thresholdMs !== undefined && !Number.isFinite(thresholdMs)) {
+  // thresholdMs is OPTIONAL. The CLI wire form (deno_core op JSON) sends
+  // `null` — not `undefined` — when no threshold is set, so both must count
+  // as "not provided"; only a present-but-non-finite value is an error.
+  if (thresholdMs !== null && thresholdMs !== undefined && !Number.isFinite(thresholdMs)) {
     throw new Error(`Invalid thresholdMs: expected a finite number, got ${String(thresholdMs)}`);
   }
 }

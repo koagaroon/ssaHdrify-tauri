@@ -1128,10 +1128,14 @@ const MAX_FACE_NAME_VARIANTS_PER_FACE: usize = 8;
 pub const MAX_CACHE_POPULATE_FACES: usize = 20_000;
 
 fn bounded_font_family_name(chars: impl Iterator<Item = char>) -> Option<String> {
-    // Take chars lazily with a short ceiling so a malformed font with a
-    // huge name-table entry can't OOM the process before the length guard
-    // fires. 257 chars is enough to detect ">256 chars" overflow below.
-    let name: String = chars.take(257).collect();
+    // Materialize with a generous ceiling so leading/trailing whitespace
+    // (trimmed below) can't push a legitimate <=256-codepoint name out of the
+    // window — taking exactly 257 would let a few leading spaces truncate a
+    // 256-char name and store a DIFFERENT family string than the font
+    // declares, causing a lookup miss. 1024 still bounds OOM from a malformed
+    // multi-KB name-table entry (the real concern); the post-trim
+    // `char_count > 256` check below is the actual length guard.
+    let name: String = chars.take(1024).collect();
     let trimmed = name.trim();
     // Guard counts CODEPOINTS, not bytes — a 100-char CJK family name
     // (300+ UTF-8 bytes) is perfectly legitimate.
@@ -3969,6 +3973,20 @@ mod tests {
         );
         assert!(bounded_font_family_name("x".repeat(257).chars()).is_none());
         assert!(bounded_font_family_name("   ".chars()).is_none());
+    }
+
+    #[test]
+    fn bounded_font_family_name_keeps_full_name_past_leading_whitespace() {
+        // Leading whitespace must NOT consume the materialize window and
+        // truncate a legitimate 256-codepoint name — that would store a
+        // different family string than the font declares and miss at lookup.
+        // 5 spaces + 256 'x' trims to the full 256-char name (a take(257)
+        // window would have truncated it to 252).
+        let padded = format!("{}{}", " ".repeat(5), "x".repeat(256));
+        assert_eq!(
+            bounded_font_family_name(padded.chars()),
+            Some("x".repeat(256))
+        );
     }
 
     #[test]
