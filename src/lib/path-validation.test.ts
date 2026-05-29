@@ -177,10 +177,14 @@ describe("decomposeInputPath", () => {
     expect(() => decomposeInputPath("episode.ass")).toThrow(/must be absolute/);
   });
 
-  it("rejects drive-relative paths (drive letter without separator)", () => {
+  it("rejects drive-relative paths but accepts drive-rooted ones", () => {
     // `C:foo.ass` on Windows means "file foo.ass on drive C's CURRENT
     // directory" — drive-relative, ambiguous, must be rejected.
     expect(() => decomposeInputPath("C:episode.ass")).toThrow(/must be absolute/);
+    // Counter-assert: a drive-ROOTED path (with separator) IS accepted, so
+    // the rejection above pins "missing separator", not a blanket "any C:
+    // path is rejected" (the message is shared with bare-name/empty).
+    expect(() => decomposeInputPath("C:\\subs\\episode.ass")).not.toThrow();
   });
 
   it("rejects empty input", () => {
@@ -343,6 +347,20 @@ describe("assertSafeOutputPath", () => {
     const uncInput = "\\\\?\\UNC\\server\\share\\subs\\episode01.ass";
     const longUnc = "//?/UNC/server/share/subs/" + "a".repeat(300) + ".ass";
     expect(() => assertSafeOutputPath(longUnc, uncInput)).toThrow(/too long/);
+  });
+
+  it("accepts a UNC output at exactly the 259 cap and rejects one char over", () => {
+    // Boundary pair (the over-cap test above only proves "clearly over"):
+    // 259 chars fits — MAX_PATH is 260 incl. the null terminator — and the
+    // check is `length > 259`, so 259 passes and 260 trips it.
+    const uncInput = "\\\\?\\UNC\\server\\share\\subs\\episode01.ass";
+    const dir = "//?/UNC/server/share/subs/";
+    const atLimit = `${dir}${"a".repeat(259 - dir.length - ".ass".length)}.ass`;
+    expect(atLimit.length).toBe(259);
+    expect(() => assertSafeOutputPath(atLimit, uncInput)).not.toThrow();
+    const overLimit = `${dir}${"a".repeat(260 - dir.length - ".ass".length)}.ass`;
+    expect(overLimit.length).toBe(260);
+    expect(() => assertSafeOutputPath(overLimit, uncInput)).toThrow(/too long/);
   });
 
   it("rejects self-overwrite when output basename only differs in case", () => {

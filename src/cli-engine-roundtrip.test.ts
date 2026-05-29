@@ -207,6 +207,25 @@ describe("HDR convert — GUI ↔ CLI byte equivalence", () => {
     expect(cli.content).toContain("Normal caption");
     expect(cli.content).not.toContain(huge);
   });
+
+  it("ASS path stays byte-identical for CRLF and bare-CR line endings", () => {
+    // Every other fixture is \n-joined. Pin that non-LF line endings
+    // round-trip identically through BOTH the CLI and GUI paths, so neither
+    // side normalizes line endings differently from the other.
+    for (const eol of ["\r\n", "\r"]) {
+      const content = ASS_FIXTURE.replace(/\n/g, eol);
+      const cli = convertHdr({
+        inputPath: inputAss,
+        content,
+        eotf: "PQ",
+        brightness: 1000,
+        outputTemplate: DEFAULT_TEMPLATE,
+      });
+      const gui = guiHdrFlow(inputAss, content, "PQ", 1000, DEFAULT_TEMPLATE);
+      expect(cli.outputPath).toBe(gui.outputPath);
+      expect(cli.content).toBe(gui.content);
+    }
+  });
 });
 
 describe("Time shift — GUI ↔ CLI byte equivalence", () => {
