@@ -378,12 +378,19 @@ export function substituteTemplate(template: string, vars: Record<string, string
   // not handled here — falls through to the next iteration's boundary
   // check). Internal value dots stay verbatim.
   let out = "";
+  let prevEmptyValue = false;
   for (const seg of segments) {
     let chunk = seg.text;
-    if (chunk.startsWith(".") && out.endsWith(".")) {
+    // Drop a boundary dot when the left side already ended with one, OR when
+    // the immediately-preceding segment was an EMPTY-valued token. The latter
+    // catches a leading empty token (`{lang}.{name}` with lang="") whose
+    // separator dot would otherwise lead the filename → a hidden-file output
+    // (`.name`). Internal value dots stay verbatim.
+    if (chunk.startsWith(".") && (out.endsWith(".") || prevEmptyValue)) {
       chunk = chunk.slice(1);
     }
     out += chunk;
+    prevEmptyValue = seg.kind === "value" && seg.text === "";
   }
   return out;
 }

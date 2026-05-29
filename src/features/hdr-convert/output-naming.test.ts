@@ -149,12 +149,14 @@ describe("resolveOutputPath — {video_name} and {lang} tokens", () => {
     expect(result).toBe(`${BASE}/Show.ass`);
   });
 
-  it("treats {video_name} as empty when option omitted, preserving leading dot", () => {
+  it("treats {video_name} as empty when option omitted, collapsing the leading dot", () => {
     const result = resolveOutputPath(`${BASE}/EP01.srt`, "{video_name}.{name}.ass", "PQ");
-    // videoStem="" + "." + "EP01" + ".ass" → ".EP01.ass". The leading dot
-    // is preserved deliberately as a hidden-file marker — see the guard
-    // at output-naming.ts:147 that explicitly avoids stripping it.
-    expect(result).toBe(`${BASE}/.EP01.ass`);
+    // videoStem="" → the separator dot the empty leading token would have led
+    // with collapses, so the output is `EP01.ass`, NOT a hidden `.EP01.ass`.
+    // An empty LEADING token must not produce a hidden-file output
+    // (N-tplleaddot); this mirrors the mid-string empty-token collapse the
+    // {video_name}.{lang}.ass cases already pin.
+    expect(result).toBe(`${BASE}/EP01.ass`);
   });
 
   it("paired Tab 4 default template produces clean output", () => {

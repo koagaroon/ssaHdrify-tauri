@@ -212,7 +212,7 @@ function transformStyleLine(
   // the `&Hxxxxxx` or `&Hxxxxxxxx` shape (6 or 8 hex digits — RGB or
   // ABGR with alpha) before transforming. A previous `{2,8}` form
   // accepted 2-, 3-, 4-, 5-, and 7-digit values that the inline
-  // `\cN&Hxxxxxx` tag regex (`COLOR_TAG_RE`, line 101) correctly
+  // `\cN&Hxxxxxx` tag regex (`COLOR_TAG_RE`) correctly
   // rejected — the asymmetry let a malformed Style field through that
   // wouldn't have been transformed if inlined as `\c&H...`. The regex
   // now lives at module scope — see `COLOR_FIELD_RE` definition.

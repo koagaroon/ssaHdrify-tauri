@@ -187,6 +187,16 @@ describe("extractSeason", () => {
     expect(extractSeason(name, bracketCleanup(name))).toBe(12);
   });
 
+  it("malformed 第N季 numerals fall back to default season 1", () => {
+    // Doubled 十, an overlong run, and a mixed digit+numeral are all rejected
+    // by the numeral validator → default season 1, instead of the old
+    // 十十→20 / 二十三四→23 wrong-but-finite keys (N-cn-numerals).
+    for (const cn of ["十十", "二十三四", "1十"]) {
+      const name = `节目 第${cn}季 - 03.mkv`;
+      expect(extractSeason(name, bracketCleanup(name))).toBe(1);
+    }
+  });
+
   it("standalone S2 → 2", () => {
     const name = "Show S2 - 24.mkv";
     expect(extractSeason(name, bracketCleanup(name))).toBe(2);

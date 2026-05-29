@@ -74,11 +74,17 @@ function splitCueBlocks(content: string): string[] {
 }
 
 export function detectFormat(content: string): SubtitleFormat {
-  const head = content.slice(0, 2000); // Check first 2KB
-  if (ASS_HEADER.test(head)) return "ass";
-  if (VTT_HEADER.test(head)) return "vtt";
-  if (SUB_LINE.test(head)) return "sub";
-  if (SRT_TIMING.test(head)) return "srt";
+  // Scan the whole content rather than a 2 KB head: a valid file whose format
+  // signature sits past an early run of comments / blank lines / a long BOM-y
+  // preamble would otherwise mis-detect as "unknown" and get rejected. The
+  // matchers are line-anchored (`^…/m`), so they short-circuit on the first
+  // matching line in the common top-of-file case; the worst case is a single
+  // linear O(n) scan with no backtracking, and the input is bounded by the
+  // downstream parse caps (MAX_RAW_BLOCKS / per-format entry caps).
+  if (ASS_HEADER.test(content)) return "ass";
+  if (VTT_HEADER.test(content)) return "vtt";
+  if (SUB_LINE.test(content)) return "sub";
+  if (SRT_TIMING.test(content)) return "srt";
   return "unknown";
 }
 

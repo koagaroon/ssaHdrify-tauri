@@ -197,11 +197,12 @@ function normalizeFamily(raw: string): string {
  *  normalize would smuggle hostile content past the trust gate. The
  *  asymmetry is load-bearing — keep both.
  *
- *  Range covers C0 (0x00-0x1F), DEL (0x7F), C1 (0x80-0x9F), the Unicode
- *  line/paragraph separators (U+2028 / U+2029), the full
- *  BiDi / zero-width control set from `unicode-controls.ts`, AND the
- *  display-spoofing whitespace + astral set (`FAMILY_SPOOFING_CHARS`,
- *  kept in lockstep with `FN_CHAR_SET`).
+ *  Range covers C0 (0x00-0x1F), DEL (0x7F), C1 (0x80-0x9F), the full
+ *  BiDi / zero-width control set from `unicode-controls.ts` (which already
+ *  includes the Unicode line/paragraph separators U+2028 / U+2029 — they
+ *  are NOT a separate additive group), AND the display-spoofing whitespace
+ *  + astral set (`FAMILY_SPOOFING_CHARS`, kept in lockstep with
+ *  `FN_CHAR_SET`).
  *  Previously a family name carrying U+202E could flow through
  *  `sanitizeFamily` into detection-grid labels, log lines, and chain
  *  progress text where the visual-reversal attack re-surfaced after

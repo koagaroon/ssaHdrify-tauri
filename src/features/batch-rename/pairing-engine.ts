@@ -7,9 +7,11 @@
  *   2. priority-ordered episode  regex set (first match wins)
  *   3. season parallel scan      (only when ep regex didn't carry it)
  *   4. pair by (season, episode) tuple
- *   5. LCS fallback              [intentionally unimplemented — regex
- *                                 covers all 7 documented fan-sub
- *                                 samples; LCS lands only if a real
+ *   5. LCS fallback              [DESIGNED (design doc decision #1) but
+ *                                 intentionally not yet implemented — the
+ *                                 regex set covers all documented fan-sub
+ *                                 samples, so no `lcs` PairingSource is
+ *                                 produced today; LCS lands only if a real
  *                                 failure surfaces in the wild]
  *
  * Pattern coverage: validated against representative real-world
@@ -132,9 +134,11 @@ export function extractEpisode(rawName: string, cleanedName: string): EpisodeRes
 
 // ── Season parallel scan ────────────────────────────────
 
-/** Convert a 1–99 Chinese numeral string to integer. Returns 1 for
- *  unrecognized input — callers treat that as "default season 1". */
-function chineseNumeralToInt(s: string): number {
+/** Convert a WELL-FORMED 1–99 Chinese numeral string to an integer.
+ *  Returns null for malformed forms (doubled 十 like "十十", overlong runs
+ *  like "二十三四", a stray non-numeral char) so callers fall back to the
+ *  default season instead of mis-pairing on a wrong-but-finite key. */
+function chineseNumeralToInt(s: string): number | null {
   const map: Record<string, number> = {
     一: 1,
     二: 2,
@@ -147,15 +151,31 @@ function chineseNumeralToInt(s: string): number {
     九: 9,
     十: 10,
   };
-  // single-char `s` (including "十") covered by the map above:
-  // map["十"] === 10, so an explicit "十"-check here would be unreachable.
-  if (s.length === 1) return map[s] ?? 1;
+  if (s.length === 1) return map[s] ?? null;
   const tenIdx = s.indexOf("十");
-  if (tenIdx === -1) return 1;
-  // Forms: 十N (10..19), N十 (20, 30...), N十M (21..99).
-  const tens = tenIdx === 0 ? 1 : (map[s[0]!] ?? 1);
-  const ones = tenIdx === s.length - 1 ? 0 : (map[s[tenIdx + 1]!] ?? 0);
-  return tens * 10 + ones;
+  // Every well-formed multi-char form contains exactly one 十 — 十N (len 2),
+  // N十 (len 2), or N十M (len 3). No 十, length > 3, a doubled 十, or a
+  // non-numeral char is malformed.
+  if (tenIdx === -1 || s.length > 3) return null;
+  // A units / tens digit must be 一..九 (1..9); 十 in a units slot (e.g.
+  // "十十") is malformed.
+  const unit = (c: string | undefined): number | null => {
+    const v = c === undefined ? undefined : map[c];
+    return v != null && v < 10 ? v : null;
+  };
+  if (s.length === 2) {
+    if (tenIdx === 0) {
+      const ones = unit(s[1]); // 十N
+      return ones == null ? null : 10 + ones;
+    }
+    const tens = unit(s[0]); // N十
+    return tens == null ? null : tens * 10;
+  }
+  // len 3 → N十M, with 十 forced to the middle position.
+  if (tenIdx !== 1) return null;
+  const tens = unit(s[0]);
+  const ones = unit(s[2]);
+  return tens == null || ones == null ? null : tens * 10 + ones;
 }
 
 interface SeasonPattern {
@@ -179,9 +199,12 @@ const SEASON_PATTERNS: SeasonPattern[] = [
     regex: /第\s*([一二三四五六七八九十\d]+)\s*季/,
     build: (m) => {
       const raw = m[1]!;
-      const n = parseInt(raw, 10);
-      if (!Number.isNaN(n)) return n;
-      return chineseNumeralToInt(raw);
+      // Pure ASCII digits parse directly. A MIXED digit+numeral capture
+      // (e.g. "1十") is not pure-digit, so it routes to the validator and is
+      // rejected as malformed → default season 1 (rather than the old
+      // `parseInt("1十") === 1` accidental prefix parse).
+      if (/^\d+$/.test(raw)) return parseInt(raw, 10);
+      return chineseNumeralToInt(raw) ?? 1;
     },
   },
   // Standalone S\d (negative lookahead so "S01E01" doesn't double-count).
