@@ -4,6 +4,7 @@ use font_kit::properties::{Properties, Style as FontKitStyle, Weight as FontKitW
 use font_kit::source::SystemSource;
 use once_cell::sync::Lazy;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -93,6 +94,8 @@ const MAX_TTC_FACES: u32 = 16;
 /// CJK fonts while still accepting known real-world CJK collections just under
 /// 60 MiB.
 const MAX_FONT_DATA_SIZE: u64 = 64 * 1024 * 1024;
+const UNICODE_SCALAR_MAX: u32 = 0x10FFFF;
+const SKIP_CMAP12_GROUP_GLYPH_ID: u32 = u32::MAX;
 
 // MAX_FONT_FALLBACK_SIZE,
 // MAX_CUMULATIVE_FALLBACK_BYTES, and CUMULATIVE_FALLBACK_BYTES were
@@ -1185,6 +1188,12 @@ fn read_be_u32(data: &[u8], offset: usize) -> Option<u32> {
         .map(|bytes| u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
 }
 
+fn write_be_u32(data: &mut [u8], offset: usize, value: u32) -> Option<()> {
+    data.get_mut(offset..offset + 4)?
+        .copy_from_slice(&value.to_be_bytes());
+    Some(())
+}
+
 fn table_range(data: &[u8], face_offset: usize, tag: &[u8; 4]) -> Option<(usize, usize)> {
     let table_count = usize::from(read_be_u16(data, face_offset + 4)?);
     let table_records = face_offset.checked_add(12)?;
@@ -1229,6 +1238,115 @@ fn sfnt_face_offsets(data: &[u8], is_collection: bool, max_faces: u32) -> Vec<(u
         }
     }
     offsets
+}
+
+fn sanitize_cmap12_invalid_groups(font_data: &[u8], index: u32) -> (Cow<'_, [u8]>, usize) {
+    let face_offset = if is_ttc_data(font_data) {
+        let Ok(index) = usize::try_from(index) else {
+            return (Cow::Borrowed(font_data), 0);
+        };
+        let Some(offset_slot) = 12usize.checked_add(index.saturating_mul(4)) else {
+            return (Cow::Borrowed(font_data), 0);
+        };
+        let Some(offset) = read_be_u32(font_data, offset_slot) else {
+            return (Cow::Borrowed(font_data), 0);
+        };
+        let Ok(offset) = usize::try_from(offset) else {
+            return (Cow::Borrowed(font_data), 0);
+        };
+        offset
+    } else {
+        0
+    };
+
+    let Some((cmap_offset, cmap_len)) = table_range(font_data, face_offset, b"cmap") else {
+        return (Cow::Borrowed(font_data), 0);
+    };
+    let Some(cmap_end) = cmap_offset.checked_add(cmap_len) else {
+        return (Cow::Borrowed(font_data), 0);
+    };
+    let Some(record_count) = read_be_u16(font_data, cmap_offset + 2).map(usize::from) else {
+        return (Cow::Borrowed(font_data), 0);
+    };
+
+    let mut invalid_group_offsets = Vec::new();
+    for record_index in 0..record_count {
+        let Some(record_offset) = (cmap_offset + 4).checked_add(record_index.saturating_mul(8))
+        else {
+            break;
+        };
+        let Some(subtable_rel) = read_be_u32(font_data, record_offset + 4) else {
+            break;
+        };
+        let Ok(subtable_rel) = usize::try_from(subtable_rel) else {
+            continue;
+        };
+        if subtable_rel >= cmap_len {
+            continue;
+        }
+        let Some(subtable_offset) = cmap_offset.checked_add(subtable_rel) else {
+            continue;
+        };
+        if read_be_u16(font_data, subtable_offset) != Some(12) {
+            continue;
+        }
+        let Some(length) = read_be_u32(font_data, subtable_offset + 4) else {
+            continue;
+        };
+        let Ok(length) = usize::try_from(length) else {
+            continue;
+        };
+        let Some(subtable_end) = subtable_offset.checked_add(length) else {
+            continue;
+        };
+        if length < 16 || subtable_end > cmap_end || subtable_end > font_data.len() {
+            continue;
+        }
+        let Some(group_count) = read_be_u32(font_data, subtable_offset + 12) else {
+            continue;
+        };
+        let Ok(group_count) = usize::try_from(group_count) else {
+            continue;
+        };
+        let groups_offset = subtable_offset + 16;
+        for group_index in 0..group_count {
+            let Some(group_offset) = groups_offset.checked_add(group_index.saturating_mul(12))
+            else {
+                break;
+            };
+            if group_offset + 12 > subtable_end {
+                break;
+            }
+            let Some(start) = read_be_u32(font_data, group_offset) else {
+                break;
+            };
+            let Some(end) = read_be_u32(font_data, group_offset + 4) else {
+                break;
+            };
+            if start > end.min(UNICODE_SCALAR_MAX) {
+                invalid_group_offsets.push(group_offset);
+            }
+        }
+    }
+
+    if invalid_group_offsets.is_empty() {
+        return (Cow::Borrowed(font_data), 0);
+    }
+
+    invalid_group_offsets.sort_unstable();
+    invalid_group_offsets.dedup();
+    let mut sanitized = font_data.to_vec();
+    for group_offset in &invalid_group_offsets {
+        let _ = write_be_u32(&mut sanitized, *group_offset, UNICODE_SCALAR_MAX);
+        let _ = write_be_u32(&mut sanitized, *group_offset + 4, UNICODE_SCALAR_MAX);
+        let _ = write_be_u32(
+            &mut sanitized,
+            *group_offset + 8,
+            SKIP_CMAP12_GROUP_GLYPH_ID,
+        );
+    }
+
+    (Cow::Owned(sanitized), invalid_group_offsets.len())
 }
 
 fn decode_utf16be_name(raw: &[u8]) -> Option<String> {
@@ -3352,7 +3470,7 @@ fn is_in_system_fonts_dir(canonical: &Path) -> bool {
 /// For TTC files with face index > 0, uses fontcull's internal crates directly
 /// to select the correct face. Always includes ASCII printable (0x0020–0x007E)
 /// and CJK fullwidth forms (0xFF01–0xFF5E) as safety padding.
-/// Falls back to full font on error.
+/// Returns an error on subsetting failure instead of embedding the full font.
 ///
 /// Public IPC entry point + the CLI's standalone-embed callsite both
 /// invoke this function as a regular `pub fn`; the `#[tauri::command]`
@@ -3880,6 +3998,14 @@ fn subset_with_index(font_data: &[u8], index: u32, codepoints: &[u32]) -> Result
         }
     }
 
+    let (font_data, sanitized_cmap_groups) = sanitize_cmap12_invalid_groups(font_data, index);
+    if sanitized_cmap_groups > 0 {
+        log::warn!(
+            "Ignored {sanitized_cmap_groups} invalid cmap format-12 group(s) outside Unicode range while subsetting face {index}"
+        );
+    }
+    let font_data = font_data.as_ref();
+
     // Display, not Debug — Debug repr leaks internal struct fields,
     // table tags, byte offsets into a frontend-visible error.
     let font = FontRef::from_index(font_data, index)
@@ -4000,6 +4126,66 @@ mod tests {
         assert!(!is_ttc_data(b""));
         assert!(!is_ttc_data(b"t"));
         assert!(!is_ttc_data(b"ttc"));
+    }
+
+    #[test]
+    fn sanitize_cmap12_invalid_groups_makes_non_unicode_ranges_unselectable() {
+        let cmap_offset = 28u32;
+        let subtable_offset = 12u32;
+        let groups = [
+            (0x20u32, 0x7Eu32, 1u32),
+            (0x110001u32, 0x110002u32, 7u32),
+            (0x500u32, 0x4FFu32, 9u32),
+        ];
+        let subtable_length = 16 + groups.len() as u32 * 12;
+        let cmap_length = subtable_offset + subtable_length;
+
+        let mut font = Vec::new();
+        font.extend_from_slice(b"\0\x01\0\0");
+        font.extend_from_slice(&1u16.to_be_bytes());
+        font.extend_from_slice(&[0; 6]);
+        font.extend_from_slice(b"cmap");
+        font.extend_from_slice(&0u32.to_be_bytes());
+        font.extend_from_slice(&cmap_offset.to_be_bytes());
+        font.extend_from_slice(&cmap_length.to_be_bytes());
+        font.extend_from_slice(&0u16.to_be_bytes());
+        font.extend_from_slice(&1u16.to_be_bytes());
+        font.extend_from_slice(&0u16.to_be_bytes());
+        font.extend_from_slice(&4u16.to_be_bytes());
+        font.extend_from_slice(&subtable_offset.to_be_bytes());
+        font.extend_from_slice(&12u16.to_be_bytes());
+        font.extend_from_slice(&0u16.to_be_bytes());
+        font.extend_from_slice(&subtable_length.to_be_bytes());
+        font.extend_from_slice(&0u32.to_be_bytes());
+        font.extend_from_slice(&(groups.len() as u32).to_be_bytes());
+        for (start, end, gid) in groups {
+            font.extend_from_slice(&start.to_be_bytes());
+            font.extend_from_slice(&end.to_be_bytes());
+            font.extend_from_slice(&gid.to_be_bytes());
+        }
+
+        let (sanitized, count) = sanitize_cmap12_invalid_groups(&font, 0);
+        assert_eq!(count, 2);
+        let sanitized = sanitized.as_ref();
+        let valid_group = cmap_offset as usize + subtable_offset as usize + 16;
+        assert_eq!(read_be_u32(sanitized, valid_group), Some(0x20));
+        assert_eq!(read_be_u32(sanitized, valid_group + 4), Some(0x7E));
+        assert_eq!(read_be_u32(sanitized, valid_group + 8), Some(1));
+
+        for group_offset in [valid_group + 12, valid_group + 24] {
+            assert_eq!(
+                read_be_u32(sanitized, group_offset),
+                Some(UNICODE_SCALAR_MAX)
+            );
+            assert_eq!(
+                read_be_u32(sanitized, group_offset + 4),
+                Some(UNICODE_SCALAR_MAX)
+            );
+            assert_eq!(
+                read_be_u32(sanitized, group_offset + 8),
+                Some(SKIP_CMAP12_GROUP_GLYPH_ID)
+            );
+        }
     }
 
     /// Boundary tests for the TTC numFonts peek inside
@@ -4204,6 +4390,104 @@ mod tests {
         let subsetted = subset_with_index(&font_data, 0, &[0x41])
             .expect("legacy GPOS fallback fixture should subset cleanly");
         assert!(!subsetted.is_empty(), "subset must not be empty");
+    }
+
+    #[test]
+    #[ignore = "requires SSAHDRIFY_TEST_CMAP12_SANITIZE_FONT env var pointing to a local fixture"]
+    fn subset_with_index_handles_out_of_unicode_cmap12_groups() {
+        let Ok(font_path) = std::env::var("SSAHDRIFY_TEST_CMAP12_SANITIZE_FONT") else {
+            eprintln!("SSAHDRIFY_TEST_CMAP12_SANITIZE_FONT not set — skipping");
+            return;
+        };
+        let font_data = match std::fs::read(&font_path) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("Cannot read {font_path}: {e} — skipping");
+                return;
+            }
+        };
+
+        let subsetted = subset_with_index(&font_data, 0, &[0x41, 0x4E2D])
+            .expect("format-12 cmap groups beyond Unicode should be ignored");
+        assert!(!subsetted.is_empty(), "subset must not be empty");
+    }
+
+    #[test]
+    #[ignore = "requires SSAHDRIFY_TEST_ALL_FONTS_CACHE env var pointing to a local font cache"]
+    fn subset_cached_font_faces_in_batch() {
+        let Ok(cache_path) = std::env::var("SSAHDRIFY_TEST_ALL_FONTS_CACHE") else {
+            eprintln!("SSAHDRIFY_TEST_ALL_FONTS_CACHE not set — skipping");
+            return;
+        };
+        let offset = std::env::var("SSAHDRIFY_TEST_ALL_FONTS_OFFSET")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(0);
+        let limit = std::env::var("SSAHDRIFY_TEST_ALL_FONTS_LIMIT")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(usize::MAX);
+        let sqlite_limit = i64::try_from(limit).unwrap_or(-1);
+        let sqlite_offset = i64::try_from(offset).unwrap_or(i64::MAX);
+
+        let conn =
+            Connection::open_with_flags(cache_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .expect("open local font cache read-only");
+        let mut stmt = conn
+            .prepare(
+                "SELECT font_path, face_index \
+                 FROM cached_fonts \
+                 ORDER BY font_path, face_index \
+                 LIMIT ?1 OFFSET ?2",
+            )
+            .expect("prepare cached font query");
+        let rows = stmt
+            .query_map(params![sqlite_limit, sqlite_offset], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i32>(1)?))
+            })
+            .expect("query cached fonts");
+
+        let mut checked = 0usize;
+        let mut failures = Vec::new();
+        for row in rows {
+            let (path, face_index) = row.expect("read cached font row");
+            checked += 1;
+            let Ok(face_index) = u32::try_from(face_index) else {
+                failures.push(format!("{path}#invalid-index"));
+                continue;
+            };
+            let font_data = match fs::read(&path) {
+                Ok(data) => data,
+                Err(error) => {
+                    failures.push(format!("{path}#{face_index}: read failed: {error}"));
+                    continue;
+                }
+            };
+            let codepoints = [0x20, 0x41, 0x4E2D, 0x3042, 0xAC00];
+            if let Err(error) = subset_with_index(&font_data, face_index, &codepoints) {
+                failures.push(format!("{path}#{face_index}: {error}"));
+            }
+            if checked % 100 == 0 {
+                eprintln!("subset cache batch progress: {checked} checked from offset {offset}");
+            }
+        }
+
+        assert!(
+            checked > 0,
+            "cache batch at offset {offset} selected no font faces"
+        );
+        assert!(
+            failures.is_empty(),
+            "{} subset failure(s) in cache batch at offset {}:\n{}",
+            failures.len(),
+            offset,
+            failures
+                .iter()
+                .take(20)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
     }
 
     fn sample_entry(path: &str, family: &str, index: u32) -> LocalFontEntry {
