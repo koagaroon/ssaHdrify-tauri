@@ -174,6 +174,18 @@ export default function FontSourceModal(props: Props) {
   // Rust cancellation is targeted by scan id, so late cancel commands from a
   // previous run cannot affect the next scan.
   const activeScanIdRef = useRef<number | null>(null);
+  // True only once a real scan is running (scanId assigned), i.e. AFTER the OS
+  // picker + large-scan confirm resolve. `busy` / `scanning` flip true earlier
+  // (in claimScanFlow, so the parent lock spans the whole pick/confirm arc), so
+  // gating the progress row + inline Cancel on `scanStarted` — not `scanning` —
+  // keeps the "Scanned N fonts…" row and its Cancel button from rendering while
+  // the native dialogs are up, where there is no scanId to cancel anyway.
+  const [scanStarted, setScanStarted] = useState(false);
+  // Set when the user dismisses (Esc / scrim / ✕) during the pre-scan window
+  // (busy but no scanId yet). runScanFlow checks it after the picker/confirm
+  // awaits resolve and bails before starting the scan, so a dismiss in that
+  // window is honored instead of being a silent no-op.
+  const cancelPendingRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   // info is non-error feedback ("added N fonts") shown in a neutral tone.
   const [info, setInfo] = useState<string | null>(null);
@@ -220,7 +232,16 @@ export default function FontSourceModal(props: Props) {
       });
       return;
     }
-    if (busyRef.current) return;
+    if (busyRef.current) {
+      // Pre-scan window: busy (OS picker / large-scan confirm in flight) but
+      // no scanId yet, so there is nothing to cancelFontScan. Flag the pending
+      // flow to bail when its current await resolves, instead of silently
+      // swallowing the dismiss. busyRef clears once the flow releases; a
+      // second dismiss then closes the modal normally — same two-step as the
+      // active-scan cancel path above.
+      cancelPendingRef.current = true;
+      return;
+    }
     onClose();
   }, [onClose, t]);
 
@@ -365,6 +386,11 @@ export default function FontSourceModal(props: Props) {
       const message = sanitizeError(e);
       console.warn("cancelFontScan failed:", e);
       setError(t("font_scan_cancel_failed", message));
+      // Re-enable the Cancel pill so the user can retry. The scan keeps
+      // running on a cancel-IPC failure (scanning stays true, so the
+      // scanning false→true reset effect never re-fires); without this the
+      // pill stays stuck on "Cancelling…" / disabled for the rest of the run.
+      setCancelRequested(false);
     });
   }, [t]);
 
@@ -396,6 +422,7 @@ export default function FontSourceModal(props: Props) {
     // assume it's a defect.
     busyRef.current = false;
     setBusy(false);
+    setScanStarted(false);
     setScanningWithParent(false);
   }, [setScanningWithParent]);
 
@@ -444,6 +471,8 @@ export default function FontSourceModal(props: Props) {
       if (!claimScanFlow()) return;
       setError(null);
       setInfo(null);
+      // Clear any stale pre-scan dismiss request left by a prior flow.
+      cancelPendingRef.current = false;
       let scanId: number | null = null;
       try {
         const input = await opts.pickInput();
@@ -451,9 +480,14 @@ export default function FontSourceModal(props: Props) {
         const preflight = await opts.preflight(input);
         const confirmed = await confirmLargeFontScan(preflight);
         if (!confirmed) return;
+        // Honor an Esc / scrim / ✕ dismiss that landed while the picker or
+        // confirm dialog was up (see requestClose's pre-scan branch). Bail
+        // before any scan id / source id is minted — nothing has mutated yet.
+        if (cancelPendingRef.current) return;
         scanId = newScanId();
         const sourceId = newSourceId();
         activeScanIdRef.current = scanId;
+        setScanStarted(true);
         resetScanProgress();
         // setScanningWithParent(true) already fired inside claimScanFlow
         // — the parent lock spans the full pick/preflight/confirm/scan
@@ -739,7 +773,7 @@ export default function FontSourceModal(props: Props) {
             </div>
           </button>
 
-          {scanning && (
+          {scanStarted && (
             <div
               className="rounded-lg px-3 py-2 flex items-center justify-between gap-3"
               style={{

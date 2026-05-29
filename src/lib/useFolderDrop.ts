@@ -214,7 +214,15 @@ export function useFolderDrop({
                 // tripped MAX_INPUT_PATHS or any other Rust-side
                 // rejection produces a silent no-op from the user's
                 // perspective.
-                if (mounted) onErrorRef.current?.(e);
+                if (mounted) {
+                  onErrorRef.current?.(e);
+                  // Also clear the drop-active highlight, mirroring the
+                  // subscription-failure catch below. The happy path resets
+                  // active before this await, so this is defense-in-depth: a
+                  // future edit moving that reset after the await would
+                  // otherwise leave the drop zone visually "armed" on error.
+                  onActiveChangeRef.current?.(false);
+                }
               }
               break;
             }

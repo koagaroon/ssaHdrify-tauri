@@ -263,10 +263,16 @@ export default function FontCacheDriftModal({
                         pack folder with a BiDi name reaches React intact.
                         React doesn't render HTML but it DOES render BiDi
                         controls and they visually reverse the path. */}
-                    {drift!.modified.slice(0, 8).map((p) => {
+                    {/* Key by index, not the sanitized path: two paths that
+                        differ only in stripped BiDi / zero-width chars sanitize
+                        to the same string and would collide as a React key
+                        (duplicate-key warning + one row dropped). The slice is
+                        a static display list that never reorders, so the index
+                        is a stable, collision-free key. */}
+                    {drift!.modified.slice(0, 8).map((p, i) => {
                       const safe = sanitizeForDialog(p);
                       return (
-                        <li key={safe} style={{ wordBreak: "break-all" }}>
+                        <li key={i} style={{ wordBreak: "break-all" }}>
                           {safe}
                         </li>
                       );
@@ -282,10 +288,12 @@ export default function FontCacheDriftModal({
                     {t("font_cache_drift_removed_label")}
                   </div>
                   <ul style={{ paddingLeft: "1rem", listStyle: "disc" }}>
-                    {drift!.removed.slice(0, 8).map((p) => {
+                    {/* Key by index — same sanitized-path collision reason as
+                        the modified list above. */}
+                    {drift!.removed.slice(0, 8).map((p, i) => {
                       const safe = sanitizeForDialog(p);
                       return (
-                        <li key={safe} style={{ wordBreak: "break-all" }}>
+                        <li key={i} style={{ wordBreak: "break-all" }}>
                           {safe}
                         </li>
                       );
@@ -344,15 +352,16 @@ export default function FontCacheDriftModal({
               <ul
                 style={{ paddingLeft: "1rem", listStyle: "disc", color: "var(--text-secondary)" }}
               >
-                {skippedFolders.slice(0, 8).map((sk) => {
+                {skippedFolders.slice(0, 8).map((sk, i) => {
                   // Same BiDi/zero-width scrub as the modified/removed
                   // lists above — folder paths and reason strings can both
                   // carry attacker-influenced bytes (reason is a Rust
                   // error message that may interpolate the folder path).
+                  // Key by index for the same sanitized-collision reason.
                   const safeFolder = sanitizeForDialog(sk.folder);
                   const safeReason = sanitizeForDialog(sk.reason);
                   return (
-                    <li key={safeFolder} style={{ wordBreak: "break-all" }}>
+                    <li key={i} style={{ wordBreak: "break-all" }}>
                       <span style={{ color: "var(--text-primary)" }}>{safeFolder}</span>
                       {" — "}
                       {safeReason}

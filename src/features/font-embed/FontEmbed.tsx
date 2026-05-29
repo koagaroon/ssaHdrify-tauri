@@ -125,6 +125,11 @@ export default function FontEmbed() {
   const [lastActionResult, setLastActionResult] = useState<
     "success" | "partial" | "error" | "cancelled" | null
   >(null);
+  // Synchronous "Cancelling…" feedback for the embed Cancel button. The abort
+  // only lands at the next per-file iteration boundary, so without this the
+  // user has no confirmation their click registered (mirrors FontSourceModal's
+  // cancelRequested). Reset by the effect below when embedding settles.
+  const [embedCancelRequested, setEmbedCancelRequested] = useState(false);
   const { logs, addLog, clearLogs, logScrollRef } = useLogPanel();
   const [showFileList, setShowFileList] = useState(false);
   const [dropActive, setDropActive] = useState(false);
@@ -635,7 +640,18 @@ export default function FontEmbed() {
         return;
       }
       try {
-        const existingCount = await countExistingFiles(projectedOutputs);
+        // Dedup by the same output key the embed loop uses for its
+        // within-batch skip — two inputs resolving to the same output are
+        // written once, so the overwrite-confirm count must not count both
+        // (it would overstate the files actually overwritten).
+        const seenProjected = new Set<string>();
+        const uniqueProjected = projectedOutputs.filter((p) => {
+          const key = normalizeOutputKey(p);
+          if (seenProjected.has(key)) return false;
+          seenProjected.add(key);
+          return true;
+        });
+        const existingCount = await countExistingFiles(uniqueProjected);
         if (existingCount > 0) {
           const confirmed = await ask(t("msg_overwrite_confirm", existingCount, filePaths.length), {
             title: t("dialog_overwrite_title"),
@@ -664,6 +680,11 @@ export default function FontEmbed() {
 
         let successCount = 0;
         let issueCount = skippedPaths.size;
+        // Files that processed cleanly but needed no embedding (every
+        // referenced font already present). Tracked apart from successCount /
+        // issueCount so an all-no-change batch isn't misframed as total
+        // failure in the final summary.
+        let noChangeCount = 0;
         let processedCount = 0;
         const seenOutputs = new Set<string>();
 
@@ -771,7 +792,10 @@ export default function FontEmbed() {
               for (const warning of missingWarnings) {
                 addLog(t("msg_fonts_file_warning", safeFileName, warning), "warn");
               }
-              issueCount += missingWarnings.length;
+              // Count this file as ONE issue ("no usable fonts"). The
+              // per-missing-font warnings above are logged for detail but must
+              // not ALSO be summed here, or one file inflates the summary's
+              // issue count past the file count.
               issueCount++;
               addLog(t("msg_no_fonts_for_file", safeFileName), "error");
               continue;
@@ -809,6 +833,12 @@ export default function FontEmbed() {
                 for (const warning of fileWarnings) {
                   addLog(t("msg_fonts_file_warning", safeFileName, warning), "warn");
                 }
+              } else {
+                // Benign no-change: every referenced font is already present,
+                // so there was nothing to embed. Not a failure — tracked
+                // separately so an all-no-change batch isn't routed to
+                // msg_fonts_all_failed below.
+                noChangeCount++;
               }
               // Nothing was actually embedded — skip the write so we
               // don't produce a `.embedded.ass` that's identical to the
@@ -869,6 +899,12 @@ export default function FontEmbed() {
         } else if (successCount > 0) {
           addLog(t("msg_fonts_complete", successCount, filePaths.length), "success");
           setLastActionResult("success");
+        } else if (issueCount === 0 && noChangeCount > 0) {
+          // Every processed file already had all its referenced fonts —
+          // nothing to embed. A benign outcome, not a failure: don't route it
+          // to msg_fonts_all_failed.
+          addLog(t("msg_fonts_all_no_change", noChangeCount), "info");
+          setLastActionResult("success");
         } else {
           addLog(t("msg_fonts_all_failed", filePaths.length), "error");
           setLastActionResult("error");
@@ -877,6 +913,7 @@ export default function FontEmbed() {
         setEmbedding(false);
         setBatchProgress(null);
         setProgress(null);
+        setEmbedCancelRequested(false);
       }
     } finally {
       busyRef.current = false;
@@ -1152,16 +1189,19 @@ export default function FontEmbed() {
         {embedding && (
           <button
             onClick={() => {
+              setEmbedCancelRequested(true);
               abortRef.current?.abort();
             }}
+            disabled={embedCancelRequested}
             className="px-4 rounded-lg text-sm transition-colors"
             style={{
               background: "var(--cancel-bg)",
               color: "var(--cancel-text)",
               height: "38px",
+              filter: embedCancelRequested ? "grayscale(1)" : "none",
             }}
           >
-            {t("btn_cancel")}
+            {embedCancelRequested ? t("btn_cancelling") : t("btn_cancel")}
           </button>
         )}
         <button

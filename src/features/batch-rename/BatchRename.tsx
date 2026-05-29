@@ -604,7 +604,19 @@ export default function BatchRename() {
       // confirm above): copy modes go straight to the overwrite dialog,
       // and the user has no other way to learn that some pairings failed
       // before the dialog moment.
-      const projectedOutputs = targets.map((t2) => t2.outputPath);
+      // Dedup by the same output key the rename loop uses for its
+      // within-batch skip — two rows resolving to the same output are
+      // written once, so the overwrite-confirm count must not count both
+      // (it would overstate the files actually overwritten).
+      const seenProjected = new Set<string>();
+      const projectedOutputs = targets
+        .map((t2) => t2.outputPath)
+        .filter((p) => {
+          const key = normalizeOutputKey(p);
+          if (seenProjected.has(key)) return false;
+          seenProjected.add(key);
+          return true;
+        });
       try {
         const existingCount = await countExistingFiles(projectedOutputs);
         if (existingCount > 0) {

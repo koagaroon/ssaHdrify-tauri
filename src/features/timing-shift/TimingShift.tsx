@@ -256,7 +256,13 @@ export default function TimingShift() {
     }
     if (thresholdInvalid) {
       if (debounceRef.current) clearTimeout(debounceRef.current);
+      // Clear the derived chips too, not just the preview: leaving
+      // captionCount / detectedFormat set would show a stale count + format
+      // badge over a blank timeline. The empty-content branch above resets
+      // all three for the same consistency reason.
       setPreview([]);
+      setCaptionCount(0);
+      setDetectedFormat("");
       return;
     }
     if (debounceRef.current) clearTimeout(debounceRef.current);

@@ -116,20 +116,36 @@ export default function NitViz({ value, onChange, disabled = false }: NitVizProp
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (disabled) return;
-    const step = e.shiftKey ? 100 : 10;
+    // Step in LOG-SCALE percent, not linear nits, so each arrow press moves a
+    // consistent fraction of the slider track. The pointer path maps position
+    // to value via log10 (nitsToPct / pctToNits); a fixed linear nit step
+    // would jump a large fraction of the track near MIN and be sub-pixel near
+    // MAX, contradicting the pointer feel.
+    const pctStep = e.shiftKey ? 10 : 2;
+    let dir: number;
     if (e.key === "ArrowLeft" || e.key === "ArrowDown") {
-      e.preventDefault();
-      onChange(Math.max(MIN_BRIGHTNESS, value - step));
+      dir = -1;
     } else if (e.key === "ArrowRight" || e.key === "ArrowUp") {
-      e.preventDefault();
-      onChange(Math.min(MAX_BRIGHTNESS, value + step));
+      dir = 1;
     } else if (e.key === "Home") {
       e.preventDefault();
       onChange(MIN_BRIGHTNESS);
+      return;
     } else if (e.key === "End") {
       e.preventDefault();
       onChange(MAX_BRIGHTNESS);
+      return;
+    } else {
+      return;
     }
+    e.preventDefault();
+    let next = pctToNits((nitsToPct(value) + dir * pctStep) / 100);
+    // pctToNits rounds to integer nits; near MIN a small log step can round
+    // back to the current value and stall. Guarantee at least a 1-nit move.
+    if (next === value) {
+      next = Math.min(MAX_BRIGHTNESS, Math.max(MIN_BRIGHTNESS, value + dir));
+    }
+    onChange(next);
   };
 
   return (

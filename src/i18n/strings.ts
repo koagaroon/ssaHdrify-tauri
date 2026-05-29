@@ -134,6 +134,7 @@ export const strings: Record<string, StringEntry> = {
   btn_convert: { en: "Convert", zh: "转换" },
   btn_converting: { en: "Converting…", zh: "转换中…" },
   btn_cancel: { en: "Cancel", zh: "取消" },
+  btn_cancelling: { en: "Cancelling…", zh: "正在取消…" },
   log_title: { en: "Log", zh: "日志" },
   log_clear: { en: "Clear", zh: "清空" },
 
@@ -303,6 +304,10 @@ export const strings: Record<string, StringEntry> = {
   msg_fonts_all_failed: {
     en: "Embed failed on all {0} file(s); see errors above",
     zh: "全部 {0} 个文件嵌入失败，详见上方错误",
+  },
+  msg_fonts_all_no_change: {
+    en: "Nothing to embed — all referenced fonts are already present in {0} file(s)",
+    zh: "无需嵌入 —— {0} 个文件引用的字体均已存在",
   },
   msg_fonts_cancelled: { en: "Embed cancelled.", zh: "已取消嵌入。" },
   msg_fonts_error: { en: "Error embedding {0}: {1}", zh: "嵌入 {0} 出错：{1}" },

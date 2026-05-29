@@ -32,6 +32,10 @@ export default function NumberInput({
   invalid = false,
 }: NumberInputProps) {
   const numStep = typeof step === "string" ? parseFloat(step) : step;
+  // Guard a non-numeric / non-positive step (e.g. a bad string prop):
+  // parseFloat would yield NaN and adjust(NaN) would emit the literal "NaN".
+  // Fall back to 1 so the spinner stays functional.
+  const safeStep = Number.isFinite(numStep) && numStep > 0 ? numStep : 1;
   const inputClass = `num-input w-full pl-3 pr-7 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]${
     disabled ? " is-disabled" : ""
   }`;
@@ -42,7 +46,13 @@ export default function NumberInput({
     let next = current + delta;
     if (min !== undefined) next = Math.max(min, next);
     if (max !== undefined) next = Math.min(max, next);
-    const decimals = String(numStep).split(".")[1]?.length ?? 0;
+    // Preserve whichever carries more decimals — the step or the current
+    // typed value — so clicking +/- on a higher-precision typed value (e.g.
+    // 1.25 with step 1) doesn't silently truncate to an integer the precision
+    // the typing path keeps.
+    const stepDecimals = String(safeStep).split(".")[1]?.length ?? 0;
+    const valueDecimals = String(current).split(".")[1]?.length ?? 0;
+    const decimals = Math.max(stepDecimals, valueDecimals);
     onChange(next.toFixed(decimals));
   };
 
@@ -76,7 +86,7 @@ export default function NumberInput({
         <button
           type="button"
           tabIndex={-1}
-          onClick={() => adjust(numStep)}
+          onClick={() => adjust(safeStep)}
           disabled={disabled}
           className="num-spin"
         >
@@ -88,7 +98,7 @@ export default function NumberInput({
         <button
           type="button"
           tabIndex={-1}
-          onClick={() => adjust(-numStep)}
+          onClick={() => adjust(-safeStep)}
           disabled={disabled}
           className="num-spin"
         >

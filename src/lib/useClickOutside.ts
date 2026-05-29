@@ -2,10 +2,12 @@
  * useClickOutside — dismiss a transient overlay (dropdown, popover) when
  * the user clicks outside its container or presses Escape.
  *
- * Mousedown is armed on the next tick so the same click that opened the
- * overlay doesn't immediately close it. Without that delay, the click
- * that flipped `open` to true bubbles up to the freshly-attached
- * `mousedown` listener and closes it on the same frame.
+ * The outside listener is `pointerdown` (not `mousedown`) so touch / pen
+ * taps — which on Tauri WebView2 touchscreens don't synthesize a mousedown —
+ * also dismiss the overlay. It is armed on the next tick so the same
+ * interaction that opened the overlay doesn't immediately close it: without
+ * that delay, the pointerdown that flipped `open` to true bubbles up to the
+ * freshly-attached listener and closes it on the same frame.
  *
  * Used by App's theme menu and the file-strip dropdowns in HDR Convert,
  * Time Shift, and Font Embed — the original sites carried four
@@ -37,7 +39,7 @@ export function useClickOutside(
 
   useEffect(() => {
     if (!open) return;
-    const onClick = (e: MouseEvent) => {
+    const onPointerDown = (e: PointerEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) {
         onDismissRef.current();
       }
@@ -45,11 +47,11 @@ export function useClickOutside(
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onDismissRef.current();
     };
-    const id = setTimeout(() => document.addEventListener("mousedown", onClick), 0);
+    const id = setTimeout(() => document.addEventListener("pointerdown", onPointerDown), 0);
     document.addEventListener("keydown", onKey);
     return () => {
       clearTimeout(id);
-      document.removeEventListener("mousedown", onClick);
+      document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKey);
     };
   }, [open, ref]);
