@@ -788,3 +788,56 @@ describe("font-collector per-variant codepoint cap boundary", () => {
     expect(() => collectFonts(makeASS(overCap))).toThrow(/Too many codepoints for one font/);
   });
 });
+
+describe("font-collector font-variant + total-codepoint cap boundaries", () => {
+  function makeUniqueGlyphRun(count: number): string {
+    return Array.from({ length: count }, (_, i) => String.fromCodePoint(0x10000 + i)).join("");
+  }
+  // `count` distinct \fn families, each used with one glyph → `count`
+  // usageMap entries. No leading text before the first \fn, so the style's
+  // default font is never recorded as an extra variant.
+  function makeVariants(count: number): string {
+    return Array.from({ length: count }, (_, i) => `{\\fnFam${i}}x`).join("");
+  }
+  // One Dialogue line per entry — used to spread codepoints across lines so
+  // each stays under the per-dialogue text cap (MAX_DIALOGUE_TEXT_LEN) while
+  // the function-level codepoint total still accumulates across them.
+  function makeMultiDialogueAss(dialogues: string[]): string {
+    return [
+      "[Script Info]",
+      "ScriptType: v4.00+",
+      "",
+      "[V4+ Styles]",
+      "Format: Name, Fontname, Fontsize, Bold, Italic",
+      "Style: Default,Arial,40,0,0",
+      "",
+      "[Events]",
+      "Format: Layer, Start, End, Style, Text",
+      ...dialogues.map((d) => `Dialogue: 0,0:00:00.00,0:00:05.00,Default,${d}`),
+      "",
+    ].join("\n");
+  }
+
+  it("allows exactly MAX_FONT_VARIANTS (500) distinct font variants", async () => {
+    await ensureLoaded();
+    expect(collectFonts(makeASS(makeVariants(500)))).toHaveLength(500);
+  });
+
+  it("rejects the 501st font variant", async () => {
+    await ensureLoaded();
+    expect(() => collectFonts(makeASS(makeVariants(501)))).toThrow(/Too many font variants/);
+  });
+
+  it("rejects when the cross-variant codepoint total exceeds MAX_TOTAL_CODEPOINTS", async () => {
+    await ensureLoaded();
+    // 16 variants × 65,536 glyphs = 1,048,576 > the 1,000,000 total cap.
+    // Spread one variant per Dialogue line so each line stays under the
+    // per-dialogue text cap (a single 16×65,536 line would trip
+    // MAX_DIALOGUE_TEXT_LEN first); each variant sits AT the per-variant cap,
+    // and 16 variants is well under MAX_FONT_VARIANTS — isolating the
+    // total-codepoint guard, which sits adjacent to the per-variant one.
+    const run = makeUniqueGlyphRun(65536);
+    const ass = makeMultiDialogueAss(Array.from({ length: 16 }, (_, i) => `{\\fnFam${i}}${run}`));
+    expect(() => collectFonts(ass)).toThrow(/Too many codepoints across fonts/);
+  });
+});

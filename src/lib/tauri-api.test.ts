@@ -197,6 +197,59 @@ describe("runStreamingScan via scanFontFiles", () => {
   });
 });
 
+describe("runStreamingScan — Channel state-machine defenses", () => {
+  it("ignores a duplicate Done (counts not overwritten last-wins)", async () => {
+    invokeMock.mockImplementation(async () => {
+      const ch = channelInstances[0]!;
+      ch.onmessage?.({ kind: "batch", total: 3 });
+      ch.onmessage?.({ kind: "done", reason: "natural", added: 3, duplicated: 1 });
+      // The Rust contract emits exactly one Done; a second must be dropped,
+      // not overwrite the first's counts.
+      ch.onmessage?.({ kind: "done", reason: "ceilingHit", added: 999, duplicated: 999 });
+    });
+
+    const result = await scanFontDirectory("/dir", "src-dupdone", 301);
+    expect(result).toEqual({ added: 3, duplicated: 1, reason: "natural" });
+  });
+
+  it("detaches onmessage after Done so a late Batch can't regress the count", async () => {
+    const seen: number[] = [];
+    invokeMock.mockImplementation(async () => {
+      const ch = channelInstances[0]!;
+      ch.onmessage?.({ kind: "batch", total: 2 });
+      ch.onmessage?.({ kind: "done", reason: "natural", added: 5, duplicated: 0 });
+      // Late Batch after Done (a lifecycle / async-fetch quirk): must be a
+      // no-op because the handler detached on Done.
+      ch.onmessage?.({ kind: "batch", total: 99 });
+    });
+
+    const result = await scanFontDirectory("/dir", "src-latebatch", 302, (t) => seen.push(t));
+    expect(result.added).toBe(5);
+    expect(seen).toEqual([2]); // the post-Done 99 never reached onBatch
+  });
+
+  it("settles and detaches on an unknown payload kind (no forward-compat hang)", async () => {
+    const seen: number[] = [];
+    invokeMock.mockImplementation(async () => {
+      const ch = channelInstances[0]!;
+      ch.onmessage?.({ kind: "batch", total: 1 });
+      // A future Rust variant emitted WITHOUT a trailing Done. If
+      // settle-on-unknown regressed, the await below would hang and time
+      // out. The unknown payload is treated as terminal with the default
+      // (pre-any-Done) counts, and the handler detaches…
+      ch.onmessage?.({ kind: "skipped", folder: "X" });
+      // …so this later real Done can't mutate the already-settled result,
+      // and the late Batch can't fire onBatch.
+      ch.onmessage?.({ kind: "done", reason: "natural", added: 42, duplicated: 7 });
+      ch.onmessage?.({ kind: "batch", total: 99 });
+    });
+
+    const result = await scanFontDirectory("/dir", "src-unknown", 303, (t) => seen.push(t));
+    expect(result).toEqual({ added: 0, duplicated: 0, reason: "natural" });
+    expect(seen).toEqual([1]); // only the pre-unknown batch reached onBatch
+  });
+});
+
 describe("font scan preflight wrappers", () => {
   it("invokes the directory and file-list preflight commands with stable args", async () => {
     invokeMock.mockResolvedValueOnce({ fontFiles: 12, totalBytes: 34 });

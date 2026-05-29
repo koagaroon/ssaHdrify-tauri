@@ -16,6 +16,7 @@ import { runChain, resolveChainOutputPath } from "./chain-runtime";
 import type { ChainPlan } from "./chain-types";
 import { processAssContent } from "../hdr-convert/ass-processor";
 import { shiftSubtitles } from "../timing-shift/timing-engine";
+import { buildFontEntry } from "../font-embed/ass-uuencode";
 
 // ── Fixtures ───────────────────────────────────────────────
 
@@ -243,6 +244,32 @@ describe("runChain — embed step", () => {
     );
   });
 
+  it("annotates a MID-chain (step 2) failure with the correct step number", () => {
+    // Step 1 (hdr) succeeds; step 2 (embed) throws because no subsets were
+    // pre-resolved. Pins the `i + 1` numbering at step >= 2 AND the
+    // abort-on-first-failure model (the throw aborts the chain) — the
+    // single-step tests above only ever exercise "step 1 (...) failed".
+    const plan: ChainPlan = {
+      steps: [
+        { kind: "hdr", params: { eotf: "PQ", brightness: 203 } },
+        {
+          kind: "embed",
+          params: {
+            fontDirs: [],
+            fontFiles: [],
+            noSystemFonts: false,
+            onMissing: "warn",
+            // subsets intentionally omitted → step 2 throws
+          },
+        },
+      ],
+      outputTemplate: "{name}.embed.ass",
+    };
+    expect(() => runChain({ plan, inputPath: INPUT_PATH, content: ASS_FIXTURE })).toThrow(
+      /step 2 \(embed\) failed: embed step in chain requires pre-resolved font subsets/
+    );
+  });
+
   it("returns input content unchanged when subsets array is empty", () => {
     // Legit case: subtitle has no font references, or all lookups
     // failed under --on-missing warn. Skip the [Fonts] insertion.
@@ -266,10 +293,12 @@ describe("runChain — embed step", () => {
     expect(result.notes).toEqual(["embed: 0 fonts embedded (no resolvable references)"]);
   });
 
-  it("inserts a [Fonts] section when subsets are provided", () => {
-    // Synthetic single-byte payload — the test verifies the section
-    // appears, not the UU-encoded contents. buildFontEntry is itself
-    // tested in ass-uuencode.test.ts.
+  it("inserts a [Fonts] section with the production-decoded subset bytes", () => {
+    // Pins the wire contract through the REAL decoder: chain-runtime's
+    // production decodeBase64 (js-base64) must turn "AAECAw==" into exactly
+    // [0,1,2,3] before buildFontEntry UU-encodes it. The byte-level assertion
+    // below catches a decodeBase64 regression that a local js-base64 mirror
+    // (wire-format.test.ts) would miss.
     const plan: ChainPlan = {
       steps: [
         {
@@ -291,7 +320,9 @@ describe("runChain — embed step", () => {
     };
     const result = runChain({ plan, inputPath: INPUT_PATH, content: ASS_FIXTURE });
     expect(result.content).toContain("[Fonts]");
-    expect(result.content).toContain("fontname: Arial.ttf");
+    // Full entry (header + UU body) for the decoded bytes — if decodeBase64
+    // produced the wrong bytes, this exact-substring match fails.
+    expect(result.content).toContain(buildFontEntry("Arial.ttf", new Uint8Array([0, 1, 2, 3])));
     expect(result.notes).toEqual(["embed: 1 font(s) embedded"]);
   });
 });
