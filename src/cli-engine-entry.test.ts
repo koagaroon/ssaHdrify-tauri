@@ -148,7 +148,7 @@ Dialogue: 0,0:00:00.00,0:00:01.00,Default,Hello
       expect(() =>
         applyFontEmbed({
           content: lineHeavyAss,
-          fonts: [{ fontName: "arial.ttf", data: [0, 1, 2] }],
+          fonts: [{ fontName: "arial.ttf", dataB64: "AAEC" }],
         })
       ).toThrow(/File too large: >501024 lines/);
     }
@@ -157,7 +157,7 @@ Dialogue: 0,0:00:00.00,0:00:01.00,Default,Hello
   it("applies uuencoded font entries before the events section", () => {
     const result = applyFontEmbed({
       content: SIMPLE_ASS,
-      fonts: [{ fontName: "arial.ttf", data: [0, 1, 2] }],
+      fonts: [{ fontName: "arial.ttf", dataB64: "AAEC" }],
     });
 
     expect(result.embeddedCount).toBe(1);
@@ -168,7 +168,7 @@ Dialogue: 0,0:00:00.00,0:00:01.00,Default,Hello
   it("applies uuencoded font entries before the events section in bare-CR ASS", () => {
     const result = applyFontEmbed({
       content: SIMPLE_ASS.replace(/\n/g, "\r"),
-      fonts: [{ fontName: "arial.ttf", data: [0, 1, 2] }],
+      fonts: [{ fontName: "arial.ttf", dataB64: "AAEC" }],
     });
 
     expect(result.embeddedCount).toBe(1);
@@ -285,7 +285,7 @@ Dialogue: 0,0:00:00.00,0:00:01.00,Default,Hi
     expect(() =>
       applyFontEmbed({
         content: malformedAss,
-        fonts: [{ fontName: "arial.ttf", data: [0, 1, 2] }],
+        fonts: [{ fontName: "arial.ttf", dataB64: "AAEC" }],
       })
     ).toThrow(/2 \[Fonts\] sections/);
   });
@@ -313,7 +313,7 @@ Dialogue: 0,0:00:02.00,0:00:03.00,Default,B
     expect(() =>
       applyFontEmbed({
         content: twoEvents,
-        fonts: [{ fontName: "arial.ttf", data: [0, 1, 2] }],
+        fonts: [{ fontName: "arial.ttf", dataB64: "AAEC" }],
       })
     ).toThrow(/2 \[Events\] sections/);
   });
@@ -341,7 +341,7 @@ Dialogue: 0,0:00:02.00,0:00:03.00,Default,B
     expect(() =>
       applyFontEmbed({
         content: existingFontsWithTwoEvents,
-        fonts: [{ fontName: "arial.ttf", data: [0, 1, 2] }],
+        fonts: [{ fontName: "arial.ttf", dataB64: "AAEC" }],
       })
     ).toThrow(/2 \[Events\] sections/);
   });
@@ -393,7 +393,7 @@ abc==
 `;
     const result = applyFontEmbed({
       content: noEventsAss,
-      fonts: [{ fontName: "arial.ttf", data: [0, 1, 2] }],
+      fonts: [{ fontName: "arial.ttf", dataB64: "AAEC" }],
     });
 
     expect(result.embeddedCount).toBe(1);

@@ -89,9 +89,10 @@ const SCAN_BATCH_INTERVAL: Duration = Duration::from_millis(100);
 /// API avoids casts in the hot loop.
 const MAX_TTC_FACES: u32 = 16;
 
-/// Cap on raw font data read for subsetting — prevents OOM with large CJK
-/// fonts and mirrors the front-end guard in `ass-uuencode.ts`.
-const MAX_FONT_DATA_SIZE: u64 = 50 * 1024 * 1024;
+/// Cap on raw font data read for scanning/subsetting — prevents OOM with large
+/// CJK fonts while still accepting known real-world CJK collections just under
+/// 60 MiB.
+const MAX_FONT_DATA_SIZE: u64 = 64 * 1024 * 1024;
 
 // MAX_FONT_FALLBACK_SIZE,
 // MAX_CUMULATIVE_FALLBACK_BYTES, and CUMULATIVE_FALLBACK_BYTES were
@@ -1174,6 +1175,294 @@ fn materialize_face_name_aliases(face_name_variants: HashSet<String>) -> Vec<Str
     face_names
 }
 
+fn read_be_u16(data: &[u8], offset: usize) -> Option<u16> {
+    data.get(offset..offset + 2)
+        .map(|bytes| u16::from_be_bytes([bytes[0], bytes[1]]))
+}
+
+fn read_be_u32(data: &[u8], offset: usize) -> Option<u32> {
+    data.get(offset..offset + 4)
+        .map(|bytes| u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+}
+
+fn table_range(data: &[u8], face_offset: usize, tag: &[u8; 4]) -> Option<(usize, usize)> {
+    let table_count = usize::from(read_be_u16(data, face_offset + 4)?);
+    let table_records = face_offset.checked_add(12)?;
+    for index in 0..table_count {
+        let record = table_records.checked_add(index.checked_mul(16)?)?;
+        let record_tag = data.get(record..record + 4)?;
+        if record_tag != tag {
+            continue;
+        }
+        let offset = usize::try_from(read_be_u32(data, record + 8)?).ok()?;
+        let len = usize::try_from(read_be_u32(data, record + 12)?).ok()?;
+        let end = offset.checked_add(len)?;
+        if end <= data.len() {
+            return Some((offset, len));
+        }
+        return None;
+    }
+    None
+}
+
+fn sfnt_face_offsets(data: &[u8], is_collection: bool, max_faces: u32) -> Vec<(u32, usize)> {
+    if !is_collection {
+        return vec![(0, 0)];
+    }
+    if data.get(0..4) != Some(b"ttcf") {
+        return Vec::new();
+    }
+    let Some(face_count) = read_be_u32(data, 8) else {
+        return Vec::new();
+    };
+    let capped = face_count.min(max_faces);
+    let mut offsets = Vec::new();
+    for index in 0..capped {
+        let Some(offset) = read_be_u32(data, 12 + usize::try_from(index).unwrap_or(0) * 4) else {
+            break;
+        };
+        let Ok(offset) = usize::try_from(offset) else {
+            continue;
+        };
+        if offset < data.len() {
+            offsets.push((index, offset));
+        }
+    }
+    offsets
+}
+
+fn decode_utf16be_name(raw: &[u8]) -> Option<String> {
+    if raw.len() % 2 != 0 {
+        return None;
+    }
+    let code_units: Vec<u16> = raw
+        .chunks_exact(2)
+        .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
+        .collect();
+    String::from_utf16(&code_units).ok()
+}
+
+fn raw_looks_utf16be_ascii(raw: &[u8]) -> bool {
+    raw.len() >= 4 && raw.len() % 2 == 0 && raw.chunks_exact(2).all(|chunk| chunk[0] == 0)
+}
+
+fn clean_legacy_name(decoded: String) -> Option<String> {
+    let cleaned = decoded.replace('\0', "");
+    bounded_font_family_name(cleaned.chars())
+}
+
+fn decode_legacy_name_record(
+    platform: u16,
+    encoding: u16,
+    language: u16,
+    raw: &[u8],
+) -> Option<String> {
+    if matches!(platform, 0) || matches!((platform, encoding), (3, 0 | 1 | 10)) {
+        return decode_utf16be_name(raw).and_then(clean_legacy_name);
+    }
+
+    // Some legacy CJK fonts use platform 3 encoding IDs 2/3/4/5 for
+    // Shift-JIS / GBK / Big5 / Wansung family names, while still storing
+    // ASCII PostScript names as UTF-16BE. Prefer UTF-16BE only for the
+    // unambiguous ASCII-shaped records, then decode the legacy DBCS bytes.
+    if raw_looks_utf16be_ascii(raw) {
+        if let Some(name) = decode_utf16be_name(raw).and_then(clean_legacy_name) {
+            return Some(name);
+        }
+    }
+
+    let legacy_encoding = match (platform, encoding, language) {
+        (3, 2, _) | (1, 1, _) => Some(encoding_rs::SHIFT_JIS),
+        (3, 3, _) | (1, 25, _) => Some(encoding_rs::GBK),
+        (3, 4, _) | (1, 2, _) => Some(encoding_rs::BIG5),
+        (3, 5, _) | (1, 3, _) => Some(encoding_rs::EUC_KR),
+        (1, 0, 11) => Some(encoding_rs::SHIFT_JIS),
+        (1, 0, 19) => Some(encoding_rs::BIG5),
+        (1, 0, 23) => Some(encoding_rs::EUC_KR),
+        (1, 0, 33) => Some(encoding_rs::GBK),
+        _ => None,
+    };
+
+    if let Some(encoding) = legacy_encoding {
+        let (decoded, _, had_errors) = encoding.decode(raw);
+        if !had_errors {
+            return clean_legacy_name(decoded.into_owned());
+        }
+    }
+
+    if raw.iter().all(|byte| byte.is_ascii()) {
+        return String::from_utf8(raw.to_vec())
+            .ok()
+            .and_then(clean_legacy_name);
+    }
+    None
+}
+
+fn legacy_face_style(data: &[u8], face_offset: usize) -> (bool, bool) {
+    let weight_bold = table_range(data, face_offset, b"OS/2")
+        .and_then(|(offset, len)| {
+            if len >= 6 {
+                read_be_u16(data, offset + 4)
+            } else {
+                None
+            }
+        })
+        .is_some_and(|weight| weight >= 600);
+    let (mac_bold, mac_italic) = table_range(data, face_offset, b"head")
+        .and_then(|(offset, len)| {
+            if len >= 46 {
+                read_be_u16(data, offset + 44)
+            } else {
+                None
+            }
+        })
+        .map(|style| ((style & 0x0001) != 0, (style & 0x0002) != 0))
+        .unwrap_or((false, false));
+    (weight_bold || mac_bold, mac_italic)
+}
+
+fn parse_legacy_name_table_entries(
+    data: &[u8],
+    canonical_string: &str,
+    size_bytes: u64,
+    is_collection: bool,
+    max_faces: u32,
+) -> Vec<LocalFontEntry> {
+    let mut entries = Vec::new();
+    for (face_index, face_offset) in sfnt_face_offsets(data, is_collection, max_faces) {
+        let Some((name_offset, name_len)) = table_range(data, face_offset, b"name") else {
+            continue;
+        };
+        if name_len < 6 {
+            continue;
+        }
+        let Some(record_count) = read_be_u16(data, name_offset + 2).map(usize::from) else {
+            continue;
+        };
+        let Some(string_offset) = read_be_u16(data, name_offset + 4).map(usize::from) else {
+            continue;
+        };
+        let Some(string_base) = name_offset.checked_add(string_offset) else {
+            continue;
+        };
+
+        let mut families: HashSet<String> = HashSet::new();
+        let mut face_name_variants: HashSet<String> = HashSet::new();
+        for record_index in 0..record_count {
+            let Some(record) = name_offset
+                .checked_add(6)
+                .and_then(|v| v.checked_add(record_index.checked_mul(12)?))
+            else {
+                break;
+            };
+            if record.checked_add(12).map_or(true, |end| end > data.len()) {
+                break;
+            }
+            let Some(platform) = read_be_u16(data, record) else {
+                continue;
+            };
+            let Some(encoding) = read_be_u16(data, record + 2) else {
+                continue;
+            };
+            let Some(language) = read_be_u16(data, record + 4) else {
+                continue;
+            };
+            let Some(name_id) = read_be_u16(data, record + 6) else {
+                continue;
+            };
+            if !matches!(name_id, 1 | 4 | 6 | 16) {
+                continue;
+            }
+            let Some(len) = read_be_u16(data, record + 8).map(usize::from) else {
+                continue;
+            };
+            let Some(offset) = read_be_u16(data, record + 10).map(usize::from) else {
+                continue;
+            };
+            let Some(start) = string_base.checked_add(offset) else {
+                continue;
+            };
+            let Some(end) = start.checked_add(len) else {
+                continue;
+            };
+            if end > data.len() {
+                continue;
+            }
+            let Some(name) =
+                decode_legacy_name_record(platform, encoding, language, &data[start..end])
+            else {
+                continue;
+            };
+            match name_id {
+                1 | 16 => {
+                    if families.len() < MAX_FAMILY_VARIANTS_PER_FACE {
+                        families.insert(name);
+                    }
+                }
+                4 | 6 => {
+                    if face_name_variants.len() < MAX_FACE_NAME_VARIANTS_PER_FACE {
+                        face_name_variants.insert(name);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if families.is_empty() {
+            if let Some(name) = face_name_variants.iter().min().cloned() {
+                families.insert(name);
+            }
+        }
+        if families.is_empty() {
+            continue;
+        }
+        let mut families: Vec<String> = families.into_iter().collect();
+        families.sort();
+        let face_names = materialize_face_name_aliases(face_name_variants);
+        let (bold, italic) = legacy_face_style(data, face_offset);
+        entries.push(LocalFontEntry {
+            path: canonical_string.to_string(),
+            index: face_index,
+            families,
+            face_names,
+            bold,
+            italic,
+            size_bytes,
+        });
+    }
+    entries
+}
+
+fn merge_legacy_name_table_entries(entries: &mut Vec<LocalFontEntry>, legacy: Vec<LocalFontEntry>) {
+    for legacy_entry in legacy {
+        let Some(existing) = entries
+            .iter_mut()
+            .find(|entry| entry.index == legacy_entry.index)
+        else {
+            entries.push(legacy_entry);
+            continue;
+        };
+        for family in legacy_entry.families {
+            if existing.families.len() >= MAX_FAMILY_VARIANTS_PER_FACE {
+                break;
+            }
+            if !existing.families.contains(&family) {
+                existing.families.push(family);
+            }
+        }
+        for face_name in legacy_entry.face_names {
+            if existing.face_names.len() >= MAX_FACE_NAME_VARIANTS_PER_FACE {
+                break;
+            }
+            if !existing.face_names.contains(&face_name) {
+                existing.face_names.push(face_name);
+            }
+        }
+        existing.families.sort();
+        existing.face_names.sort();
+    }
+}
+
 /// Parse one font file (TTF/OTF/TTC/OTC) and return a `LocalFontEntry` per
 /// face **and per distinct localized family name** in the face's name table.
 ///
@@ -1469,6 +1758,16 @@ fn parse_local_font_file(canonical: &Path, scan_id: u64) -> Vec<LocalFontEntry> 
             size_bytes,
         });
     }
+    let legacy_entries = parse_legacy_name_table_entries(
+        &data,
+        &canonical_string,
+        size_bytes,
+        is_collection,
+        max_faces,
+    );
+    if !legacy_entries.is_empty() {
+        merge_legacy_name_table_entries(&mut entries, legacy_entries);
+    }
     entries
 }
 
@@ -1647,7 +1946,7 @@ pub async fn preflight_font_files(paths: Vec<String>) -> Result<FontScanPrefligh
 /// security reasoning straightforward.
 ///
 /// Bytes-cap posture : per-file size is capped at
-/// `MAX_FONT_DATA_SIZE` (50 MB) and face count at `MAX_FONTS_PER_SCAN`
+/// `MAX_FONT_DATA_SIZE` (64 MB) and face count at `MAX_FONTS_PER_SCAN`
 /// (100k). There is NO cumulative-bytes ceiling on the scan as a
 /// whole. Peak memory stays bounded because each file's bytes are
 /// dropped before the next iteration (fs::read + parse run in
@@ -3280,7 +3579,7 @@ pub fn subset_font(
     // attacker-crafted cache rows pointing at `/etc/passwd.ttf` (or
     // any non-font local file renamed / symlinked to a font extension)
     // would otherwise pass extension + provenance + size gates and
-    // reach `fs::read` for a 50 MB buffer copy. The no-fallback policy
+    // reach `fs::read` for a 64 MB buffer copy. The no-fallback policy
     // already closes the byte-exfil layer (subset returns Err on
     // fontcull failure
     // with no fallback), but reading arbitrary local files into
@@ -3487,8 +3786,8 @@ pub fn subset_font(
 /// Pre-fix this returned `Vec<u8>` directly; serde-json would write each
 /// byte as decimal+comma (~4–5× per byte), and a 10 MB legitimate subset
 /// would expand to ~50 MB IPC payload + a main-thread JSON parse pass.
-/// Frontend `subsetFont()` decodes via `atob` (mirrors chain-runtime's
-/// `decodeBase64`).
+/// Frontend `subsetFont()` decodes with the shared local byte decoder
+/// instead of relying on host-provided Web APIs.
 #[tauri::command]
 pub fn subset_font_b64(
     font_path: String,
@@ -3591,14 +3890,6 @@ fn subset_with_index(font_data: &[u8], index: u32, codepoints: &[u32]) -> Result
         unicode_set.insert(cp);
     }
 
-    // Drop the three "dead in subtitle rendering" tables. The set
-    // contains exactly the tags we want fontcull to omit from the
-    // output font.
-    let mut drop_tables: IntSet<Tag> = IntSet::empty();
-    drop_tables.insert(Tag::new(b"vmtx"));
-    drop_tables.insert(Tag::new(b"LTSH"));
-    drop_tables.insert(Tag::new(b"kern"));
-
     // Preserve the full name-table — every name ID, every language.
     // `IntSet::all()` is the inverse of `IntSet::empty()`; harfbuzz-
     // subset's SETS convention treats `all()` as "retain everything",
@@ -3610,20 +3901,48 @@ fn subset_with_index(font_data: &[u8], index: u32, codepoints: &[u32]) -> Result
     let layout_scripts: IntSet<Tag> = IntSet::all();
     let layout_features: IntSet<Tag> = IntSet::empty();
 
-    let plan = Plan::new(
-        &empty_gids,
-        &unicode_set,
-        &font,
-        SubsetFlags::default(),
-        &drop_tables,
-        &layout_scripts,
-        &layout_features,
-        &name_ids,
-        &langs,
-    );
+    let subset_once = |drop_gpos: bool| {
+        // Drop the three "dead in subtitle rendering" tables. The set
+        // contains exactly the tags we want fontcull to omit from the
+        // output font. GPOS is kept on the first attempt for shaping
+        // quality, then dropped only as a compatibility retry for
+        // legacy CJK fonts whose positioning table makes fontcull fail.
+        let mut drop_tables: IntSet<Tag> = IntSet::empty();
+        drop_tables.insert(Tag::new(b"vmtx"));
+        drop_tables.insert(Tag::new(b"LTSH"));
+        drop_tables.insert(Tag::new(b"kern"));
+        if drop_gpos {
+            drop_tables.insert(Tag::new(b"GPOS"));
+        }
 
-    // Display, not Debug — same reasoning as above.
-    subset_font(&font, &plan).map_err(|e| format!("Subset failed for face {index}: {e}"))
+        let plan = Plan::new(
+            &empty_gids,
+            &unicode_set,
+            &font,
+            SubsetFlags::default(),
+            &drop_tables,
+            &layout_scripts,
+            &layout_features,
+            &name_ids,
+            &langs,
+        );
+
+        // Display, not Debug — same reasoning as above.
+        subset_font(&font, &plan).map_err(|e| format!("Subset failed for face {index}: {e}"))
+    };
+
+    match subset_once(false) {
+        Ok(subsetted) => Ok(subsetted),
+        Err(error) if error.contains("table 'GPOS'") => {
+            log::warn!(
+                "Subsetting face {index} failed on GPOS; retrying with the GPOS table dropped"
+            );
+            subset_once(true).map_err(|fallback_error| {
+                format!("{error}; retry without GPOS also failed: {fallback_error}")
+            })
+        }
+        Err(error) => Err(error),
+    }
 }
 
 #[cfg(test)]
@@ -3865,6 +4184,26 @@ mod tests {
             "Expected ratio < 30% with tuned Plan, got {:.1}%",
             ratio
         );
+    }
+
+    #[test]
+    #[ignore = "requires SSAHDRIFY_TEST_GPOS_FALLBACK_FONT env var pointing to a local fixture"]
+    fn subset_with_index_handles_legacy_gpos_failure_font() {
+        let Ok(font_path) = std::env::var("SSAHDRIFY_TEST_GPOS_FALLBACK_FONT") else {
+            eprintln!("SSAHDRIFY_TEST_GPOS_FALLBACK_FONT not set — skipping");
+            return;
+        };
+        let font_data = match std::fs::read(&font_path) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("Cannot read {font_path}: {e} — skipping");
+                return;
+            }
+        };
+
+        let subsetted = subset_with_index(&font_data, 0, &[0x41])
+            .expect("legacy GPOS fallback fixture should subset cleanly");
+        assert!(!subsetted.is_empty(), "subset must not be empty");
     }
 
     fn sample_entry(path: &str, family: &str, index: u32) -> LocalFontEntry {

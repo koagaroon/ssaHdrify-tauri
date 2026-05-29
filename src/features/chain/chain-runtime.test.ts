@@ -308,10 +308,9 @@ describe("runChain — embed step", () => {
 
   it("inserts a [Fonts] section with the production-decoded subset bytes", () => {
     // Pins the wire contract through the REAL decoder: chain-runtime's
-    // production decodeBase64 (js-base64) must turn "AAECAw==" into exactly
+    // production decodeBase64 must turn "AAECAw==" into exactly
     // [0,1,2,3] before buildFontEntry UU-encodes it. The byte-level assertion
-    // below catches a decodeBase64 regression that a local js-base64 mirror
-    // (wire-format.test.ts) would miss.
+    // below catches a decodeBase64 regression.
     const plan: ChainPlan = {
       steps: [
         {
@@ -322,9 +321,9 @@ describe("runChain — embed step", () => {
             noSystemFonts: false,
             onMissing: "warn",
             // base64("\x00\x01\x02\x03") === "AAECAw==". Decoded by
-            // chain-runtime via js-base64 → matches the Rust shell's
-            // serde-base64 wire format. (js-base64, not atob: the CLI
-            // runtime is bare deno_core without Web APIs.)
+            // chain-runtime via the local decoder -> matches the Rust shell's
+            // serde-base64 wire format. (Not atob: the CLI runtime is bare
+            // deno_core without Web APIs.)
             subsets: [{ fontName: "Arial.ttf", dataB64: "AAECAw==" }],
           },
         },

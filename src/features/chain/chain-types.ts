@@ -80,11 +80,9 @@ export interface EmbedStepParams {
 /**
  * Chain-mode font subset payload: base64-encoded bytes. Renamed from
  * the original `FontSubsetPayload` to disambiguate from the
- * standalone-embed payload of the same name in
- * `src/cli-engine-entry.ts`, which uses the JSON `number[]` form.
- * The two coexist intentionally (different IPC paths, different
- * expansion-vs-compatibility tradeoffs); the rename stops IDE
- * auto-import from picking the wrong one.
+ * standalone-embed payload of the same name in `src/cli-engine-entry.ts`;
+ * both now use `dataB64`, but the types stay separate so IDE auto-import
+ * cannot mix chain-step params with standalone-embed requests.
  */
 export interface ChainFontSubsetPayload {
   fontName: string;
@@ -93,9 +91,8 @@ export interface ChainFontSubsetPayload {
    * into a base64 string (~1.33× expansion) instead of the previous
    * JSON `[byte, byte, ...]` form (~4-5× expansion that pressured V8's
    * heap on the worst-case CUMULATIVE_FALLBACK_BYTES path). The embed
-   * transform decodes via `js-base64`; the bare deno_core JsRuntime
-   * has no `atob` global, and the GUI's `subsetFont` decodes the same
-   * way so both paths share one decoder.
+   * transform decodes with the local byte decoder; the bare deno_core
+   * JsRuntime has no `atob` global.
    */
   dataB64: string;
 }

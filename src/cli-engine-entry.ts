@@ -38,6 +38,9 @@ import {
 } from "./lib/path-validation";
 import { categorize, type RenameCategory } from "./lib/rename-extensions";
 import { parseSubtitle } from "./lib/subtitle-parser";
+import { sanitizeError } from "./lib/dedup-helpers";
+import { stripUnicodeControls } from "./lib/unicode-controls";
+import { decodeBase64Bytes } from "./lib/base64-bytes";
 
 // Chain feature — runtime + types re-exported so the Rust shell can
 // reach them via the bundled engine.js. Adding the chain entry here
@@ -155,15 +158,14 @@ export interface FontEmbedApplyRequest {
 }
 
 /**
- * Standalone-embed font subset payload: bytes serialized as JSON
- * `number[]`. Distinct from chain-types.ts's `ChainFontSubsetPayload`
- * which uses base64 (`dataB64`); the two coexist intentionally on
- * different IPC paths. Don't auto-import; pick the one matching your
- * call site.
+ * Standalone-embed font subset payload: bytes serialized as base64.
+ * This intentionally matches chain-types.ts's `ChainFontSubsetPayload`
+ * so large CJK font batches do not expand into JSON number arrays
+ * before reaching V8.
  */
 export interface FontSubsetPayload {
   fontName: string;
-  data: number[];
+  dataB64: string;
 }
 
 export interface FontEmbedApplyResult {
@@ -362,20 +364,8 @@ export function applyFontEmbed(request: FontEmbedApplyRequest): FontEmbedApplyRe
   // contract uniformity.
   assertAssShape(request.content);
 
-  // `font.data` is `number[]` from the deno_core op marshal
-  // (Rust `Vec<u8>` → serde_json → TS array of bytes). `Uint8Array.from`
-  // silently coerces non-byte values (256→0, -1→255, NaN→0, 1.5→1),
-  // which would be a disclosure primitive if a non-Rust source ever
-  // populated `request.fonts`. Today the bytes always originate from
-  // `subset_font` / `subset_font_b64` op outputs whose `u8` Rust type
-  // serde-validates the range; the chain path uses base64 (dataB64)
-  // which rejects non-byte payloads loudly. If a future caller surface
-  // adds a non-Rust origin (browser drag-drop bytes, user-typed hex
-  // input, third-party plugin), validate each element with
-  // `Number.isInteger(b) && b >= 0 && b <= 255` BEFORE this Uint8Array
-  // construction.
   const fontEntries = request.fonts.map((font) =>
-    buildFontEntry(font.fontName, Uint8Array.from(font.data))
+    buildFontEntry(font.fontName, decodeSubsetBase64(font.dataB64, font.fontName))
   );
 
   if (fontEntries.length === 0) {
@@ -390,6 +380,18 @@ export function applyFontEmbed(request: FontEmbedApplyRequest): FontEmbedApplyRe
     content: insertFontsSection(request.content, fontsSection),
     embeddedCount: fontEntries.length,
   };
+}
+
+function decodeSubsetBase64(dataB64: string, name: string): Uint8Array {
+  try {
+    return decodeBase64Bytes(dataB64);
+  } catch (e) {
+    const message = sanitizeError(e);
+    const safeName = stripUnicodeControls(name);
+    throw new Error(`base64 decode failed for font subset '${safeName}': ${message}`, {
+      cause: e,
+    });
+  }
 }
 
 /**

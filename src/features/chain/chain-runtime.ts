@@ -10,8 +10,6 @@
  * runtime doesn't know which produced it.
  */
 
-import { Base64 } from "js-base64";
-
 import { processAssContent } from "../hdr-convert/ass-processor";
 import { assertFiniteShiftMs, shiftSubtitles } from "../timing-shift/timing-engine";
 import { buildFontEntry } from "../font-embed/ass-uuencode";
@@ -24,6 +22,7 @@ import {
 } from "../../lib/path-validation";
 import { sanitizeError } from "../../lib/dedup-helpers";
 import { stripUnicodeControls } from "../../lib/unicode-controls";
+import { decodeBase64Bytes } from "../../lib/base64-bytes";
 import type {
   ChainResult,
   ChainRunRequest,
@@ -213,11 +212,10 @@ function embedTransform(ctx: TransformContext, params: EmbedStepParams): Transfo
  * the V8 source ~4-5× per byte and pressured the heap on the worst-
  * case CUMULATIVE_FALLBACK_BYTES path.
  *
- * Uses `js-base64` instead of the global `atob()`: the CLI runs on a
+ * Uses a local decoder instead of global `atob()`: the CLI runs on a
  * bare `deno_core::JsRuntime` with `extensions: vec![]`, which does
- * NOT provide Web APIs. `atob` would throw `ReferenceError: atob is
- * not defined` in production even though Vitest passes because Node
- * has a global atob.
+ * NOT provide Web APIs. It also avoids js-base64's large-string
+ * split/map path, which can overflow the stack on large CJK subsets.
  *
  * `name` annotates errors: a corrupt subset payload from a future
  * Rust-side encoder bug surfaces as `"base64 decode failed for font
@@ -226,13 +224,13 @@ function embedTransform(ctx: TransformContext, params: EmbedStepParams): Transfo
  */
 function decodeBase64(b64: string, name: string): Uint8Array {
   try {
-    return Base64.toUint8Array(b64);
+    return decodeBase64Bytes(b64);
   } catch (e) {
-    // `message` is BiDi-scrubbed via sanitizeError (catch-arm
-    // sweep): even though Base64.toUint8Array's error message is library-
-    // controlled today, the message ends up in a re-thrown Error that
-    // surfaces in the chain log panel. Scrubbing at the extraction site
-    // keeps the catch-arm contract uniform with the rest of the project.
+    // `message` is BiDi-scrubbed via sanitizeError (catch-arm sweep):
+    // even though decodeBase64Bytes' error message is local today, the
+    // message ends up in a re-thrown Error that surfaces in the chain log
+    // panel. Scrubbing at the extraction site keeps the catch-arm contract
+    // uniform with the rest of the project.
     //
     // wrap `name` in stripUnicodeControls
     // too. The buildFontFileName helper already strips everything but

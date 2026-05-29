@@ -4,10 +4,10 @@
  */
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke, Channel } from "@tauri-apps/api/core";
-import { Base64 } from "js-base64";
 import { strings } from "../i18n/strings";
 import { fileNameFromPath } from "./path-validation";
 import { VIDEO_EXTS, SUBTITLE_EXTS } from "./rename-extensions";
+import { decodeBase64Bytes } from "./base64-bytes";
 
 // ── File Dialogs ──────────────────────────────────────────
 
@@ -267,21 +267,15 @@ export async function findSystemFont(
  *
  *  Wire format: Rust returns the bytes base64-encoded (`subset_font_b64`)
  *  to dodge the JSON `[byte, byte, ...]` form's ~4–5× expansion. The
- *  worst-case 10 MB fallback subset would otherwise produce a ~50 MB
- *  IPC payload + main-thread JSON parse pass; base64 is ~1.33× and
- *  `atob` is V8 builtin. Mirrors chain-runtime's `decodeBase64`. */
+ *  worst-case 10 MB subset would otherwise produce a ~50 MB IPC payload
+ *  + main-thread JSON parse pass; base64 is ~1.33×. */
 export async function subsetFont(
   fontPath: string,
   fontIndex: number,
   codepoints: number[]
 ): Promise<Uint8Array> {
   const b64: string = await invoke("subset_font_b64", { fontPath, fontIndex, codepoints });
-  // js-base64 (consistent with chain-runtime's decodeBase64). WebView2
-  // has a working `atob`, but using one decoder library across both
-  // paths keeps the encoding contract single-rooted — a future bug fix
-  // in one site shows up in the other automatically.
-  const bytes = Base64.toUint8Array(b64);
-  return bytes;
+  return decodeBase64Bytes(b64);
 }
 
 /** One font face discovered in a user-picked directory or file list.

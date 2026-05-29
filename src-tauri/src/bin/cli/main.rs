@@ -16,18 +16,18 @@ mod engine;
 const MAX_SHIFT_OFFSET_MS: i64 = 365 * 24 * 60 * 60 * 1000;
 const CLI_FONT_DB_DIR_PREFIX: &str = "ssahdrify-cli-font-db";
 
-/// Chain-level cumulative cap on
-/// the aggregate raw font-subset bytes that flow into the per-input
-/// JSON payload handed to V8. Per-font cap is `MAX_FONT_DATA_SIZE`
-/// (50 MB, in `app_lib::fonts`); the gap was the cumulative case —
-/// a pathological subtitle referencing 100+ heavy fonts could produce
-/// multi-GB raw bytes which base64-encode to ~1.33× and then ride
-/// through `format!()` / serde_json on Rust's heap before V8 ever
-/// sees the request. 200 MB raw → ~270 MB base64 → bounded
-/// allocation peak. Reject before payload assembly with a focused
-/// chain-only error so the per-input outcome is `Failed` with a
-/// clear cause.
-const MAX_CHAIN_SUBSET_TOTAL_BYTES: usize = 200 * 1024 * 1024;
+/// Cumulative cap on aggregate raw font-subset bytes before they are
+/// base64-encoded and handed to V8. Per-font cap is
+/// `MAX_FONT_DATA_SIZE` (64 MB, in `app_lib::fonts`); the gap is the
+/// cumulative case — a pathological subtitle referencing many heavy
+/// fonts can produce hundreds of MB of raw subset bytes, then expand
+/// to ~1.33× as base64 and again while the TS side builds uuencoded
+/// ASS font entries. Reject before payload assembly with a focused
+/// per-input error instead of letting deno_core panic with
+/// FastStringV8AllocationError.
+const MAX_V8_SUBSET_TOTAL_BYTES: usize = 100 * 1024 * 1024;
+const MAX_CHAIN_SUBSET_TOTAL_BYTES: usize = MAX_V8_SUBSET_TOTAL_BYTES;
+const MAX_EMBED_SUBSET_TOTAL_BYTES: usize = MAX_V8_SUBSET_TOTAL_BYTES;
 
 /// cap font.codepoints.len() at the CLI's
 /// resolve_embed_fonts boundary before cloning into
@@ -2180,7 +2180,7 @@ fn process_one_chain_input(
         // Cumulative cap on the aggregate raw font-subset bytes
         // BEFORE the base64 +
         // serde_json marshal below. Per-font cap (MAX_FONT_DATA_SIZE,
-        // 50 MB) holds; the gap was the cumulative case — N×50 MB
+        // 64 MB) holds; the gap was the cumulative case — N×64 MB
         // raw bytes ride through `format!()` / serde_json on Rust
         // heap before V8 sees the payload. Sum up to the
         // MAX_CHAIN_SUBSET_TOTAL_BYTES ceiling and Fail with a
@@ -2191,16 +2191,17 @@ fn process_one_chain_input(
             return builder.into_failed(format!(
                 "chain embed subsets total {total_subset_bytes} bytes exceeds the \
                  {MAX_CHAIN_SUBSET_TOTAL_BYTES}-byte cap; reduce per-input font count \
-                 or use the standalone `embed` subcommand which streams per-file"
+                 or split the subtitle before embedding"
             ));
         }
         // Encode subset bytes as base64 strings. The previous form
         // (`{ "data": [byte, byte, ...] }`) expanded ~4-5× per byte
         // when serde_json wrote bytes as decimal+comma JSON-in-JS-source,
         // which compounded against the per-font MAX_FONT_DATA_SIZE
-        // budget (50 MB, defined in fonts.rs) into ~200 MB of V8 heap
+        // budget (64 MB, defined in fonts.rs) into heavy V8 heap
         // pressure on the worst-case path. Base64 is ~1.33× and
-        // decoded in TS via atob().
+        // decoded in TS via the local base64 byte decoder because bare
+        // deno_core has no Web API globals like atob().
         let subsets_json: Vec<serde_json::Value> = subsets
             .into_iter()
             .map(|s| {
@@ -4003,6 +4004,26 @@ fn process_embed_file(
             embedded_count: 0,
         }
     } else {
+        let total_subset_bytes: usize = subset_payloads.iter().map(|s| s.data.len()).sum();
+        if total_subset_bytes > MAX_EMBED_SUBSET_TOTAL_BYTES {
+            return (
+                attach_warnings(
+                    failed_report(
+                        &input_path,
+                        Some(output),
+                        Some(read_result.encoding),
+                        format!(
+                            "embed subsets total {total_subset_bytes} bytes exceeds the \
+                             {MAX_EMBED_SUBSET_TOTAL_BYTES}-byte cap; reduce per-input font \
+                             count or split the subtitle before embedding"
+                        ),
+                    ),
+                    &warnings,
+                ),
+                font_diagnostics,
+            );
+        }
+
         let apply_request = engine::FontEmbedApplyRequest {
             content: read_result.text,
             fonts: subset_payloads,

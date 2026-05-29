@@ -1,6 +1,6 @@
 use deno_core::{serde_v8, v8, JsRuntime, RuntimeOptions};
 use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 
 const ENGINE_SOURCE: &str = include_str!(concat!(env!("OUT_DIR"), "/cli-engine.js"));
 
@@ -164,19 +164,25 @@ pub struct FontEmbedApplyRequest {
     pub fonts: Vec<FontSubsetPayload>,
 }
 
+fn serialize_bytes_base64<S>(bytes: &Vec<u8>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    use base64::Engine as _;
+    serializer.serialize_str(&base64::engine::general_purpose::STANDARD.encode(bytes))
+}
+
 /// One font's subset bytes for the standalone `embed` flow's
-/// `FontEmbedApplyRequest`. Serialized as `{ "fontName": ..., "data":
-/// [byte, byte, ...] }` (JSON number-array form). Chain mode does NOT
-/// use this struct on the wire — `process_one_chain_input` builds an
-/// inline base64 payload (`{ "fontName": ..., "dataB64": "..." }`)
-/// directly to dodge the ~4-5× expansion JSON-array form would impose
-/// against the per-font MAX_FONT_DATA_SIZE budget (50 MB, defined in
-/// fonts.rs). The two wire formats are intentional, not a sign of
-/// unfinished migration.
+/// `FontEmbedApplyRequest`. Rust keeps raw bytes here so chain mode can
+/// still apply its raw-byte cumulative cap before encoding, but the
+/// standalone V8 payload serializes the bytes as `{ dataB64: "..." }`.
+/// This matches chain mode and avoids the ~4-5× heap expansion caused
+/// by the old JSON number-array form.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FontSubsetPayload {
     pub font_name: String,
+    #[serde(rename = "dataB64", serialize_with = "serialize_bytes_base64")]
     pub data: Vec<u8>,
 }
 
@@ -510,5 +516,27 @@ impl CliEngine {
         let local = v8::Local::new(scope, result);
         serde_v8::from_v8(scope, local)
             .map_err(|err| format!("failed to decode {label} {step} result: {err}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FontEmbedApplyRequest, FontSubsetPayload};
+
+    #[test]
+    fn font_subset_payload_serializes_bytes_as_base64() {
+        let request = FontEmbedApplyRequest {
+            content: "[Script Info]\nScriptType: v4.00+\n".to_string(),
+            fonts: vec![FontSubsetPayload {
+                font_name: "arial.ttf".to_string(),
+                data: vec![0, 1, 2],
+            }],
+        };
+
+        let json = serde_json::to_value(&request).expect("serialize request");
+        let font = &json["fonts"][0];
+        assert_eq!(font["fontName"], "arial.ttf");
+        assert_eq!(font["dataB64"], "AAEC");
+        assert!(font.get("data").is_none());
     }
 }
