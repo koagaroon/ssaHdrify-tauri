@@ -160,6 +160,33 @@ fn deny_list_contains_required_categories() {
         ("$HOME/.local/share/keyrings/**", "GNOME keyring"),
         ("$HOME/.gnome2/keyrings/**", "legacy GNOME keyring"),
         ("$HOME/.kde/share/apps/kwallet/**", "KDE Wallet"),
+        // Bare-directory denies that sit ALONGSIDE their `/**` recursive
+        // forms above — pinned so neither half can be silently dropped.
+        ("$HOME/.aws", "AWS credentials dir"),
+        ("$HOME/.azure", "Azure CLI dir"),
+        ("$HOME/.gcloud", "gcloud dir"),
+        ("$HOME/.gnupg", "GPG keyring dir"),
+        ("$HOME/.docker", "Docker auth dir"),
+        ("$HOME/.kube", "kubeconfig dir"),
+        // Editor state across the three non-Windows config conventions
+        // (Linux XDG config, Linux data, macOS Application Support).
+        (
+            "$HOME/.config/Code/User/**",
+            "VS Code user state (Linux XDG)",
+        ),
+        ("$HOME/.config/JetBrains/**", "JetBrains state (Linux XDG)"),
+        (
+            "$HOME/.local/share/JetBrains/**",
+            "JetBrains state (Linux data)",
+        ),
+        (
+            "$HOME/Library/Application Support/Code/User/**",
+            "VS Code user state (macOS)",
+        ),
+        (
+            "$HOME/Library/Application Support/JetBrains/**",
+            "JetBrains state (macOS)",
+        ),
     ];
 
     let missing: Vec<&(&str, &str)> = required
@@ -270,4 +297,31 @@ fn deny_list_entries_use_known_scope_variables() {
             .collect::<Vec<_>>()
             .join("\n")
     );
+}
+
+#[test]
+fn bundle_namespaced_denies_are_bare_recursive_only() {
+    // $APPDATA / $APPLOCALDATA are bundle-namespaced (resolve to
+    // `<roaming>/com.koagaroon.ssahdrify/`), so the ONLY meaningful form is
+    // the bare `$APPDATA/**` — the app's own namespaced dir. A multi-segment
+    // `$APPDATA/<anything>/**` resolves to a non-existent doubly-namespaced
+    // path and DENIES NOTHING. The forbidden-traps test blocks only the
+    // specific historical mistakes; this enforces the GENERAL rule so a
+    // future `$APPDATA/Foo/**`-shaped trap fails too (pattern over
+    // enumeration). `$APPLOCALDATA` does not start with `$APPDATA`, so the
+    // two prefixes never cross-match.
+    let deny = read_deny_paths();
+    for p in &deny {
+        for prefix in ["$APPDATA", "$APPLOCALDATA"] {
+            if p.starts_with(prefix) {
+                assert_eq!(
+                    p,
+                    &format!("{prefix}/**"),
+                    "bundle-namespaced deny must be bare `{prefix}/**`; the multi-segment \
+                     form `{p}` resolves to a non-existent doubly-namespaced path and \
+                     denies nothing"
+                );
+            }
+        }
+    }
 }

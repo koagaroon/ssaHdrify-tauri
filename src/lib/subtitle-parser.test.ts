@@ -74,6 +74,21 @@ describe("parseSubtitle", () => {
     );
   });
 
+  it("clamps an out-of-range MicroDVD fps to the default", () => {
+    // clampFps guards parse/build against a crafted `{1}{1}<fps>` header or a
+    // bad caller-supplied fps drifting every timestamp. It is reachable via
+    // the public parseSubtitle(content, fps); each invalid value
+    // (0 / negative / NaN / Infinity / >1000) must fall back to DEFAULT_FPS.
+    const sub = "{0}{25}Hello\n{26}{50}World";
+    const baseline = parseSubtitle(sub).captions; // default fps
+    for (const badFps of [0, -5, NaN, Infinity, 2000]) {
+      expect(parseSubtitle(sub, badFps).captions).toEqual(baseline);
+    }
+    // Counter-assert: a valid in-range fps IS honored, so the equalities
+    // above pin clamping rather than "fps ignored entirely".
+    expect(parseSubtitle(sub, 25).captions).not.toEqual(baseline);
+  });
+
   it("smoke-tests a 100-entry ASS parse stays well within MAX_PARSED_ENTRIES", () => {
     // Defense-in-depth cap inside parseAss — guards against pathological
     // files (or runaway generators) that would otherwise fan out to
