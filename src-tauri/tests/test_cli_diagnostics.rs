@@ -91,8 +91,11 @@ fn engine_bundle_missing() -> Option<String> {
 #[test]
 fn embed_diagnose_reports_written_with_warnings() {
     if let Some(reason) = engine_bundle_missing() {
-        eprintln!("skipping: {reason}");
-        return;
+        // Hard-fail instead of skip-and-return: a skip records PASS in Cargo,
+        // so a forgotten `npm run build:engine` would ship every diagnostics
+        // integration test as a green no-op. Matches the panic guard in
+        // test_chain.rs / test_font_cache.rs.
+        panic!("engine bundle missing — run `npm run build:engine` first ({reason})");
     }
 
     let work = temp_dir("embed-warnings");
@@ -128,8 +131,11 @@ fn embed_diagnose_reports_written_with_warnings() {
 #[test]
 fn diagnose_fonts_reports_missing_without_writing_output() {
     if let Some(reason) = engine_bundle_missing() {
-        eprintln!("skipping: {reason}");
-        return;
+        // Hard-fail instead of skip-and-return: a skip records PASS in Cargo,
+        // so a forgotten `npm run build:engine` would ship every diagnostics
+        // integration test as a green no-op. Matches the panic guard in
+        // test_chain.rs / test_font_cache.rs.
+        panic!("engine bundle missing — run `npm run build:engine` first ({reason})");
     }
 
     let work = temp_dir("standalone");
@@ -169,8 +175,11 @@ fn diagnose_fonts_reports_missing_without_writing_output() {
 #[test]
 fn diagnose_fonts_next_actions_are_localized() {
     if let Some(reason) = engine_bundle_missing() {
-        eprintln!("skipping: {reason}");
-        return;
+        // Hard-fail instead of skip-and-return: a skip records PASS in Cargo,
+        // so a forgotten `npm run build:engine` would ship every diagnostics
+        // integration test as a green no-op. Matches the panic guard in
+        // test_chain.rs / test_font_cache.rs.
+        panic!("engine bundle missing — run `npm run build:engine` first ({reason})");
     }
 
     let work = temp_dir("standalone-next-actions-zh");
@@ -201,8 +210,11 @@ fn diagnose_fonts_next_actions_are_localized() {
 #[test]
 fn diagnose_fonts_json_reports_successful_files_as_diagnosed() {
     if let Some(reason) = engine_bundle_missing() {
-        eprintln!("skipping: {reason}");
-        return;
+        // Hard-fail instead of skip-and-return: a skip records PASS in Cargo,
+        // so a forgotten `npm run build:engine` would ship every diagnostics
+        // integration test as a green no-op. Matches the panic guard in
+        // test_chain.rs / test_font_cache.rs.
+        panic!("engine bundle missing — run `npm run build:engine` first ({reason})");
     }
 
     let work = temp_dir("standalone-json-status");
@@ -238,8 +250,11 @@ fn diagnose_fonts_json_reports_successful_files_as_diagnosed() {
 #[test]
 fn diagnose_fonts_does_not_validate_embed_output_path() {
     if let Some(reason) = engine_bundle_missing() {
-        eprintln!("skipping: {reason}");
-        return;
+        // Hard-fail instead of skip-and-return: a skip records PASS in Cargo,
+        // so a forgotten `npm run build:engine` would ship every diagnostics
+        // integration test as a green no-op. Matches the panic guard in
+        // test_chain.rs / test_font_cache.rs.
+        panic!("engine bundle missing — run `npm run build:engine` first ({reason})");
     }
 
     let work = temp_dir("standalone-output-free");
@@ -284,8 +299,11 @@ fn diagnose_fonts_does_not_validate_embed_output_path() {
 #[test]
 fn diagnose_fonts_does_not_mutate_cache_file() {
     if let Some(reason) = engine_bundle_missing() {
-        eprintln!("skipping: {reason}");
-        return;
+        // Hard-fail instead of skip-and-return: a skip records PASS in Cargo,
+        // so a forgotten `npm run build:engine` would ship every diagnostics
+        // integration test as a green no-op. Matches the panic guard in
+        // test_chain.rs / test_font_cache.rs.
+        panic!("engine bundle missing — run `npm run build:engine` first ({reason})");
     }
 
     let work = temp_dir("cache-readonly");
@@ -355,8 +373,11 @@ fn diagnose_fonts_does_not_mutate_cache_file() {
 #[test]
 fn json_with_diagnose_includes_full_diagnostics() {
     if let Some(reason) = engine_bundle_missing() {
-        eprintln!("skipping: {reason}");
-        return;
+        // Hard-fail instead of skip-and-return: a skip records PASS in Cargo,
+        // so a forgotten `npm run build:engine` would ship every diagnostics
+        // integration test as a green no-op. Matches the panic guard in
+        // test_chain.rs / test_font_cache.rs.
+        panic!("engine bundle missing — run `npm run build:engine` first ({reason})");
     }
 
     let work = temp_dir("json");
@@ -399,8 +420,11 @@ fn json_with_diagnose_includes_full_diagnostics() {
 #[test]
 fn non_font_command_attaches_compact_diagnostics() {
     if let Some(reason) = engine_bundle_missing() {
-        eprintln!("skipping: {reason}");
-        return;
+        // Hard-fail instead of skip-and-return: a skip records PASS in Cargo,
+        // so a forgotten `npm run build:engine` would ship every diagnostics
+        // integration test as a green no-op. Matches the panic guard in
+        // test_chain.rs / test_font_cache.rs.
+        panic!("engine bundle missing — run `npm run build:engine` first ({reason})");
     }
 
     let work = temp_dir("shift");
@@ -433,8 +457,11 @@ fn non_font_command_attaches_compact_diagnostics() {
 #[test]
 fn embed_diagnose_failed_missing_font_suggests_full_details() {
     if let Some(reason) = engine_bundle_missing() {
-        eprintln!("skipping: {reason}");
-        return;
+        // Hard-fail instead of skip-and-return: a skip records PASS in Cargo,
+        // so a forgotten `npm run build:engine` would ship every diagnostics
+        // integration test as a green no-op. Matches the panic guard in
+        // test_chain.rs / test_font_cache.rs.
+        panic!("engine bundle missing — run `npm run build:engine` first ({reason})");
     }
 
     let work = temp_dir("embed-fail-next-actions");
@@ -464,4 +491,35 @@ fn embed_diagnose_failed_missing_font_suggests_full_details() {
     );
 
     let _ = fs::remove_dir_all(work);
+}
+
+#[test]
+fn diagnose_flag_is_rejected_on_unsupported_commands() {
+    // Contract (CLI design doc #9): `--diagnose` is supported ONLY on
+    // hdr / shift / embed / rename. chain and refresh-fonts must FAIL on it
+    // rather than silently ignore it. Both reject before any engine work
+    // (chain via its step parser, refresh-fonts via clap), so this needs no
+    // engine bundle and no skip/panic guard. The assertion pins "rejected and
+    // names the flag" without coupling to either tool's exact wording.
+    let chain = run_cli(&["chain", "--diagnose", "a.ass", "hdr"]);
+    assert!(
+        !chain.status.success(),
+        "chain must reject --diagnose, not silently ignore it"
+    );
+    let chain_err = String::from_utf8_lossy(&chain.stderr);
+    assert!(
+        chain_err.contains("--diagnose"),
+        "chain rejection should name the offending flag; stderr={chain_err}"
+    );
+
+    let refresh = run_cli(&["refresh-fonts", "--diagnose", "--font-dir", "."]);
+    assert!(
+        !refresh.status.success(),
+        "refresh-fonts must reject --diagnose, not silently ignore it"
+    );
+    let refresh_err = String::from_utf8_lossy(&refresh.stderr);
+    assert!(
+        refresh_err.contains("--diagnose"),
+        "refresh-fonts rejection should name the offending flag; stderr={refresh_err}"
+    );
 }

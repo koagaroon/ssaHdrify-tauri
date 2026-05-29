@@ -119,9 +119,11 @@ describe("extractEpisode — Western fallbacks", () => {
     expect(ep?.seasonFromMatch).toBe(0);
   });
 
-  it("EP01 / E01 catches Western-ish naming", () => {
+  it("EP01 / E01 catches Western-ish naming (bounded to 1-3 digits)", () => {
     expect(extractEpisode("Show.EP07.mkv", bracketCleanup("Show.EP07.mkv"))?.episode).toBe(7);
     expect(extractEpisode("Show.E12.mkv", bracketCleanup("Show.E12.mkv"))?.episode).toBe(12);
+    // At-limit: 3 digits still match (real episode counts top out ~999).
+    expect(extractEpisode("Show EP999.mkv", bracketCleanup("Show EP999.mkv"))?.episode).toBe(999);
   });
 
   it("第N话 catches Chinese marker", () => {
@@ -152,6 +154,15 @@ describe("extractEpisode — should NOT match", () => {
       expect(typeof ep.episode).toBe("number");
       expect(ep.episode).not.toBe(1080);
     }
+  });
+
+  it("over-limit EP run (4+ digits) does not prefix-truncate to a wrong episode", () => {
+    // `\bEP?(\d{1,3})\b` bounds the Western EP fallback to 1-3 digits; the
+    // trailing \b makes EP1234 FAIL to match rather than truncate to 123.
+    // With no other marker present, the episode is unresolved (null) and the
+    // file falls through to the LCS fallback instead of pairing on a wrong
+    // episode. Pairs with the at-limit EP999 case above.
+    expect(extractEpisode("Show EP1234.mkv", bracketCleanup("Show EP1234.mkv"))).toBeNull();
   });
 });
 

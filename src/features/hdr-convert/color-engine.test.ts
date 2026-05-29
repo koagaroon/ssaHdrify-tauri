@@ -12,41 +12,35 @@ describe("sRgbToHdr — PQ mode", () => {
     expect(sRgbToHdr(0, 0, 0, 100, "PQ")).toEqual([0, 0, 0]);
   });
 
-  it("converts white to valid 8-bit range", () => {
-    const [r, g, b] = sRgbToHdr(255, 255, 255, 100, "PQ");
-    for (const ch of [r, g, b]) {
+  it("converts white to a non-black valid 8-bit range", () => {
+    const out = sRgbToHdr(255, 255, 255, 100, "PQ");
+    for (const ch of out) {
       expect(ch).toBeGreaterThanOrEqual(0);
       expect(ch).toBeLessThanOrEqual(255);
     }
+    // Counter-assert: a range-only check is satisfied by the catch-all
+    // return-black path; pin that white did NOT collapse to [0,0,0].
+    expect(out).not.toEqual([0, 0, 0]);
   });
 
-  it("is deterministic — same input maps to specific golden output (Round 11 W11.6 N1-R11-07)", () => {
-    // Pin against a golden triple rather than comparing two output
-    // triples from the same call inputs to each other (tautological
-    // for any pure function), so a regression in the underlying
-    // Color.js math (or its bundled coefficients) trips the test.
-    // The golden is captured from the current Color.js pipeline;
-    // intentional math changes regenerate via
-    // `npx vitest run -u src/features/hdr-convert/color-engine.test.ts`.
-    expect(sRgbToHdr(128, 64, 200, 100, "PQ")).toMatchInlineSnapshot(`
-      [
-        88,
-        69,
-        113,
-      ]
-    `);
-    expect(sRgbToHdr(200, 100, 50, 1000, "PQ")).toMatchInlineSnapshot(`
-      [
-        167,
-        141,
-        112,
-      ]
-    `);
-    // Determinism still pinned for the same call → byte-identical
-    // output on the second invocation.
-    const first = sRgbToHdr(50, 100, 200, 500, "PQ");
-    const second = sRgbToHdr(50, 100, 200, 500, "PQ");
-    expect(first).toEqual(second);
+  it("matches the colour-science PQ reference (not a self-captured snapshot)", () => {
+    // Reference values come from Python colour-science, NOT from this pipeline
+    // itself — so a regression in the Color.js math (or its bundled
+    // coefficients) fails the test instead of being silently re-baselined via
+    // `vitest -u`. Both sides implement: sRGB → XYZ(D65) → scale by
+    // (brightness / 203) → BT.2020 linear → eotf_inverse_BT2100_PQ at a
+    // 203 cd/m² (BT.2408) reference white → ×255, round. Verified an exact
+    // (0-LSB) match against colour 0.4.x:
+    //   eotf_inverse_BT2100_PQ(
+    //     XYZ_to_RGB(sRGB_to_XYZ(rgb/255) * (b/203), BT2020, cctf=False)
+    //       .clip(0) * 203) * 255, rounded
+    // Regenerate with that formula if the math intentionally changes; do NOT
+    // `vitest -u` a self-captured value back in.
+    expect(sRgbToHdr(128, 64, 200, 100, "PQ")).toEqual([88, 69, 113]);
+    expect(sRgbToHdr(200, 100, 50, 1000, "PQ")).toEqual([167, 141, 112]);
+    expect(sRgbToHdr(255, 255, 255, 100, "PQ")).toEqual([130, 130, 130]);
+    // Determinism: byte-identical output on a repeat call.
+    expect(sRgbToHdr(50, 100, 200, 500, "PQ")).toEqual(sRgbToHdr(50, 100, 200, 500, "PQ"));
   });
 
   it("different brightness produces different output", () => {
@@ -63,22 +57,30 @@ describe("sRgbToHdr — PQ mode", () => {
 });
 
 describe("sRgbToHdr — HLG mode", () => {
-  it("converts white to valid 8-bit range", () => {
-    const [r, g, b] = sRgbToHdr(255, 255, 255, 100, "HLG");
-    for (const ch of [r, g, b]) {
-      expect(ch).toBeGreaterThanOrEqual(0);
-      expect(ch).toBeLessThanOrEqual(255);
-    }
+  it("matches the colour-science HLG reference (eotf_inverse_BT2100_HLG, γ=1.2)", () => {
+    // The HLG OOTF⁻¹ + ARIB STD-B67 OETF are hand-written here (Color.js's
+    // rec2100hlg omits the OOTF). Reference values come from Python
+    // colour-science eotf_inverse_BT2100_HLG (L_W=1000, system_gamma=1.2),
+    // verified an exact (0-LSB) match against this implementation — so the
+    // hand-written math is pinned to the spec, not to itself. Pipeline:
+    // sRGB → XYZ(D65) → scale by brightness (cd/m²) → BT.2020 linear →
+    // eotf_inverse_BT2100_HLG → ×255, round.
+    expect(sRgbToHdr(255, 255, 255, 100, "HLG")).toEqual([161, 161, 161]);
+    expect(sRgbToHdr(200, 100, 50, 100, "HLG")).toEqual([122, 76, 43]);
   });
 
   it("maps black to black", () => {
     expect(sRgbToHdr(0, 0, 0, 100, "HLG")).toEqual([0, 0, 0]);
   });
 
-  it("produces different output from PQ for same input", () => {
+  it("produces different (non-black) output from PQ for same input", () => {
     const pq = sRgbToHdr(200, 100, 50, 100, "PQ");
     const hlg = sRgbToHdr(200, 100, 50, 100, "HLG");
     expect(pq).not.toEqual(hlg);
+    // Counter-assert: neither collapsed to the catch-all return-black path,
+    // which a bare not.toEqual(pq, hlg) wouldn't catch if both were [0,0,0].
+    expect(pq).not.toEqual([0, 0, 0]);
+    expect(hlg).not.toEqual([0, 0, 0]);
   });
 });
 

@@ -26,13 +26,16 @@ vi.mock("../../lib/tauri-api", () => ({
 // Import after vi.mock so the mocked module is picked up.
 import {
   analyzeFonts,
+  aggregateFonts,
   buildUserFontMap,
   embedFonts,
   userFontKey,
   MAX_SUBSET_CODEPOINTS_FOR_DEDUP,
+  MAX_AGGREGATE_CODEPOINTS_PER_KEY,
   type FontInfo,
+  type FileAnalysis,
 } from "./font-embedder";
-import type { FontUsage } from "./font-collector";
+import type { FontUsage, FontKey } from "./font-collector";
 
 const MINIMAL_ASS = `[Script Info]
 ScriptType: v4.00+
@@ -876,5 +879,51 @@ Dialogue: 0,0:00:00.00,0:00:05.00,Default,Hello
     expect(result!.embeddedCount).toBe(4);
     // Fallback path: one subset call per alias, not one dedup call.
     expect(subsetFontMock).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe("aggregateFonts — cross-file union + cap", () => {
+  function makeAnalysis(family: string, codepoints: Iterable<number>): FileAnalysis {
+    const key: FontKey = { family, bold: false, italic: false };
+    const cps = new Set(codepoints);
+    const info: FontInfo = {
+      key,
+      glyphCount: cps.size,
+      filePath: "/fonts/x.ttf",
+      fontIndex: 0,
+      error: null,
+      source: "local",
+    };
+    return { content: "", infos: [info], usages: [{ key, codepoints: cps }] };
+  }
+
+  it("unions codepoints for the same font key across files", () => {
+    const perFile = new Map<string, FileAnalysis>([
+      ["a.ass", makeAnalysis("Arial", [65, 66, 67])],
+      ["b.ass", makeAnalysis("Arial", [67, 68, 69])], // 67 overlaps
+    ]);
+    const { infos, usages } = aggregateFonts(perFile);
+    expect(usages).toHaveLength(1);
+    expect([...usages[0]!.codepoints].sort((a, b) => a - b)).toEqual([65, 66, 67, 68, 69]);
+    expect(infos[0]!.glyphCount).toBe(5);
+  });
+
+  it("does not clamp a union under the cap", () => {
+    const perFile = new Map<string, FileAnalysis>([["s.ass", makeAnalysis("Arial", [1, 2, 3])]]);
+    expect(aggregateFonts(perFile).usages[0]!.codepoints.size).toBe(3);
+  });
+
+  it("caps the per-key union at MAX_AGGREGATE_CODEPOINTS_PER_KEY", () => {
+    // Per-file caps (MAX_CODEPOINTS_PER_VARIANT / MAX_TOTAL_CODEPOINTS) bound
+    // each file but NOT their cross-file union; a crafted batch could
+    // otherwise grow the in-memory detection-grid Set unbounded. Over-cap
+    // input must clamp to exactly the cap.
+    function* overCap(): Generator<number> {
+      for (let i = 0; i <= MAX_AGGREGATE_CODEPOINTS_PER_KEY; i++) yield i;
+    }
+    const perFile = new Map<string, FileAnalysis>([["big.ass", makeAnalysis("Arial", overCap())]]);
+    expect(aggregateFonts(perFile).usages[0]!.codepoints.size).toBe(
+      MAX_AGGREGATE_CODEPOINTS_PER_KEY
+    );
   });
 });

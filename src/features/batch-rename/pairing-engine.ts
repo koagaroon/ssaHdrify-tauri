@@ -108,9 +108,14 @@ const EPISODE_PATTERNS: EpisodePattern[] = [
     useRaw: false,
     build: (m) => ({ episode: parseInt(m[1]!, 10) }),
   },
-  // Western EP01 / E01 — final fallback.
+  // Western EP01 / E01 — final fallback. Bounded to 1-3 digits to match
+  // sibling Pattern B (`\d{1,3}`) and the "episode counts top out ~999"
+  // rationale above. The trailing `\b` makes an overlong run (e.g. EP1234)
+  // FAIL to match rather than prefix-truncate to a wrong episode, so it
+  // falls through to the LCS fallback instead of feeding parseInt a
+  // precision-lossy 4+ digit value.
   {
-    regex: /\bEP?(\d+)\b/i,
+    regex: /\bEP?(\d{1,3})\b/i,
     useRaw: false,
     build: (m) => ({ episode: parseInt(m[1]!, 10) }),
   },
