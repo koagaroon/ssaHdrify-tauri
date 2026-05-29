@@ -96,6 +96,19 @@ describe("runChain — single shift step", () => {
     expect(result.content).toBe(expected.content);
   });
 
+  it("rejects a non-finite shift offset in a chain step (no misleading zero-shift)", () => {
+    // Same CLI-boundary guard as the standalone convertShift: a NaN offset
+    // would be silently clamped to a zero-shift success. The chain shift
+    // transform must reject it up front.
+    const plan: ChainPlan = {
+      steps: [{ kind: "shift", params: { offsetMs: NaN } }],
+      outputTemplate: "{name}.shifted.ass",
+    };
+    expect(() => runChain({ plan, inputPath: INPUT_PATH, content: ASS_FIXTURE })).toThrow(
+      /Invalid offsetMs/
+    );
+  });
+
   it("emits a diagnostic note with shift counts and detected format", () => {
     const plan: ChainPlan = {
       steps: [{ kind: "shift", params: { offsetMs: 2000 } }],

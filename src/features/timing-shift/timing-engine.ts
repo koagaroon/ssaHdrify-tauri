@@ -34,6 +34,24 @@ export interface ShiftOptions {
   fps?: number | undefined;
 }
 
+/**
+ * Validate the numeric shift params at a CLI engine boundary. Deliberately
+ * NOT called inside `shiftSubtitles`: the GUI passes NumberInput-validated
+ * values, and the formatter already clamps a stray NaN to 0 — but at the CLI
+ * entry that clamp is a MISLEADING success (shiftedCount / preview disagree
+ * with the rendered zero-shift). Callers at the trust boundary (the standalone
+ * `convertShift` and the chain shift transform) reject up front instead, so
+ * the failure is loud rather than a silent no-op.
+ */
+export function assertFiniteShiftMs(offsetMs: number, thresholdMs?: number): void {
+  if (!Number.isFinite(offsetMs)) {
+    throw new Error(`Invalid offsetMs: expected a finite number, got ${String(offsetMs)}`);
+  }
+  if (thresholdMs !== undefined && !Number.isFinite(thresholdMs)) {
+    throw new Error(`Invalid thresholdMs: expected a finite number, got ${String(thresholdMs)}`);
+  }
+}
+
 export interface PreviewEntry {
   index: number;
   originalStart: number;

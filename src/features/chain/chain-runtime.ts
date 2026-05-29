@@ -13,7 +13,7 @@
 import { Base64 } from "js-base64";
 
 import { processAssContent } from "../hdr-convert/ass-processor";
-import { shiftSubtitles } from "../timing-shift/timing-engine";
+import { assertFiniteShiftMs, shiftSubtitles } from "../timing-shift/timing-engine";
 import { buildFontEntry } from "../font-embed/ass-uuencode";
 import { assertAssShape, insertFontsSection } from "../font-embed/ass-font-section";
 import {
@@ -128,6 +128,11 @@ function hdrTransform(ctx: TransformContext, params: HdrStepParams): TransformRe
 }
 
 function shiftTransform(ctx: TransformContext, params: ShiftStepParams): TransformResult {
+  // Same CLI-boundary guard as the standalone convertShift: a NaN / Infinity
+  // offset would be silently zeroed by the formatter, producing a misleading
+  // success. Reject up front. (See assertFiniteShiftMs for why it's not inside
+  // shiftSubtitles itself.)
+  assertFiniteShiftMs(params.offsetMs, params.thresholdMs);
   const result = shiftSubtitles(ctx.content, {
     offsetMs: params.offsetMs,
     thresholdMs: params.thresholdMs,

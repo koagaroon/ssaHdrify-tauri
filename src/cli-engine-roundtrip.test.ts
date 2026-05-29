@@ -523,3 +523,43 @@ describe("Shift / Embed resolvers — strict-throw on unknown tokens", () => {
     ).not.toThrow();
   });
 });
+
+describe("CLI engine entry — input boundary validation", () => {
+  const inputAss = "C:\\subs\\episode01.ass";
+
+  it("rejects a bogus eotf rather than emitting a mislabeled file", () => {
+    // eotf arrives as a JSON string from the deno_core op layer; the TS Eotf
+    // type isn't enforced at runtime. A bogus value would flow into the
+    // {eotf} filename token as wrong-but-legal. Cast through unknown to
+    // simulate the unvalidated wire value.
+    const bogus = "P9" as unknown as Eotf;
+    expect(() =>
+      convertHdr({ inputPath: inputAss, content: ASS_FIXTURE, eotf: bogus, brightness: 1000 })
+    ).toThrow(/Invalid eotf/);
+    expect(() => resolveHdrOutputPath({ inputPath: inputAss, eotf: bogus })).toThrow(
+      /Invalid eotf/
+    );
+    // Valid eotfs still pass.
+    expect(() =>
+      convertHdr({ inputPath: inputAss, content: ASS_FIXTURE, eotf: "PQ", brightness: 1000 })
+    ).not.toThrow();
+  });
+
+  it("rejects a non-finite shift offset / threshold (no misleading zero-shift)", () => {
+    // NaN / Infinity would be silently clamped to 0 by the formatter,
+    // producing a success whose shiftedCount disagrees with the rendered
+    // (unchanged) times. Reject at the boundary instead.
+    for (const bad of [NaN, Infinity, -Infinity]) {
+      expect(() =>
+        convertShift({ inputPath: inputAss, content: ASS_FIXTURE, offsetMs: bad })
+      ).toThrow(/Invalid offsetMs/);
+    }
+    expect(() =>
+      convertShift({ inputPath: inputAss, content: ASS_FIXTURE, offsetMs: 1000, thresholdMs: NaN })
+    ).toThrow(/Invalid thresholdMs/);
+    // A finite offset still passes.
+    expect(() =>
+      convertShift({ inputPath: inputAss, content: ASS_FIXTURE, offsetMs: 1000 })
+    ).not.toThrow();
+  });
+});

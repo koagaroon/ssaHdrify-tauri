@@ -99,7 +99,14 @@ export function parseAssColor(assColor: string): {
   b: number;
   alpha: string;
 } {
-  // Strip &H prefix, pad to 8 chars
+  // Strip the &H prefix and left-pad to 8 hex chars (AABBGGRR). Shorter
+  // inputs pad with leading zeros (alpha defaults opaque). Inputs LONGER than
+  // 8 are NOT rejected: padStart is a no-op and the slices below take the
+  // FIRST 8 chars, silently ignoring the overflow. This is a caller-trusted
+  // contract, not a guard — every production caller bounds the input to 6 or
+  // 8 hex upstream (the color-tag matchers + the 6/8-hex GUI color field). A
+  // future caller passing >8 hex would get the leading-8 prefix as
+  // wrong-but-valid; validate at that caller if one ever appears.
   const stripped = assColor.replace(/^&H/i, "").padStart(8, "0");
   const alpha = stripped.slice(0, 2);
   const blue = parseInt(stripped.slice(2, 4), 16);

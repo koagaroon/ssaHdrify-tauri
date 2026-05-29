@@ -23,7 +23,11 @@ import { buildFontEntry } from "./features/font-embed/ass-uuencode";
 import { assertAssShape, insertFontsSection } from "./features/font-embed/ass-font-section";
 import { buildFontFileName } from "./features/font-embed/font-embedder";
 import { collectFontsWithParser, fontKeyLabel } from "./features/font-embed/font-collector";
-import { deriveShiftedPath, shiftSubtitles } from "./features/timing-shift/timing-engine";
+import {
+  assertFiniteShiftMs,
+  deriveShiftedPath,
+  shiftSubtitles,
+} from "./features/timing-shift/timing-engine";
 import { extractLangFromBaseName, LANG_TAGS } from "./lib/lang-detection";
 import {
   assertSafeOutputFilename,
@@ -167,11 +171,24 @@ export interface FontEmbedApplyResult {
   embeddedCount: number;
 }
 
+// The CLI engine entry is a real input boundary: `eotf` arrives as a JSON
+// string from the deno_core op layer, where the `Eotf` TS type is NOT enforced
+// at runtime. A bogus value would flow into the {eotf} filename token as
+// wrong-but-legal output (sRgbToHdr silently treats any non-"HLG" value as
+// "PQ"), so reject it up front rather than emit a mislabeled file.
+const VALID_EOTFS: readonly Eotf[] = ["PQ", "HLG"];
+function assertValidEotf(eotf: Eotf): void {
+  if (!VALID_EOTFS.includes(eotf)) {
+    throw new Error(`Invalid eotf '${String(eotf)}': expected one of ${VALID_EOTFS.join(", ")}`);
+  }
+}
+
 export function resolveHdrOutputPath(request: {
   inputPath: string;
   eotf: Eotf;
   outputTemplate?: string;
 }): string {
+  assertValidEotf(request.eotf);
   // Cheap path-only resolution. MUST stay byte-identical to convertHdr's
   // returned outputPath — both route through resolveOutputPath with the
   // same template defaulting, so byte equality holds by construction.
@@ -180,6 +197,7 @@ export function resolveHdrOutputPath(request: {
 }
 
 export function convertHdr(request: HdrConversionRequest): HdrConversionResult {
+  assertValidEotf(request.eotf);
   const brightness = request.brightness ?? DEFAULT_BRIGHTNESS;
   const outputTemplate = request.outputTemplate ?? DEFAULT_TEMPLATE;
   // outputPath is computed here AND in resolveHdrOutputPath; the CLI
@@ -235,6 +253,7 @@ export function convertHdr(request: HdrConversionRequest): HdrConversionResult {
 }
 
 export function convertShift(request: ShiftConversionRequest): ShiftConversionResult {
+  assertFiniteShiftMs(request.offsetMs, request.thresholdMs);
   const result = shiftSubtitles(request.content, {
     offsetMs: request.offsetMs,
     thresholdMs: request.thresholdMs,
