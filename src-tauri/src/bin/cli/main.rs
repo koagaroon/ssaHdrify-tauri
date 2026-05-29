@@ -1012,6 +1012,38 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
             .to_string());
     }
 
+    // --output-dir / --overwrite / --fail-fast affect OUTPUT-file writing;
+    // refresh-fonts writes only to the cache, so they're inert here. Surface
+    // a notice rather than ignoring them silently (no-silent-action). Unlike
+    // --no-cache (contradictory → hard error) these are harmless, so a
+    // non-fatal stderr line is the right level. --cache-file / --no-cache are
+    // the documented handled/bounded-ignore flags and stay excluded.
+    if !globals.quiet {
+        let mut inert: Vec<&str> = Vec::new();
+        if globals.output_dir.is_some() {
+            inert.push("--output-dir");
+        }
+        if globals.overwrite {
+            inert.push("--overwrite");
+        }
+        if globals.fail_fast {
+            inert.push("--fail-fast");
+        }
+        if !inert.is_empty() {
+            let flags = inert.join(", ");
+            eprintln!(
+                "{}",
+                localize(
+                    globals,
+                    format!(
+                        "ℹ refresh-fonts writes only to the cache; these flags have no effect here: {flags}"
+                    ),
+                    format!("ℹ refresh-fonts 仅写入缓存；以下参数在此无效：{flags}"),
+                )
+            );
+        }
+    }
+
     validate_cache_file_arg(globals)?;
 
     // validate each --font-dir argv early —
@@ -1061,6 +1093,72 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
             final_folder_paths.len(),
             app_lib::font_cache::MAX_CACHED_FOLDERS
         ));
+    }
+
+    // --dry-run previews planned work without touching persisted state,
+    // matching the cheap-first dry-run contract of the other subcommands:
+    // gate BEFORE the expensive scan and mutate nothing. The existing cache
+    // is read READ-ONLY (no file is created when absent), so the folder-cap
+    // preview reflects reality without the open_or_create side effect.
+    if globals.dry_run {
+        if cache_path.exists() {
+            match app_lib::font_cache::FontCache::open_existing_read_only(&cache_path) {
+                Ok(existing) => {
+                    for folder in existing
+                        .list_folders()
+                        .map_err(|e| format!("reading existing cache folders: {e}"))?
+                    {
+                        final_folder_paths.insert(folder.folder_path);
+                    }
+                }
+                Err(app_lib::font_cache::CacheError::SchemaVersionMismatch { found, expected }) => {
+                    return Err(format!(
+                        "Cache at {} has schema version {found} but this CLI uses version {expected}.\n\
+                         The cache is from a different release and must be rebuilt.\n\
+                         Delete the file manually and re-run refresh-fonts:\n  \
+                         (file: {})",
+                        cache_path.display(),
+                        cache_path.display(),
+                    ));
+                }
+                Err(e) => return Err(format!("opening cache: {e}")),
+            }
+        }
+        if final_folder_paths.len() > app_lib::font_cache::MAX_CACHED_FOLDERS {
+            return Err(format!(
+                "refresh-fonts would track {} total cached folders, exceeding the {}-folder cache sanity cap. Delete the cache file or rebuild it with fewer --font-dir sources.",
+                final_folder_paths.len(),
+                app_lib::font_cache::MAX_CACHED_FOLDERS
+            ));
+        }
+        if !globals.quiet {
+            let n = args.font_dirs.len();
+            eprintln!(
+                "{}",
+                localize(
+                    globals,
+                    format!(
+                        "ℹ Dry run: would scan {n} source root{} and update the cache. No changes written:",
+                        s_if(n)
+                    ),
+                    format!("ℹ 预演：将扫描 {n} 个源根目录并更新缓存。未写入任何更改："),
+                )
+            );
+            for dir in &args.font_dirs {
+                let dir_disp = sanitize_for_display(&dir.to_string_lossy());
+                eprintln!("    {dir_disp}");
+            }
+            let cache_disp = sanitize_for_display(&cache_path.display().to_string());
+            eprintln!(
+                "{}",
+                localize(
+                    globals,
+                    format!("  Cache file: {cache_disp}"),
+                    format!("  缓存文件：{cache_disp}"),
+                )
+            );
+        }
+        return Ok(ExitCode::SUCCESS);
     }
 
     if !globals.quiet {

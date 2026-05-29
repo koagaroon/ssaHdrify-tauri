@@ -392,20 +392,40 @@ export interface FileAnalysis {
  * `usages` from the cache stay authoritative for the embed loop's
  * per-file subsetting (each file embeds only the codepoints IT uses).
  */
+// Absolute ceiling on the cross-file codepoint union per font key in
+// `aggregateFonts`. Mirrors the 1,000,000 per-file MAX_TOTAL_CODEPOINTS
+// ceiling: honest batches stay in the low thousands even on full-CJK runs,
+// so this only fires on crafted / pathological input and never clamps a real
+// coverage count. Exported so `font-embedder.test.ts` can pin the cap.
+export const MAX_AGGREGATE_CODEPOINTS_PER_KEY = 1_000_000;
+
 export function aggregateFonts(perFile: Map<string, FileAnalysis>): {
   infos: FontInfo[];
   usages: FontUsage[];
 } {
-  // Union codepoints per font key across all files.
+  // Union codepoints per font key across all files, capped per key. The
+  // per-file caps in font-collector (MAX_CODEPOINTS_PER_VARIANT,
+  // MAX_TOTAL_CODEPOINTS) bound each file's contribution but NOT their union
+  // across an N-file batch — N files each near the per-variant cap could
+  // union to N×cap. The cap bounds worst-case memory at one
+  // MAX_AGGREGATE_CODEPOINTS_PER_KEY-sized Set per key. This union is only an
+  // in-memory display / coverage-stats artifact (detection-grid glyphCount +
+  // FontSourceModal batch coverage); the per-file subsetting below consumes
+  // the per-file `usages`, which stay authoritative and individually capped,
+  // so a clamped aggregate never under-subsets a real file.
   const usageMap = new Map<string, { key: FontKey; codepoints: Set<number> }>();
   for (const analysis of perFile.values()) {
     for (const u of analysis.usages) {
       const k = userFontKey(u.key.family, u.key.bold, u.key.italic);
-      const existing = usageMap.get(k);
-      if (existing) {
-        for (const cp of u.codepoints) existing.codepoints.add(cp);
-      } else {
-        usageMap.set(k, { key: u.key, codepoints: new Set(u.codepoints) });
+      let entry = usageMap.get(k);
+      if (!entry) {
+        entry = { key: u.key, codepoints: new Set<number>() };
+        usageMap.set(k, entry);
+      }
+      if (entry.codepoints.size >= MAX_AGGREGATE_CODEPOINTS_PER_KEY) continue;
+      for (const cp of u.codepoints) {
+        entry.codepoints.add(cp);
+        if (entry.codepoints.size >= MAX_AGGREGATE_CODEPOINTS_PER_KEY) break;
       }
     }
   }

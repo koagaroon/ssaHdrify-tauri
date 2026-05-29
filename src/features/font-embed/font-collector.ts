@@ -55,11 +55,27 @@ import { ASCII_CONTROL_CHARS, BIDI_AND_ZERO_WIDTH_CHARS } from "../../lib/unicod
 // behavior change is unreachable for legitimate or malformed input.
 const R_TAG_RE =
   /\\r(?:([\p{L}\p{N}_][\p{L}\p{N}_-]{0,127})?(?![\p{L}\p{N}_-])|[\p{L}\p{N}_][\p{L}\p{N}_-]{128,199999}(?![\p{L}\p{N}_-]))/gu;
+// Display-spoofing chars rejected from font family names. NOT added to
+// unicode-controls.ts's BIDI_AND_ZERO_WIDTH_CHARS — that set is mirrored
+// codepoint-for-codepoint to Rust `util.rs` and extended only on a CVE (see
+// its header). These aren't crashes or Trojan-Source vectors:
+//   - U+00A0 NBSP, U+2000-U+200A (variable-width spaces), U+202F narrow
+//     NBSP, U+205F medium math space all masquerade as ASCII space, so a
+//     family label / [Fonts] header can read as a different name than it is.
+//   - Astral code points (U+10000-U+10FFFF) never legitimately appear in a
+//     font family name.
+// U+3000 (ideographic space) is intentionally NOT rejected — it is visibly
+// full-width and legitimately used in CJK typography. Spliced into BOTH
+// FN_CHAR_SET (the `\fn` capture) AND `sanitizeFamily` (the Style-Fontname
+// path) so the "FN_CHAR_SET excludes exactly what sanitizeFamily strips"
+// contract — which makes the `\fn` `|| current.family` fallback dead — holds.
+const FAMILY_SPOOFING_CHARS = "\\u00A0\\u2000-\\u200A\\u202F\\u205F\\u{10000}-\\u{10FFFF}";
+
 // `\fn` regex constructed dynamically because the exclusion class
 // interpolates `BIDI_AND_ZERO_WIDTH_CHARS`. Hoisted to a module-level
 // const just like the literal regexes above so the compile cost is
 // paid once per process, not per override block.
-const FN_CHAR_SET = `[^\\\\}{${ASCII_CONTROL_CHARS}${BIDI_AND_ZERO_WIDTH_CHARS}]`;
+const FN_CHAR_SET = `[^\\\\}{${ASCII_CONTROL_CHARS}${BIDI_AND_ZERO_WIDTH_CHARS}${FAMILY_SPOOFING_CHARS}]`;
 const FN_TAG_RE = new RegExp(
   `\\\\fn(?:(${FN_CHAR_SET}{0,128})(?!${FN_CHAR_SET})|${FN_CHAR_SET}{129,200000}(?!${FN_CHAR_SET}))`,
   "gu"
@@ -182,8 +198,10 @@ function normalizeFamily(raw: string): string {
  *  asymmetry is load-bearing — keep both.
  *
  *  Range covers C0 (0x00-0x1F), DEL (0x7F), C1 (0x80-0x9F), the Unicode
- *  line/paragraph separators (U+2028 / U+2029), AND the full
- *  BiDi / zero-width control set from `unicode-controls.ts`.
+ *  line/paragraph separators (U+2028 / U+2029), the full
+ *  BiDi / zero-width control set from `unicode-controls.ts`, AND the
+ *  display-spoofing whitespace + astral set (`FAMILY_SPOOFING_CHARS`,
+ *  kept in lockstep with `FN_CHAR_SET`).
  *  Previously a family name carrying U+202E could flow through
  *  `sanitizeFamily` into detection-grid labels, log lines, and chain
  *  progress text where the visual-reversal attack re-surfaced after
@@ -205,7 +223,13 @@ export function sanitizeFamily(raw: string): string {
   // directive is needed. Behavior is identical to a literal regex
   // (codepoint classes are evaluated at the same runtime stage).
   return raw
-    .replace(new RegExp(`[${ASCII_CONTROL_CHARS}${BIDI_AND_ZERO_WIDTH_CHARS}]`, "gu"), "")
+    .replace(
+      new RegExp(
+        `[${ASCII_CONTROL_CHARS}${BIDI_AND_ZERO_WIDTH_CHARS}${FAMILY_SPOOFING_CHARS}]`,
+        "gu"
+      ),
+      ""
+    )
     .slice(0, 128);
 }
 
@@ -577,7 +601,8 @@ function applyOverrideTags(
         // The previous `sanitizeFamily(rawFamily) || current.family`
         // fallback was STRUCTURALLY UNREACHABLE. FN_CHAR_SET excludes
         // the same codepoints `sanitizeFamily` strips (C0 / DEL / C1 /
-        // BiDi / zero-width) plus `\` `{` `}`, AND the first
+        // BiDi / zero-width / spoofing whitespace + astral) plus `\` `{`
+        // `}`, AND the first
         // FN_TAG_RE alternation branch caps at 128 chars — exactly
         // what `sanitizeFamily` truncates to. So once `rawFamily` is
         // non-empty after `normalizeFamily`,
