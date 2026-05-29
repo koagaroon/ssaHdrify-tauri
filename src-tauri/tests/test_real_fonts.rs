@@ -14,6 +14,7 @@ use std::process::Command;
 use app_lib::font_cache::FontCache;
 
 const FONT_ROOT_ENV: &str = "SSAHDRIFY_TEST_FONT_ROOT";
+const DREAM_HAN_ROOT_ENV: &str = "SSAHDRIFY_TEST_DREAMHAN_ROOT";
 
 const CJK_LOOKUP_CANDIDATES: &[&str] = &[
     "Source Han Serif SC",
@@ -58,6 +59,30 @@ fn real_font_root() -> Option<PathBuf> {
         root.display()
     );
     Some(root)
+}
+
+fn dream_han_root() -> Option<PathBuf> {
+    let Some(root) = std::env::var_os(DREAM_HAN_ROOT_ENV).map(PathBuf::from) else {
+        eprintln!("{DREAM_HAN_ROOT_ENV} not set; skipping Dream Han compatibility gate");
+        return None;
+    };
+    if !root.is_dir() {
+        eprintln!(
+            "{DREAM_HAN_ROOT_ENV} does not point to a readable directory: {}; skipping",
+            root.display()
+        );
+        return None;
+    }
+    Some(root)
+}
+
+fn require_font_file(path: PathBuf) -> PathBuf {
+    assert!(
+        path.is_file(),
+        "expected local real-font fixture at {}",
+        path.display()
+    );
+    path
 }
 
 fn is_font_file(path: &Path) -> bool {
@@ -140,7 +165,7 @@ fn run_cli(args: &[OsString]) -> std::process::Output {
         .expect("failed to spawn ssahdrify-cli")
 }
 
-fn write_ass_fixture(dir: &Path, file_name: &str, family: &str) -> PathBuf {
+fn write_ass_fixture_with_bold(dir: &Path, file_name: &str, family: &str, bold: i32) -> PathBuf {
     let path = dir.join(file_name);
     let content = format!(
         concat!(
@@ -149,15 +174,48 @@ fn write_ass_fixture(dir: &Path, file_name: &str, family: &str) -> PathBuf {
             "\n",
             "[V4+ Styles]\n",
             "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n",
-            "Style: Default,{family},20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1\n",
+            "Style: Default,{family},20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,{bold},0,0,0,100,100,0,0,1,2,2,2,10,10,10,1\n",
             "\n",
             "[Events]\n",
             "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n",
             "Dialogue: 0,0:00:01.00,0:00:03.00,Default,,0,0,0,,Real font gate 真实字体门禁\n",
         ),
-        family = family
+        family = family,
+        bold = bold
     );
     fs::write(&path, content).expect("failed to write ASS fixture");
+    path
+}
+
+fn write_ass_fixture(dir: &Path, file_name: &str, family: &str) -> PathBuf {
+    write_ass_fixture_with_bold(dir, file_name, family, 0)
+}
+
+fn write_multi_family_ass_fixture(dir: &Path, file_name: &str, families: &[String]) -> PathBuf {
+    let path = dir.join(file_name);
+    let mut content = String::from(concat!(
+        "[Script Info]\n",
+        "ScriptType: v4.00+\n",
+        "\n",
+        "[V4+ Styles]\n",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n",
+    ));
+    for (index, family) in families.iter().enumerate() {
+        content.push_str(&format!(
+            "Style: S{index},{family},20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1\n"
+        ));
+    }
+    content.push_str(concat!(
+        "\n",
+        "[Events]\n",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n",
+    ));
+    for index in 0..families.len() {
+        content.push_str(&format!(
+            "Dialogue: 0,0:00:01.00,0:00:03.00,S{index},,0,0,0,,Dream Han weight gate\n"
+        ));
+    }
+    fs::write(&path, content).expect("failed to write multi-family ASS fixture");
     path
 }
 
@@ -178,6 +236,70 @@ fn lookup_first(cache: &FontCache, families: &[&str]) -> Option<String> {
         })
 }
 
+fn diagnostic_for_family<'a>(value: &'a serde_json::Value, family: &str) -> &'a serde_json::Value {
+    let fonts = value["fonts"]
+        .as_array()
+        .expect("diagnostics JSON should include fonts[]");
+    fonts
+        .iter()
+        .find(|font| font["family"] == family)
+        .unwrap_or_else(|| panic!("diagnostics JSON did not include family {family}: {value}"))
+}
+
+fn assert_diagnose_resolved_in_tier(output: &std::process::Output, family: &str, tier_name: &str) {
+    assert!(
+        output.status.success(),
+        "diagnose-fonts should succeed: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let value: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("diagnose stdout should be JSON");
+    let diagnostic = diagnostic_for_family(&value, family);
+    assert_eq!(diagnostic["result"], "resolved");
+    assert!(
+        diagnostic["path"]
+            .as_str()
+            .is_some_and(|path| !path.is_empty()),
+        "resolved diagnostic should carry the font path: {diagnostic}"
+    );
+    assert!(
+        diagnostic["tiers"].as_array().is_some_and(|tiers| {
+            tiers
+                .iter()
+                .any(|tier| tier["tier"] == tier_name && tier["status"] == "hit")
+        }),
+        "diagnostic should prove the {tier_name} tier resolved the font: {diagnostic}"
+    );
+}
+
+fn assert_diagnose_many_resolved_in_tier(
+    output: &std::process::Output,
+    families: &[String],
+    tier_name: &str,
+) {
+    assert!(
+        output.status.success(),
+        "diagnose-fonts should succeed: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let value: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("diagnose stdout should be JSON");
+    for family in families {
+        let diagnostic = diagnostic_for_family(&value, family);
+        assert_eq!(diagnostic["result"], "resolved", "{diagnostic}");
+        assert!(
+            diagnostic["tiers"].as_array().is_some_and(|tiers| {
+                tiers
+                    .iter()
+                    .any(|tier| tier["tier"] == tier_name && tier["status"] == "hit")
+            }),
+            "diagnostic should prove the {tier_name} tier resolved {family}: {diagnostic}"
+        );
+    }
+}
+
 fn assert_diagnose_resolved(output: &std::process::Output, family: &str) {
     assert!(
         output.status.success(),
@@ -190,13 +312,7 @@ fn assert_diagnose_resolved(output: &std::process::Output, family: &str) {
     assert_eq!(value["files"][0]["status"], "diagnosed");
     assert_eq!(value["cache"]["status"], "usable");
 
-    let fonts = value["fonts"]
-        .as_array()
-        .expect("diagnostics JSON should include fonts[]");
-    let diagnostic = fonts
-        .iter()
-        .find(|font| font["family"] == family)
-        .unwrap_or_else(|| panic!("diagnostics JSON did not include family {family}: {value}"));
+    let diagnostic = diagnostic_for_family(&value, family);
     assert_eq!(diagnostic["result"], "resolved");
     assert!(
         diagnostic["path"]
@@ -223,13 +339,7 @@ fn assert_diagnose_missing(output: &std::process::Output, family: &str) {
 
     let value: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("diagnose stdout should be JSON");
-    let fonts = value["fonts"]
-        .as_array()
-        .expect("diagnostics JSON should include fonts[]");
-    let diagnostic = fonts
-        .iter()
-        .find(|font| font["family"] == family)
-        .unwrap_or_else(|| panic!("diagnostics JSON did not include family {family}: {value}"));
+    let diagnostic = diagnostic_for_family(&value, family);
     assert_eq!(diagnostic["result"], "missing");
 }
 
@@ -317,6 +427,192 @@ fn real_font_package_refreshes_cache_and_diagnoses_cjk_fonts() {
     match lookup_first(&cache, DREAM_HAN_LOOKUP_CANDIDATES) {
         Some(family) => eprintln!("Dream Han available in local pack as {family}"),
         None => eprintln!("Dream Han Serif SC W22 not present in the local pack cache"),
+    }
+
+    let _ = fs::remove_dir_all(work);
+}
+
+#[test]
+#[ignore = "requires SSAHDRIFY_TEST_DREAMHAN_ROOT pointing at local Dream Han fixtures"]
+fn dream_han_serif_face_names_resolve_across_local_cache_and_embed_paths() {
+    let Some(root) = dream_han_root() else {
+        return;
+    };
+    let serif_dir = root.join("DreamHanSerif");
+    let sans_dir = root.join("DreamHanSans");
+    let serif_w22 = require_font_file(serif_dir.join("DreamHanSerif-W22.ttc"));
+    let serif_cn_w22 =
+        require_font_file(root.join("DreamHanSerifCN").join("DreamHanSerifCN-W22.ttf"));
+    let _sans_w22 = require_font_file(sans_dir.join("DreamHanSans-W22.ttc"));
+
+    let work = temp_dir("dream-han");
+    let cache_path = work.join("dream-han-cache.sqlite3");
+    let out_normal = work.join("normal-out");
+    let out_space_cjk = work.join("ramdisk shaped output 中文");
+    let out_nested_missing = work.join("missing-parent").join("ass_out");
+
+    let sc_plain = write_ass_fixture(&work, "dreamhan-sc-w22.ass", "Dream Han Serif SC W22");
+    let sc_bold = write_ass_fixture_with_bold(
+        &work,
+        "dreamhan-sc-w22-bold.ass",
+        "Dream Han Serif SC W22",
+        -1,
+    );
+    let postscript = write_ass_fixture(
+        &work,
+        "dreamhan-sc-w22-postscript.ass",
+        "DreamHanSerifSC-W22",
+    );
+    let cn_plain = write_ass_fixture(&work, "dreamhan-cn-w22.ass", "Dream Han Serif CN W22");
+    let sans_plain = write_ass_fixture(&work, "dreamhan-sans-sc-w22.ass", "Dream Han Sans SC W22");
+
+    let local_file_diagnose = run_cli(&[
+        os("--lang"),
+        os("en"),
+        os("--json"),
+        os("--no-cache"),
+        os("diagnose-fonts"),
+        os("--font-file"),
+        os(serif_w22.as_os_str()),
+        os("--no-system-fonts"),
+        os(sc_plain.as_os_str()),
+    ]);
+    assert_diagnose_resolved_in_tier(&local_file_diagnose, "Dream Han Serif SC W22", "local");
+
+    let local_dir_diagnose = run_cli(&[
+        os("--lang"),
+        os("en"),
+        os("--json"),
+        os("--no-cache"),
+        os("diagnose-fonts"),
+        os("--font-dir"),
+        os(serif_dir.as_os_str()),
+        os("--no-system-fonts"),
+        os(sc_plain.as_os_str()),
+    ]);
+    assert_diagnose_resolved_in_tier(&local_dir_diagnose, "Dream Han Serif SC W22", "local");
+
+    let local_ttf_diagnose = run_cli(&[
+        os("--lang"),
+        os("en"),
+        os("--json"),
+        os("--no-cache"),
+        os("diagnose-fonts"),
+        os("--font-file"),
+        os(serif_cn_w22.as_os_str()),
+        os("--no-system-fonts"),
+        os(cn_plain.as_os_str()),
+    ]);
+    assert_diagnose_resolved_in_tier(&local_ttf_diagnose, "Dream Han Serif CN W22", "local");
+
+    let refresh = run_cli(&[
+        os("--lang"),
+        os("en"),
+        os("--cache-file"),
+        os(cache_path.as_os_str()),
+        os("refresh-fonts"),
+        os("--font-dir"),
+        os(serif_dir.as_os_str()),
+        os("--font-dir"),
+        os(sans_dir.as_os_str()),
+    ]);
+    assert!(
+        refresh.status.success(),
+        "refresh-fonts should index Dream Han dirs: stderr={}",
+        String::from_utf8_lossy(&refresh.stderr)
+    );
+
+    let cache_sc_diagnose = run_cli(&[
+        os("--lang"),
+        os("en"),
+        os("--json"),
+        os("--cache-file"),
+        os(cache_path.as_os_str()),
+        os("diagnose-fonts"),
+        os("--no-system-fonts"),
+        os(sc_plain.as_os_str()),
+    ]);
+    assert_diagnose_resolved_in_tier(&cache_sc_diagnose, "Dream Han Serif SC W22", "cache");
+
+    let cache_bold_diagnose = run_cli(&[
+        os("--lang"),
+        os("en"),
+        os("--json"),
+        os("--cache-file"),
+        os(cache_path.as_os_str()),
+        os("diagnose-fonts"),
+        os("--no-system-fonts"),
+        os(sc_bold.as_os_str()),
+    ]);
+    assert_diagnose_resolved_in_tier(&cache_bold_diagnose, "Dream Han Serif SC W22", "cache");
+
+    let cache_postscript_diagnose = run_cli(&[
+        os("--lang"),
+        os("en"),
+        os("--json"),
+        os("--cache-file"),
+        os(cache_path.as_os_str()),
+        os("diagnose-fonts"),
+        os("--no-system-fonts"),
+        os(postscript.as_os_str()),
+    ]);
+    assert_diagnose_resolved_in_tier(&cache_postscript_diagnose, "DreamHanSerifSC-W22", "cache");
+
+    let cache_sans_diagnose = run_cli(&[
+        os("--lang"),
+        os("en"),
+        os("--json"),
+        os("--cache-file"),
+        os(cache_path.as_os_str()),
+        os("diagnose-fonts"),
+        os("--no-system-fonts"),
+        os(sans_plain.as_os_str()),
+    ]);
+    assert_diagnose_resolved_in_tier(&cache_sans_diagnose, "Dream Han Sans SC W22", "cache");
+
+    let serif_weights: Vec<String> = (1..=27)
+        .map(|weight| format!("Dream Han Serif SC W{weight}"))
+        .collect();
+    let weights_ass =
+        write_multi_family_ass_fixture(&work, "dreamhan-serif-sc-all-weights.ass", &serif_weights);
+    let weights_diagnose = run_cli(&[
+        os("--lang"),
+        os("en"),
+        os("--json"),
+        os("--cache-file"),
+        os(cache_path.as_os_str()),
+        os("diagnose-fonts"),
+        os("--no-system-fonts"),
+        os(weights_ass.as_os_str()),
+    ]);
+    assert_diagnose_many_resolved_in_tier(&weights_diagnose, &serif_weights, "cache");
+
+    for output_dir in [&out_normal, &out_space_cjk, &out_nested_missing] {
+        let embed = run_cli(&[
+            os("--lang"),
+            os("en"),
+            os("--cache-file"),
+            os(cache_path.as_os_str()),
+            os("--fail-fast"),
+            os("--output-dir"),
+            os(output_dir.as_os_str()),
+            os("embed"),
+            os("--no-system-fonts"),
+            os("--on-missing"),
+            os("fail"),
+            os(sc_plain.as_os_str()),
+        ]);
+        assert!(
+            embed.status.success(),
+            "embed should write Dream Han output to {}: stderr={}",
+            output_dir.display(),
+            String::from_utf8_lossy(&embed.stderr)
+        );
+        assert!(
+            output_dir.join("dreamhan-sc-w22.embed.ass").exists(),
+            "embed output was not written under {}",
+            output_dir.display()
+        );
     }
 
     let _ = fs::remove_dir_all(work);

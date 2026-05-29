@@ -6549,6 +6549,19 @@ mod tests {
     }
 
     #[test]
+    fn relocate_output_path_accepts_ramdisk_shaped_output_dirs() {
+        let drive_root = PathBuf::from("R:\\");
+        let root_result =
+            relocate_output_path("C:\\subs\\episode.embed.ass", Some(&drive_root)).unwrap();
+        assert_eq!(root_result, drive_root.join("episode.embed.ass"));
+
+        let spaced_cjk_dir = PathBuf::from("R:\\ass out 中文");
+        let spaced_result =
+            relocate_output_path("C:\\subs\\episode.embed.ass", Some(&spaced_cjk_dir)).unwrap();
+        assert_eq!(spaced_result, spaced_cjk_dir.join("episode.embed.ass"));
+    }
+
+    #[test]
     fn relocate_output_path_rejects_overlong_relocated_path() {
         // A 300-char path comfortably exceeds the 259-char cap.
         let long_dir_name: String = "a".repeat(300);

@@ -676,7 +676,9 @@ pub struct FontLookupResult {
 /// `face_names` holds full-face aliases such as `Dream Han Serif SC W22` or a
 /// PostScript name. These identify a specific face/weight, so lookup indexes
 /// them style-insensitively: an ASS file can name the W22 face directly even
-/// when its separate Bold column is `0`.
+/// when its separate Bold column is `0`. Some fonts also repeat a full face
+/// name in their family-name table; keep that full-name alias anyway so the
+/// concrete face remains directly addressable.
 ///
 /// The entry count reported to users reflects font files/faces (not variants),
 /// so a folder with 3 TTFs shows as "3 fonts" even if we pulled 8 matchable
@@ -1162,6 +1164,16 @@ fn bounded_font_family_name(chars: impl Iterator<Item = char>) -> Option<String>
     Some(trimmed.to_string())
 }
 
+fn materialize_face_name_aliases(face_name_variants: HashSet<String>) -> Vec<String> {
+    // FULL_NAME / POSTSCRIPT_NAME values identify a concrete face. Keep them
+    // even when a font also repeats the same string in FAMILY_NAME; Dream Han
+    // Serif W15+ does exactly that, and filtering the duplicate leaves only a
+    // bold style-sensitive family row that ASS `Bold=0` cannot match.
+    let mut face_names: Vec<String> = face_name_variants.into_iter().collect();
+    face_names.sort();
+    face_names
+}
+
 /// Parse one font file (TTF/OTF/TTC/OTC) and return a `LocalFontEntry` per
 /// face **and per distinct localized family name** in the face's name table.
 ///
@@ -1445,17 +1457,7 @@ fn parse_local_font_file(canonical: &Path, scan_id: u64) -> Vec<LocalFontEntry> 
             }
         }
 
-        let family_lookup_keys: HashSet<String> = families
-            .iter()
-            .map(|name| crate::font_cache::family_lookup_key(name))
-            .collect();
-        let mut face_names: Vec<String> = face_name_variants
-            .into_iter()
-            .filter(|name| {
-                !family_lookup_keys.contains(&crate::font_cache::family_lookup_key(name))
-            })
-            .collect();
-        face_names.sort();
+        let face_names = materialize_face_name_aliases(face_name_variants);
 
         entries.push(LocalFontEntry {
             path: canonical_string.clone(),
@@ -4015,6 +4017,86 @@ mod tests {
         );
     }
 
+    #[test]
+    fn face_name_aliases_keep_full_name_that_duplicates_family_variant() {
+        let duplicated_family_name = "Dream Han Serif SC W22".to_string();
+        let family_variants = [duplicated_family_name.clone()];
+        let mut face_name_variants = HashSet::new();
+        face_name_variants.insert(duplicated_family_name.clone());
+        face_name_variants.insert("DreamHanSerifSC-W22".to_string());
+
+        let aliases = materialize_face_name_aliases(face_name_variants);
+
+        assert!(
+            family_variants.contains(&duplicated_family_name),
+            "test fixture should model a font that repeats FULL_NAME in FAMILY_NAME"
+        );
+        assert_eq!(
+            aliases,
+            vec![
+                "Dream Han Serif SC W22".to_string(),
+                "DreamHanSerifSC-W22".to_string()
+            ]
+        );
+    }
+
+    /// Usage on Windows:
+    ///   SSAHDRIFY_TEST_DREAMHAN_SERIF_TTC=C:/Font_files/DreamHanSerif/DreamHanSerif-W22.ttc
+    ///   cargo test --lib -- --ignored parse_local_dream_han_serif_w22_keeps_duplicate_full_name_alias
+    #[test]
+    #[ignore = "requires SSAHDRIFY_TEST_DREAMHAN_SERIF_TTC pointing to a Dream Han Serif W22 TTC"]
+    fn parse_local_dream_han_serif_w22_keeps_duplicate_full_name_alias() {
+        let Some(fixture) =
+            std::env::var_os("SSAHDRIFY_TEST_DREAMHAN_SERIF_TTC").map(PathBuf::from)
+        else {
+            eprintln!("SSAHDRIFY_TEST_DREAMHAN_SERIF_TTC not set; skipping");
+            return;
+        };
+        if !fixture.is_file() {
+            eprintln!(
+                "Dream Han fixture not found at {}; skipping",
+                fixture.display()
+            );
+            return;
+        }
+        let canonical = fixture
+            .canonicalize()
+            .expect("Dream Han fixture should canonicalize");
+        let entries = parse_local_font_file(&canonical, NO_SCAN_ID);
+        let sc_face = entries
+            .iter()
+            .find(|entry| {
+                entry
+                    .families
+                    .iter()
+                    .any(|name| name == "Dream Han Serif SC W22")
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "fixture did not expose Dream Han Serif SC W22 as a family variant; parsed {} entries",
+                    entries.len()
+                )
+            });
+
+        assert!(sc_face.bold, "W22 should be classified as bold");
+        assert!(
+            sc_face
+                .face_names
+                .iter()
+                .any(|name| name == "Dream Han Serif SC W22"),
+            "duplicated FULL_NAME must remain a concrete face alias: {:?}",
+            sc_face.face_names
+        );
+        assert!(
+            sc_face
+                .face_names
+                .iter()
+                .any(|name| name == "DreamHanSerifSC-W22"),
+            "PostScript name must remain a concrete face alias: {:?}",
+            sc_face.face_names
+        );
+    }
+
     fn commit_entries(source_id: &str, entries: Vec<LocalFontEntry>) -> ImportOutcome {
         let mut conn = open_user_font_db().expect("test DB should open");
         let tx = conn.transaction().expect("transaction should start");
@@ -4088,7 +4170,11 @@ mod tests {
         let entry = LocalFontEntry {
             path: temp_font_path_str.clone(),
             index: 3,
-            families: vec!["Dream Han Serif SC".to_string(), "梦源宋体 SC".to_string()],
+            families: vec![
+                "Dream Han Serif SC".to_string(),
+                "Dream Han Serif SC W22".to_string(),
+                "梦源宋体 SC".to_string(),
+            ],
             face_names: vec![
                 "Dream Han Serif SC W22".to_string(),
                 "DreamHanSerifSC-W22".to_string(),
@@ -4106,7 +4192,9 @@ mod tests {
             .collect();
 
         assert!(keys.contains(&user_font_key("Dream Han Serif SC", true, false)));
+        assert!(keys.contains(&user_font_key("Dream Han Serif SC W22", true, false)));
         assert!(!keys.contains(&user_font_key("Dream Han Serif SC", false, false)));
+        assert!(!keys.contains(&user_font_key("Dream Han Serif SC W22", false, false)));
         assert_eq!(
             metadata[0].face_name_aliases,
             vec![

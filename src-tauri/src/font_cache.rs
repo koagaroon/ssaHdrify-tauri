@@ -182,6 +182,11 @@ fn reject_cache_reparse_paths(cache_path: &Path) -> Result<(), CacheError> {
 /// Old cache files do not have these alias rows, so they would silently
 /// keep missing TTC faces until rebuilt.
 ///
+/// v4 → v5: duplicate full-face aliases are preserved even when the same
+/// normalized string also appears in the family-name table. Old v4 caches can
+/// miss fonts such as `Dream Han Serif SC W22` because they kept only the bold
+/// style-sensitive family row.
+///
 /// v3 → v4: full-face / PostScript aliases are stored as style-
 /// insensitive alias rows in a separate key kind. Exact family-name
 /// rows must win before alias rows so an alias cannot override a real
@@ -197,7 +202,7 @@ fn reject_cache_reparse_paths(cache_path: &Path) -> Result<(), CacheError> {
 /// rules, or face-index encoding, bump first. Long-term: persist a
 /// git-describe-derived build_id in cache_meta alongside the
 /// version number to catch unbumped semantic shifts.
-pub const SCHEMA_VERSION: i32 = 4;
+pub const SCHEMA_VERSION: i32 = 5;
 
 const KEY_KIND_FAMILY: i32 = 0;
 const KEY_KIND_FACE_ALIAS: i32 = 1;
