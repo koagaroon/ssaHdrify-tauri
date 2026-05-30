@@ -4876,7 +4876,7 @@ dependencies = [
 
 [[package]]
 name = "ssahdrify"
-version = "1.5.0-preview.4"
+version = "1.5.0-preview.5"
 dependencies = [
  "base64 0.22.1",
  "chardetng",

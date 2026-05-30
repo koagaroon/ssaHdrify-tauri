@@ -1410,15 +1410,14 @@ fn sanitize_cmap12_invalid_groups(
                         "cmap format-12 rewrite count exceeds max {MAX_CMAP12_REWRITE_OFFSETS_PER_FACE}"
                     ));
                 }
-            } else if end > UNICODE_SCALAR_MAX {
-                if clamp_end_offsets.insert(group_offset + 4)
-                    && skip_group_offsets.len() + clamp_end_offsets.len()
-                        > MAX_CMAP12_REWRITE_OFFSETS_PER_FACE
-                {
-                    return Err(format!(
-                        "cmap format-12 rewrite count exceeds max {MAX_CMAP12_REWRITE_OFFSETS_PER_FACE}"
-                    ));
-                }
+            } else if end > UNICODE_SCALAR_MAX
+                && clamp_end_offsets.insert(group_offset + 4)
+                && skip_group_offsets.len() + clamp_end_offsets.len()
+                    > MAX_CMAP12_REWRITE_OFFSETS_PER_FACE
+            {
+                return Err(format!(
+                    "cmap format-12 rewrite count exceeds max {MAX_CMAP12_REWRITE_OFFSETS_PER_FACE}"
+                ));
             }
         }
     }

@@ -84,14 +84,14 @@ macOS / Linux users, see "Build from Source" below.
 
 Format support differs by workflow. The table below describes current behavior. `HDR Color Conversion` converts `.srt` / `.sub` to ASS first; `.vtt` is not yet accepted for HDR conversion.
 
-| 功能 / Workflow | `.ass` / `.ssa` | `.srt` | `.sub` | `.vtt` |
-| --- | --- | --- | --- | --- |
-| HDR 色彩转换 / HDR Color Conversion | 原生处理 / native | 转换为 ASS / convert to ASS | 转换为 ASS / convert to ASS | 暂不支持 / not yet supported |
-| 时间轴偏移 / Timing Shift | 保持格式 / preserve format | 保持格式 / preserve format | 保持格式 / preserve format | 保持格式 / preserve format |
-| 字体嵌入 / Font Embedding | 支持 / yes | 不支持 / no | 不支持 / no | 不支持 / no |
-| `diagnose-fonts` | 支持 / yes | 不支持 / no | 不支持 / no | 不支持 / no |
-| 批量重命名 / Batch Rename | 配对、复制或重命名 / pair, copy, or rename | 配对、复制或重命名 / pair, copy, or rename | 配对、复制或重命名 / pair, copy, or rename | 配对、复制或重命名 / pair, copy, or rename |
-| `chain` | 取决于步骤 / depends on steps | 取决于步骤 / depends on steps | 取决于步骤 / depends on steps | 仅支持本身接受 `.vtt` 的步骤 / only where the chosen step accepts `.vtt` |
+| 功能 / Workflow                     | `.ass` / `.ssa`                            | `.srt`                                     | `.sub`                                     | `.vtt`                                                                   |
+| ----------------------------------- | ------------------------------------------ | ------------------------------------------ | ------------------------------------------ | ------------------------------------------------------------------------ |
+| HDR 色彩转换 / HDR Color Conversion | 原生处理 / native                          | 转换为 ASS / convert to ASS                | 转换为 ASS / convert to ASS                | 暂不支持 / not yet supported                                             |
+| 时间轴偏移 / Timing Shift           | 保持格式 / preserve format                 | 保持格式 / preserve format                 | 保持格式 / preserve format                 | 保持格式 / preserve format                                               |
+| 字体嵌入 / Font Embedding           | 支持 / yes                                 | 不支持 / no                                | 不支持 / no                                | 不支持 / no                                                              |
+| `diagnose-fonts`                    | 支持 / yes                                 | 不支持 / no                                | 不支持 / no                                | 不支持 / no                                                              |
+| 批量重命名 / Batch Rename           | 配对、复制或重命名 / pair, copy, or rename | 配对、复制或重命名 / pair, copy, or rename | 配对、复制或重命名 / pair, copy, or rename | 配对、复制或重命名 / pair, copy, or rename                               |
+| `chain`                             | 取决于步骤 / depends on steps              | 取决于步骤 / depends on steps              | 取决于步骤 / depends on steps              | 仅支持本身接受 `.vtt` 的步骤 / only where the chosen step accepts `.vtt` |
 
 ---
 

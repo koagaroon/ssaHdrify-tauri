@@ -3209,18 +3209,19 @@ fn run_diagnose_fonts(
     let mut subset_budget = DiagnosticSubsetBudget::default();
     let mut subset_budget_warning_emitted = false;
 
+    let mut diagnose_context = DiagnoseFontContext {
+        globals,
+        args: &embed_args,
+        use_user_fonts,
+        cache,
+        engine: &mut engine,
+        subset_check: args.subset_check,
+        subset_budget: &mut subset_budget,
+        subset_budget_warning_emitted: &mut subset_budget_warning_emitted,
+    };
+
     for file in &embed_args.files {
-        let (result, mut diagnostics) = diagnose_font_file(
-            globals,
-            &embed_args,
-            use_user_fonts,
-            cache,
-            &mut engine,
-            file,
-            args.subset_check,
-            &mut subset_budget,
-            &mut subset_budget_warning_emitted,
-        );
+        let (result, mut diagnostics) = diagnose_font_file(&mut diagnose_context, file);
         for diagnostic in &mut diagnostics {
             diagnostic.file = Some(result.input.clone());
         }
@@ -3244,6 +3245,17 @@ fn run_diagnose_fonts(
     }
 
     Ok(report.exit_code())
+}
+
+struct DiagnoseFontContext<'a> {
+    globals: &'a GlobalOptions,
+    args: &'a EmbedArgs,
+    use_user_fonts: bool,
+    cache: Option<&'a app_lib::font_cache::FontCache>,
+    engine: &'a mut engine::CliEngine,
+    subset_check: bool,
+    subset_budget: &'a mut DiagnosticSubsetBudget,
+    subset_budget_warning_emitted: &'a mut bool,
 }
 
 fn validate_diagnose_fonts_globals(globals: &GlobalOptions) -> Result<(), String> {
@@ -3270,17 +3282,7 @@ fn validate_diagnose_fonts_globals(globals: &GlobalOptions) -> Result<(), String
     Ok(())
 }
 
-fn diagnose_font_file(
-    globals: &GlobalOptions,
-    args: &EmbedArgs,
-    use_user_fonts: bool,
-    cache: Option<&app_lib::font_cache::FontCache>,
-    engine: &mut engine::CliEngine,
-    file: &Path,
-    subset_check: bool,
-    subset_budget: &mut DiagnosticSubsetBudget,
-    subset_budget_warning_emitted: &mut bool,
-) -> EmbedFileOutcome {
+fn diagnose_font_file(ctx: &mut DiagnoseFontContext<'_>, file: &Path) -> EmbedFileOutcome {
     let input_path = match absolute_path(file) {
         Ok(path) => path,
         Err(error) => return (failed_report(file, None, None, error), Vec::new()),
@@ -3307,7 +3309,7 @@ fn diagnose_font_file(
     let plan_request = engine::FontDiagnosticsPlanRequest {
         content: read_result.text,
     };
-    let plan = match engine.plan_font_diagnostics(&plan_request) {
+    let plan = match ctx.engine.plan_font_diagnostics(&plan_request) {
         Ok(result) => result,
         Err(error) => {
             return (
@@ -3317,16 +3319,23 @@ fn diagnose_font_file(
         }
     };
 
-    match resolve_embed_fonts(globals, args, use_user_fonts, cache, true, &plan.fonts) {
+    match resolve_embed_fonts(
+        ctx.globals,
+        ctx.args,
+        ctx.use_user_fonts,
+        ctx.cache,
+        true,
+        &plan.fonts,
+    ) {
         Ok(outcome) => {
             let mut diagnostics = outcome.diagnostics;
             let mut warnings = outcome.warnings;
-            if subset_check {
+            if ctx.subset_check {
                 warnings.extend(apply_subset_checks_to_diagnostics(
                     &outcome.resolved,
                     &mut diagnostics,
-                    subset_budget,
-                    subset_budget_warning_emitted,
+                    ctx.subset_budget,
+                    ctx.subset_budget_warning_emitted,
                 ));
             }
             (
