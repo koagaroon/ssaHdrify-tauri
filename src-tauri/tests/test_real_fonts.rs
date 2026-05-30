@@ -436,6 +436,35 @@ fn assert_diagnose_subset_ok(output: &std::process::Output, family: &str, embedd
     );
 }
 
+fn assert_diagnose_subset_ok_for_family(output: &std::process::Output, family: &str) {
+    assert!(
+        output.status.success(),
+        "diagnose-fonts --subset-check should succeed: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let value: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("diagnose stdout should be JSON");
+    let diagnostic = diagnostic_for_family(&value, family);
+    assert_eq!(diagnostic["result"], "resolved", "{diagnostic}");
+    assert!(
+        diagnostic["embeddedFontName"]
+            .as_str()
+            .is_some_and(|name| !name.is_empty()),
+        "resolved subset diagnostic should carry the effective ASS [Fonts] label: {diagnostic}"
+    );
+    assert_eq!(
+        diagnostic["subsetCheck"]["status"], "ok",
+        "resolved real font should pass in-memory subset check: {diagnostic}"
+    );
+    assert!(
+        diagnostic["subsetCheck"]["bytes"]
+            .as_u64()
+            .is_some_and(|bytes| bytes > 0),
+        "successful subset check should report subset byte size: {diagnostic}"
+    );
+}
+
 fn assert_diagnose_many_resolved_in_tier(
     output: &std::process::Output,
     families: &[String],
@@ -459,6 +488,30 @@ fn assert_diagnose_many_resolved_in_tier(
                     .any(|tier| tier["tier"] == tier_name && tier["status"] == "hit")
             }),
             "diagnostic should prove the {tier_name} tier resolved {family}: {diagnostic}"
+        );
+    }
+}
+
+fn assert_diagnose_many_subset_ok(output: &std::process::Output, families: &[String]) {
+    assert!(
+        output.status.success(),
+        "diagnose-fonts --subset-check should succeed: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let value: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("diagnose stdout should be JSON");
+    for family in families {
+        let diagnostic = diagnostic_for_family(&value, family);
+        assert_eq!(
+            diagnostic["subsetCheck"]["status"], "ok",
+            "resolved real font should pass subset check for {family}: {diagnostic}"
+        );
+        assert!(
+            diagnostic["subsetCheck"]["bytes"]
+                .as_u64()
+                .is_some_and(|bytes| bytes > 0),
+            "successful subset check should report byte size for {family}: {diagnostic}"
         );
     }
 }
@@ -565,9 +618,11 @@ fn real_font_package_refreshes_cache_and_diagnoses_cjk_fonts() {
         os(cache_path.as_os_str()),
         os("diagnose-fonts"),
         os("--no-system-fonts"),
+        os("--subset-check"),
         os(cjk_ass.as_os_str()),
     ]);
     assert_diagnose_resolved(&diagnose_cjk, &cjk_family);
+    assert_diagnose_subset_ok_for_family(&diagnose_cjk, &cjk_family);
     assert!(
         !work.join("real-cjk.embed.ass").exists(),
         "diagnose-fonts must not write subtitle outputs"
@@ -670,9 +725,11 @@ fn dream_han_serif_face_names_resolve_across_local_cache_and_embed_paths() {
         os("--font-file"),
         os(serif_cn_w22.as_os_str()),
         os("--no-system-fonts"),
+        os("--subset-check"),
         os(cn_plain.as_os_str()),
     ]);
     assert_diagnose_resolved_in_tier(&local_ttf_diagnose, "Dream Han Serif CN W22", "local");
+    assert_diagnose_subset_ok_for_family(&local_ttf_diagnose, "Dream Han Serif CN W22");
 
     let refresh = run_cli(&[
         os("--lang"),
@@ -699,9 +756,15 @@ fn dream_han_serif_face_names_resolve_across_local_cache_and_embed_paths() {
         os(cache_path.as_os_str()),
         os("diagnose-fonts"),
         os("--no-system-fonts"),
+        os("--subset-check"),
         os(sc_plain.as_os_str()),
     ]);
     assert_diagnose_resolved_in_tier(&cache_sc_diagnose, "Dream Han Serif SC W22", "cache");
+    assert_diagnose_subset_ok(
+        &cache_sc_diagnose,
+        "Dream Han Serif SC W22",
+        "dream_han_serif_sc_w22.ttf",
+    );
 
     let cache_bold_diagnose = run_cli(&[
         os("--lang"),
@@ -711,9 +774,11 @@ fn dream_han_serif_face_names_resolve_across_local_cache_and_embed_paths() {
         os(cache_path.as_os_str()),
         os("diagnose-fonts"),
         os("--no-system-fonts"),
+        os("--subset-check"),
         os(sc_bold.as_os_str()),
     ]);
     assert_diagnose_resolved_in_tier(&cache_bold_diagnose, "Dream Han Serif SC W22", "cache");
+    assert_diagnose_subset_ok_for_family(&cache_bold_diagnose, "Dream Han Serif SC W22");
 
     let cache_postscript_diagnose = run_cli(&[
         os("--lang"),
@@ -723,9 +788,11 @@ fn dream_han_serif_face_names_resolve_across_local_cache_and_embed_paths() {
         os(cache_path.as_os_str()),
         os("diagnose-fonts"),
         os("--no-system-fonts"),
+        os("--subset-check"),
         os(postscript.as_os_str()),
     ]);
     assert_diagnose_resolved_in_tier(&cache_postscript_diagnose, "DreamHanSerifSC-W22", "cache");
+    assert_diagnose_subset_ok_for_family(&cache_postscript_diagnose, "DreamHanSerifSC-W22");
 
     let cache_sans_diagnose = run_cli(&[
         os("--lang"),
@@ -735,9 +802,11 @@ fn dream_han_serif_face_names_resolve_across_local_cache_and_embed_paths() {
         os(cache_path.as_os_str()),
         os("diagnose-fonts"),
         os("--no-system-fonts"),
+        os("--subset-check"),
         os(sans_plain.as_os_str()),
     ]);
     assert_diagnose_resolved_in_tier(&cache_sans_diagnose, "Dream Han Sans SC W22", "cache");
+    assert_diagnose_subset_ok_for_family(&cache_sans_diagnose, "Dream Han Sans SC W22");
 
     let serif_weights: Vec<String> = (1..=27)
         .map(|weight| format!("Dream Han Serif SC W{weight}"))
@@ -752,9 +821,11 @@ fn dream_han_serif_face_names_resolve_across_local_cache_and_embed_paths() {
         os(cache_path.as_os_str()),
         os("diagnose-fonts"),
         os("--no-system-fonts"),
+        os("--subset-check"),
         os(weights_ass.as_os_str()),
     ]);
     assert_diagnose_many_resolved_in_tier(&weights_diagnose, &serif_weights, "cache");
+    assert_diagnose_many_subset_ok(&weights_diagnose, &serif_weights);
 
     for output_dir in [&out_normal, &out_space_cjk, &out_nested_missing] {
         let embed = run_cli(&[
