@@ -131,15 +131,15 @@ Format support differs by workflow. The table below describes current behavior. 
 
 Fonts used in fan-sub typesetting often are not installed system-wide. Open **Font Sources**, add the local folders you want to scan, and those fonts can be matched without installing them into the OS.
 
-支持任意大小的文件夹；扫描时会实时显示已读取的字体数量，也可以随时取消。选择包含超过 5000 个文件或容量超过 1 GB 的目录前，程序会先弹出确认对话框。
+支持大型字体文件夹；扫描时会实时显示已读取的字体数量，也可以随时取消。选择约 5000 个字体文件或总量约 5 GiB 以上的来源前，程序会先弹出确认对话框。扫描和缓存写入都有安全上限；超大或异常来源可能提前停止，或仅用于本次会话而不写入持久化缓存，并会在界面/日志中提示。
 
-Folders of any size are accepted; the scan shows a real-time count of fonts found and can be cancelled at any time. Before scanning a directory with over 5000 files or more than 1 GB of content, the app asks for confirmation.
+Large font folders are supported; the scan shows a real-time count of fonts found and can be cancelled at any time. Before scanning a source with about 5000 font files or about 5 GiB of content, the app asks for confirmation. Scanning and cache writes are bounded by safety ceilings; unusually large or malformed sources may stop early or be used only for the current session instead of being persisted, with a visible message.
 
 > **字体名称匹配 / Font Name Matching**
 >
-> 工具会读取字体文件的 OpenType `name` 表，并索引**所有**语言变体（英文、中文、Typographic 名等）。ASS 脚本无论引用哪个名称，都能匹配到同一个字体文件；`@家族名` 这类竖排前缀也会按同一字体处理。
+> 工具会读取字体文件的 OpenType `name` 表，并索引受支持的本地化 family、typographic family、full-face 和 PostScript 名称变体（英文、中文等），同时带有防异常字体的安全上限。ASS 脚本无论引用哪个受支持名称，都能匹配到同一个字体文件；`@家族名` 这类竖排前缀也会按同一字体处理。
 >
-> The tool reads each font's OpenType `name` table and indexes **every** localized family-name variant (English, Chinese, Typographic, etc.). An ASS script referencing any of those names resolves to the same font file; the ASS `@FamilyName` vertical-writing prefix is treated as the same font.
+> The tool reads each font's OpenType `name` table and indexes supported localized family, typographic-family, full-face, and PostScript name variants (English, Chinese, etc.), with safety caps for abnormal fonts. An ASS script referencing any supported name resolves to the same font file; the ASS `@FamilyName` vertical-writing prefix is treated as the same font.
 >
 > 对 `.ttc` / `.otc` 字体集合，工具会按匹配到的 face index 抽出对应字形并嵌入为单 face 子集。ASS `[Fonts]` 里的 `fontname:` 是生成的嵌入项标签，例如 `dream_han_serif_sc_w22.ttf`，不代表源文件必须是 `.ttf`；实际匹配依赖子集字体内部保留的 `name` 表。
 >
@@ -255,6 +255,10 @@ ssahdrify-cli chain          --help
 
 `diagnose-fonts` is the standalone detailed diagnostic command. It is verbose by default and read-only: it does not write output subtitles and does not refresh or mutate the font cache. It accepts subtitle inputs plus font-resolution options: `--font-dir`, `--font-file`, `--no-system-fonts`, `--no-cache`, `--cache-file`, `--lang`, and `--json`. Add `--subset-check` only when you want to verify that resolved font files can actually be subset; the check runs in memory and does not write subtitles.
 
+为避免诊断命令在异常字幕/字体组合上长时间运行，`--subset-check` 有命令级预算：最多 128 次子集化调用，累计子集输出约 100 MiB；超出后剩余检查会标记为 skipped，并输出一次 budget exhausted 警告。
+
+To keep diagnostics bounded on unusual subtitle/font combinations, `--subset-check` uses one command-level budget: up to 128 subset calls and about 100 MiB of cumulative subset output. After that, remaining checks are marked skipped and one budget-exhausted warning is emitted.
+
 ```bash
 # 附加紧凑诊断 / Attach compact diagnostics
 ssahdrify-cli embed --diagnose input.ass
@@ -330,11 +334,15 @@ Use `--cache-file <PATH>` to choose a different path.
 
 - 每个 `--font-dir` 只扫描一层（不递归），与 `embed --font-dir` 语义一致。树状字体目录需要逐层显式传入。
 - 字体缓存最多记录 256 个源文件夹；更大的字体树请先整理为更少的叶子目录，或拆成多个缓存文件使用。
+- 单个缓存来源最多安全写入约 **20,000 个 font faces**；超过时 `refresh-fonts` 会跳过该来源，GUI 本次扫描可继续使用会话索引，但不会为该超大来源写入持久化缓存。
+- 单个字体文件的扫描/子集化读取上限为 **64 MiB**；超过会被拒绝并报告错误。
 - GUI 和 CLI 各自使用独立缓存文件，避免 SQLite 锁竞争；同一个可执行文件同时只会读写一个缓存文件（默认路径或 `--cache-file` 覆盖路径）。`chain` v1 暂不读取缓存（其中的 embed 步始终使用显式 `--font-dir` 或系统字体）。
 - 跨版本不会自动迁移缓存结构；版本不匹配时，CLI 会明确提示删除缓存文件并重新运行 `refresh-fonts`。
 
 - Each `--font-dir` is scanned one level deep (non-recursive), matching `embed --font-dir` semantics. Pass each leaf folder explicitly for tree-shaped collections.
 - The font cache tracks at most 256 source folders. For larger font trees, organize fonts into fewer leaf folders or split work across separate cache files.
+- A single cached source can safely persist about **20,000 font faces**. If it exceeds that cap, `refresh-fonts` skips that source, while the GUI can still use the current session index but will not persist acceleration for that oversized source.
+- A single font file is capped at **64 MiB** for scanning/subsetting; larger files are refused with an error.
 - GUI and CLI use separate cache files to avoid SQLite lock contention; a single binary opens exactly one cache at a time (default path or `--cache-file` override). `chain` v1 does not consult the cache; its embed step always uses explicit `--font-dir` or system fonts.
 - There is no automatic schema migration across releases. Version mismatch surfaces as an explicit prompt to delete the cache file and rerun `refresh-fonts`.
 
