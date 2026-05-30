@@ -1123,6 +1123,8 @@ pub fn find_system_font(
 /// (8 family rows + 8 alias rows), not 8 + (8 × 4 style rows).
 const MAX_FAMILY_VARIANTS_PER_FACE: usize = 8;
 const MAX_FACE_NAME_VARIANTS_PER_FACE: usize = 8;
+const MAX_LEGACY_NAME_RECORD_BYTES: usize = 4096;
+const MAX_LEGACY_NAME_DECODE_ATTEMPTS_PER_FACE: usize = 256;
 
 /// Cap on the number of font faces a single directory scan will
 /// snapshot into the GUI / CLI persistent cache. Above this threshold
@@ -1293,12 +1295,27 @@ fn sanitize_cmap12_invalid_groups(font_data: &[u8], index: u32) -> (Cow<'_, [u8]
         return (Cow::Borrowed(font_data), 0);
     };
 
-    let mut invalid_group_offsets = Vec::new();
+    let mut earliest_subtable_rel: Option<usize> = None;
+    let max_record_count = cmap_len.saturating_sub(4) / 8;
+    let record_count = record_count.min(max_record_count);
+    let mut scanned_subtables = HashSet::new();
+    let mut invalid_group_offsets = HashSet::new();
     for record_index in 0..record_count {
-        let Some(record_offset) = (cmap_offset + 4).checked_add(record_index.saturating_mul(8))
-        else {
+        let Some(record_rel) = 4usize.checked_add(record_index.saturating_mul(8)) else {
             break;
         };
+        if earliest_subtable_rel.is_some_and(|first_subtable| record_rel >= first_subtable) {
+            break;
+        }
+        let Some(record_offset) = cmap_offset.checked_add(record_rel) else {
+            break;
+        };
+        if record_offset
+            .checked_add(8)
+            .map_or(true, |end| end > cmap_end)
+        {
+            break;
+        }
         let Some(subtable_rel) = read_be_u32(font_data, record_offset + 4) else {
             break;
         };
@@ -1308,9 +1325,14 @@ fn sanitize_cmap12_invalid_groups(font_data: &[u8], index: u32) -> (Cow<'_, [u8]
         if subtable_rel >= cmap_len {
             continue;
         }
+        earliest_subtable_rel =
+            Some(earliest_subtable_rel.map_or(subtable_rel, |current| current.min(subtable_rel)));
         let Some(subtable_offset) = cmap_offset.checked_add(subtable_rel) else {
             continue;
         };
+        if !scanned_subtables.insert(subtable_offset) {
+            continue;
+        }
         if read_be_u16(font_data, subtable_offset) != Some(12) {
             continue;
         }
@@ -1332,6 +1354,8 @@ fn sanitize_cmap12_invalid_groups(font_data: &[u8], index: u32) -> (Cow<'_, [u8]
         let Ok(group_count) = usize::try_from(group_count) else {
             continue;
         };
+        let max_group_count = length.saturating_sub(16) / 12;
+        let group_count = group_count.min(max_group_count);
         let groups_offset = subtable_offset + 16;
         for group_index in 0..group_count {
             let Some(group_offset) = groups_offset.checked_add(group_index.saturating_mul(12))
@@ -1348,7 +1372,7 @@ fn sanitize_cmap12_invalid_groups(font_data: &[u8], index: u32) -> (Cow<'_, [u8]
                 break;
             };
             if start > end.min(UNICODE_SCALAR_MAX) {
-                invalid_group_offsets.push(group_offset);
+                invalid_group_offsets.insert(group_offset);
             }
         }
     }
@@ -1357,8 +1381,8 @@ fn sanitize_cmap12_invalid_groups(font_data: &[u8], index: u32) -> (Cow<'_, [u8]
         return (Cow::Borrowed(font_data), 0);
     }
 
+    let mut invalid_group_offsets: Vec<_> = invalid_group_offsets.into_iter().collect();
     invalid_group_offsets.sort_unstable();
-    invalid_group_offsets.dedup();
     let mut sanitized = font_data.to_vec();
     for group_offset in &invalid_group_offsets {
         let _ = write_be_u32(&mut sanitized, *group_offset, UNICODE_SCALAR_MAX);
@@ -1399,6 +1423,10 @@ fn decode_legacy_name_record(
     language: u16,
     raw: &[u8],
 ) -> Option<String> {
+    if raw.len() > MAX_LEGACY_NAME_RECORD_BYTES {
+        return None;
+    }
+
     if matches!(platform, 0) || matches!((platform, encoding), (3, 0 | 1 | 10)) {
         return decode_utf16be_name(raw).and_then(clean_legacy_name);
     }
@@ -1478,18 +1506,31 @@ fn parse_legacy_name_table_entries(
         if name_len < 6 {
             continue;
         }
+        let Some(name_end) = name_offset.checked_add(name_len) else {
+            continue;
+        };
         let Some(record_count) = read_be_u16(data, name_offset + 2).map(usize::from) else {
             continue;
         };
         let Some(string_offset) = read_be_u16(data, name_offset + 4).map(usize::from) else {
             continue;
         };
+        if string_offset < 6 || string_offset > name_len {
+            continue;
+        }
         let Some(string_base) = name_offset.checked_add(string_offset) else {
             continue;
         };
+        if string_base > name_end {
+            continue;
+        }
+        let max_record_count = string_offset.saturating_sub(6) / 12;
+        let record_count = record_count.min(max_record_count);
 
         let mut families: HashSet<String> = HashSet::new();
         let mut face_name_variants: HashSet<String> = HashSet::new();
+        let mut seen_records = HashSet::new();
+        let mut decode_attempts = 0usize;
         for record_index in 0..record_count {
             let Some(record) = name_offset
                 .checked_add(6)
@@ -1497,7 +1538,7 @@ fn parse_legacy_name_table_entries(
             else {
                 break;
             };
-            if record.checked_add(12).map_or(true, |end| end > data.len()) {
+            if record.checked_add(12).map_or(true, |end| end > name_end) {
                 break;
             }
             let Some(platform) = read_be_u16(data, record) else {
@@ -1515,9 +1556,20 @@ fn parse_legacy_name_table_entries(
             if !matches!(name_id, 1 | 4 | 6 | 16) {
                 continue;
             }
+            let target_full = match name_id {
+                1 | 16 => families.len() >= MAX_FAMILY_VARIANTS_PER_FACE,
+                4 | 6 => face_name_variants.len() >= MAX_FACE_NAME_VARIANTS_PER_FACE,
+                _ => false,
+            };
+            if target_full {
+                continue;
+            }
             let Some(len) = read_be_u16(data, record + 8).map(usize::from) else {
                 continue;
             };
+            if len == 0 || len > MAX_LEGACY_NAME_RECORD_BYTES {
+                continue;
+            }
             let Some(offset) = read_be_u16(data, record + 10).map(usize::from) else {
                 continue;
             };
@@ -1527,7 +1579,23 @@ fn parse_legacy_name_table_entries(
             let Some(end) = start.checked_add(len) else {
                 continue;
             };
-            if end > data.len() {
+            if end > name_end {
+                continue;
+            }
+            if !seen_records.insert((platform, encoding, language, name_id, start, end)) {
+                continue;
+            }
+            if decode_attempts >= MAX_LEGACY_NAME_DECODE_ATTEMPTS_PER_FACE {
+                break;
+            }
+            decode_attempts += 1;
+
+            let target_full = match name_id {
+                1 | 16 => families.len() >= MAX_FAMILY_VARIANTS_PER_FACE,
+                4 | 6 => face_name_variants.len() >= MAX_FACE_NAME_VARIANTS_PER_FACE,
+                _ => false,
+            };
+            if target_full {
                 continue;
             }
             let Some(name) =
@@ -4152,6 +4220,29 @@ mod tests {
         assert!(!is_ttc_data(b"ttc"));
     }
 
+    fn font_with_single_table(tag: &[u8; 4], table_data: &[u8]) -> Vec<u8> {
+        let table_offset = 28u32;
+        let table_len = u32::try_from(table_data.len()).expect("test table fits u32");
+
+        let mut font = Vec::new();
+        font.extend_from_slice(b"\0\x01\0\0");
+        font.extend_from_slice(&1u16.to_be_bytes());
+        font.extend_from_slice(&[0; 6]);
+        font.extend_from_slice(tag);
+        font.extend_from_slice(&0u32.to_be_bytes());
+        font.extend_from_slice(&table_offset.to_be_bytes());
+        font.extend_from_slice(&table_len.to_be_bytes());
+        font.extend_from_slice(table_data);
+        font
+    }
+
+    fn utf16be_test_bytes(value: &str) -> Vec<u8> {
+        value
+            .encode_utf16()
+            .flat_map(|unit| unit.to_be_bytes())
+            .collect()
+    }
+
     #[test]
     fn sanitize_cmap12_invalid_groups_makes_non_unicode_ranges_unselectable() {
         let cmap_offset = 28u32;
@@ -4210,6 +4301,116 @@ mod tests {
                 Some(SKIP_CMAP12_GROUP_GLYPH_ID)
             );
         }
+    }
+
+    #[test]
+    fn sanitize_cmap12_invalid_groups_ignores_records_overlapping_first_subtable() {
+        let first_subtable_rel = 12u32;
+        let ghost_subtable_rel = 40u32;
+        let first_invalid = [0x110001u32, 0x110002u32, 7u32];
+        let ghost_invalid = [0x110010u32, 0x110011u32, 9u32];
+
+        let mut cmap = Vec::new();
+        cmap.extend_from_slice(&0u16.to_be_bytes());
+        cmap.extend_from_slice(&2u16.to_be_bytes());
+        cmap.extend_from_slice(&0u16.to_be_bytes());
+        cmap.extend_from_slice(&4u16.to_be_bytes());
+        cmap.extend_from_slice(&first_subtable_rel.to_be_bytes());
+        assert_eq!(cmap.len(), first_subtable_rel as usize);
+
+        // The declared format-12 length is also what a bogus second encoding
+        // record would expose as its subtable offset if parser code kept
+        // walking records after the first subtable begins.
+        cmap.extend_from_slice(&12u16.to_be_bytes());
+        cmap.extend_from_slice(&0u16.to_be_bytes());
+        cmap.extend_from_slice(&ghost_subtable_rel.to_be_bytes());
+        cmap.extend_from_slice(&0u32.to_be_bytes());
+        cmap.extend_from_slice(&1u32.to_be_bytes());
+        for value in first_invalid {
+            cmap.extend_from_slice(&value.to_be_bytes());
+        }
+        assert_eq!(cmap.len(), ghost_subtable_rel as usize);
+
+        cmap.extend_from_slice(&12u16.to_be_bytes());
+        cmap.extend_from_slice(&0u16.to_be_bytes());
+        cmap.extend_from_slice(&28u32.to_be_bytes());
+        cmap.extend_from_slice(&0u32.to_be_bytes());
+        cmap.extend_from_slice(&1u32.to_be_bytes());
+        for value in ghost_invalid {
+            cmap.extend_from_slice(&value.to_be_bytes());
+        }
+
+        let font = font_with_single_table(b"cmap", &cmap);
+        let (sanitized, count) = sanitize_cmap12_invalid_groups(&font, 0);
+        assert_eq!(count, 1);
+        let sanitized = sanitized.as_ref();
+
+        let table_offset = 28usize;
+        let first_group = table_offset + first_subtable_rel as usize + 16;
+        assert_eq!(
+            read_be_u32(sanitized, first_group),
+            Some(UNICODE_SCALAR_MAX)
+        );
+        assert_eq!(
+            read_be_u32(sanitized, first_group + 4),
+            Some(UNICODE_SCALAR_MAX)
+        );
+        assert_eq!(
+            read_be_u32(sanitized, first_group + 8),
+            Some(SKIP_CMAP12_GROUP_GLYPH_ID)
+        );
+
+        let ghost_group = table_offset + ghost_subtable_rel as usize + 16;
+        assert_eq!(read_be_u32(sanitized, ghost_group), Some(ghost_invalid[0]));
+        assert_eq!(
+            read_be_u32(sanitized, ghost_group + 4),
+            Some(ghost_invalid[1])
+        );
+        assert_eq!(
+            read_be_u32(sanitized, ghost_group + 8),
+            Some(ghost_invalid[2])
+        );
+    }
+
+    #[test]
+    fn parse_legacy_name_table_entries_rejects_strings_outside_declared_name_table() {
+        let family = utf16be_test_bytes("Escaped Family");
+        let mut name_table = Vec::new();
+        name_table.extend_from_slice(&0u16.to_be_bytes());
+        name_table.extend_from_slice(&1u16.to_be_bytes());
+        name_table.extend_from_slice(&18u16.to_be_bytes());
+        name_table.extend_from_slice(&3u16.to_be_bytes());
+        name_table.extend_from_slice(&1u16.to_be_bytes());
+        name_table.extend_from_slice(&0x0409u16.to_be_bytes());
+        name_table.extend_from_slice(&1u16.to_be_bytes());
+        name_table.extend_from_slice(&(family.len() as u16).to_be_bytes());
+        name_table.extend_from_slice(&0u16.to_be_bytes());
+        assert_eq!(name_table.len(), 18);
+
+        let mut font = font_with_single_table(b"name", &name_table);
+        font.extend_from_slice(&family);
+
+        let entries = parse_legacy_name_table_entries(
+            &font,
+            "C:/fonts/malformed.ttf",
+            font.len() as u64,
+            false,
+            1,
+        );
+        assert!(
+            entries.is_empty(),
+            "name strings beyond the declared table length must be ignored"
+        );
+    }
+
+    #[test]
+    fn decode_legacy_name_record_rejects_oversized_raw_records() {
+        let mut raw = Vec::with_capacity(MAX_LEGACY_NAME_RECORD_BYTES + 2);
+        while raw.len() <= MAX_LEGACY_NAME_RECORD_BYTES {
+            raw.extend_from_slice(&[0, b'A']);
+        }
+
+        assert!(decode_legacy_name_record(3, 1, 0x0409, &raw).is_none());
     }
 
     /// Boundary tests for the TTC numFonts peek inside
