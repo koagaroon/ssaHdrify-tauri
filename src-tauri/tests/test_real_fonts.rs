@@ -66,13 +66,11 @@ fn dream_han_root() -> Option<PathBuf> {
         eprintln!("{DREAM_HAN_ROOT_ENV} not set; skipping Dream Han compatibility gate");
         return None;
     };
-    if !root.is_dir() {
-        eprintln!(
-            "{DREAM_HAN_ROOT_ENV} does not point to a readable directory: {}; skipping",
-            root.display()
-        );
-        return None;
-    }
+    assert!(
+        root.is_dir(),
+        "{DREAM_HAN_ROOT_ENV} must point to a readable Dream Han fixture directory: {}",
+        root.display()
+    );
     Some(root)
 }
 
