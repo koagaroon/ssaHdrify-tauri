@@ -28,6 +28,8 @@ const CLI_FONT_DB_DIR_PREFIX: &str = "ssahdrify-cli-font-db";
 const MAX_V8_SUBSET_TOTAL_BYTES: usize = 100 * 1024 * 1024;
 const MAX_CHAIN_SUBSET_TOTAL_BYTES: usize = MAX_V8_SUBSET_TOTAL_BYTES;
 const MAX_EMBED_SUBSET_TOTAL_BYTES: usize = MAX_V8_SUBSET_TOTAL_BYTES;
+const MAX_DIAGNOSTIC_SUBSET_CALLS: usize = 128;
+const MAX_DIAGNOSTIC_SUBSET_TOTAL_BYTES: usize = MAX_V8_SUBSET_TOTAL_BYTES;
 
 /// cap font.codepoints.len() at the CLI's
 /// resolve_embed_fonts boundary before cloning into
@@ -773,6 +775,59 @@ enum FontSubsetCheckStatus {
     Ok,
     Failed,
     Skipped,
+}
+
+#[derive(Debug, Default)]
+struct DiagnosticSubsetBudget {
+    calls: usize,
+    bytes: usize,
+    exhausted_reason: Option<String>,
+}
+
+impl DiagnosticSubsetBudget {
+    fn skipped(reason: String) -> FontSubsetCheckDiagnostic {
+        FontSubsetCheckDiagnostic {
+            status: FontSubsetCheckStatus::Skipped,
+            bytes: None,
+            error: Some(reason),
+        }
+    }
+
+    fn exhausted_check(&self) -> Option<FontSubsetCheckDiagnostic> {
+        self.exhausted_reason
+            .as_ref()
+            .map(|reason| Self::skipped(reason.clone()))
+    }
+
+    fn begin_call(&mut self) -> Option<FontSubsetCheckDiagnostic> {
+        if let Some(check) = self.exhausted_check() {
+            return Some(check);
+        }
+        if self.calls >= MAX_DIAGNOSTIC_SUBSET_CALLS {
+            let reason =
+                format!("subset-check call budget exceeded ({MAX_DIAGNOSTIC_SUBSET_CALLS} calls)");
+            self.exhausted_reason = Some(reason.clone());
+            return Some(Self::skipped(reason));
+        }
+        self.calls += 1;
+        None
+    }
+
+    fn finish_bytes(&mut self, len: usize) -> Option<FontSubsetCheckDiagnostic> {
+        let Some(total) = self
+            .bytes
+            .checked_add(len)
+            .filter(|total| *total <= MAX_DIAGNOSTIC_SUBSET_TOTAL_BYTES)
+        else {
+            let reason = format!(
+                "subset-check byte budget exceeded ({len} bytes would exceed max {MAX_DIAGNOSTIC_SUBSET_TOTAL_BYTES})"
+            );
+            self.exhausted_reason = Some(reason.clone());
+            return Some(Self::skipped(reason));
+        };
+        self.bytes = total;
+        None
+    }
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -3302,13 +3357,15 @@ fn apply_subset_checks_to_diagnostics(
     }
 
     let mut warnings = Vec::new();
+    let mut budget = DiagnosticSubsetBudget::default();
+    let mut budget_warning_emitted = false;
     let face_groups = group_resolved_fonts_by_face(resolved);
     for group in face_groups.values() {
         let merged = match group.merged_codepoints_with_cap(MAX_SUBSET_CODEPOINTS_FOR_DEDUP) {
             Ok(merged) => merged,
             Err(_) => {
                 for alias in &group.aliases {
-                    let check = run_one_subset_check(alias);
+                    let check = run_one_subset_check(alias, &mut budget);
                     if check.status == FontSubsetCheckStatus::Failed {
                         if let Some(error) = &check.error {
                             warnings.push(format!(
@@ -3317,6 +3374,11 @@ fn apply_subset_checks_to_diagnostics(
                             ));
                         }
                     }
+                    push_subset_budget_warning_once(
+                        &mut warnings,
+                        &check,
+                        &mut budget_warning_emitted,
+                    );
                     set_subset_check_for_resolved_font(diagnostics, alias, check);
                 }
                 continue;
@@ -3325,25 +3387,21 @@ fn apply_subset_checks_to_diagnostics(
 
         let codepoints: Vec<u32> = merged.into_iter().collect();
         let template = group.template();
-        let check =
-            match app_lib::fonts::subset_font(template.path.clone(), template.index, codepoints) {
-                Ok(data) => FontSubsetCheckDiagnostic {
-                    status: FontSubsetCheckStatus::Ok,
-                    bytes: Some(data.len()),
-                    error: None,
-                },
-                Err(error) => {
-                    warnings.push(format!(
-                        "font subset check failed: {} ({error})",
-                        group.labels.join(" / ")
-                    ));
-                    FontSubsetCheckDiagnostic {
-                        status: FontSubsetCheckStatus::Failed,
-                        bytes: None,
-                        error: Some(error),
-                    }
-                }
-            };
+        let check = run_budgeted_subset_check(
+            template.path.clone(),
+            template.index,
+            codepoints,
+            &mut budget,
+        );
+        if check.status == FontSubsetCheckStatus::Failed {
+            if let Some(error) = &check.error {
+                warnings.push(format!(
+                    "font subset check failed: {} ({error})",
+                    group.labels.join(" / ")
+                ));
+            }
+        }
+        push_subset_budget_warning_once(&mut warnings, &check, &mut budget_warning_emitted);
 
         for alias in &group.aliases {
             set_subset_check_for_resolved_font(diagnostics, alias, check.clone());
@@ -3353,13 +3411,27 @@ fn apply_subset_checks_to_diagnostics(
     warnings
 }
 
-fn run_one_subset_check(font: &ResolvedEmbedFont) -> FontSubsetCheckDiagnostic {
-    match app_lib::fonts::subset_font(font.path.clone(), font.index, font.codepoints.clone()) {
-        Ok(data) => FontSubsetCheckDiagnostic {
-            status: FontSubsetCheckStatus::Ok,
-            bytes: Some(data.len()),
-            error: None,
-        },
+fn run_budgeted_subset_check(
+    path: String,
+    index: u32,
+    codepoints: Vec<u32>,
+    budget: &mut DiagnosticSubsetBudget,
+) -> FontSubsetCheckDiagnostic {
+    if let Some(skipped) = budget.begin_call() {
+        return skipped;
+    }
+    match app_lib::fonts::subset_font(path, index, codepoints) {
+        Ok(data) => {
+            let len = data.len();
+            if let Some(skipped) = budget.finish_bytes(len) {
+                return skipped;
+            }
+            FontSubsetCheckDiagnostic {
+                status: FontSubsetCheckStatus::Ok,
+                bytes: Some(len),
+                error: None,
+            }
+        }
         Err(error) => FontSubsetCheckDiagnostic {
             status: FontSubsetCheckStatus::Failed,
             bytes: None,
@@ -3368,15 +3440,49 @@ fn run_one_subset_check(font: &ResolvedEmbedFont) -> FontSubsetCheckDiagnostic {
     }
 }
 
+fn run_one_subset_check(
+    font: &ResolvedEmbedFont,
+    budget: &mut DiagnosticSubsetBudget,
+) -> FontSubsetCheckDiagnostic {
+    run_budgeted_subset_check(
+        font.path.clone(),
+        font.index,
+        font.codepoints.clone(),
+        budget,
+    )
+}
+
+fn push_subset_budget_warning_once(
+    warnings: &mut Vec<String>,
+    check: &FontSubsetCheckDiagnostic,
+    emitted: &mut bool,
+) {
+    if *emitted || check.status != FontSubsetCheckStatus::Skipped {
+        return;
+    }
+    let Some(error) = &check.error else {
+        return;
+    };
+    if !error.contains("budget exceeded") {
+        return;
+    }
+    warnings.push(format!("font subset check skipped: {error}"));
+    *emitted = true;
+}
+
 fn set_subset_check_for_resolved_font(
     diagnostics: &mut [FontDiagnostic],
     font: &ResolvedEmbedFont,
     check: FontSubsetCheckDiagnostic,
 ) {
     if let Some(diagnostic) = diagnostics.iter_mut().find(|diagnostic| {
+        let requested_name = diagnostic
+            .requested_embedded_font_name
+            .as_deref()
+            .unwrap_or(diagnostic.embedded_font_name.as_str());
         diagnostic.subset_check.is_none()
             && diagnostic.label == font.label
-            && diagnostic.embedded_font_name == font.font_name
+            && requested_name == font.font_name
             && diagnostic.path.as_deref() == Some(font.path.as_str())
             && diagnostic.index == Some(font.index)
     }) {
@@ -6340,13 +6446,15 @@ fn parse_timestamp_part(part: &str, label: &str) -> Result<i64, String> {
 mod tests {
     use super::{
         apply_effective_embedded_font_names, classify_locale, copy_file_output,
-        create_cli_font_db_dir, diagnostic_next_actions, display_path, duplicate_rename_output_keys,
-        engine, group_resolved_fonts_by_face, normalize_output_key, parse_duration_ms,
-        parse_timestamp_ms, predict_chain_output_path, relocate_output_path, resolve_embed_fonts,
-        sanitize_for_display, substitute_template, write_output, Cli, Command, CommandDiagnostics,
-        DiagnoseMode, EmbedArgs, FileDiagnostic, FileStatus, FontDiagnostic, GlobalOptions,
-        MissingFontAction, OutputLang, ResolvedEmbedFont, TempFontDbDir,
-        MAX_RESOLVED_FONT_CODEPOINTS, MAX_SHIFT_OFFSET_MS, MAX_SUBSET_CODEPOINTS_FOR_DEDUP,
+        create_cli_font_db_dir, diagnostic_next_actions, display_path,
+        duplicate_rename_output_keys, engine, group_resolved_fonts_by_face, normalize_output_key,
+        parse_duration_ms, parse_timestamp_ms, predict_chain_output_path, relocate_output_path,
+        resolve_embed_fonts, sanitize_for_display, substitute_template, write_output, Cli, Command,
+        CommandDiagnostics, DiagnoseMode, DiagnosticSubsetBudget, EmbedArgs, FileDiagnostic,
+        FileStatus, FontDiagnostic, FontSubsetCheckStatus, GlobalOptions, MissingFontAction,
+        OutputLang, ResolvedEmbedFont, TempFontDbDir, MAX_DIAGNOSTIC_SUBSET_CALLS,
+        MAX_DIAGNOSTIC_SUBSET_TOTAL_BYTES, MAX_RESOLVED_FONT_CODEPOINTS, MAX_SHIFT_OFFSET_MS,
+        MAX_SUBSET_CODEPOINTS_FOR_DEDUP,
     };
     // Import the canonical filename literal directly from app_lib so the
     // test pins the same name `TempFontDbDir::drop`'s remove_dir_all
@@ -7344,6 +7452,50 @@ mod tests {
         assert_eq!(
             diagnostics[1].requested_embedded_font_name.as_deref(),
             Some("font_1eda5db2.ttf")
+        );
+    }
+
+    #[test]
+    fn diagnostic_subset_budget_skips_when_call_cap_is_reached() {
+        let mut budget = DiagnosticSubsetBudget {
+            calls: MAX_DIAGNOSTIC_SUBSET_CALLS,
+            bytes: 0,
+            exhausted_reason: None,
+        };
+
+        let check = budget
+            .begin_call()
+            .expect("at-cap budget should skip before another subset call");
+
+        assert_eq!(check.status, FontSubsetCheckStatus::Skipped);
+        assert!(
+            check
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("call budget exceeded")),
+            "skip reason should mention call budget: {check:?}"
+        );
+    }
+
+    #[test]
+    fn diagnostic_subset_budget_skips_when_byte_cap_would_be_exceeded() {
+        let mut budget = DiagnosticSubsetBudget {
+            calls: 0,
+            bytes: MAX_DIAGNOSTIC_SUBSET_TOTAL_BYTES - 1,
+            exhausted_reason: None,
+        };
+
+        let check = budget
+            .finish_bytes(2)
+            .expect("over-byte-cap result should be skipped");
+
+        assert_eq!(check.status, FontSubsetCheckStatus::Skipped);
+        assert!(
+            check
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("byte budget exceeded")),
+            "skip reason should mention byte budget: {check:?}"
         );
     }
 
