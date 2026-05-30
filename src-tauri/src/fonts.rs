@@ -1125,6 +1125,8 @@ const MAX_FAMILY_VARIANTS_PER_FACE: usize = 8;
 const MAX_FACE_NAME_VARIANTS_PER_FACE: usize = 8;
 const MAX_LEGACY_NAME_RECORD_BYTES: usize = 4096;
 const MAX_LEGACY_NAME_DECODE_ATTEMPTS_PER_FACE: usize = 256;
+const MAX_CMAP12_GROUPS_PER_FACE: usize = 65_536;
+const MAX_CMAP12_REWRITE_OFFSETS_PER_FACE: usize = 4_096;
 
 /// Cap on the number of font faces a single directory scan will
 /// snapshot into the GUI / CLI persistent cache. Above this threshold
@@ -1266,19 +1268,22 @@ fn sfnt_face_offsets(data: &[u8], is_collection: bool, max_faces: u32) -> Vec<(u
     offsets
 }
 
-fn sanitize_cmap12_invalid_groups(font_data: &[u8], index: u32) -> (Cow<'_, [u8]>, usize) {
+fn sanitize_cmap12_invalid_groups(
+    font_data: &[u8],
+    index: u32,
+) -> Result<(Cow<'_, [u8]>, usize), String> {
     let face_offset = if is_ttc_data(font_data) {
         let Ok(index) = usize::try_from(index) else {
-            return (Cow::Borrowed(font_data), 0);
+            return Ok((Cow::Borrowed(font_data), 0));
         };
         let Some(offset_slot) = 12usize.checked_add(index.saturating_mul(4)) else {
-            return (Cow::Borrowed(font_data), 0);
+            return Ok((Cow::Borrowed(font_data), 0));
         };
         let Some(offset) = read_be_u32(font_data, offset_slot) else {
-            return (Cow::Borrowed(font_data), 0);
+            return Ok((Cow::Borrowed(font_data), 0));
         };
         let Ok(offset) = usize::try_from(offset) else {
-            return (Cow::Borrowed(font_data), 0);
+            return Ok((Cow::Borrowed(font_data), 0));
         };
         offset
     } else {
@@ -1286,13 +1291,13 @@ fn sanitize_cmap12_invalid_groups(font_data: &[u8], index: u32) -> (Cow<'_, [u8]
     };
 
     let Some((cmap_offset, cmap_len)) = table_range(font_data, face_offset, b"cmap") else {
-        return (Cow::Borrowed(font_data), 0);
+        return Ok((Cow::Borrowed(font_data), 0));
     };
     let Some(cmap_end) = cmap_offset.checked_add(cmap_len) else {
-        return (Cow::Borrowed(font_data), 0);
+        return Ok((Cow::Borrowed(font_data), 0));
     };
     let Some(record_count) = read_be_u16(font_data, cmap_offset + 2).map(usize::from) else {
-        return (Cow::Borrowed(font_data), 0);
+        return Ok((Cow::Borrowed(font_data), 0));
     };
 
     let mut earliest_subtable_rel: Option<usize> = None;
@@ -1357,6 +1362,11 @@ fn sanitize_cmap12_invalid_groups(font_data: &[u8], index: u32) -> (Cow<'_, [u8]
         };
         let max_group_count = length.saturating_sub(16) / 12;
         let group_count = group_count.min(max_group_count);
+        if group_count > MAX_CMAP12_GROUPS_PER_FACE {
+            return Err(format!(
+                "cmap format-12 group count {group_count} exceeds max {MAX_CMAP12_GROUPS_PER_FACE}"
+            ));
+        }
         let groups_offset = subtable_offset + 16;
         for group_index in 0..group_count {
             let Some(group_offset) = groups_offset.checked_add(group_index.saturating_mul(12))
@@ -1373,15 +1383,29 @@ fn sanitize_cmap12_invalid_groups(font_data: &[u8], index: u32) -> (Cow<'_, [u8]
                 break;
             };
             if start > end || start > UNICODE_SCALAR_MAX {
-                skip_group_offsets.insert(group_offset);
+                if skip_group_offsets.insert(group_offset)
+                    && skip_group_offsets.len() + clamp_end_offsets.len()
+                        > MAX_CMAP12_REWRITE_OFFSETS_PER_FACE
+                {
+                    return Err(format!(
+                        "cmap format-12 rewrite count exceeds max {MAX_CMAP12_REWRITE_OFFSETS_PER_FACE}"
+                    ));
+                }
             } else if end > UNICODE_SCALAR_MAX {
-                clamp_end_offsets.insert(group_offset + 4);
+                if clamp_end_offsets.insert(group_offset + 4)
+                    && skip_group_offsets.len() + clamp_end_offsets.len()
+                        > MAX_CMAP12_REWRITE_OFFSETS_PER_FACE
+                {
+                    return Err(format!(
+                        "cmap format-12 rewrite count exceeds max {MAX_CMAP12_REWRITE_OFFSETS_PER_FACE}"
+                    ));
+                }
             }
         }
     }
 
     if skip_group_offsets.is_empty() && clamp_end_offsets.is_empty() {
-        return (Cow::Borrowed(font_data), 0);
+        return Ok((Cow::Borrowed(font_data), 0));
     }
 
     let mut sanitized = font_data.to_vec();
@@ -1404,10 +1428,10 @@ fn sanitize_cmap12_invalid_groups(font_data: &[u8], index: u32) -> (Cow<'_, [u8]
         let _ = write_be_u32(&mut sanitized, *end_offset, UNICODE_SCALAR_MAX);
     }
 
-    (
+    Ok((
         Cow::Owned(sanitized),
         skip_group_offsets.len() + clamp_end_offsets.len(),
-    )
+    ))
 }
 
 fn decode_utf16be_name(raw: &[u8]) -> Option<String> {
@@ -4103,7 +4127,7 @@ fn subset_with_index(font_data: &[u8], index: u32, codepoints: &[u32]) -> Result
         }
     }
 
-    let (font_data, sanitized_cmap_groups) = sanitize_cmap12_invalid_groups(font_data, index);
+    let (font_data, sanitized_cmap_groups) = sanitize_cmap12_invalid_groups(font_data, index)?;
     if sanitized_cmap_groups > 0 {
         log::warn!(
             "Ignored {sanitized_cmap_groups} invalid cmap format-12 group(s) outside Unicode range while subsetting face {index}"
@@ -4292,7 +4316,8 @@ mod tests {
             font.extend_from_slice(&gid.to_be_bytes());
         }
 
-        let (sanitized, count) = sanitize_cmap12_invalid_groups(&font, 0);
+        let (sanitized, count) =
+            sanitize_cmap12_invalid_groups(&font, 0).expect("test font should sanitize");
         assert_eq!(count, 2);
         let sanitized = sanitized.as_ref();
         let valid_group = cmap_offset as usize + subtable_offset as usize + 16;
@@ -4351,7 +4376,8 @@ mod tests {
             font.extend_from_slice(&glyph.to_be_bytes());
         }
 
-        let (sanitized, count) = sanitize_cmap12_invalid_groups(&font, 0);
+        let (sanitized, count) =
+            sanitize_cmap12_invalid_groups(&font, 0).expect("test font should sanitize");
         assert_eq!(count, 1);
         let sanitized = sanitized.as_ref();
         let clamped_group = cmap_offset as usize + subtable_offset as usize + 16;
@@ -4366,6 +4392,73 @@ mod tests {
         assert_eq!(read_be_u32(sanitized, valid_group), Some(0x30));
         assert_eq!(read_be_u32(sanitized, valid_group + 4), Some(0x31));
         assert_eq!(read_be_u32(sanitized, valid_group + 8), Some(2));
+    }
+
+    #[test]
+    fn sanitize_cmap12_invalid_groups_rejects_excessive_group_count() {
+        let subtable_offset = 12u32;
+        let group_count = MAX_CMAP12_GROUPS_PER_FACE + 1;
+        let subtable_length = 16 + group_count as u32 * 12;
+
+        let mut cmap = Vec::new();
+        cmap.extend_from_slice(&0u16.to_be_bytes());
+        cmap.extend_from_slice(&1u16.to_be_bytes());
+        cmap.extend_from_slice(&0u16.to_be_bytes());
+        cmap.extend_from_slice(&4u16.to_be_bytes());
+        cmap.extend_from_slice(&subtable_offset.to_be_bytes());
+        assert_eq!(cmap.len(), subtable_offset as usize);
+        cmap.extend_from_slice(&12u16.to_be_bytes());
+        cmap.extend_from_slice(&0u16.to_be_bytes());
+        cmap.extend_from_slice(&subtable_length.to_be_bytes());
+        cmap.extend_from_slice(&0u32.to_be_bytes());
+        cmap.extend_from_slice(&(group_count as u32).to_be_bytes());
+        for index in 0..group_count {
+            let start = 0x20 + u32::try_from(index % 64).expect("test index fits");
+            cmap.extend_from_slice(&start.to_be_bytes());
+            cmap.extend_from_slice(&start.to_be_bytes());
+            cmap.extend_from_slice(&1u32.to_be_bytes());
+        }
+
+        let font = font_with_single_table(b"cmap", &cmap);
+        let err = sanitize_cmap12_invalid_groups(&font, 0)
+            .expect_err("excessive cmap format-12 groups must be rejected");
+        assert!(
+            err.contains("group count"),
+            "error should identify cmap group-count cap: {err}"
+        );
+    }
+
+    #[test]
+    fn sanitize_cmap12_invalid_groups_rejects_excessive_rewrites() {
+        let subtable_offset = 12u32;
+        let group_count = MAX_CMAP12_REWRITE_OFFSETS_PER_FACE + 1;
+        let subtable_length = 16 + group_count as u32 * 12;
+
+        let mut cmap = Vec::new();
+        cmap.extend_from_slice(&0u16.to_be_bytes());
+        cmap.extend_from_slice(&1u16.to_be_bytes());
+        cmap.extend_from_slice(&0u16.to_be_bytes());
+        cmap.extend_from_slice(&4u16.to_be_bytes());
+        cmap.extend_from_slice(&subtable_offset.to_be_bytes());
+        assert_eq!(cmap.len(), subtable_offset as usize);
+        cmap.extend_from_slice(&12u16.to_be_bytes());
+        cmap.extend_from_slice(&0u16.to_be_bytes());
+        cmap.extend_from_slice(&subtable_length.to_be_bytes());
+        cmap.extend_from_slice(&0u32.to_be_bytes());
+        cmap.extend_from_slice(&(group_count as u32).to_be_bytes());
+        for _ in 0..group_count {
+            cmap.extend_from_slice(&(UNICODE_SCALAR_MAX + 1).to_be_bytes());
+            cmap.extend_from_slice(&(UNICODE_SCALAR_MAX + 1).to_be_bytes());
+            cmap.extend_from_slice(&1u32.to_be_bytes());
+        }
+
+        let font = font_with_single_table(b"cmap", &cmap);
+        let err = sanitize_cmap12_invalid_groups(&font, 0)
+            .expect_err("excessive cmap format-12 rewrites must be rejected");
+        assert!(
+            err.contains("rewrite count"),
+            "error should identify cmap rewrite cap: {err}"
+        );
     }
 
     #[test]
@@ -4406,7 +4499,8 @@ mod tests {
         }
 
         let font = font_with_single_table(b"cmap", &cmap);
-        let (sanitized, count) = sanitize_cmap12_invalid_groups(&font, 0);
+        let (sanitized, count) =
+            sanitize_cmap12_invalid_groups(&font, 0).expect("test font should sanitize");
         assert_eq!(count, 1);
         let sanitized = sanitized.as_ref();
 
