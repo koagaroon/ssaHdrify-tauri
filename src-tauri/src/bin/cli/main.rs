@@ -727,6 +727,7 @@ struct FontDiagnostic {
     file: Option<String>,
     label: String,
     family: String,
+    embedded_font_name: String,
     bold: bool,
     italic: bool,
     glyph_count: usize,
@@ -785,6 +786,7 @@ impl FontDiagnostic {
             file: None,
             label: font.label.clone(),
             family: font.family.clone(),
+            embedded_font_name: font.font_name.clone(),
             bold: font.bold,
             italic: font.italic,
             glyph_count: font.glyph_count,
@@ -3310,6 +3312,10 @@ fn emit_standalone_font_diagnostics(globals: &GlobalOptions, diagnostics: &Comma
             sanitize_for_display(&font.label),
             font.result
         );
+        println!(
+            "  embedded label: {}",
+            sanitize_for_display(&font.embedded_font_name)
+        );
         if let Some(path) = &font.path {
             println!(
                 "  resolved: {}#{}",
@@ -5334,6 +5340,10 @@ fn emit_attached_diagnostics(
             sanitize_for_display(&font.label),
             file_suffix,
             font.result
+        );
+        eprintln!(
+            "    embedded label: {}",
+            sanitize_for_display(&font.embedded_font_name)
         );
         if let Some(path) = &font.path {
             eprintln!(

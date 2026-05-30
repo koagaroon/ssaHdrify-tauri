@@ -22,6 +22,7 @@ const MISSING_FONT_ASS: &str = concat!(
     "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n",
     "Dialogue: 0,0:00:01.00,0:00:03.00,Default,,0,0,0,,Hello world\n",
 );
+const MISSING_FONT_EMBEDDED_NAME: &str = "definitelymissingssahdrifyfont.ttf";
 
 fn cli_path() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_ssahdrify-cli"))
@@ -160,6 +161,10 @@ fn diagnose_fonts_reports_missing_without_writing_output() {
         "standalone diagnostics should name the missing font: stdout={stdout}"
     );
     assert!(
+        stdout.contains("embedded label:") && stdout.contains(MISSING_FONT_EMBEDDED_NAME),
+        "standalone diagnostics should show the generated ASS [Fonts] label: stdout={stdout}"
+    );
+    assert!(
         stdout.contains("next actions:")
             && stdout.contains("pass `--font-dir <DIR>` or `--font-file <FILE>`"),
         "standalone diagnostics should suggest a concrete font-source next step: stdout={stdout}"
@@ -238,6 +243,10 @@ fn diagnose_fonts_json_reports_successful_files_as_diagnosed() {
         serde_json::from_slice(&output.stdout).expect("stdout should be JSON");
     assert_eq!(value["files"][0]["status"], "diagnosed");
     assert_eq!(value["files"][0]["output"], serde_json::Value::Null);
+    assert_eq!(
+        value["fonts"][0]["embeddedFontName"],
+        MISSING_FONT_EMBEDDED_NAME
+    );
     assert!(
         !String::from_utf8_lossy(&output.stdout).contains("next actions"),
         "human next-action prose must not be mixed into JSON stdout"
@@ -412,6 +421,46 @@ fn json_with_diagnose_includes_full_diagnostics() {
             .as_array()
             .is_some_and(|fonts| !fonts.is_empty()),
         "diagnostic JSON should include full font details: {value}"
+    );
+    assert_eq!(
+        value["diagnostics"]["fonts"][0]["embeddedFontName"],
+        MISSING_FONT_EMBEDDED_NAME
+    );
+
+    let _ = fs::remove_dir_all(work);
+}
+
+#[test]
+fn embed_diagnose_full_prints_generated_font_label() {
+    if let Some(reason) = engine_bundle_missing() {
+        // Hard-fail instead of skip-and-return: a skip records PASS in Cargo,
+        // so a forgotten `npm run build:engine` would ship every diagnostics
+        // integration test as a green no-op. Matches the panic guard in
+        // test_chain.rs / test_font_cache.rs.
+        panic!("engine bundle missing — run `npm run build:engine` first ({reason})");
+    }
+
+    let work = temp_dir("embed-full-font-label");
+    let input = write_missing_font_ass(&work);
+    let output = run_cli(&[
+        "--lang",
+        "en",
+        "--no-cache",
+        "embed",
+        "--no-system-fonts",
+        "--diagnose=full",
+        input.to_str().unwrap(),
+    ]);
+
+    assert!(
+        output.status.success(),
+        "embed --diagnose=full should succeed under default warn mode: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("embedded label:") && stderr.contains(MISSING_FONT_EMBEDDED_NAME),
+        "full human diagnostics should show the generated ASS [Fonts] label: stderr={stderr}"
     );
 
     let _ = fs::remove_dir_all(work);
