@@ -127,8 +127,39 @@ fn collect_font_leaf_dirs(root: &Path) -> Vec<PathBuf> {
     dirs
 }
 
+fn representative_pack_root(root: &Path) -> PathBuf {
+    if root.join("精简包").is_dir() {
+        return root.to_path_buf();
+    }
+
+    let mut candidates = Vec::new();
+    let entries = fs::read_dir(root)
+        .unwrap_or_else(|error| panic!("failed to read {}: {error}", root.display()));
+    for entry in entries {
+        let entry = entry.expect("failed to read directory entry");
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .expect("failed to inspect directory entry");
+        if file_type.is_dir() && path.join("精简包").is_dir() {
+            candidates.push(path);
+        }
+    }
+    candidates.sort();
+
+    assert_eq!(
+        candidates.len(),
+        1,
+        "expected {} to be either a font-pack root with 精简包 or a parent with exactly one such child; found {}",
+        root.display(),
+        candidates.len()
+    );
+    candidates.remove(0)
+}
+
 fn representative_font_dirs(root: &Path) -> Vec<PathBuf> {
-    let compact_root = root.join("精简包");
+    let pack_root = representative_pack_root(root);
+    let compact_root = pack_root.join("精简包");
     assert!(
         compact_root.is_dir(),
         "expected compact font pack at {}",
@@ -137,8 +168,8 @@ fn representative_font_dirs(root: &Path) -> Vec<PathBuf> {
 
     let mut dirs = collect_font_leaf_dirs(&compact_root);
     for targeted in [
-        root.join("完整包").join("Adobe").join("CJK"),
-        root.join("完整包").join("Google（谷歌）").join("CJK"),
+        pack_root.join("完整包").join("Adobe").join("CJK"),
+        pack_root.join("完整包").join("Google（谷歌）").join("CJK"),
     ] {
         if targeted.is_dir() {
             dirs.push(targeted);
@@ -149,7 +180,7 @@ fn representative_font_dirs(root: &Path) -> Vec<PathBuf> {
     assert!(
         !dirs.is_empty(),
         "expected at least one representative font directory under {}",
-        root.display()
+        pack_root.display()
     );
     dirs
 }
