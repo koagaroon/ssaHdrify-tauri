@@ -1134,19 +1134,43 @@ const MAX_FACE_NAME_VARIANTS_PER_FACE: usize = 8;
 pub const MAX_CACHE_POPULATE_FACES: usize = 20_000;
 
 fn bounded_font_family_name(chars: impl Iterator<Item = char>) -> Option<String> {
-    // Materialize with a generous ceiling so leading/trailing whitespace
-    // (trimmed below) can't push a legitimate <=256-codepoint name out of the
-    // window — taking exactly 257 would let a few leading spaces truncate a
-    // 256-char name and store a DIFFERENT family string than the font
-    // declares, causing a lookup miss. 1024 still bounds OOM from a malformed
-    // multi-KB name-table entry (the real concern); the post-trim
-    // `char_count > 256` check below is the actual length guard.
-    let name: String = chars.take(1024).collect();
-    let trimmed = name.trim();
+    // Stream-trim instead of `take(N).collect().trim()`: truncating before
+    // validation can turn an overpadded name like "   ArialMalicious..." into
+    // the fake alias "Arial". Keep at most the 256 codepoints that could be
+    // accepted, count internal whitespace toward that cap, and ignore only
+    // true leading/trailing whitespace.
+    let mut name = String::new();
+    let mut name_count = 0usize;
+    let mut pending_ws = String::new();
+    let mut pending_ws_count = 0usize;
+    let mut seen_non_ws = false;
+
+    for ch in chars {
+        if !seen_non_ws && ch.is_whitespace() {
+            continue;
+        }
+        if ch.is_whitespace() {
+            pending_ws_count += 1;
+            if name_count + pending_ws_count <= 256 {
+                pending_ws.push(ch);
+            }
+            continue;
+        }
+
+        seen_non_ws = true;
+        if name_count + pending_ws_count + 1 > 256 {
+            return None;
+        }
+        name.push_str(&pending_ws);
+        pending_ws.clear();
+        name.push(ch);
+        name_count += pending_ws_count + 1;
+        pending_ws_count = 0;
+    }
+
     // Guard counts CODEPOINTS, not bytes — a 100-char CJK family name
     // (300+ UTF-8 bytes) is perfectly legitimate.
-    let char_count = trimmed.chars().count();
-    if trimmed.is_empty() || char_count > 256 {
+    if name.is_empty() {
         return None;
     }
     // fold validate_font_family into this helper so
@@ -1162,10 +1186,10 @@ fn bounded_font_family_name(chars: impl Iterator<Item = char>) -> Option<String>
     // semantics — `validate_font_family` is the canonical rejection
     // predicate used elsewhere, calling it here means callers don't
     // each have to remember to revalidate.
-    if crate::util::validate_font_family(trimmed).is_err() {
+    if crate::util::validate_font_family(&name).is_err() {
         return None;
     }
-    Some(trimmed.to_string())
+    Some(name)
 }
 
 fn materialize_face_name_aliases(face_name_variants: HashSet<String>) -> Vec<String> {
@@ -4605,12 +4629,34 @@ mod tests {
         // Leading whitespace must NOT consume the materialize window and
         // truncate a legitimate 256-codepoint name — that would store a
         // different family string than the font declares and miss at lookup.
-        // 5 spaces + 256 'x' trims to the full 256-char name (a take(257)
-        // window would have truncated it to 252).
         let padded = format!("{}{}", " ".repeat(5), "x".repeat(256));
         assert_eq!(
             bounded_font_family_name(padded.chars()),
             Some("x".repeat(256))
+        );
+    }
+
+    #[test]
+    fn bounded_font_family_name_rejects_overpadded_truncation_alias() {
+        let padded_attack = format!("{}{}{}", " ".repeat(1019), "Arial", "X".repeat(252));
+        assert!(
+            bounded_font_family_name(padded_attack.chars()).is_none(),
+            "must validate the full trimmed name, not truncate to the fake alias Arial"
+        );
+    }
+
+    #[test]
+    fn bounded_font_family_name_ignores_only_true_trailing_whitespace() {
+        let padded = format!("{}{}", "x".repeat(256), " ".repeat(4096));
+        assert_eq!(
+            bounded_font_family_name(padded.chars()),
+            Some("x".repeat(256))
+        );
+
+        let internal_over_cap = format!("{}{}y", "x".repeat(255), " ".repeat(2));
+        assert!(
+            bounded_font_family_name(internal_over_cap.chars()).is_none(),
+            "internal whitespace before a later non-space character counts toward the cap"
         );
     }
 

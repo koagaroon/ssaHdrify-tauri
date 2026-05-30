@@ -838,6 +838,7 @@ struct ResolveEmbedFontsOutcome {
     diagnostics: Vec<FontDiagnostic>,
 }
 
+#[derive(Debug)]
 struct ResolveEmbedFontsError {
     error: String,
     diagnostics: Vec<FontDiagnostic>,
@@ -3000,6 +3001,7 @@ fn run_embed(
         .map(absolute_path)
         .transpose()?;
     let mut report = CommandReport::new("embed");
+    let collect_font_diagnostics = diagnose.is_some();
     let mut font_diagnostics = Vec::new();
     // Same first-wins dedup policy as run_hdr. Embed already orders
     // dedup correctly (cheap plan_font_embed → dedup → expensive
@@ -3012,15 +3014,18 @@ fn run_embed(
             &args,
             use_user_fonts,
             cache,
+            collect_font_diagnostics,
             output_dir.as_deref(),
             &mut engine,
             file,
             &mut seen_outputs,
         );
-        for diagnostic in &mut diagnostics {
-            diagnostic.file = Some(result.input.clone());
+        if collect_font_diagnostics {
+            for diagnostic in &mut diagnostics {
+                diagnostic.file = Some(result.input.clone());
+            }
+            font_diagnostics.append(&mut diagnostics);
         }
-        font_diagnostics.append(&mut diagnostics);
         let failed = result.status == FileStatus::Failed;
         emit_file_report(globals, &result);
         report.push(result);
@@ -3210,7 +3215,7 @@ fn diagnose_font_file(
         }
     };
 
-    match resolve_embed_fonts(globals, args, use_user_fonts, cache, &plan.fonts) {
+    match resolve_embed_fonts(globals, args, use_user_fonts, cache, true, &plan.fonts) {
         Ok(outcome) => (
             FileReport {
                 input,
@@ -3824,17 +3829,18 @@ fn emit_font_source_summary(
     );
 }
 
-// 8 args: globals + args + use_user_fonts + cache + output_dir +
-// engine + file + seen_outputs. The cache and use_user_fonts could
-// be folded into a per-run state struct, but the existing run_embed
-// already passes them as parallel locals; bundling here would just
-// shift the boilerplate. Allowing this one lint locally.
+// 9 args: globals + args + use_user_fonts + cache + diagnostic flag +
+// output_dir + engine + file + seen_outputs. The cache and use_user_fonts
+// could be folded into a per-run state struct, but the existing run_embed
+// already passes them as parallel locals; bundling here would just shift
+// the boilerplate. Allowing this one lint locally.
 #[allow(clippy::too_many_arguments)]
 fn process_embed_file(
     globals: &GlobalOptions,
     args: &EmbedArgs,
     use_user_fonts: bool,
     cache: Option<&app_lib::font_cache::FontCache>,
+    collect_font_diagnostics: bool,
     output_dir: Option<&Path>,
     engine: &mut engine::CliEngine,
     file: &Path,
@@ -3928,26 +3934,32 @@ fn process_embed_file(
     let mut warnings: Vec<String> = Vec::new();
 
     let mut font_diagnostics = Vec::new();
-    let resolved_fonts =
-        match resolve_embed_fonts(globals, args, use_user_fonts, cache, &plan.fonts) {
-            Ok(mut outcome) => {
-                warnings.append(&mut outcome.warnings);
-                font_diagnostics.append(&mut outcome.diagnostics);
-                outcome.resolved
-            }
-            Err(mut error) => {
-                font_diagnostics.append(&mut error.diagnostics);
-                return (
-                    failed_report(
-                        &input_path,
-                        Some(output),
-                        Some(read_result.encoding),
-                        error.error,
-                    ),
-                    font_diagnostics,
-                );
-            }
-        };
+    let resolved_fonts = match resolve_embed_fonts(
+        globals,
+        args,
+        use_user_fonts,
+        cache,
+        collect_font_diagnostics,
+        &plan.fonts,
+    ) {
+        Ok(mut outcome) => {
+            warnings.append(&mut outcome.warnings);
+            font_diagnostics.append(&mut outcome.diagnostics);
+            outcome.resolved
+        }
+        Err(mut error) => {
+            font_diagnostics.append(&mut error.diagnostics);
+            return (
+                failed_report(
+                    &input_path,
+                    Some(output),
+                    Some(read_result.encoding),
+                    error.error,
+                ),
+                font_diagnostics,
+            );
+        }
+    };
 
     let glyph_count: usize = plan.fonts.iter().map(|font| font.glyph_count).sum();
     let referenced = plan.fonts.len();
@@ -4151,6 +4163,7 @@ fn resolve_chain_embed_subsets(
         embed_args,
         use_user_fonts,
         None,
+        false,
         &plan_result.fonts,
     )
     .map_err(|e| (e.error, Vec::new()))?;
@@ -4165,14 +4178,16 @@ fn resolve_chain_embed_subsets(
 }
 
 /// Resolve fonts; under `--on-missing warn`, returns the resolved
-/// list AND the missing-font diagnostics so the caller can surface
-/// them in `FileReport.warnings` (not just on stderr). Under
-/// `--on-missing fail`, returns Err on any missing font.
+/// list and missing-font warnings. Detailed `FontDiagnostic` rows are
+/// collected only when the caller requested diagnostics; ordinary
+/// embed/chain runs must not retain batch-wide diagnostic objects.
+/// Under `--on-missing fail`, returns Err on any missing font.
 fn resolve_embed_fonts(
     globals: &GlobalOptions,
     args: &EmbedArgs,
     use_user_fonts: bool,
     cache: Option<&app_lib::font_cache::FontCache>,
+    collect_diagnostics: bool,
     fonts: &[engine::FontEmbedUsage],
 ) -> Result<ResolveEmbedFontsOutcome, ResolveEmbedFontsError> {
     let mut resolved = Vec::new();
@@ -4192,14 +4207,16 @@ fn resolve_embed_fonts(
         // existing --on-missing surface (warning + counted in skipped
         // / Failed under `fail`).
         if font.codepoints.len() > MAX_RESOLVED_FONT_CODEPOINTS {
-            let mut diagnostic = FontDiagnostic::new(font);
             let error = format!(
                 "too many codepoints: {} > cap {}",
                 font.codepoints.len(),
                 MAX_RESOLVED_FONT_CODEPOINTS
             );
-            diagnostic.mark_error(error.clone());
-            diagnostics.push(diagnostic);
+            if collect_diagnostics {
+                let mut diagnostic = FontDiagnostic::new(font);
+                diagnostic.mark_error(error.clone());
+                diagnostics.push(diagnostic);
+            }
             missing.push(format!(
                 "{} (too many codepoints: {} > cap {})",
                 font.label,
@@ -4213,16 +4230,22 @@ fn resolve_embed_fonts(
             (Some(found), _) => found,
             (None, None) => {
                 missing.push(font.label.clone());
-                diagnostics.push(lookup.diagnostic);
+                if collect_diagnostics {
+                    diagnostics.push(lookup.diagnostic);
+                }
                 continue;
             }
             (None, Some(error)) => {
                 missing.push(format!("{} ({error})", font.label));
-                diagnostics.push(lookup.diagnostic);
+                if collect_diagnostics {
+                    diagnostics.push(lookup.diagnostic);
+                }
                 continue;
             }
         };
-        diagnostics.push(lookup.diagnostic);
+        if collect_diagnostics {
+            diagnostics.push(lookup.diagnostic);
+        }
 
         resolved.push(ResolvedEmbedFont {
             label: font.label.clone(),
@@ -6111,10 +6134,10 @@ mod tests {
         classify_locale, copy_file_output, create_cli_font_db_dir, diagnostic_next_actions,
         display_path, duplicate_rename_output_keys, engine, group_resolved_fonts_by_face,
         normalize_output_key, parse_duration_ms, parse_timestamp_ms, predict_chain_output_path,
-        relocate_output_path, sanitize_for_display, substitute_template, write_output, Cli,
-        Command, CommandDiagnostics, DiagnoseMode, FileDiagnostic, FileStatus, GlobalOptions,
-        OutputLang, ResolvedEmbedFont, TempFontDbDir, MAX_RESOLVED_FONT_CODEPOINTS,
-        MAX_SHIFT_OFFSET_MS, MAX_SUBSET_CODEPOINTS_FOR_DEDUP,
+        relocate_output_path, resolve_embed_fonts, sanitize_for_display, substitute_template,
+        write_output, Cli, Command, CommandDiagnostics, DiagnoseMode, EmbedArgs, FileDiagnostic,
+        FileStatus, GlobalOptions, MissingFontAction, OutputLang, ResolvedEmbedFont, TempFontDbDir,
+        MAX_RESOLVED_FONT_CODEPOINTS, MAX_SHIFT_OFFSET_MS, MAX_SUBSET_CODEPOINTS_FOR_DEDUP,
     };
     // Import the canonical filename literal directly from app_lib so the
     // test pins the same name `TempFontDbDir::drop`'s remove_dir_all
@@ -6300,6 +6323,64 @@ mod tests {
                 .all(|action| !action.contains("embed --on-missing")),
             "non-font warnings should not suggest strict font-embedding policy: {actions:?}"
         );
+    }
+
+    #[test]
+    fn shift_request_omits_absent_threshold_from_json_wire_shape() {
+        let request = engine::ShiftConversionRequest {
+            input_path: "C:\\subs\\episode.ass".to_string(),
+            content: "[Script Info]\n".to_string(),
+            offset_ms: 1000,
+            threshold_ms: None,
+            output_template: "{name}.shifted{ext}".to_string(),
+        };
+
+        let json = serde_json::to_value(request).expect("request should serialize");
+        assert!(
+            json.get("thresholdMs").is_none(),
+            "None threshold must be omitted, not serialized as thresholdMs:null"
+        );
+    }
+
+    #[test]
+    fn resolve_embed_fonts_drops_diagnostics_when_not_requested() {
+        let globals = test_globals();
+        let args = EmbedArgs {
+            font_dirs: Vec::new(),
+            font_files: Vec::new(),
+            no_system_fonts: true,
+            on_missing: MissingFontAction::Warn,
+            output_template: "{name}.embed.ass".to_string(),
+            files: Vec::new(),
+        };
+        let usage = engine::FontEmbedUsage {
+            family: "Definitely Missing".to_string(),
+            bold: false,
+            italic: false,
+            label: "Definitely Missing".to_string(),
+            font_name: "Definitely Missing".to_string(),
+            glyph_count: 1,
+            codepoints: vec![0x41],
+        };
+
+        let no_diagnostics = resolve_embed_fonts(
+            &globals,
+            &args,
+            false,
+            None,
+            false,
+            std::slice::from_ref(&usage),
+        )
+        .expect("warn mode should return a skipped-font warning");
+        assert!(no_diagnostics.diagnostics.is_empty());
+        assert_eq!(
+            no_diagnostics.warnings,
+            vec!["missing font: Definitely Missing".to_string()]
+        );
+
+        let with_diagnostics = resolve_embed_fonts(&globals, &args, false, None, true, &[usage])
+            .expect("diagnostic mode should still return warn-mode outcome");
+        assert_eq!(with_diagnostics.diagnostics.len(), 1);
     }
 
     #[test]

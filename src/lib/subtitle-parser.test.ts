@@ -139,6 +139,78 @@ describe("parseSubtitle", () => {
     expect(result.format).toBe("sub");
     expect(result.captions).toHaveLength(100);
   });
+
+  it("keeps SRT when later caption text contains higher-priority format markers", () => {
+    const content = [
+      "1",
+      "00:00:01,000 --> 00:00:02,000",
+      "This line is normal.",
+      "",
+      "2",
+      "00:00:03,000 --> 00:00:04,000",
+      "[Script Info]",
+      "WEBVTT",
+      "{123}{456}",
+      "",
+    ].join("\n");
+
+    const result = parseSubtitle(content);
+    expect(result.format).toBe("srt");
+    expect(result.captions).toHaveLength(2);
+    expect(result.captions[1]!.text).toContain("[Script Info]");
+    expect(result.captions[1]!.text).toContain("WEBVTT");
+    expect(result.captions[1]!.text).toContain("{123}{456}");
+  });
+
+  it("still detects ASS after a long benign preamble when no earlier marker exists", () => {
+    const preamble = "; harmless preamble\n".repeat(180);
+    const ass =
+      preamble +
+      "[Script Info]\nScriptType: v4.00+\n\n" +
+      "[Events]\nFormat: Layer, Start, End, Style, Text\n" +
+      "Dialogue: 0,0:00:01.00,0:00:02.00,Default,After preamble\n";
+
+    const result = parseSubtitle(ass);
+    expect(result.format).toBe("ass");
+    expect(result.captions).toHaveLength(1);
+  });
+
+  it("keeps ASS when preamble text only resembles an incomplete SRT cue", () => {
+    const ass = [
+      "; exported by a tool that writes sample ranges first",
+      "00:00:01,000 --> 00:00:02,000",
+      "",
+      "[Script Info]",
+      "ScriptType: v4.00+",
+      "",
+      "[Events]",
+      "Format: Layer, Start, End, Style, Text",
+      "Dialogue: 0,0:00:01.00,0:00:02.00,Default,Real ASS",
+      "",
+    ].join("\n");
+
+    const result = parseSubtitle(ass);
+    expect(result.format).toBe("ass");
+    expect(result.captions).toHaveLength(1);
+  });
+
+  it("keeps ASS when preamble text only resembles an empty MicroDVD cue", () => {
+    const ass = [
+      "{123}{456}",
+      "",
+      "[Script Info]",
+      "ScriptType: v4.00+",
+      "",
+      "[Events]",
+      "Format: Layer, Start, End, Style, Text",
+      "Dialogue: 0,0:00:01.00,0:00:02.00,Default,Real ASS",
+      "",
+    ].join("\n");
+
+    const result = parseSubtitle(ass);
+    expect(result.format).toBe("ass");
+    expect(result.captions).toHaveLength(1);
+  });
 });
 
 // ── Raw-block junk-flood ceiling regression pin ──
@@ -385,17 +457,10 @@ describe("parseSubtitle / shiftSubtitle — oversized-ASS-Dialogue placeholder a
   it("rejects 13-digit-frame MicroDVD entry (upper bound enforced)", () => {
     const tooLong = "9999999999999"; // 13 digits
     const content = `{${tooLong}}{${tooLong}}Over the limit\n`;
-    // subLineRe requires `\d{1,12}` frame numbers — the 13-digit
-    // form fails to match the per-line regex. detectFormat's
-    // SUB_LINE uses `\d+` (no cap), so detection still classifies
-    // this as `sub`, but parseSub yields zero captions. Asymmetry
-    // is intentional today: detection cap mirrors per-line cap
-    // would be tighter, but the format-detect ceiling is bounded
-    // by 2 KB of `head` text and the per-line extractor is the
-    // real semantic boundary.
-    const result = parseSubtitle(content);
-    expect(result.format).toBe("sub");
-    expect(result.captions).toHaveLength(0);
+    // SUB_LINE and subLineRe both require `\d{1,12}` frame numbers, so
+    // an over-bound MicroDVD line fails format detection and extraction
+    // at the same boundary.
+    expect(() => parseSubtitle(content)).toThrow("Could not detect subtitle format");
   });
 
   // Direct pins on the parseSub / parseSrt / parseVtt skipped-

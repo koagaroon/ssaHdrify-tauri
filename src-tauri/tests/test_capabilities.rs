@@ -55,6 +55,52 @@ fn read_deny_paths() -> Vec<String> {
         .collect()
 }
 
+fn read_permission_strings() -> Vec<String> {
+    let raw = std::fs::read_to_string(capabilities_path())
+        .expect("capabilities/default.json should be readable");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&raw).expect("capabilities/default.json should parse as JSON");
+    parsed["permissions"]
+        .as_array()
+        .expect("permissions should be an array")
+        .iter()
+        .filter_map(|permission| permission.as_str().map(ToString::to_string))
+        .collect()
+}
+
+#[test]
+fn plugin_fs_grants_only_exists_not_default_read_surface() {
+    let permissions = read_permission_strings();
+
+    assert!(
+        permissions
+            .iter()
+            .any(|permission| permission == "fs:allow-exists"),
+        "overwrite preflight still needs plugin-fs exists()"
+    );
+    assert!(
+        !permissions
+            .iter()
+            .any(|permission| permission == "fs:default"),
+        "fs:default grants broad read APIs; frontend should keep only fs:allow-exists"
+    );
+    for forbidden in [
+        "fs:allow-read-file",
+        "fs:allow-read-dir",
+        "fs:allow-stat",
+        "fs:allow-lstat",
+        "fs:allow-write-file",
+        "fs:allow-write-text-file",
+        "fs:allow-copy-file",
+        "fs:allow-rename",
+    ] {
+        assert!(
+            !permissions.iter().any(|permission| permission == forbidden),
+            "unexpected broad plugin-fs permission remained: {forbidden}"
+        );
+    }
+}
+
 #[test]
 fn deny_list_contains_required_categories() {
     let deny = read_deny_paths();

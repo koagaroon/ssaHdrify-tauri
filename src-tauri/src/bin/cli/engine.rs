@@ -73,6 +73,7 @@ pub struct ShiftConversionRequest {
     pub input_path: String,
     pub content: String,
     pub offset_ms: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub threshold_ms: Option<i64>,
     pub output_template: String,
 }

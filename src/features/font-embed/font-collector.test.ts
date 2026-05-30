@@ -414,6 +414,46 @@ Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\rStyleA\r` + overlong +
       "Y must land in Arial after overlong \\fn resets to initial family"
     ).toBe(true);
   });
+
+  it("\\fn spoofing whitespace is sanitized from the full family, not captured as a prefix", async () => {
+    await ensureLoaded();
+    const nbsp = String.fromCharCode(0x00a0);
+    const usage = collectFonts(makeASS(`{\\fnArial${nbsp}Black}Z`));
+
+    const sanitized = usage.find((u) => u.key.family === "ArialBlack");
+    const prefix = usage.find((u) => u.key.family === "Arial");
+    expect(
+      sanitized,
+      "NBSP-bearing family should sanitize to the full ArialBlack name"
+    ).toBeDefined();
+    expect(sanitized!.codepoints.has(0x5a), "Z must land in the sanitized full family").toBe(true);
+    expect(prefix, "NBSP must not terminate \\fn into the prefix family Arial").toBeUndefined();
+  });
+
+  it("\\fn astral codepoint is sanitized from the full family, not captured as a prefix", async () => {
+    await ensureLoaded();
+    const astral = String.fromCodePoint(0x10000);
+    const usage = collectFonts(makeASS(`{\\fnPrefix${astral}Suffix}Q`));
+
+    const sanitized = usage.find((u) => u.key.family === "PrefixSuffix");
+    const prefix = usage.find((u) => u.key.family === "Prefix");
+    expect(
+      sanitized,
+      "astral-bearing family should sanitize to the full PrefixSuffix name"
+    ).toBeDefined();
+    expect(sanitized!.codepoints.has(0x51), "Q must land in the sanitized full family").toBe(true);
+    expect(prefix, "astral codepoint must not terminate \\fn into a prefix family").toBeUndefined();
+  });
+
+  it("\\fn with only sanitized-away characters resets to the initial family", async () => {
+    await ensureLoaded();
+    const nbsp = String.fromCharCode(0x00a0);
+    const usage = collectFonts(makeASS(`{\\fn${nbsp}}N`));
+
+    const arial = usage.find((u) => u.key.family === "Arial");
+    expect(arial, "empty-after-sanitize \\fn must fall back to the initial family").toBeDefined();
+    expect(arial!.codepoints.has(0x4e), "N must land in Arial").toBe(true);
+  });
 });
 
 // ── Digit-led style name pair for the state-retention fix. The

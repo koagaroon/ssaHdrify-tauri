@@ -65,17 +65,18 @@ const R_TAG_RE =
 //   - Astral code points (U+10000-U+10FFFF) never legitimately appear in a
 //     font family name.
 // U+3000 (ideographic space) is intentionally NOT rejected — it is visibly
-// full-width and legitimately used in CJK typography. Spliced into BOTH
-// FN_CHAR_SET (the `\fn` capture) AND `sanitizeFamily` (the Style-Fontname
-// path) so the "FN_CHAR_SET excludes exactly what sanitizeFamily strips"
-// contract — which makes the `\fn` `|| current.family` fallback dead — holds.
+// full-width and legitimately used in CJK typography. These codepoints are
+// stripped by `sanitizeFamily`, but they must NOT terminate FN_TAG_RE; otherwise
+// `\fnArial<NBSP>Black` captures the prefix `Arial` and sanitization never sees
+// the full spoofed family name.
 const FAMILY_SPOOFING_CHARS = "\\u00A0\\u2000-\\u200A\\u202F\\u205F\\u{10000}-\\u{10FFFF}";
 
 // `\fn` regex constructed dynamically because the exclusion class
-// interpolates `BIDI_AND_ZERO_WIDTH_CHARS`. Hoisted to a module-level
-// const just like the literal regexes above so the compile cost is
-// paid once per process, not per override block.
-const FN_CHAR_SET = `[^\\\\}{${ASCII_CONTROL_CHARS}${BIDI_AND_ZERO_WIDTH_CHARS}${FAMILY_SPOOFING_CHARS}]`;
+// is easier to audit as one named fragment. Capture every codepoint up
+// to the next override/backslash or brace, then sanitize the full value
+// in the tag handler. Excluding display-spoofing chars here would turn
+// them into prefix-truncation boundaries instead of sanitizable input.
+const FN_CHAR_SET = `[^\\\\}{]`;
 const FN_TAG_RE = new RegExp(
   `\\\\fn(?:(${FN_CHAR_SET}{0,128})(?!${FN_CHAR_SET})|${FN_CHAR_SET}{129,200000}(?!${FN_CHAR_SET}))`,
   "gu"
@@ -201,8 +202,9 @@ function normalizeFamily(raw: string): string {
  *  BiDi / zero-width control set from `unicode-controls.ts` (which already
  *  includes the Unicode line/paragraph separators U+2028 / U+2029 — they
  *  are NOT a separate additive group), AND the display-spoofing whitespace
- *  + astral set (`FAMILY_SPOOFING_CHARS`, kept in lockstep with
- *  `FN_CHAR_SET`).
+ *  + astral set (`FAMILY_SPOOFING_CHARS`). `\fn` captures those
+ *  characters first and calls this sanitizer afterward so spoofing
+ *  characters cannot become regex prefix boundaries.
  *  Previously a family name carrying U+202E could flow through
  *  `sanitizeFamily` into detection-grid labels, log lines, and chain
  *  progress text where the visual-reversal attack re-surfaced after
@@ -599,27 +601,17 @@ function applyOverrideTags(
         // both produce `tag.family === undefined`; the `?? ""` keeps
         // the existing fall-through-to-initialFont semantic.
         //
-        // The previous `sanitizeFamily(rawFamily) || current.family`
-        // fallback was STRUCTURALLY UNREACHABLE. FN_CHAR_SET excludes
-        // the same codepoints `sanitizeFamily` strips (C0 / DEL / C1 /
-        // BiDi / zero-width / spoofing whitespace + astral) plus `\` `{`
-        // `}`, AND the first
-        // FN_TAG_RE alternation branch caps at 128 chars — exactly
-        // what `sanitizeFamily` truncates to. So once `rawFamily` is
-        // non-empty after `normalizeFamily`,
-        // `sanitizeFamily(rawFamily)` is byte-equal to `rawFamily`
-        // itself and never returns "". The `|| current.family` clause
-        // could only fire if FN_CHAR_SET were ever loosened to admit
-        // chars `sanitizeFamily` strips — in that future scenario,
-        // the right reference frame is ambiguous (running font vs
-        // pre-block snapshot vs initial) and would need libass
-        // verification at that time. The position-sorted walk doesn't
-        // need the dead fallback.
+        // Capture first, sanitize second. If FN_TAG_RE treats spoofing
+        // whitespace, BiDi, or astral codepoints as boundaries, malformed
+        // names become prefix aliases (for example `Arial<NBSP>Black` ->
+        // `Arial`). Let sanitizeFamily see the full family name, then reset
+        // to the initial family only when sanitization leaves no usable name.
         const rawFamily = normalizeFamily(tag.family ?? "");
-        if (!rawFamily) {
+        const sanitizedFamily = sanitizeFamily(rawFamily);
+        if (!sanitizedFamily) {
           font.family = initialFont.family;
         } else {
-          font.family = sanitizeFamily(rawFamily);
+          font.family = sanitizedFamily;
         }
         break;
       }

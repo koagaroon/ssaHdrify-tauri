@@ -53,15 +53,16 @@ const VTT_HEADER = /^WEBVTT/m;
 // extraction caps at {1,12}; a future caller piping the detection
 // match into parseInt would have re-introduced the unbounded surface).
 //
-// `^…/m` anchor + multiline flag — matches `parseSrt`'s line-anchored
+// Line-anchored check — matches `parseSrt`'s line-anchored
 // `timingRe`. Without the anchor, prose like `Caption text
 // 12:00:00,000 --> 12:00:01,000 in prose` matches detection but
 // `parseSrt`'s `timingRe.test(line)` finds zero hits → captions=[]
 // returns silently. Sibling regex coherence with ASS_HEADER /
-// VTT_HEADER / SUB_LINE which all use `^…/m`.
-const SRT_TIMING = /^\d{1,12}:\d{2}:\d{2},\d{3}\s*-->\s*\d{1,12}:\d{2}:\d{2},\d{3}/m;
+// VTT_HEADER / SUB_LINE_SINGLE which all require line starts.
+const SRT_TIMING_LINE = /^\d{1,12}:\d{2}:\d{2},\d{3}\s*-->\s*\d{1,12}:\d{2}:\d{2},\d{3}/;
+const SRT_CUE_INDEX = /^\d{1,12}$/;
 const ASS_HEADER = /^\[Script Info\]/im;
-const SUB_LINE = /^\{\d+\}\{\d+\}/m;
+const SUB_LINE_SINGLE = /^\{\d{1,12}\}\{\d{1,12}\}(.*)$/;
 
 function normalizeLineEndings(content: string): string {
   return content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
@@ -73,19 +74,140 @@ function splitCueBlocks(content: string): string[] {
     .filter((b) => b.trim());
 }
 
+type CueCandidate = {
+  index: number;
+  hasText: boolean;
+};
+
+function lineEndAt(content: string, lineStart: number): number {
+  const lineEnd = content.indexOf("\n", lineStart);
+  return lineEnd === -1 ? content.length : lineEnd;
+}
+
+function isBlankLine(line: string): boolean {
+  return /^[ \t]*$/.test(line);
+}
+
+function hasNonBlankLineAfter(content: string, start: number, blockEnd: number): boolean {
+  let lineStart = start;
+  while (lineStart < blockEnd) {
+    const lineEnd = lineEndAt(content, lineStart);
+    if (content.slice(lineStart, lineEnd).trim().length > 0) {
+      return true;
+    }
+    lineStart = lineEnd >= content.length ? content.length : lineEnd + 1;
+  }
+  return false;
+}
+
+function findFirstCueCandidate(
+  content: string,
+  inspectLine: (
+    line: string,
+    lineIndex: number,
+    firstLine: string,
+    lineStart: number,
+    nextLineStart: number,
+    blockEnd: number
+  ) => CueCandidate | undefined
+): CueCandidate | undefined {
+  let blockStart = 0;
+  while (blockStart < content.length) {
+    while (blockStart < content.length) {
+      const lineEnd = lineEndAt(content, blockStart);
+      if (!isBlankLine(content.slice(blockStart, lineEnd))) break;
+      blockStart = lineEnd >= content.length ? content.length : lineEnd + 1;
+    }
+    if (blockStart >= content.length) break;
+
+    let blockEnd = blockStart;
+    while (blockEnd < content.length) {
+      const lineEnd = lineEndAt(content, blockEnd);
+      if (isBlankLine(content.slice(blockEnd, lineEnd))) break;
+      blockEnd = lineEnd >= content.length ? content.length : lineEnd + 1;
+    }
+
+    let lineStart = blockStart;
+    let lineIndex = 0;
+    let firstLine = "";
+    while (lineStart < blockEnd) {
+      const lineEnd = lineEndAt(content, lineStart);
+      const line = content.slice(lineStart, lineEnd);
+      if (lineIndex === 0) firstLine = line;
+      const candidate = inspectLine(
+        line,
+        lineIndex,
+        firstLine,
+        lineStart,
+        lineEnd >= content.length ? content.length : lineEnd + 1,
+        blockEnd
+      );
+      if (candidate) return candidate;
+      lineStart = lineEnd >= content.length ? content.length : lineEnd + 1;
+      lineIndex += 1;
+    }
+
+    blockStart = blockEnd >= content.length ? content.length : blockEnd + 1;
+  }
+  return undefined;
+}
+
+function firstSrtCueCandidate(content: string): CueCandidate | undefined {
+  return findFirstCueCandidate(
+    content,
+    (line, lineIndex, firstLine, lineStart, nextLineStart, blockEnd) => {
+      if (!SRT_TIMING_LINE.test(line)) return undefined;
+      if (lineIndex > 1) return undefined;
+      if (lineIndex === 1 && !SRT_CUE_INDEX.test(firstLine.trim())) return undefined;
+      return {
+        index: lineStart,
+        hasText: hasNonBlankLineAfter(content, nextLineStart, blockEnd),
+      };
+    }
+  );
+}
+
+function firstSubCueCandidate(content: string): CueCandidate | undefined {
+  return findFirstCueCandidate(content, (line, _lineIndex, _firstLine, lineStart) => {
+    const match = line.match(SUB_LINE_SINGLE);
+    if (!match) return undefined;
+    return { index: lineStart, hasText: match[1]!.trim().length > 0 };
+  });
+}
+
 export function detectFormat(content: string): SubtitleFormat {
-  // Scan the whole content rather than a 2 KB head: a valid file whose format
-  // signature sits past an early run of comments / blank lines / a long BOM-y
-  // preamble would otherwise mis-detect as "unknown" and get rejected. The
-  // matchers are line-anchored (`^…/m`), so they short-circuit on the first
-  // matching line in the common top-of-file case; the worst case is a single
-  // linear O(n) scan with no backtracking, and the input is bounded by the
-  // downstream parse caps (MAX_RAW_BLOCKS / per-format entry caps).
-  if (ASS_HEADER.test(content)) return "ass";
-  if (VTT_HEADER.test(content)) return "vtt";
-  if (SUB_LINE.test(content)) return "sub";
-  if (SRT_TIMING.test(content)) return "srt";
-  return "unknown";
+  const normalized = normalizeLineEndings(content);
+  const headerCandidates = [
+    { format: "ass" as const, index: ASS_HEADER.exec(normalized)?.index },
+    { format: "vtt" as const, index: VTT_HEADER.exec(normalized)?.index },
+  ].filter(
+    (candidate): candidate is { format: "ass" | "vtt"; index: number } =>
+      candidate.index !== undefined
+  );
+  const hasHeaderCandidate = headerCandidates.length > 0;
+  const srtCue = firstSrtCueCandidate(normalized);
+  const subCue = firstSubCueCandidate(normalized);
+
+  // Keep the full-content scan so a long benign preamble does not hide a real
+  // header, but cue-based formats must prove a cue-shaped block before they can
+  // outrank a later header. This avoids both spoof directions: SRT cue text
+  // that says `[Script Info]` stays SRT, while an ASS preamble containing a bare
+  // timestamp line still reaches the real ASS header.
+  const candidates = [
+    ...headerCandidates,
+    srtCue && (!hasHeaderCandidate || srtCue.hasText)
+      ? { format: "srt" as const, index: srtCue.index }
+      : undefined,
+    subCue && (!hasHeaderCandidate || subCue.hasText)
+      ? { format: "sub" as const, index: subCue.index }
+      : undefined,
+  ].filter(
+    (candidate): candidate is { format: Exclude<SubtitleFormat, "unknown">; index: number } =>
+      candidate !== undefined && candidate.index !== undefined
+  );
+
+  candidates.sort((a, b) => a.index - b.index);
+  return candidates[0]?.format ?? "unknown";
 }
 
 // ── Timestamp Parsing ─────────────────────────────────────
@@ -254,7 +376,7 @@ function parseSrt(content: string): Caption[] {
   }
   // Regex defined inside function — no shared lastIndex state.
   // Hours bounded to 12 digits — accepts the single-digit form some
-  // tools emit (`0:00:01,000`), matching detectFormat's SRT_TIMING,
+  // tools emit (`0:00:01,000`), matching detectFormat's SRT_TIMING_LINE,
   // while rejecting pathological 100+ digit strings that would saturate
   // parseInt to Infinity.
   const timingRe = /^(\d{1,12}:\d{2}:\d{2},\d{3})\s*-->\s*(\d{1,12}:\d{2}:\d{2},\d{3})/;

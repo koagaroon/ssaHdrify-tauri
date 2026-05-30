@@ -115,13 +115,10 @@ pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
     // so rejecting verbatim forms from frontend IPC is safe.
     //
     // Note: this closes the bypass for OUR Rust safe_io / encoding /
-    // fonts entrypoints. Direct plugin-fs frontend calls
-    // (`read_text_file`, `exists`) still hit Tauri's `is_allowed`
-    // without going through validate_ipc_path; the bypass persists
-    // for those at the Tauri-scope layer. Per design doc § fs:scope
-    // policy, the Rust backends are the actual security boundary;
-    // plugin-fs read exposure remains accepted P1a (requires WebView
-    // XSS to reach).
+    // fonts entrypoints. The frontend no longer grants plugin-fs's
+    // broad read surface; its remaining direct plugin-fs call is
+    // `exists()` for overwrite preflight, while file reads/writes stay
+    // behind Rust commands that call this validator first.
     //
     // Byte-prefix check on raw `path.as_bytes()`. The previous form
     // called `path.to_ascii_lowercase()` which allocated a fresh

@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default permissions for the desktop window. fs:scope is allow=** + deny-list for sensitive locations (credentials, browser profiles, shell history, jump lists, app's own session DB); the scope policy applies to both plugin-fs (frontend-initiated) AND the Rust-side safe_io commands which reuse app.fs_scope().is_allowed(...). R17 W17.5 (N-R17-72): fs:default + fs:allow-exists are listed explicitly — fs:default's permission set covers the read APIs (readFile, readDir, exists, lstat) the frontend uses for source/target inspection; fs:allow-exists is broken out so a future tightening of fs:default doesn't silently revoke the cross-cutting exists() check countExistingFiles + plugin-fs callers rely on. Deny-list order: $HOME → $DATA → $LOCALDATA → $APPDATA/$APPLOCALDATA → app-private. Full rationale + threat model + finding history: see the project design doc § 'fs:scope policy'. Deny-list integrity is pinned by tests/test_capabilities.rs (R17 W17.5 A-R17-49).",
+  "description": "Default permissions for the desktop window. fs:scope is allow=** + deny-list for sensitive locations (credentials, browser profiles, shell history, jump lists, app's own session DB); the scope policy applies to both plugin-fs (frontend-initiated) AND the Rust-side safe_io commands which reuse app.fs_scope().is_allowed(...). The frontend's remaining plugin-fs use is overwrite preflight via exists(), so only fs:allow-exists is granted; file reads/writes/copy/rename route through Rust commands with extension, reparse-point, and scope checks. Deny-list order: $HOME → $DATA → $LOCALDATA → $APPDATA/$APPLOCALDATA → app-private. Full rationale + threat model + finding history: see the project design doc § 'fs:scope policy'. Deny-list integrity is pinned by tests/test_capabilities.rs (R17 W17.5 A-R17-49).",
   "windows": ["main"],
   "permissions": [
     "core:default",
@@ -11,7 +11,6 @@
     "core:window:allow-close",
     "core:window:allow-start-dragging",
     "dialog:default",
-    "fs:default",
     "fs:allow-exists",
     {
       "identifier": "fs:scope",
