@@ -26,7 +26,7 @@ function encodeAsNumberArray(bytes: Uint8Array): number[] {
   return Array.from(bytes);
 }
 
-// Use js-base64 (already a runtime dep, cross-environment) instead of
+// Use js-base64 (test-only, cross-environment) instead of
 // Node's Buffer — the project's tsconfig doesn't include @types/node,
 // and the test runs through Vite/Vitest's browser-shaped env where
 // Buffer isn't a global.

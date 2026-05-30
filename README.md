@@ -45,14 +45,14 @@
 
 ## 下载 | Download
 
-Windows 用户可从 [Releases](https://github.com/koagaroon/ssaHdrify-tauri/releases/latest) 页面下载免安装的便携版 exe：
+Windows 用户可从 [Releases](https://github.com/koagaroon/ssaHdrify-tauri/releases) 页面下载免安装的便携版 exe。稳定版和预览版都会列在这里；预览版通常包含 README 中描述的最新 CLI / 字体缓存功能。
 
 - **`ssahdrify*.exe`** — 图形界面（GUI），适合手动操作
 - **`ssahdrify-cli*.exe`** — 命令行（CLI），适合自动化流水线、批处理和脚本化场景
 
 macOS / Linux 用户请参考下方「从源码构建」。
 
-Windows users can download portable, no-installer exe files from [Releases](https://github.com/koagaroon/ssaHdrify-tauri/releases/latest):
+Windows users can download portable, no-installer exe files from [Releases](https://github.com/koagaroon/ssaHdrify-tauri/releases). Both stable and preview builds are listed there; preview builds usually contain the newest CLI / font-cache features described in this README.
 
 - **`ssahdrify*.exe`** — graphical interface (GUI), for manual workflows
 - **`ssahdrify-cli*.exe`** — command line (CLI), for automation pipelines, batch jobs, and scripts
@@ -147,6 +147,10 @@ Folders of any size are accepted; the scan shows a real-time count of fonts foun
 
 ### 快速示例 | Quick Examples
 
+下面示例中的 `<font-folder>`、`<series-folder>` 等都是占位符；请替换成你自己电脑上的实际路径。
+
+Placeholders such as `<font-folder>` and `<series-folder>` mean your own local paths; replace them before running the commands.
+
 ```text
 # HDR 色彩转换（PQ 曲线）/ HDR conversion (PQ curve)
 ssahdrify-cli hdr --eotf pq input.ass
@@ -155,20 +159,20 @@ ssahdrify-cli hdr --eotf pq input.ass
 ssahdrify-cli shift --offset +500ms input.ass
 
 # 字体嵌入：从指定文件夹查找字体 / Font embed: search a folder for fonts
-ssahdrify-cli embed --font-dir "C:/Fonts" input.ass
+ssahdrify-cli embed --font-dir "<font-folder>" input.ass
 
 # 字体解析诊断：不写输出文件 / Font diagnostics: no output subtitle writes
-ssahdrify-cli diagnose-fonts --font-dir "C:/Fonts" input.ass
+ssahdrify-cli diagnose-fonts --font-dir "<font-folder>" input.ass
 
 # 持久化字体缓存：先扫描一次，后续 embed 复用 / Persistent font cache: scan once, reuse later
-ssahdrify-cli refresh-fonts --font-dir "C:/Fonts"
+ssahdrify-cli refresh-fonts --font-dir "<font-folder>"
 ssahdrify-cli embed input.ass            # 自动使用缓存 / uses cache automatically
 
 # 链式调用：一次完成 HDR 转换和时间轴偏移，只有最后一步写文件 / Chain: HDR + shift in one command, only the final step writes
 ssahdrify-cli chain hdr --eotf pq + shift --offset +500ms input.ass
 
 # 批量重命名：默认复制到视频所在目录 / Batch rename (default: copy sub next to video)
-ssahdrify-cli rename "C:/My Series"
+ssahdrify-cli rename "<series-folder>"
 ```
 
 ### 全部子命令 | All Subcommands
@@ -234,13 +238,13 @@ ssahdrify-cli chain          --help
 ssahdrify-cli embed --diagnose input.ass
 
 # 附加完整诊断 / Attach full diagnostics
-ssahdrify-cli embed --diagnose=full --font-dir "C:/Fonts" input.ass
+ssahdrify-cli embed --diagnose=full --font-dir "<font-folder>" input.ass
 
 # 只诊断字体解析，不写字幕 / Diagnose font resolution only, no subtitle writes
-ssahdrify-cli diagnose-fonts --font-dir "C:/Fonts" input.ass
+ssahdrify-cli diagnose-fonts --font-dir "<font-folder>" input.ass
 
 # 下游打包必须完整嵌入字体时推荐 / Recommended when downstream packaging requires every font
-ssahdrify-cli embed --font-dir "C:/Fonts" --on-missing fail --fail-fast --diagnose input.ass
+ssahdrify-cli embed --font-dir "<font-folder>" --on-missing fail --fail-fast --diagnose input.ass
 ```
 
 `embed` 默认仍使用 `--on-missing warn`：能嵌入的字体会继续嵌入，缺失或子集化失败的字体会变成 warning。此时输出文件可能已经写出，但 summary 会明确显示 `written with warnings / incomplete`，避免把部分成功误读成“全部字体都成功”。
@@ -257,20 +261,20 @@ The `embed` subcommand normally rescans every `--font-dir` on each invocation to
 
 ```bash
 # 一次性扫描字体目录，构建缓存 / Scan once to build the cache
-ssahdrify-cli refresh-fonts --font-dir "C:/Fonts/Anime" --font-dir "C:/Fonts/Latin"
+ssahdrify-cli refresh-fonts --font-dir "<anime-font-folder>" --font-dir "<latin-font-folder>"
 
 # 后续 embed 自动复用缓存（不再扫描） / Subsequent embed uses cache (no scan)
 ssahdrify-cli embed input.ass
 
 # 也可以继续加 --font-dir，临时合并额外字体源（缓存 + 额外目录） /
 # You can still pass --font-dir to merge extra dirs with the cache
-ssahdrify-cli embed --font-dir "C:/Fonts/Project-Specific" input.ass
+ssahdrify-cli embed --font-dir "<project-font-folder>" input.ass
 
 # 本次强制不用缓存 / Force no-cache for one run
-ssahdrify-cli --no-cache embed --font-dir "C:/Fonts" input.ass
+ssahdrify-cli --no-cache embed --font-dir "<font-folder>" input.ass
 
 # 字体目录变更后刷新缓存 / Refresh cache after fonts change
-ssahdrify-cli refresh-fonts --font-dir "C:/Fonts/Anime" --font-dir "C:/Fonts/Latin"
+ssahdrify-cli refresh-fonts --font-dir "<anime-font-folder>" --font-dir "<latin-font-folder>"
 ```
 
 #### 缓存位置 | Cache Location
@@ -432,7 +436,7 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端测试 / Rust bac
 │  Tauri 2 + React +           │ │  clap (argv parsing)                        │
 │  Tailwind frontend           │ │  deno_core / V8 (embedded JS bundle)        │
 │  - 4 tabs                    │ │  - feature and utility subcommands          │
-│  - i18n (zh/en),             │ │  - JSON reports for hdr/shift/embed/rename  │
+│  - i18n (zh/en),             │ │  - JSON reports + font diagnostics          │
 │    dark/light/auto theme     │ │  - env_logger (stderr warnings)             │
 │  - FontSourceModal UI        │ │  - sys-locale (--lang auto)                 │
 └──────────────┬───────────────┘ └─────────────────────┬───────────────────────┘
@@ -444,7 +448,7 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端测试 / Rust bac
 ┌───────────────────────────────────┴──────────────────────────────────────────┐
 │  Shared Rust crates                                                          │
 │  - font-kit (system font discovery + matching)                               │
-│  - fontcull / fontcull-skrifa (subsetting + name-table reader)               │
+│  - fontcull stack (subsetting + name-table reader)                           │
 │  - chardetng + encoding_rs (encoding detection + conversion)                 │
 │  - serde / serde_json (serialization)                                        │
 │  - rusqlite (font cache + user font index)                                   │
@@ -511,7 +515,6 @@ The tables below list the main direct dependencies and bundled assets; the full 
 | [React Window](https://github.com/bvaughn/react-window)                      | MIT                                  | 大列表虚拟滚动 / Virtualized large lists                                                                       |
 | [Color.js](https://colorjs.io/)                                              | MIT                                  | HDR 色彩空间转换 (PQ/HLG) / HDR color space conversion                                                         |
 | [ass-compiler](https://github.com/weizhenye/ass-compiler)                    | MIT                                  | ASS 字幕解析（字体收集）/ ASS subtitle parsing for font collection                                             |
-| [js-base64](https://github.com/dankogai/js-base64)                           | BSD-3-Clause                         | 前端与 CLI chain 字体载荷 base64 解码 / Base64 decoding for frontend and CLI chain font payloads               |
 | [font-kit](https://github.com/servo/font-kit)                                | MIT OR Apache-2.0                    | 跨平台系统字体发现 (Rust) / Cross-platform system font discovery                                               |
 | [fontcull](https://github.com/bearcove/fontcull)                             | MIT / MIT OR Apache-2.0              | 字体子集化（含 fontcull-klippa、fontcull-skrifa）/ Font subsetting (includes fontcull-klippa, fontcull-skrifa) |
 | [chardetng](https://github.com/hsivonen/chardetng)                           | MIT OR Apache-2.0                    | 编码检测 (Firefox 引擎) / Encoding detection (Firefox's engine)                                                |
@@ -540,14 +543,15 @@ The tables below list the main direct dependencies and bundled assets; the full 
 
 #### 构建时依赖（不随应用分发）| Build-time only (not shipped)
 
-| 组件 / Component                              | 许可证 / License  | 用途 / Usage                                                    |
-| --------------------------------------------- | ----------------- | --------------------------------------------------------------- |
-| [Tailwind CSS](https://tailwindcss.com/)      | MIT               | CSS 工具框架 / CSS utility framework                            |
-| [TypeScript](https://www.typescriptlang.org/) | Apache-2.0        | 类型检查 / Type checking                                        |
-| [Vite](https://vite.dev/)                     | MIT               | 构建工具 / Build tool                                           |
-| [Tauri CLI](https://tauri.app/)               | MIT OR Apache-2.0 | Tauri 构建入口 / Tauri build entry point                        |
-| [ESLint](https://eslint.org/)                 | MIT               | 代码检查 / Linting                                              |
-| [Stylelint](https://stylelint.io/)            | MIT               | CSS 代码检查 / CSS linting                                      |
-| [Prettier](https://prettier.io/)              | MIT               | 代码格式化 / Code formatter                                     |
-| [Vitest](https://vitest.dev/)                 | MIT               | 单元测试 / Unit testing                                         |
-| [esbuild](https://esbuild.github.io/)         | MIT               | 为 CLI 嵌入打包 engine.js / Bundles engine.js for CLI embedding |
+| 组件 / Component                                   | 许可证 / License  | 用途 / Usage                                                           |
+| -------------------------------------------------- | ----------------- | ---------------------------------------------------------------------- |
+| [Tailwind CSS](https://tailwindcss.com/)           | MIT               | CSS 工具框架 / CSS utility framework                                   |
+| [TypeScript](https://www.typescriptlang.org/)      | Apache-2.0        | 类型检查 / Type checking                                               |
+| [Vite](https://vite.dev/)                          | MIT               | 构建工具 / Build tool                                                  |
+| [Tauri CLI](https://tauri.app/)                    | MIT OR Apache-2.0 | Tauri 构建入口 / Tauri build entry point                               |
+| [ESLint](https://eslint.org/)                      | MIT               | 代码检查 / Linting                                                     |
+| [Stylelint](https://stylelint.io/)                 | MIT               | CSS 代码检查 / CSS linting                                             |
+| [Prettier](https://prettier.io/)                   | MIT               | 代码格式化 / Code formatter                                            |
+| [Vitest](https://vitest.dev/)                      | MIT               | 单元测试 / Unit testing                                                |
+| [js-base64](https://github.com/dankogai/js-base64) | BSD-3-Clause      | 测试侧 base64 wire-format 编码 / Test-side base64 wire-format encoding |
+| [esbuild](https://esbuild.github.io/)              | MIT               | 为 CLI 嵌入打包 engine.js / Bundles engine.js for CLI embedding        |
