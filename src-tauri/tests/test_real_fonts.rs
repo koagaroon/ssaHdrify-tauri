@@ -219,6 +219,105 @@ fn write_multi_family_ass_fixture(dir: &Path, file_name: &str, families: &[Strin
     path
 }
 
+fn ass_font_uudecode(encoded: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    for group in encoded.as_bytes().chunks(4) {
+        assert!(
+            group.len() >= 2,
+            "ASS embedded-font payload ended with an invalid 1-char group"
+        );
+        let mut vals = [0u8; 4];
+        for (index, byte) in group.iter().enumerate() {
+            vals[index] = byte
+                .checked_sub(33)
+                .expect("ASS embedded-font byte below printable alphabet");
+        }
+
+        let decoded = [
+            (vals[0] << 2) | (vals[1] >> 4),
+            ((vals[1] & 0x0f) << 4) | (vals[2] >> 2),
+            ((vals[2] & 0x03) << 6) | vals[3],
+        ];
+        let count = if group.len() == 4 { 3 } else { group.len() - 1 };
+        out.extend_from_slice(&decoded[..count]);
+    }
+    out
+}
+
+fn first_embedded_font(path: &Path) -> (String, Vec<u8>) {
+    let text = fs::read_to_string(path).expect("read embedded ASS output");
+    let mut in_fonts = false;
+    let mut font_name: Option<String> = None;
+    let mut encoded = String::new();
+
+    for line in text.lines() {
+        if line == "[Fonts]" {
+            in_fonts = true;
+            continue;
+        }
+        if !in_fonts {
+            continue;
+        }
+        if line.starts_with('[') {
+            break;
+        }
+        if let Some(name) = line.strip_prefix("fontname: ") {
+            if font_name.is_some() {
+                break;
+            }
+            font_name = Some(name.to_string());
+            continue;
+        }
+        if font_name.is_some() && !line.is_empty() {
+            encoded.push_str(line);
+        }
+    }
+
+    let font_name = font_name.expect("embedded ASS output should contain a fontname header");
+    assert!(
+        !encoded.is_empty(),
+        "embedded ASS output should contain encoded font data for {font_name}"
+    );
+    (font_name, ass_font_uudecode(&encoded))
+}
+
+fn utf16be_pattern(value: &str) -> Vec<u8> {
+    value
+        .encode_utf16()
+        .flat_map(|unit| unit.to_be_bytes())
+        .collect()
+}
+
+fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty()
+        && haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
+}
+
+fn assert_dream_han_ttc_embeds_as_named_single_face_subset(output: &Path) {
+    let (font_name, data) = first_embedded_font(output);
+    assert_eq!(
+        font_name, "dream_han_serif_sc_w22.ttf",
+        "the visible ASS fontname is a generated attachment label"
+    );
+    assert!(
+        data.starts_with(b"\0\x01\0\0"),
+        "Dream Han W22 TTC should embed as a single-face TrueType subset, not a TTC collection"
+    );
+    assert!(
+        !data.starts_with(b"ttcf"),
+        "embedded Dream Han payload must not remain a TTC collection"
+    );
+    for name in ["Dream Han Serif SC W22", "DreamHanSerifSC-W22"] {
+        let pattern = utf16be_pattern(name);
+        assert!(
+            contains_bytes(&data, &pattern),
+            "embedded Dream Han subset should preserve name-table alias {name}"
+        );
+    }
+}
+
 fn lookup_first(cache: &FontCache, families: &[&str]) -> Option<String> {
     families
         .iter()
@@ -614,6 +713,9 @@ fn dream_han_serif_face_names_resolve_across_local_cache_and_embed_paths() {
             output_dir.display()
         );
     }
+    assert_dream_han_ttc_embeds_as_named_single_face_subset(
+        &out_normal.join("dreamhan-sc-w22.embed.ass"),
+    );
 
     let _ = fs::remove_dir_all(work);
 }

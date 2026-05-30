@@ -122,6 +122,10 @@ Folders of any size are accepted; the scan shows a real-time count of fonts foun
 > 工具会读取字体文件的 OpenType `name` 表，并索引**所有**语言变体（英文、中文、Typographic 名等）。ASS 脚本无论引用哪个名称，都能匹配到同一个字体文件；`@家族名` 这类竖排前缀也会按同一字体处理。
 >
 > The tool reads each font's OpenType `name` table and indexes **every** localized family-name variant (English, Chinese, Typographic, etc.). An ASS script referencing any of those names resolves to the same font file; the ASS `@FamilyName` vertical-writing prefix is treated as the same font.
+>
+> 对 `.ttc` / `.otc` 字体集合，工具会按匹配到的 face index 抽出对应字形并嵌入为单 face 子集。ASS `[Fonts]` 里的 `fontname:` 是生成的嵌入项标签，例如 `dream_han_serif_sc_w22.ttf`，不代表源文件必须是 `.ttf`；实际匹配依赖子集字体内部保留的 `name` 表。
+>
+> For `.ttc` / `.otc` collections, the matched face index is subset into a single-face embedded font. The ASS `[Fonts]` `fontname:` line is a generated attachment label, such as `dream_han_serif_sc_w22.ttf`; it does not mean the source file had to be `.ttf`. Matching relies on the preserved internal `name` table in the subset font.
 
 ### 批量重命名 / Batch Rename
 
