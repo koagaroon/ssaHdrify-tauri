@@ -1125,6 +1125,8 @@ const MAX_FAMILY_VARIANTS_PER_FACE: usize = 8;
 const MAX_FACE_NAME_VARIANTS_PER_FACE: usize = 8;
 const MAX_LEGACY_NAME_RECORD_BYTES: usize = 4096;
 const MAX_LEGACY_NAME_DECODE_ATTEMPTS_PER_FACE: usize = 256;
+const MAX_CMAP12_ENCODING_RECORDS_PER_FACE: usize = 1024;
+const MAX_CMAP12_SUBTABLES_PER_FACE: usize = 128;
 const MAX_CMAP12_GROUPS_PER_FACE: usize = 65_536;
 const MAX_CMAP12_REWRITE_OFFSETS_PER_FACE: usize = 4_096;
 
@@ -1303,7 +1305,13 @@ fn sanitize_cmap12_invalid_groups(
     let mut earliest_subtable_rel: Option<usize> = None;
     let max_record_count = cmap_len.saturating_sub(4) / 8;
     let record_count = record_count.min(max_record_count);
+    if record_count > MAX_CMAP12_ENCODING_RECORDS_PER_FACE {
+        return Err(format!(
+            "cmap encoding record count {record_count} exceeds max {MAX_CMAP12_ENCODING_RECORDS_PER_FACE}"
+        ));
+    }
     let mut scanned_subtables = HashSet::new();
+    let mut scanned_cmap12_groups = 0usize;
     let mut skip_group_offsets = HashSet::new();
     let mut clamp_end_offsets = HashSet::new();
     for record_index in 0..record_count {
@@ -1339,6 +1347,11 @@ fn sanitize_cmap12_invalid_groups(
         if !scanned_subtables.insert(subtable_offset) {
             continue;
         }
+        if scanned_subtables.len() > MAX_CMAP12_SUBTABLES_PER_FACE {
+            return Err(format!(
+                "cmap subtable count exceeds max {MAX_CMAP12_SUBTABLES_PER_FACE}"
+            ));
+        }
         if read_be_u16(font_data, subtable_offset) != Some(12) {
             continue;
         }
@@ -1362,9 +1375,12 @@ fn sanitize_cmap12_invalid_groups(
         };
         let max_group_count = length.saturating_sub(16) / 12;
         let group_count = group_count.min(max_group_count);
-        if group_count > MAX_CMAP12_GROUPS_PER_FACE {
+        scanned_cmap12_groups = scanned_cmap12_groups
+            .checked_add(group_count)
+            .ok_or_else(|| "cmap format-12 group count overflowed".to_string())?;
+        if scanned_cmap12_groups > MAX_CMAP12_GROUPS_PER_FACE {
             return Err(format!(
-                "cmap format-12 group count {group_count} exceeds max {MAX_CMAP12_GROUPS_PER_FACE}"
+                "cmap format-12 group count {scanned_cmap12_groups} exceeds max {MAX_CMAP12_GROUPS_PER_FACE}"
             ));
         }
         let groups_offset = subtable_offset + 16;
@@ -4273,6 +4289,49 @@ mod tests {
         font
     }
 
+    fn cmap12_subtable_with_group_count(group_count: usize) -> Vec<u8> {
+        let subtable_length = 16 + group_count as u32 * 12;
+        let mut subtable = Vec::new();
+        subtable.extend_from_slice(&12u16.to_be_bytes());
+        subtable.extend_from_slice(&0u16.to_be_bytes());
+        subtable.extend_from_slice(&subtable_length.to_be_bytes());
+        subtable.extend_from_slice(&0u32.to_be_bytes());
+        subtable.extend_from_slice(&(group_count as u32).to_be_bytes());
+        for index in 0..group_count {
+            let codepoint = 0x20 + u32::try_from(index % 64).expect("test index fits");
+            subtable.extend_from_slice(&codepoint.to_be_bytes());
+            subtable.extend_from_slice(&codepoint.to_be_bytes());
+            subtable.extend_from_slice(&1u32.to_be_bytes());
+        }
+        subtable
+    }
+
+    fn cmap_with_format12_subtables(group_counts: &[usize]) -> Vec<u8> {
+        let record_count = group_counts.len();
+        let records_len = 4 + record_count * 8;
+        let mut subtables = Vec::new();
+        let mut subtable_offsets = Vec::new();
+        for group_count in group_counts {
+            subtable_offsets.push(records_len + subtables.len());
+            subtables.extend_from_slice(&cmap12_subtable_with_group_count(*group_count));
+        }
+
+        let mut cmap = Vec::new();
+        cmap.extend_from_slice(&0u16.to_be_bytes());
+        cmap.extend_from_slice(
+            &(u16::try_from(record_count).expect("test record count fits")).to_be_bytes(),
+        );
+        for offset in subtable_offsets {
+            cmap.extend_from_slice(&0u16.to_be_bytes());
+            cmap.extend_from_slice(&4u16.to_be_bytes());
+            cmap.extend_from_slice(
+                &(u32::try_from(offset).expect("test offset fits")).to_be_bytes(),
+            );
+        }
+        cmap.extend_from_slice(&subtables);
+        cmap
+    }
+
     fn utf16be_test_bytes(value: &str) -> Vec<u8> {
         value
             .encode_utf16()
@@ -4396,35 +4455,72 @@ mod tests {
 
     #[test]
     fn sanitize_cmap12_invalid_groups_rejects_excessive_group_count() {
-        let subtable_offset = 12u32;
         let group_count = MAX_CMAP12_GROUPS_PER_FACE + 1;
-        let subtable_length = 16 + group_count as u32 * 12;
-
-        let mut cmap = Vec::new();
-        cmap.extend_from_slice(&0u16.to_be_bytes());
-        cmap.extend_from_slice(&1u16.to_be_bytes());
-        cmap.extend_from_slice(&0u16.to_be_bytes());
-        cmap.extend_from_slice(&4u16.to_be_bytes());
-        cmap.extend_from_slice(&subtable_offset.to_be_bytes());
-        assert_eq!(cmap.len(), subtable_offset as usize);
-        cmap.extend_from_slice(&12u16.to_be_bytes());
-        cmap.extend_from_slice(&0u16.to_be_bytes());
-        cmap.extend_from_slice(&subtable_length.to_be_bytes());
-        cmap.extend_from_slice(&0u32.to_be_bytes());
-        cmap.extend_from_slice(&(group_count as u32).to_be_bytes());
-        for index in 0..group_count {
-            let start = 0x20 + u32::try_from(index % 64).expect("test index fits");
-            cmap.extend_from_slice(&start.to_be_bytes());
-            cmap.extend_from_slice(&start.to_be_bytes());
-            cmap.extend_from_slice(&1u32.to_be_bytes());
-        }
-
+        let cmap = cmap_with_format12_subtables(&[group_count]);
         let font = font_with_single_table(b"cmap", &cmap);
         let err = sanitize_cmap12_invalid_groups(&font, 0)
             .expect_err("excessive cmap format-12 groups must be rejected");
         assert!(
             err.contains("group count"),
             "error should identify cmap group-count cap: {err}"
+        );
+    }
+
+    #[test]
+    fn sanitize_cmap12_invalid_groups_rejects_cumulative_group_count() {
+        let first_count = MAX_CMAP12_GROUPS_PER_FACE / 2 + 1;
+        let second_count = MAX_CMAP12_GROUPS_PER_FACE - first_count + 1;
+        let cmap = cmap_with_format12_subtables(&[first_count, second_count]);
+        let font = font_with_single_table(b"cmap", &cmap);
+
+        let err = sanitize_cmap12_invalid_groups(&font, 0)
+            .expect_err("cumulative cmap format-12 groups must be rejected");
+
+        assert!(
+            err.contains("group count"),
+            "error should identify cumulative cmap group-count cap: {err}"
+        );
+    }
+
+    #[test]
+    fn sanitize_cmap12_invalid_groups_rejects_excessive_encoding_records() {
+        let record_count = MAX_CMAP12_ENCODING_RECORDS_PER_FACE + 1;
+        let first_subtable_rel = 4 + record_count * 8;
+        let mut cmap = Vec::new();
+        cmap.extend_from_slice(&0u16.to_be_bytes());
+        cmap.extend_from_slice(
+            &(u16::try_from(record_count).expect("test record count fits")).to_be_bytes(),
+        );
+        for _ in 0..record_count {
+            cmap.extend_from_slice(&0u16.to_be_bytes());
+            cmap.extend_from_slice(&4u16.to_be_bytes());
+            cmap.extend_from_slice(
+                &(u32::try_from(first_subtable_rel).expect("test offset fits")).to_be_bytes(),
+            );
+        }
+        let font = font_with_single_table(b"cmap", &cmap);
+
+        let err = sanitize_cmap12_invalid_groups(&font, 0)
+            .expect_err("excessive cmap encoding records must be rejected");
+
+        assert!(
+            err.contains("encoding record count"),
+            "error should identify cmap encoding-record cap: {err}"
+        );
+    }
+
+    #[test]
+    fn sanitize_cmap12_invalid_groups_rejects_excessive_unique_subtables() {
+        let group_counts = vec![0usize; MAX_CMAP12_SUBTABLES_PER_FACE + 1];
+        let cmap = cmap_with_format12_subtables(&group_counts);
+        let font = font_with_single_table(b"cmap", &cmap);
+
+        let err = sanitize_cmap12_invalid_groups(&font, 0)
+            .expect_err("excessive cmap subtables must be rejected");
+
+        assert!(
+            err.contains("subtable count"),
+            "error should identify cmap subtable-count cap: {err}"
         );
     }
 
