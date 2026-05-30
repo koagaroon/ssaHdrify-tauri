@@ -3463,7 +3463,7 @@ fn push_subset_budget_warning_once(
     let Some(error) = &budget.exhausted_reason else {
         return;
     };
-    warnings.push(format!("font subset check skipped: {error}"));
+    warnings.push(format!("font subset check budget exhausted: {error}"));
     *emitted = true;
 }
 
@@ -7043,10 +7043,19 @@ mod tests {
 
         fs::write(dir.join(USER_FONT_DB_FILENAME), b"db").unwrap();
         fs::write(dir.join(format!("{USER_FONT_DB_FILENAME}-wal")), b"wal").unwrap();
+        app_lib::fonts::init_user_font_db(&dir).unwrap();
         let guard = TempFontDbDir(dir.clone());
         drop(guard);
 
         assert!(!dir.exists());
+        let result = app_lib::fonts::resolve_user_font("Arial".to_string(), false, false);
+        let Err(error) = result else {
+            panic!("dropped CLI temp DB guard should clear the global DB path");
+        };
+        assert!(
+            error.contains("not initialized"),
+            "dropped CLI temp DB guard should fail shut after cleanup: {error}"
+        );
     }
 
     // ── substitute_template — regression coverage ──

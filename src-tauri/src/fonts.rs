@@ -1339,8 +1339,9 @@ fn sanitize_cmap12_invalid_groups(
         if subtable_rel >= cmap_len {
             continue;
         }
-        earliest_subtable_rel =
-            Some(earliest_subtable_rel.map_or(subtable_rel, |current| current.min(subtable_rel)));
+        if subtable_rel < record_rel.saturating_add(8) {
+            continue;
+        }
         let Some(subtable_offset) = cmap_offset.checked_add(subtable_rel) else {
             continue;
         };
@@ -1367,6 +1368,8 @@ fn sanitize_cmap12_invalid_groups(
         if length < 16 || subtable_end > cmap_end || subtable_end > font_data.len() {
             continue;
         }
+        earliest_subtable_rel =
+            Some(earliest_subtable_rel.map_or(subtable_rel, |current| current.min(subtable_rel)));
         let Some(group_count) = read_be_u32(font_data, subtable_offset + 12) else {
             continue;
         };
@@ -4521,6 +4524,52 @@ mod tests {
         assert!(
             err.contains("subtable count"),
             "error should identify cmap subtable-count cap: {err}"
+        );
+    }
+
+    #[test]
+    fn sanitize_cmap12_invalid_groups_ignores_bogus_early_offset_before_later_record() {
+        let real_subtable_rel = 20u32;
+        let invalid_group = [UNICODE_SCALAR_MAX + 1, UNICODE_SCALAR_MAX + 1, 7u32];
+
+        let mut cmap = Vec::new();
+        cmap.extend_from_slice(&0u16.to_be_bytes());
+        cmap.extend_from_slice(&2u16.to_be_bytes());
+        cmap.extend_from_slice(&0u16.to_be_bytes());
+        cmap.extend_from_slice(&4u16.to_be_bytes());
+        cmap.extend_from_slice(&12u32.to_be_bytes());
+        assert_eq!(cmap.len(), 12);
+        cmap.extend_from_slice(&0u16.to_be_bytes());
+        cmap.extend_from_slice(&4u16.to_be_bytes());
+        cmap.extend_from_slice(&real_subtable_rel.to_be_bytes());
+        assert_eq!(cmap.len(), real_subtable_rel as usize);
+        cmap.extend_from_slice(&12u16.to_be_bytes());
+        cmap.extend_from_slice(&0u16.to_be_bytes());
+        cmap.extend_from_slice(&28u32.to_be_bytes());
+        cmap.extend_from_slice(&0u32.to_be_bytes());
+        cmap.extend_from_slice(&1u32.to_be_bytes());
+        for value in invalid_group {
+            cmap.extend_from_slice(&value.to_be_bytes());
+        }
+
+        let font = font_with_single_table(b"cmap", &cmap);
+        let (sanitized, count) =
+            sanitize_cmap12_invalid_groups(&font, 0).expect("later record should be scanned");
+
+        assert_eq!(count, 1);
+        let sanitized = sanitized.as_ref();
+        let group_offset = 28usize + real_subtable_rel as usize + 16;
+        assert_eq!(
+            read_be_u32(sanitized, group_offset),
+            Some(UNICODE_SCALAR_MAX)
+        );
+        assert_eq!(
+            read_be_u32(sanitized, group_offset + 4),
+            Some(UNICODE_SCALAR_MAX)
+        );
+        assert_eq!(
+            read_be_u32(sanitized, group_offset + 8),
+            Some(SKIP_CMAP12_GROUP_GLYPH_ID)
         );
     }
 
