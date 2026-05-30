@@ -943,6 +943,8 @@ struct ResolvedEmbedFont {
     font_name: String,
     path: String,
     index: u32,
+    bold: bool,
+    italic: bool,
     codepoints: Vec<u32>,
 }
 
@@ -4531,6 +4533,8 @@ fn resolve_embed_fonts(
             font_name: font.font_name.clone(),
             path,
             index,
+            bold: font.bold,
+            italic: font.italic,
             codepoints: font.codepoints.clone(),
         });
     }
@@ -4571,6 +4575,12 @@ fn apply_effective_embedded_font_names(
 ) {
     let face_groups = group_resolved_fonts_by_face(resolved);
     for group in face_groups.values() {
+        if group
+            .merged_codepoints_with_cap(MAX_SUBSET_CODEPOINTS_FOR_DEDUP)
+            .is_err()
+        {
+            continue;
+        }
         let effective_name = group.template().font_name.as_str();
         for alias in &group.aliases {
             if let Some(diagnostic) = diagnostics.iter_mut().find(|diagnostic| {
@@ -4579,6 +4589,8 @@ fn apply_effective_embedded_font_names(
                     && diagnostic.embedded_font_name == alias.font_name
                     && diagnostic.path.as_deref() == Some(alias.path.as_str())
                     && diagnostic.index == Some(alias.index)
+                    && diagnostic.bold == alias.bold
+                    && diagnostic.italic == alias.italic
             }) {
                 diagnostic.mark_effective_embedded_font_name(effective_name);
             }
@@ -4595,7 +4607,8 @@ fn apply_effective_embedded_font_names(
 /// to non-zero. With `--fail-fast` on top, the batch also
 /// short-circuits at the per-file boundary.
 ///
-/// Dedup by resolved `(path, index)` face: family aliases that
+/// Dedup by resolved `(path, index, bold, italic)` face/style tuple:
+/// family aliases that
 /// resolve to the same face (e.g., the English `Microsoft YaHei`
 /// and Chinese `微软雅黑` both pointing at `msyh.ttc` face 0)
 /// otherwise subset twice and embed byte-identical payloads under
@@ -4608,7 +4621,7 @@ fn apply_effective_embedded_font_names(
 /// without routing through `embedFonts()`.
 /// Output of `group_resolved_fonts_by_face`: one entry per unique
 /// resolved face. `aliases` holds every ResolvedEmbedFont that
-/// resolved to this `(path, index)` tuple (in insertion order, so
+/// resolved to this `(path, index, bold, italic)` tuple (in insertion order, so
 /// `aliases[0]` is the first-seen alias and serves as the dedup
 /// template — its `font_name` drives the eventual `[Fonts]` entry
 /// filename in the dedup-happy path). `labels` is the deduplicated
@@ -4662,23 +4675,24 @@ impl<'a> ResolvedFaceGroup<'a> {
     }
 }
 
-/// Group resolved fonts by `(path, index)` so family aliases that
-/// resolve to the same underlying face produce one subset call
+/// Group resolved fonts by `(path, index, bold, italic)` so family
+/// aliases that resolve to the same underlying face/style produce one subset call
 /// instead of N byte-identical ones. Pure helper extracted for
 /// unit-test access; see the test module for boundary coverage
 /// (single alias, two aliases collapse, TTC face 0 vs 1 stay
-/// distinct, label list preserves every alias for diagnostics).
+/// distinct, style flags stay distinct, label list preserves every
+/// alias for diagnostics).
 ///
 /// BTreeMap keeps deterministic iteration so `[Fonts]` entries are
 /// stable across runs on the same input — easier to diff outputs
 /// when investigating embed differences across versions.
 fn group_resolved_fonts_by_face(
     fonts: &[ResolvedEmbedFont],
-) -> std::collections::BTreeMap<(String, u32), ResolvedFaceGroup<'_>> {
-    let mut face_groups: std::collections::BTreeMap<(String, u32), ResolvedFaceGroup> =
+) -> std::collections::BTreeMap<(String, u32, bool, bool), ResolvedFaceGroup<'_>> {
+    let mut face_groups: std::collections::BTreeMap<(String, u32, bool, bool), ResolvedFaceGroup> =
         std::collections::BTreeMap::new();
     for font in fonts {
-        let key = (font.path.clone(), font.index);
+        let key = (font.path.clone(), font.index, font.bold, font.italic);
         match face_groups.get_mut(&key) {
             Some(group) => {
                 group.aliases.push(font);
@@ -7371,6 +7385,27 @@ mod tests {
             font_name: font_name.to_string(),
             path: path.to_string(),
             index,
+            bold: false,
+            italic: false,
+            codepoints: codepoints.to_vec(),
+        }
+    }
+
+    fn make_resolved_with_style(
+        label: &str,
+        path: &str,
+        index: u32,
+        bold: bool,
+        italic: bool,
+        codepoints: &[u32],
+    ) -> ResolvedEmbedFont {
+        ResolvedEmbedFont {
+            label: label.to_string(),
+            font_name: format!("{label}.ttf"),
+            path: path.to_string(),
+            index,
+            bold,
+            italic,
             codepoints: codepoints.to_vec(),
         }
     }
@@ -7382,8 +7417,8 @@ mod tests {
     fn diagnostic_for_resolved(font: &ResolvedEmbedFont) -> FontDiagnostic {
         let usage = engine::FontEmbedUsage {
             family: font.label.clone(),
-            bold: false,
-            italic: false,
+            bold: font.bold,
+            italic: font.italic,
             label: font.label.clone(),
             font_name: font.font_name.clone(),
             glyph_count: font.codepoints.len(),
@@ -7456,6 +7491,28 @@ mod tests {
     }
 
     #[test]
+    fn effective_embedded_font_name_keeps_alias_labels_for_over_cap_fallback() {
+        let aliases = vec![
+            make_resolved_range("A", "/fonts/face.ttf", 0x010000, 70_000),
+            make_resolved_range("B", "/fonts/face.ttf", 0x020000, 70_000),
+            make_resolved_range("C", "/fonts/face.ttf", 0x030000, 70_000),
+        ];
+        let mut diagnostics: Vec<_> = aliases.iter().map(diagnostic_for_resolved).collect();
+
+        apply_effective_embedded_font_names(&aliases, &mut diagnostics);
+
+        assert_eq!(diagnostics[0].embedded_font_name, "A.ttf");
+        assert_eq!(diagnostics[1].embedded_font_name, "B.ttf");
+        assert_eq!(diagnostics[2].embedded_font_name, "C.ttf");
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.requested_embedded_font_name.is_none()),
+            "over-cap fallback emits per-alias labels, so diagnostics must not rewrite them"
+        );
+    }
+
+    #[test]
     fn diagnostic_subset_budget_skips_when_call_cap_is_reached() {
         let mut budget = DiagnosticSubsetBudget {
             calls: MAX_DIAGNOSTIC_SUBSET_CALLS,
@@ -7513,8 +7570,43 @@ mod tests {
         let groups = group_resolved_fonts_by_face(&inputs);
         assert_eq!(groups.len(), 2);
         // Both face indices present as map keys.
-        let indices: std::collections::BTreeSet<u32> = groups.keys().map(|(_, i)| *i).collect();
+        let indices: std::collections::BTreeSet<u32> =
+            groups.keys().map(|(_, i, _, _)| *i).collect();
         assert_eq!(indices, [0u32, 1u32].into_iter().collect());
+    }
+
+    #[test]
+    fn group_resolved_fonts_keeps_style_flags_distinct_on_same_face() {
+        let inputs = vec![
+            make_resolved_with_style(
+                "Face Regular",
+                "/fonts/family.ttc",
+                0,
+                false,
+                false,
+                &[0x41],
+            ),
+            make_resolved_with_style("Face Bold", "/fonts/family.ttc", 0, true, false, &[0x42]),
+            make_resolved_with_style("Face Italic", "/fonts/family.ttc", 0, false, true, &[0x43]),
+        ];
+
+        let groups = group_resolved_fonts_by_face(&inputs);
+
+        assert_eq!(
+            groups.len(),
+            3,
+            "same path/index with different ASS style flags must not dedup"
+        );
+        let styles: std::collections::BTreeSet<(bool, bool)> = groups
+            .keys()
+            .map(|(_, _, bold, italic)| (*bold, *italic))
+            .collect();
+        assert_eq!(
+            styles,
+            [(false, false), (true, false), (false, true)]
+                .into_iter()
+                .collect()
+        );
     }
 
     #[test]
@@ -7576,6 +7668,8 @@ mod tests {
             font_name: format!("{label}.ttf"),
             path: path.to_string(),
             index: 0,
+            bold: false,
+            italic: false,
             codepoints,
         }
     }
