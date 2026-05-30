@@ -732,6 +732,8 @@ struct FontDiagnostic {
     label: String,
     family: String,
     embedded_font_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    requested_embedded_font_name: Option<String>,
     bold: bool,
     italic: bool,
     glyph_count: usize,
@@ -811,6 +813,7 @@ impl FontDiagnostic {
             label: font.label.clone(),
             family: font.family.clone(),
             embedded_font_name: font.font_name.clone(),
+            requested_embedded_font_name: None,
             bold: font.bold,
             italic: font.italic,
             glyph_count: font.glyph_count,
@@ -850,6 +853,13 @@ impl FontDiagnostic {
     fn mark_error(&mut self, error: String) {
         self.result = FontResolutionResult::Error;
         self.error = Some(error);
+    }
+
+    fn mark_effective_embedded_font_name(&mut self, effective_name: &str) {
+        if self.embedded_font_name != effective_name {
+            self.requested_embedded_font_name = Some(self.embedded_font_name.clone());
+            self.embedded_font_name = effective_name.to_string();
+        }
     }
 }
 
@@ -3467,6 +3477,9 @@ fn emit_standalone_font_diagnostics(globals: &GlobalOptions, diagnostics: &Comma
             "  embedded label: {}",
             sanitize_for_display(&font.embedded_font_name)
         );
+        if let Some(requested) = &font.requested_embedded_font_name {
+            println!("  requested label: {}", sanitize_for_display(requested));
+        }
         if let Some(check) = &font.subset_check {
             println!("  subset check: {}", format_subset_check_summary(check));
         }
@@ -4431,6 +4444,10 @@ fn resolve_embed_fonts(
         }
     }
 
+    if collect_diagnostics {
+        apply_effective_embedded_font_names(&resolved, &mut diagnostics);
+    }
+
     let warnings = missing
         .into_iter()
         .map(|m| format!("missing font: {m}"))
@@ -4440,6 +4457,27 @@ fn resolve_embed_fonts(
         warnings,
         diagnostics,
     })
+}
+
+fn apply_effective_embedded_font_names(
+    resolved: &[ResolvedEmbedFont],
+    diagnostics: &mut [FontDiagnostic],
+) {
+    let face_groups = group_resolved_fonts_by_face(resolved);
+    for group in face_groups.values() {
+        let effective_name = group.template().font_name.as_str();
+        for alias in &group.aliases {
+            if let Some(diagnostic) = diagnostics.iter_mut().find(|diagnostic| {
+                diagnostic.requested_embedded_font_name.is_none()
+                    && diagnostic.label == alias.label
+                    && diagnostic.embedded_font_name == alias.font_name
+                    && diagnostic.path.as_deref() == Some(alias.path.as_str())
+                    && diagnostic.index == Some(alias.index)
+            }) {
+                diagnostic.mark_effective_embedded_font_name(effective_name);
+            }
+        }
+    }
 }
 
 /// Subset fonts. Under `--on-missing warn`, returns the payloads
@@ -5499,6 +5537,9 @@ fn emit_attached_diagnostics(
             "    embedded label: {}",
             sanitize_for_display(&font.embedded_font_name)
         );
+        if let Some(requested) = &font.requested_embedded_font_name {
+            eprintln!("    requested label: {}", sanitize_for_display(requested));
+        }
         if let Some(check) = &font.subset_check {
             eprintln!("    subset check: {}", format_subset_check_summary(check));
         }
@@ -6298,12 +6339,13 @@ fn parse_timestamp_part(part: &str, label: &str) -> Result<i64, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_locale, copy_file_output, create_cli_font_db_dir, diagnostic_next_actions,
-        display_path, duplicate_rename_output_keys, engine, group_resolved_fonts_by_face,
-        normalize_output_key, parse_duration_ms, parse_timestamp_ms, predict_chain_output_path,
-        relocate_output_path, resolve_embed_fonts, sanitize_for_display, substitute_template,
-        write_output, Cli, Command, CommandDiagnostics, DiagnoseMode, EmbedArgs, FileDiagnostic,
-        FileStatus, GlobalOptions, MissingFontAction, OutputLang, ResolvedEmbedFont, TempFontDbDir,
+        apply_effective_embedded_font_names, classify_locale, copy_file_output,
+        create_cli_font_db_dir, diagnostic_next_actions, display_path, duplicate_rename_output_keys,
+        engine, group_resolved_fonts_by_face, normalize_output_key, parse_duration_ms,
+        parse_timestamp_ms, predict_chain_output_path, relocate_output_path, resolve_embed_fonts,
+        sanitize_for_display, substitute_template, write_output, Cli, Command, CommandDiagnostics,
+        DiagnoseMode, EmbedArgs, FileDiagnostic, FileStatus, FontDiagnostic, GlobalOptions,
+        MissingFontAction, OutputLang, ResolvedEmbedFont, TempFontDbDir,
         MAX_RESOLVED_FONT_CODEPOINTS, MAX_SHIFT_OFFSET_MS, MAX_SUBSET_CODEPOINTS_FOR_DEDUP,
     };
     // Import the canonical filename literal directly from app_lib so the
@@ -7209,14 +7251,39 @@ mod tests {
         );
     }
 
-    fn make_resolved(label: &str, path: &str, index: u32, codepoints: &[u32]) -> ResolvedEmbedFont {
+    fn make_resolved_with_font_name(
+        label: &str,
+        font_name: &str,
+        path: &str,
+        index: u32,
+        codepoints: &[u32],
+    ) -> ResolvedEmbedFont {
         ResolvedEmbedFont {
             label: label.to_string(),
-            font_name: format!("{label}.ttf"),
+            font_name: font_name.to_string(),
             path: path.to_string(),
             index,
             codepoints: codepoints.to_vec(),
         }
+    }
+
+    fn make_resolved(label: &str, path: &str, index: u32, codepoints: &[u32]) -> ResolvedEmbedFont {
+        make_resolved_with_font_name(label, &format!("{label}.ttf"), path, index, codepoints)
+    }
+
+    fn diagnostic_for_resolved(font: &ResolvedEmbedFont) -> FontDiagnostic {
+        let usage = engine::FontEmbedUsage {
+            family: font.label.clone(),
+            bold: false,
+            italic: false,
+            label: font.label.clone(),
+            font_name: font.font_name.clone(),
+            glyph_count: font.codepoints.len(),
+            codepoints: font.codepoints.clone(),
+        };
+        let mut diagnostic = FontDiagnostic::new(&usage);
+        diagnostic.mark_resolved(font.path.clone(), font.index);
+        diagnostic
     }
 
     #[test]
@@ -7247,6 +7314,37 @@ mod tests {
         // Template is first-occurrence — drives font_name + path
         // for the subsequent subset_font call.
         assert_eq!(group.template().label, "Microsoft YaHei");
+    }
+
+    #[test]
+    fn effective_embedded_font_name_matches_dedup_template_for_same_face_aliases() {
+        let aliases = vec![
+            make_resolved_with_font_name(
+                "Microsoft YaHei",
+                "microsoft_yahei.ttf",
+                "/fonts/msyh.ttc",
+                0,
+                &[0x41, 0x42],
+            ),
+            make_resolved_with_font_name(
+                "微软雅黑",
+                "font_1eda5db2.ttf",
+                "/fonts/msyh.ttc",
+                0,
+                &[0x4f60, 0x597d],
+            ),
+        ];
+        let mut diagnostics: Vec<_> = aliases.iter().map(diagnostic_for_resolved).collect();
+
+        apply_effective_embedded_font_names(&aliases, &mut diagnostics);
+
+        assert_eq!(diagnostics[0].embedded_font_name, "microsoft_yahei.ttf");
+        assert_eq!(diagnostics[0].requested_embedded_font_name, None);
+        assert_eq!(diagnostics[1].embedded_font_name, "microsoft_yahei.ttf");
+        assert_eq!(
+            diagnostics[1].requested_embedded_font_name.as_deref(),
+            Some("font_1eda5db2.ttf")
+        );
     }
 
     #[test]
