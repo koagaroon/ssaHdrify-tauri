@@ -1299,7 +1299,8 @@ fn sanitize_cmap12_invalid_groups(font_data: &[u8], index: u32) -> (Cow<'_, [u8]
     let max_record_count = cmap_len.saturating_sub(4) / 8;
     let record_count = record_count.min(max_record_count);
     let mut scanned_subtables = HashSet::new();
-    let mut invalid_group_offsets = HashSet::new();
+    let mut skip_group_offsets = HashSet::new();
+    let mut clamp_end_offsets = HashSet::new();
     for record_index in 0..record_count {
         let Some(record_rel) = 4usize.checked_add(record_index.saturating_mul(8)) else {
             break;
@@ -1371,20 +1372,23 @@ fn sanitize_cmap12_invalid_groups(font_data: &[u8], index: u32) -> (Cow<'_, [u8]
             let Some(end) = read_be_u32(font_data, group_offset + 4) else {
                 break;
             };
-            if start > end.min(UNICODE_SCALAR_MAX) {
-                invalid_group_offsets.insert(group_offset);
+            if start > end || start > UNICODE_SCALAR_MAX {
+                skip_group_offsets.insert(group_offset);
+            } else if end > UNICODE_SCALAR_MAX {
+                clamp_end_offsets.insert(group_offset + 4);
             }
         }
     }
 
-    if invalid_group_offsets.is_empty() {
+    if skip_group_offsets.is_empty() && clamp_end_offsets.is_empty() {
         return (Cow::Borrowed(font_data), 0);
     }
 
-    let mut invalid_group_offsets: Vec<_> = invalid_group_offsets.into_iter().collect();
-    invalid_group_offsets.sort_unstable();
     let mut sanitized = font_data.to_vec();
-    for group_offset in &invalid_group_offsets {
+
+    let mut skip_group_offsets: Vec<_> = skip_group_offsets.into_iter().collect();
+    skip_group_offsets.sort_unstable();
+    for group_offset in &skip_group_offsets {
         let _ = write_be_u32(&mut sanitized, *group_offset, UNICODE_SCALAR_MAX);
         let _ = write_be_u32(&mut sanitized, *group_offset + 4, UNICODE_SCALAR_MAX);
         let _ = write_be_u32(
@@ -1394,7 +1398,16 @@ fn sanitize_cmap12_invalid_groups(font_data: &[u8], index: u32) -> (Cow<'_, [u8]
         );
     }
 
-    (Cow::Owned(sanitized), invalid_group_offsets.len())
+    let mut clamp_end_offsets: Vec<_> = clamp_end_offsets.into_iter().collect();
+    clamp_end_offsets.sort_unstable();
+    for end_offset in &clamp_end_offsets {
+        let _ = write_be_u32(&mut sanitized, *end_offset, UNICODE_SCALAR_MAX);
+    }
+
+    (
+        Cow::Owned(sanitized),
+        skip_group_offsets.len() + clamp_end_offsets.len(),
+    )
 }
 
 fn decode_utf16be_name(raw: &[u8]) -> Option<String> {
@@ -4301,6 +4314,58 @@ mod tests {
                 Some(SKIP_CMAP12_GROUP_GLYPH_ID)
             );
         }
+    }
+
+    #[test]
+    fn sanitize_cmap12_invalid_groups_clamps_ranges_ending_past_unicode() {
+        let cmap_offset = 28u32;
+        let subtable_offset = 12u32;
+        let groups = [
+            (0x20u32, UNICODE_SCALAR_MAX + 1, 1u32),
+            (0x30u32, 0x31u32, 2u32),
+        ];
+        let subtable_length = 16 + groups.len() as u32 * 12;
+        let cmap_length = subtable_offset + subtable_length;
+
+        let mut font = Vec::new();
+        font.extend_from_slice(b"\0\x01\0\0");
+        font.extend_from_slice(&1u16.to_be_bytes());
+        font.extend_from_slice(&[0; 6]);
+        font.extend_from_slice(b"cmap");
+        font.extend_from_slice(&0u32.to_be_bytes());
+        font.extend_from_slice(&cmap_offset.to_be_bytes());
+        font.extend_from_slice(&cmap_length.to_be_bytes());
+        font.extend_from_slice(&0u16.to_be_bytes());
+        font.extend_from_slice(&1u16.to_be_bytes());
+        font.extend_from_slice(&0u16.to_be_bytes());
+        font.extend_from_slice(&4u16.to_be_bytes());
+        font.extend_from_slice(&subtable_offset.to_be_bytes());
+        font.extend_from_slice(&12u16.to_be_bytes());
+        font.extend_from_slice(&0u16.to_be_bytes());
+        font.extend_from_slice(&subtable_length.to_be_bytes());
+        font.extend_from_slice(&0u32.to_be_bytes());
+        font.extend_from_slice(&(groups.len() as u32).to_be_bytes());
+        for (start, end, glyph) in groups {
+            font.extend_from_slice(&start.to_be_bytes());
+            font.extend_from_slice(&end.to_be_bytes());
+            font.extend_from_slice(&glyph.to_be_bytes());
+        }
+
+        let (sanitized, count) = sanitize_cmap12_invalid_groups(&font, 0);
+        assert_eq!(count, 1);
+        let sanitized = sanitized.as_ref();
+        let clamped_group = cmap_offset as usize + subtable_offset as usize + 16;
+        assert_eq!(read_be_u32(sanitized, clamped_group), Some(0x20));
+        assert_eq!(
+            read_be_u32(sanitized, clamped_group + 4),
+            Some(UNICODE_SCALAR_MAX)
+        );
+        assert_eq!(read_be_u32(sanitized, clamped_group + 8), Some(1));
+
+        let valid_group = clamped_group + 12;
+        assert_eq!(read_be_u32(sanitized, valid_group), Some(0x30));
+        assert_eq!(read_be_u32(sanitized, valid_group + 4), Some(0x31));
+        assert_eq!(read_be_u32(sanitized, valid_group + 8), Some(2));
     }
 
     #[test]
