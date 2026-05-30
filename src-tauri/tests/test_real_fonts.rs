@@ -363,12 +363,45 @@ fn assert_diagnose_resolved_in_tier(output: &std::process::Output, family: &str,
         "resolved diagnostic should carry the font path: {diagnostic}"
     );
     assert!(
+        diagnostic["index"].as_u64().is_some(),
+        "resolved diagnostic should carry the face index: {diagnostic}"
+    );
+    assert!(
+        diagnostic["embeddedFontName"]
+            .as_str()
+            .is_some_and(|name| !name.is_empty()),
+        "resolved diagnostic should carry the generated ASS [Fonts] label: {diagnostic}"
+    );
+    assert!(
         diagnostic["tiers"].as_array().is_some_and(|tiers| {
             tiers
                 .iter()
                 .any(|tier| tier["tier"] == tier_name && tier["status"] == "hit")
         }),
         "diagnostic should prove the {tier_name} tier resolved the font: {diagnostic}"
+    );
+}
+
+fn assert_diagnose_subset_ok(output: &std::process::Output, family: &str, embedded_name: &str) {
+    assert!(
+        output.status.success(),
+        "diagnose-fonts --subset-check should succeed: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let value: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("diagnose stdout should be JSON");
+    let diagnostic = diagnostic_for_family(&value, family);
+    assert_eq!(diagnostic["embeddedFontName"], embedded_name);
+    assert_eq!(
+        diagnostic["subsetCheck"]["status"], "ok",
+        "resolved real font should pass in-memory subset check: {diagnostic}"
+    );
+    assert!(
+        diagnostic["subsetCheck"]["bytes"]
+            .as_u64()
+            .is_some_and(|bytes| bytes > 0),
+        "successful subset check should report subset byte size: {diagnostic}"
     );
 }
 
@@ -574,9 +607,15 @@ fn dream_han_serif_face_names_resolve_across_local_cache_and_embed_paths() {
         os("--font-file"),
         os(serif_w22.as_os_str()),
         os("--no-system-fonts"),
+        os("--subset-check"),
         os(sc_plain.as_os_str()),
     ]);
     assert_diagnose_resolved_in_tier(&local_file_diagnose, "Dream Han Serif SC W22", "local");
+    assert_diagnose_subset_ok(
+        &local_file_diagnose,
+        "Dream Han Serif SC W22",
+        "dream_han_serif_sc_w22.ttf",
+    );
 
     let local_dir_diagnose = run_cli(&[
         os("--lang"),

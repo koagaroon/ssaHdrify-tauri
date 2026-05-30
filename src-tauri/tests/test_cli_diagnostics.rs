@@ -255,6 +255,55 @@ fn diagnose_fonts_json_reports_successful_files_as_diagnosed() {
     let _ = fs::remove_dir_all(work);
 }
 
+#[test]
+fn diagnose_fonts_subset_check_reports_skipped_for_unresolved_without_writing_output() {
+    if let Some(reason) = engine_bundle_missing() {
+        // Hard-fail instead of skip-and-return: a skip records PASS in Cargo,
+        // so a forgotten `npm run build:engine` would ship every diagnostics
+        // integration test as a green no-op. Matches the panic guard in
+        // test_chain.rs / test_font_cache.rs.
+        panic!("engine bundle missing — run `npm run build:engine` first ({reason})");
+    }
+
+    let work = temp_dir("subset-check-unresolved");
+    let input = write_missing_font_ass(&work);
+    let output = run_cli(&[
+        "--lang",
+        "en",
+        "--json",
+        "--no-cache",
+        "diagnose-fonts",
+        "--no-system-fonts",
+        "--subset-check",
+        input.to_str().unwrap(),
+    ]);
+
+    assert!(
+        output.status.success(),
+        "diagnose-fonts --subset-check should complete for unresolved fonts: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout should be JSON");
+    assert_eq!(value["files"][0]["status"], "diagnosed");
+    assert_eq!(
+        value["fonts"][0]["subsetCheck"]["status"], "skipped",
+        "unresolved fonts should report a skipped subset check: {value}"
+    );
+    assert!(
+        value["fonts"][0]["subsetCheck"]["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("not resolved")),
+        "skipped subset check should explain why: {value}"
+    );
+    assert!(
+        !work.join("missing-font.embed.ass").exists(),
+        "diagnose-fonts --subset-check must not write subtitle outputs"
+    );
+
+    let _ = fs::remove_dir_all(work);
+}
+
 #[cfg(target_os = "windows")]
 #[test]
 fn diagnose_fonts_does_not_validate_embed_output_path() {
@@ -350,6 +399,7 @@ fn diagnose_fonts_does_not_mutate_cache_file() {
         cache.to_str().unwrap(),
         "diagnose-fonts",
         "--no-system-fonts",
+        "--subset-check",
         input.to_str().unwrap(),
     ]);
     assert!(

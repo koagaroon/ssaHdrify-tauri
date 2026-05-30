@@ -413,6 +413,10 @@ struct DiagnoseFontsArgs {
     #[arg(long)]
     no_system_fonts: bool,
 
+    /// Also try in-memory subsetting for resolved fonts. 额外对已解析字体执行内存中的子集化检查。
+    #[arg(long = "subset-check")]
+    subset_check: bool,
+
     /// ASS/SSA files to diagnose. 要诊断的 ASS/SSA 文件。
     #[arg(required = true)]
     files: Vec<PathBuf>,
@@ -738,6 +742,8 @@ struct FontDiagnostic {
     index: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    subset_check: Option<FontSubsetCheckDiagnostic>,
     tiers: Vec<FontTierDiagnostic>,
 }
 
@@ -747,6 +753,24 @@ enum FontResolutionResult {
     Resolved,
     Missing,
     Error,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct FontSubsetCheckDiagnostic {
+    status: FontSubsetCheckStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bytes: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum FontSubsetCheckStatus {
+    Ok,
+    Failed,
+    Skipped,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -794,6 +818,7 @@ impl FontDiagnostic {
             path: None,
             index: None,
             error: None,
+            subset_check: None,
             tiers: Vec::new(),
         }
     }
@@ -3123,6 +3148,7 @@ fn run_diagnose_fonts(
             cache,
             &mut engine,
             file,
+            args.subset_check,
         );
         for diagnostic in &mut diagnostics {
             diagnostic.file = Some(result.input.clone());
@@ -3180,6 +3206,7 @@ fn diagnose_font_file(
     cache: Option<&app_lib::font_cache::FontCache>,
     engine: &mut engine::CliEngine,
     file: &Path,
+    subset_check: bool,
 ) -> EmbedFileOutcome {
     let input_path = match absolute_path(file) {
         Ok(path) => path,
@@ -3218,25 +3245,149 @@ fn diagnose_font_file(
     };
 
     match resolve_embed_fonts(globals, args, use_user_fonts, cache, true, &plan.fonts) {
-        Ok(outcome) => (
-            FileReport {
-                input,
-                output: None,
-                encoding: Some(read_result.encoding),
-                status: FileStatus::Diagnosed,
-                error: None,
-                warnings: if outcome.warnings.is_empty() {
-                    None
-                } else {
-                    Some(outcome.warnings)
+        Ok(outcome) => {
+            let mut diagnostics = outcome.diagnostics;
+            let mut warnings = outcome.warnings;
+            if subset_check {
+                warnings.extend(apply_subset_checks_to_diagnostics(
+                    &outcome.resolved,
+                    &mut diagnostics,
+                ));
+            }
+            (
+                FileReport {
+                    input,
+                    output: None,
+                    encoding: Some(read_result.encoding),
+                    status: FileStatus::Diagnosed,
+                    error: None,
+                    warnings: if warnings.is_empty() {
+                        None
+                    } else {
+                        Some(warnings)
+                    },
                 },
-            },
-            outcome.diagnostics,
-        ),
+                diagnostics,
+            )
+        }
         Err(error) => (
             failed_report(&input_path, None, Some(read_result.encoding), error.error),
             error.diagnostics,
         ),
+    }
+}
+
+fn apply_subset_checks_to_diagnostics(
+    resolved: &[ResolvedEmbedFont],
+    diagnostics: &mut [FontDiagnostic],
+) -> Vec<String> {
+    for diagnostic in diagnostics.iter_mut() {
+        if diagnostic.result != FontResolutionResult::Resolved {
+            diagnostic.subset_check = Some(FontSubsetCheckDiagnostic {
+                status: FontSubsetCheckStatus::Skipped,
+                bytes: None,
+                error: Some("font was not resolved".to_string()),
+            });
+        }
+    }
+
+    let mut warnings = Vec::new();
+    let face_groups = group_resolved_fonts_by_face(resolved);
+    for group in face_groups.values() {
+        let merged = match group.merged_codepoints_with_cap(MAX_SUBSET_CODEPOINTS_FOR_DEDUP) {
+            Ok(merged) => merged,
+            Err(_) => {
+                for alias in &group.aliases {
+                    let check = run_one_subset_check(alias);
+                    if check.status == FontSubsetCheckStatus::Failed {
+                        if let Some(error) = &check.error {
+                            warnings.push(format!(
+                                "font subset check failed: {} ({error})",
+                                alias.label
+                            ));
+                        }
+                    }
+                    set_subset_check_for_resolved_font(diagnostics, alias, check);
+                }
+                continue;
+            }
+        };
+
+        let codepoints: Vec<u32> = merged.into_iter().collect();
+        let template = group.template();
+        let check =
+            match app_lib::fonts::subset_font(template.path.clone(), template.index, codepoints) {
+                Ok(data) => FontSubsetCheckDiagnostic {
+                    status: FontSubsetCheckStatus::Ok,
+                    bytes: Some(data.len()),
+                    error: None,
+                },
+                Err(error) => {
+                    warnings.push(format!(
+                        "font subset check failed: {} ({error})",
+                        group.labels.join(" / ")
+                    ));
+                    FontSubsetCheckDiagnostic {
+                        status: FontSubsetCheckStatus::Failed,
+                        bytes: None,
+                        error: Some(error),
+                    }
+                }
+            };
+
+        for alias in &group.aliases {
+            set_subset_check_for_resolved_font(diagnostics, alias, check.clone());
+        }
+    }
+
+    warnings
+}
+
+fn run_one_subset_check(font: &ResolvedEmbedFont) -> FontSubsetCheckDiagnostic {
+    match app_lib::fonts::subset_font(font.path.clone(), font.index, font.codepoints.clone()) {
+        Ok(data) => FontSubsetCheckDiagnostic {
+            status: FontSubsetCheckStatus::Ok,
+            bytes: Some(data.len()),
+            error: None,
+        },
+        Err(error) => FontSubsetCheckDiagnostic {
+            status: FontSubsetCheckStatus::Failed,
+            bytes: None,
+            error: Some(error),
+        },
+    }
+}
+
+fn set_subset_check_for_resolved_font(
+    diagnostics: &mut [FontDiagnostic],
+    font: &ResolvedEmbedFont,
+    check: FontSubsetCheckDiagnostic,
+) {
+    if let Some(diagnostic) = diagnostics.iter_mut().find(|diagnostic| {
+        diagnostic.subset_check.is_none()
+            && diagnostic.label == font.label
+            && diagnostic.embedded_font_name == font.font_name
+            && diagnostic.path.as_deref() == Some(font.path.as_str())
+            && diagnostic.index == Some(font.index)
+    }) {
+        diagnostic.subset_check = Some(check);
+    }
+}
+
+fn format_subset_check_summary(check: &FontSubsetCheckDiagnostic) -> String {
+    match check.status {
+        FontSubsetCheckStatus::Ok => match check.bytes {
+            Some(bytes) => format!("ok ({bytes} bytes)"),
+            None => "ok".to_string(),
+        },
+        FontSubsetCheckStatus::Failed => match &check.error {
+            Some(error) => format!("failed ({})", sanitize_for_display(error)),
+            None => "failed".to_string(),
+        },
+        FontSubsetCheckStatus::Skipped => match &check.error {
+            Some(error) => format!("skipped ({})", sanitize_for_display(error)),
+            None => "skipped".to_string(),
+        },
     }
 }
 
@@ -3316,6 +3467,9 @@ fn emit_standalone_font_diagnostics(globals: &GlobalOptions, diagnostics: &Comma
             "  embedded label: {}",
             sanitize_for_display(&font.embedded_font_name)
         );
+        if let Some(check) = &font.subset_check {
+            println!("  subset check: {}", format_subset_check_summary(check));
+        }
         if let Some(path) = &font.path {
             println!(
                 "  resolved: {}#{}",
@@ -5345,6 +5499,9 @@ fn emit_attached_diagnostics(
             "    embedded label: {}",
             sanitize_for_display(&font.embedded_font_name)
         );
+        if let Some(check) = &font.subset_check {
+            eprintln!("    subset check: {}", format_subset_check_summary(check));
+        }
         if let Some(path) = &font.path {
             eprintln!(
                 "    resolved: {}#{}",

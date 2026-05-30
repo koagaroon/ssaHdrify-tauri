@@ -251,9 +251,9 @@ ssahdrify-cli chain          --help
 
 `hdr` / `shift` / `embed` / `rename` support `--diagnose[=summary|full]`. `--diagnose` and `--diagnose=summary` are equivalent and attach compact diagnostics after the command finishes; `--diagnose=full` lists per-file details, and `embed` also lists font-resolution tiers (current run sources, persistent cache, system fonts) plus cache status. `chain` and `refresh-fonts` do not support `--diagnose`; passing it errors instead of being silently ignored.
 
-`diagnose-fonts` 是独立的详细诊断命令，默认输出 verbose 报告，而且只读：不写输出字幕、不刷新或修改字体缓存。它接受字幕输入和字体解析选项：`--font-dir`、`--font-file`、`--no-system-fonts`、`--no-cache`、`--cache-file`、`--lang`、`--json`。
+`diagnose-fonts` 是独立的详细诊断命令，默认输出 verbose 报告，而且只读：不写输出字幕、不刷新或修改字体缓存。它接受字幕输入和字体解析选项：`--font-dir`、`--font-file`、`--no-system-fonts`、`--no-cache`、`--cache-file`、`--lang`、`--json`。需要确认字体文件是否真的能被子集化时，可显式加入 `--subset-check`；该检查只在内存中运行，不写出字幕。
 
-`diagnose-fonts` is the standalone detailed diagnostic command. It is verbose by default and read-only: it does not write output subtitles and does not refresh or mutate the font cache. It accepts subtitle inputs plus font-resolution options: `--font-dir`, `--font-file`, `--no-system-fonts`, `--no-cache`, `--cache-file`, `--lang`, and `--json`.
+`diagnose-fonts` is the standalone detailed diagnostic command. It is verbose by default and read-only: it does not write output subtitles and does not refresh or mutate the font cache. It accepts subtitle inputs plus font-resolution options: `--font-dir`, `--font-file`, `--no-system-fonts`, `--no-cache`, `--cache-file`, `--lang`, and `--json`. Add `--subset-check` only when you want to verify that resolved font files can actually be subset; the check runs in memory and does not write subtitles.
 
 ```bash
 # 附加紧凑诊断 / Attach compact diagnostics
@@ -264,6 +264,9 @@ ssahdrify-cli embed --diagnose=full --font-dir "<font-folder>" input.ass
 
 # 只诊断字体解析，不写字幕 / Diagnose font resolution only, no subtitle writes
 ssahdrify-cli diagnose-fonts --font-dir "<font-folder>" input.ass
+
+# 额外检查已解析字体能否子集化 / Also check whether resolved fonts can be subset
+ssahdrify-cli diagnose-fonts --subset-check --font-dir "<font-folder>" input.ass
 
 # 下游打包必须完整嵌入字体时推荐 / Recommended when downstream packaging requires every font
 ssahdrify-cli embed --font-dir "<font-folder>" --on-missing fail --fail-fast --diagnose input.ass
