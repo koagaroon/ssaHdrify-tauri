@@ -424,6 +424,21 @@ mod tests {
         decode_bytes(&bytes)
     }
 
+    fn temp_file_path(name: &str, ext: &str) -> std::path::PathBuf {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "ssahdrify_encoding_{name}_{}_{}.{}",
+            std::process::id(),
+            stamp,
+            ext
+        ));
+        path
+    }
+
     #[test]
     fn utf8_no_bom() {
         let result = decode_fixture("utf8.ass");
@@ -459,6 +474,20 @@ mod tests {
         let result = decode_bytes(&bytes);
         assert_eq!(result.encoding, "UTF-16BE");
         assert_eq!(result.text, "AB");
+    }
+
+    #[test]
+    fn read_text_refuses_sup_sidecar_extension() {
+        let path = temp_file_path("read_sup", "sup");
+        std::fs::write(&path, b"pgs-binary").unwrap();
+
+        let err = match read_text_detect_encoding_inner(&path.to_string_lossy(), |_| true) {
+            Ok(_) => panic!("expected .sup read to fail"),
+            Err(err) => err,
+        };
+
+        assert!(err.contains("Unsupported file type: .sup"), "got: {err}");
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

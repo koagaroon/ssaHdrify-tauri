@@ -51,12 +51,13 @@ import {
   type PairingSource,
   type OutputMode,
 } from "./pairing-engine";
-import { categorize } from "../../lib/rename-extensions";
+import { categorizeForRename } from "../../lib/rename-extensions";
 
-// VIDEO_EXTS / SUBTITLE_EXTS / IGNORED_EXTS / Category / `categorize` now
-// live in `src/lib/rename-extensions.ts` — shared with the CLI engine and
-// the tauri-api picker filter. Add new extensions (`.av1`, `.heic`,
-// etc.) to that module; this file consumes via the import above.
+// VIDEO_EXTS / RENAME_SUBTITLE_EXTS / IGNORED_EXTS / Category /
+// `categorizeForRename` now live in `src/lib/rename-extensions.ts` —
+// shared with the CLI engine and the tauri-api picker filter. Add new
+// rename-only sidecars there without widening parser-aligned text
+// subtitle workflows.
 
 interface Categorized {
   videos: string[];
@@ -69,7 +70,7 @@ function categorizePaths(paths: string[]): Categorized {
   const subtitles: string[] = [];
   const unknown: string[] = [];
   for (const p of paths) {
-    const cat = categorize(fileNameFromPath(p));
+    const cat = categorizeForRename(fileNameFromPath(p));
     if (cat === "video") videos.push(p);
     else if (cat === "subtitle") subtitles.push(p);
     else if (cat === "ignored") continue;

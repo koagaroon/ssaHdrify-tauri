@@ -1,12 +1,11 @@
 /**
- * Shared file-extension classification for the Batch Rename feature.
+ * Shared file-extension classification for file pickers and workflow
+ * input buckets.
  *
- * Three Sets + a `categorize(name)` helper drive both the post-drop /
- * post-pick classification (CLI engine + GUI BatchRename) AND the open-
- * dialog picker filter (tauri-api.ts). Before this extraction the three
- * Sets were defined verbatim across two files and the picker filter
- * carried a fourth inline copy — a future ext-set change (`.av1`, `.heic`,
- * etc.) would have needed to land in four places.
+ * Text subtitle workflows and Batch Rename intentionally do NOT share
+ * one subtitle extension set. Timing / HDR / text reads can only accept
+ * formats the parser understands; Batch Rename can also move opaque
+ * sidecars such as Blu-ray PGS `.sup` without reading them as text.
  *
  * Consolidated here because the previous "two sides is small enough"
  * comment in BatchRename.tsx assumed N=2; the CLI engine made it N=3
@@ -18,6 +17,9 @@
  *   inside the Set has no semantic effect.
  * - SUBTITLE_EXTS: text-subtitle formats. Same set is used by the
  *   TimingShift "is this a subtitle file?" check.
+ * - RENAME_SUBTITLE_EXTS: subtitle sidecars Batch Rename may pair,
+ *   copy, or rename without parsing. Keep this broader set out of
+ *   Timing Shift / HDR / readText gates.
  * - IGNORED_EXTS: companion files that ship in fan-sub release folders
  *   but have no place in this app's workflow. Surfacing them as
  *   "unknown" would be noise. Sub-categories:
@@ -63,6 +65,8 @@ export const VIDEO_EXTS: ReadonlySet<string> = new Set([
 // wouldn't lead to a usable output.
 export const SUBTITLE_EXTS: ReadonlySet<string> = new Set(["ass", "ssa", "srt", "sub", "vtt"]);
 
+export const RENAME_SUBTITLE_EXTS: ReadonlySet<string> = new Set([...SUBTITLE_EXTS, "sup"]);
+
 export const IGNORED_EXTS: ReadonlySet<string> = new Set([
   "torrent",
   "zip",
@@ -83,11 +87,22 @@ export const IGNORED_EXTS: ReadonlySet<string> = new Set([
 export type RenameCategory = "video" | "subtitle" | "ignored" | "unknown";
 
 export function categorize(name: string): RenameCategory {
+  return categorizeWithSubtitleSet(name, SUBTITLE_EXTS);
+}
+
+export function categorizeForRename(name: string): RenameCategory {
+  return categorizeWithSubtitleSet(name, RENAME_SUBTITLE_EXTS);
+}
+
+function categorizeWithSubtitleSet(
+  name: string,
+  subtitleExts: ReadonlySet<string>
+): RenameCategory {
   const dot = name.lastIndexOf(".");
   if (dot < 0) return "unknown";
   const ext = name.slice(dot + 1).toLowerCase();
   if (VIDEO_EXTS.has(ext)) return "video";
-  if (SUBTITLE_EXTS.has(ext)) return "subtitle";
+  if (subtitleExts.has(ext)) return "subtitle";
   if (IGNORED_EXTS.has(ext)) return "ignored";
   return "unknown";
 }

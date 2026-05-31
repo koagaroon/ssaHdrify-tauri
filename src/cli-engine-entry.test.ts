@@ -91,6 +91,23 @@ describe("planRename", () => {
 
     expect(plan.pairings[0]!.noOp).toBe(true);
   });
+
+  it("plans .sup as an opaque Batch Rename subtitle sidecar", () => {
+    const sup = "C:\\media\\[RawsX][Show Title][01][1080P][BDRip].sup";
+    const plan = planRename({
+      paths: [video, sup],
+      mode: "copy_to_video",
+      langs: "auto",
+    });
+
+    expect(plan.subtitleCount).toBe(1);
+    expect(plan.pairings[0]).toMatchObject({
+      inputPath: sup,
+      outputPath: "C:\\media\\[RawsX][Show Title][01][1080P][BDRip].sup",
+      videoPath: video,
+      noOp: true,
+    });
+  });
 });
 
 describe("font embed engine helpers", () => {

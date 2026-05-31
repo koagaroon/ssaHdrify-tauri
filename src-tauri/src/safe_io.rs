@@ -24,13 +24,16 @@
 //!
 //!   1. **`validate_ipc_path`** (util.rs) — Cc / BiDi / DOS-device
 //!      gates. Rejects malformed paths before any fs syscall.
-//!   2. **Subtitle-extension whitelist** — destinations (and copy/rename
-//!      sources) must end with `.ass / .ssa / .srt / .vtt / .sub`.
-//!      Matches `read_text_detect_encoding`'s pattern AND the TS
-//!      `SUBTITLE_EXTS` set in `src/lib/rename-extensions.ts` — what the
-//!      `subtitle-parser.ts::detectFormat` parser actually handles.
+//!   2. **Subtitle-extension whitelist** — text writes must end with
+//!      `.ass / .ssa / .srt / .vtt / .sub`, matching
+//!      `read_text_detect_encoding` and the TS parser-aligned
+//!      `SUBTITLE_EXTS` set. Copy/rename allows those same text
+//!      extensions plus opaque rename-only sidecars such as `.sup`, but
+//!      sidecar copies/renames must preserve the sidecar extension
+//!      (`.sup -> .sup`) so a binary subtitle cannot be laundered into a
+//!      future text-readable `.ass`.
 //!      Closes the "Start Menu autostart .desktop / .lnk" persistence
-//!      class because those extensions are outside the set.
+//!      class because those extensions are outside both sets.
 //!   3. **`fs_scope().is_allowed()`** — reuses Tauri's plugin-fs
 //!      allow/deny policy verbatim (no manual port of the 50-entry deny
 //!      list; single source of truth in `capabilities/default.json`).
@@ -59,25 +62,84 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use tauri_plugin_fs::FsExt;
 
-fn check_subtitle_extension(path: &Path, label: &str) -> Result<(), String> {
-    let ext = path
-        .extension()
+const ALLOWED_RENAME_SIDECAR_EXTENSIONS: &[&str] = &["sup"];
+
+fn path_extension_lower(path: &Path) -> String {
+    path.extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_ascii_lowercase())
-        .unwrap_or_default();
-    if !ALLOWED_TEXT_EXTENSIONS.contains(&ext.as_str()) {
-        let pretty = if ext.is_empty() {
-            "(no extension)".to_string()
-        } else {
-            format!(".{ext}")
-        };
+        .unwrap_or_default()
+}
+
+fn pretty_ext(ext: &str) -> String {
+    if ext.is_empty() {
+        "(no extension)".to_string()
+    } else {
+        format!(".{ext}")
+    }
+}
+
+fn text_ext_allowed(ext: &str) -> bool {
+    ALLOWED_TEXT_EXTENSIONS.contains(&ext)
+}
+
+fn sidecar_ext_allowed(ext: &str) -> bool {
+    ALLOWED_RENAME_SIDECAR_EXTENSIONS.contains(&ext)
+}
+
+fn check_subtitle_extension(path: &Path, label: &str) -> Result<(), String> {
+    let ext = path_extension_lower(path);
+    if !text_ext_allowed(&ext) {
+        let allowed = ALLOWED_TEXT_EXTENSIONS.join(", ");
         return Err(format!(
             "{label} path must end with a subtitle extension; got {pretty} \
-             (allowed: {})",
-            ALLOWED_TEXT_EXTENSIONS.join(", ")
+             (allowed: {allowed})",
+            pretty = pretty_ext(&ext)
         ));
     }
     Ok(())
+}
+
+fn check_copy_rename_extensions(src: &Path, dst: &Path) -> Result<(), String> {
+    let src_ext = path_extension_lower(src);
+    let dst_ext = path_extension_lower(dst);
+    let src_text = text_ext_allowed(&src_ext);
+    let dst_text = text_ext_allowed(&dst_ext);
+    let src_sidecar = sidecar_ext_allowed(&src_ext);
+    let dst_sidecar = sidecar_ext_allowed(&dst_ext);
+
+    if src_text && dst_text {
+        return Ok(());
+    }
+
+    let allowed = format!(
+        "{}, {}",
+        ALLOWED_TEXT_EXTENSIONS.join(", "),
+        ALLOWED_RENAME_SIDECAR_EXTENSIONS.join(", ")
+    );
+
+    if !src_text && !src_sidecar {
+        return Err(format!(
+            "Source path must end with a subtitle extension; got {} (allowed: {allowed})",
+            pretty_ext(&src_ext)
+        ));
+    }
+    if !dst_text && !dst_sidecar {
+        return Err(format!(
+            "Destination path must end with a subtitle extension; got {} (allowed: {allowed})",
+            pretty_ext(&dst_ext)
+        ));
+    }
+
+    if src_sidecar && dst_sidecar && src_ext == dst_ext {
+        return Ok(());
+    }
+
+    Err(format!(
+        "Sidecar subtitle copy/rename must preserve the sidecar extension; got source {} and destination {}",
+        pretty_ext(&src_ext),
+        pretty_ext(&dst_ext)
+    ))
 }
 
 fn check_scope_allows(
@@ -403,8 +465,7 @@ pub fn safe_copy_file_inner(
     validate_ipc_path(dst, "Destination")?;
     let src_ref = Path::new(src);
     let dst_ref = Path::new(dst);
-    check_subtitle_extension(src_ref, "Source")?;
-    check_subtitle_extension(dst_ref, "Destination")?;
+    check_copy_rename_extensions(src_ref, dst_ref)?;
     check_scope_allows(&is_allowed, src_ref, "Source")?;
     check_scope_allows(&is_allowed, dst_ref, "Destination")?;
     check_scope_allows_resolved(&is_allowed, src_ref, "Source")?;
@@ -452,8 +513,7 @@ pub fn safe_rename_file_inner(
     validate_ipc_path(dst, "Destination")?;
     let src_ref = Path::new(src);
     let dst_ref = Path::new(dst);
-    check_subtitle_extension(src_ref, "Source")?;
-    check_subtitle_extension(dst_ref, "Destination")?;
+    check_copy_rename_extensions(src_ref, dst_ref)?;
     check_scope_allows(&is_allowed, src_ref, "Source")?;
     check_scope_allows(&is_allowed, dst_ref, "Destination")?;
     check_scope_allows_resolved(&is_allowed, src_ref, "Source")?;
@@ -623,6 +683,16 @@ mod tests {
     }
 
     #[test]
+    fn write_refuses_sup_sidecar_extension() {
+        let dir = temp_dir("write_sup_ext");
+        let path = dir.join("out.sup");
+        let err = safe_write_text_file_inner(&path.to_string_lossy(), "binary?", true, allow_all)
+            .unwrap_err();
+        assert!(err.contains("subtitle extension"));
+        assert!(!path.exists());
+    }
+
+    #[test]
     fn write_refuses_when_scope_denies() {
         let dir = temp_dir("write_scope_deny");
         let path = dir.join("out.ass");
@@ -663,6 +733,40 @@ mod tests {
         fs::File::open(&dst).unwrap().read_to_end(&mut buf).unwrap();
         assert_eq!(buf, b"payload");
         assert!(src.exists());
+    }
+
+    #[test]
+    fn copy_allows_sup_sidecar_when_extension_is_preserved() {
+        let dir = temp_dir("copy_sup_sidecar");
+        let src = dir.join("src.sup");
+        let dst = dir.join("dst.sup");
+        fs::write(&src, b"pgs-binary").unwrap();
+        safe_copy_file_inner(
+            &src.to_string_lossy(),
+            &dst.to_string_lossy(),
+            false,
+            allow_all,
+        )
+        .unwrap();
+        assert_eq!(fs::read(&dst).unwrap(), b"pgs-binary");
+        assert!(src.exists());
+    }
+
+    #[test]
+    fn copy_refuses_sup_to_text_extension_laundering() {
+        let dir = temp_dir("copy_sup_to_text");
+        let src = dir.join("src.sup");
+        let dst = dir.join("dst.ass");
+        fs::write(&src, b"pgs-binary").unwrap();
+        let err = safe_copy_file_inner(
+            &src.to_string_lossy(),
+            &dst.to_string_lossy(),
+            false,
+            allow_all,
+        )
+        .unwrap_err();
+        assert!(err.contains("preserve the sidecar extension"), "got: {err}");
+        assert!(!dst.exists());
     }
 
     #[test]
@@ -718,6 +822,41 @@ mod tests {
         .unwrap();
         assert!(!src.exists());
         assert_eq!(fs::read(&dst).unwrap(), b"payload");
+    }
+
+    #[test]
+    fn rename_allows_sup_sidecar_when_extension_is_preserved() {
+        let dir = temp_dir("rename_sup_sidecar");
+        let src = dir.join("src.sup");
+        let dst = dir.join("dst.sup");
+        fs::write(&src, b"pgs-binary").unwrap();
+        safe_rename_file_inner(
+            &src.to_string_lossy(),
+            &dst.to_string_lossy(),
+            false,
+            allow_all,
+        )
+        .unwrap();
+        assert!(!src.exists());
+        assert_eq!(fs::read(&dst).unwrap(), b"pgs-binary");
+    }
+
+    #[test]
+    fn rename_refuses_text_to_sup_extension_laundering() {
+        let dir = temp_dir("rename_text_to_sup");
+        let src = dir.join("src.ass");
+        let dst = dir.join("dst.sup");
+        fs::write(&src, b"text").unwrap();
+        let err = safe_rename_file_inner(
+            &src.to_string_lossy(),
+            &dst.to_string_lossy(),
+            false,
+            allow_all,
+        )
+        .unwrap_err();
+        assert!(err.contains("preserve the sidecar extension"), "got: {err}");
+        assert!(src.exists());
+        assert!(!dst.exists());
     }
 
     #[test]

@@ -6,7 +6,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { strings } from "../i18n/strings";
 import { fileNameFromPath } from "./path-validation";
-import { VIDEO_EXTS, SUBTITLE_EXTS } from "./rename-extensions";
+import { VIDEO_EXTS, SUBTITLE_EXTS, RENAME_SUBTITLE_EXTS } from "./rename-extensions";
 import { decodeBase64Bytes } from "./base64-bytes";
 
 // ── File Dialogs ──────────────────────────────────────────
@@ -91,11 +91,11 @@ export async function pickAssFiles(t?: DialogTranslator): Promise<string[] | nul
 
 // Picker filters derive from the same Sets that drive post-pick
 // categorization (`rename-extensions.ts`). Single source of truth so
-// adding `.av1` / `.heic` etc. doesn't drift between the dialog's
-// allowed extensions and the post-drop classification.
+// adding `.av1` / `.heic` / rename-only `.sup` doesn't drift between
+// the dialog's allowed extensions and the post-drop classification.
 function videoAndSubtitleFilters(t?: DialogTranslator): FileFilter[] {
   const videoExtList = Array.from(VIDEO_EXTS);
-  const subtitleExtList = Array.from(SUBTITLE_EXTS);
+  const subtitleExtList = Array.from(RENAME_SUBTITLE_EXTS);
   return [
     {
       name: dt(t, "dialog_filter_video_subtitle_files"),

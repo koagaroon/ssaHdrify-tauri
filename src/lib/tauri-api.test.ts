@@ -367,6 +367,7 @@ describe("localized native file dialogs", () => {
             "srt",
             "sub",
             "vtt",
+            "sup",
           ],
         },
         {
@@ -390,7 +391,7 @@ describe("localized native file dialogs", () => {
         },
         {
           name: "字幕文件",
-          extensions: ["ass", "ssa", "srt", "sub", "vtt"],
+          extensions: ["ass", "ssa", "srt", "sub", "vtt", "sup"],
         },
         { name: "所有文件", extensions: ["*"] },
       ],

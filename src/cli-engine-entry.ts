@@ -36,7 +36,7 @@ import {
   fileNameFromPath,
   substituteTemplate,
 } from "./lib/path-validation";
-import { categorize, type RenameCategory } from "./lib/rename-extensions";
+import { categorizeForRename, type RenameCategory } from "./lib/rename-extensions";
 import { parseSubtitle } from "./lib/subtitle-parser";
 import { sanitizeError } from "./lib/dedup-helpers";
 import { stripUnicodeControls } from "./lib/unicode-controls";
@@ -478,9 +478,10 @@ function resolveEmbedOutputPathInternal(inputPath: string, template = "{name}.em
 // VIDEO_EXTS / SUBTITLE_EXTS / IGNORED_EXTS / RenameCategory now live in
 // `src/lib/rename-extensions.ts` — shared with GUI BatchRename and the
 // tauri-api picker filter. The GUI uses the
-// `categorize(name)` helper; CLI keeps `categorizeRenamePath(path)` as a
-// thin wrapper that runs `fileNameFromPath` first because CLI receives
-// full argv paths, not bare filenames.
+// `categorizeForRename(name)` helper; CLI keeps
+// `categorizeRenamePath(path)` as a thin wrapper that runs
+// `fileNameFromPath` first because CLI receives full argv paths, not
+// bare filenames.
 
 type LanguageSelection =
   | { kind: "auto" }
@@ -520,13 +521,14 @@ function categorizeRenamePaths(paths: string[]): CategorizedRenamePaths {
 
 function categorizeRenamePath(path: string): RenameCategory {
   // thin wrapper — delegate the ext-lookup chain to the
-  // canonical `categorize` (which scans VIDEO_EXTS → SUBTITLE_EXTS →
-  // IGNORED_EXTS in the same priority order). The chain was previously
-  // open-coded here, so a future bucket addition or priority shift in
-  // `rename-extensions.ts::categorize` would silently skip the CLI
-  // path. `fileNameFromPath` still applies upstream to keep the
+  // canonical `categorizeForRename` (which scans VIDEO_EXTS →
+  // RENAME_SUBTITLE_EXTS → IGNORED_EXTS in the same priority order).
+  // The chain was previously open-coded here, so a future bucket
+  // addition or priority shift in
+  // `rename-extensions.ts::categorizeForRename` would silently skip the
+  // CLI path. `fileNameFromPath` still applies upstream to keep the
   // trailing-separator handling.
-  return categorize(fileNameFromPath(path));
+  return categorizeForRename(fileNameFromPath(path));
 }
 
 function parseLanguageSelection(raw: string): LanguageSelection {
