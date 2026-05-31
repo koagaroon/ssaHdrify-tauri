@@ -770,6 +770,23 @@ mod tests {
     }
 
     #[test]
+    fn copy_refuses_text_to_sup_extension_laundering() {
+        let dir = temp_dir("copy_text_to_sup");
+        let src = dir.join("src.ass");
+        let dst = dir.join("dst.sup");
+        fs::write(&src, b"text").unwrap();
+        let err = safe_copy_file_inner(
+            &src.to_string_lossy(),
+            &dst.to_string_lossy(),
+            false,
+            allow_all,
+        )
+        .unwrap_err();
+        assert!(err.contains("preserve the sidecar extension"), "got: {err}");
+        assert!(!dst.exists());
+    }
+
+    #[test]
     fn copy_refuses_when_scope_denies_destination() {
         let dir = temp_dir("copy_scope_deny");
         let src = dir.join("src.ass");
@@ -847,6 +864,24 @@ mod tests {
         let src = dir.join("src.ass");
         let dst = dir.join("dst.sup");
         fs::write(&src, b"text").unwrap();
+        let err = safe_rename_file_inner(
+            &src.to_string_lossy(),
+            &dst.to_string_lossy(),
+            false,
+            allow_all,
+        )
+        .unwrap_err();
+        assert!(err.contains("preserve the sidecar extension"), "got: {err}");
+        assert!(src.exists());
+        assert!(!dst.exists());
+    }
+
+    #[test]
+    fn rename_refuses_sup_to_text_extension_laundering() {
+        let dir = temp_dir("rename_sup_to_text");
+        let src = dir.join("src.sup");
+        let dst = dir.join("dst.ass");
+        fs::write(&src, b"pgs-binary").unwrap();
         let err = safe_rename_file_inner(
             &src.to_string_lossy(),
             &dst.to_string_lossy(),
