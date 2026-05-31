@@ -1,11 +1,12 @@
 /**
- * SRT/SUB → ASS conversion with color preprocessing.
+ * Text-cue subtitle → ASS conversion with color preprocessing.
  *
- * Converts SRT <font color="#RRGGBB"> tags to ASS inline color overrides
- * before building a full ASS document. This allows the HDR processor
- * to handle all color tags uniformly.
+ * Converts SRT/WebVTT-ish <font color="#RRGGBB"> tags to ASS inline
+ * color overrides before building a full ASS document. This allows the
+ * HDR processor to handle all color tags uniformly.
  *
- * Uses subsrt for multi-format parsing and ass-compiler for ASS generation.
+ * Pair with `src/lib/subtitle-parser.ts` for timing extraction, then
+ * build a minimal ASS document for the HDR processor.
  */
 
 import { ASCII_CONTROL_CHARS, BIDI_AND_ZERO_WIDTH_CHARS } from "../../lib/unicode-controls";
@@ -55,7 +56,7 @@ const SRT_COLOR_OPEN_RE =
   /<font\b[^>]{0,512}\bcolor="?#([0-9a-fA-F]{6}(?![0-9a-fA-F])|[0-9a-fA-F]{3}(?![0-9a-fA-F]))"?[^>]{0,512}>/gi;
 const SRT_COLOR_CLOSE_RE = /<\/font>/gi;
 
-// ── SRT Color Preprocessing ──────────────────────────────
+// ── Text Cue Color Preprocessing ─────────────────────────
 
 /**
  * Neutralize raw `\`, `{`, `}` in user-supplied SRT text BEFORE any of our
@@ -242,6 +243,29 @@ export function buildAssDocument(
   return lines.join("\n");
 }
 
+export function buildAssDocumentFromCaptions(
+  captions: { start: number; end: number; text: string; skipped?: boolean }[],
+  style: StyleConfig = DEFAULT_STYLE
+): { content: string; skippedCount: number } {
+  if (captions.length === 0) {
+    throw new Error("No subtitle cues detected");
+  }
+
+  const skippedCount = captions.filter((c) => c.skipped).length;
+  const entries = captions
+    .filter((c) => !c.skipped)
+    .map((c) => ({
+      start: c.start,
+      end: c.end,
+      text: c.text,
+    }));
+
+  return {
+    content: buildAssDocument(entries, style),
+    skippedCount,
+  };
+}
+
 /**
  * Convert milliseconds to ASS timestamp format: H:MM:SS.cc (centiseconds)
  */
@@ -260,8 +284,8 @@ function msToAssTime(ms: number): string {
 
 // ── Format Support ────────────────────────────────────────
 
-/** File extensions that need SRT/SUB → ASS conversion */
-export const CONVERTIBLE_EXTENSIONS = new Set([".srt", ".sub"]);
+/** File extensions that need text-cue → ASS conversion */
+export const CONVERTIBLE_EXTENSIONS = new Set([".srt", ".sub", ".vtt"]);
 
 /** File extensions that are native ASS/SSA */
 export const NATIVE_ASS_EXTENSIONS = new Set([".ass", ".ssa"]);

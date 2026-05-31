@@ -2,7 +2,7 @@ import { parse as parseAss } from "ass-compiler";
 import { processAssContent } from "./features/hdr-convert/ass-processor";
 import {
   DEFAULT_STYLE,
-  buildAssDocument,
+  buildAssDocumentFromCaptions,
   isConvertible,
   isNativeAss,
   processSrtUserText,
@@ -226,24 +226,12 @@ export function convertHdr(request: HdrConversionRequest): HdrConversionResult {
     const preprocessed = processSrtUserText(request.content);
     const { captions } = parseSubtitle(preprocessed, DEFAULT_STYLE.fps);
     // Drop oversized-text placeholders before building ASS. parseSrt /
-    // parseSub emit `{ text: "", skipped: true }` for captions over
+    // parseSub / parseVtt emit `{ text: "", skipped: true }` for captions over
     // MAX_CAPTION_TEXT_LEN (W11.1 contract); without this filter the
     // CLI HDR path serializes each as a blank Dialogue line. Mirrors
-    // HdrConvert.tsx:444 GUI-side filter. (parseVtt placeholders never
-    // reach here — `.vtt` doesn't match isConvertible; parseAss
-    // placeholders also don't — `.ass` goes through the isNativeAss
-    // branch above.)
-    const skippedCount = captions.filter((c) => c.skipped).length;
-    const rawAss = buildAssDocument(
-      captions
-        .filter((caption) => !caption.skipped)
-        .map((caption) => ({
-          start: caption.start,
-          end: caption.end,
-          text: caption.text,
-        })),
-      DEFAULT_STYLE
-    );
+    // HdrConvert.tsx GUI-side filter. (parseAss placeholders don't
+    // reach here — `.ass` goes through the isNativeAss branch above.)
+    const { content: rawAss, skippedCount } = buildAssDocumentFromCaptions(captions, DEFAULT_STYLE);
     return {
       outputPath,
       content: processAssContent(rawAss, brightness, request.eotf),

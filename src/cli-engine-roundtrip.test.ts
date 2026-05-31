@@ -28,7 +28,7 @@ import { DEFAULT_BRIGHTNESS, type Eotf } from "./features/hdr-convert/color-engi
 import { processAssContent } from "./features/hdr-convert/ass-processor";
 import {
   DEFAULT_STYLE,
-  buildAssDocument,
+  buildAssDocumentFromCaptions,
   isConvertible,
   isNativeAss,
   processSrtUserText,
@@ -70,9 +70,22 @@ const SRT_FIXTURE = [
   "",
 ].join("\n");
 
+const VTT_FIXTURE = [
+  "WEBVTT",
+  "",
+  "cue-a",
+  "00:00:00.000 --> 00:00:01.500 line:90% position:50%",
+  "<i>Web</i> cue",
+  "",
+  "00:00:01.500 --> 00:00:03.000",
+  "Plain second cue",
+  "",
+].join("\n");
+
 // GUI replay of the HDR-Convert tab's per-file imperative flow
-// (HdrConvert.tsx:365-397). Mirrors what processAssContent / SRT-path
-// chain produces for a given (content, brightness, eotf) tuple.
+// (HdrConvert.tsx:365-397). Mirrors what processAssContent /
+// text-cue conversion produces for a given (content, brightness, eotf)
+// tuple.
 function guiHdrFlow(
   inputPath: string,
   content: string,
@@ -90,13 +103,7 @@ function guiHdrFlow(
   if (isConvertible(fileName)) {
     const preprocessed = processSrtUserText(content);
     const { captions } = parseSubtitle(preprocessed, DEFAULT_STYLE.fps);
-    // Mirror HdrConvert.tsx:444's filter — without it this test helper
-    // would diverge from the actual GUI path, falsely confirming CLI ↔
-    // GUI byte equivalence against a buggy mirror.
-    const rawAss = buildAssDocument(
-      captions.filter((c) => !c.skipped).map((c) => ({ start: c.start, end: c.end, text: c.text })),
-      DEFAULT_STYLE
-    );
+    const { content: rawAss } = buildAssDocumentFromCaptions(captions, DEFAULT_STYLE);
     return { outputPath, content: processAssContent(rawAss, brightness, eotf) };
   }
 
@@ -106,6 +113,7 @@ function guiHdrFlow(
 describe("HDR convert — GUI ↔ CLI byte equivalence", () => {
   const inputAss = "C:\\subs\\episode01.ass";
   const inputSrt = "C:\\subs\\episode02.srt";
+  const inputVtt = "C:\\subs\\episode03.vtt";
 
   it("ASS path produces byte-identical output for shared (content, brightness, eotf)", () => {
     const cli = convertHdr({
@@ -133,6 +141,23 @@ describe("HDR convert — GUI ↔ CLI byte equivalence", () => {
 
     expect(cli.outputPath).toBe(gui.outputPath);
     expect(cli.content).toBe(gui.content);
+  });
+
+  it("WebVTT path produces byte-identical generated ASS output", () => {
+    const cli = convertHdr({
+      inputPath: inputVtt,
+      content: VTT_FIXTURE,
+      eotf: "PQ",
+      brightness: 203,
+      outputTemplate: DEFAULT_TEMPLATE,
+    });
+    const gui = guiHdrFlow(inputVtt, VTT_FIXTURE, "PQ", 203, DEFAULT_TEMPLATE);
+
+    expect(cli.outputPath).toBe(gui.outputPath);
+    expect(cli.outputPath).toBe("C:\\subs\\episode03.hdr.ass");
+    expect(cli.content).toBe(gui.content);
+    expect(cli.content).toContain("Web");
+    expect(cli.content).not.toContain("line:90%");
   });
 
   it("CLI applies DEFAULT_BRIGHTNESS when brightness is omitted, matching GUI default state", () => {

@@ -1,5 +1,5 @@
 /**
- * SRT/SUB converter tests — ported from Python tests/test_hdrify.py
+ * Text-cue converter tests — ported from Python tests/test_hdrify.py
  *
  * Tests cover: HTML font color preprocessing, ASS document building,
  * format detection helpers, and custom style configuration.
@@ -10,10 +10,12 @@ import {
   preprocessSrtColors,
   processSrtUserText,
   buildAssDocument,
+  buildAssDocumentFromCaptions,
   isNativeAss,
   isConvertible,
   DEFAULT_STYLE,
 } from "./srt-converter";
+import { parseSubtitle } from "../../lib/subtitle-parser";
 
 // ── preprocessSrtColors ──────────────────────────────────
 
@@ -230,8 +232,56 @@ describe("isConvertible", () => {
     expect(isConvertible("subtitle.ass")).toBe(false);
   });
 
-  it("rejects .vtt files", () => {
-    expect(isConvertible("subtitle.vtt")).toBe(false);
+  it("accepts .vtt files", () => {
+    expect(isConvertible("subtitle.vtt")).toBe(true);
+  });
+
+  it("is case-insensitive for .vtt files", () => {
+    expect(isConvertible("subtitle.VTT")).toBe(true);
+  });
+});
+
+describe("WebVTT HDR conversion prep", () => {
+  it("builds ASS dialogue from basic WebVTT text cues", () => {
+    const vtt = [
+      "WEBVTT",
+      "",
+      "cue-a",
+      "00:00:01.000 --> 00:00:02.500",
+      "First line",
+      "",
+      "00:00:03.000 --> 00:00:04.000",
+      "<i>Second</i> line",
+    ].join("\n");
+
+    const { captions } = parseSubtitle(processSrtUserText(vtt));
+    const { content: doc } = buildAssDocumentFromCaptions(captions);
+
+    expect(doc).toContain("Dialogue: 0,0:00:01.00,0:00:02.50");
+    expect(doc).toContain("First line");
+    expect(doc).toContain("{\\i1}Second{\\i0} line");
+  });
+
+  it("ignores WebVTT cue settings instead of leaking them into ASS text", () => {
+    const vtt = [
+      "WEBVTT",
+      "",
+      "00:00:05.000 --> 00:00:06.000 line:90% position:50% align:center",
+      "Positioned cue",
+    ].join("\n");
+
+    const { captions } = parseSubtitle(processSrtUserText(vtt));
+    const { content: doc } = buildAssDocumentFromCaptions(captions);
+
+    expect(doc).toContain("Positioned cue");
+    expect(doc).not.toContain("line:90%");
+    expect(doc).not.toContain("position:50%");
+  });
+
+  it("rejects WebVTT files with no parseable cues before emitting empty ASS", () => {
+    const { captions } = parseSubtitle("WEBVTT\n\nNOTE\ncomment only");
+
+    expect(() => buildAssDocumentFromCaptions(captions)).toThrow(/No subtitle cues/);
   });
 });
 

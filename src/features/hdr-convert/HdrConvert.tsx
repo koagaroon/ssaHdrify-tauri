@@ -3,7 +3,7 @@ import { pickSubtitleFiles, readText, writeText, fileNameFromPath } from "../../
 import { processAssContent, parseAssColor, formatAssColor } from "./ass-processor";
 import {
   processSrtUserText,
-  buildAssDocument,
+  buildAssDocumentFromCaptions,
   isNativeAss,
   isConvertible,
   DEFAULT_STYLE,
@@ -444,7 +444,7 @@ export default function HdrConvert() {
               // Direct ASS processing
               assContent = processAssContent(content, brightness, eotf);
             } else if (isConvertible(fileName)) {
-              // SRT/SUB → ASS conversion path. processSrtUserText composes
+              // Text-cue → ASS conversion path. processSrtUserText composes
               // the two-step user-text pipeline (escape user braces, then
               // inject our trusted color tags) so the order can't be swapped
               // or one step skipped by a future caller.
@@ -461,20 +461,13 @@ export default function HdrConvert() {
               // dropped from the captions array on the SRT/VTT side).
               // Log via addLog so the user sees it rather than
               // discovering it after the fact.
-              const skippedCount = captions.filter((c) => c.skipped).length;
+              const { content: rawAss, skippedCount } = buildAssDocumentFromCaptions(
+                captions,
+                style
+              );
               if (skippedCount > 0) {
                 addLog(t("msg_oversized_skipped", skippedCount, fileName), "warn");
               }
-
-              // Build ASS document from parsed captions
-              const entries = captions
-                .filter((c) => !c.skipped)
-                .map((c) => ({
-                  start: c.start,
-                  end: c.end,
-                  text: c.text,
-                }));
-              const rawAss = buildAssDocument(entries, style);
 
               // Now transform the ASS colors to HDR
               assContent = processAssContent(rawAss, brightness, eotf);

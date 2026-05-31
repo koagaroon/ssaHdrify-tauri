@@ -24,6 +24,35 @@ describe("parseSubtitle", () => {
     expect(result.captions.map((c) => c.text)).toEqual(["First line", "Second line"]);
   });
 
+  it("skips WebVTT NOTE/STYLE/REGION blocks even when they contain timing-shaped lines", () => {
+    const content = [
+      "WEBVTT",
+      "",
+      "NOTE exported by a tool",
+      "00:00:01.000 --> 00:00:02.000",
+      "comment text must not become a cue",
+      "",
+      "STYLE",
+      "::cue { color: white }",
+      "00:00:03.000 --> 00:00:04.000",
+      "style text must not become a cue",
+      "",
+      "REGION",
+      "id:bottom",
+      "00:00:05.000 --> 00:00:06.000",
+      "region text must not become a cue",
+      "",
+      "00:00:07.000 --> 00:00:08.000",
+      "real cue",
+    ].join("\n");
+
+    const result = parseSubtitle(content);
+
+    expect(result.format).toBe("vtt");
+    expect(result.captions).toHaveLength(1);
+    expect(result.captions[0]!.text).toBe("real cue");
+  });
+
   it("parses ASS Dialogue lines and reports format=ass", () => {
     const content =
       "[Script Info]\nScriptType: v4.00+\n\n" +

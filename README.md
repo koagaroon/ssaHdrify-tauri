@@ -80,18 +80,23 @@ macOS / Linux users, see "Build from Source" below.
 
 ## 支持格式 | Supported Formats
 
-不同功能的格式支持范围并不完全相同；下表是当前行为。`HDR 色彩转换` 对 `.srt` / `.sub` 会先转换成 ASS 再处理，`.vtt` 暂不用于 HDR 转换。
+不同功能的格式支持范围并不完全相同；下表是当前行为。`HDR 色彩转换` 对 `.srt` / `.sub` / `.vtt` 会先转换成 ASS 再处理。
 
-Format support differs by workflow. The table below describes current behavior. `HDR Color Conversion` converts `.srt` / `.sub` to ASS first; `.vtt` is not yet accepted for HDR conversion.
+Format support differs by workflow. The table below describes current behavior. `HDR Color Conversion` converts `.srt` / `.sub` / `.vtt` to ASS first.
 
 | 功能 / Workflow                     | `.ass` / `.ssa`                            | `.srt`                                     | `.sub`                                     | `.vtt`                                                                   |
 | ----------------------------------- | ------------------------------------------ | ------------------------------------------ | ------------------------------------------ | ------------------------------------------------------------------------ |
-| HDR 色彩转换 / HDR Color Conversion | 原生处理 / native                          | 转换为 ASS / convert to ASS                | 转换为 ASS / convert to ASS                | 暂不支持 / not yet supported                                             |
+| HDR 色彩转换 / HDR Color Conversion | 原生处理 / native                          | 转换为 ASS / convert to ASS                | 转换为 ASS / convert to ASS                | 基本文本 cue 转换为 ASS / basic text cues convert to ASS                 |
 | 时间轴偏移 / Timing Shift           | 保持格式 / preserve format                 | 保持格式 / preserve format                 | 保持格式 / preserve format                 | 保持格式 / preserve format                                               |
 | 字体嵌入 / Font Embedding           | 支持 / yes                                 | 不支持 / no                                | 不支持 / no                                | 不支持 / no                                                              |
 | `diagnose-fonts`                    | 支持 / yes                                 | 不支持 / no                                | 不支持 / no                                | 不支持 / no                                                              |
 | 批量重命名 / Batch Rename           | 配对、复制或重命名 / pair, copy, or rename | 配对、复制或重命名 / pair, copy, or rename | 配对、复制或重命名 / pair, copy, or rename | 配对、复制或重命名 / pair, copy, or rename                               |
 | `chain`                             | 取决于步骤 / depends on steps              | 取决于步骤 / depends on steps              | 取决于步骤 / depends on steps              | 仅支持本身接受 `.vtt` 的步骤 / only where the chosen step accepts `.vtt` |
+
+> [!NOTE]
+> 这里的 `.sub` 指 MicroDVD 文本字幕。Blu-ray PGS `.sup` 和 VobSub `.sub/.idx` 属于图像字幕，不适用于 HDR 文本颜色转换、ASS 字体嵌入或 `diagnose-fonts`。如需把图像字幕变成文本字幕，请先使用专门的字幕转换/OCR 工具。
+>
+> Here `.sub` means MicroDVD text subtitles. Blu-ray PGS `.sup` and VobSub `.sub/.idx` are image subtitle formats, so HDR text color conversion, ASS font embedding, and `diagnose-fonts` do not apply. To turn image subtitles into text subtitles, convert/OCR them with a dedicated subtitle tool first.
 
 ---
 

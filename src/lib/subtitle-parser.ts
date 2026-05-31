@@ -479,6 +479,12 @@ function parseVtt(content: string): Caption[] {
   // block-vs-entry rationale.
   for (const block of blocks) {
     const lines = block.replace(/^\n/, "").split("\n");
+    const firstLine = lines[0]?.trimStart() ?? "";
+    // WebVTT NOTE / STYLE / REGION blocks are metadata, not cues. A
+    // timing-looking line inside them must not become ASS dialogue.
+    if (/^(?:NOTE|STYLE|REGION)(?:\s|$)/.test(firstLine)) {
+      continue;
+    }
     // Find the timing line — a cue ID is any line that does NOT contain "-->"
     let timingIdx = -1;
     for (let i = 0; i < lines.length; i++) {

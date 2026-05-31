@@ -120,7 +120,7 @@ export const strings: Record<string, StringEntry> = {
   template_label: { en: "Output Template", zh: "输出模板" },
   template_custom: { en: "Custom…", zh: "自定义…" },
   style_settings: { en: "Style Settings", zh: "样式设置" },
-  style_hint: { en: "(SRT/SUB input only)", zh: "（仅 SRT/SUB 输入）" },
+  style_hint: { en: "(SRT/SUB/VTT input only)", zh: "（仅 SRT/SUB/VTT 输入）" },
   style_font: { en: "Font", zh: "字体" },
   style_font_placeholder: { en: "Font family name", zh: "字体族名称" },
   style_size: { en: "Size", zh: "字号" },
