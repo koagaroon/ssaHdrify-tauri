@@ -460,6 +460,37 @@ describe("deriveRenameOutputPath — exact basename match (no lang suffix)", () 
   });
 });
 
+describe("deriveRenameOutputPath — language-preserving multi-subtitle mode", () => {
+  const dir = "C:\\foo\\";
+  const video = `${dir}Show.S01E01.mkv`;
+
+  it("inserts a canonical language suffix before the subtitle extension", () => {
+    const sub = `${dir}Show.S01E01.sc.ass`;
+    expect(
+      deriveRenameOutputPath(video, sub, "copy_to_video", null, { languageSuffix: "SC" })
+    ).toBe(`${dir}Show.S01E01.sc.ass`);
+  });
+
+  it("preserves opaque sidecar extensions while adding the language suffix", () => {
+    const sub = `${dir}Show.S01E01.sc.sup`;
+    expect(
+      deriveRenameOutputPath(video, sub, "copy_to_video", null, { languageSuffix: "sc" })
+    ).toBe(`${dir}Show.S01E01.sc.sup`);
+  });
+
+  it("treats an already language-suffixed in-place rename as a no-op", () => {
+    const sub = `${dir}Show.S01E01.sc.ass`;
+    expect(deriveRenameOutputPath(video, sub, "rename", null, { languageSuffix: "sc" })).toBe(sub);
+  });
+
+  it("rejects unsafe language suffixes before output path validation", () => {
+    const sub = `${dir}Show.S01E01.ass`;
+    expect(() =>
+      deriveRenameOutputPath(video, sub, "copy_to_video", null, { languageSuffix: "../sc" })
+    ).toThrow(/Invalid language suffix/);
+  });
+});
+
 describe("deriveRenameOutputPath — path-validator integration", () => {
   // Pin the contract that wires assertSafeOutputFilename +
   // assertSafeOutputPath into the rename derivation. Each mode picks

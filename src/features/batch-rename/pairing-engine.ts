@@ -432,17 +432,33 @@ export function compareKeys(a: string, b: string): number {
 
 export type OutputMode = "rename" | "copy_to_video" | "copy_to_chosen";
 
+export interface RenameOutputOptions {
+  /** Optional suffix inserted between the video stem and subtitle extension.
+   * Used by multi-subtitle planning so `Video.sc.ass` and `Video.tc.ass`
+   * can coexist. Omit for exact basename matching (`Video.ass`). */
+  languageSuffix?: string | undefined;
+}
+
+function normalizeLanguageSuffix(suffix: string | undefined): string {
+  if (suffix === undefined) return "";
+  const normalized = suffix.trim().toLowerCase();
+  if (!normalized) return "";
+  if (!/^[a-z0-9][a-z0-9-]{0,15}$/.test(normalized)) {
+    throw new Error(`Invalid language suffix for rename output: ${suffix}`);
+  }
+  return normalized;
+}
+
 /** Derive the output path for renaming a subtitle to match a video.
  *
- * Output filename = `<video_basename><sub_extension>` — the subtitle
- * basename is replaced with the video basename verbatim (no lang
- * suffix preservation). User intent is exact basename match so a
- * media player auto-loads the sub; modern players already pick up
- * `.zh.ass` / `.sc.ass`-suffixed siblings, so preserving the lang
- * tag would defeat the rename's whole purpose. When the user wants
- * multiple language subs for the same video, the grid checkbox
- * picks ONE per video; collisions on additional checked rows are
- * caught by within-batch dedup.
+ * Default output filename = `<video_basename><sub_extension>` — the
+ * subtitle basename is replaced with the video basename verbatim. User
+ * intent in the default GUI/CLI path is exact basename match so a media
+ * player auto-loads the sub.
+ *
+ * Multi-subtitle planning can pass `languageSuffix` to produce
+ * `<video_basename>.<lang><sub_extension>` so same-extension sidecars
+ * for one video do not collapse onto the same output path.
  *
  * Target directory varies by mode:
  *   - rename          : same directory as the SUBTITLE (source disappears)
@@ -457,15 +473,16 @@ export function deriveRenameOutputPath(
   videoPath: string,
   subtitlePath: string,
   mode: OutputMode,
-  chosenDir: string | null
+  chosenDir: string | null,
+  options: RenameOutputOptions = {}
 ): string {
   // Video basename (without extension)
   const videoBaseFull = baseName(videoPath);
   const videoBase = stripExtension(videoBaseFull);
 
-  // Keep only the subtitle's file extension; the rest of the sub name
-  // (including any `.zh` / `.sc` / `.tc` lang token) is discarded so
-  // the output basename equals the video basename verbatim.
+  // Keep only the subtitle's file extension. The subtitle stem is not
+  // copied verbatim; default mode uses the video basename exactly, while
+  // multi-subtitle mode re-inserts a validated canonical language suffix.
   // `subDot >= 0` (not `> 0`) intentionally accepts the leading-dot
   // edge case `.ass`: a fan-sub pack can deliver a leading-dot
   // filename and the old `> 0` guard would produce `<videoBase>` with
@@ -475,7 +492,8 @@ export function deriveRenameOutputPath(
   const subDot = subFull.lastIndexOf(".");
   const subExt = subDot >= 0 ? subFull.slice(subDot) : ""; // ".ass" / ".srt" / etc.
 
-  const outName = `${videoBase}${subExt}`;
+  const langSuffix = normalizeLanguageSuffix(options.languageSuffix);
+  const outName = langSuffix ? `${videoBase}.${langSuffix}${subExt}` : `${videoBase}${subExt}`;
 
   // Pick target directory per mode
   let targetDir: string;
@@ -543,7 +561,7 @@ export function deriveRenameOutputPath(
     }
     validatorRef = `${normTargetDir}/__validator_ref__`;
   }
-  // BatchRename's outName is `${videoBase}${subExt}`,
+  // BatchRename's outName is `${videoBase}${optionalLangSuffix}${subExt}`,
   // i.e., the user's verbatim video filename with the subtitle's
   // extension. Brace characters in legitimate fan-sub video names
   // (`[Group] Show {1080p}.mkv`) must pass — they're not template
@@ -568,9 +586,10 @@ export function deriveRenameOutputPath(
   //
   // The rename loop later treats noOp rows as Skipped before any I/O
   // attempt, so even the partial check elided here would have no
-  // effect on what reaches the filesystem. Other modes (copy_to_video,
-  // copy_to_chosen) always have outputPath in a different directory
-  // and need the full validator.
+  // effect on what reaches the filesystem. Other modes are validated
+  // normally; copy_to_video can also be a harmless no-op, but its
+  // validator reference is the video path rather than the subtitle
+  // source, so it does not need this rename-specific bypass.
   if (!(mode === "rename" && isNoOpRename(subtitlePath, outputPath))) {
     assertSafeOutputPath(outputPath, validatorRef);
   }

@@ -48,26 +48,79 @@ describe("planRename", () => {
 
     expect(plan.pairings.map((row) => row.inputPath)).toEqual([subSc, subJp]);
     expect(plan.pairings.map((row) => row.language)).toEqual(["sc", "jp"]);
+    expect(plan.pairings.map((row) => row.outputPath)).toEqual([
+      "C:\\media\\[RawsX][Show Title][01][1080P][BDRip].sc.ass",
+      "C:\\media\\[RawsX][Show Title][01][1080P][BDRip].jp.srt",
+    ]);
   });
 
   it("all mode can plan multiple language rows for one unambiguous video", () => {
     const plan = planRename({
-      paths: [video, subSc, subJp],
+      paths: [video, subSc, subTc, subJp],
       mode: "copy_to_video",
       langs: "all",
     });
 
-    expect(plan.pairings).toHaveLength(2);
+    expect(plan.pairings).toHaveLength(3);
     expect(plan.pairings.map((row) => row.outputPath)).toEqual([
-      "C:\\media\\[RawsX][Show Title][01][1080P][BDRip].ass",
-      "C:\\media\\[RawsX][Show Title][01][1080P][BDRip].srt",
+      "C:\\media\\[RawsX][Show Title][01][1080P][BDRip].sc.ass",
+      "C:\\media\\[RawsX][Show Title][01][1080P][BDRip].tc.ass",
+      "C:\\media\\[RawsX][Show Title][01][1080P][BDRip].jp.srt",
     ]);
     // Pin per-row language values so a future pairing-engine
     // refactor that merged the two rows into one (or duplicated a
     // single language across rows) would surface here instead of
     // sliding past the length + path-array checks above.
-    expect(plan.pairings.map((row) => row.language)).toEqual(["sc", "jp"]);
-    expect(plan.pairings.map((row) => row.inputPath)).toEqual([subSc, subJp]);
+    expect(plan.pairings.map((row) => row.language)).toEqual(["sc", "tc", "jp"]);
+    expect(plan.pairings.map((row) => row.inputPath)).toEqual([subSc, subTc, subJp]);
+  });
+
+  it("all mode keeps already matched untagged subtitles as no-op", () => {
+    const untagged = "C:\\media\\[RawsX][Show Title][01][1080P][BDRip].ass";
+    const plan = planRename({
+      paths: [video, untagged],
+      mode: "copy_to_video",
+      langs: "all",
+    });
+
+    expect(plan.pairings[0]).toMatchObject({
+      inputPath: untagged,
+      outputPath: "C:\\media\\[RawsX][Show Title][01][1080P][BDRip].ass",
+      language: "",
+      noOp: true,
+    });
+  });
+
+  it("canonical language aliases surface duplicate output keys for the Rust CLI guard", () => {
+    const subScAlias = "C:\\media\\[SubsA][Show Title][01][1080P][BDRip].sc.ass";
+    const subZhCn = "C:\\media\\[SubsB][Show Title][01][1080P][BDRip].zh-CN.ass";
+    const plan = planRename({
+      paths: [video, subScAlias, subZhCn],
+      mode: "copy_to_video",
+      langs: "all",
+    });
+
+    expect(plan.pairings.map((row) => row.language)).toEqual(["sc", "sc"]);
+    expect(plan.pairings.map((row) => row.noOp)).toEqual([false, false]);
+    expect(plan.pairings.map((row) => row.outputPath)).toEqual([
+      "C:\\media\\[RawsX][Show Title][01][1080P][BDRip].sc.ass",
+      "C:\\media\\[RawsX][Show Title][01][1080P][BDRip].sc.ass",
+    ]);
+  });
+
+  it("all mode preserves language suffixes for opaque .sup sidecars", () => {
+    const subScSup = "C:\\media\\[RawsX][Show Title][01][1080P][BDRip].sc.sup";
+    const subTcSup = "C:\\media\\[RawsX][Show Title][01][1080P][BDRip].tc.sup";
+    const plan = planRename({
+      paths: [video, subScSup, subTcSup],
+      mode: "copy_to_video",
+      langs: "all",
+    });
+
+    expect(plan.pairings.map((row) => row.outputPath)).toEqual([
+      "C:\\media\\[RawsX][Show Title][01][1080P][BDRip].sc.sup",
+      "C:\\media\\[RawsX][Show Title][01][1080P][BDRip].tc.sup",
+    ]);
   });
 
   it("supports copy-to-chosen output directories", () => {
@@ -79,6 +132,20 @@ describe("planRename", () => {
     });
 
     expect(plan.pairings[0]!.outputPath).toBe("D:\\out\\[RawsX][Show Title][01][1080P][BDRip].ass");
+  });
+
+  it("preserves explicit language suffixes in copy-to-chosen mode", () => {
+    const plan = planRename({
+      paths: [video, subSc, subTc],
+      mode: "copy_to_chosen",
+      outputDir: "D:\\out",
+      langs: "all",
+    });
+
+    expect(plan.pairings.map((row) => row.outputPath)).toEqual([
+      "D:\\out\\[RawsX][Show Title][01][1080P][BDRip].sc.ass",
+      "D:\\out\\[RawsX][Show Title][01][1080P][BDRip].tc.ass",
+    ]);
   });
 
   it("marks already matched subtitles as no-op", () => {

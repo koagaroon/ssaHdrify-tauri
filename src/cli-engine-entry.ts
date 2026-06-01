@@ -282,6 +282,7 @@ export function planRename(request: RenamePlanRequest): RenamePlanResult {
     selection.kind === "auto"
       ? buildAutoRenameCandidates(videos, filteredSubtitles)
       : buildMultiLanguageRenameCandidates(videos, filteredSubtitles);
+  const preserveLanguageSuffix = selection.kind !== "auto";
 
   return {
     videoCount: videos.length,
@@ -293,7 +294,12 @@ export function planRename(request: RenamePlanRequest): RenamePlanResult {
         candidate.video.path,
         candidate.subtitle.path,
         request.mode,
-        request.outputDir ?? null
+        request.outputDir ?? null,
+        {
+          languageSuffix: preserveLanguageSuffix
+            ? subtitleLanguage(candidate.subtitle.name) || undefined
+            : undefined,
+        }
       );
       return {
         inputPath: candidate.subtitle.path,

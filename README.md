@@ -206,7 +206,14 @@ ssahdrify-cli chain hdr --eotf pq + shift --offset +500ms input.ass
 
 # 批量重命名：默认复制到视频所在目录 / Batch rename (default: copy sub next to video)
 ssahdrify-cli rename "<series-folder>"
+
+# 多外挂字幕：保留语言后缀，避免 sc/tc 同扩展字幕互相覆盖 / Multiple sidecar subtitles: keep language suffixes
+ssahdrify-cli rename "<series-folder>" --langs all --dry-run
 ```
+
+`rename --langs auto` 保持和 GUI 一致的默认行为：每个视频只选一个字幕，输出文件名精确匹配视频 stem（如 `Video.ass`）。`rename --langs all` 或显式列表（如 `--langs sc,jp`）可以为同一个视频规划多个字幕，并写成带语言后缀的文件名（如 `Video.sc.ass`、`Video.jp.srt`）；没有语言标记的字幕仍使用精确视频名（如 `Video.ass`）。如果多行会写到同一个目标路径，CLI 会在写入前阻止这些冲突行。
+
+`rename --langs auto` keeps the GUI-style behavior: one subtitle per video, named exactly like the video stem (`Video.ass`). `rename --langs all` or an explicit list such as `--langs sc,jp` can plan multiple subtitles for the same video and writes language-suffixed names such as `Video.sc.ass` and `Video.jp.srt`; untagged subtitles still use the exact video name (`Video.ass`). If multiple rows would write to the same target path, the CLI blocks those conflict rows before writing.
 
 ### 全部子命令 | All Subcommands
 

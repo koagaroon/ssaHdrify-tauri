@@ -384,7 +384,7 @@ struct RenameArgs {
     #[arg(long, value_enum, default_value_t = RenameMode::CopyToVideo)]
     mode: RenameMode,
 
-    /// Language selection: auto, all, or a comma-separated list such as sc,jp. 语言选择：auto、all 或逗号分隔列表（如 sc,jp）。
+    /// Language selection: auto chooses one subtitle per video; all/list keep language suffixes. 语言选择：auto 每集选一个字幕；all/列表会保留语言后缀。
     #[arg(long, default_value = "auto")]
     langs: String,
 
@@ -6890,6 +6890,59 @@ mod tests {
         assert!(
             duplicates.contains(expected_key),
             "no-op row's target should be claimed in the seen set"
+        );
+    }
+
+    #[test]
+    fn rename_dedup_allows_distinct_language_suffix_outputs() {
+        let rows = vec![
+            engine::RenamePlanRow {
+                input_path: "C:\\Subs\\episode.sc.ass".to_string(),
+                output_path: "C:\\Subs\\Episode.sc.ass".to_string(),
+                video_path: "C:\\Subs\\Episode.mkv".to_string(),
+                no_op: false,
+            },
+            engine::RenamePlanRow {
+                input_path: "C:\\Subs\\episode.tc.ass".to_string(),
+                output_path: "C:\\Subs\\Episode.tc.ass".to_string(),
+                video_path: "C:\\Subs\\Episode.mkv".to_string(),
+                no_op: false,
+            },
+        ];
+
+        let duplicates = duplicate_rename_output_keys(&rows);
+        assert!(
+            duplicates.is_empty(),
+            "distinct canonical language outputs must not be blocked as duplicates"
+        );
+    }
+
+    #[test]
+    fn rename_dedup_flags_canonical_alias_duplicate_outputs() {
+        let rows = vec![
+            engine::RenamePlanRow {
+                input_path: "C:\\Subs\\episode.sc.ass".to_string(),
+                output_path: "C:\\Subs\\Episode.sc.ass".to_string(),
+                video_path: "C:\\Subs\\Episode.mkv".to_string(),
+                no_op: false,
+            },
+            engine::RenamePlanRow {
+                input_path: "C:\\Subs\\episode.zh-CN.ass".to_string(),
+                output_path: "C:\\Subs\\Episode.sc.ass".to_string(),
+                video_path: "C:\\Subs\\Episode.mkv".to_string(),
+                no_op: false,
+            },
+        ];
+
+        let duplicates = duplicate_rename_output_keys(&rows);
+        let expected_key = if cfg!(windows) || cfg!(target_os = "macos") {
+            "c:/subs/episode.sc.ass"
+        } else {
+            "C:/Subs/Episode.sc.ass"
+        };
+        assert!(
+            duplicates.contains(expected_key),
+            "canonical aliases that resolve to the same output must be blocked"
         );
     }
 
