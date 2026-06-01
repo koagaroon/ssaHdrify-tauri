@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseSubtitle, shiftSubtitle } from "./subtitle-parser";
+import { parseSubtitle, shiftSubtitle, transformSubtitleTimings } from "./subtitle-parser";
 
 describe("parseSubtitle", () => {
   it("splits SRT cue blocks with mixed CRLF and LF endings", () => {
@@ -239,6 +239,19 @@ describe("parseSubtitle", () => {
     const result = parseSubtitle(ass);
     expect(result.format).toBe("ass");
     expect(result.captions).toHaveLength(1);
+  });
+});
+
+describe("transformSubtitleTimings", () => {
+  it("rejects non-finite transformed timestamps before formatting output", () => {
+    const srt = ["1", "00:00:01,000 --> 00:00:02,000", "hello", ""].join("\n");
+
+    expect(() =>
+      transformSubtitleTimings(srt, (caption) => ({
+        ...caption,
+        start: NaN,
+      }))
+    ).toThrow(/non-finite timestamp/);
   });
 });
 

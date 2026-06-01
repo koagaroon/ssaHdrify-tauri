@@ -11,6 +11,7 @@
  */
 import {
   shiftSubtitle,
+  transformSubtitleTimings,
   formatDisplayTime,
   parseDisplayTime,
   type Caption,
@@ -24,6 +25,8 @@ import {
 
 export type { Caption, SubtitleFormat };
 export { formatDisplayTime, parseDisplayTime };
+
+export const MAX_TIMING_OFFSET_MS = 365 * 24 * 3600 * 1000;
 
 export interface ShiftOptions {
   /** Offset in milliseconds (positive = later/slower, negative = earlier/faster) */
@@ -68,6 +71,39 @@ export interface PreviewEntry {
   wasShifted: boolean;
 }
 
+export interface TimingMapRule {
+  /** Rule start in milliseconds. Caption start times at this value match. */
+  startMs: number;
+  /** Optional exclusive end in milliseconds. Caption start times at this value no longer match. */
+  endMs?: number | undefined;
+  /** Offset in milliseconds applied to both caption start and end. */
+  offsetMs: number;
+  /** Disabled rows are ignored. Defaults to true. */
+  enabled?: boolean | undefined;
+  /** Optional UI/report label for the rule. */
+  label?: string | undefined;
+}
+
+export interface NormalizedTimingMapRule {
+  index: number;
+  startMs: number;
+  endMs?: number | undefined;
+  offsetMs: number;
+  label?: string | undefined;
+}
+
+export interface TimingMapMatch {
+  ruleIndex: number | null;
+  appliedOffsetMs: number;
+  ruleLabel?: string | undefined;
+}
+
+export interface TimingMapPreviewEntry extends PreviewEntry {
+  ruleIndex: number | null;
+  appliedOffsetMs: number;
+  ruleLabel?: string | undefined;
+}
+
 export interface ShiftResult {
   /** Shifted subtitle content as string */
   content: string;
@@ -86,46 +122,103 @@ export interface ShiftResult {
   skippedCount: number;
 }
 
-/**
- * Parse, shift, and rebuild a subtitle file.
- */
-export function shiftSubtitles(content: string, options: ShiftOptions): ShiftResult {
-  const { offsetMs, thresholdMs, fps } = options;
+export interface TimingMapResult extends Omit<ShiftResult, "preview"> {
+  preview: TimingMapPreviewEntry[];
+  shiftedCount: number;
+  activeRuleCount: number;
+}
 
-  const { output, format, captions, shifted } = shiftSubtitle(content, offsetMs, thresholdMs, fps);
+function truncateCodepoints(text: string, max: number): string {
+  let cp = 0;
+  let out = "";
+  for (const ch of text) {
+    if (cp >= max) break;
+    out += ch;
+    cp++;
+  }
+  return out;
+}
 
-  // Build preview for every caption — the UI scroll container decides
-  // how many are visible at a time. Long lines are truncated to 60
-  // codepoints (not UTF-16 code units) so emoji and astral-plane glyphs
-  // aren't bisected mid-surrogate. The full text is preserved in fullText
-  // for hover tooltips.
-  const truncateCodepoints = (text: string, max: number): string => {
-    let cp = 0;
-    let out = "";
-    for (const ch of text) {
-      if (cp >= max) break;
-      out += ch;
-      cp++;
+function assertFiniteTimingMapMs(value: number, label: string): void {
+  if (!Number.isFinite(value)) {
+    throw new Error(`Invalid timing map ${label}: expected a finite number, got ${String(value)}`);
+  }
+  if (!Number.isInteger(value)) {
+    throw new Error(`Invalid timing map ${label}: expected an integer millisecond value`);
+  }
+}
+
+export function normalizeTimingMapRules(rules: TimingMapRule[]): NormalizedTimingMapRule[] {
+  if (!Array.isArray(rules)) {
+    throw new Error("Timing map rules must be an array");
+  }
+
+  const normalized: NormalizedTimingMapRule[] = [];
+  for (let i = 0; i < rules.length; i += 1) {
+    const rule = rules[i];
+    if (!rule) {
+      throw new Error(`Invalid timing map rule ${i + 1}: missing rule`);
     }
-    return out;
-  };
-  // (Pattern 2): exclude `skipped: true` placeholders
-  // (oversized captions kept positionally for buildAss's sequential consume
-  // — see subtitle-parser.ts MAX_CAPTION_TEXT_LEN handling). The preview
-  // surface is a user-facing list; including placeholder rows allocates
-  // up to MAX_PARSED_ENTRIES (500k) empty PreviewEntry objects with no
-  // visible content. Build paths (HDR / Embed / output writing) already
-  // filter `c.skipped`; preview was the lone consumer that didn't.
-  // `index` still tracks the caption's position in the buildAss-aligned
-  // vector so the displayed numbering matches the source line numbers a
-  // user might cross-reference.
-  const preview: PreviewEntry[] = [];
+    if (rule.enabled === false) continue;
+
+    assertFiniteTimingMapMs(rule.startMs, `rule ${i + 1} startMs`);
+    assertFiniteTimingMapMs(rule.offsetMs, `rule ${i + 1} offsetMs`);
+    if (rule.startMs < 0) {
+      throw new Error(`Invalid timing map rule ${i + 1}: startMs must be >= 0`);
+    }
+    if (Math.abs(rule.offsetMs) > MAX_TIMING_OFFSET_MS) {
+      throw new Error(
+        `Invalid timing map rule ${i + 1}: offsetMs exceeds +/-${MAX_TIMING_OFFSET_MS} ms`
+      );
+    }
+
+    const out: NormalizedTimingMapRule = {
+      index: i,
+      startMs: rule.startMs,
+      offsetMs: rule.offsetMs,
+    };
+    if (rule.endMs !== undefined) {
+      assertFiniteTimingMapMs(rule.endMs, `rule ${i + 1} endMs`);
+      if (rule.endMs <= rule.startMs) {
+        throw new Error(`Invalid timing map rule ${i + 1}: endMs must be greater than startMs`);
+      }
+      out.endMs = rule.endMs;
+    }
+    if (rule.label !== undefined && rule.label.trim()) {
+      out.label = rule.label.trim().slice(0, 80);
+    }
+    normalized.push(out);
+  }
+
+  return normalized;
+}
+
+export function findTimingMapRule(
+  captionStartMs: number,
+  rules: NormalizedTimingMapRule[]
+): NormalizedTimingMapRule | null {
+  // First enabled matching rule wins. This keeps overlapping maps
+  // deterministic and gives future GUI rule order real meaning.
+  for (const rule of rules) {
+    if (captionStartMs < rule.startMs) continue;
+    if (rule.endMs !== undefined && captionStartMs >= rule.endMs) continue;
+    return rule;
+  }
+  return null;
+}
+
+function buildPreview(
+  captions: Caption[],
+  shifted: Caption[],
+  matches?: TimingMapMatch[]
+): PreviewEntry[] | TimingMapPreviewEntry[] {
+  const preview: (PreviewEntry | TimingMapPreviewEntry)[] = [];
   for (let i = 0; i < captions.length; i++) {
     const c = captions[i]!;
     if (c.skipped) continue;
     const s = shifted[i]!;
     const wasShifted = c.start !== s.start || c.end !== s.end;
-    preview.push({
+    const base: PreviewEntry = {
       index: i + 1,
       originalStart: c.start,
       originalEnd: c.end,
@@ -134,8 +227,33 @@ export function shiftSubtitles(content: string, options: ShiftOptions): ShiftRes
       text: truncateCodepoints(c.text, 60),
       fullText: c.text,
       wasShifted,
-    });
+    };
+    const match = matches?.[i];
+    if (match) {
+      preview.push({
+        ...base,
+        ruleIndex: match.ruleIndex,
+        appliedOffsetMs: match.appliedOffsetMs,
+        ...(match.ruleLabel !== undefined && { ruleLabel: match.ruleLabel }),
+      });
+    } else {
+      preview.push(base);
+    }
   }
+  return preview;
+}
+
+/**
+ * Parse, shift, and rebuild a subtitle file.
+ */
+export function shiftSubtitles(content: string, options: ShiftOptions): ShiftResult {
+  const { offsetMs, thresholdMs, fps } = options;
+
+  const { output, format, captions, shifted } = shiftSubtitle(content, offsetMs, thresholdMs, fps);
+  // Build preview for every caption — the UI scroll container decides
+  // how many are visible at a time. `buildPreview` excludes oversized
+  // skipped placeholders and preserves original caption indexes.
+  const preview = buildPreview(captions, shifted) as PreviewEntry[];
 
   return {
     content: output,
@@ -143,6 +261,56 @@ export function shiftSubtitles(content: string, options: ShiftOptions): ShiftRes
     preview,
     captionCount: captions.length,
     skippedCount: captions.filter((c) => c.skipped).length,
+  };
+}
+
+export function shiftSubtitlesWithTimingMap(
+  content: string,
+  options: { rules: TimingMapRule[]; fps?: number | undefined }
+): TimingMapResult {
+  const rules = normalizeTimingMapRules(options.rules);
+  const matches: TimingMapMatch[] = [];
+
+  const { output, format, captions, shifted } = transformSubtitleTimings(
+    content,
+    (caption, index) => {
+      const rule = findTimingMapRule(caption.start, rules);
+      if (!rule) {
+        matches[index] = { ruleIndex: null, appliedOffsetMs: 0 };
+        return { ...caption };
+      }
+      matches[index] = {
+        ruleIndex: rule.index,
+        appliedOffsetMs: rule.offsetMs,
+        ...(rule.label !== undefined && { ruleLabel: rule.label }),
+      };
+      return {
+        ...caption,
+        start: Math.max(0, caption.start + rule.offsetMs),
+        end: Math.max(0, caption.end + rule.offsetMs),
+      };
+    },
+    options.fps
+  );
+
+  for (let i = 0; i < captions.length; i += 1) {
+    if (captions[i]!.skipped) {
+      matches[i] = { ruleIndex: null, appliedOffsetMs: 0 };
+    } else if (!matches[i]) {
+      matches[i] = { ruleIndex: null, appliedOffsetMs: 0 };
+    }
+  }
+
+  const preview = buildPreview(captions, shifted, matches) as TimingMapPreviewEntry[];
+
+  return {
+    content: output,
+    format,
+    preview,
+    captionCount: captions.length,
+    skippedCount: captions.filter((c) => c.skipped).length,
+    shiftedCount: preview.filter((entry) => entry.wasShifted).length,
+    activeRuleCount: rules.length,
   };
 }
 

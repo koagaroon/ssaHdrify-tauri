@@ -43,6 +43,8 @@ export interface ParseResult {
 
 export type SubtitleFormat = "srt" | "vtt" | "ass" | "sub" | "unknown";
 
+export type CaptionTimingTransform = (caption: Caption, index: number) => Caption;
+
 // ── Format Detection ──────────────────────────────────────
 
 const VTT_HEADER = /^WEBVTT/m;
@@ -841,6 +843,69 @@ export function parseSubtitle(content: string, fps?: number): ParseResult {
   return { format, captions };
 }
 
+function rebuildSubtitle(
+  content: string,
+  format: SubtitleFormat,
+  captions: Caption[],
+  fps?: number
+): string {
+  switch (format) {
+    case "srt":
+      return buildSrt(captions);
+    case "vtt": {
+      // Preserve the original VTT header (may contain X-TIMESTAMP-MAP for HLS).
+      // Extracted here and passed to buildVtt as a local — no module-level state.
+      const headerMatch = content.match(/^(WEBVTT[^\r\n]*)\r?\n/);
+      const vttHeader = headerMatch?.[1] ?? "WEBVTT";
+      return buildVtt(captions, vttHeader);
+    }
+    case "ass":
+      return buildAss(content, captions);
+    case "sub":
+      return buildSub(captions, fps);
+    default:
+      throw new Error(`Cannot rebuild format: ${format}`);
+  }
+}
+
+/**
+ * Parse a subtitle, transform caption timestamps, and rebuild in the same
+ * format. Used by simple global shift and Timing Workbench timing maps so
+ * every timing mode shares parser caps, skipped-placeholder handling, and
+ * format-preserving builders.
+ */
+export function transformSubtitleTimings(
+  content: string,
+  transform: CaptionTimingTransform,
+  fps?: number
+): { output: string; format: SubtitleFormat; captions: Caption[]; shifted: Caption[] } {
+  const { format, captions } = parseSubtitle(content, fps);
+
+  const shifted = captions.map((c, index) => {
+    // Skipped placeholders (all four parsers emit them for oversized
+    // text) pass through unchanged — buildAss returns the original
+    // line, buildSrt / buildVtt / buildSub filter them out. Shifting
+    // their timestamps would be wasted work.
+    if (c.skipped) return c;
+    const next = transform(c, index);
+    if (!Number.isFinite(next.start) || !Number.isFinite(next.end)) {
+      throw new Error(`Caption timing transform returned a non-finite timestamp at index ${index}`);
+    }
+    return {
+      ...next,
+      start: Math.max(0, next.start),
+      end: Math.max(0, next.end),
+    };
+  });
+
+  return {
+    output: rebuildSubtitle(content, format, shifted, fps),
+    format,
+    captions,
+    shifted,
+  };
+}
+
 /**
  * Shift subtitle timestamps and rebuild the file.
  *
@@ -856,45 +921,17 @@ export function shiftSubtitle(
   thresholdMs?: number,
   fps?: number
 ): { output: string; format: SubtitleFormat; captions: Caption[]; shifted: Caption[] } {
-  const { format, captions } = parseSubtitle(content, fps);
-
-  const shifted = captions.map((c) => {
-    // Skipped placeholders (all four parsers emit them for oversized
-    // text) pass through unchanged — buildAss returns the original
-    // line, buildSrt / buildVtt / buildSub filter them out. Shifting
-    // their timestamps would be wasted work.
-    if (c.skipped) return c;
-    const shouldShift = thresholdMs === undefined || c.start >= thresholdMs;
-    if (!shouldShift) return { ...c };
-    return {
-      ...c,
-      start: Math.max(0, c.start + offsetMs),
-      end: Math.max(0, c.end + offsetMs),
-    };
-  });
-
-  let output: string;
-  switch (format) {
-    case "srt":
-      output = buildSrt(shifted);
-      break;
-    case "vtt": {
-      // Preserve the original VTT header (may contain X-TIMESTAMP-MAP for HLS).
-      // Extracted here and passed to buildVtt as a local — no module-level state.
-      const headerMatch = content.match(/^(WEBVTT[^\r\n]*)\r?\n/);
-      const vttHeader = headerMatch?.[1] ?? "WEBVTT";
-      output = buildVtt(shifted, vttHeader);
-      break;
-    }
-    case "ass":
-      output = buildAss(content, shifted);
-      break;
-    case "sub":
-      output = buildSub(shifted, fps);
-      break;
-    default:
-      throw new Error(`Cannot rebuild format: ${format}`);
-  }
-
-  return { output, format, captions, shifted };
+  return transformSubtitleTimings(
+    content,
+    (c) => {
+      const shouldShift = thresholdMs === undefined || c.start >= thresholdMs;
+      if (!shouldShift) return { ...c };
+      return {
+        ...c,
+        start: Math.max(0, c.start + offsetMs),
+        end: Math.max(0, c.end + offsetMs),
+      };
+    },
+    fps
+  );
 }
