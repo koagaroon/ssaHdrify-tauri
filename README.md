@@ -281,6 +281,10 @@ ssahdrify-cli chain          --help
 
 `diagnose-fonts` is the standalone detailed diagnostic command. It is verbose by default and read-only: it does not write output subtitles and does not refresh or mutate the font cache. It accepts subtitle inputs plus font-resolution options: `--font-dir`, `--font-file`, `--no-system-fonts`, `--no-cache`, `--cache-file`, `--lang`, and `--json`. Add `--subset-check` only when you want to verify that resolved font files can actually be subset; the check runs in memory and does not write subtitles.
 
+`diagnose-fonts` 和带 `--diagnose` 的 `embed` 还会输出 package-level Font QA 状态：`complete`、`incomplete` 或 `blocked`。`complete` 表示已检查文件里的字体引用全部解析成功；`incomplete` 表示有缺失字体、警告或被跳过的可选子集化检查；`blocked` 表示文件诊断失败、字体解析错误，或 `--subset-check` 明确失败。
+
+`diagnose-fonts` and `embed --diagnose` also report a package-level Font QA status: `complete`, `incomplete`, or `blocked`. `complete` means all inspected font references resolved; `incomplete` means missing fonts, warnings, or skipped optional subset checks remain; `blocked` means a file diagnostic failed, a font resolution errored, or `--subset-check` explicitly failed.
+
 为避免诊断命令在异常字幕/字体组合上长时间运行，`--subset-check` 有命令级预算：最多 128 次子集化调用，累计子集输出约 100 MiB；超出后剩余检查会标记为 skipped，并输出一次 budget exhausted 警告。
 
 To keep diagnostics bounded on unusual subtitle/font combinations, `--subset-check` uses one command-level budget: up to 128 subset calls and about 100 MiB of cumulative subset output. After that, remaining checks are marked skipped and one budget-exhausted warning is emitted.

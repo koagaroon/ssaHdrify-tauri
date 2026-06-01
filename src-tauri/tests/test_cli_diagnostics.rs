@@ -161,6 +161,12 @@ fn diagnose_fonts_reports_missing_without_writing_output() {
         "standalone diagnostics should name the missing font: stdout={stdout}"
     );
     assert!(
+        stdout.contains("Font QA: incomplete")
+            && stdout.contains("fonts: 0/1")
+            && stdout.contains("missing: 1"),
+        "standalone diagnostics should include a package-level QA verdict: stdout={stdout}"
+    );
+    assert!(
         stdout.contains("embedded label:") && stdout.contains(MISSING_FONT_EMBEDDED_NAME),
         "standalone diagnostics should show the generated ASS [Fonts] label: stdout={stdout}"
     );
@@ -243,6 +249,9 @@ fn diagnose_fonts_json_reports_successful_files_as_diagnosed() {
         serde_json::from_slice(&output.stdout).expect("stdout should be JSON");
     assert_eq!(value["files"][0]["status"], "diagnosed");
     assert_eq!(value["files"][0]["output"], serde_json::Value::Null);
+    assert_eq!(value["qa"]["status"], "incomplete");
+    assert_eq!(value["qa"]["fontReferenceCount"], 1);
+    assert_eq!(value["qa"]["missingCount"], 1);
     assert_eq!(
         value["fonts"][0]["embeddedFontName"],
         MISSING_FONT_EMBEDDED_NAME
@@ -286,6 +295,8 @@ fn diagnose_fonts_subset_check_reports_skipped_for_unresolved_without_writing_ou
     let value: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("stdout should be JSON");
     assert_eq!(value["files"][0]["status"], "diagnosed");
+    assert_eq!(value["qa"]["status"], "incomplete");
+    assert_eq!(value["qa"]["subsetSkippedCount"], 1);
     assert_eq!(
         value["fonts"][0]["subsetCheck"]["status"], "skipped",
         "unresolved fonts should report a skipped subset check: {value}"
@@ -460,6 +471,8 @@ fn json_with_diagnose_includes_full_diagnostics() {
     let value: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("stdout should be JSON");
     assert_eq!(value["diagnostics"]["mode"], "summary");
+    assert_eq!(value["diagnostics"]["qa"]["status"], "incomplete");
+    assert_eq!(value["diagnostics"]["qa"]["missingCount"], 1);
     assert!(
         value["diagnostics"]["files"]
             .as_array()

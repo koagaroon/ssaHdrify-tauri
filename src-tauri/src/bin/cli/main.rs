@@ -675,8 +675,34 @@ struct CommandDiagnostics {
     files: Vec<FileDiagnostic>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cache: Option<CacheDiagnostic>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    qa: Option<FontQaSummary>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     fonts: Vec<FontDiagnostic>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct FontQaSummary {
+    status: FontQaStatus,
+    file_count: usize,
+    failed_file_count: usize,
+    font_reference_count: usize,
+    resolved_count: usize,
+    missing_count: usize,
+    error_count: usize,
+    subset_checked_count: usize,
+    subset_ok_count: usize,
+    subset_failed_count: usize,
+    subset_skipped_count: usize,
+}
+
+#[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum FontQaStatus {
+    Complete,
+    Incomplete,
+    Blocked,
 }
 
 #[derive(Debug, Serialize)]
@@ -2747,11 +2773,7 @@ fn load_timing_map_rules(
     if parsed.rules.is_empty() {
         return Err("timing map contains no rules".to_string());
     }
-    if !parsed
-        .rules
-        .iter()
-        .any(|rule| rule.enabled.unwrap_or(true))
-    {
+    if !parsed.rules.iter().any(|rule| rule.enabled.unwrap_or(true)) {
         return Err("timing map contains no enabled rules".to_string());
     }
     Ok(parsed.rules)
@@ -3598,6 +3620,10 @@ fn emit_standalone_font_diagnostics(globals: &GlobalOptions, diagnostics: &Comma
             ),
         )
     );
+
+    if let Some(qa) = &diagnostics.qa {
+        println!("{}", format_font_qa_summary(globals, qa));
+    }
 
     if let Some(cache) = &diagnostics.cache {
         let path = cache
@@ -5433,6 +5459,11 @@ fn build_command_diagnostics(
             "one or more files completed with warnings; inspect results[].warnings".to_string(),
         );
     }
+    let qa = if report.command == "diagnose-fonts" || !fonts.is_empty() {
+        Some(build_font_qa_summary(report, &fonts, warning_count))
+    } else {
+        None
+    };
 
     CommandDiagnostics {
         mode,
@@ -5452,7 +5483,65 @@ fn build_command_diagnostics(
             })
             .collect(),
         cache,
+        qa,
         fonts,
+    }
+}
+
+fn build_font_qa_summary(
+    report: &CommandReport,
+    fonts: &[FontDiagnostic],
+    warning_count: usize,
+) -> FontQaSummary {
+    let failed_file_count = report
+        .results
+        .iter()
+        .filter(|result| result.status == FileStatus::Failed)
+        .count();
+    let mut resolved_count = 0;
+    let mut missing_count = 0;
+    let mut error_count = 0;
+    let mut subset_checked_count = 0;
+    let mut subset_ok_count = 0;
+    let mut subset_failed_count = 0;
+    let mut subset_skipped_count = 0;
+
+    for font in fonts {
+        match font.result {
+            FontResolutionResult::Resolved => resolved_count += 1,
+            FontResolutionResult::Missing => missing_count += 1,
+            FontResolutionResult::Error => error_count += 1,
+        }
+        if let Some(check) = &font.subset_check {
+            subset_checked_count += 1;
+            match check.status {
+                FontSubsetCheckStatus::Ok => subset_ok_count += 1,
+                FontSubsetCheckStatus::Failed => subset_failed_count += 1,
+                FontSubsetCheckStatus::Skipped => subset_skipped_count += 1,
+            }
+        }
+    }
+
+    let status = if failed_file_count > 0 || error_count > 0 || subset_failed_count > 0 {
+        FontQaStatus::Blocked
+    } else if missing_count > 0 || warning_count > 0 || subset_skipped_count > 0 {
+        FontQaStatus::Incomplete
+    } else {
+        FontQaStatus::Complete
+    };
+
+    FontQaSummary {
+        status,
+        file_count: report.results.len(),
+        failed_file_count,
+        font_reference_count: fonts.len(),
+        resolved_count,
+        missing_count,
+        error_count,
+        subset_checked_count,
+        subset_ok_count,
+        subset_failed_count,
+        subset_skipped_count,
     }
 }
 
@@ -5482,6 +5571,56 @@ fn unresolved_font_count(diagnostics: &CommandDiagnostics) -> usize {
         .iter()
         .filter(|font| font.result != FontResolutionResult::Resolved)
         .count()
+}
+
+fn format_font_qa_summary(globals: &GlobalOptions, qa: &FontQaSummary) -> String {
+    let status_en = match qa.status {
+        FontQaStatus::Complete => "complete",
+        FontQaStatus::Incomplete => "incomplete",
+        FontQaStatus::Blocked => "blocked",
+    };
+    let status_zh = match qa.status {
+        FontQaStatus::Complete => "完整",
+        FontQaStatus::Incomplete => "不完整",
+        FontQaStatus::Blocked => "受阻",
+    };
+    let subset_en = if qa.subset_checked_count > 0 {
+        format!(
+            ", subset checks: {} ok, {} failed, {} skipped",
+            qa.subset_ok_count, qa.subset_failed_count, qa.subset_skipped_count
+        )
+    } else {
+        String::new()
+    };
+    let subset_zh = if qa.subset_checked_count > 0 {
+        format!(
+            "，子集化检查：{} 个通过，{} 个失败，{} 个跳过",
+            qa.subset_ok_count, qa.subset_failed_count, qa.subset_skipped_count
+        )
+    } else {
+        String::new()
+    };
+    localize(
+        globals,
+        format!(
+            "Font QA: {status_en} (files: {}, failed: {}, fonts: {}/{}, missing: {}, errors: {}{subset_en})",
+            qa.file_count,
+            qa.failed_file_count,
+            qa.resolved_count,
+            qa.font_reference_count,
+            qa.missing_count,
+            qa.error_count
+        ),
+        format!(
+            "字体 QA：{status_zh}（文件：{}，失败：{}，字体：{}/{}, 缺失：{}，错误：{}{subset_zh}）",
+            qa.file_count,
+            qa.failed_file_count,
+            qa.resolved_count,
+            qa.font_reference_count,
+            qa.missing_count,
+            qa.error_count
+        ),
+    )
 }
 
 fn diagnostic_next_actions(
@@ -5656,6 +5795,10 @@ fn emit_attached_diagnostics(
             ),
         )
     );
+
+    if let Some(qa) = &diagnostics.qa {
+        eprintln!("  {}", format_font_qa_summary(globals, qa));
+    }
 
     if let Some(cache) = &diagnostics.cache {
         let path = cache
@@ -6524,16 +6667,17 @@ fn parse_timestamp_part(part: &str, label: &str) -> Result<i64, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_effective_embedded_font_names, apply_subset_checks_to_diagnostics, classify_locale,
-        copy_file_output, create_cli_font_db_dir, diagnostic_next_actions, display_path,
-        duplicate_rename_output_keys, engine, group_resolved_fonts_by_face, normalize_output_key,
-        parse_duration_ms, parse_timestamp_ms, predict_chain_output_path, relocate_output_path,
-        resolve_embed_fonts, sanitize_for_display, substitute_template, write_output, Cli, Command,
-        CommandDiagnostics, DiagnoseMode, DiagnosticSubsetBudget, EmbedArgs, FileDiagnostic,
-        FileStatus, FontDiagnostic, FontSubsetCheckStatus, GlobalOptions, MissingFontAction,
-        OutputLang, ResolvedEmbedFont, TempFontDbDir, MAX_DIAGNOSTIC_SUBSET_CALLS,
-        MAX_DIAGNOSTIC_SUBSET_TOTAL_BYTES, MAX_RESOLVED_FONT_CODEPOINTS, MAX_SHIFT_OFFSET_MS,
-        MAX_SUBSET_CODEPOINTS_FOR_DEDUP,
+        apply_effective_embedded_font_names, apply_subset_checks_to_diagnostics,
+        build_font_qa_summary, classify_locale, copy_file_output, create_cli_font_db_dir,
+        diagnostic_next_actions, display_path, duplicate_rename_output_keys, engine,
+        group_resolved_fonts_by_face, normalize_output_key, parse_duration_ms, parse_timestamp_ms,
+        predict_chain_output_path, relocate_output_path, resolve_embed_fonts, sanitize_for_display,
+        substitute_template, write_output, Cli, Command, CommandDiagnostics, CommandReport,
+        DiagnoseMode, DiagnosticSubsetBudget, EmbedArgs, FileDiagnostic, FileReport, FileStatus,
+        FontDiagnostic, FontQaStatus, FontSubsetCheckDiagnostic, FontSubsetCheckStatus,
+        GlobalOptions, MissingFontAction, OutputLang, ResolvedEmbedFont, TempFontDbDir,
+        MAX_DIAGNOSTIC_SUBSET_CALLS, MAX_DIAGNOSTIC_SUBSET_TOTAL_BYTES,
+        MAX_RESOLVED_FONT_CODEPOINTS, MAX_SHIFT_OFFSET_MS, MAX_SUBSET_CODEPOINTS_FOR_DEDUP,
     };
     // Import the canonical filename literal directly from app_lib so the
     // test pins the same name `TempFontDbDir::drop`'s remove_dir_all
@@ -6702,6 +6846,7 @@ mod tests {
                 warnings: vec!["non-font warning".to_string()],
             }],
             cache: None,
+            qa: None,
             fonts: Vec::new(),
         };
 
@@ -6719,6 +6864,69 @@ mod tests {
                 .all(|action| !action.contains("embed --on-missing")),
             "non-font warnings should not suggest strict font-embedding policy: {actions:?}"
         );
+    }
+
+    fn qa_usage(label: &str) -> engine::FontEmbedUsage {
+        engine::FontEmbedUsage {
+            family: label.to_string(),
+            bold: false,
+            italic: false,
+            label: label.to_string(),
+            font_name: format!("{label}.ttf"),
+            glyph_count: 1,
+            codepoints: vec![0x41],
+        }
+    }
+
+    fn qa_report(status: FileStatus) -> CommandReport {
+        let mut report = CommandReport::new("diagnose-fonts");
+        report.push(FileReport {
+            input: "input.ass".to_string(),
+            output: None,
+            encoding: Some("utf-8".to_string()),
+            status,
+            error: None,
+            warnings: None,
+        });
+        report
+    }
+
+    #[test]
+    fn font_qa_summary_marks_complete_when_all_fonts_resolve() {
+        let mut resolved = FontDiagnostic::new(&qa_usage("Resolved"));
+        resolved.mark_resolved("/fonts/resolved.ttf".to_string(), 0);
+
+        let qa = build_font_qa_summary(&qa_report(FileStatus::Diagnosed), &[resolved], 0);
+
+        assert_eq!(qa.status, FontQaStatus::Complete);
+        assert_eq!(qa.resolved_count, 1);
+        assert_eq!(qa.missing_count, 0);
+    }
+
+    #[test]
+    fn font_qa_summary_marks_incomplete_for_missing_fonts() {
+        let missing = FontDiagnostic::new(&qa_usage("Missing"));
+
+        let qa = build_font_qa_summary(&qa_report(FileStatus::Diagnosed), &[missing], 0);
+
+        assert_eq!(qa.status, FontQaStatus::Incomplete);
+        assert_eq!(qa.missing_count, 1);
+    }
+
+    #[test]
+    fn font_qa_summary_marks_blocked_for_subset_failures() {
+        let mut resolved = FontDiagnostic::new(&qa_usage("BrokenSubset"));
+        resolved.mark_resolved("/fonts/broken.ttf".to_string(), 0);
+        resolved.subset_check = Some(FontSubsetCheckDiagnostic {
+            status: FontSubsetCheckStatus::Failed,
+            bytes: None,
+            error: Some("subset failed".to_string()),
+        });
+
+        let qa = build_font_qa_summary(&qa_report(FileStatus::Diagnosed), &[resolved], 0);
+
+        assert_eq!(qa.status, FontQaStatus::Blocked);
+        assert_eq!(qa.subset_failed_count, 1);
     }
 
     #[test]
