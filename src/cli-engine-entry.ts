@@ -28,7 +28,7 @@ import {
   deriveShiftedPath,
   shiftSubtitles,
 } from "./features/timing-shift/timing-engine";
-import { extractLangFromBaseName, LANG_TAGS } from "./lib/lang-detection";
+import { canonicalLanguageTag, LANG_TAGS, subtitleLanguageFromName } from "./lib/lang-detection";
 import {
   assertSafeOutputFilename,
   assertSafeOutputPath,
@@ -549,7 +549,7 @@ function parseLanguageSelection(raw: string): LanguageSelection {
     if (!LANG_TAGS.has(token)) {
       throw new Error(`Unsupported language code: ${token}`);
     }
-    languages.add(canonicalLanguage(token));
+    languages.add(canonicalLanguageTag(token));
   }
 
   if (languages.size === 0) {
@@ -637,39 +637,7 @@ function groupMatchedFilesByKey(files: ParsedFile[]): Map<string, ParsedFile[]> 
 // pairing-engine version's malformed-key `|| 0` WHY comment.
 
 function subtitleLanguage(name: string): string {
-  const dot = name.lastIndexOf(".");
-  const baseName = dot > 0 ? name.slice(0, dot) : name;
-  return canonicalLanguage(extractLangFromBaseName(baseName));
-}
-
-function canonicalLanguage(language: string): string {
-  switch (language.toLowerCase()) {
-    case "chs":
-    case "sc":
-    case "zh":
-    case "zh-cn":
-      return "sc";
-    case "cht":
-    case "tc":
-    case "zh-tw":
-      return "tc";
-    case "ja":
-    case "jpn":
-    case "jp":
-      return "jp";
-    case "eng":
-      return "en";
-    // `ko` / `kor` reconcile. Without this branch,
-    // a CLI invocation with `--langs kor` could not match subtitle
-    // filenames carrying the `.ko.ass` suffix (and vice versa),
-    // silently filtering the row. Mirrors the sc / tc / jp / en
-    // reconciliation already in place.
-    case "ko":
-    case "kor":
-      return "ko";
-    default:
-      return language.toLowerCase();
-  }
+  return subtitleLanguageFromName(name);
 }
 
 // `fileNameFromPath` now lives in `path-validation.ts`.

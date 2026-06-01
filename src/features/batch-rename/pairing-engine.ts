@@ -411,6 +411,122 @@ export function buildPairings(videos: ParsedFile[], subtitles: ParsedFile[]): Pa
   return rows;
 }
 
+/**
+ * Build GUI rows for the opt-in multi-subtitle mode. The default
+ * buildPairings model stays video-centric (one row per video); this
+ * variant emits one row per matched subtitle when the episode key has
+ * exactly one video, so `.sc.ass` + `.tc.ass` sidecars can both be
+ * selected and written.
+ *
+ * Ambiguous video keys still pair by index only, matching the CLI's
+ * conservative behavior: if multiple videos share the same episode
+ * key, producing every video/subtitle cross-product would create
+ * misleading rows and likely duplicate outputs.
+ */
+export function buildMultiSubtitlePairings(
+  videos: ParsedFile[],
+  subtitles: ParsedFile[]
+): PairingRow[] {
+  const rows: PairingRow[] = [];
+  const matchedSubs = new Map<string, ParsedFile[]>();
+  for (const s of subtitles) {
+    if (s.episode === null) continue;
+    const key = pairingKeyTuple(s.season, s.episode);
+    const arr = matchedSubs.get(key) ?? [];
+    arr.push(s);
+    matchedSubs.set(key, arr);
+  }
+
+  const matchedVideos = new Map<string, ParsedFile[]>();
+  const unmatchedVideos: ParsedFile[] = [];
+  for (const v of videos) {
+    if (v.episode === null) {
+      unmatchedVideos.push(v);
+      continue;
+    }
+    const key = pairingKeyTuple(v.season, v.episode);
+    const arr = matchedVideos.get(key) ?? [];
+    arr.push(v);
+    matchedVideos.set(key, arr);
+  }
+
+  const sortedKeys = Array.from(matchedVideos.keys()).sort(compareKeys);
+  const newId = (v: ParsedFile, s?: ParsedFile) => (s ? `v|${v.path}|s|${s.path}` : `v|${v.path}`);
+
+  for (const key of sortedKeys) {
+    const vs = matchedVideos.get(key) ?? [];
+    const ss = matchedSubs.get(key) ?? [];
+    if (ss.length === 0) {
+      for (const v of vs) {
+        rows.push({
+          id: newId(v),
+          video: { path: v.path, name: v.name },
+          subtitle: null,
+          source: "unmatched",
+          selected: false,
+          key: "unmatched",
+        });
+      }
+      continue;
+    }
+
+    if (vs.length === 1) {
+      const v = vs[0]!;
+      for (const s of ss) {
+        rows.push({
+          id: newId(v, s),
+          video: { path: v.path, name: v.name },
+          subtitle: { path: s.path, name: s.name },
+          source: "regex",
+          selected: true,
+          key,
+        });
+      }
+      continue;
+    }
+
+    for (let i = 0; i < vs.length; i += 1) {
+      const v = vs[i]!;
+      const s = ss[i] ?? null;
+      rows.push({
+        id: s ? newId(v, s) : newId(v),
+        video: { path: v.path, name: v.name },
+        subtitle: s ? { path: s.path, name: s.name } : null,
+        source: s ? "warning" : "unmatched",
+        selected: s !== null,
+        key: s ? key : "unmatched",
+      });
+    }
+  }
+
+  for (const v of unmatchedVideos) {
+    rows.push({
+      id: newId(v),
+      video: { path: v.path, name: v.name },
+      subtitle: null,
+      source: "unmatched",
+      selected: false,
+      key: "unmatched",
+    });
+  }
+
+  return rows;
+}
+
+export function findDuplicateRenameOutputKeys(outputPaths: string[]): Set<string> {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const outputPath of outputPaths) {
+    const key = normalizeOutputKey(outputPath);
+    if (seen.has(key)) {
+      duplicates.add(key);
+    } else {
+      seen.add(key);
+    }
+  }
+  return duplicates;
+}
+
 export function compareKeys(a: string, b: string): number {
   // Called only on matched-video keys (`${season}|${episode}` shape).
   // Unmatched videos take a separate branch above

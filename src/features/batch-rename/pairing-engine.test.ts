@@ -19,7 +19,9 @@ import {
   extractEpisode,
   extractSeason,
   buildPairings,
+  buildMultiSubtitlePairings,
   deriveRenameOutputPath,
+  findDuplicateRenameOutputKeys,
   isNoOpRename,
   assignSubtitleToRow,
   type PairingRow,
@@ -390,6 +392,64 @@ describe("buildPairings — common shapes", () => {
     expect(rows[2]!.source).toBe("unmatched");
     expect(rows[2]!.subtitle).toBeNull();
     expect(rows[2]!.key).toBe("unmatched");
+  });
+});
+
+describe("buildMultiSubtitlePairings — opt-in multi-subtitle GUI mode", () => {
+  it("1 video + 3 language subs produces 3 selected rows for that video", () => {
+    const v = parse("[RawsX][Show][01][1080p].mkv");
+    const s1 = parse("[SubsA][Show][01][1080p].sc.ass");
+    const s2 = parse("[SubsA][Show][01][1080p].tc.ass");
+    const s3 = parse("[SubsA][Show][01][1080p].jp.srt");
+    const rows = buildMultiSubtitlePairings([v], [s1, s2, s3]);
+
+    expect(rows).toHaveLength(3);
+    expect(rows.map((r) => r.video?.path)).toEqual([v.path, v.path, v.path]);
+    expect(rows.map((r) => r.subtitle?.path)).toEqual([s1.path, s2.path, s3.path]);
+    expect(rows.map((r) => r.selected)).toEqual([true, true, true]);
+    expect(rows.map((r) => r.source)).toEqual(["regex", "regex", "regex"]);
+  });
+
+  it("ambiguous video keys still pair by index instead of creating a cross-product", () => {
+    const v1 = parse("[RawA][Show][01][1080p].mkv");
+    const v2 = parse("[RawB][Show][01][1080p].mkv");
+    const s1 = parse("[SubsA][Show][01][1080p].sc.ass");
+    const s2 = parse("[SubsB][Show][01][1080p].tc.ass");
+    const rows = buildMultiSubtitlePairings([v1, v2], [s1, s2]);
+
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.source)).toEqual(["warning", "warning"]);
+    expect(rows.map((r) => r.video?.path)).toEqual([v1.path, v2.path]);
+    expect(rows.map((r) => r.subtitle?.path)).toEqual([s1.path, s2.path]);
+  });
+
+  it("keeps unmatched videos as unselected rows", () => {
+    const v = parse("Show.without.episode.mkv");
+    const rows = buildMultiSubtitlePairings([v], []);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.video?.path).toBe(v.path);
+    expect(rows[0]!.subtitle).toBeNull();
+    expect(rows[0]!.selected).toBe(false);
+    expect(rows[0]!.source).toBe("unmatched");
+  });
+});
+
+describe("findDuplicateRenameOutputKeys", () => {
+  it("allows distinct language suffix outputs", () => {
+    const duplicates = findDuplicateRenameOutputKeys([
+      "C:\\Subs\\Episode.sc.ass",
+      "C:\\Subs\\Episode.tc.ass",
+    ]);
+    expect(duplicates.size).toBe(0);
+  });
+
+  it("flags duplicate outputs after canonical alias resolution", () => {
+    const duplicates = findDuplicateRenameOutputKeys([
+      "C:/Subs/Episode.sc.ass",
+      "C:/Subs/Episode.sc.ass",
+    ]);
+    expect(duplicates.size).toBe(1);
   });
 });
 

@@ -13,8 +13,10 @@
  * with another video are unpaired automatically (uniquely owned).
  * Subtitles whose episode regex didn't match any video are hidden
  * from the grid but stay in the dropdown — the workflow is
- * video-first ("I have a video, find me a sub for it"). ↺ Reset
- * restores the engine's seed.
+ * video-first ("I have a video, find me a sub for it"). Multi-subtitle
+ * mode switches the seed to one row per matched subtitle for the same
+ * video, preserving language suffixes on output. ↺ Reset restores the
+ * engine's seed.
  */
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import {
@@ -35,6 +37,7 @@ import { countExistingFiles } from "../../lib/output-collisions";
 import { useLogPanel } from "../../lib/useLogPanel";
 import { LogPanel } from "../../lib/LogPanel";
 import { DropErrorBanner } from "../../lib/DropErrorBanner";
+import { subtitleLanguageFromName } from "../../lib/lang-detection";
 import {
   buildConflictMessage,
   normalizeOutputKey,
@@ -43,8 +46,10 @@ import {
 } from "../../lib/dedup-helpers";
 import {
   buildPairings,
+  buildMultiSubtitlePairings,
   parseFilename,
   deriveRenameOutputPath,
+  findDuplicateRenameOutputKeys,
   isNoOpRename,
   assignSubtitleToRow,
   type PairingRow,
@@ -158,6 +163,7 @@ export default function BatchRename() {
   // Picked target directory for the `copy_to_chosen` mode. Required
   // before Run when that mode is active.
   const [chosenDir, setChosenDir] = useState<string | null>(null);
+  const [multiSubtitleMode, setMultiSubtitleMode] = useState(false);
   // Pairing rows are direct state, not a derived view over an
   // overrides Map. The engine seeds them from the input file lists;
   // user actions (toggle / dropdown pick) mutate rows in place,
@@ -203,8 +209,10 @@ export default function BatchRename() {
     // `b|...` branches that were unreachable in practice (subtitle-
     // only or both-null rows are never produced by buildPairings), and
     // the engine's `makeRowId` output was discarded one line later.
-    return buildPairings(parsedVideos, parsedSubs);
-  }, [videoPaths, videoNames, subtitlePaths, subtitleNames]);
+    return multiSubtitleMode
+      ? buildMultiSubtitlePairings(parsedVideos, parsedSubs)
+      : buildPairings(parsedVideos, parsedSubs);
+  }, [videoPaths, videoNames, subtitlePaths, subtitleNames, multiSubtitleMode]);
 
   // Reset edits when the input file lists change. baseRows only
   // recomputes when the user re-picks / clears, so this isn't a
@@ -491,7 +499,12 @@ export default function BatchRename() {
             row.video!.path,
             row.subtitle!.path,
             outputMode,
-            chosenDir
+            chosenDir,
+            {
+              languageSuffix: multiSubtitleMode
+                ? subtitleLanguageFromName(row.subtitle!.name) || undefined
+                : undefined,
+            }
           );
           derivedTargets.push({ row, outputPath });
         } catch (e) {
@@ -517,7 +530,7 @@ export default function BatchRename() {
       // followed by copyFile(src, src) failures. The remaining work goes
       // through the regular flow.
       const noopTargets: { row: PairingRow; outputPath: string }[] = [];
-      const targets: { row: PairingRow; outputPath: string }[] = [];
+      let targets: { row: PairingRow; outputPath: string }[] = [];
       for (const tgt of derivedTargets) {
         if (isNoOpRename(tgt.row.subtitle!.path, tgt.outputPath)) {
           noopTargets.push(tgt);
@@ -529,7 +542,26 @@ export default function BatchRename() {
         // Sanitize attacker-influenced filename.
         addLog(t("msg_rename_already_named", sanitizeForDialog(tgt.row.subtitle!.name)), "info");
       }
+      const duplicateOutputKeys = findDuplicateRenameOutputKeys(
+        derivedTargets.map((tgt) => tgt.outputPath)
+      );
+      const duplicateTargets = targets.filter((tgt) =>
+        duplicateOutputKeys.has(normalizeOutputKey(tgt.outputPath))
+      );
+      for (const tgt of duplicateTargets) {
+        addLog(t("msg_skipped_duplicate", sanitizeForDialog(tgt.row.subtitle!.name)), "error");
+      }
+      if (duplicateTargets.length > 0) {
+        targets = targets.filter(
+          (tgt) => !duplicateOutputKeys.has(normalizeOutputKey(tgt.outputPath))
+        );
+      }
       if (targets.length === 0) {
+        if (duplicateTargets.length > 0) {
+          addLog(t("msg_rename_all_failed", duplicateTargets.length), "error");
+          setLastActionResult("error");
+          return;
+        }
         // Nothing was actually written. Logging this as success + green
         // footer would suggest the rename worked; route through "noop"
         // (amber pending) so the user sees that the run made no changes.
@@ -700,10 +732,10 @@ export default function BatchRename() {
           addLog(t("msg_processing", subName));
 
           try {
-            // Within-batch dedup. Two rows producing the same output
-            // path (e.g., user pre-edited filenames in a way that
-            // collides) would otherwise overwrite each other. No-op
-            // rows (target == source) were filtered pre-flight.
+            // Defense-in-depth duplicate guard. The pre-flight above
+            // blocks every non-no-op duplicate participant before any
+            // write; keep this loop check so future refactors cannot
+            // accidentally reintroduce first-wins overwrite behavior.
             const normalizedOut = normalizeOutputKey(outputPath);
             if (seenOutputs.has(normalizedOut)) {
               addLog(t("msg_skipped_duplicate", subName), "error");
@@ -762,7 +794,7 @@ export default function BatchRename() {
     } finally {
       busyRef.current = false;
     }
-  }, [busy, actionableCount, actionableRows, outputMode, chosenDir, addLog, t]);
+  }, [busy, actionableCount, actionableRows, outputMode, chosenDir, multiSubtitleMode, addLog, t]);
 
   // Reset last-action on selection change.
   useEffect(() => {
@@ -957,7 +989,22 @@ export default function BatchRename() {
           <div className="text-xs font-medium mb-2" style={{ color: "var(--text-muted)" }}>
             {t("rename_mode_label")}
           </div>
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-2">
+            <label
+              className="flex items-center gap-2 text-sm cursor-pointer"
+              style={{ color: "var(--text-primary)" }}
+            >
+              <input
+                type="checkbox"
+                checked={multiSubtitleMode}
+                onChange={(e) => setMultiSubtitleMode(e.target.checked)}
+                disabled={busy}
+              />
+              <span>{t("rename_multi_subtitle_mode")}</span>
+            </label>
+            <div className="text-xs ml-6" style={{ color: "var(--text-muted)" }}>
+              {t("rename_multi_subtitle_mode_hint")}
+            </div>
             <label
               className="flex items-center gap-2 text-sm cursor-pointer"
               style={{ color: "var(--text-primary)" }}

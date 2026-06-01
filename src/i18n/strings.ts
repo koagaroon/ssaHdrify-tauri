@@ -608,6 +608,14 @@ export const strings: Record<string, StringEntry> = {
   // ── Output-mode + run flow (Stage 5c) ────────────────────
   rename_row_select_aria: { en: "Select this pair", zh: "选中此对" },
   rename_mode_label: { en: "Output mode", zh: "输出方式" },
+  rename_multi_subtitle_mode: {
+    en: "Keep multiple subtitles per video",
+    zh: "保留每个视频的多个字幕",
+  },
+  rename_multi_subtitle_mode_hint: {
+    en: "Tagged subtitles write as Video.sc.ass / Video.tc.ass; untagged subtitles keep Video.ass.",
+    zh: "带标签字幕会写成 Video.sc.ass / Video.tc.ass；无标签字幕仍使用 Video.ass。",
+  },
   rename_mode_copy_to_video: {
     en: "Copy to video directory",
     zh: "复制到视频所在目录",
