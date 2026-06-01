@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { applyFontEmbed, planFontEmbed, planRename } from "./cli-engine-entry";
+import {
+  applyFontEmbed,
+  convertShift,
+  parseTimingMap,
+  planFontEmbed,
+  planRename,
+} from "./cli-engine-entry";
 
 const SIMPLE_ASS = `[Script Info]
 Title: CLI Font Test
@@ -13,6 +19,17 @@ Style: Default,Arial,20,0,0
 Format: Layer, Start, End, Style, Text
 Dialogue: 0,0:00:00.00,0:00:01.00,Default,Hello
 `;
+
+const SIMPLE_SRT = [
+  "1",
+  "00:00:01,000 --> 00:00:02,000",
+  "one",
+  "",
+  "2",
+  "00:00:05,000 --> 00:00:06,000",
+  "two",
+  "",
+].join("\n");
 
 describe("planRename", () => {
   const video = "C:\\media\\[RawsX][Show Title][01][1080P][BDRip].mkv";
@@ -174,6 +191,50 @@ describe("planRename", () => {
       videoPath: video,
       noOp: true,
     });
+  });
+});
+
+describe("time shift timing-map engine helpers", () => {
+  it("parses timing maps and converts through the CLI engine surface", () => {
+    const map = parseTimingMap({
+      content: [
+        "start,end,offset,label,enabled",
+        "00:00:00.000,00:00:05.000,+1s,opening,true",
+        "00:00:05.000,,-500ms,main,true",
+      ].join("\n"),
+    });
+
+    const result = convertShift({
+      inputPath: "C:\\subs\\sample.srt",
+      content: SIMPLE_SRT,
+      offsetMs: 0,
+      timingMapRules: map.rules,
+    });
+
+    expect(result.outputPath).toBe("C:\\subs\\sample.shifted.srt");
+    expect(result.shiftedCount).toBe(2);
+    expect(result.content).toContain("00:00:02,000 --> 00:00:03,000");
+    expect(result.content).toContain("00:00:04,500 --> 00:00:05,500");
+  });
+
+  it("rejects accidental mixing of timing map and global shift controls", () => {
+    expect(() =>
+      convertShift({
+        inputPath: "C:\\subs\\sample.srt",
+        content: SIMPLE_SRT,
+        offsetMs: 1000,
+        timingMapRules: [{ startMs: 0, offsetMs: 500 }],
+      })
+    ).toThrow(/non-zero offsetMs/);
+    expect(() =>
+      convertShift({
+        inputPath: "C:\\subs\\sample.srt",
+        content: SIMPLE_SRT,
+        offsetMs: 0,
+        thresholdMs: 1000,
+        timingMapRules: [{ startMs: 0, offsetMs: 500 }],
+      })
+    ).toThrow(/thresholdMs/);
   });
 });
 

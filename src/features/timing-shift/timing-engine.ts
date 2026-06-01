@@ -84,6 +84,10 @@ export interface TimingMapRule {
   label?: string | undefined;
 }
 
+export interface TimingMapParseResult {
+  rules: TimingMapRule[];
+}
+
 export interface NormalizedTimingMapRule {
   index: number;
   startMs: number;
@@ -146,6 +150,225 @@ function assertFiniteTimingMapMs(value: number, label: string): void {
   if (!Number.isInteger(value)) {
     throw new Error(`Invalid timing map ${label}: expected an integer millisecond value`);
   }
+}
+
+const MAX_TIMING_MAP_RULES = 10_000;
+
+function parseTimingMapTimestampMs(value: unknown, label: string): number {
+  if (typeof value === "number") {
+    assertFiniteTimingMapMs(value, label);
+    return value;
+  }
+  if (typeof value !== "string") {
+    throw new Error(`Invalid timing map ${label}: expected timestamp string or integer ms`);
+  }
+
+  const raw = value.trim();
+  if (!raw) {
+    throw new Error(`Invalid timing map ${label}: expected a timestamp`);
+  }
+  if (/^\d+$/.test(raw)) {
+    const parsed = Number(raw);
+    assertFiniteTimingMapMs(parsed, label);
+    return parsed;
+  }
+
+  const normalized = raw.replace(",", ".");
+  const m = normalized.match(/^(\d{1,12}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?$/);
+  if (!m) {
+    throw new Error(`Invalid timing map ${label}: expected HH:MM:SS.mmm, HH:MM:SS, or integer ms`);
+  }
+  const minutes = Number(m[2]);
+  const seconds = Number(m[3]);
+  if (minutes >= 60 || seconds >= 60) {
+    throw new Error(`Invalid timing map ${label}: minutes and seconds must be below 60`);
+  }
+  const parsed =
+    Number(m[1]) * 3_600_000 +
+    minutes * 60_000 +
+    seconds * 1000 +
+    Number((m[4] ?? "0").padEnd(3, "0"));
+  assertFiniteTimingMapMs(parsed, label);
+  return parsed;
+}
+
+function parseUnsignedDurationMs(value: string, label: string): number {
+  const factors: Record<string, number> = { h: 3_600_000, m: 60_000, s: 1000, ms: 1 };
+  const order: Record<string, number> = { h: 0, m: 1, s: 2, ms: 3 };
+  const used = new Set<string>();
+  const tokenRe = /(\d+(?:\.\d+)?)(ms|h|m|s)/gy;
+  let pos = 0;
+  let lastOrder = -1;
+  let total = 0;
+
+  while (pos < value.length) {
+    tokenRe.lastIndex = pos;
+    const m = tokenRe.exec(value);
+    if (!m || m.index !== pos) {
+      throw new Error(`Invalid timing map ${label}: expected duration like +2.5s or -500ms`);
+    }
+    const unit = m[2]!;
+    if (used.has(unit)) {
+      throw new Error(`Invalid timing map ${label}: repeated duration unit '${unit}'`);
+    }
+    if (order[unit]! <= lastOrder) {
+      throw new Error(`Invalid timing map ${label}: duration units must be ordered h, m, s, ms`);
+    }
+    used.add(unit);
+    lastOrder = order[unit]!;
+    total += Number(m[1]) * factors[unit]!;
+    pos = tokenRe.lastIndex;
+  }
+
+  if (used.size === 0 || !Number.isFinite(total) || !Number.isInteger(total)) {
+    throw new Error(`Invalid timing map ${label}: expected an integer millisecond duration`);
+  }
+  return total;
+}
+
+function parseTimingMapOffsetMs(value: unknown, label: string): number {
+  if (typeof value === "number") {
+    assertFiniteTimingMapMs(value, label);
+    return value;
+  }
+  if (typeof value !== "string") {
+    throw new Error(`Invalid timing map ${label}: expected signed duration or integer ms`);
+  }
+
+  const raw = value.trim();
+  if (/^[+-]?\d+$/.test(raw)) {
+    const parsed = Number(raw);
+    assertFiniteTimingMapMs(parsed, label);
+    return parsed;
+  }
+  const signChar = raw[0];
+  if (signChar !== "+" && signChar !== "-") {
+    throw new Error(`Invalid timing map ${label}: offset strings must include + or -`);
+  }
+  const sign = signChar === "-" ? -1 : 1;
+  const body = raw.slice(1).trim();
+  if (!body) {
+    throw new Error(`Invalid timing map ${label}: offset is empty`);
+  }
+  const magnitude = body.includes(":")
+    ? parseTimingMapTimestampMs(body, label)
+    : parseUnsignedDurationMs(body, label);
+  const parsed = sign * magnitude;
+  assertFiniteTimingMapMs(parsed, label);
+  return parsed;
+}
+
+function parseTimingMapEnabled(value: unknown, label: string): boolean | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const raw = value.trim().toLowerCase();
+    if (!raw) return undefined;
+    if (["true", "1", "yes", "on", "enabled"].includes(raw)) return true;
+    if (["false", "0", "no", "off", "disabled"].includes(raw)) return false;
+  }
+  throw new Error(`Invalid timing map ${label}: enabled must be true or false`);
+}
+
+function timingMapField(raw: Record<string, unknown>, msName: string, textName: string): unknown {
+  return raw[msName] ?? raw[textName];
+}
+
+function coerceTimingMapRule(raw: unknown, index: number): TimingMapRule {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(`Invalid timing map rule ${index + 1}: expected object`);
+  }
+  const record = raw as Record<string, unknown>;
+  const enabled = parseTimingMapEnabled(record.enabled, `rule ${index + 1} enabled`);
+  const out: TimingMapRule = {
+    startMs: parseTimingMapTimestampMs(
+      timingMapField(record, "startMs", "start"),
+      `rule ${index + 1} start`
+    ),
+    offsetMs: parseTimingMapOffsetMs(
+      timingMapField(record, "offsetMs", "offset"),
+      `rule ${index + 1} offset`
+    ),
+  };
+  const end = timingMapField(record, "endMs", "end");
+  if (end !== undefined && end !== null && end !== "") {
+    out.endMs = parseTimingMapTimestampMs(end, `rule ${index + 1} end`);
+  }
+  if (enabled !== undefined) {
+    out.enabled = enabled;
+  }
+  if (typeof record.label === "string" && record.label.trim()) {
+    out.label = record.label.trim();
+  }
+  return out;
+}
+
+function parseCsvTimingMap(content: string): TimingMapRule[] {
+  const rules: TimingMapRule[] = [];
+  const lines = content.split(/\r\n|\n|\r/);
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    const rawLine = lines[lineIndex]!;
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+
+    const fields = rawLine.split(",").map((field) => field.trim());
+    const lowerFields = fields.map((field) => field.toLowerCase());
+    if (lowerFields[0] === "start" && lowerFields.includes("offset")) {
+      continue;
+    }
+    if (fields.length < 3 || fields.length > 5) {
+      throw new Error(
+        `Invalid timing map line ${lineIndex + 1}: expected start,end,offset[,label[,enabled]]`
+      );
+    }
+
+    const rawRule: Record<string, unknown> = {
+      start: fields[0],
+      offset: fields[2],
+    };
+    if (fields[1]) rawRule.end = fields[1];
+    if (fields[3]) rawRule.label = fields[3];
+    if (fields[4]) rawRule.enabled = fields[4];
+    rules.push(coerceTimingMapRule(rawRule, rules.length));
+    if (rules.length > MAX_TIMING_MAP_RULES) {
+      throw new Error(`Timing map has too many rules; max ${MAX_TIMING_MAP_RULES}`);
+    }
+  }
+  return rules;
+}
+
+export function parseTimingMapText(content: string): TimingMapParseResult {
+  const trimmed = content.trim();
+  if (!trimmed) {
+    throw new Error("Timing map is empty");
+  }
+
+  const rules = (() => {
+    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+      const parsed = JSON.parse(trimmed) as unknown;
+      const rawRules = Array.isArray(parsed)
+        ? parsed
+        : parsed &&
+            typeof parsed === "object" &&
+            Array.isArray((parsed as { rules?: unknown }).rules)
+          ? (parsed as { rules: unknown[] }).rules
+          : null;
+      if (!rawRules) {
+        throw new Error("Timing map JSON must be an array or an object with a rules array");
+      }
+      if (rawRules.length > MAX_TIMING_MAP_RULES) {
+        throw new Error(`Timing map has too many rules; max ${MAX_TIMING_MAP_RULES}`);
+      }
+      return rawRules.map(coerceTimingMapRule);
+    }
+    return parseCsvTimingMap(content);
+  })();
+
+  if (rules.length === 0) {
+    throw new Error("Timing map contains no rules");
+  }
+  normalizeTimingMapRules(rules);
+  return { rules };
 }
 
 export function normalizeTimingMapRules(rules: TimingMapRule[]): NormalizedTimingMapRule[] {

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   MAX_TIMING_OFFSET_MS,
   normalizeTimingMapRules,
+  parseTimingMapText,
   shiftSubtitles,
   shiftSubtitlesWithTimingMap,
 } from "./timing-engine";
@@ -104,6 +105,54 @@ describe("shiftSubtitlesWithTimingMap", () => {
     expect(result.content).toContain("00:00:01,000 --> 00:00:02,000");
     expect(result.content).toContain("00:00:06,000 --> 00:00:07,000");
     expect(result.content).toContain("00:00:09,000 --> 00:00:10,000");
+  });
+});
+
+describe("parseTimingMapText", () => {
+  it("parses app-owned JSON timing maps with timestamp strings", () => {
+    const parsed = parseTimingMapText(
+      JSON.stringify({
+        rules: [
+          {
+            start: "00:00:00.000",
+            end: "00:00:05.000",
+            offset: "+1.25s",
+            label: "opening",
+          },
+          { startMs: 5000, offsetMs: -500, enabled: true },
+        ],
+      })
+    );
+
+    expect(parsed.rules).toEqual([
+      { startMs: 0, endMs: 5000, offsetMs: 1250, label: "opening" },
+      { startMs: 5000, offsetMs: -500, enabled: true },
+    ]);
+  });
+
+  it("parses CSV timing maps and applies them through the shared engine", () => {
+    const parsed = parseTimingMapText(
+      [
+        "# start,end,offset,label,enabled",
+        "start,end,offset,label,enabled",
+        "00:00:00.000,00:00:05.000,+1s,opening,true",
+        "00:00:05.000,,-500ms,main,true",
+      ].join("\n")
+    );
+
+    const result = shiftSubtitlesWithTimingMap(SRT_SAMPLE, parsed);
+
+    expect(parsed.rules).toHaveLength(2);
+    expect(result.preview.map((entry) => entry.ruleLabel)).toEqual(["opening", "main", "main"]);
+    expect(result.content).toContain("00:00:02,000 --> 00:00:03,000");
+    expect(result.content).toContain("00:00:04,500 --> 00:00:05,500");
+  });
+
+  it("rejects malformed timing-map imports before conversion", () => {
+    expect(() => parseTimingMapText("")).toThrow(/empty/);
+    expect(() => parseTimingMapText("[{}]")).toThrow(/start/);
+    expect(() => parseTimingMapText("00:60:00.000,,+1s")).toThrow(/below 60/);
+    expect(() => parseTimingMapText("00:00:00.000,,1s")).toThrow(/include \+ or -/);
   });
 });
 

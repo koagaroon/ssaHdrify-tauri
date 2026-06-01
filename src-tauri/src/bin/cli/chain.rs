@@ -198,7 +198,17 @@ pub fn parse_chain_argv(
         // HDR / Embed have no string-parse step, so no eager validation
         // is needed for them.
         if let ParsedStep::Shift(args) = &step {
-            crate::parse_duration_ms(&args.offset)
+            if args.map.is_some() {
+                return Err(format!(
+                    "step {} (shift --map): timing-map shift is only supported by standalone `shift --map` for now",
+                    i + 1
+                ));
+            }
+            let offset = args
+                .offset
+                .as_deref()
+                .ok_or_else(|| format!("step {} (shift): --offset is required", i + 1))?;
+            crate::parse_duration_ms(offset)
                 .map_err(|e| format!("step {} (shift --offset): {e}", i + 1))?;
             if let Some(after) = args.after.as_deref() {
                 crate::parse_timestamp_ms(after)
@@ -815,6 +825,14 @@ mod tests {
         let argv = argv_of(&["hdr", "--eotf", "pq", "+", "shift", "--offset", "+2s"]);
         let err = parse_chain_argv(&argv, None).unwrap_err();
         assert!(err.contains("step 'shift'"), "got: {err}");
+    }
+
+    #[test]
+    fn full_parse_rejects_shift_map_in_chain() {
+        let argv = argv_of(&["shift", "--map", "plan.json", "cat.ass"]);
+        let err = parse_chain_argv(&argv, None).unwrap_err();
+        assert!(err.contains("shift --map"), "got: {err}");
+        assert!(err.contains("standalone"), "got: {err}");
     }
 
     #[test]

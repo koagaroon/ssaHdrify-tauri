@@ -15,6 +15,7 @@ mod engine;
 
 const MAX_SHIFT_OFFSET_MS: i64 = 365 * 24 * 60 * 60 * 1000;
 const CLI_FONT_DB_DIR_PREFIX: &str = "ssahdrify-cli-font-db";
+const MAX_TIMING_MAP_BYTES: u64 = 1024 * 1024;
 
 /// Cumulative cap on aggregate raw font-subset bytes before they are
 /// base64-encoded and handed to V8. Per-font cap is
@@ -284,14 +285,24 @@ impl EotfArg {
 #[derive(Args, Debug)]
 pub(crate) struct ShiftArgs {
     /// Signed duration, for example "+2.5s", "-500ms", or "+1m30s". 带符号的偏移量，如 "+2.5s"、"-500ms" 或 "+1m30s"。
-    #[arg(long, allow_hyphen_values = true)]
-    offset: String,
+    #[arg(
+        long,
+        allow_hyphen_values = true,
+        required_unless_present = "map",
+        conflicts_with = "map"
+    )]
+    offset: Option<String>,
 
     /// Shift only entries after this timestamp.
     /// Format: HH:MM:SS, HH:MM:SS.mmm, or HH:MM:SS,mmm (ISO 8601 comma form).
     /// 仅平移此时间戳之后的字幕条目。格式：HH:MM:SS、HH:MM:SS.mmm 或 HH:MM:SS,mmm。
-    #[arg(long)]
+    #[arg(long, conflicts_with = "map")]
     after: Option<String>,
+
+    /// Apply a timing-map file instead of one global offset. Supports JSON rules or CSV lines: start,end,offset[,label[,enabled]].
+    /// 使用时间轴映射文件，而不是单一全局偏移。支持 JSON 规则或 CSV 行：start,end,offset[,label[,enabled]]。
+    #[arg(long = "map", value_name = "FILE", conflicts_with_all = ["offset", "after"])]
+    map: Option<PathBuf>,
 
     /// Output filename template. 输出文件名模板。
     #[arg(long, default_value = "{name}.shifted{ext}")]
@@ -543,7 +554,11 @@ impl ShiftArgs {
     /// chain-parse gate regressed and the panic is the correct fail-
     /// fast (better than a silent semantic divergence).
     pub(crate) fn to_chain_step(&self) -> serde_json::Value {
-        let offset_ms = parse_duration_ms(&self.offset)
+        let offset = self
+            .offset
+            .as_deref()
+            .expect("ShiftArgs.offset validated in chain::parse_chain_argv");
+        let offset_ms = parse_duration_ms(offset)
             .expect("ShiftArgs.offset validated in chain::parse_chain_argv");
         let threshold_ms = self.after.as_deref().map(|text| {
             parse_timestamp_ms(text).expect("ShiftArgs.after validated in chain::parse_chain_argv")
@@ -950,6 +965,7 @@ struct ResolvedEmbedFont {
 struct ShiftProcessContext<'a> {
     offset_ms: i64,
     threshold_ms: Option<i64>,
+    timing_map_rules: Option<Vec<engine::TimingMapRule>>,
     output_dir: Option<&'a Path>,
 }
 
@@ -2708,14 +2724,55 @@ fn format_oversized_skipped_warning(
     )])
 }
 
+fn load_timing_map_rules(
+    engine: &mut engine::CliEngine,
+    map_path: &Path,
+) -> Result<Vec<engine::TimingMapRule>, String> {
+    let absolute = absolute_path(map_path)?;
+    let display = display_path(&absolute);
+    let metadata = fs::metadata(&absolute)
+        .map_err(|err| format!("failed to read timing map metadata for {display}: {err}"))?;
+    if !metadata.is_file() {
+        return Err(format!("timing map path is not a regular file: {display}"));
+    }
+    if metadata.len() > MAX_TIMING_MAP_BYTES {
+        return Err(format!(
+            "timing map file is too large: {} bytes (max {MAX_TIMING_MAP_BYTES})",
+            metadata.len()
+        ));
+    }
+    let content = fs::read_to_string(&absolute)
+        .map_err(|err| format!("failed to read timing map as UTF-8 text from {display}: {err}"))?;
+    let parsed = engine.parse_timing_map(&engine::TimingMapParseRequest { content })?;
+    if parsed.rules.is_empty() {
+        return Err("timing map contains no rules".to_string());
+    }
+    if !parsed
+        .rules
+        .iter()
+        .any(|rule| rule.enabled.unwrap_or(true))
+    {
+        return Err("timing map contains no enabled rules".to_string());
+    }
+    Ok(parsed.rules)
+}
+
 fn run_shift(
     globals: &GlobalOptions,
     args: ShiftArgs,
     diagnose: Option<DiagnoseMode>,
 ) -> Result<ExitCode, String> {
-    let offset_ms = parse_duration_ms(&args.offset)?;
+    let offset_ms = match args.offset.as_deref() {
+        Some(offset) => parse_duration_ms(offset)?,
+        None => 0,
+    };
     let threshold_ms = args.after.as_deref().map(parse_timestamp_ms).transpose()?;
     let mut engine = engine::CliEngine::new()?;
+    let timing_map_rules = args
+        .map
+        .as_deref()
+        .map(|path| load_timing_map_rules(&mut engine, path))
+        .transpose()?;
     let output_dir = globals
         .output_dir
         .as_deref()
@@ -2736,6 +2793,7 @@ fn run_shift(
             &ShiftProcessContext {
                 offset_ms,
                 threshold_ms,
+                timing_map_rules: timing_map_rules.clone(),
                 output_dir: output_dir.as_deref(),
             },
             &mut engine,
@@ -2825,6 +2883,7 @@ fn build_shift_request(
         content,
         offset_ms: context.offset_ms,
         threshold_ms: context.threshold_ms,
+        timing_map_rules: context.timing_map_rules.clone(),
         output_template,
     }
 }
@@ -6669,6 +6728,7 @@ mod tests {
             content: "[Script Info]\n".to_string(),
             offset_ms: 1000,
             threshold_ms: None,
+            timing_map_rules: None,
             output_template: "{name}.shifted{ext}".to_string(),
         };
 

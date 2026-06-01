@@ -75,6 +75,8 @@ pub struct ShiftConversionRequest {
     pub offset_ms: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub threshold_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timing_map_rules: Option<Vec<TimingMapRule>>,
     pub output_template: String,
 }
 
@@ -90,6 +92,31 @@ pub struct ShiftConversionResult {
     /// were emitted as skipped placeholders (see also
     /// `HdrConversionResult::skipped_count`).
     pub skipped_count: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimingMapRule {
+    pub start_ms: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_ms: Option<i64>,
+    pub offset_ms: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimingMapParseRequest {
+    pub content: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimingMapParseResult {
+    pub rules: Vec<TimingMapRule>,
 }
 
 #[derive(Debug, Serialize)]
@@ -305,6 +332,7 @@ impl CliEngine {
                  globalThis.ssaHdrifyCliEngine !== null && \
                  typeof globalThis.ssaHdrifyCliEngine.convertHdr === 'function' && \
                  typeof globalThis.ssaHdrifyCliEngine.convertShift === 'function' && \
+                 typeof globalThis.ssaHdrifyCliEngine.parseTimingMap === 'function' && \
                  typeof globalThis.ssaHdrifyCliEngine.planFontEmbed === 'function' && \
                  typeof globalThis.ssaHdrifyCliEngine.planFontDiagnostics === 'function' && \
                  typeof globalThis.ssaHdrifyCliEngine.applyFontEmbed === 'function' && \
@@ -388,6 +416,19 @@ impl CliEngine {
             "ssahdrify-cli-convert-shift.js",
             "Time Shift",
             "conversion",
+            request,
+        )
+    }
+
+    pub fn parse_timing_map(
+        &mut self,
+        request: &TimingMapParseRequest,
+    ) -> Result<TimingMapParseResult, String> {
+        self.call_engine(
+            "parseTimingMap",
+            "ssahdrify-cli-parse-timing-map.js",
+            "Timing map",
+            "parse",
             request,
         )
     }

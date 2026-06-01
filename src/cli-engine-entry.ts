@@ -26,7 +26,10 @@ import { collectFontsWithParser, fontKeyLabel } from "./features/font-embed/font
 import {
   assertFiniteShiftMs,
   deriveShiftedPath,
+  parseTimingMapText,
   shiftSubtitles,
+  shiftSubtitlesWithTimingMap,
+  type TimingMapRule,
 } from "./features/timing-shift/timing-engine";
 import { canonicalLanguageTag, LANG_TAGS, subtitleLanguageFromName } from "./lib/lang-detection";
 import {
@@ -84,6 +87,7 @@ export interface ShiftConversionRequest {
   content: string;
   offsetMs: number;
   thresholdMs?: number;
+  timingMapRules?: TimingMapRule[];
   outputTemplate?: string;
 }
 
@@ -100,6 +104,14 @@ export interface ShiftConversionResult {
    * to mirror TimingShift.tsx's msg_oversized_skipped.
    */
   skippedCount: number;
+}
+
+export interface TimingMapParseRequest {
+  content: string;
+}
+
+export interface TimingMapParseResult {
+  rules: TimingMapRule[];
 }
 
 export interface RenamePlanRequest {
@@ -243,11 +255,24 @@ export function convertHdr(request: HdrConversionRequest): HdrConversionResult {
 }
 
 export function convertShift(request: ShiftConversionRequest): ShiftConversionResult {
-  assertFiniteShiftMs(request.offsetMs, request.thresholdMs);
-  const result = shiftSubtitles(request.content, {
-    offsetMs: request.offsetMs,
-    thresholdMs: request.thresholdMs,
-  });
+  let result: ReturnType<typeof shiftSubtitles> | ReturnType<typeof shiftSubtitlesWithTimingMap>;
+  if (request.timingMapRules !== undefined) {
+    if (request.offsetMs !== 0) {
+      throw new Error("Timing map shift cannot be combined with a non-zero offsetMs");
+    }
+    if (request.thresholdMs !== undefined) {
+      throw new Error("Timing map shift cannot be combined with thresholdMs");
+    }
+    result = shiftSubtitlesWithTimingMap(request.content, {
+      rules: request.timingMapRules,
+    });
+  } else {
+    assertFiniteShiftMs(request.offsetMs, request.thresholdMs);
+    result = shiftSubtitles(request.content, {
+      offsetMs: request.offsetMs,
+      thresholdMs: request.thresholdMs,
+    });
+  }
 
   return {
     outputPath: resolveShiftOutputPathInternal(
@@ -258,9 +283,16 @@ export function convertShift(request: ShiftConversionRequest): ShiftConversionRe
     content: result.content,
     format: result.format,
     captionCount: result.captionCount,
-    shiftedCount: result.preview.filter((entry) => entry.wasShifted).length,
+    shiftedCount:
+      "shiftedCount" in result
+        ? result.shiftedCount
+        : result.preview.filter((entry) => entry.wasShifted).length,
     skippedCount: result.skippedCount,
   };
+}
+
+export function parseTimingMap(request: TimingMapParseRequest): TimingMapParseResult {
+  return parseTimingMapText(request.content);
 }
 
 // Note: planRename is intentionally atomic — a single bad output

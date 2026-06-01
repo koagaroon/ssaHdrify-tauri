@@ -192,6 +192,9 @@ ssahdrify-cli hdr --eotf pq input.ass
 # 时间轴偏移 +500ms / Timing shift +500ms
 ssahdrify-cli shift --offset +500ms input.ass
 
+# 时间轴映射：按多个时间段应用不同偏移 / Timing map: apply different offsets by segment
+ssahdrify-cli shift --map timing-map.json input.srt
+
 # 字体嵌入：从指定文件夹查找字体 / Font embed: search a folder for fonts
 ssahdrify-cli embed --font-dir "<font-folder>" input.ass
 
@@ -215,6 +218,10 @@ ssahdrify-cli rename "<series-folder>" --langs all --dry-run
 `rename --langs auto` 保持和 GUI 一致的默认行为：每个视频只选一个字幕，输出文件名精确匹配视频 stem（如 `Video.ass`）。`rename --langs all` 或显式列表（如 `--langs sc,jp`）可以为同一个视频规划多个字幕，并写成带语言后缀的文件名（如 `Video.sc.ass`、`Video.jp.srt`）；没有语言标记的字幕仍使用精确视频名（如 `Video.ass`）。如果多行会写到同一个目标路径，CLI 会在写入前阻止这些冲突行。
 
 `rename --langs auto` keeps the GUI-style behavior: one subtitle per video, named exactly like the video stem (`Video.ass`). `rename --langs all` or an explicit list such as `--langs sc,jp` can plan multiple subtitles for the same video and writes language-suffixed names such as `Video.sc.ass` and `Video.jp.srt`; untagged subtitles still use the exact video name (`Video.ass`). If multiple rows would write to the same target path, the CLI blocks those conflict rows before writing.
+
+`shift --map <FILE>` 使用一个只读时间轴映射文件，不运行 Sushi、alass、FFmpeg 或任何音频自动同步工具。JSON 格式可以写成 `{"rules":[{"start":"00:00:00.000","end":"00:05:00.000","offset":"+1s","label":"opening"},{"startMs":5000,"offsetMs":-500}]}`。也可以使用简单 CSV 行：`start,end,offset,label,enabled`，例如 `00:00:00.000,00:05:00.000,+1s,opening,true`。`start` 包含、`end` 不包含；重叠规则按文件顺序先匹配者生效。映射文件会在批处理开始前先解析和校验，失败时不会写任何字幕。
+
+`shift --map <FILE>` uses a read-only timing-map file; it does not run Sushi, alass, FFmpeg, or any audio auto-sync helper. JSON can look like `{"rules":[{"start":"00:00:00.000","end":"00:05:00.000","offset":"+1s","label":"opening"},{"startMs":5000,"offsetMs":-500}]}`. A simple CSV shape is also accepted: `start,end,offset,label,enabled`, for example `00:00:00.000,00:05:00.000,+1s,opening,true`. `start` is inclusive, `end` is exclusive, and overlapping rules use the first matching row in file order. The map is parsed and validated before batch processing starts, so invalid maps do not write subtitle outputs.
 
 ### 全部子命令 | All Subcommands
 
