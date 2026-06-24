@@ -148,6 +148,19 @@ describe("parseTimingMapText", () => {
     expect(result.content).toContain("00:00:04,500 --> 00:00:05,500");
   });
 
+  it("accepts timing-map timestamps at the shared 100000-hour cap", () => {
+    const parsed = parseTimingMapText("100000:59:59.999,,+1s");
+
+    expect(parsed.rules).toEqual([{ startMs: 360_003_599_999, offsetMs: 1000 }]);
+  });
+
+  it("rejects timing-map timestamps beyond the shared 100000-hour cap", () => {
+    expect(() => parseTimingMapText("100001:00:00.000,,+1s")).toThrow(/exceeds/);
+    expect(() =>
+      parseTimingMapText(JSON.stringify([{ startMs: 360_003_600_000, offsetMs: 0 }]))
+    ).toThrow(/exceeds/);
+  });
+
   it("rejects malformed timing-map imports before conversion", () => {
     expect(() => parseTimingMapText("")).toThrow(/empty/);
     expect(() => parseTimingMapText("[{}]")).toThrow(/start/);

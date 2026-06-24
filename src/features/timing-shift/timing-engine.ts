@@ -153,10 +153,15 @@ function assertFiniteTimingMapMs(value: number, label: string): void {
 }
 
 const MAX_TIMING_MAP_RULES = 10_000;
+// Match the Rust CLI `--after` parser cap: 100k hours is far beyond
+// subtitle reality while keeping timing math in JavaScript safe-integer
+// space. Timing maps should not accept looser timestamps than the
+// existing simple Time Shift path.
+const MAX_TIMING_MAP_TIMESTAMP_MS = 100_000 * 3_600_000 + 59 * 60_000 + 59 * 1000 + 999;
 
 function parseTimingMapTimestampMs(value: unknown, label: string): number {
   if (typeof value === "number") {
-    assertFiniteTimingMapMs(value, label);
+    assertTimingMapTimestampMs(value, label);
     return value;
   }
   if (typeof value !== "string") {
@@ -169,7 +174,7 @@ function parseTimingMapTimestampMs(value: unknown, label: string): number {
   }
   if (/^\d+$/.test(raw)) {
     const parsed = Number(raw);
-    assertFiniteTimingMapMs(parsed, label);
+    assertTimingMapTimestampMs(parsed, label);
     return parsed;
   }
 
@@ -188,8 +193,18 @@ function parseTimingMapTimestampMs(value: unknown, label: string): number {
     minutes * 60_000 +
     seconds * 1000 +
     Number((m[4] ?? "0").padEnd(3, "0"));
-  assertFiniteTimingMapMs(parsed, label);
+  assertTimingMapTimestampMs(parsed, label);
   return parsed;
+}
+
+function assertTimingMapTimestampMs(value: number, label: string): void {
+  assertFiniteTimingMapMs(value, label);
+  if (value < 0) {
+    throw new Error(`Invalid timing map ${label}: timestamp must be >= 0`);
+  }
+  if (value > MAX_TIMING_MAP_TIMESTAMP_MS) {
+    throw new Error(`Invalid timing map ${label}: timestamp exceeds 100000:59:59.999`);
+  }
 }
 
 function parseUnsignedDurationMs(value: string, label: string): number {
@@ -389,6 +404,9 @@ export function normalizeTimingMapRules(rules: TimingMapRule[]): NormalizedTimin
     if (rule.startMs < 0) {
       throw new Error(`Invalid timing map rule ${i + 1}: startMs must be >= 0`);
     }
+    if (rule.startMs > MAX_TIMING_MAP_TIMESTAMP_MS) {
+      throw new Error(`Invalid timing map rule ${i + 1}: startMs exceeds 100000:59:59.999`);
+    }
     if (Math.abs(rule.offsetMs) > MAX_TIMING_OFFSET_MS) {
       throw new Error(
         `Invalid timing map rule ${i + 1}: offsetMs exceeds +/-${MAX_TIMING_OFFSET_MS} ms`
@@ -402,6 +420,12 @@ export function normalizeTimingMapRules(rules: TimingMapRule[]): NormalizedTimin
     };
     if (rule.endMs !== undefined) {
       assertFiniteTimingMapMs(rule.endMs, `rule ${i + 1} endMs`);
+      if (rule.endMs < 0) {
+        throw new Error(`Invalid timing map rule ${i + 1}: endMs must be >= 0`);
+      }
+      if (rule.endMs > MAX_TIMING_MAP_TIMESTAMP_MS) {
+        throw new Error(`Invalid timing map rule ${i + 1}: endMs exceeds 100000:59:59.999`);
+      }
       if (rule.endMs <= rule.startMs) {
         throw new Error(`Invalid timing map rule ${i + 1}: endMs must be greater than startMs`);
       }
