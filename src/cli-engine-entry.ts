@@ -27,8 +27,8 @@ import {
   assertFiniteShiftMs,
   deriveShiftedPath,
   parseTimingMapText,
-  shiftSubtitles,
-  shiftSubtitlesWithTimingMap,
+  shiftSubtitlesCompact,
+  shiftSubtitlesWithTimingMapCompact,
   type TimingMapRule,
 } from "./features/timing-shift/timing-engine";
 import { canonicalLanguageTag, LANG_TAGS, subtitleLanguageFromName } from "./lib/lang-detection";
@@ -255,7 +255,9 @@ export function convertHdr(request: HdrConversionRequest): HdrConversionResult {
 }
 
 export function convertShift(request: ShiftConversionRequest): ShiftConversionResult {
-  let result: ReturnType<typeof shiftSubtitles> | ReturnType<typeof shiftSubtitlesWithTimingMap>;
+  let result:
+    | ReturnType<typeof shiftSubtitlesCompact>
+    | ReturnType<typeof shiftSubtitlesWithTimingMapCompact>;
   if (request.timingMapRules !== undefined) {
     if (request.offsetMs !== 0) {
       throw new Error("Timing map shift cannot be combined with a non-zero offsetMs");
@@ -263,12 +265,12 @@ export function convertShift(request: ShiftConversionRequest): ShiftConversionRe
     if (request.thresholdMs !== undefined) {
       throw new Error("Timing map shift cannot be combined with thresholdMs");
     }
-    result = shiftSubtitlesWithTimingMap(request.content, {
+    result = shiftSubtitlesWithTimingMapCompact(request.content, {
       rules: request.timingMapRules,
     });
   } else {
     assertFiniteShiftMs(request.offsetMs, request.thresholdMs);
-    result = shiftSubtitles(request.content, {
+    result = shiftSubtitlesCompact(request.content, {
       offsetMs: request.offsetMs,
       thresholdMs: request.thresholdMs,
     });
@@ -283,10 +285,7 @@ export function convertShift(request: ShiftConversionRequest): ShiftConversionRe
     content: result.content,
     format: result.format,
     captionCount: result.captionCount,
-    shiftedCount:
-      "shiftedCount" in result
-        ? result.shiftedCount
-        : result.preview.filter((entry) => entry.wasShifted).length,
+    shiftedCount: result.shiftedCount,
     skippedCount: result.skippedCount,
   };
 }

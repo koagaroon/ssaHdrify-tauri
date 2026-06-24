@@ -96,6 +96,17 @@ export interface NormalizedTimingMapRule {
   label?: string | undefined;
 }
 
+export interface CompiledTimingMapSegment {
+  startMs: number;
+  endMs?: number | undefined;
+  rule: NormalizedTimingMapRule;
+}
+
+export interface CompiledTimingMap {
+  segments: CompiledTimingMapSegment[];
+  activeRuleCount: number;
+}
+
 export interface TimingMapMatch {
   ruleIndex: number | null;
   appliedOffsetMs: number;
@@ -129,6 +140,14 @@ export interface ShiftResult {
 export interface TimingMapResult extends Omit<ShiftResult, "preview"> {
   preview: TimingMapPreviewEntry[];
   shiftedCount: number;
+  activeRuleCount: number;
+}
+
+export interface CompactShiftResult extends Omit<ShiftResult, "preview"> {
+  shiftedCount: number;
+}
+
+export interface CompactTimingMapResult extends CompactShiftResult {
   activeRuleCount: number;
 }
 
@@ -440,18 +459,154 @@ export function normalizeTimingMapRules(rules: TimingMapRule[]): NormalizedTimin
   return normalized;
 }
 
+function addTimingMapEvent(
+  events: Map<number, NormalizedTimingMapRule[]>,
+  timeMs: number,
+  rule: NormalizedTimingMapRule
+): void {
+  const current = events.get(timeMs);
+  if (current) {
+    current.push(rule);
+  } else {
+    events.set(timeMs, [rule]);
+  }
+}
+
+function pushRuleHeap(heap: NormalizedTimingMapRule[], rule: NormalizedTimingMapRule): void {
+  heap.push(rule);
+  let index = heap.length - 1;
+  while (index > 0) {
+    const parent = Math.floor((index - 1) / 2);
+    if (heap[parent]!.index <= rule.index) break;
+    heap[index] = heap[parent]!;
+    index = parent;
+  }
+  heap[index] = rule;
+}
+
+function popRuleHeap(heap: NormalizedTimingMapRule[]): NormalizedTimingMapRule | undefined {
+  if (heap.length === 0) return undefined;
+  const top = heap[0]!;
+  const last = heap.pop()!;
+  if (heap.length === 0) return top;
+
+  let index = 0;
+  while (true) {
+    const left = index * 2 + 1;
+    const right = left + 1;
+    if (left >= heap.length) break;
+
+    const child = right < heap.length && heap[right]!.index < heap[left]!.index ? right : left;
+    if (heap[child]!.index >= last.index) break;
+    heap[index] = heap[child]!;
+    index = child;
+  }
+  heap[index] = last;
+  return top;
+}
+
+function pushTimingMapSegment(
+  segments: CompiledTimingMapSegment[],
+  startMs: number,
+  endMs: number | undefined,
+  rule: NormalizedTimingMapRule
+): void {
+  if (endMs !== undefined && endMs <= startMs) return;
+  const previous = segments[segments.length - 1];
+  if (previous && previous.rule.index === rule.index && previous.endMs === startMs) {
+    previous.endMs = endMs;
+    return;
+  }
+  segments.push({
+    startMs,
+    ...(endMs !== undefined && { endMs }),
+    rule,
+  });
+}
+
+export function compileTimingMapRules(rules: NormalizedTimingMapRule[]): CompiledTimingMap {
+  const starts = new Map<number, NormalizedTimingMapRule[]>();
+  const ends = new Map<number, NormalizedTimingMapRule[]>();
+  const boundaries = new Set<number>([0]);
+
+  for (const rule of rules) {
+    boundaries.add(rule.startMs);
+    addTimingMapEvent(starts, rule.startMs, rule);
+    if (rule.endMs !== undefined) {
+      boundaries.add(rule.endMs);
+      addTimingMapEvent(ends, rule.endMs, rule);
+    }
+  }
+
+  const sortedBoundaries = Array.from(boundaries).sort((a, b) => a - b);
+  const activeRuleIndexes = new Set<number>();
+  const priorityHeap: NormalizedTimingMapRule[] = [];
+  const segments: CompiledTimingMapSegment[] = [];
+
+  for (let i = 0; i < sortedBoundaries.length; i += 1) {
+    const boundary = sortedBoundaries[i]!;
+    for (const rule of ends.get(boundary) ?? []) {
+      activeRuleIndexes.delete(rule.index);
+    }
+    for (const rule of starts.get(boundary) ?? []) {
+      activeRuleIndexes.add(rule.index);
+      pushRuleHeap(priorityHeap, rule);
+    }
+
+    while (priorityHeap.length > 0 && !activeRuleIndexes.has(priorityHeap[0]!.index)) {
+      popRuleHeap(priorityHeap);
+    }
+
+    const winner = priorityHeap[0];
+    if (winner) {
+      pushTimingMapSegment(segments, boundary, sortedBoundaries[i + 1], winner);
+    }
+  }
+
+  return { segments, activeRuleCount: rules.length };
+}
+
 export function findTimingMapRule(
   captionStartMs: number,
-  rules: NormalizedTimingMapRule[]
+  timingMap: CompiledTimingMap
 ): NormalizedTimingMapRule | null {
-  // First enabled matching rule wins. This keeps overlapping maps
-  // deterministic and gives future GUI rule order real meaning.
-  for (const rule of rules) {
-    if (captionStartMs < rule.startMs) continue;
-    if (rule.endMs !== undefined && captionStartMs >= rule.endMs) continue;
-    return rule;
+  const { segments } = timingMap;
+  let low = 0;
+  let high = segments.length - 1;
+
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    const segment = segments[mid]!;
+    if (captionStartMs < segment.startMs) {
+      high = mid - 1;
+    } else if (segment.endMs !== undefined && captionStartMs >= segment.endMs) {
+      low = mid + 1;
+    } else {
+      return segment.rule;
+    }
   }
   return null;
+}
+
+function countSkippedCaptions(captions: Caption[]): number {
+  let count = 0;
+  for (const caption of captions) {
+    if (caption.skipped) count += 1;
+  }
+  return count;
+}
+
+function countShiftedCaptions(captions: Caption[], shifted: Caption[]): number {
+  let count = 0;
+  for (let i = 0; i < captions.length; i += 1) {
+    const caption = captions[i]!;
+    if (caption.skipped) continue;
+    const next = shifted[i]!;
+    if (caption.start !== next.start || caption.end !== next.end) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 function buildPreview(
@@ -516,12 +671,13 @@ export function shiftSubtitlesWithTimingMap(
   options: { rules: TimingMapRule[]; fps?: number | undefined }
 ): TimingMapResult {
   const rules = normalizeTimingMapRules(options.rules);
+  const timingMap = compileTimingMapRules(rules);
   const matches: TimingMapMatch[] = [];
 
   const { output, format, captions, shifted } = transformSubtitleTimings(
     content,
     (caption, index) => {
-      const rule = findTimingMapRule(caption.start, rules);
+      const rule = findTimingMapRule(caption.start, timingMap);
       if (!rule) {
         matches[index] = { ruleIndex: null, appliedOffsetMs: 0 };
         return { ...caption };
@@ -555,9 +711,52 @@ export function shiftSubtitlesWithTimingMap(
     format,
     preview,
     captionCount: captions.length,
-    skippedCount: captions.filter((c) => c.skipped).length,
-    shiftedCount: preview.filter((entry) => entry.wasShifted).length,
-    activeRuleCount: rules.length,
+    skippedCount: countSkippedCaptions(captions),
+    shiftedCount: countShiftedCaptions(captions, shifted),
+    activeRuleCount: timingMap.activeRuleCount,
+  };
+}
+
+export function shiftSubtitlesCompact(content: string, options: ShiftOptions): CompactShiftResult {
+  const { offsetMs, thresholdMs, fps } = options;
+  const { output, format, captions, shifted } = shiftSubtitle(content, offsetMs, thresholdMs, fps);
+
+  return {
+    content: output,
+    format,
+    captionCount: captions.length,
+    skippedCount: countSkippedCaptions(captions),
+    shiftedCount: countShiftedCaptions(captions, shifted),
+  };
+}
+
+export function shiftSubtitlesWithTimingMapCompact(
+  content: string,
+  options: { rules: TimingMapRule[]; fps?: number | undefined }
+): CompactTimingMapResult {
+  const rules = normalizeTimingMapRules(options.rules);
+  const timingMap = compileTimingMapRules(rules);
+  const { output, format, captions, shifted } = transformSubtitleTimings(
+    content,
+    (caption) => {
+      const rule = findTimingMapRule(caption.start, timingMap);
+      if (!rule) return { ...caption };
+      return {
+        ...caption,
+        start: Math.max(0, caption.start + rule.offsetMs),
+        end: Math.max(0, caption.end + rule.offsetMs),
+      };
+    },
+    options.fps
+  );
+
+  return {
+    content: output,
+    format,
+    captionCount: captions.length,
+    skippedCount: countSkippedCaptions(captions),
+    shiftedCount: countShiftedCaptions(captions, shifted),
+    activeRuleCount: timingMap.activeRuleCount,
   };
 }
 

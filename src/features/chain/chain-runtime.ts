@@ -11,7 +11,7 @@
  */
 
 import { processAssContent } from "../hdr-convert/ass-processor";
-import { assertFiniteShiftMs, shiftSubtitles } from "../timing-shift/timing-engine";
+import { assertFiniteShiftMs, shiftSubtitlesCompact } from "../timing-shift/timing-engine";
 import { buildFontEntry } from "../font-embed/ass-uuencode";
 import { assertAssShape, insertFontsSection } from "../font-embed/ass-font-section";
 import {
@@ -132,14 +132,11 @@ function shiftTransform(ctx: TransformContext, params: ShiftStepParams): Transfo
   // success. Reject up front. (See assertFiniteShiftMs for why it's not inside
   // shiftSubtitles itself.)
   assertFiniteShiftMs(params.offsetMs, params.thresholdMs);
-  const result = shiftSubtitles(ctx.content, {
+  const result = shiftSubtitlesCompact(ctx.content, {
     offsetMs: params.offsetMs,
     thresholdMs: params.thresholdMs,
   });
-  // `ShiftResult` doesn't carry a `shiftedCount` directly — derive it
-  // from the preview array's `wasShifted` flags, matching how the
-  // existing `convertShift` wrapper in cli-engine-entry.ts does it.
-  const shiftedCount = result.preview.filter((entry) => entry.wasShifted).length;
+  const shiftedCount = result.shiftedCount;
   // surface skippedCount as a structured field on
   // TransformResult (not a note suffix). runChain aggregates it
   // into ChainResult.skippedCount; the Rust shell reads that field

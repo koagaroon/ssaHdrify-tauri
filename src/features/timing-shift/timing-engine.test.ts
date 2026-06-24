@@ -2,10 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import {
   MAX_TIMING_OFFSET_MS,
+  compileTimingMapRules,
+  findTimingMapRule,
   normalizeTimingMapRules,
   parseTimingMapText,
   shiftSubtitles,
+  shiftSubtitlesCompact,
   shiftSubtitlesWithTimingMap,
+  shiftSubtitlesWithTimingMapCompact,
 } from "./timing-engine";
 
 const SRT_SAMPLE = [
@@ -105,6 +109,33 @@ describe("shiftSubtitlesWithTimingMap", () => {
     expect(result.content).toContain("00:00:01,000 --> 00:00:02,000");
     expect(result.content).toContain("00:00:06,000 --> 00:00:07,000");
     expect(result.content).toContain("00:00:09,000 --> 00:00:10,000");
+  });
+
+  it("preserves first-match priority through compiled timing-map lookup", () => {
+    const rules = normalizeTimingMapRules([
+      { startMs: 1000, endMs: 6000, offsetMs: 1000 },
+      { startMs: 2000, endMs: 3000, offsetMs: 9000 },
+      { startMs: 6000, offsetMs: -500 },
+    ]);
+    const compiled = compileTimingMapRules(rules);
+
+    expect(findTimingMapRule(500, compiled)).toBeNull();
+    expect(findTimingMapRule(2000, compiled)?.index).toBe(0);
+    expect(findTimingMapRule(5999, compiled)?.index).toBe(0);
+    expect(findTimingMapRule(6000, compiled)?.index).toBe(2);
+  });
+
+  it("returns compact results for CLI-style shift paths without preview payloads", () => {
+    const simple = shiftSubtitlesCompact(SRT_SAMPLE, { offsetMs: 1000, thresholdMs: 5000 });
+    const mapped = shiftSubtitlesWithTimingMapCompact(SRT_SAMPLE, {
+      rules: [{ startMs: 5000, endMs: 9000, offsetMs: 1000 }],
+    });
+
+    expect("preview" in simple).toBe(false);
+    expect(simple.shiftedCount).toBe(2);
+    expect("preview" in mapped).toBe(false);
+    expect(mapped.shiftedCount).toBe(1);
+    expect(mapped.activeRuleCount).toBe(1);
   });
 });
 
