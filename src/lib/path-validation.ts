@@ -123,6 +123,15 @@ export interface InputPathParts {
   usedBackslash: boolean;
 }
 
+export interface OutputDirectoryParts {
+  /** Slash-normalized directory with trailing separators removed. */
+  dir: string;
+  /** Original directory after platform-specific separator normalization. */
+  normalized: string;
+  /** Whether the chosen directory used Windows-style backslashes. */
+  usedBackslash: boolean;
+}
+
 /**
  * Decompose an absolute input path into directory, base name, extension,
  * and separator-style parts. The single source of truth for what counts
@@ -275,6 +284,96 @@ export function pathsEqualOnFs(a: string, b: string): boolean {
   // future Unicode-width or normalization step landed in one but not
   // the other.
   return normalizeOutputKey(a) === normalizeOutputKey(b);
+}
+
+function normalizeForPathValidation(path: string): string {
+  return isWindowsRuntime ? path.replace(/\\/g, "/") : path;
+}
+
+function trimTrailingPathSeparators(path: string): string {
+  return path.replace(/\/+$/, "");
+}
+
+function assertOutputPathShape(normalizedOutput: string): void {
+  if (new RegExp(`[${ASCII_CONTROL_CHARS}]`).test(normalizedOutput)) {
+    throw new Error(`Output path contains control characters: ${normalizedOutput}`);
+  }
+
+  if (hasUnicodeControls(normalizedOutput)) {
+    throw new Error(
+      `Output path contains invisible or bidi-control characters: ${normalizedOutput}`
+    );
+  }
+
+  if (/(^|\/)\.\.($|\/)/.test(normalizedOutput)) {
+    throw new Error(`Output path contains directory traversal: ${normalizedOutput}`);
+  }
+}
+
+function assertOutputPathLength(normalizedOutput: string): void {
+  // MAX_PATH check. Local long-path inputs (`\\?\C:\...`,
+  // forward-normalized to `//?/C:/...`) support up to 32767 chars on
+  // Windows 10+. UNC long paths (`\\?\UNC\server\share\...` →
+  // `//?/UNC/...`) keep the 260 cap because the server side may not
+  // support long paths. Case-insensitive UNC prefix check so a
+  // lowercased `//?/unc/...` still classifies as UNC.
+  // Windows MAX_PATH is 260 INCLUDING the trailing null terminator, so
+  // the practical buffer-fitting limit is 259 chars. A 260-char path
+  // passes a > 260 check but trips ERROR_PATH_NOT_FOUND at write time.
+  // Use 259 to surface the limit with a clear error here. Long-local
+  // paths get the OS extended limit (32767 incl. null → 32766 usable).
+  //
+  // POSIX runtimes get PATH_MAX = 4096 (Linux's standard limit,
+  // matches Rust-side `RELOCATED_PATH_MAX_LEN` cfg-gated POSIX path)
+  // instead of the Windows 259. An earlier hard-coded 259 false-
+  // rejected legitimate Linux paths approaching ~260 chars; the
+  // per-OS branch closes the gap.
+  const lower = normalizedOutput.toLowerCase();
+  const isLongLocalPath = lower.startsWith("//?/") && !lower.startsWith("//?/unc/");
+  let maxPathLen: number;
+  if (isLongLocalPath) {
+    maxPathLen = 32766;
+  } else if (isWindowsRuntime) {
+    maxPathLen = 259;
+  } else {
+    maxPathLen = 4096;
+  }
+  if (normalizedOutput.length > maxPathLen) {
+    throw new Error(`Output path too long (${normalizedOutput.length} chars, max ${maxPathLen})`);
+  }
+}
+
+function assertOutputPathInsideDirectory(normalizedOutput: string, normalizedDir: string): void {
+  const dir = trimTrailingPathSeparators(normalizedDir);
+  if (!dir) {
+    throw new Error("Output directory is empty after normalization");
+  }
+
+  if (!normalizedOutput.startsWith(dir + "/")) {
+    throw new Error(`Output path escapes output directory: ${normalizedOutput}`);
+  }
+}
+
+export function decomposeOutputDirectoryPath(outputDir: string): OutputDirectoryParts {
+  if (!outputDir) {
+    throw new Error("Output directory must be absolute");
+  }
+
+  const usedBackslash = isWindowsRuntime && outputDir.includes("\\");
+  const normalized = usedBackslash ? outputDir.replace(/\\/g, "/") : outputDir;
+  assertOutputPathShape(normalized);
+
+  const isAbsolute = normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized);
+  if (!isAbsolute) {
+    throw new Error("Output directory must be absolute");
+  }
+
+  const dir = trimTrailingPathSeparators(normalized);
+  if (!dir) {
+    throw new Error("Output directory is empty after normalization");
+  }
+
+  return { dir, normalized, usedBackslash };
 }
 
 /**
@@ -469,38 +568,15 @@ export function assertSafeOutputFilename(
  * to forward slashes internally before comparing.
  */
 export function assertSafeOutputPath(outputPath: string, inputPath: string): void {
-  // Backslash → forward only on Windows (POSIX-correctness gate,
-  // parity with `pathsEqualOnFs` and `decomposeInputPath`). On POSIX
-  // `\` is a valid filename character;
-  // unconditional rewriting would mangle directory-escape and
-  // self-overwrite checks on legitimate POSIX paths containing `\`.
-  const normalizedOutput = isWindowsRuntime ? outputPath.replace(/\\/g, "/") : outputPath;
-  const normalizedInput = isWindowsRuntime ? inputPath.replace(/\\/g, "/") : inputPath;
-  // ASCII C0 + DEL + C1 control-char gate on the
-  // full path. `decomposeInputPath` already rejects these on inputs,
-  // and `assertSafeOutputFilename` covers the filename portion — but
-  // BatchRename's `deriveRenameOutputPath` builds the directory
-  // portion from `dirname(videoPath)` (rename mode), `dirname(videoPath)`
-  // (copy_to_video mode), or `chosenDir` directly (copy_to_chosen
-  // mode) without round-tripping the dir through `decomposeInputPath`.
-  // A control-char-bearing directory name would land in the output
-  // path and only get caught downstream at Rust's `validate_ipc_path`
-  // (or worse, if a future call bypassed Rust validation). Mirror
-  // the input-side control-char reject above as defense-in-depth.
-  if (new RegExp(`[${ASCII_CONTROL_CHARS}]`).test(normalizedOutput)) {
-    throw new Error(`Output path contains control characters: ${normalizedOutput}`);
-  }
+  const normalizedOutput = normalizeForPathValidation(outputPath);
+  const normalizedInput = normalizeForPathValidation(inputPath);
+  assertOutputPathShape(normalizedOutput);
+
   const inputDirEnd = normalizedInput.lastIndexOf("/");
   if (inputDirEnd < 0) {
     throw new Error("Input path has no directory component");
   }
   const inputDir = normalizedInput.slice(0, inputDirEnd);
-
-  // Path traversal — `..` as a path component, not as a substring of
-  // a longer name like `..foo` (which is legal).
-  if (/(^|\/)\.\.($|\/)/.test(normalizedOutput)) {
-    throw new Error(`Output path contains directory traversal: ${normalizedOutput}`);
-  }
 
   // Output must stay inside the input directory. Comparing against
   // `inputDir + "/"` avoids the `/dir1` vs `/dir12` prefix collision.
@@ -520,36 +596,7 @@ export function assertSafeOutputPath(outputPath: string, inputPath: string): voi
     throw new Error(`Output path escapes input directory: ${normalizedOutput}`);
   }
 
-  // MAX_PATH check. Local long-path inputs (`\\?\C:\...`,
-  // forward-normalized to `//?/C:/...`) support up to 32767 chars on
-  // Windows 10+. UNC long paths (`\\?\UNC\server\share\...` →
-  // `//?/UNC/...`) keep the 260 cap because the server side may not
-  // support long paths. Case-insensitive UNC prefix check so a
-  // lowercased `//?/unc/...` still classifies as UNC.
-  // Windows MAX_PATH is 260 INCLUDING the trailing null terminator, so
-  // the practical buffer-fitting limit is 259 chars. A 260-char path
-  // passes a > 260 check but trips ERROR_PATH_NOT_FOUND at write time.
-  // Use 259 to surface the limit with a clear error here. Long-local
-  // paths get the OS extended limit (32767 incl. null → 32766 usable).
-  //
-  // POSIX runtimes get PATH_MAX = 4096 (Linux's standard limit,
-  // matches Rust-side `RELOCATED_PATH_MAX_LEN` cfg-gated POSIX path)
-  // instead of the Windows 259. An earlier hard-coded 259 false-
-  // rejected legitimate Linux paths approaching ~260 chars; the
-  // per-OS branch closes the gap.
-  const lower = normalizedOutput.toLowerCase();
-  const isLongLocalPath = lower.startsWith("//?/") && !lower.startsWith("//?/unc/");
-  let maxPathLen: number;
-  if (isLongLocalPath) {
-    maxPathLen = 32766;
-  } else if (isWindowsRuntime) {
-    maxPathLen = 259;
-  } else {
-    maxPathLen = 4096;
-  }
-  if (normalizedOutput.length > maxPathLen) {
-    throw new Error(`Output path too long (${normalizedOutput.length} chars, max ${maxPathLen})`);
-  }
+  assertOutputPathLength(normalizedOutput);
 
   // Self-overwrite. Filesystem-aware: case-folding only on Windows /
   // macOS where the FS is case-insensitive. On Linux ext4 / btrfs / xfs,
@@ -557,6 +604,23 @@ export function assertSafeOutputPath(outputPath: string, inputPath: string): voi
   // lowercase would false-reject a legitimate `episode.ass` output when
   // the input was `Episode.ass`.
   if (pathsEqualOnFs(normalizedOutput, normalizedInput)) {
+    throw new Error("Output path is the same as input (would overwrite source file)");
+  }
+}
+
+export function assertSafeOutputPathInDirectory(
+  outputPath: string,
+  outputDir: string,
+  sourcePath?: string
+): void {
+  const normalizedOutput = normalizeForPathValidation(outputPath);
+  const { dir: normalizedDir } = decomposeOutputDirectoryPath(outputDir);
+
+  assertOutputPathShape(normalizedOutput);
+  assertOutputPathInsideDirectory(normalizedOutput, normalizedDir);
+  assertOutputPathLength(normalizedOutput);
+
+  if (sourcePath && pathsEqualOnFs(normalizedOutput, sourcePath)) {
     throw new Error("Output path is the same as input (would overwrite source file)");
   }
 }

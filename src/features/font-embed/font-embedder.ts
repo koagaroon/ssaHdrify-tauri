@@ -25,9 +25,11 @@ import { assertAssShape, insertFontsSection } from "./ass-font-section";
 import {
   assertSafeOutputFilename,
   assertSafeOutputPath,
+  assertSafeOutputPathInDirectory,
   decomposeInputPath,
+  decomposeOutputDirectoryPath,
 } from "../../lib/path-validation";
-import { sanitizeError } from "../../lib/dedup-helpers";
+import { normalizeOutputKey, sanitizeError } from "../../lib/dedup-helpers";
 import { stripUnicodeControls } from "../../lib/unicode-controls";
 
 // ── Types ─────────────────────────────────────────────────
@@ -95,6 +97,28 @@ export interface EmbedFontsResult {
   content: string;
   embeddedCount: number;
   warnings: string[];
+}
+
+export interface DeriveEmbeddedPathOptions {
+  /** Flat custom output directory. Omit/null keeps the sibling-output default. */
+  outputDir?: string | null;
+}
+
+export interface PlannedEmbeddedOutput {
+  inputPath: string;
+  outputPath: string;
+}
+
+export interface SkippedEmbeddedOutput {
+  inputPath: string;
+  reason: "invalid" | "duplicate";
+  message: string;
+  outputPath?: string;
+}
+
+export interface PlanEmbeddedOutputsResult {
+  targets: PlannedEmbeddedOutput[];
+  skipped: SkippedEmbeddedOutput[];
 }
 
 // ── Font Discovery ────────────────────────────────────────
@@ -457,23 +481,12 @@ export function aggregateFonts(perFile: Map<string, FileAnalysis>): {
   return { infos: aggInfos, usages: aggUsages };
 }
 
-/**
- * Derive the `.embedded.ass` output path for a given input ASS path.
- *
- * Used by the batch embed flow — Font Embed writes outputs alongside
- * inputs with a `.embedded` infix and a normalized `.ass` extension
- * (`EP01.ass` → `EP01.embedded.ass`, `EP01.ssa` → `EP01.embedded.ass`).
- * The native separator of the input path is preserved so the result
- * round-trips through Win32 APIs and shell-integration tools without
- * mixing slashes.
- *
- * Why a derived path instead of a per-file native save dialog: those
- * dialogs are blocking and don't scale to N files. The same-directory
- * convention matches the most common workflow and gives the user a
- * single overwrite-confirm gate via `countExistingFiles` before the
- * batch begins.
- */
-export function deriveEmbeddedPath(inputPath: string): string {
+function embeddedOutputName(inputPath: string): {
+  dir: string;
+  normalized: string;
+  usedBackslash: boolean;
+  outputName: string;
+} {
   // Decompose via the shared helper. Validates absolute, accepts drive-
   // root files (`C:\foo.ass`), rejects drive-relative (`C:foo.ass`).
   const parts = decomposeInputPath(inputPath);
@@ -498,12 +511,77 @@ export function deriveEmbeddedPath(inputPath: string): string {
   // Output is always .ass — the embed step rebuilds an ASS-format file
   // regardless of whether the input was .ass or .ssa.
   const outputName = `${baseName}.embedded.ass`;
+  assertSafeOutputFilename(outputName);
+  return { dir, normalized, usedBackslash, outputName };
+}
+
+/**
+ * Derive the `.embedded.ass` output path for a given input ASS path.
+ *
+ * Default mode writes beside each input with a `.embedded` infix and a
+ * normalized `.ass` extension (`EP01.ass` → `EP01.embedded.ass`,
+ * `EP01.ssa` → `EP01.embedded.ass`). A caller may pass `outputDir` to
+ * write the same filename flat into a user-chosen directory. In chosen-
+ * directory mode the chosen directory's separator style is preserved on
+ * Windows so shell integration sees native-looking paths.
+ *
+ * Why a derived path instead of a per-file native save dialog: those
+ * dialogs are blocking and don't scale to N files. Derived paths give
+ * the user a single overwrite-confirm gate via `countExistingFiles`
+ * before the batch begins.
+ */
+export function deriveEmbeddedPath(
+  inputPath: string,
+  options: DeriveEmbeddedPathOptions = {}
+): string {
+  const { dir, normalized, usedBackslash, outputName } = embeddedOutputName(inputPath);
+  if (options.outputDir !== undefined && options.outputDir !== null) {
+    const outputDir = decomposeOutputDirectoryPath(options.outputDir);
+    const outputPath = `${outputDir.dir}/${outputName}`;
+    assertSafeOutputPathInDirectory(outputPath, options.outputDir, normalized);
+    return outputDir.usedBackslash ? outputPath.replace(/\//g, "\\") : outputPath;
+  }
+
   // Apply the shared safety checks (reserved names, traversal,
   // MAX_PATH, self-overwrite). Same helpers as HDR / Shift resolvers.
-  assertSafeOutputFilename(outputName);
   const outputPath = `${dir}/${outputName}`;
   assertSafeOutputPath(outputPath, normalized);
   return usedBackslash ? outputPath.replace(/\//g, "\\") : outputPath;
+}
+
+export function planEmbeddedOutputs(
+  inputPaths: string[],
+  options: DeriveEmbeddedPathOptions = {}
+): PlanEmbeddedOutputsResult {
+  const targets: PlannedEmbeddedOutput[] = [];
+  const skipped: SkippedEmbeddedOutput[] = [];
+  const seenOutputs = new Set<string>();
+
+  for (const inputPath of inputPaths) {
+    try {
+      const outputPath = deriveEmbeddedPath(inputPath, options);
+      const outputKey = normalizeOutputKey(outputPath);
+      if (seenOutputs.has(outputKey)) {
+        skipped.push({
+          inputPath,
+          outputPath,
+          reason: "duplicate",
+          message: "duplicate output path",
+        });
+        continue;
+      }
+      seenOutputs.add(outputKey);
+      targets.push({ inputPath, outputPath });
+    } catch (e) {
+      skipped.push({
+        inputPath,
+        reason: "invalid",
+        message: sanitizeError(e),
+      });
+    }
+  }
+
+  return { targets, skipped };
 }
 
 // Source of truth: `app_lib::fonts::MAX_SUBSET_CODEPOINTS` in

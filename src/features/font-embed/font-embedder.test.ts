@@ -32,6 +32,8 @@ import {
   userFontKey,
   MAX_SUBSET_CODEPOINTS_FOR_DEDUP,
   MAX_AGGREGATE_CODEPOINTS_PER_KEY,
+  deriveEmbeddedPath,
+  planEmbeddedOutputs,
   type FontInfo,
   type FileAnalysis,
 } from "./font-embedder";
@@ -50,6 +52,105 @@ Format: Layer, Start, End, Style, Text
 Dialogue: 0,0:00:00.00,0:00:05.00,Default,Hello
 Dialogue: 0,0:00:05.00,0:00:10.00,Emphasis,Bold text
 `;
+
+describe("deriveEmbeddedPath / planEmbeddedOutputs", () => {
+  it("keeps sibling output behavior unchanged for ASS and SSA inputs", () => {
+    expect(deriveEmbeddedPath("C:\\subs\\episode.ass")).toBe("C:\\subs\\episode.embedded.ass");
+    expect(deriveEmbeddedPath("C:\\subs\\episode.ssa")).toBe("C:\\subs\\episode.embedded.ass");
+  });
+
+  it("keeps sibling self-overwrite rejection for already-embedded inputs", () => {
+    expect(() => deriveEmbeddedPath("C:\\subs\\episode.embedded.ass")).toThrow(/same as input/);
+  });
+
+  it("strips an existing .embedded infix when writing to another directory", () => {
+    expect(deriveEmbeddedPath("C:\\subs\\episode.embedded.ass", { outputDir: "D:\\out" })).toBe(
+      "D:\\out\\episode.embedded.ass"
+    );
+  });
+
+  it("writes flat outputs into a chosen directory", () => {
+    expect(deriveEmbeddedPath("C:\\subs\\episode.ssa", { outputDir: "D:\\out" })).toBe(
+      "D:\\out\\episode.embedded.ass"
+    );
+  });
+
+  it("preserves chosen directory separator style on Windows", () => {
+    expect(deriveEmbeddedPath("C:\\subs\\episode.ass", { outputDir: "D:/out" })).toBe(
+      "D:/out/episode.embedded.ass"
+    );
+  });
+
+  it("rejects unsafe chosen output directories", () => {
+    expect(() => deriveEmbeddedPath("C:\\subs\\episode.ass", { outputDir: "out" })).toThrow(
+      /absolute/
+    );
+    expect(() => deriveEmbeddedPath("C:\\subs\\episode.ass", { outputDir: "/" })).toThrow(/empty/);
+    expect(() =>
+      deriveEmbeddedPath("C:\\subs\\episode.ass", { outputDir: "D:\\out\\..\\secret" })
+    ).toThrow(/traversal/);
+    expect(() =>
+      deriveEmbeddedPath("C:\\subs\\episode.ass", { outputDir: "D:\\out\u202E" })
+    ).toThrow(/invisible|bidi/);
+    expect(() => deriveEmbeddedPath("C:\\subs\\episode.ass", { outputDir: "D:\\out\x00" })).toThrow(
+      /control/
+    );
+  });
+
+  it("rejects chosen output paths that are too long", () => {
+    expect(() =>
+      deriveEmbeddedPath("C:\\subs\\episode.ass", {
+        outputDir: `D:\\${"a".repeat(260)}`,
+      })
+    ).toThrow(/too long/);
+  });
+
+  it("rejects self-overwrite when chosen directory equals the input directory", () => {
+    expect(() =>
+      deriveEmbeddedPath("C:\\subs\\episode.embedded.ass", { outputDir: "C:\\subs" })
+    ).toThrow(/same as input/);
+  });
+
+  it("plans unique targets and skips duplicate flat chosen-folder outputs", () => {
+    const result = planEmbeddedOutputs(
+      ["C:\\s1\\episode.ass", "C:\\s2\\episode.ssa", "C:\\s3\\other.ass"],
+      { outputDir: "D:\\out" }
+    );
+
+    expect(result.targets).toEqual([
+      { inputPath: "C:\\s1\\episode.ass", outputPath: "D:\\out\\episode.embedded.ass" },
+      { inputPath: "C:\\s3\\other.ass", outputPath: "D:\\out\\other.embedded.ass" },
+    ]);
+    expect(result.skipped).toEqual([
+      {
+        inputPath: "C:\\s2\\episode.ssa",
+        outputPath: "D:\\out\\episode.embedded.ass",
+        reason: "duplicate",
+        message: "duplicate output path",
+      },
+    ]);
+  });
+
+  it("treats case-only chosen-folder output collisions as duplicates", () => {
+    const result = planEmbeddedOutputs(["C:\\s1\\EP01.ass", "C:\\s2\\ep01.ass"], {
+      outputDir: "D:\\out",
+    });
+
+    expect(result.targets).toHaveLength(1);
+    expect(result.skipped).toMatchObject([{ inputPath: "C:\\s2\\ep01.ass", reason: "duplicate" }]);
+  });
+
+  it("keeps valid targets when another input path is invalid", () => {
+    const result = planEmbeddedOutputs(["C:\\subs\\ok.ass", "relative.ass"], {
+      outputDir: "D:\\out",
+    });
+
+    expect(result.targets).toEqual([
+      { inputPath: "C:\\subs\\ok.ass", outputPath: "D:\\out\\ok.embedded.ass" },
+    ]);
+    expect(result.skipped).toMatchObject([{ inputPath: "relative.ass", reason: "invalid" }]);
+  });
+});
 
 function makeEntry(family: string, bold: boolean, italic: boolean, path: string): LocalFontEntry {
   return {
