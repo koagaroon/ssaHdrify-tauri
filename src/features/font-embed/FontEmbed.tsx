@@ -608,6 +608,12 @@ export default function FontEmbed() {
     setLastActionResult(null);
   }, [fontsFiles]);
 
+  // Output destination changes alter what a subsequent Embed click will do,
+  // so clear stale "done" / "cancelled" status just like file changes do.
+  useEffect(() => {
+    setLastActionResult(null);
+  }, [outputMode, chosenOutputDir]);
+
   // File-list dropdown: close on click-outside / Escape (mirrors HDR).
   useClickOutside(showFileList, fileContainerRef, () => setShowFileList(false));
 
@@ -863,6 +869,14 @@ export default function FontEmbed() {
           // to msg_fonts_all_failed.
           addLog(t("msg_fonts_all_no_change", noChangeCount), "info");
           setLastActionResult("success");
+        } else if (noChangeCount > 0 && issueCount > 0) {
+          // Some files were benign no-ops while others failed preflight
+          // or processing. That is incomplete, not "all failed".
+          addLog(
+            t("msg_fonts_complete_partial", successCount, filePaths.length, issueCount),
+            "warn"
+          );
+          setLastActionResult("partial");
         } else {
           addLog(t("msg_fonts_all_failed", filePaths.length), "error");
           setLastActionResult("error");

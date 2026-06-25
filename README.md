@@ -133,10 +133,11 @@ Format support differs by workflow. The table below describes current behavior. 
 
 ### 字体嵌入 / Font Embedding
 
-1. 点击「选择字幕文件 / Select Subtitle File」，选择 ASS 字幕文件 / Click **Select Subtitle File** to pick an ASS file
+1. 点击「选择字幕文件 / Select Subtitle File」，选择一个或多个 ASS/SSA 字幕文件 / Click **Select Subtitle File** to pick one or more ASS/SSA files
 2. 工具会自动检测字幕引用的字体，并优先尝试从系统字体库匹配 / The tool detects fonts referenced by the subtitle and first tries to match them against the system font library
 3. 主面板会实时显示本地字体源覆盖情况（覆盖 N / M）和尚未匹配的字体；每个字体都会标注来源（本地 / 系统）和状态（已找到 / 缺失）/ The main panel shows live local-source coverage (Coverage: N / M) and lists any still-missing families; each detected font is tagged with its source (Local / System) and status (Found / Missing)
-4. 点击「嵌入已选字体」，将子集化后的字体数据写入 ASS 文件 / Click **Embed Selected Fonts** to write the subset font data into the ASS file
+4. 选择输出位置：默认保存到源字幕旁，也可以保存到指定文件夹；指定文件夹模式会将输出平铺到该文件夹，重复输出名会自动跳过 / Choose the output location: save beside each source subtitle by default, or save into a chosen folder; chosen-folder mode writes flat outputs into that folder and skips duplicate output names
+5. 点击「嵌入已选字体」，将子集化后的字体数据写入 `.embedded.ass` 输出文件 / Click **Embed Selected Fonts** to write the subset font data into `.embedded.ass` output files
 
 字幕组排版常用字体通常没有安装在系统中。打开「字体来源 / Font Sources」面板，添加需要扫描的本地文件夹；这些字体无需系统安装，也可以参与匹配。
 
