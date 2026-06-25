@@ -289,6 +289,8 @@ export const strings: Record<string, StringEntry> = {
   fonts_missing: { en: "Missing", zh: "缺失" },
   btn_embed: { en: "Embed Selected Fonts ({0})", zh: "嵌入已选字体（{0}）" },
   btn_embed_default: { en: "Embed Fonts", zh: "嵌入字体" },
+  fonts_output_beside_input: { en: "Save beside input", zh: "保存到源文件旁" },
+  fonts_output_chosen_dir: { en: "Save to chosen folder", zh: "保存到指定文件夹" },
   msg_fonts_start: {
     en: "Starting embed: {0} file(s)",
     zh: "开始嵌入：{0} 个文件",

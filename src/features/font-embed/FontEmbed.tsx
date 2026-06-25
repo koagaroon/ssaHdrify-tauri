@@ -4,6 +4,7 @@ import {
   fileNameFromPath,
   openFontCache,
   pickAssFiles,
+  pickOutputDirectory,
   readText,
   removeFontSource,
   writeText,
@@ -13,8 +14,8 @@ import {
   aggregateFonts,
   analyzeFonts,
   embedFonts,
+  planEmbeddedOutputs,
   userFontKey,
-  deriveEmbeddedPath,
   type FileAnalysis,
   type FontInfo,
   type EmbedProgress,
@@ -32,12 +33,9 @@ import { useClickOutside } from "../../lib/useClickOutside";
 import { useLogPanel } from "../../lib/useLogPanel";
 import { LogPanel } from "../../lib/LogPanel";
 import { DropErrorBanner } from "../../lib/DropErrorBanner";
-import {
-  buildConflictMessage,
-  normalizeOutputKey,
-  sanitizeError,
-  sanitizeForDialog,
-} from "../../lib/dedup-helpers";
+import { buildConflictMessage, sanitizeError, sanitizeForDialog } from "../../lib/dedup-helpers";
+
+type FontEmbedOutputMode = "beside_input" | "chosen_dir";
 
 /** Stable selection key — survives `fonts[]` reorders (e.g. after adding a
  *  new font source triggers a reanalyze with a different ordering). Using
@@ -58,6 +56,14 @@ function keysOfResolvedFonts(infos: FontInfo[]): Set<string> {
 
 function missingReferencedFonts(infos: FontInfo[]): FontInfo[] {
   return infos.filter((info) => !info.filePath);
+}
+
+function safeDisplayFileName(path: string): string {
+  try {
+    return sanitizeForDialog(fileNameFromPath(path));
+  } catch {
+    return sanitizeForDialog(path.split(/[\\/]/).pop() ?? path);
+  }
 }
 
 // Font Embed only operates on ASS / SSA — other subtitle formats don't carry
@@ -134,6 +140,8 @@ export default function FontEmbed() {
   const [showFileList, setShowFileList] = useState(false);
   const [dropActive, setDropActive] = useState(false);
   const [dropError, setDropError] = useState<string | null>(null);
+  const [outputMode, setOutputMode] = useState<FontEmbedOutputMode>("beside_input");
+  const [chosenOutputDir, setChosenOutputDir] = useState<string | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
   // Synchronous double-click guard — `embedding` state lags
@@ -577,6 +585,12 @@ export default function FontEmbed() {
     [fontSources, reanalyzeWithSources, addLog, t]
   );
 
+  const handlePickOutputDir = useCallback(async () => {
+    if (analyzing || embedding) return;
+    const dir = await pickOutputDirectory(t);
+    if (dir) setChosenOutputDir(dir);
+  }, [analyzing, embedding, t]);
+
   const toggleSelect = (key: string) => {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -604,59 +618,41 @@ export default function FontEmbed() {
     if (busyRef.current) return;
     busyRef.current = true;
     try {
-      // Pre-flight overwrite check — same project-wide pattern. Per-file
-      // try wraps `deriveEmbeddedPath` so a single bad path surfaces with
-      // filename context instead of aborting the whole batch with a
-      // template-error string and no attribution.
-      // Pre-flight errors below render into the log panel via addLog;
-      // the per-file path comes from the user's filePaths array which
-      // can carry attacker-influenced content (fan-sub drops, P1b).
-      // sanitizeForDialog strips BiDi / zero-width controls so a
-      // U+202E in a path can't visually reverse the surrounding log
-      // line.
-      //
-      // Collect-and-continue: one bad template / unsafe filename in a
-      // batch shouldn't abort the entire run. HDR + Timing already
-      // collect failures and continue with the remaining files;
-      // FontEmbed previously returned on the first pre-flight error,
-      // leaving a 10-file batch entirely unprocessed because file #3
-      // had an unusual filename. We surface each failure in the log
-      // and only abort when EVERY file failed.
-      const projectedOutputs: string[] = [];
-      const skippedPaths = new Set<string>();
-      for (const p of filePaths) {
-        try {
-          projectedOutputs.push(deriveEmbeddedPath(p));
-        } catch (e) {
-          const safePath = sanitizeForDialog(fileNameFromPath(p));
-          const safeErr = sanitizeError(e);
-          addLog(t("msg_fonts_error", safePath, safeErr), "error");
-          skippedPaths.add(p);
+      if (outputMode === "chosen_dir" && !chosenOutputDir) {
+        addLog(t("msg_rename_no_chosen_dir"), "error");
+        setLastActionResult("error");
+        return;
+      }
+
+      const planned = planEmbeddedOutputs(
+        filePaths,
+        outputMode === "chosen_dir" ? { outputDir: chosenOutputDir! } : {}
+      );
+      for (const skipped of planned.skipped) {
+        const safePath = safeDisplayFileName(skipped.inputPath);
+        if (skipped.reason === "duplicate") {
+          addLog(t("msg_skipped_duplicate", safePath), "error");
+        } else {
+          addLog(t("msg_fonts_error", safePath, skipped.message), "error");
         }
       }
-      if (skippedPaths.size === filePaths.length) {
+      if (planned.targets.length === 0) {
         // Every file failed pre-flight — nothing left to process.
         setLastActionResult("error");
         return;
       }
       try {
-        // Dedup by the same output key the embed loop uses for its
-        // within-batch skip — two inputs resolving to the same output are
-        // written once, so the overwrite-confirm count must not count both
-        // (it would overstate the files actually overwritten).
-        const seenProjected = new Set<string>();
-        const uniqueProjected = projectedOutputs.filter((p) => {
-          const key = normalizeOutputKey(p);
-          if (seenProjected.has(key)) return false;
-          seenProjected.add(key);
-          return true;
-        });
-        const existingCount = await countExistingFiles(uniqueProjected);
+        const existingCount = await countExistingFiles(
+          planned.targets.map((target) => target.outputPath)
+        );
         if (existingCount > 0) {
-          const confirmed = await ask(t("msg_overwrite_confirm", existingCount, filePaths.length), {
-            title: t("dialog_overwrite_title"),
-            kind: "warning",
-          });
+          const confirmed = await ask(
+            t("msg_overwrite_confirm", existingCount, planned.targets.length),
+            {
+              title: t("dialog_overwrite_title"),
+              kind: "warning",
+            }
+          );
           if (!confirmed) {
             addLog(t("msg_fonts_cancelled"), "info");
             setLastActionResult("cancelled");
@@ -673,60 +669,31 @@ export default function FontEmbed() {
       // HdrConvert::handleConvert for rationale.
       abortRef.current = new AbortController();
       setEmbedding(true);
-      setBatchProgress({ processed: 0, total: filePaths.length });
+      setBatchProgress({ processed: planned.skipped.length, total: filePaths.length });
 
       try {
         addLog(t("msg_fonts_start", filePaths.length));
 
         let successCount = 0;
-        let issueCount = skippedPaths.size;
+        let issueCount = planned.skipped.length;
         // Files that processed cleanly but needed no embedding (every
         // referenced font already present). Tracked apart from successCount /
         // issueCount so an all-no-change batch isn't misframed as total
         // failure in the final summary.
         let noChangeCount = 0;
-        let processedCount = 0;
-        const seenOutputs = new Set<string>();
+        let processedCount = planned.skipped.length;
 
-        for (let i = 0; i < filePaths.length; i++) {
-          const filePath = filePaths[i]!;
+        for (const target of planned.targets) {
+          const filePath = target.inputPath;
+          const outputPath = target.outputPath;
 
-          // hoist safeFileName above the
-          // skip-check so a future refactor adding work between the
-          // skip-check and the original declaration site doesn't
-          // surface ReferenceError on a defensive throw inside that
-          // gap. Mirrors HdrConvert / TimingShift posture (single
-          // declaration at top-of-loop-body). The compute cost is one
-          // sanitizeForDialog + fileNameFromPath per iteration even
-          // on skipped paths, which is negligible against the actual
-          // embed work and worth the symmetry.
-          //
-          // bare-split fallback before
-          // fileNameFromPath — if fileNameFromPath throws (invalid
-          // path shapes), we still get a reasonable display string
-          // instead of sanitizeForDialog'ing the full path. Same
-          // shape adopted across HdrConvert + TimingShift.
-          const safeFileName = (() => {
-            try {
-              return sanitizeForDialog(fileNameFromPath(filePath));
-            } catch {
-              return sanitizeForDialog(filePath.split(/[\\/]/).pop() ?? filePath);
-            }
-          })();
+          // Compute once at the top of each loop so every downstream
+          // log interpolation gets the same BiDi-scrubbed display name.
+          const safeFileName = safeDisplayFileName(filePath);
 
           if (abortRef.current?.signal.aborted) {
             addLog(t("msg_fonts_cancelled"), "info");
             break;
-          }
-
-          // Skip files that failed pre-flight collect-and-continue
-          // . Their error was already logged above; here
-          // we just need to not process them so processedCount still
-          // climbs to filePaths.length and the footer chip is accurate.
-          if (skippedPaths.has(filePath)) {
-            processedCount++;
-            setBatchProgress({ processed: processedCount, total: filePaths.length });
-            continue;
           }
 
           // BiDi parity — fileName / outName below flow into many
@@ -737,15 +704,6 @@ export default function FontEmbed() {
           addLog(t("msg_processing", safeFileName));
 
           try {
-            const outputPath = deriveEmbeddedPath(filePath);
-            const normalizedOut = normalizeOutputKey(outputPath);
-            if (seenOutputs.has(normalizedOut)) {
-              issueCount++;
-              addLog(t("msg_skipped_duplicate", safeFileName), "error");
-              continue;
-            }
-            seenOutputs.add(normalizedOut);
-
             // Pull from the per-file analysis cache populated at ingest.
             // Every visible path in the grid was ingested before this
             // loop runs (see `ingestPaths`), and ingest is the site that
@@ -918,7 +876,7 @@ export default function FontEmbed() {
     } finally {
       busyRef.current = false;
     }
-  }, [fileCount, filePaths, isSingleFile, selected, addLog, t]);
+  }, [fileCount, filePaths, isSingleFile, selected, outputMode, chosenOutputDir, addLog, t]);
 
   // Footer status — busy carries N-of-M progress; cancelled is its own
   // visible state.
@@ -980,7 +938,10 @@ export default function FontEmbed() {
   // (selected only flips after analyze completes), but a future change
   // that publishes per-file would otherwise quietly let Embed fire on a
   // partially-analyzed batch.
-  const isEmbedDisabled = embedding || analyzing || selected.size === 0 || fileCount === 0;
+  const outputControlsDisabled = analyzing || embedding;
+  const missingChosenOutputDir = outputMode === "chosen_dir" && !chosenOutputDir;
+  const isEmbedDisabled =
+    embedding || analyzing || selected.size === 0 || fileCount === 0 || missingChosenOutputDir;
 
   function embedButtonLabel(): string {
     if (embedding) return t("btn_embedding");
@@ -1131,6 +1092,68 @@ export default function FontEmbed() {
         </p>
       )}
 
+      <div className="flex flex-wrap items-center gap-3">
+        <label
+          className="flex items-center gap-2 text-sm cursor-pointer"
+          style={{ color: "var(--text-primary)" }}
+        >
+          <input
+            type="radio"
+            name="font-embed-output-mode"
+            value="beside_input"
+            checked={outputMode === "beside_input"}
+            onChange={() => setOutputMode("beside_input")}
+            disabled={outputControlsDisabled}
+          />
+          <span>{t("fonts_output_beside_input")}</span>
+          <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+            {t("rename_mode_default")}
+          </span>
+        </label>
+        <label
+          className="flex items-center gap-2 text-sm cursor-pointer"
+          style={{ color: "var(--text-primary)" }}
+        >
+          <input
+            type="radio"
+            name="font-embed-output-mode"
+            value="chosen_dir"
+            checked={outputMode === "chosen_dir"}
+            onChange={() => setOutputMode("chosen_dir")}
+            disabled={outputControlsDisabled}
+          />
+          <span>{t("fonts_output_chosen_dir")}</span>
+        </label>
+        {outputMode === "chosen_dir" && (
+          <div className="flex items-center gap-2 min-w-0">
+            <button
+              onClick={handlePickOutputDir}
+              disabled={outputControlsDisabled}
+              className="px-3 py-1 rounded text-xs font-medium"
+              style={{
+                background: outputControlsDisabled ? "var(--bg-input)" : "var(--accent)",
+                color: outputControlsDisabled ? "var(--text-muted)" : "white",
+              }}
+            >
+              {t("btn_pick_chosen_dir")}
+            </button>
+            {chosenOutputDir ? (
+              <span
+                className="text-xs truncate"
+                style={{ color: "var(--text-secondary)", maxWidth: "min(420px, 55vw)" }}
+                title={sanitizeForDialog(chosenOutputDir)}
+              >
+                {sanitizeForDialog(chosenOutputDir)}
+              </span>
+            ) : (
+              <span className="text-xs italic" style={{ color: "var(--text-muted)" }}>
+                {t("rename_chosen_dir_empty")}
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* Action row: select fonts + embed + cancel.
            Font source picking is intentionally decoupled from subtitle
            loading — the user can pick fonts first OR a subtitle first
@@ -1207,6 +1230,7 @@ export default function FontEmbed() {
         <button
           onClick={handleEmbed}
           disabled={isEmbedDisabled}
+          title={missingChosenOutputDir ? t("msg_rename_no_chosen_dir") : undefined}
           className="px-6 rounded-lg font-medium text-sm transition-colors"
           style={
             isEmbedDisabled
