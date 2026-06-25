@@ -909,6 +909,9 @@ export default function FontEmbed() {
     }
   }, [fileCount, filePaths, isSingleFile, selected, outputMode, chosenOutputDir, addLog, t]);
 
+  const outputControlsDisabled = analyzing || embedding;
+  const missingChosenOutputDir = outputMode === "chosen_dir" && !chosenOutputDir;
+
   // Footer status — busy carries N-of-M progress; cancelled is its own
   // visible state.
   const tabStatus = useMemo<Status>(() => {
@@ -983,8 +986,6 @@ export default function FontEmbed() {
   // (selected only flips after analyze completes), but a future change
   // that publishes per-file would otherwise quietly let Embed fire on a
   // partially-analyzed batch.
-  const outputControlsDisabled = analyzing || embedding;
-  const missingChosenOutputDir = outputMode === "chosen_dir" && !chosenOutputDir;
   const isEmbedDisabled =
     embedding || analyzing || selected.size === 0 || fileCount === 0 || missingChosenOutputDir;
 
