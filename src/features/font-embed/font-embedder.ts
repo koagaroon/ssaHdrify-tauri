@@ -111,7 +111,7 @@ export interface PlannedEmbeddedOutput {
 
 export interface SkippedEmbeddedOutput {
   inputPath: string;
-  reason: "invalid" | "duplicate";
+  reason: "invalid" | "duplicate" | "input_conflict";
   message: string;
   outputPath?: string;
 }
@@ -556,11 +556,21 @@ export function planEmbeddedOutputs(
   const targets: PlannedEmbeddedOutput[] = [];
   const skipped: SkippedEmbeddedOutput[] = [];
   const seenOutputs = new Set<string>();
+  const inputKeys = new Set(inputPaths.map((inputPath) => normalizeOutputKey(inputPath)));
 
   for (const inputPath of inputPaths) {
     try {
       const outputPath = deriveEmbeddedPath(inputPath, options);
       const outputKey = normalizeOutputKey(outputPath);
+      if (inputKeys.has(outputKey)) {
+        skipped.push({
+          inputPath,
+          outputPath,
+          reason: "input_conflict",
+          message: "output path matches a selected input file",
+        });
+        continue;
+      }
       if (seenOutputs.has(outputKey)) {
         skipped.push({
           inputPath,

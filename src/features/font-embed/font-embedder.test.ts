@@ -131,13 +131,95 @@ describe("deriveEmbeddedPath / planEmbeddedOutputs", () => {
     ]);
   });
 
-  it("treats case-only chosen-folder output collisions as duplicates", () => {
-    const result = planEmbeddedOutputs(["C:\\s1\\EP01.ass", "C:\\s2\\ep01.ass"], {
+  it("skips sibling outputs that would overwrite another selected input", () => {
+    const result = planEmbeddedOutputs(["C:\\subs\\episode.ass", "C:\\subs\\episode.embedded.ass"]);
+
+    expect(result.targets).toEqual([]);
+    expect(result.skipped).toMatchObject([
+      {
+        inputPath: "C:\\subs\\episode.ass",
+        outputPath: "C:\\subs\\episode.embedded.ass",
+        reason: "input_conflict",
+        message: "output path matches a selected input file",
+      },
+      {
+        inputPath: "C:\\subs\\episode.embedded.ass",
+        reason: "invalid",
+      },
+    ]);
+  });
+
+  it("skips chosen-folder outputs that would overwrite another selected input", () => {
+    const result = planEmbeddedOutputs(["C:\\src\\episode.ass", "D:\\out\\episode.embedded.ass"], {
+      outputDir: "D:\\out",
+    });
+
+    expect(result.targets).toEqual([]);
+    expect(result.skipped).toMatchObject([
+      {
+        inputPath: "C:\\src\\episode.ass",
+        outputPath: "D:\\out\\episode.embedded.ass",
+        reason: "input_conflict",
+      },
+      {
+        inputPath: "D:\\out\\episode.embedded.ass",
+        reason: "invalid",
+      },
+    ]);
+  });
+
+  it("treats identical chosen-folder output collisions as duplicates", () => {
+    const result = planEmbeddedOutputs(["C:\\s1\\episode.ass", "C:\\s2\\episode.ssa"], {
       outputDir: "D:\\out",
     });
 
     expect(result.targets).toHaveLength(1);
-    expect(result.skipped).toMatchObject([{ inputPath: "C:\\s2\\ep01.ass", reason: "duplicate" }]);
+    expect(result.skipped).toMatchObject([
+      { inputPath: "C:\\s2\\episode.ssa", reason: "duplicate" },
+    ]);
+  });
+
+  it("deduplicates case-only outputs on an injected case-insensitive runtime", async () => {
+    const platformGlobal = globalThis as typeof globalThis & {
+      __ssahdrifyPlatform?: { isWindows: boolean; isCaseInsensitiveFs: boolean };
+    };
+    platformGlobal.__ssahdrifyPlatform = { isWindows: false, isCaseInsensitiveFs: true };
+    vi.resetModules();
+    try {
+      const mod = await import("./font-embedder");
+      const result = mod.planEmbeddedOutputs(["/s1/EP01.ass", "/s2/ep01.ass"], {
+        outputDir: "/out",
+      });
+
+      expect(result.targets).toHaveLength(1);
+      expect(result.skipped).toMatchObject([{ inputPath: "/s2/ep01.ass", reason: "duplicate" }]);
+    } finally {
+      delete platformGlobal.__ssahdrifyPlatform;
+      vi.resetModules();
+    }
+  });
+
+  it("keeps case-only outputs distinct on an injected case-sensitive runtime", async () => {
+    const platformGlobal = globalThis as typeof globalThis & {
+      __ssahdrifyPlatform?: { isWindows: boolean; isCaseInsensitiveFs: boolean };
+    };
+    platformGlobal.__ssahdrifyPlatform = { isWindows: false, isCaseInsensitiveFs: false };
+    vi.resetModules();
+    try {
+      const mod = await import("./font-embedder");
+      const result = mod.planEmbeddedOutputs(["/s1/EP01.ass", "/s2/ep01.ass"], {
+        outputDir: "/out",
+      });
+
+      expect(result.targets).toEqual([
+        { inputPath: "/s1/EP01.ass", outputPath: "/out/EP01.embedded.ass" },
+        { inputPath: "/s2/ep01.ass", outputPath: "/out/ep01.embedded.ass" },
+      ]);
+      expect(result.skipped).toEqual([]);
+    } finally {
+      delete platformGlobal.__ssahdrifyPlatform;
+      vi.resetModules();
+    }
   });
 
   it("keeps valid targets when another input path is invalid", () => {

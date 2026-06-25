@@ -129,7 +129,7 @@ export default function FontEmbed() {
     null
   );
   const [lastActionResult, setLastActionResult] = useState<
-    "success" | "partial" | "error" | "cancelled" | null
+    "success" | "noop" | "partial" | "error" | "cancelled" | null
   >(null);
   // Synchronous "Cancelling…" feedback for the embed Cancel button. The abort
   // only lands at the next per-file iteration boundary, so without this the
@@ -587,9 +587,13 @@ export default function FontEmbed() {
 
   const handlePickOutputDir = useCallback(async () => {
     if (analyzing || embedding) return;
-    const dir = await pickOutputDirectory(t);
-    if (dir) setChosenOutputDir(dir);
-  }, [analyzing, embedding, t]);
+    try {
+      const dir = await pickOutputDirectory(t);
+      if (dir) setChosenOutputDir(dir);
+    } catch (e) {
+      addLog(t("error_prefix", sanitizeError(e)), "error");
+    }
+  }, [analyzing, embedding, addLog, t]);
 
   const toggleSelect = (key: string) => {
     setSelected((prev) => {
@@ -652,8 +656,12 @@ export default function FontEmbed() {
           planned.targets.map((target) => target.outputPath)
         );
         if (existingCount > 0) {
+          const skippedSuffix =
+            planned.skipped.length > 0
+              ? `\n\n${t("msg_fonts_skipped_count", planned.skipped.length)}`
+              : "";
           const confirmed = await ask(
-            t("msg_overwrite_confirm", existingCount, planned.targets.length),
+            t("msg_overwrite_confirm", existingCount, planned.targets.length) + skippedSuffix,
             {
               title: t("dialog_overwrite_title"),
               kind: "warning",
@@ -854,12 +862,21 @@ export default function FontEmbed() {
         const aborted = !!abortRef.current?.signal.aborted;
         if (aborted) {
           setLastActionResult("cancelled");
+        } else if (successCount > 0 && issueCount > 0 && noChangeCount > 0) {
+          addLog(
+            t("msg_fonts_complete_partial_mixed", successCount, noChangeCount, issueCount),
+            "warn"
+          );
+          setLastActionResult("partial");
         } else if (successCount > 0 && issueCount > 0) {
           addLog(
             t("msg_fonts_complete_partial", successCount, filePaths.length, issueCount),
             "warn"
           );
           setLastActionResult("partial");
+        } else if (successCount > 0 && noChangeCount > 0) {
+          addLog(t("msg_fonts_complete_mixed", successCount, noChangeCount), "success");
+          setLastActionResult("success");
         } else if (successCount > 0) {
           addLog(t("msg_fonts_complete", successCount, filePaths.length), "success");
           setLastActionResult("success");
@@ -868,12 +885,12 @@ export default function FontEmbed() {
           // nothing to embed. A benign outcome, not a failure: don't route it
           // to msg_fonts_all_failed.
           addLog(t("msg_fonts_all_no_change", noChangeCount), "info");
-          setLastActionResult("success");
+          setLastActionResult("noop");
         } else if (noChangeCount > 0 && issueCount > 0) {
           // Some files were benign no-ops while others failed preflight
           // or processing. That is incomplete, not "all failed".
           addLog(
-            t("msg_fonts_complete_partial", successCount, filePaths.length, issueCount),
+            t("msg_fonts_complete_partial_mixed", successCount, noChangeCount, issueCount),
             "warn"
           );
           setLastActionResult("partial");
@@ -905,6 +922,7 @@ export default function FontEmbed() {
     }
     if (analyzing) return { kind: "busy", message: t("status_fonts_analyzing") };
     if (lastActionResult === "success") return { kind: "done", message: t("status_fonts_done") };
+    if (lastActionResult === "noop") return { kind: "done", message: t("status_fonts_noop") };
     if (lastActionResult === "partial") {
       return { kind: "pending", message: t("status_fonts_partial") };
     }
@@ -915,6 +933,9 @@ export default function FontEmbed() {
     if (selected.size === 0) {
       return { kind: "pending", message: t("status_fonts_pick") };
     }
+    if (missingChosenOutputDir) {
+      return { kind: "pending", message: t("msg_rename_no_chosen_dir") };
+    }
     if (isSingleFile) {
       return { kind: "pending", message: t("status_fonts_pending", selected.size) };
     }
@@ -922,7 +943,17 @@ export default function FontEmbed() {
       kind: "pending",
       message: t("status_fonts_batch_pending", selected.size, fileCount),
     };
-  }, [fileCount, isSingleFile, analyzing, embedding, batchProgress, selected, lastActionResult, t]);
+  }, [
+    fileCount,
+    isSingleFile,
+    analyzing,
+    embedding,
+    batchProgress,
+    selected,
+    lastActionResult,
+    missingChosenOutputDir,
+    t,
+  ]);
   useTabStatus("fonts", tabStatus);
 
   const formatFontLabel = (info: FontInfo) => fontKeyLabel(info.key);

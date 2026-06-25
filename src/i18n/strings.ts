@@ -39,6 +39,7 @@ export const strings: Record<string, StringEntry> = {
   },
   status_fonts_busy: { en: "Embedding…", zh: "嵌入中…" },
   status_fonts_done: { en: "Fonts embedded", zh: "字体已嵌入" },
+  status_fonts_noop: { en: "Nothing to embed", zh: "无需嵌入" },
   status_fonts_partial: { en: "Fonts embedded with warnings", zh: "字体已嵌入，但有警告" },
   status_fonts_error: { en: "Embed failed", zh: "嵌入失败" },
   status_fonts_cancelled: { en: "Embed cancelled", zh: "已取消嵌入" },
@@ -299,9 +300,21 @@ export const strings: Record<string, StringEntry> = {
     en: "Embed complete: {0}/{1} file(s) processed",
     zh: "嵌入完成：已处理 {0}/{1} 个文件",
   },
+  msg_fonts_complete_mixed: {
+    en: "Embed complete: {0} file(s) written, {1} unchanged",
+    zh: "嵌入完成：已写入 {0} 个文件，{1} 个文件无需更改",
+  },
   msg_fonts_complete_partial: {
     en: "Embed incomplete: {0}/{1} file(s) written, {2} issue(s)",
     zh: "嵌入不完整：已写入 {0}/{1} 个文件，{2} 个问题",
+  },
+  msg_fonts_complete_partial_mixed: {
+    en: "Embed incomplete: {0} file(s) written, {1} unchanged, {2} issue(s)",
+    zh: "嵌入不完整：已写入 {0} 个文件，{1} 个文件无需更改，{2} 个问题",
+  },
+  msg_fonts_skipped_count: {
+    en: "Note: {0} file(s) were skipped before this prompt (see log).",
+    zh: "注意：另有 {0} 个文件已在此提示前跳过（见日志）。",
   },
   msg_fonts_all_failed: {
     en: "Embed failed on all {0} file(s); see errors above",
