@@ -318,22 +318,47 @@ fn deny_list_entries_use_known_scope_variables() {
     // `${DATA}/...` (shell-style braces), or accidentally absolute
     // paths (`C:\Users\...`) that resolve to a literal path the
     // matcher won't expand.
-    let allowed_prefixes = [
-        "$HOME/",
-        "$DATA/",
-        "$LOCALDATA/",
-        "$APPDATA/",
-        "$APPLOCALDATA/",
+    let allowed_prefixes = ["$HOME/", "$DATA/", "$LOCALDATA/"];
+    let allowed_exact = [
+        "$APPDATA",
+        "$APPDATA/**",
+        "$APPLOCALDATA",
+        "$APPLOCALDATA/**",
     ];
 
     let bad: Vec<&String> = deny
         .iter()
-        .filter(|p| !allowed_prefixes.iter().any(|pref| p.starts_with(pref)))
+        .filter(|p| {
+            !allowed_prefixes.iter().any(|pref| p.starts_with(pref))
+                && !allowed_exact.iter().any(|exact| p == exact)
+        })
         .collect();
     assert!(
         bad.is_empty(),
         "deny list entries with unknown / mangled scope-variable prefix (R17 W17.5):\n{}",
         bad.iter()
+            .map(|p| format!("  - {p}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
+
+#[test]
+fn recursive_denies_include_the_bare_directory() {
+    let deny = read_deny_paths();
+
+    let missing: Vec<String> = deny
+        .iter()
+        .filter_map(|path| path.strip_suffix("/**"))
+        .filter(|bare| !deny.iter().any(|path| path == bare))
+        .map(ToString::to_string)
+        .collect();
+
+    assert!(
+        missing.is_empty(),
+        "recursive deny entries must also deny the bare directory itself:\n{}",
+        missing
+            .iter()
             .map(|p| format!("  - {p}"))
             .collect::<Vec<_>>()
             .join("\n")
@@ -355,12 +380,11 @@ fn bundle_namespaced_denies_are_bare_recursive_only() {
     for p in &deny {
         for prefix in ["$APPDATA", "$APPLOCALDATA"] {
             if p.starts_with(prefix) {
-                assert_eq!(
-                    p,
-                    &format!("{prefix}/**"),
-                    "bundle-namespaced deny must be bare `{prefix}/**`; the multi-segment \
-                     form `{p}` resolves to a non-existent doubly-namespaced path and \
-                     denies nothing"
+                assert!(
+                    p == prefix || p == &format!("{prefix}/**"),
+                    "bundle-namespaced deny must be exactly `{prefix}` or `{prefix}/**`; the \
+                     multi-segment form `{p}` resolves to a non-existent doubly-namespaced \
+                     path and denies nothing"
                 );
             }
         }
