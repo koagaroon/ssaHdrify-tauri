@@ -34,9 +34,9 @@
 //!      future text-readable `.ass`.
 //!      Closes the "Start Menu autostart .desktop / .lnk" persistence
 //!      class because those extensions are outside both sets.
-//!   3. **`fs_scope().is_allowed()`** — reuses Tauri's plugin-fs
-//!      allow/deny policy verbatim (no manual port of the 50-entry deny
-//!      list; single source of truth in `capabilities/default.json`).
+//!   3. **App-owned `Scope::is_allowed()`** — reuses Tauri's matcher with
+//!      a scope built from `capabilities/default.json`. That JSON
+//!      remains the single source of truth for the deny list.
 //!      Closes the "exfil credentials via copy" class because
 //!      `$HOME/.ssh` and the rest of the deny list refuse on both src
 //!      and dst.
@@ -46,7 +46,7 @@
 //!
 //! Tests pin the gating logic via `*_inner` helpers that take an
 //! `is_allowed` closure so the Tauri command's `AppHandle` doesn't have
-//! to be mocked. GUI production wraps `app.fs_scope().is_allowed(...)`;
+//! to be mocked. GUI production wraps the app-owned scope's `is_allowed`;
 //! the CLI binary (`bin/cli/main.rs`) also routes its write / copy /
 //! rename outputs through these helpers with a permissive `|_| true`
 //! closure (CLI argv is the user's intent, so there is no
@@ -60,7 +60,6 @@ use crate::util::{is_reparse_point, validate_ipc_path};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use tauri_plugin_fs::FsExt;
 
 const ALLOWED_RENAME_SIDECAR_EXTENSIONS: &[&str] = &["sup"];
 
@@ -573,7 +572,7 @@ pub fn safe_write_text_file(
     content: String,
     overwrite: bool,
 ) -> Result<(), String> {
-    let scope = app.fs_scope();
+    let scope = crate::fs_policy::app_fs_scope(&app)?;
     safe_write_text_file_inner(&path, &content, overwrite, move |p| scope.is_allowed(p))
 }
 
@@ -589,7 +588,7 @@ pub fn safe_copy_file(
     dst: String,
     overwrite: bool,
 ) -> Result<(), String> {
-    let scope = app.fs_scope();
+    let scope = crate::fs_policy::app_fs_scope(&app)?;
     safe_copy_file_inner(&src, &dst, overwrite, move |p| scope.is_allowed(p))
 }
 
@@ -605,7 +604,7 @@ pub fn safe_rename_file(
     dst: String,
     overwrite: bool,
 ) -> Result<(), String> {
-    let scope = app.fs_scope();
+    let scope = crate::fs_policy::app_fs_scope(&app)?;
     safe_rename_file_inner(&src, &dst, overwrite, move |p| scope.is_allowed(p))
 }
 

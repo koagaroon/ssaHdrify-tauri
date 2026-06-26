@@ -8,7 +8,6 @@ use crate::util::is_reparse_point;
 use chardetng::EncodingDetector;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use tauri_plugin_fs::FsExt;
 
 /// Verify a path's extension is in `ALLOWED_TEXT_EXTENSIONS`. Case-folded.
 fn ext_is_allowed(path: &Path) -> bool {
@@ -131,8 +130,8 @@ pub struct ReadTextResult {
 /// 2. chardetng heuristic — handles GBK, Big5, Shift_JIS, EUC-KR, etc.
 /// 3. Lossy UTF-8 fallback — if all else fails
 ///
-/// The Tauri command (`read_text_detect_encoding`) wraps this with
-/// `app.fs_scope().is_allowed`; the CLI binary (which has no Tauri app
+/// The Tauri command (`read_text_detect_encoding`) wraps this with the
+/// app-owned fs scope; the CLI binary (which has no Tauri app
 /// handle and treats argv-provided paths as the trust surface) passes
 /// an allow-all closure. Same shape as `safe_io`'s `*_inner` helpers —
 /// keeps the policy gate testable without an `AppHandle` mock.
@@ -335,14 +334,14 @@ pub fn read_text_detect_encoding_inner(
     Ok(decode_bytes(&bytes))
 }
 
-/// Tauri command wrapper. Resolves fs:scope via the live AppHandle then
+/// Tauri command wrapper. Resolves the app-owned fs scope then
 /// delegates to `read_text_detect_encoding_inner`.
 #[tauri::command]
 pub fn read_text_detect_encoding(
     app: tauri::AppHandle,
     path: String,
 ) -> Result<ReadTextResult, String> {
-    let scope = app.fs_scope();
+    let scope = crate::fs_policy::app_fs_scope(&app)?;
     read_text_detect_encoding_inner(&path, move |p| scope.is_allowed(p))
 }
 

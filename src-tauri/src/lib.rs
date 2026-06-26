@@ -3,6 +3,7 @@ pub mod encoding;
 pub mod font_cache;
 pub mod font_cache_commands;
 pub mod fonts;
+pub mod fs_policy;
 pub mod safe_io;
 pub mod util;
 
@@ -39,6 +40,12 @@ pub fn run() {
                     .timezone_strategy(tauri_plugin_log::TimezoneStrategy::UseLocal)
                     .build(),
             )?;
+
+            let app_fs_scope = fs_policy::init_app_fs_scope(app)
+                .map_err(|e| std::io::Error::other(format!("app filesystem scope: {e}")))?;
+            if !app.manage(app_fs_scope) {
+                return Err(std::io::Error::other("app filesystem scope already initialized").into());
+            }
 
             // Snapshot env-derived system-fonts paths eagerly, before any
             // user action can run. Defense-in-depth against post-launch

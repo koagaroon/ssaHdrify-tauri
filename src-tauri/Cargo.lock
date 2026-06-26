@@ -4890,6 +4890,7 @@ dependencies = [
  "fontcull-read-fonts",
  "fontcull-skrifa",
  "fontcull-write-fonts",
+ "glob",
  "log",
  "once_cell",
  "rfd",
