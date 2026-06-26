@@ -48,6 +48,7 @@ import {
   fileNameFromPath,
   pickAssFiles,
   pickFontFiles,
+  outputPathExists,
   pickRenameInputs,
   preflightFontDirectory,
   preflightFontFiles,
@@ -55,10 +56,21 @@ import {
   scanFontFiles,
 } from "./tauri-api";
 
+
 beforeEach(() => {
   channelInstances.length = 0;
   invokeMock.mockReset();
   openMock.mockReset();
+});
+describe("outputPathExists", () => {
+  it("routes overwrite preflight through the Rust safe_io command", async () => {
+    invokeMock.mockResolvedValueOnce(true);
+
+    await expect(outputPathExists("D:/Anime/out.ass")).resolves.toBe(true);
+    expect(invokeMock).toHaveBeenCalledWith("safe_output_path_exists", {
+      path: "D:/Anime/out.ass",
+    });
+  });
 });
 
 describe("runStreamingScan — sync delivery (batches arrive during invoke)", () => {

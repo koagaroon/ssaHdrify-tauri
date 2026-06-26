@@ -189,6 +189,11 @@ export async function readTextDetectEncoding(path: string): Promise<ReadTextResu
   return invoke<ReadTextResult>("read_text_detect_encoding", { path });
 }
 
+/** Check whether a subtitle output path already exists before overwrite preflight.
+ *  Routes through Rust so the frontend does not need direct plugin-fs permissions. */
+export async function outputPathExists(path: string): Promise<boolean> {
+  return invoke<boolean>("safe_output_path_exists", { path });
+}
 /** Write a text file with explicit UTF-8.
  *
  *  Routes through the Rust-side `safe_write_text_file` command (not

@@ -69,22 +69,17 @@ fn read_permission_strings() -> Vec<String> {
 }
 
 #[test]
-fn plugin_fs_grants_only_exists_not_default_read_surface() {
+fn plugin_fs_grants_no_direct_file_command_surface() {
     let permissions = read_permission_strings();
 
-    assert!(
-        permissions
-            .iter()
-            .any(|permission| permission == "fs:allow-exists"),
-        "overwrite preflight still needs plugin-fs exists()"
-    );
     assert!(
         !permissions
             .iter()
             .any(|permission| permission == "fs:default"),
-        "fs:default grants broad read APIs; frontend should keep only fs:allow-exists"
+        "fs:default grants broad read APIs; frontend file checks should route through Rust"
     );
     for forbidden in [
+        "fs:allow-exists",
         "fs:allow-read-file",
         "fs:allow-read-dir",
         "fs:allow-stat",

@@ -116,8 +116,7 @@ pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
     //
     // Note: this closes the bypass for OUR Rust safe_io / encoding /
     // fonts entrypoints. The frontend no longer grants plugin-fs's
-    // broad read surface; its remaining direct plugin-fs call is
-    // `exists()` for overwrite preflight, while file reads/writes stay
+    // broad read surface; overwrite preflight and file reads/writes stay
     // behind Rust commands that call this validator first.
     //
     // Byte-prefix check on raw `path.as_bytes()`. The previous form

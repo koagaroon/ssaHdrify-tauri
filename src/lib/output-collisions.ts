@@ -12,7 +12,7 @@
  * Save-As-style flows (single file picked through a native save dialog)
  * already have OS-level overwrite confirmation and don't need this util.
  */
-import { exists } from "@tauri-apps/plugin-fs";
+import { outputPathExists } from "./tauri-api";
 
 /** Maximum concurrent fs::stat probes. Real-world batch sizes top out
  *  around 26 (typical anime episode count), so 32 covers the common
@@ -49,7 +49,7 @@ export async function countExistingFiles(paths: string[]): Promise<number> {
       const idx = cursor++;
       if (idx >= paths.length) return;
       try {
-        if (await exists(paths[idx]!)) {
+        if (await outputPathExists(paths[idx]!)) {
           existingCount += 1;
         }
       } catch {

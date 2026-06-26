@@ -141,6 +141,23 @@ fn check_copy_rename_extensions(src: &Path, dst: &Path) -> Result<(), String> {
     ))
 }
 
+fn check_output_probe_extension(path: &Path, label: &str) -> Result<(), String> {
+    let ext = path_extension_lower(path);
+    if text_ext_allowed(&ext) || sidecar_ext_allowed(&ext) {
+        return Ok(());
+    }
+
+    let allowed = format!(
+        "{}, {}",
+        ALLOWED_TEXT_EXTENSIONS.join(", "),
+        ALLOWED_RENAME_SIDECAR_EXTENSIONS.join(", ")
+    );
+    Err(format!(
+        "{label} path must end with a subtitle extension; got {pretty} \
+         (allowed: {allowed})",
+        pretty = pretty_ext(&ext)
+    ))
+}
 fn check_scope_allows(
     is_allowed: &impl Fn(&Path) -> bool,
     path: &Path,
@@ -438,6 +455,25 @@ fn create_new_and_write_bytes(path: &Path, content: &[u8]) -> Result<(), String>
 // Windows cross-volume), so they need the late re-check; write
 // doesn't. Putting one here would be redundant defense without
 // closing a real window.
+pub fn safe_output_path_exists_inner(
+    path: &str,
+    is_allowed: impl Fn(&Path) -> bool,
+) -> Result<bool, String> {
+    validate_ipc_path(path, "Output")?;
+    let path_ref = Path::new(path);
+    check_output_probe_extension(path_ref, "Output")?;
+    check_scope_allows(&is_allowed, path_ref, "Output")?;
+    check_scope_allows_resolved(&is_allowed, path_ref, "Output")?;
+
+    // Use symlink_metadata instead of Path::exists so an output-slot
+    // symlink or junction, including a dangling one, still counts as an
+    // occupied destination during overwrite preflight.
+    match fs::symlink_metadata(path_ref) {
+        Ok(_) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(format!("Failed to check output path existence: {e}")),
+    }
+}
 pub fn safe_write_text_file_inner(
     path: &str,
     content: &str,
@@ -562,6 +598,14 @@ pub fn safe_rename_file_inner(
 
 // ── Tauri commands (production) ────────────────────────────────
 
+/// Check whether an output path already exists before a GUI overwrite
+/// preflight. This intentionally covers subtitle text outputs and
+/// rename-only sidecars, but not arbitrary files.
+#[tauri::command]
+pub fn safe_output_path_exists(app: tauri::AppHandle, path: String) -> Result<bool, String> {
+    let scope = crate::fs_policy::app_fs_scope(&app)?;
+    safe_output_path_exists_inner(&path, move |p| scope.is_allowed(p))
+}
 /// Write a text file safely. Layered defenses: scope deny enforcement,
 /// subtitle-extension whitelist, symlink rejection on destination,
 /// atomic `create_new(true)` open.
@@ -635,6 +679,41 @@ mod tests {
         dir
     }
 
+    #[test]
+    fn output_exists_probe_reports_existing_and_missing_outputs() {
+        let dir = temp_dir("exists_probe_basic");
+        let existing = dir.join("existing.ass");
+        let missing = dir.join("missing.ass");
+        fs::write(&existing, b"old").unwrap();
+
+        assert!(safe_output_path_exists_inner(&existing.to_string_lossy(), allow_all).unwrap());
+        assert!(!safe_output_path_exists_inner(&missing.to_string_lossy(), allow_all).unwrap());
+    }
+
+    #[test]
+    fn output_exists_probe_allows_sup_sidecar_preflight() {
+        let dir = temp_dir("exists_probe_sup");
+        let path = dir.join("episode.sup");
+        fs::write(&path, b"pgs sidecar").unwrap();
+
+        assert!(safe_output_path_exists_inner(&path.to_string_lossy(), allow_all).unwrap());
+    }
+
+    #[test]
+    fn output_exists_probe_refuses_non_subtitle_extension() {
+        let dir = temp_dir("exists_probe_txt");
+        let path = dir.join("note.txt");
+        let err = safe_output_path_exists_inner(&path.to_string_lossy(), allow_all).unwrap_err();
+        assert!(err.contains("subtitle extension"));
+    }
+
+    #[test]
+    fn output_exists_probe_refuses_when_scope_denies() {
+        let dir = temp_dir("exists_probe_scope");
+        let path = dir.join("out.ass");
+        let err = safe_output_path_exists_inner(&path.to_string_lossy(), deny_all).unwrap_err();
+        assert!(err.contains("filesystem scope"));
+    }
     #[test]
     fn write_creates_file_when_dest_missing() {
         let dir = temp_dir("write_missing");

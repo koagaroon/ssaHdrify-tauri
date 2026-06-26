@@ -2,7 +2,7 @@
  * Tests for countExistingFiles — the principle-#6 backstop that gates batch
  * writes behind an overwrite-confirmation prompt across all four tabs.
  *
- * Mocks @tauri-apps/plugin-fs so the suite runs in pure Node. The behaviors
+ * Mocks the Tauri API wrapper so the suite runs in pure Node. The behaviors
  * pinned here are the ones the consumer tabs depend on: empty input is 0,
  * mixed inputs return the correct count, and a stat error counts as
  * EXISTING — fail-safe bias that errs toward surfacing the
@@ -12,8 +12,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const existsMock = vi.fn();
-vi.mock("@tauri-apps/plugin-fs", () => ({
-  exists: (path: string) => existsMock(path),
+vi.mock("./tauri-api", () => ({
+  outputPathExists: (path: string) => existsMock(path),
 }));
 
 // Import AFTER vi.mock so the mocked module is picked up.
