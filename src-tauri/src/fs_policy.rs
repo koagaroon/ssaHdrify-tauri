@@ -53,17 +53,27 @@ fn fs_scope_from_capability_json(raw: &str) -> Result<FsScope, String> {
         .get("permissions")
         .and_then(Value::as_array)
         .ok_or_else(|| "capabilities/default.json is missing permissions[]".to_string())?;
-    let scope = permissions
+    let scopes: Vec<&Value> = permissions
         .iter()
-        .find(|permission| {
+        .filter(|permission| {
             permission.get("identifier").and_then(Value::as_str) == Some(FS_SCOPE_IDENTIFIER)
         })
-        .ok_or_else(|| "capabilities/default.json is missing fs:scope permission".to_string())?;
+        .collect();
+    let scope = match scopes.as_slice() {
+        [scope] => *scope,
+        [] => return Err("capabilities/default.json is missing fs:scope permission".to_string()),
+        _ => {
+            return Err(
+                "capabilities/default.json must contain exactly one fs:scope permission"
+                    .to_string(),
+            )
+        }
+    };
 
     Ok(FsScope::Scope {
         allow: parse_scope_paths(scope, "allow")?,
         deny: parse_scope_paths(scope, "deny")?,
-        require_literal_leading_dot: None,
+        require_literal_leading_dot: parse_require_literal_leading_dot(scope)?,
     })
 }
 
@@ -77,13 +87,40 @@ fn parse_scope_paths(scope: &Value, key: &str) -> Result<Vec<PathBuf>, String> {
         .iter()
         .enumerate()
         .map(|(index, entry)| {
-            entry
-                .get("path")
-                .and_then(Value::as_str)
-                .map(PathBuf::from)
+            parse_scope_path(entry)
                 .ok_or_else(|| format!("fs:scope {key}[{index}] is missing a path string"))
         })
         .collect()
+}
+
+fn parse_scope_path(entry: &Value) -> Option<PathBuf> {
+    entry
+        .as_str()
+        .or_else(|| entry.get("path").and_then(Value::as_str))
+        .map(PathBuf::from)
+}
+
+fn parse_require_literal_leading_dot(scope: &Value) -> Result<Option<bool>, String> {
+    let camel = parse_optional_bool(scope, "requireLiteralLeadingDot")?;
+    let kebab = parse_optional_bool(scope, "require-literal-leading-dot")?;
+    match (camel, kebab) {
+        (Some(a), Some(b)) if a != b => Err(
+            "fs:scope has conflicting requireLiteralLeadingDot / require-literal-leading-dot values"
+                .to_string(),
+        ),
+        (Some(value), _) | (_, Some(value)) => Ok(Some(value)),
+        (None, None) => Ok(None),
+    }
+}
+
+fn parse_optional_bool(scope: &Value, key: &str) -> Result<Option<bool>, String> {
+    match scope.get(key) {
+        Some(value) => value
+            .as_bool()
+            .map(Some)
+            .ok_or_else(|| format!("fs:scope {key} must be a boolean")),
+        None => Ok(None),
+    }
 }
 
 #[cfg(test)]
@@ -99,6 +136,70 @@ mod tests {
         assert_eq!(allow, vec![PathBuf::from("**")]);
         assert!(deny.contains(&PathBuf::from("$HOME/.ssh/**")));
         assert!(deny.contains(&PathBuf::from("$APPDATA/**")));
+    }
+
+    #[test]
+    fn parses_shorthand_paths_and_literal_dot_flag() {
+        let raw = r#"
+        {
+          "permissions": [
+            {
+              "identifier": "fs:scope",
+              "allow": ["**"],
+              "deny": ["$HOME/.ssh/**"],
+              "requireLiteralLeadingDot": true
+            }
+          ]
+        }
+        "#;
+
+        let FsScope::Scope {
+            allow,
+            deny,
+            require_literal_leading_dot,
+        } = fs_scope_from_capability_json(raw).unwrap()
+        else {
+            panic!("capability should parse as a full fs scope");
+        };
+
+        assert_eq!(allow, vec![PathBuf::from("**")]);
+        assert_eq!(deny, vec![PathBuf::from("$HOME/.ssh/**")]);
+        assert_eq!(require_literal_leading_dot, Some(true));
+    }
+
+    #[test]
+    fn rejects_duplicate_fs_scope_permissions() {
+        let raw = r#"
+        {
+          "permissions": [
+            { "identifier": "fs:scope", "allow": [], "deny": [] },
+            { "identifier": "fs:scope", "allow": [], "deny": [] }
+          ]
+        }
+        "#;
+
+        let err = fs_scope_from_capability_json(raw).unwrap_err();
+        assert!(err.contains("exactly one fs:scope"));
+    }
+
+    #[test]
+    fn rejects_conflicting_literal_dot_aliases() {
+        let raw = r#"
+        {
+          "permissions": [
+            {
+              "identifier": "fs:scope",
+              "allow": [],
+              "deny": [],
+              "requireLiteralLeadingDot": true,
+              "require-literal-leading-dot": false
+            }
+          ]
+        }
+        "#;
+
+        let err = fs_scope_from_capability_json(raw).unwrap_err();
+        assert!(err.contains("conflicting requireLiteralLeadingDot"));
     }
 
     #[cfg(windows)]
