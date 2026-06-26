@@ -56,7 +56,6 @@ import {
   scanFontFiles,
 } from "./tauri-api";
 
-
 beforeEach(() => {
   channelInstances.length = 0;
   invokeMock.mockReset();
