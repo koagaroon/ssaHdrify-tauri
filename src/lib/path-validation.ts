@@ -148,6 +148,7 @@ export interface OutputDirectoryParts {
  *   - Drive-relative: `C:foo.ass` (drive letter without separator —
  *     ambiguous; on Windows refers to the file in drive C's *current*
  *     directory, which has no defined meaning at this layer)
+ *   - Current-directory or parent-directory path components (`.` / `..`)
  *   - Empty / invalid stems
  *   - Control characters anywhere in the path
  *
@@ -226,6 +227,7 @@ export function decomposeInputPath(inputPath: string): InputPathParts {
   if (!isAbsolute) {
     throw new Error("Input path must be absolute");
   }
+  assertNoCurrentDirectorySegments(normalized, "Input path");
 
   const hasDotDotSegment = normalized.split("/").some((seg) => seg === "..");
   if (hasDotDotSegment) {
@@ -310,6 +312,12 @@ function assertOutputPathShape(normalizedOutput: string): void {
   }
 }
 
+function assertNoCurrentDirectorySegments(normalizedPath: string, label: string): void {
+  if (/(^|\/)\.($|\/)/.test(normalizedPath)) {
+    throw new Error(`${label} contains current-directory segments: ${normalizedPath}`);
+  }
+}
+
 function assertOutputPathLength(normalizedOutput: string): void {
   // MAX_PATH check. Local long-path inputs (`\\?\C:\...`,
   // forward-normalized to `//?/C:/...`) support up to 32767 chars on
@@ -367,6 +375,7 @@ export function decomposeOutputDirectoryPath(outputDir: string): OutputDirectory
   if (!isAbsolute) {
     throw new Error("Output directory must be absolute");
   }
+  assertNoCurrentDirectorySegments(normalized, "Output directory");
 
   const dir = trimTrailingPathSeparators(normalized);
   if (!dir) {

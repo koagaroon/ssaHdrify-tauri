@@ -111,6 +111,42 @@ describe("deriveEmbeddedPath / planEmbeddedOutputs", () => {
     ).toThrow(/same as input/);
   });
 
+  it("rejects chosen-directory dot aliases that would bypass self-overwrite checks", () => {
+    expect(() =>
+      deriveEmbeddedPath("C:\\subs\\episode.embedded.ass", { outputDir: "C:\\subs\\." })
+    ).toThrow(/current-directory/);
+  });
+
+  it("skips planner targets when chosen output directory contains a dot alias", () => {
+    const result = planEmbeddedOutputs(["C:\\subs\\episode.embedded.ass"], {
+      outputDir: "C:\\subs\\.",
+    });
+
+    expect(result.targets).toEqual([]);
+    expect(result.skipped).toMatchObject([
+      {
+        inputPath: "C:\\subs\\episode.embedded.ass",
+        reason: "invalid",
+      },
+    ]);
+    expect(result.skipped[0]?.message).toMatch(/current-directory/);
+  });
+
+  it("skips planner targets when the input path contains a dot alias", () => {
+    const result = planEmbeddedOutputs(["C:\\subs\\.\\episode.embedded.ass"], {
+      outputDir: "C:\\subs",
+    });
+
+    expect(result.targets).toEqual([]);
+    expect(result.skipped).toMatchObject([
+      {
+        inputPath: "C:\\subs\\.\\episode.embedded.ass",
+        reason: "invalid",
+      },
+    ]);
+    expect(result.skipped[0]?.message).toMatch(/current-directory/);
+  });
+
   it("plans unique targets and skips duplicate flat chosen-folder outputs", () => {
     const result = planEmbeddedOutputs(
       ["C:\\s1\\episode.ass", "C:\\s2\\episode.ssa", "C:\\s3\\other.ass"],

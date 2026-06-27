@@ -4,6 +4,7 @@ import {
   WINDOWS_RESERVED_NAMES,
   assertSafeOutputFilename,
   assertSafeOutputPath,
+  decomposeOutputDirectoryPath,
   decomposeInputPath,
   substituteTemplate,
 } from "./path-validation";
@@ -245,6 +246,11 @@ describe("decomposeInputPath", () => {
     expect(() => decomposeInputPath("/home/u/../etc/passwd")).toThrow(/parent-directory/);
   });
 
+  it("rejects current-directory path components", () => {
+    expect(() => decomposeInputPath("C:\\subs\\.\\episode.ass")).toThrow(/current-directory/);
+    expect(() => decomposeInputPath("/home/u/./episode.ass")).toThrow(/current-directory/);
+  });
+
   it("accepts `..` inside a filename segment (not a parent-dir segment)", () => {
     // Substring `..` inside a filename component is legitimate
     // (`foo..bar.ass`), not a traversal. The component-level split
@@ -252,6 +258,42 @@ describe("decomposeInputPath", () => {
     // `validate_accepts_dotdot_inside_filename` pin.
     expect(() => decomposeInputPath("C:\\subs\\foo..bar.ass")).not.toThrow();
     expect(() => decomposeInputPath("/home/u/file..name.ass")).not.toThrow();
+  });
+});
+
+describe("decomposeOutputDirectoryPath", () => {
+  it("preserves ordinary chosen directory behavior", () => {
+    expect(decomposeOutputDirectoryPath("D:\\out")).toEqual({
+      dir: "D:/out",
+      normalized: "D:/out",
+      usedBackslash: true,
+    });
+    expect(decomposeOutputDirectoryPath("D:/out")).toEqual({
+      dir: "D:/out",
+      normalized: "D:/out",
+      usedBackslash: false,
+    });
+    expect(decomposeOutputDirectoryPath("R:\\")).toEqual({
+      dir: "R:",
+      normalized: "R:/",
+      usedBackslash: true,
+    });
+  });
+
+  it("rejects current-directory path components in chosen output directories", () => {
+    for (const outputDir of [
+      "C:\\subs\\.",
+      "C:\\subs\\.\\nested",
+      "/tmp/subs/.",
+      "/tmp/subs/./nested",
+    ]) {
+      expect(() => decomposeOutputDirectoryPath(outputDir)).toThrow(/current-directory/);
+    }
+  });
+
+  it("accepts dots inside ordinary directory names", () => {
+    expect(() => decomposeOutputDirectoryPath("C:\\subs.v1\\out")).not.toThrow();
+    expect(() => decomposeOutputDirectoryPath("/tmp/.../out")).not.toThrow();
   });
 });
 
