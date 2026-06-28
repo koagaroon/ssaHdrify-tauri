@@ -1,3 +1,5 @@
+import { parseFiniteNumberText } from "./strict-number";
+
 /**
  * Theme-aware number input with custom +/- buttons.
  * Uses CSS variables for colors.
@@ -31,18 +33,17 @@ export default function NumberInput({
   id,
   invalid = false,
 }: NumberInputProps) {
-  const numStep = typeof step === "string" ? parseFloat(step) : step;
-  // Guard a non-numeric / non-positive step (e.g. a bad string prop):
-  // parseFloat would yield NaN and adjust(NaN) would emit the literal "NaN".
-  // Fall back to 1 so the spinner stays functional.
-  const safeStep = Number.isFinite(numStep) && numStep > 0 ? numStep : 1;
+  const numStep = typeof step === "string" ? parseFiniteNumberText(step) : step;
+  // Guard a non-numeric / non-positive step (e.g. a bad string prop).
+  const safeStep =
+    typeof numStep === "number" && Number.isFinite(numStep) && numStep > 0 ? numStep : 1;
   const inputClass = `num-input w-full pl-3 pr-7 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]${
     disabled ? " is-disabled" : ""
   }`;
 
   const adjust = (delta: number) => {
-    const current = typeof value === "string" ? parseFloat(value) : value;
-    if (Number.isNaN(current)) return;
+    const current = typeof value === "string" ? parseFiniteNumberText(value) : value;
+    if (current === null || !Number.isFinite(current)) return;
     let next = current + delta;
     if (min !== undefined) next = Math.max(min, next);
     if (max !== undefined) next = Math.min(max, next);

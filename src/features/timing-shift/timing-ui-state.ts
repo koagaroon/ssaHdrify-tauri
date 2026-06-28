@@ -1,3 +1,5 @@
+import { parseFiniteNumberText } from "../../lib/strict-number";
+
 export interface TimingSaveDisabledState {
   fileCount: number;
   thresholdInvalid: boolean;
@@ -6,10 +8,8 @@ export interface TimingSaveDisabledState {
 }
 
 export function isTimingOffsetInvalid(offsetText: string, offsetMax: number): boolean {
-  const text = offsetText.trim();
-  if (text === "") return true;
-  const value = parseFloat(text);
-  return !Number.isFinite(value) || Math.abs(value) > offsetMax;
+  const value = parseFiniteNumberText(offsetText);
+  return value === null || Math.abs(value) > offsetMax;
 }
 
 export function isTimingSaveDisabled(state: TimingSaveDisabledState): boolean {

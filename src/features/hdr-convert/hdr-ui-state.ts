@@ -1,3 +1,5 @@
+import { parseFiniteNumberText } from "../../lib/strict-number";
+
 export interface HdrConvertDisabledState {
   hasFiles: boolean;
   processing: boolean;
@@ -9,10 +11,8 @@ export function isHdrBrightnessInvalid(
   minBrightness: number,
   maxBrightness: number
 ): boolean {
-  const text = brightnessText.trim();
-  if (text === "") return true;
-  const value = parseFloat(text);
-  return !Number.isFinite(value) || value < minBrightness || value > maxBrightness;
+  const value = parseFiniteNumberText(brightnessText);
+  return value === null || value < minBrightness || value > maxBrightness;
 }
 
 export function isHdrConvertDisabled(state: HdrConvertDisabledState): boolean {

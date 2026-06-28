@@ -15,6 +15,7 @@ import { ask } from "@tauri-apps/plugin-dialog";
 
 import { parseSubtitle } from "../../lib/subtitle-parser";
 import NumberInput from "../../lib/NumberInput";
+import { parseFiniteNumberText } from "../../lib/strict-number";
 import NitViz from "./NitViz";
 import { isHdrBrightnessInvalid, isHdrConvertDisabled } from "./hdr-ui-state";
 import { useI18n } from "../../i18n/useI18n";
@@ -168,13 +169,8 @@ export default function HdrConvert() {
 
   const handleBrightnessChange = (value: string) => {
     setBrightnessText(value);
-    // parseFloat + Math.round mirror TimingShift's offset handler.
-    // parseInt silently truncates fractional input ("100.5" → 100)
-    // with no visible signal; parseFloat accepts the full value and
-    // rounding happens at the storage boundary so downstream nits
-    // math stays on integer cd/m².
-    const num = parseFloat(value);
-    if (!Number.isNaN(num) && num >= MIN_BRIGHTNESS && num <= MAX_BRIGHTNESS) {
+    const num = parseFiniteNumberText(value);
+    if (num !== null && num >= MIN_BRIGHTNESS && num <= MAX_BRIGHTNESS) {
       setBrightness(Math.round(num));
     }
   };

@@ -6,6 +6,10 @@ describe("timing UI state guards", () => {
   it("marks blank, non-finite, and out-of-range offsets invalid", () => {
     expect(isTimingOffsetInvalid("", 1000)).toBe(true);
     expect(isTimingOffsetInvalid("not a number", 1000)).toBe(true);
+    expect(isTimingOffsetInvalid("12abc", 1000)).toBe(true);
+    expect(isTimingOffsetInvalid("1e", 1000)).toBe(true);
+    expect(isTimingOffsetInvalid("1e+", 1000)).toBe(true);
+    expect(isTimingOffsetInvalid("1e-", 1000)).toBe(true);
     expect(isTimingOffsetInvalid("1001", 1000)).toBe(true);
     expect(isTimingOffsetInvalid("-1001", 1000)).toBe(true);
   });
@@ -14,6 +18,7 @@ describe("timing UI state guards", () => {
     expect(isTimingOffsetInvalid("1000", 1000)).toBe(false);
     expect(isTimingOffsetInvalid("-1000", 1000)).toBe(false);
     expect(isTimingOffsetInvalid("2.5", 10)).toBe(false);
+    expect(isTimingOffsetInvalid("1e2", 1000)).toBe(false);
   });
 
   it("disables Save when the visible offset is invalid", () => {

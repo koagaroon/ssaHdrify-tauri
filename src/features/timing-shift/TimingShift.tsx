@@ -20,6 +20,7 @@ import { useLogPanel } from "../../lib/useLogPanel";
 import { LogPanel } from "../../lib/LogPanel";
 import { DropErrorBanner } from "../../lib/DropErrorBanner";
 import NumberInput from "../../lib/NumberInput";
+import { parseFiniteNumberText } from "../../lib/strict-number";
 import { isTimingOffsetInvalid, isTimingSaveDisabled } from "./timing-ui-state";
 import {
   buildConflictMessage,
@@ -177,13 +178,8 @@ export default function TimingShift() {
   };
   const handleOffsetChange = (value: string) => {
     setOffsetText(value);
-    // parseFloat accepts fractional s-unit inputs ("2.5s" → 2.5
-    // seconds). An earlier parseInt-based form silently dropped the
-    // decimal portion ("2.5" → 2), violating no-silent-action.
-    // effectiveOffsetMs rounds at the math boundary to keep integer-ms
-    // downstream.
-    const n = parseFloat(value);
-    if (!Number.isNaN(n) && Math.abs(n) <= offsetMax) {
+    const n = parseFiniteNumberText(value);
+    if (n !== null && Math.abs(n) <= offsetMax) {
       setOffsetValue(n);
     }
   };
