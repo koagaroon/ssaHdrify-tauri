@@ -16,6 +16,7 @@ import { ask } from "@tauri-apps/plugin-dialog";
 import { parseSubtitle } from "../../lib/subtitle-parser";
 import NumberInput from "../../lib/NumberInput";
 import NitViz from "./NitViz";
+import { isHdrBrightnessInvalid, isHdrConvertDisabled } from "./hdr-ui-state";
 import { useI18n } from "../../i18n/useI18n";
 import { useFileContext } from "../../lib/FileContext";
 import type { Status } from "../../lib/StatusContext";
@@ -178,15 +179,11 @@ export default function HdrConvert() {
     }
   };
 
-  // Derived: brightnessText parses cleanly but lands outside the
-  // [MIN_BRIGHTNESS, MAX_BRIGHTNESS] window. Used to drive the input's
-  // visible-error border. Without this signal, a user typing "99999"
-  // sees no validation feedback and the Convert button proceeds with
-  // the prior in-range value silently.
-  const brightnessOutOfRange = (() => {
-    const num = parseFloat(brightnessText);
-    return !Number.isNaN(num) && (num < MIN_BRIGHTNESS || num > MAX_BRIGHTNESS);
-  })();
+  // Derived: the visible input is not currently a finite in-range
+  // brightness. Without this, Convert can proceed against the prior
+  // valid `brightness` while the user sees a different value in the
+  // field.
+  const brightnessInvalid = isHdrBrightnessInvalid(brightnessText, MIN_BRIGHTNESS, MAX_BRIGHTNESS);
 
   // Slider / preset paths emit a validated number — keep both state slots in sync.
   const handleBrightnessFromNits = useCallback((nits: number) => {
@@ -195,12 +192,14 @@ export default function HdrConvert() {
   }, []);
 
   const activeTemplate = template === "custom" ? customTemplate : template;
-  // Gate Convert on out-of-range too. Without this, a user typing
-  // "99999" sees the invalid border on the input but Convert still
-  // proceeds against the prior in-range `brightness` state — a stale
-  // commit with no visible signal. The button's disabled state binds
-  // to the same expression, so keyboard activation is also blocked.
-  const convertDisabled = !hdrFiles || processing || brightnessOutOfRange;
+  // Gate Convert on the same visible-input validity shown by the
+  // NumberInput border, so keyboard activation cannot commit a stale
+  // prior brightness value.
+  const convertDisabled = isHdrConvertDisabled({
+    hasFiles: !!hdrFiles,
+    processing,
+    brightnessInvalid,
+  });
 
   // ── File selection (separate from conversion) ──────────
   // Strict cross-tab dedup contract: any conflict rejects the WHOLE
@@ -285,7 +284,15 @@ export default function HdrConvert() {
 
   // ── Conversion (uses already-selected files) ───────────
   const handleConvert = useCallback(async () => {
-    if (!hdrFiles) return;
+    if (
+      isHdrConvertDisabled({
+        hasFiles: !!hdrFiles,
+        processing,
+        brightnessInvalid,
+      })
+    ) {
+      return;
+    }
     // Synchronous double-click gate — `processing` state lags
     // setProcessing(true) by one render, so a fast second click can
     // pass the disabled gate before React paints. busyRef is written
@@ -528,7 +535,7 @@ export default function HdrConvert() {
     } finally {
       busyRef.current = false;
     }
-  }, [hdrFiles, brightness, eotf, activeTemplate, style, addLog, t]);
+  }, [hdrFiles, processing, brightnessInvalid, brightness, eotf, activeTemplate, style, addLog, t]);
 
   const handleClearFiles = useCallback(() => {
     clearFile("hdr");
@@ -756,7 +763,7 @@ export default function HdrConvert() {
             min={MIN_BRIGHTNESS}
             max={MAX_BRIGHTNESS}
             disabled={processing}
-            invalid={brightnessOutOfRange}
+            invalid={brightnessInvalid}
             className="w-36"
           />
           <p className="text-xs" style={{ color: "var(--text-muted)" }}>
