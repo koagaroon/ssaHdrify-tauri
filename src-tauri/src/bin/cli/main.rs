@@ -1187,7 +1187,7 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
     // fail-fast before opening the cache or starting any scan. The
     // downstream scan_directory_collecting now validates too (defense
     // in depth), but the early check produces a cleaner per-arg
-    // error message at the right level. `--cache-file` (also argv P1b)
+    // error message at the right level. `--cache-file` (also argv untrusted-input)
     // is already validated at the top of run() before any subcommand.
     for dir in &args.font_dirs {
         // Refuse non-UTF-8 paths upfront via `to_str()` rather than
@@ -1481,7 +1481,7 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
             )
         );
         // cache_path.display() is also sanitized — `cache_path` comes
-        // from globals.cache_file (argv P1b) or default_cli_cache_path
+        // from globals.cache_file (argv untrusted-input) or default_cli_cache_path
         // (env-var-resolved).
         let cache_disp = sanitize_for_display(&cache_path.display().to_string());
         eprintln!(
@@ -2488,7 +2488,7 @@ fn emit_chain_dry_run(plan: &chain::ChainPlan, globals: &GlobalOptions) {
     println!("Plan (no files written):");
     println!();
     // Every emit_chain_dry_run print site sanitizes interpolated
-    // strings. `plan.output_template` is user-supplied argv (P1b);
+    // strings. `plan.output_template` is user-supplied argv (untrusted-input);
     // `input` is
     // also argv; `out_str` derives from input + template via
     // predict_chain_output_path, so any input control char leaks into
@@ -3732,7 +3732,7 @@ fn prepare_embed_cache(
                     // Every prepare_embed_cache eprintln that
                     // interpolates `cache_path.display()` or a drift
                     // folder string (sourced from the SQLite cache,
-                    // which is P1b under --cache-file argv override)
+                    // which is untrusted-input under --cache-file argv override)
                     // sanitizes at the print boundary. The error `e`
                     // from default_cli_cache_path can carry env-var
                     // resolution failure text that includes path
@@ -3941,7 +3941,7 @@ fn prepare_embed_cache(
             for f in &drift.modified {
                 // Drift folder strings originate from the SQLite cache
                 // (cached_folders.folder_path). Under --cache-file argv
-                // override, those rows are P1b (attacker may craft).
+                // override, those rows are untrusted-input (attacker may craft).
                 let f_disp = sanitize_for_display(f);
                 eprintln!(
                     "{}",
@@ -4569,7 +4569,7 @@ fn resolve_embed_fonts(
     for font in fonts {
         // Cap font.codepoints BEFORE the lookup + clone into
         // ResolvedEmbedFont. `font` flows
-        // from V8/TS-parsed ASS (P1b attacker-influenced), so a crafted
+        // from V8/TS-parsed ASS (attacker-influenced), so a crafted
         // subtitle declaring a million codepoints per font would
         // retain a 4 MB Vec<u32> per ResolvedEmbedFont entry until
         // subset_font runs — multiplied across many fonts. subset_font's
@@ -4921,8 +4921,8 @@ fn resolve_embed_font(
     // The GUI sibling `font_cache_commands::lookup_font_family`
     // validates at the IPC boundary; the CLI's resolve_embed_font is
     // the equivalent boundary on the CLI side (font.family flows from
-    // TS-engine V8-extracted ASS `\fn` content, which is P1b
-    // attacker-influenced). Without this upfront validation, tier-2
+    // TS-engine V8-extracted ASS `\fn` content, which is attacker-
+    // influenced). Without this upfront validation, tier-2
     // `c.lookup_family` would be the odd tier — tier-1
     // `resolve_user_font` and tier-3 `find_system_font` validate
     // internally, but a cache row keyed by a hostile name could
@@ -5989,7 +5989,7 @@ fn emit_file_report(globals: &GlobalOptions, result: &FileReport) {
             // same here. Failure messages bubble up from
             // `resolve_embed_fonts` / `subset_resolved_fonts` with
             // `font.label` interpolated raw — font.label flows from V8-
-            // parsed ASS `\fn` content (P1b attacker-influenced), so a
+            // parsed ASS `\fn` content (attacker-influenced), so a
             // crafted subtitle with U+202E / control / zero-width in
             // \fn reaches stderr unlaundered without this sanitize.
             // Also covers safe_io's reparse-refusal / scope-deny /
@@ -6078,7 +6078,7 @@ fn emit_file_report(globals: &GlobalOptions, result: &FileReport) {
                 // Standalone-path warning content needs the same
                 // print-boundary sanitize as chain-mode
                 // emit_chain_warnings. `font.label` flows from V8-
-                // parsed ASS \fn (P1b) and reaches here via
+                // parsed ASS \fn (untrusted-input) and reaches here via
                 // resolve_embed_fonts missing_warnings +
                 // subset_resolved_fonts skipped_warnings.
                 let w_disp = sanitize_for_display(warning);
@@ -6272,7 +6272,7 @@ fn output_path_exists(globals: &GlobalOptions, path: &Path) -> bool {
 
 // write_output / copy_file_output / rename_file_output route through
 // `app_lib::safe_io::*_inner` with a permissive `|_| true` predicate.
-// CLI argv IS the user (P1a authorship); there is no Tauri fs:scope
+// CLI argv IS the user (local-user authorship); there is no Tauri fs:scope
 // to enforce, so the closure short-circuits the scope check while
 // every other defense in the safe_io chain still applies:
 //   - `validate_ipc_path` rejects extended-length / DOS-device /
@@ -7078,15 +7078,12 @@ mod tests {
         assert!(parse_duration_ms("+999999999999s").is_err());
     }
 
-    // at-limit / over-limit boundary pair for
-    // MAX_SHIFT_OFFSET_MS. The reviewer's
-    // `code_review.md § boundary-named tests` rule: when a title
-    // names a cap, pair the at-limit test (must accept) with an
-    // over-limit counter-test (must reject), so a refactor that
-    // loosens the cap in either direction surfaces. The existing
-    // `parse_duration_ms_caps_extreme_values` test above only
-    // exercises far-over-cap inputs; the at-cap boundary was
-    // unpinned.
+    // at-limit / over-limit boundary pair for MAX_SHIFT_OFFSET_MS.
+    // When a test name promises a cap, pair the at-limit test (must
+    // accept) with an over-limit counter-test (must reject), so a
+    // refactor that loosens the cap in either direction surfaces. The
+    // existing `parse_duration_ms_caps_extreme_values` test above only
+    // exercises far-over-cap inputs; the at-cap boundary was unpinned.
     #[test]
     fn parse_duration_ms_at_max_shift_offset_accepts() {
         // MAX_SHIFT_OFFSET_MS = 365 * 24 * 60 * 60 * 1000 ms (= 1 year

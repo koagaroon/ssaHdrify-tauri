@@ -582,7 +582,7 @@ function createDialogueRe(): RegExp {
 // per-caption text cap. Real-world ASS
 // dialogue lines are < 1 KB even for elaborate styled karaoke. 64 KB
 // is generous — guards against a crafted file with a single dialogue
-// containing a multi-MB text body (P1b attacker-influenced content).
+// containing a multi-MB attacker-influenced text body.
 // Captions exceeding the cap are skipped (text dropped), but for ASS
 // parseAss still emits a placeholder Caption with `skipped: true` so
 // that buildAss's positional consumption stays aligned with the

@@ -141,8 +141,8 @@ export default function FontCacheDriftModal({
       setSkippedFolders(result.skipped);
       onRescanComplete();
     } catch (e) {
-      // BiDi parity — Rust IPC errors can interpolate folder paths
-      // (P1b attacker-influenced content).
+      // BiDi parity — Rust IPC errors can interpolate attacker-influenced
+      // folder paths.
       // sanitizeForDialog strips BiDi / zero-width controls so a
       // U+202E in a drifted folder path can't reverse the surrounding
       // error banner text.

@@ -210,7 +210,7 @@ static ALLOWED_FONT_PATHS: Lazy<Mutex<HashSet<(String, u32)>>> =
 ///    discovered via font-kit which guarantees the path lives under a
 ///    known dir; cache hits are trusted on the strength of the
 ///    in-process lookup having succeeded against an opened SQLite file
-///    (P1a — single-user, AppData-local).
+///    (local-user, single-user, AppData-local).
 ///
 /// Trusting cache hits in-process restores the design-locked CLI
 /// Situation B ("no --font-dir + cache exists → implicit cache use")
@@ -525,7 +525,7 @@ pub enum ScanProgress {
 /// Why a font scan stopped. Three legitimate states; the prior
 /// `(cancelled: bool, ceiling_hit: bool)` pair allowed a fourth
 /// `(false, true)` combination by construction that the runtime never
-/// actually emitted, which the reviewer flagged. Single-variant enum
+/// actually emitted. Single-variant enum
 /// eliminates the impossible state and lets frontend / test code
 /// pattern-match exhaustively.
 ///
@@ -1877,8 +1877,8 @@ fn parse_local_font_file(canonical: &Path, scan_id: u64) -> Vec<LocalFontEntry> 
         // existing wrap around fontcull::subset_font_data_unicode
         // below: skrifa is in active development and crafted TTC /
         // OTC inputs can trigger panics on bad face counts, malformed
-        // CFF, or out-of-range name-table records (P1b
-        // attacker-influenced content sources). Without catch_unwind
+        // CFF, or out-of-range name-table records from attacker-influenced
+        // content sources. Without catch_unwind
         // here, a single panicking face would unwind through the
         // whole `parse_local_font_file` and abort the surrounding
         // scan — instead of the documented "skip this face, continue
@@ -2217,8 +2217,8 @@ pub async fn preflight_font_files(paths: Vec<String>) -> Result<FontScanPrefligh
 /// dropped before the next iteration (fs::read + parse run in
 /// sequence, not in parallel), AND the user-facing
 /// `preflight_font_directory` reports total bytes BEFORE the scan
-/// starts so an XL-confirmation modal can warn the user. P1b
-/// (subtitle / font CONTENT SOURCE threat) is bounded by the
+/// starts so an XL-confirmation modal can warn the user. Untrusted
+/// subtitle / font content is bounded by the
 /// preflight gate; adding a cumulative cap would be
 /// defensive-complexity for a scenario the preflight already covers.
 /// Revisit if a future flow bypasses preflight (e.g., direct
@@ -2348,7 +2348,7 @@ fn scan_directory_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
         // files (.txt / .png / etc.) would fill `seen` to the cap and
         // trip `CeilingHit` with 0 faces — but
         // `preflight_directory_inner` counts only font-extension files,
-        // so the XL-size confirmation modal never fires (P1b: hostile
+        // so the XL-size confirmation modal never fires (untrusted-input: hostile
         // pack defeats the safety check). Aligning scan's accounting
         // with preflight's means both speak about the same "directory
         // size."
@@ -2750,7 +2750,7 @@ pub async fn scan_font_directory(
         // `RUST_LOG=info` dev runs and tauri-plugin-log files written
         // under app-data-dir (user-local, no cross-user reach). The
         // path is provided BY the user via picker / drag-drop, so it
-        // is content the user already saw. P1a (single-user desktop)
+        // is content the user already saw. local-user (single-user desktop)
         // does not consider local-file disclosure a leak. If this
         // app later ships a remote-log shipper or a public crash
         // reporter, sanitize at the shipper boundary, not here — the
@@ -2869,7 +2869,7 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
         // exact file. `scan_directory_inner`'s reject applies to
         // entries DISCOVERED inside a user-chosen folder, where a
         // crafted font pack could plant top-level symlinks to inflate
-        // the per-folder count past the XL-safety preflight (P1b). For
+        // the per-folder count past the XL-safety preflight (untrusted-input). For
         // the file-list path the user picked each entry on its own, so
         // chasing a single symlinked entry doesn't bypass any aggregate
         // count gate. `canonicalize` below + `has_allowed_font_extension`
@@ -3139,7 +3139,7 @@ pub fn remove_font_source(source_id: String, kind: Option<String>) -> Result<(),
     // safe path (no eviction). The cost is a stale cache row that
     // next-launch drift detection picks up, vs the over-evict that
     // would silently break a different source's cache acceleration.
-    // Defer P1a — frontend in-process trust: `kind` is the lone IPC
+    // Accepted local-user risk: frontend in-process trust. `kind` is the lone IPC
     // argument here whose value flows from the
     // frontend without server-side cross-check against SQL state.
     // The rest of the validation pattern (e.g., source_id through
@@ -3296,8 +3296,8 @@ fn register_font_path(path: &Path, font_index: u32) -> Result<FontLookupResult, 
     // (above). System-font paths come from font-kit's OS enumeration
     // and pass through canonicalize() + the system-fonts-dir constraint
     // — both stronger gates than cache rows have — but the symmetric
-    // validate call is cheap defense-in-depth that closes the asymmetry
-    // a reviewer flagged. If a future change to font-kit, the system
+    // validate call is cheap defense-in-depth that closes the asymmetry.
+    // If a future change to font-kit, the system
     // font enumeration, or normalize_canonical_path lets through a
     // path with control chars / BiDi / `..` segments, this is the
     // final gate before the trust set commits.
@@ -3352,7 +3352,7 @@ fn insert_with_cap(
 /// Drop every entry from `ALLOWED_CACHE_FONT_PATHS`. Called when a
 /// cache-wide reset happens: `clear_font_cache` rebuilds the SQLite
 /// file but previously left in-process provenance rows behind —
-/// combined with a hostile `--cache-file` swap (P1b), stale trust
+/// combined with a hostile `--cache-file` swap (untrusted-input), stale trust
 /// entries would persist until app restart and let `subset_font`
 /// accept paths the freshly-cleared cache no longer references.
 /// `clear_font_sources` already does the same eviction at
@@ -3405,7 +3405,7 @@ pub fn clear_cache_provenance() {
 pub fn register_cache_provenance(hit: &crate::font_cache::FontLookupResult) -> Result<(), String> {
     // re-validate the canonical path through the
     // IPC validator before insertion. A hostile cache file supplied
-    // via `--cache-file` (P1b) could carry crafted rows with control
+    // via `--cache-file` (untrusted-input) could carry crafted rows with control
     // chars, BiDi, parent-directory segments, or DOS device prefixes;
     // catching at insert time keeps the trust set clean.
     crate::util::validate_ipc_path(hit.font_path(), "Cache font")?;
@@ -3774,7 +3774,7 @@ pub fn subset_font(
     // check on top of the registration. Cache + user tiers are
     // checked only when system didn't accept and are NOT individually
     // referenced after the gate; collapsing them into one boolean
-    // would lose the lazy-evaluation ordering reviewers expect.
+    // would lose the lazy-evaluation ordering this relies on.
     let accepted_via_system = ALLOWED_FONT_PATHS
         .lock()
         .map_err(|_| "Internal error: font path cache corrupted".to_string())?
@@ -3849,7 +3849,7 @@ pub fn subset_font(
     // fontcull failure
     // with no fallback), but reading arbitrary local files into
     // process memory is itself a primitive worth closing at the
-    // source — especially for `--cache-file`-supplied paths (P1b).
+    // source — especially for `--cache-file`-supplied paths (untrusted-input).
     //
     // System fonts (`accepted_via_system=true`) skip this sniff: they
     // already passed the stricter `is_in_system_fonts_dir` gate above,

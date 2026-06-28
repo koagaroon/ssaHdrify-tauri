@@ -295,8 +295,8 @@ export function runChain(request: ChainRunRequest): ChainResult {
       // (BiDi / control char stripping). assertAssShape's current
       // messages are literals (no interpolated content), but a future
       // loosening that interpolates path / family bytes would silently
-      // re-introduce a P1b leak. Pin the helper at construction so
-      // the sibling parity holds.
+      // re-introduce an untrusted-input leak. Pin the helper at
+      // construction so the sibling parity holds.
       const msg = sanitizeError(err);
       throw new Error(
         "Chain includes an embed step but the input ASS failed shape / size " +
@@ -365,8 +365,8 @@ export function runChain(request: ChainRunRequest): ChainResult {
       // for downstream debugging without losing the annotated
       // user-facing message. `message` goes through sanitizeError
       // The re-thrown error flows to the chain log panel, where any
-      // BiDi / line-break smuggling from a P1b transform-internal
-      // error would otherwise reach the UI un-scrubbed.
+      // BiDi / line-break smuggling from transform-internal untrusted
+      // input would otherwise reach the UI un-scrubbed.
       const message = sanitizeError(err);
       throw new Error(`step ${i + 1} (${step.kind}) failed: ${message}`, {
         cause: err,

@@ -245,7 +245,7 @@ fn walk_one_level(dir: &Path, out: &mut Vec<String>) -> bool {
                 // skipped it — a folder dropped at top-level whose
                 // entries
                 // happened to carry BiDi / zero-width / control
-                // chars in their filenames (P1b: a fan-sub pack
+                // chars in their filenames (untrusted-input: a fan-sub pack
                 // could pre-author such files) would push the
                 // unscrubbed path into `out`, and the BatchRename
                 // pairing UI's `<option>` text / dropdown labels
@@ -359,8 +359,7 @@ mod tests {
     /// returns Ok (the per-path validation may filter individual
     /// entries, but the input-cap gate itself does not fire).
     /// Without this pair, a refactor that loosened the cap in the
-    /// reject direction would silently pass. Per `code_review.md`
-    /// "boundary-pair tests".
+    /// reject direction would silently pass.
     #[test]
     fn accepts_exactly_max_input_paths_boundary() {
         let at_limit: Vec<String> = (0..MAX_INPUT_PATHS)

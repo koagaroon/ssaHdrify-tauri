@@ -35,11 +35,11 @@ import { ASCII_CONTROL_CHARS, BIDI_AND_ZERO_WIDTH_CHARS } from "../../lib/unicod
 // style reset.
 // Overlong-branch upper bound made explicit. Transitively bounded by
 // MAX_DIALOGUE_TEXT_LEN = 1_000_000 upstream; 200_000 leaves comfortable
-// headroom while still being a concrete cap reviewers can audit without
-// chasing the upstream transitive bound. R_TAG_RE overlong upper
+// headroom while still being a concrete cap future audits can check
+// without chasing the upstream transitive bound. R_TAG_RE overlong upper
 // {128,199999} (1 leading + 199999 continuation = 200000 total) matches
 // FN_TAG_RE's {129,200000} total ceiling; the symmetry is the contract
-// reviewers grep for.
+// future audits can search for.
 //
 // Both alternations now carry the trailing boundary lookahead — the
 // first alt (1-128 chars) AND the overlong second alt (129-200000

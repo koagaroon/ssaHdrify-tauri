@@ -1,8 +1,8 @@
 //! Symlink-safe + scope-honoring file write / copy / rename commands for
 //! the GUI.
 //!
-//! A security review flagged two reachable paths where a
-//! malicious or accidental symlink in an attacker-influenced subtitle
+//! Two reachable paths used to let a malicious or accidental symlink
+//! in an attacker-influenced subtitle
 //! pack could redirect Tauri's `@tauri-apps/plugin-fs` write/copy/rename
 //! calls to an arbitrary destination: plain `fs::write` and the
 //! plugin-fs copy/rename APIs follow reparse points, so a planted
@@ -11,10 +11,9 @@
 //!
 //! Initial migration moved the write/copy/rename operations onto these
 //! commands, dropping the `fs:allow-write-text-file` / `-copy-file` /
-//! `-rename` plugin-fs permission grants. A follow-up review
-//! (2ec537b0, HIGH) noticed that move ALSO dropped the `fs:scope` deny
-//! list as a side effect: the policy was tied to plugin-fs callsites,
-//! not to the new commands. A compromised WebView could call
+//! `-rename` plugin-fs permission grants. That move also dropped the
+//! `fs:scope` deny list as a side effect: the policy was tied to
+//! plugin-fs callsites, not to the new commands. A compromised WebView could call
 //! `safe_copy_file($HOME/.ssh/id_rsa, /tmp/leak.ass)` and then read the
 //! copy through the normal subtitle reader; `safe_write_text_file`
 //! could plant a file under Windows Start Menu autostart paths. The
@@ -386,8 +385,8 @@ fn reject_reparse_source(path: &Path, label: &str) -> Result<(), String> {
 /// but the in-place rename semantics break in a way this gate doesn't
 /// catch. Detecting hardlinks would require platform-specific
 /// `MetadataExt::dev()/ino()` (Unix) and `GetFileInformationByHandle`
-/// (Windows). P1a-bounded — fan-sub subtitle workflows don't use
-/// hardlinks; revisit if the threat model shifts to multi-tool
+/// (Windows). Bounded to local-user filesystem access; fan-sub subtitle
+/// workflows don't use hardlinks. Revisit if the threat model shifts to multi-tool
 /// pipelines that pre-link files.
 ///
 /// Mixed canonicalize-result cases : when EITHER src
@@ -571,11 +570,11 @@ pub fn safe_rename_file_inner(
         );
         return Err("Refusing to rename symlink / junction (race-time detection)".to_string());
     }
-    // (P1b TOCTOU symmetry): copy's destination
+    // Rename destination TOCTOU symmetry: copy's destination
     // is implicitly protected by `OpenOptions::create_new(true)` at
     // open time; rename has no equivalent atomic guard. Between
     // `clear_existing_destination` (which removed dst after its own
-    // reparse pre-check) and the `fs::rename` below, a P1b actor can
+    // reparse pre-check) and the `fs::rename` below, an attacker can
     // re-plant a symlink at dst — same window copy already closes.
     // One syscall (`is_reparse_point` = lstat on POSIX, file_attributes
     // on Windows); race window is narrow but the cost is trivial.

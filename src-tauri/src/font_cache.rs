@@ -209,7 +209,7 @@ const KEY_KIND_FACE_ALIAS: i32 = 1;
 
 /// DoS-class sanity cap on the number of `cached_folders` rows
 /// `list_folders` / `diff_against` will return. A hostile cache file
-/// (P1b via `--cache-file`) populated with hundreds of fabricated
+/// (untrusted-input via `--cache-file`) populated with hundreds of fabricated
 /// folder rows — especially UNC paths to dead servers — would otherwise
 /// spin every detect call through a per-row stat loop, bounded only by
 /// per-stat OS timeout. The cap fires inside `list_folders` and refuses
@@ -553,7 +553,7 @@ impl FontCache {
         // Residual TOCTOU window between the `is_reparse_point`
         // check above and the `Connection::open` below — an attacker
         // who can swap `cache_path` to a symlink in this window
-        // bypasses the guard. P1a-accepted: the per-user AppData
+        // bypasses the guard. Accepted local-user risk: the per-user AppData
         // location requires an attacker who already has write
         // access to %APPDATA%/$XDG_DATA_HOME, which is well outside
         // the single-user-desktop threat model. Sibling acknowledgment

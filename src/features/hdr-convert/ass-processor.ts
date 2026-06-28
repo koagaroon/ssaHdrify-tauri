@@ -308,7 +308,7 @@ export function processAssContent(
   // passes the byte-size guard above, but `.split(/\r?\n/)` then
   // allocates ~50M empty strings (~2 GB V8 heap) BEFORE the post-split
   // throw at line 221 can fire. A small content+pure-newline blob
-  // crafted via a hostile subtitle file is reachable (P1b: subtitle
+  // crafted via a hostile subtitle file is reachable (untrusted-input: subtitle
   // content from public release channels). Probe the count manually
   // and throw before the split allocates. Gated on content.length to
   // keep the small-file fast path zero-overhead. The 1 MB gate is well

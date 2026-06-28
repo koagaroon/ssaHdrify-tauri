@@ -408,8 +408,8 @@ describe("parseSubtitle / shiftSubtitle — oversized-ASS-Dialogue placeholder a
     // `\d{2,11}` would have left both tests green (9 digits passes,
     // 13 fails) without exercising the actual 12-digit edge. The
     // 12-digit fixture + the 13-digit over-bound counter-test (below)
-    // pin the boundary from both sides — code_review.md "boundary-
-    // named tests pair at-limit + over-limit".
+    // pin the boundary from both sides: at-limit must pass and
+    // over-limit must fail.
     const longHour = "999999999999"; // 12 digits, exactly at {2,12} upper bound
     const content = `WEBVTT\r\n\r\n${longHour}:00:01.000 --> ${longHour}:00:02.000\r\nLine\r\n`;
     const result = parseSubtitle(content);

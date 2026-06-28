@@ -87,8 +87,8 @@ static GUI_FONT_CACHE: Lazy<Mutex<Option<FontCache>>> = Lazy::new(|| Mutex::new(
 /// extracted from three near-identical try_lock + as_mut
 /// blocks across `try_record_folder_in_gui_cache`,
 /// `try_remove_folder_from_gui_cache`, and
-/// `clear_all_folders_in_gui_cache_locked`. The shared shape was the
-/// reviewer's actual concern; the three sites disagree on WouldBlock
+/// `clear_all_folders_in_gui_cache_locked`. The shared locking shape is
+/// deliberately isolated; the three sites disagree on WouldBlock
 /// log level (DEBUG for the auto-populate / auto-evict best-effort
 /// helpers; WARN for clear-all because the guard is supposed to
 /// prevent contention there) and on whether None-slot deserves a WARN,
@@ -310,7 +310,7 @@ pub fn migrate_legacy_gui_cache(legacy_dir: &Path, new_dir: &Path) {
         // here — `-journal` / `-wal` / `-shm`; the main file is
         // handled above the loop and gets its own pair of reparse
         // checks). At most once per app launch on the migration
-        // path. Bounded P1a per single-user-desktop AppData reparse
+        // path. Bounded local-user per single-user-desktop AppData reparse
         // class, but symmetry with the source-side check is cheap
         // enough to keep.
         if crate::util::is_reparse_point(&new_side) {
@@ -354,7 +354,7 @@ pub fn init_gui_font_cache(app_data_dir: &Path) -> Result<(), String> {
     // "Resolution divergence note"), used at a different layer. Both
     // chains land inside the user's own AppData / XDG_DATA_HOME —
     // planting a reparse-point in the parent walk requires AppData
-    // write access. Same P1a class as parent-walk reparse on AppData.
+    // write access. Same local-user class as parent-walk reparse on AppData.
     // Defending here would mean a parent-walk reparse scan on every
     // startup, duplicating the FontCache::open_or_create boundary
     // check — and contradicting the locked single-user-desktop threat
@@ -1144,12 +1144,12 @@ pub fn clear_font_cache() -> Result<(), String> {
     // doc claim "either all removed or none" read broader than the
     // implementation delivered.
     //
-    // **TOCTOU between Phase 1 and Phase 2 (P1a-accepted)**: between
-    // the pre-scan reparse check below and the per-file remove_file
-    // loop, a P1a actor with filesystem
+    // **TOCTOU between Phase 1 and Phase 2 (accepted local-user risk)**:
+    // between the pre-scan reparse check below and the per-file remove_file
+    // loop, a local-user actor with filesystem
     // access could plant a symlink at any of the four sidecar paths
     // — the remove_file would then act on the planted link instead
-    // of the file we lstat'd. Bounded by P1a (single-user desktop,
+    // of the file we lstat'd. Bounded by local-user (single-user desktop,
     // AppData-local — defender controls the parent directory). The
     // CacheMutationGuard above serializes against rescan / clear-
     // re-entry but not against an attacker with filesystem-level
@@ -1159,14 +1159,14 @@ pub fn clear_font_cache() -> Result<(), String> {
     // multi-user / MDM-managed shapes (same revisit trigger as the
     // design doc § fs:scope resolution divergence note).
     //
-    // P1a vs P1b note : these sidecar paths look
-    // filesystem-resident, which superficially suggests P1b (content
-    // source under attacker influence). The distinction: P1b applies
-    // to user-influenced *content* (subtitle files, font packs) — the
-    // attacker chooses the bytes/path. Here the paths are computed
+    // local-user vs untrusted-input note: these sidecar paths look
+    // filesystem-resident, which superficially suggests untrusted input
+    // (content source under attacker influence). The distinction:
+    // untrusted-input applies to user-influenced *content* (subtitle
+    // files, font packs) — the attacker chooses the bytes/path. Here the paths are computed
     // entirely from `init_gui_font_cache(&app_data_dir)` outputs;
     // there is no user-content tributary. The threat is purely the
-    // P1a actor model (process with filesystem write access to the
+    // local-user actor model (process with filesystem write access to the
     // defender's AppData parent), not a content-tainted input.
     for p in &paths {
         match std::fs::remove_file(p) {
@@ -1444,7 +1444,7 @@ pub fn lookup_font_family(
     // still returned `Ok(Some(result))` — the unscrubbed path then
     // flowed into IPC response → frontend display surfaces (status
     // panel, log lines) BEFORE `subset_font`'s re-validation could
-    // reject it (P1b disclosure surface). Returning None forces the
+    // reject it (untrusted-input disclosure surface). Returning None forces the
     // caller into the next lookup tier (system fonts) and keeps the
     // crafted path off the wire.
     if let Some(ref r) = result {
@@ -1455,9 +1455,8 @@ pub fn lookup_font_family(
             // BiDi / zero-width / control characters before reaching
             // this site — `family` is a sanitized substring of the IPC
             // input. If `validate_font_family`'s rejection set is ever
-            // relaxed, this log site silently re-opens as a leak; the
-            // pin lives here so a future relaxation reviewer notices
-            // the dependency. `{e}` is the
+            // relaxed, this log site silently re-opens as a leak; this
+            // comment pins the dependency for future audits. `{e}` is the
             // `register_cache_provenance` error string which carries
             // no path bytes (provenance Err strings are generic
             // refusal messages).

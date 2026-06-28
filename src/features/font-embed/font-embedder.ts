@@ -724,8 +724,7 @@ export async function embedFonts(
       // i18n key for consistency with the subsetting-failure path below.
       // (Reuses `label` from the outer scope.)
       // `label` is `fontKeyLabel(info.key)`, where info.key.family
-      // flows from V8-parsed ASS `\fn` (P1b
-      // attacker-influenced). The subset-failure site below already
+      // flows from attacker-influenced V8-parsed ASS `\fn`. The subset-failure site below already
       // scrubs; this no-usage-entry sibling stayed raw. Cheap
       // stripUnicodeControls wrap mirrors the subset-failure
       // sanitizeError(...) posture for the same single-source
@@ -897,8 +896,8 @@ export async function embedFonts(
       if (isCancelled?.()) return null;
     } catch (subsetErr) {
       // sanitizeError keeps this catch arm aligned with the others. The
-      // Rust subset_font error string can interpolate font-file paths (P1b — fan-sub
-      // font packs are attacker-influenced content). The error flows
+      // Rust subset_font error string can interpolate font-file paths
+      // from attacker-influenced fan-sub font packs. The error flows
       // into progress.stage which the log panel renders directly;
       // without scrubbing, a font with a BiDi-bearing name or path can
       // visually reverse adjacent text in the log line. sanitizeError

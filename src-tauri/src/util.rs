@@ -179,7 +179,7 @@ pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
         // variants (COM¹/²/³, LPT¹/²/³). TS-side WINDOWS_RESERVED_NAMES
         // has had these since the initial extraction; Rust's
         // `is_ascii_digit()` fails for multi-byte UTF-8 superscripts
-        // (U+00B9 / U+00B2 / U+00B3), leaving a parity gap a P1b
+        // (U+00B9 / U+00B2 / U+00B3), leaving a parity gap where a
         // hostile path could pass through Rust IPC validation while
         // the TS-side downstream check rejected it. The full-string
         // match below covers all six in one shot, alongside the
@@ -243,8 +243,8 @@ pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
 ///   Separator), U+FEFF (ZWNBSP / BOM-in-middle).
 ///
 /// Mirrors `validate_ipc_path`'s rejection set so family names
-/// originating from ASS \fn references (P1b: content-source
-/// attacker) OR font name-table entries (also P1b) can't smuggle
+/// originating from ASS \fn references (untrusted-input: content-source
+/// attacker) OR font name-table entries (also untrusted-input) can't smuggle
 /// these into the session DB / persistent cache and from there to
 /// status messages / log lines that don't sanitize at render. The
 /// drift modal's separate `sanitizeForDialog` wrap is the
@@ -492,7 +492,7 @@ mod tests {
         // U+00B3) so the generic COM/LPT + digit fallback never matches
         // these. A refactor dropping the explicit Unicode arms would
         // re-open the parity gap with TS-side WINDOWS_RESERVED_NAMES,
-        // letting a P1b hostile path slip through Rust IPC validation
+        // letting a hostile path slip through Rust IPC validation
         // while TS rejected it downstream.
         for name in [
             "COM\u{00B9}",

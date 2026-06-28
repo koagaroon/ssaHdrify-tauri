@@ -760,11 +760,9 @@ describe("font-collector \\r resets siblings within the same block", () => {
 // ── Overlong second-alternation cap (1 leading + {128,199999}
 // continuation = 200000 total). The earlier 129-char test pins the
 // LOWER bound of the overlong branch; these two pin the UPPER bound
-// from both sides per code_review.md § "Fixture must exercise what
-// the title names. For boundary-named tests, pair the at-limit test
-// with an over-limit counter-test." Both alternations now carry the
-// trailing boundary lookahead; the 200001-char case relies on the
-// lookahead to refuse rather than silently prefix-matching. ──
+// from both sides. Both alternations now carry the trailing boundary
+// lookahead; the 200001-char case relies on the lookahead to refuse
+// rather than silently prefix-matching. ──
 describe("font-collector R_TAG overlong-cap boundary (200000 / 200001)", () => {
   it("\\r at 200000-char overlong cap matches and resets to initial style", async () => {
     // At-limit: 1 leading + 199999 continuation = 200000 total, the

@@ -129,7 +129,7 @@ export function sanitizeForDialog(name: string): string {
   // filename with an embedded \r\n can fake additional confirm lines
   // in OS-native
   // `ask()` dialog bodies, smuggling a fake question past the user
-  // (P1b); the rest of the C0/C1 range carries the same surface —
+  // (untrusted-input); the rest of the C0/C1 range carries the same surface —
   // `\t` produces uneven dialog body indentation; \0 can truncate
   // Win32 TaskDialog text at the NUL byte on certain code paths; ESC
   // can manipulate terminal cursor state on stderr surfaces; C1

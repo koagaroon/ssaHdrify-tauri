@@ -39,7 +39,7 @@ export interface UseLogPanelResult {
 const MAX_LOG_ENTRIES = 200;
 /**
  * Per-entry text length cap. Pairs with MAX_LOG_ENTRIES. Without this,
- * attacker-influenced inputs (P1b font / filename / error-message
+ * attacker-influenced inputs (untrusted-input font / filename / error-message
  * content) could push individual entries to arbitrary length — a
  * 32 KB filename per row × 200 rows ≈ 6 MB
  * retained in React state with the log panel rendering each row's
@@ -95,7 +95,7 @@ export function useLogPanel(): UseLogPanelResult {
       // at `MAX_LOG_ENTRY_TEXT_LEN - 1` can land between a high+low
       // surrogate pair (e.g., a CJK ext-B character or emoji),
       // leaving a lone surrogate before the ellipsis. Most renderers
-      // display the orphaned surrogate as U+FFFD. P1b attacker
+      // display the orphaned surrogate as U+FFFD. Attacker-influenced
       // input (font names, filename paths) could position a
       // surrogate exactly at the cut. `Array.from(text)` iterates
       // code POINTS (handles surrogate pairs), and `.slice` on the

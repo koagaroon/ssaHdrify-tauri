@@ -794,7 +794,7 @@ export default function FontEmbed() {
 
             // outName goes through addLog twice below; sanitize once
             // at derivation. fileNameFromPath result is from a
-            // user-derived path that may carry P1b attacker-influenced
+            // user-derived path that may carry attacker-influenced
             // segments.
             const safeOutName = sanitizeForDialog(fileNameFromPath(outputPath));
             if (result.embeddedCount === 0) {

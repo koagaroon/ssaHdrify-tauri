@@ -511,8 +511,8 @@ export default function BatchRename() {
         } catch (e) {
           const reason = sanitizeError(e);
           // Sanitize the subtitle name before it flows into the log
-          // line. Fan-sub subtitle filenames are P1b attacker-
-          // influenced; HDR / Timing / Embed already sanitize at every
+          // line. Fan-sub subtitle filenames are attacker-influenced;
+          // HDR / Timing / Embed already sanitize at every
           // addLog site, BatchRename was the outlier.
           addLog(t("msg_rename_skipped", sanitizeForDialog(row.subtitle!.name), reason), "error");
           skippedDeriveCount += 1;

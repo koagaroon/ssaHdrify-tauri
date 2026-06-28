@@ -221,8 +221,7 @@ export default function FontSourceModal(props: Props) {
         // why the dismiss didn't take effect; without this they're stuck
         // with no feedback. Console line stays for dev diagnostics.
         // sanitizeForDialog scrubs BiDi / zero-width controls — Rust IPC
-        // error strings can interpolate font-pack paths (P1b
-        // attacker-influenced content), and React renders the result
+        // error strings can interpolate attacker-influenced font-pack paths, and React renders the result
         // directly into the modal banner without the BiDi reversal
         // protection that `validate_ipc_path` would have applied
         // upstream.
@@ -526,7 +525,7 @@ export default function FontSourceModal(props: Props) {
         // sanitizeForDialog: the catch covers the full scan pipeline
         // (picker / preflight / streaming scan), so the error message
         // can carry font-pack path strings or font-file names which
-        // are attacker-influenced (P1b).
+        // are attacker-influenced (untrusted-input).
         setError(sanitizeError(e));
       } finally {
         if (scanId !== null && activeScanIdRef.current === scanId) {
@@ -572,7 +571,7 @@ export default function FontSourceModal(props: Props) {
         // scrub the basename through sanitizeForDialog
         // before interpolating into the error message. The error renders
         // in the modal's <p> banner without React-level escaping for
-        // BiDi controls, so a P1b hostile folder name like
+        // BiDi controls, so a hostile folder name like
         // `EP01<U+202E>cssa` would otherwise reverse the surrounding
         // text. The source-list render path at line 652 already wraps
         // src.label in sanitizeForDialog; this closes the lone gap on

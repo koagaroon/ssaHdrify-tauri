@@ -10,9 +10,9 @@
     /* Bundler mode */
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
-    /* R17 W17.5 (N-R17-70): `verbatimModuleSyntax` requires every
-       type-only import to be `import type` and refuses to elide
-       value imports — keeps the `import { Foo }` vs
+    /* `verbatimModuleSyntax` requires every type-only import to be
+       `import type` and refuses to elide value imports — keeps the
+       `import { Foo }` vs
        `import type { Foo }` distinction honest at the source level.
        `erasableSyntaxOnly` (further down) refuses TS-only construct
        families (enums, parameter properties, namespaces) that can't
@@ -32,17 +32,17 @@
     "noUnusedParameters": true,
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true,
-    /* R17 W17.5b (N-R17-59): `arr[i]` typed `T | undefined` instead of
-       `T`. `strict: true` does NOT include this; it's a separate flag
-       that surfaces an off-by-one regression class — hot paths in
+    /* `arr[i]` typed `T | undefined` instead of `T`. `strict: true`
+       does NOT include this; it's a separate flag that surfaces an
+       off-by-one regression class — hot paths in
        subtitle parsing, chain segmentation, and fontcull boundaries
        use indexed access where a length-mismatch between sibling
        arrays would otherwise read `undefined` silently. Call sites
        guard with explicit length checks / `??` fallbacks. */
     "noUncheckedIndexedAccess": true,
-    /* R17 W17.5b (N-R17-60): `prop?: T` no longer accepts
-       `prop: undefined`. Distinguishes "absent" from "present and
-       undefined" — eliminates a class of subtle bugs where a caller
+    /* `prop?: T` no longer accepts `prop: undefined`. Distinguishes
+       "absent" from "present and undefined" — eliminates a class of
+       subtle bugs where a caller
        passes `{ prop: undefined }` thinking it's the same as omitting
        the field. */
     "exactOptionalPropertyTypes": true
