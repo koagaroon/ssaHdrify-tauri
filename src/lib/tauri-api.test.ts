@@ -15,7 +15,7 @@
  *      (large-payload `plugin:__TAURI_CHANNEL__|fetch` async path).
  *      runStreamingScan must still return final counts, because the
  *      Done sentinel arrives after every Batch and donePromise gates
- *      the return. This is the A-bug-1 regression test.
+ *      the return. This pins the async-after-resolve regression.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -410,7 +410,7 @@ describe("localized native file dialogs", () => {
   });
 });
 
-describe("runStreamingScan — async-after-resolve (A-bug-1 regression)", () => {
+describe("runStreamingScan — async-after-resolve regression", () => {
   it("waits for Done before returning, even when batches fire after invoke resolves", async () => {
     // Simulate Tauri's large-payload fetch path: invoke promise resolves
     // BEFORE any batch lands. Without the Done-sentinel guard,

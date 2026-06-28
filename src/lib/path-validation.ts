@@ -388,7 +388,7 @@ export function decomposeOutputDirectoryPath(outputDir: string): OutputDirectory
 /**
  * Substitute `{token}` placeholders in `template` with `vars` values.
  *
- * Three design choices, all responses to review findings:
+ * Three safety choices this helper must preserve:
  *
  * 1. **No `$`-interpretation on values.** A naïve
  *    `template.replace(/\{token\}/g, value)` interprets `$&`, `$'`,

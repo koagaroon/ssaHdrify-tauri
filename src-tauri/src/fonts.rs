@@ -61,9 +61,8 @@ const MAX_FONTS_PER_SCAN: usize = 100_000;
 ///
 /// Channel-budget context: since the SQLite migration, `ScanProgress::Batch`
 /// payload is constant-tiny (one `usize` count). The 8 KB direct-eval
-/// threshold (Budget 1 in `reference_tauri_channel_perf.md`) no longer
-/// applies — every batch goes via the synchronous direct-eval path. The
-/// only budget this size needs to respect is event rate (Budget 2): too
+/// threshold no longer applies — every batch goes via the synchronous
+/// direct-eval path. The only budget this size needs to respect is event rate: too
 /// many events too fast saturate the WebView2 main thread. Aim for ≤ ~10
 /// emits per second visible to the UI; combined with `SCAN_BATCH_INTERVAL`
 /// below, batch=40 sits well inside that envelope.
@@ -480,7 +479,8 @@ static CANCEL_SCAN_ID: AtomicU64 = AtomicU64::new(NO_SCAN_ID);
 /// `Done` is small (under the threshold), travels via direct eval, but the
 /// Channel layer enforces in-order delivery — so the frontend's `Done`
 /// handler only fires *after* every preceding `Batch` has been processed.
-/// See A-bug-1 in the v1.3.1 design doc for the diagnostic data.
+/// The async-after-invoke-resolve case is pinned by the frontend
+/// `runStreamingScan` tests.
 ///
 /// Wire-format mirror lives in `src/lib/tauri-api.ts` as
 /// `RawScanProgress`. The two definitions are NOT generated from each
@@ -514,7 +514,8 @@ pub enum ScanProgress {
     /// under 8 KB (Tauri Channel's direct-eval threshold) — string
     /// fields are the risk. Bound them at the API boundary OR
     /// aggregate into counts; never let a Vec<String> or unbounded
-    /// String slip in. See `reference_tauri_channel_perf.md`.
+    /// String slip in. Keep this invariant mirrored in the TS
+    /// `RawScanProgress` contract.
     Done {
         reason: ScanStopReason,
         added: usize,
@@ -3395,8 +3396,8 @@ pub fn clear_cache_provenance() {
 /// (CLI bin, future external consumers) cannot construct one outside
 /// of `FontCache::lookup_family`. The invariant "only lookup_family
 /// hits register in `ALLOWED_CACHE_FONT_PATHS`" is enforced at the
-/// type layer rather than by review discipline — comments and review
-/// notes decay across refactors; types don't.
+/// type layer rather than by manual convention — narrative comments
+/// decay across refactors; types don't.
 ///
 /// Cache row paths are canonicalized upstream by `replace_folder`;
 /// this function re-validates via `validate_ipc_path` anyway so a
@@ -3636,8 +3637,8 @@ fn is_in_system_fonts_dir(canonical: &Path) -> bool {
 /// expansion `subset_font_b64` exists specifically to dodge. The
 /// GUI-side IPC path MUST go through `subset_font_b64`; adding the
 /// attribute here would silently bypass that guard and pressure V8
-/// heap on every embed. Future direct exposure must be gated by
-/// review.
+/// heap on every embed. Future direct exposure must go through an
+/// explicit security and resource-budget audit.
 pub fn subset_font(
     font_path: String,
     font_index: u32,
@@ -4088,8 +4089,7 @@ fn is_ttc_data(font_data: &[u8]) -> bool {
 /// same shape.
 ///
 /// Plan tuning rationale (from a measured comparison against
-/// assfonts/AssFontSubset on the same input — see CLI design doc
-/// § Project design locks):
+/// assfonts/AssFontSubset on the same input):
 ///
 /// - **Drop `vmtx`, `LTSH`, `kern`.** `vmtx` (vertical metrics) is
 ///   ~60 KB per CJK face — one record per `maxp.numGlyphs`, but

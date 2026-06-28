@@ -2,13 +2,13 @@
  * Pairing engine — fan-sub style episode + season extraction and
  * video↔subtitle pairing for Tab 4 (Batch Rename).
  *
- * Algorithm (per design doc 已决定 #1):
+ * Algorithm:
  *   1. bracket cleanup           strip every [..] group
  *   2. priority-ordered episode  regex set (first match wins)
  *   3. season parallel scan      (only when ep regex didn't carry it)
  *   4. pair by (season, episode) tuple
- *   5. LCS fallback              [DESIGNED (design doc decision #1) but
- *                                 intentionally not yet implemented — the
+ *   5. LCS fallback              [reserved but intentionally not yet
+ *                                 implemented — the
  *                                 regex set covers all documented fan-sub
  *                                 samples, so no `lcs` PairingSource is
  *                                 produced today; LCS lands only if a real

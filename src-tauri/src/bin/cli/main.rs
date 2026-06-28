@@ -1740,10 +1740,9 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
         };
         println!("{summary}");
     }
-    // partial-failure (1) vs complete-failure
-    // (2) exit-code split, matching `CommandReport::exit_code`'s
-    // semantics for HDR / Shift / Embed / Rename per the design doc
-    // § Cross-cutting 行为 § Exit codes. A flat exit code 1 for any
+    // partial-failure (1) vs complete-failure (2) exit-code split,
+    // matching `CommandReport::exit_code`'s semantics for HDR / Shift
+    // / Embed / Rename. A flat exit code 1 for any
     // failure would prevent CI / pipeline scripts from distinguishing
     // "everything failed" (likely config / argv mistake) from "some
     // files failed" (likely per-file content issue).
@@ -6288,9 +6287,8 @@ fn output_path_exists(globals: &GlobalOptions, path: &Path) -> bool {
 //     trap closed for the GUI) + the late re-check before
 //     `File::open` (copy) / `fs::rename` (rename) for the dst-side
 //     reparse swap window.
-// Routing through the single source of truth means future findings
-// against safe_io auto-propagate here instead of needing parallel
-// fixes.
+// Routing through the single source of truth means future safe_io
+// fixes auto-propagate here instead of needing parallel fixes.
 //
 // The `_globals` parameter is preserved on each function for caller-
 // site convention (every other CLI fs-helper takes globals); safe_io

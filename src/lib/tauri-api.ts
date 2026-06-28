@@ -212,9 +212,10 @@ export async function writeText(path: string, content: string): Promise<void> {
   await invoke("safe_write_text_file", { path, content, overwrite: true });
 }
 
-/** Rename / move a file. Atomic on the same volume; cross-volume falls
- *  back to copy-then-delete (std::fs::rename semantics). Used by Batch
- *  Rename's "rename in place" mode where the source file disappears.
+/** Rename / move a file. Atomic when the platform supports the requested
+ *  move; unsupported cross-volume moves fail and should use Batch
+ *  Rename's copy modes instead. Used by Batch Rename's "rename in
+ *  place" mode where the source file disappears.
  *
  *  Routes through `safe_rename_file` rather than `@tauri-apps/plugin-fs`
  *  rename, which would let a symlinked source rename a sensitive target
@@ -318,7 +319,7 @@ export interface LocalFontEntry {
  *  async batches arrive — without `Done` the UI could report completion
  *  before every progress callback drained. The Channel layer guarantees
  *  in-order delivery, so `Done` only fires after every preceding batch
- *  has been processed. See A-bug-1 in v1.3.1 design doc. */
+ *  has been processed. */
 // Wire-format mirror of Rust's `ScanProgress` enum in
 // `src-tauri/src/fonts.rs`, serialized via
 // `#[serde(tag = "kind", rename_all = "camelCase")]`. The two type

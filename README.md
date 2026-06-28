@@ -49,7 +49,7 @@
 Windows 用户可从 [Releases](https://github.com/koagaroon/ssaHdrify-tauri/releases) 页面下载免安装的便携版 exe。建议优先使用最新稳定版；预览版也会保留在同一页面，用于测试尚未进入稳定版的功能。
 
 > [!NOTE]
-> `v1.5.0` 正式版包含当前 README 中描述的 CLI、字体缓存 / 诊断、`.vtt` HDR 转换和 `.sup` 批量重命名侧车支持。
+> 最新稳定版已包含 CLI、字体缓存 / 诊断、`.vtt` HDR 转换和 `.sup` 批量重命名侧车支持；预览版可能额外包含尚未进入稳定版的修复或改进。
 
 - **`ssahdrify*.exe`** — 图形界面（GUI），适合手动操作
 - **`ssahdrify-cli*.exe`** — 命令行（CLI），适合自动化流水线、批处理和脚本化场景
@@ -59,7 +59,7 @@ macOS / Linux 用户请参考下方「从源码构建」。
 Windows users can download portable, no-installer exe files from [Releases](https://github.com/koagaroon/ssaHdrify-tauri/releases). Use the latest stable build by default; preview builds remain listed on the same page for testing features that have not entered a stable release yet.
 
 > [!NOTE]
-> The formal `v1.5.0` release includes the CLI, font cache / diagnostics, `.vtt` HDR conversion, and `.sup` Batch Rename sidecar support described in this README.
+> The latest stable release includes the CLI, font cache / diagnostics, `.vtt` HDR conversion, and `.sup` Batch Rename sidecar support. Preview builds may also include fixes or improvements that have not entered the stable line yet.
 
 - **`ssahdrify*.exe`** — graphical interface (GUI), for manual workflows
 - **`ssahdrify-cli*.exe`** — command line (CLI), for automation pipelines, batch jobs, and scripts

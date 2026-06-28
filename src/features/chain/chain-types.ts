@@ -46,10 +46,10 @@ export interface ShiftStepParams {
  *    the Rust struct serializes all four; dropping them on the TS
  *    side would force a divergent payload spec and complicate the
  *    JSON-round-trip test.
- * 2. Future GUI integration. When the chain runtime gets a GUI
- *    surface (Shape A → Shape B/C per the CLI design doc), the GUI
- *    may resolve fonts in TS rather than Rust — at that point the
- *    TS embed transform will start reading these fields directly.
+ * 2. Future GUI integration. If the chain runtime gets a GUI
+ *    surface, the GUI may resolve fonts in TS rather than Rust — at
+ *    that point the TS embed transform will start reading these fields
+ *    directly.
  *
  * Splitting into Rust-only / TS-only param shapes would force the
  * payload type to switch by caller, adding wire-format branching for

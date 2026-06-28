@@ -51,7 +51,7 @@
 //! closure (CLI argv is the user's intent, so there is no
 //! Tauri-side scope policy to enforce — but every other defense in the
 //! chain still applies). Centralizing the defense set here means
-//! future findings against safe_io auto-propagate to both binaries
+//! future safe_io fixes auto-propagate to both binaries
 //! instead of needing parallel fixes in each.
 
 use crate::encoding::ALLOWED_TEXT_EXTENSIONS;
@@ -260,8 +260,8 @@ fn clear_existing_destination(path: &Path, overwrite: bool) -> Result<(), String
     // `symlink_metadata` (= lstat) returns the link's own metadata
     // without following it. Path::exists() follows symlinks on Unix
     // and would return false for a dangling shortcut, which is the
-    // exact case the review flagged (the chain CLI write path bypassed
-    // this check the same way before commit b7d9d21).
+    // exact regression case: the chain CLI write path used to bypass
+    // this check before the shared safe_io helper owned it.
     //
     // The back-to-back syscalls
     // (`symlink_metadata` returning `meta` here, then `is_reparse_point`

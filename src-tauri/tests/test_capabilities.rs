@@ -100,7 +100,7 @@ fn plugin_fs_grants_no_direct_file_command_surface() {
 fn deny_list_contains_required_categories() {
     let deny = read_deny_paths();
 
-    // Per design doc § fs:scope policy three categories.
+    // Required fs:scope deny-list categories.
     // Each entry below documents which category + which OS family it
     // protects so a future audit can re-verify by reading the list
     // in one place.

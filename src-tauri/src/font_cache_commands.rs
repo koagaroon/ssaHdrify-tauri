@@ -350,8 +350,7 @@ pub fn init_gui_font_cache(app_data_dir: &Path) -> Result<(), String> {
     // / `~/Library/Application Support` (macOS) per the unified dir
     // migration; an alternative resolution exists via Tauri's
     // `app.path().app_data_dir()` (the `$DATA` capability scope
-    // variable resolution; see design doc § fs:scope policy
-    // "Resolution divergence note"), used at a different layer. Both
+    // variable resolution), used at a different layer. Both
     // chains land inside the user's own AppData / XDG_DATA_HOME —
     // planting a reparse-point in the parent walk requires AppData
     // write access. Same local-user class as parent-walk reparse on AppData.
@@ -1156,8 +1155,7 @@ pub fn clear_font_cache() -> Result<(), String> {
     // access; closing that window would require atomic open-and-
     // unlink primitives (Linux-specific) or a wider lock scope that
     // doesn't exist on Windows. Revisit if the project deploys in
-    // multi-user / MDM-managed shapes (same revisit trigger as the
-    // design doc § fs:scope resolution divergence note).
+    // multi-user / MDM-managed shapes.
     //
     // local-user vs untrusted-input note: these sidecar paths look
     // filesystem-resident, which superficially suggests untrusted input

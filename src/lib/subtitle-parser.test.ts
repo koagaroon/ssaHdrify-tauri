@@ -428,8 +428,8 @@ describe("parseSubtitle / shiftSubtitle — oversized-ASS-Dialogue placeholder a
 
   // Boundary-pair parity for SRT and ASS hour fields. VTT already
   // had at-limit + over-limit pairs; SRT and ASS share the same
-  // `\d{1,12}` bound but only had "smoke test" coverage. Code-review
-  // discipline requires both sides of a named boundary be pinned so
+  // `\d{1,12}` bound but only had "smoke test" coverage. A named
+  // boundary needs both sides pinned so
   // a refactor that loosens the cap (`\d{1,13}`) or tightens it
   // (`\d{1,11}`) trips a test.
 

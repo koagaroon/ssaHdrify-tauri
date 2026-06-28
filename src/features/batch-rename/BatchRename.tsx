@@ -156,7 +156,7 @@ export default function BatchRename() {
   // Reset whenever renameFiles changes.
   const [unknownCount, setUnknownCount] = useState(0);
   const { logs, addLog, clearLogs, logScrollRef } = useLogPanel();
-  // Output strategy — three modes per design doc 已决定 #3.
+  // Output strategy: three modes.
   // Default `copy_to_video` matches the most common fan-sub workflow
   // (subs end up in the same folder as the videos, originals untouched).
   const [outputMode, setOutputMode] = useState<OutputMode>("copy_to_video");
@@ -295,12 +295,11 @@ export default function BatchRename() {
         width: "1fr",
         render: (row) =>
           row.video ? (
-            // Sanitize the visible video filename. The design doc
-            // positioned the destructive-rename ask() dialog as the
-            // safety net, but a BiDi-reversed display in the grid
-            // undermines the visual-confirm value the user relies on
-            // BEFORE the dialog appears (they pick which row to rename
-            // from this grid, not the dialog).
+            // Sanitize the visible video filename before the
+            // destructive-rename ask() dialog. A BiDi-reversed display
+            // in the grid undermines the visual-confirm value the user
+            // relies on BEFORE the dialog appears (they pick which row
+            // to rename from this grid, not the dialog).
             <span title={sanitizeForDialog(row.video.name)}>
               {sanitizeForDialog(row.video.name)}
             </span>
@@ -974,7 +973,7 @@ export default function BatchRename() {
         </p>
       )}
 
-      {/* Output-mode strategy. Three modes (per design doc 已决定 #3)
+      {/* Output-mode strategy. Three modes
            with a chosen-dir picker visible only when the third mode is
            selected. The mode persists across selection changes; the
            chosen-dir is cleared when files clear. Styled as a plain

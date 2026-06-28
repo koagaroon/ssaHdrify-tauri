@@ -418,8 +418,8 @@ impl DriftReport {
 /// `fonts::register_cache_provenance` accepting `&FontLookupResult`
 /// instead of `(&str, u32)`, the invariant "only
 /// lookup_family hits register in ALLOWED_CACHE_FONT_PATHS" is now
-/// enforced at the type layer rather than by review discipline.
-/// Comments and review notes decay across refactors; types don't.
+/// enforced at the type layer rather than by manual convention.
+/// Narrative comments decay across refactors; types don't.
 /// Internal app_lib callers (`font_cache_commands.rs`) still read
 /// fields directly under pub(crate); outside callers go through the
 /// read-only getters / `into_parts`.
@@ -1080,8 +1080,8 @@ fn current_unix_seconds() -> Option<i64> {
         .and_then(|d| i64::try_from(d.as_secs()).ok())
 }
 
-/// Schema SQL — one statement per table. Tables match the design
-/// locked in the design doc § #5.
+/// Schema SQL — one statement per table. Tables match the current
+/// persistent font-cache layout.
 ///
 /// `cached_folders.last_scanned_at`: Unix timestamp (seconds since
 /// epoch) of when this folder was last walked by `refresh-fonts`. Used

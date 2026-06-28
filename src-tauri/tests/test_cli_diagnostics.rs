@@ -607,8 +607,8 @@ fn embed_diagnose_failed_missing_font_suggests_full_details() {
 
 #[test]
 fn diagnose_flag_is_rejected_on_unsupported_commands() {
-    // Contract (CLI design doc #9): `--diagnose` is supported ONLY on
-    // hdr / shift / embed / rename. chain and refresh-fonts must FAIL on it
+    // Contract: `--diagnose` is supported ONLY on hdr / shift / embed
+    // / rename. chain and refresh-fonts must FAIL on it
     // rather than silently ignore it. Both reject before any engine work
     // (chain via its step parser, refresh-fonts via clap), so this needs no
     // engine bundle and no skip/panic guard. The assertion pins "rejected and
