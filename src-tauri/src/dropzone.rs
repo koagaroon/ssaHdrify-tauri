@@ -151,7 +151,7 @@ pub fn expand_dropped_paths(paths: Vec<String>) -> Result<ExpandedPaths, String>
     // This aggregate IS the user-visible consequence (N drops of M dropped);
     // the per-failure warnings above are the function-name-leak class.
     // Release builds default to LevelFilter::Warn (see lib.rs), so
-    // pre-W3 the per-failure noise was visible but the synthesis that
+    // previously the per-failure noise was visible but the synthesis that
     // explains the noise was not.
     if rejected > 0 {
         log::warn!(

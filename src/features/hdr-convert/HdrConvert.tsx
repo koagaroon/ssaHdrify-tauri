@@ -182,8 +182,7 @@ export default function HdrConvert() {
   // [MIN_BRIGHTNESS, MAX_BRIGHTNESS] window. Used to drive the input's
   // visible-error border. Without this signal, a user typing "99999"
   // sees no validation feedback and the Convert button proceeds with
-  // the prior in-range value silently — the kind of surprise
-  // vibe-coding.md no-silent-action exists to prevent.
+  // the prior in-range value silently.
   const brightnessOutOfRange = (() => {
     const num = parseFloat(brightnessText);
     return !Number.isNaN(num) && (num < MIN_BRIGHTNESS || num > MAX_BRIGHTNESS);
@@ -481,15 +480,11 @@ export default function HdrConvert() {
 
             // Write output
             await writeText(outputPath, assContent);
-            // (Pattern 1 sibling parity):
-            // FontEmbed wraps fileNameFromPath in sanitizeForDialog
-            // (line ~794); BatchRename does the same. fileNameFromPath
-            // already strips C0/C1/DEL + BiDi via stripUnicodeControls,
-            // so no current bug — but the visible asymmetry left HDR
-            // as a Pattern-1 census exception. Defense-in-depth wrap
-            // for sibling-feature symmetry; a future helper-contract
-            // loosening doesn't silently re-introduce attack surface
-            // here while FontEmbed / BatchRename stay covered.
+            // FontEmbed and BatchRename also sanitize display names
+            // before logging. fileNameFromPath already strips
+            // C0/C1/DEL + BiDi via stripUnicodeControls, so this is
+            // defense-in-depth for sibling-feature symmetry if that
+            // helper ever loosens.
             const outName = sanitizeForDialog(fileNameFromPath(outputPath));
             addLog(t("msg_done", outName), "success");
             successCount++;

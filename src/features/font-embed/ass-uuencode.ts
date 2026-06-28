@@ -120,7 +120,7 @@ export function buildFontEntry(fontName: string, data: Uint8Array): string {
   // upstream buildFontFileName output as a self-contained defense at
   // the encoder boundary.
   //
-  // (N4-R7-3 followup): `no-control-regex`
+  // `no-control-regex`
   // eslint-disable directive removed \u2014 the rule only inspects regex
   // literals, and this regex is built via `new RegExp(...)` from a
   // string interpolation, so the rule was never going to fire.
@@ -136,8 +136,8 @@ export function buildFontEntry(fontName: string, data: Uint8Array): string {
   //
   // BOTH sanitizers share `\\` and `:` \u2014 that is the structural
   // overlap; `,{}` are unique to srt-converter side, `/` is unique to
-  // this side. Pattern 1 census rule: both must keep stripping the
-  // shared BIDI / control set; the extra boundary-specific chars are
+  // this side. Both sanitizers must keep stripping the shared BIDI /
+  // control set; the extra boundary-specific chars are
   // intentional and MUST NOT be unified into a single helper without
   // re-checking the per-boundary character implications.
   const safeName = fontName.replace(

@@ -290,8 +290,8 @@ export function runChain(request: ChainRunRequest): ChainResult {
     try {
       assertAssShape(content);
     } catch (err) {
-      // (Pattern 1 sibling parity): every other
-      // catch-arm in chain-runtime.ts routes through `sanitizeError`
+      // Every other catch-arm in chain-runtime.ts routes through
+      // `sanitizeError`
       // (BiDi / control char stripping). assertAssShape's current
       // messages are literals (no interpolated content), but a future
       // loosening that interpolates path / family bytes would silently
@@ -364,10 +364,9 @@ export function runChain(request: ChainRunRequest): ChainResult {
       // a bare engine error. `cause` preserves the original error
       // for downstream debugging without losing the annotated
       // user-facing message. `message` goes through sanitizeError
-      // (Pattern 1 callsite census miss): the re-thrown error flows
-      // to the chain log panel where any BiDi / line-break smuggling
-      // from a P1b transform-internal error would otherwise reach the
-      // UI un-scrubbed.
+      // The re-thrown error flows to the chain log panel, where any
+      // BiDi / line-break smuggling from a P1b transform-internal
+      // error would otherwise reach the UI un-scrubbed.
       const message = sanitizeError(err);
       throw new Error(`step ${i + 1} (${step.kind}) failed: ${message}`, {
         cause: err,

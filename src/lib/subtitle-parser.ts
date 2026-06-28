@@ -25,8 +25,8 @@ export interface Caption {
    * MAX_CAPTION_TEXT_LEN (64 KB). All four parsers (parseAss /
    * parseSub / parseSrt / parseVtt) emit one Caption per logical entry
    * so feature layers can count `captions.filter(c => c.skipped).length`
-   * and surface the drop to the user via msg_oversized_skipped
-   * (no-silent-action per vibe-coding.md). The placeholder counts
+   * and surface the drop to the user via msg_oversized_skipped.
+   * The placeholder counts
    * toward MAX_PARSED_ENTRIES on every parser. buildAss returns the
    * original Dialogue line untouched (so its positional alignment with
    * the regex-walk over original content holds); buildSrt / buildVtt /
@@ -51,9 +51,9 @@ const VTT_HEADER = /^WEBVTT/m;
 // SRT hours use variable digit width in practice — many tools emit
 // `0:00:01,234` or `1:02:03,456`. Hours bounded at `{1,12}` to match
 // `parseSrtTime` / `parseAssTime` / `parseDisplayTime`'s extraction
-// regexes (Pattern 2 symmetry — earlier detection used \d+ while
-// extraction caps at {1,12}; a future caller piping the detection
-// match into parseInt would have re-introduced the unbounded surface).
+// regexes. Earlier detection used \d+ while extraction caps at
+// {1,12}; a future caller piping the detection match into parseInt
+// would have re-introduced the unbounded surface.
 //
 // Line-anchored check — matches `parseSrt`'s line-anchored
 // `timingRe`. Without the anchor, prose like `Caption text

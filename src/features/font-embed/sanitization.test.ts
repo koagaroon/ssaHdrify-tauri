@@ -42,7 +42,7 @@ function buildFontEntryName(name: string): string {
   return header.slice("fontname: ".length);
 }
 
-describe("font-name sanitization symmetry (Round 2 N-R2-17)", () => {
+describe("font-name sanitization symmetry", () => {
   it("sanitizeFamily strips C0 + DEL + C1 + line separators", () => {
     const input = `Arial${C0_SAMPLE}${DEL}${C1_SAMPLE}${LINE_SEP}${PARA_SEP}Bold`;
     const out = sanitizeFamily(input);

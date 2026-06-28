@@ -4,17 +4,17 @@
 // the esbuild-only build path doesn't drag in the GUI bundler's
 // transitive deps.
 //
-// Why a shared module (R17 W17.2 / W17.5 N-R17-64): pre-W17.5 the
+// Why a shared module: the
 // resolver was duplicated in vite.config.ts and build-engine.mjs.
-// R17 surfaced one already-drifted gap (N-R17-63: build-engine.mjs
+// The old split resolver surfaced one already-drifted gap (build-engine.mjs
 // lacked the sanitize-emptied warn branch vite.config.ts had —
 // `v0.0.0-unknown` would have shipped on the CLI side while the GUI
-// surfaced a warning) and one bug class (N-R17-62: empty-string
+// surfaced a warning) and one bug class (empty-string
 // `pkg.version` silently fell through to the sentinel rather than
 // surfacing the package.json corruption). Single source of truth here
 // closes both at once and prevents future drift.
 //
-// R17 W17.5 (A-R17-54): use `execFileSync` (no shell interpretation)
+// Use `execFileSync` (no shell interpretation)
 // instead of `execSync` to remove the build-time injection surface
 // where an attacker who can plant `git.bat` / `git.exe` earlier on
 // PATH could execute arbitrary code via the shell. Removes the
@@ -56,7 +56,7 @@ export function resolveAppVersion(projectRoot) {
   // strings use.
   const sanitized = raw.replace(/[^a-zA-Z0-9._+-]/g, "");
   if (raw && !sanitized) {
-    // R17 W17.5 (N-R17-63 parity fix): build-engine.mjs previously
+    // Parity fix: build-engine.mjs previously
     // lacked this branch; the GUI would warn while the CLI silently
     // used `v0.0.0-unknown`. Single helper means both sides surface
     // the same way now.
@@ -87,7 +87,7 @@ function readGitDescribe(projectRoot) {
       stdio: ["pipe", "pipe", "pipe"],
       // Cap the build-time git lookup so a pathological repo (huge
       // packed refs, credential-prompt, LFS hang) can't stall the
-      // build forever. R17 W17.5 (N-R17-69): catch arm now surfaces
+      // build forever. The catch arm now surfaces
       // the underlying error via console.warn so a real failure
       // (corrupt repo, timeout) doesn't get masked as "git
       // unavailable" silently.
@@ -109,8 +109,8 @@ function readGitDescribe(projectRoot) {
 function readPackageVersion(projectRoot) {
   try {
     const pkg = JSON.parse(readFileSync(resolve(projectRoot, "package.json"), "utf8"));
-    // R17 W17.5 (N-R17-62): explicit non-empty check instead of just
-    // truthy. Pre-W17.5 a package.json with `"version": ""` would
+    // Explicit non-empty check instead of just
+    // truthy. A package.json with `"version": ""` would
     // collapse via falsy-fallthrough to the sentinel without
     // surfacing the corruption.
     if (typeof pkg.version === "string" && pkg.version.length > 0) {

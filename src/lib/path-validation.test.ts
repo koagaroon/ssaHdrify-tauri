@@ -38,7 +38,7 @@ describe("assertSafeOutputFilename", () => {
     expect(() => assertSafeOutputFilename("x\x7fy.ass")).toThrow(/illegal/);
   });
 
-  it("rejects C1 controls (U+0080–U+009F) — Round 8 A-R8-N4-4 parity with Rust", () => {
+  it("rejects C1 controls (U+0080–U+009F), matching Rust", () => {
     // An earlier ILLEGAL_FILENAME_CHARS covered C0 + DEL only (Cc
     // minus C1). Rust's `is_control()` matches the full Cc category;
     // expanding `\x7f-\x9f` closes the TS↔Rust gap.
@@ -93,7 +93,7 @@ describe("assertSafeOutputFilename", () => {
     expect(() => assertSafeOutputFilename("a}b.ass")).toThrow(/illegal/);
   });
 
-  it("with allowBraces=true, permits `{}` but still rejects other illegal chars (Round 10 N-R10-005)", () => {
+  it("with allowBraces=true, permits `{}` but still rejects other illegal chars", () => {
     // BatchRename derives outName from the user's verbatim video
     // filename, where `{}` are legitimate (NTFS / ext4 / APFS allow
     // them, fan-sub naming routinely emits `[Group] Show {1080p}`).
@@ -110,7 +110,7 @@ describe("assertSafeOutputFilename", () => {
     expect(() => assertSafeOutputFilename("a|b.ass", { allowBraces: true })).toThrow(/illegal/);
   });
 
-  it("rejects BiDi / zero-width controls (Round 6 Wave 6.2 parity)", () => {
+  it("rejects BiDi / zero-width controls", () => {
     // ILLEGAL_FILENAME_CHARS is C0 + DEL + NTFS punctuation only — Cf
     // codepoints slip through and land on disk verbatim. The Rust
     // backstop catches them at IPC entry, but a future direct-write
@@ -197,7 +197,7 @@ describe("decomposeInputPath", () => {
     expect(() => decomposeInputPath("C:\\sub\x1fs\\episode.ass")).toThrow(/control characters/);
   });
 
-  it("rejects C1 controls in the path (Round 8 A-R8-N4-4)", () => {
+  it("rejects C1 controls in the path", () => {
     // Same gap as in assertSafeOutputFilename: an earlier regex
     // covered C0 + DEL only. C1 (U+0080–U+009F) now rejects too,
     // matching Rust's `is_control()` Cc coverage.
@@ -232,7 +232,7 @@ describe("decomposeInputPath", () => {
     expect(parts.ext).toBe(".ass");
   });
 
-  it("rejects `..` path components (Round 6 Wave 6.2 parity)", () => {
+  it("rejects `..` path components", () => {
     // The Rust validate_ipc_path rejects parent-directory segments at
     // IPC entry , but TS-side template derivation
     // consumes decomposeInputPath results BEFORE the round-trip. A
@@ -439,7 +439,7 @@ describe("assertSafeOutputPath", () => {
   });
 });
 
-describe("decomposeInputPath — Round 5 BiDi / zero-width hardening", () => {
+describe("decomposeInputPath — BiDi / zero-width hardening", () => {
   it("rejects paths containing BiDi RLO (Trojan-Source class)", () => {
     // EP01<U+202E>cssa.ass renders as EP01ssa.shifted.ass after the
     // RLO flip but lands on disk verbatim. An earlier helper's

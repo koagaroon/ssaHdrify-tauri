@@ -85,7 +85,7 @@ describe("sRgbToHdr — HLG mode", () => {
 });
 
 describe("sRgbToHdr — edge cases", () => {
-  it("snaps zero / negative / NaN brightness to DEFAULT_BRIGHTNESS (W7.5 boundary guard)", () => {
+  it("snaps zero / negative / NaN brightness to DEFAULT_BRIGHTNESS", () => {
     // Returning [0,0,0] gracefully (the Python reference threw on
     // zero) was the prior behavior. Now a Number.isFinite + <
     // MIN_BRIGHTNESS guard at the sRgbToHdr entry snaps invalid

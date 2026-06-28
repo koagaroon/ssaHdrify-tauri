@@ -10,7 +10,7 @@ import { describe, it, expect } from "vitest";
 import { sanitizeForDialog, sanitizeError } from "./dedup-helpers";
 
 describe("sanitizeForDialog", () => {
-  it("strips BiDi / zero-width controls (Round 6 W6.2 parity set)", () => {
+  it("strips BiDi / zero-width controls", () => {
     // U+202E RIGHT-TO-LEFT OVERRIDE — the classic Trojan-Source vector.
     // U+200B ZERO WIDTH SPACE — invisible separator.
     // U+FEFF ZWNBSP / BOM-in-middle. Use escape form so ESLint's
@@ -20,7 +20,7 @@ describe("sanitizeForDialog", () => {
     expect(sanitizeForDialog("a\u{FEFF}b")).toBe("ab");
   });
 
-  it("strips C0 + DEL + C1 control range (Round 10 N-R10-026 widening, was Round 8 A-R8-A4-24 \\r\\n-only)", () => {
+  it("strips C0 + DEL + C1 control range, including CR/LF", () => {
     // An earlier version scrubbed only \n / \r; the current contract
     // widens to the full C0 (\x00-\x1f) + DEL (\x7f) + C1 (\x80-\x9f)
     // range, so the test must exercise the wider span, not just the
@@ -65,7 +65,7 @@ describe("sanitizeError", () => {
     expect(sanitizeError(42)).toBe("42");
   });
 
-  it("scrubs BiDi codepoints on non-Error throws too (Round 10 N-R10-021)", () => {
+  it("scrubs BiDi codepoints on non-Error throws too", () => {
     // An earlier version's non-Error tests only covered ASCII
     // payloads ("bare string\n.danger", 42), so a future refactor
     // that bypassed sanitizeForDialog on the non-Error branch (e.g.,

@@ -137,7 +137,7 @@ describe("runChain — single shift step", () => {
     expect(result.skippedCount).toBe(0);
   });
 
-  it("aggregates skippedCount > 0 when shift parses oversized captions (R13 N-R13-1)", () => {
+  it("aggregates skippedCount > 0 when shift parses oversized captions", () => {
     // Companion to the standalone-side oversized SRT test in
     // cli-engine-roundtrip.test.ts. The chain runs against ASS, so
     // the fixture stuffs one Dialogue line with text exceeding
@@ -385,7 +385,7 @@ describe("resolveChainOutputPath", () => {
     );
   });
 
-  it("preserves intentional `..` inside user content (Round 1 F4.N-R1-1)", () => {
+  it("preserves intentional `..` inside user content", () => {
     // Fan-sub filenames legitimately carry `..` in the baseName — e.g.,
     // `[Group]Show..special.ass`. The blanket post-substitution
     // collapse used previously fused those into a single dot, corrupting
@@ -400,7 +400,7 @@ describe("resolveChainOutputPath", () => {
     ).toBe("C:\\subs\\[Group]Show..special.shifted.ass");
   });
 
-  it("substitutes values containing `$` literally (Round 1 F4.A-R1-3)", () => {
+  it("substitutes values containing `$` literally", () => {
     // String#replace with $-bearing replacement strings interprets
     // `$&` / `$'` / `` $` `` / `$<N>` as backref tokens. Filenames
     // with `$` are rare but legal (Windows admin shares like `c$`,
@@ -436,7 +436,7 @@ describe("resolveChainOutputPath", () => {
     );
   });
 
-  it("rejects uppercase / mixed-case unknown tokens (R12 N-R12-5)", () => {
+  it("rejects uppercase / mixed-case unknown tokens", () => {
     // The chain validator's regex is widened to
     // [a-zA-Z_][a-zA-Z0-9_]{0,31} (case-insensitive) so capitalized
     // typos like {Eotf} / {NAME} / {Format} hit the chain-level

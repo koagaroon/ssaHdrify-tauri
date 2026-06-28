@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.6.0-preview.2",
   "type": "module",
-  "//": "Build script taxonomy (R17 W17.5 N-R17-68): `build` = full GUI release path (tsc -b typecheck + vite build, used by `tauri build` via beforeBuildCommand); `build:gui` = vite build only (skip typecheck, faster local rebuild); `build:engine` = esbuild → dist-engine/engine.js (the CLI binary's V8 bundle, embedded via include_str!); `build:cli` = build:engine + cargo --release --bin ssahdrify-cli; `build:all` = build (GUI) + build:cli (CLI). Lint umbrella (`lint`) runs JS+CSS+Rust; `lint:fix` autofixes what it can.",
+  "//": "Build script taxonomy: `build` = full GUI release path (tsc -b typecheck + vite build, used by `tauri build` via beforeBuildCommand); `build:gui` = vite build only (skip typecheck, faster local rebuild); `build:engine` = esbuild → dist-engine/engine.js (the CLI binary's V8 bundle, embedded via include_str!); `build:cli` = build:engine + cargo --release --bin ssahdrify-cli; `build:all` = build (GUI) + build:cli (CLI). Lint umbrella (`lint`) runs JS+CSS+Rust; `lint:fix` autofixes what it can.",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",

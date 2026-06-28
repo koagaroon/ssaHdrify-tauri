@@ -1,6 +1,6 @@
 // Build helper for the CLI engine bundle (esbuild + __APP_VERSION__ define).
 //
-// Why this exists (R13 W13.1 / N-R13-9): the previous inline `esbuild`
+// Why this exists: the previous inline `esbuild`
 // invocation in `package.json::build:engine` produced a bundle that left
 // `__APP_VERSION__` unresolved, because esbuild has no equivalent of
 // Vite's `define` injection without an explicit `--define` flag. The
@@ -21,10 +21,10 @@
 // the engine bundle and the GUI bundle agree on `__APP_VERSION__` at
 // every build.
 //
-// R17 W17.5 (N-R17-64): version-resolver logic moved to
+// Version-resolver logic moved to
 // `scripts/lib/app-version.mjs` so this script and `vite.config.ts`
-// share a single source of truth. Pre-W17.5 the resolver was
-// duplicated in two files and had already drifted (N-R17-63: the
+// share a single source of truth. Previously the resolver was
+// duplicated in two files and had already drifted (the
 // sanitize-emptied warn branch existed in vite.config.ts but not
 // here).
 

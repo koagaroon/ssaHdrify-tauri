@@ -38,7 +38,7 @@ function decodeFromBase64(b64: string): Uint8Array {
   return decodeBase64Bytes(b64);
 }
 
-describe("FontSubsetPayload wire-format round-trip (Round 3 N-R3-13)", () => {
+describe("FontSubsetPayload wire-format round-trip", () => {
   const SAMPLE = new Uint8Array([
     0x00, 0x01, 0x10, 0x20, 0x7f, 0x80, 0xfe, 0xff,
     // Some 0x00s scattered to catch null-byte handling regressions.

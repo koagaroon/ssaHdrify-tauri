@@ -70,7 +70,7 @@ describe("extractEpisode — documented fan-sub samples", () => {
     expect(ep?.episode).toBe(2);
   });
 
-  it("Pattern A — episode 00 (pilot / OVA zero) is preserved (Round 11 W11.6 N2-R11-03)", () => {
+  it("Pattern A — episode 00 (pilot / OVA zero) is preserved", () => {
     // The Pattern A coverage previously skipped the `episode 0` edge —
     // OVA pilots and " - 00 [" prologue numbering are real-world
     // fan-sub conventions. A regex regression that excluded zero
@@ -582,7 +582,7 @@ describe("deriveRenameOutputPath — path-validator integration", () => {
     expect(() => deriveRenameOutputPath(video, sub, "copy_to_video", null)).not.toThrow();
   });
 
-  it("accepts brace characters in video-derived output names (Round 10 N-R10-005)", () => {
+  it("accepts brace characters in video-derived output names", () => {
     // BatchRename's outName is built from the user's verbatim video
     // filename + the subtitle's extension — there's no template
     // substitution in play, so brace literals are legitimate (NTFS /
@@ -773,7 +773,7 @@ describe("isNoOpRename", () => {
   });
 });
 
-describe("buildPairings — Round 5 regression guards", () => {
+describe("buildPairings — regression guards", () => {
   it("ambiguous videos with no subtitles → source: 'unmatched', not 'warning'", () => {
     // Two videos with identical episode keys (would normally be ambiguous)
     // but ZERO subtitles — no decision to mark "debatable". An earlier

@@ -20,7 +20,7 @@ default-run = "ssahdrify"
 name = "app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
-# R17 W17.5 (N-R17-65): the GUI binary `ssahdrify` uses Cargo's
+# The GUI binary `ssahdrify` uses Cargo's
 # implicit `src/main.rs` discovery — no `[[bin]]` block needed (and
 # adding one alongside the implicit detection would warn under
 # `cargo` 2024+). `default-run = "ssahdrify"` above is the
@@ -55,7 +55,7 @@ tauri-plugin-fs = "2"
 # deno_core version loads; bumping requires reading the deno_core
 # changelog AND re-running the CLI engine integration tests
 # (`tests/test_chain.rs`) to confirm the V8 entry-points still match.
-# R17 W17.5 (N-R17-74): rationale documented so a future
+# Rationale documented so a future
 # `cargo update`-style "just bump the pin" decision pauses for the
 # binding audit first.
 deno_core = "=0.400.0"
@@ -79,9 +79,9 @@ env_logger = "0.11"
 # JSON-array form expands ~4-5× per byte (decimal text + comma + space)
 # and pressures V8's heap on the per-font MAX_FONT_DATA_SIZE budget
 # (64 MB, defined in src/fonts.rs); base64 is ~1.33× and decoded in
-# TS via the local byte decoder. (R15 W15.3 N-R15-12 anchor refresh — previous mention
+# TS via the local byte decoder. A previous comment
 # of CUMULATIVE_FALLBACK_BYTES was a phantom citation; that symbol
-# was removed in R6 W6.9 along with the fontcull-parse-fail fallback
+# was removed along with the fontcull-parse-fail fallback
 # path. The justification is still load-bearing: MAX_FONT_DATA_SIZE
 # guards subset_font's data return on the Ok path.)
 base64 = "0.22"
@@ -103,7 +103,7 @@ glob = "0.3.3"
 # profiles, Cargo's `[profile.release.package.<name>]` overrides are
 # the way — see the GUI design doc's 2026-05-08 spillover entry for
 # context. Keep this comment if the profile block is reorganized.
-# R17 W17.5 (A-R17-60): `panic = "abort"` is INTENTIONALLY ABSENT.
+# `panic = "abort"` is INTENTIONALLY ABSENT.
 # `fonts::subset_font` uses `std::panic::catch_unwind` to recover
 # from fontcull panics on malformed font data — that recovery path
 # requires the unwind runtime to be present. Enabling `panic =

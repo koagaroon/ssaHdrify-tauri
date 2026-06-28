@@ -183,10 +183,7 @@ fn deny_list_contains_required_categories() {
             "legacy bundle-namespaced state (Tauri internal)",
         ),
         ("$APPLOCALDATA/**", "legacy bundle-namespaced local state"),
-        (
-            "$DATA/ssahdrify/**",
-            "unified app data dir (W11.4b destination)",
-        ),
+        ("$DATA/ssahdrify/**", "unified app data dir destination"),
         // Shell history (POSIX + PowerShell + fish + vi + less)
         ("$HOME/.bash_history", "bash"),
         ("$HOME/.zsh_history", "zsh"),
@@ -236,7 +233,7 @@ fn deny_list_contains_required_categories() {
         .collect();
     assert!(
         missing.is_empty(),
-        "deny list is missing required entries (R17 W17.5 A-R17-49 pin):\n{}",
+        "deny list is missing required entries:\n{}",
         missing
             .iter()
             .map(|(path, label)| format!("  - {path}  ({label})"))
@@ -257,41 +254,29 @@ fn deny_list_rejects_w12_1_w13_2_traps() {
     // resolve to a non-existent doubly-namespaced path and DENY
     // NOTHING. The right form for cross-tool denies is `$DATA/...`.
     let forbidden = [
-        (
-            "$APPDATA/Microsoft/Credentials/**",
-            "should be $DATA/... (W12.1)",
-        ),
-        ("$APPDATA/Mozilla/**", "should be $DATA/... (W12.1)"),
-        ("$APPDATA/Signal/**", "should be $DATA/... (W12.1)"),
+        ("$APPDATA/Microsoft/Credentials/**", "should be $DATA/..."),
+        ("$APPDATA/Mozilla/**", "should be $DATA/..."),
+        ("$APPDATA/Signal/**", "should be $DATA/..."),
         (
             "$APPLOCALDATA/Microsoft/Credentials/**",
-            "should be $LOCALDATA/... (W12.1)",
+            "should be $LOCALDATA/...",
         ),
         (
             "$APPLOCALDATA/Google/Chrome/User Data/**",
-            "should be $LOCALDATA/... (W12.1)",
+            "should be $LOCALDATA/...",
         ),
         // per-file `.cargo/credentials*` /
         // `.cargo/config*` enumeration is superseded by the wildcard
         // `.cargo/**`. Adding the narrower rules back would suggest
         // a future contributor might enumerate by hand again and
         // miss `.cargo/registry/**` / `.cargo/git/**`.
-        (
-            "$HOME/.cargo/credentials",
-            "covered by $HOME/.cargo/** (W17.5 A-R17-50)",
-        ),
+        ("$HOME/.cargo/credentials", "covered by $HOME/.cargo/**"),
         (
             "$HOME/.cargo/credentials.toml",
-            "covered by $HOME/.cargo/** (W17.5 A-R17-50)",
+            "covered by $HOME/.cargo/**",
         ),
-        (
-            "$HOME/.cargo/config",
-            "covered by $HOME/.cargo/** (W17.5 A-R17-50)",
-        ),
-        (
-            "$HOME/.cargo/config.toml",
-            "covered by $HOME/.cargo/** (W17.5 A-R17-50)",
-        ),
+        ("$HOME/.cargo/config", "covered by $HOME/.cargo/**"),
+        ("$HOME/.cargo/config.toml", "covered by $HOME/.cargo/**"),
     ];
 
     let present: Vec<&(&str, &str)> = forbidden
@@ -300,7 +285,7 @@ fn deny_list_rejects_w12_1_w13_2_traps() {
         .collect();
     assert!(
         present.is_empty(),
-        "deny list contains entries flagged as wrong-shape (R17 W17.5):\n{}",
+        "deny list contains entries flagged as wrong-shape:\n{}",
         present
             .iter()
             .map(|(path, reason)| format!("  - {path}  ({reason})"))
@@ -335,7 +320,7 @@ fn deny_list_entries_use_known_scope_variables() {
         .collect();
     assert!(
         bad.is_empty(),
-        "deny list entries with unknown / mangled scope-variable prefix (R17 W17.5):\n{}",
+        "deny list entries with unknown / mangled scope-variable prefix:\n{}",
         bad.iter()
             .map(|p| format!("  - {p}"))
             .collect::<Vec<_>>()

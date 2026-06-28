@@ -404,9 +404,8 @@ export default function FontEmbed() {
       setLastActionResult(null);
       const assPaths = paths.filter((p) => fileNameHasAssExt(fileNameFromPath(p)));
       if (assPaths.length === 0) {
-        // Pattern 1 sibling parity with HdrConvert.tsx + TimingShift.tsx:
-        // surface through both the log AND the DropErrorBanner —
-        // users with collapsed log panels see nothing from log-only.
+        // Surface through both the log and DropErrorBanner; users with
+        // collapsed log panels see nothing from log-only feedback.
         const msg = t("msg_no_subtitle_in_drop");
         addLog(msg, "error");
         setDropError(msg);

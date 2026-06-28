@@ -443,7 +443,7 @@ describe("parseSubtitle / shiftSubtitle — oversized-ASS-Dialogue placeholder a
 
   it("rejects 13-digit-hour SRT timing (upper bound enforced)", () => {
     const tooLong = "9999999999999"; // 13 digits
-    // Pattern 2 cap symmetry: SRT_TIMING used to allow `\d+` for
+    // Cap symmetry: SRT_TIMING used to allow `\d+` for
     // hours so 13-digit-hour SRT was format-detected as SRT and
     // rejected per-block ("zero captions"). The detector now caps
     // hours at {1,12} matching the extraction regexes, so a 13-digit
@@ -509,7 +509,7 @@ describe("parseSubtitle / shiftSubtitle — oversized-ASS-Dialogue placeholder a
   // placeholder contracts. Previously these contracts were exercised
   // only via integration paths.
 
-  it("parseSub emits a skipped placeholder for oversized text (R10 N-R10-006)", () => {
+  it("parseSub emits a skipped placeholder for oversized text", () => {
     const big = "Z".repeat(65_000); // > MAX_CAPTION_TEXT_LEN (64 KB)
     const sub = `{0}{24}${big}\n{48}{72}NORMAL\n`;
     const result = parseSubtitle(sub);
@@ -521,7 +521,7 @@ describe("parseSubtitle / shiftSubtitle — oversized-ASS-Dialogue placeholder a
     expect(result.captions[1]!.text).toContain("NORMAL");
   });
 
-  it("parseSrt emits a skipped placeholder for oversized text (W11.1 N1-R11-01)", () => {
+  it("parseSrt emits a skipped placeholder for oversized text", () => {
     const big = "Z".repeat(65_000);
     const srt =
       "1\n00:00:01,000 --> 00:00:02,000\n" + big + "\n\n2\n00:00:03,000 --> 00:00:04,000\nNORMAL\n";
@@ -533,7 +533,7 @@ describe("parseSubtitle / shiftSubtitle — oversized-ASS-Dialogue placeholder a
     expect(result.captions[1]!.text).toBe("NORMAL");
   });
 
-  it("parseVtt emits a skipped placeholder for oversized text (W11.1 N1-R11-01)", () => {
+  it("parseVtt emits a skipped placeholder for oversized text", () => {
     const big = "Z".repeat(65_000);
     const vtt =
       "WEBVTT\n\n" +

@@ -513,7 +513,7 @@ fn collect_suspicious_orderings(steps: &[ParsedStep]) -> Vec<String> {
     let mut warnings = Vec::new();
     let kinds: Vec<&str> = steps.iter().map(ParsedStep::kind_name).collect();
 
-    // Pattern 1: HDR appearing more than once. The color transform
+    // Invalid shape 1: HDR appearing more than once. The color transform
     // is not idempotent — applying it twice doubles the brightness
     // mapping and is almost certainly a user error.
     //
@@ -533,7 +533,7 @@ fn collect_suspicious_orderings(steps: &[ParsedStep]) -> Vec<String> {
         ));
     }
 
-    // Pattern 2: shift after embed. Embed only appends a `[Fonts]`
+    // Invalid shape 2: shift after embed. Embed only appends a `[Fonts]`
     // section; it does not modify the `[Events]` or `[V4+ Styles]`
     // sections that shift touches. So shift-after-embed produces
     // identical content to shift-before-embed — the order has no

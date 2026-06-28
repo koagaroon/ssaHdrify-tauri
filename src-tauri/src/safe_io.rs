@@ -264,15 +264,15 @@ fn clear_existing_destination(path: &Path, overwrite: bool) -> Result<(), String
     // exact case the review flagged (the chain CLI write path bypassed
     // this check the same way before commit b7d9d21).
     //
-    // the back-to-back syscalls
-    // (symlink_metadata returning `meta` here, then is_reparse_point
-    // calling symlink_metadata again two lines below) look redundant
+    // The back-to-back syscalls
+    // (`symlink_metadata` returning `meta` here, then `is_reparse_point`
+    // calling `symlink_metadata` again) look redundant
     // — `meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT` on
     // Windows / `meta.file_type().is_symlink()` on POSIX would
     // answer from the already-fetched `meta`. Kept deliberately for
     // call-shape parity with the other `is_reparse_point` usages in
-    // this file (lines 170, 285, 332) and across the codebase
-    // (dropzone.rs::walk_one_level documents the same trade-off).
+    // this file and across the codebase
+    // (`dropzone.rs::walk_one_level` documents the same trade-off).
     // Centralizing into a `is_reparse_point_from_meta`
     // helper would touch 6+ sites with no measurable perf win on a
     // failure-path syscall pattern.
@@ -317,8 +317,8 @@ fn clear_existing_destination(path: &Path, overwrite: bool) -> Result<(), String
             //
             // (syscall count WHY): this is the THIRD
             // `is_reparse_point` lstat on `path` inside
-            // `clear_existing_destination` — fs::symlink_metadata at
-            // line 122, the first reparse check at line 124, and
+            // `clear_existing_destination`: the initial
+            // `fs::symlink_metadata`, the first reparse check, and
             // this race-time re-check. The first two form a
             // stat-then-act pair documented earlier; the third was
             // added for late-race parity. All three are deliberate:
@@ -558,15 +558,12 @@ pub fn safe_rename_file_inner(
     ensure_parent_dir(dst_ref)?;
     clear_existing_destination(dst_ref, overwrite)?;
 
-    // re-check `is_reparse_point` immediately before
-    // `fs::rename` for parity with `safe_copy_file_inner`'s open-time
-    // re-check . `fs::rename` on POSIX moves the
-    // symlink itself (doesn't chase the target) and Windows behaves
-    // similarly for same-volume renames — but cross-volume `rename`
-    // falls back to copy-then-delete (std semantics), which DOES
-    // follow the link. Closing the TOCTOU window symmetrically with
-    // the copy path eliminates the "rename across volumes after
-    // swap" edge case at near-zero cost (one syscall).
+    // Re-check `is_reparse_point` immediately before `fs::rename` for
+    // parity with `safe_copy_file_inner`'s open-time re-check.
+    // Regardless of platform rename semantics, this helper's contract
+    // is that a reparse-point source never reaches the final move
+    // operation. The extra syscall keeps the source side aligned with
+    // the copy path after any late swap.
     if is_reparse_point(src_ref) {
         log::warn!(
             "Refusing to rename possible symlink / junction at rename-time: {}",
@@ -637,10 +634,9 @@ pub fn safe_copy_file(
 }
 
 /// Rename / move `src` to `dst` safely. Same gating as `safe_copy_file`.
-/// `fs::rename` is atomic on the same volume and falls back to
-/// copy-then-delete cross-volume (std semantics); both paths fail-shut
-/// on a pre-existing dst symlink because we removed any planted
-/// shortcut earlier.
+/// `fs::rename` is atomic when the platform supports the requested move;
+/// unsupported moves fail through the returned error. Both endpoints are
+/// reparse-checked before the final call so planted shortcuts fail shut.
 #[tauri::command]
 pub fn safe_rename_file(
     app: tauri::AppHandle,

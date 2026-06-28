@@ -83,7 +83,7 @@ describe("font-collector \\p drawing-tag whitespace handling", () => {
 // .match() (first-wins) would silently mis-attribute fonts / styles
 // between embed and render. ──
 
-describe("font-collector multi-tag last-wins parity (W7.5 regression anchor)", () => {
+describe("font-collector multi-tag last-wins parity", () => {
   it("multi-\\fn block uses LAST family (libass parity)", async () => {
     // `{\fnArial\fnTimes New Roman}` resolves to `Times New Roman` —
     // the last `\fn` wins. A regression to first-match-only would
@@ -237,7 +237,7 @@ Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\rStyleA\rStyleB}DDDD`}
 });
 
 // ── Boundary-pin for \r and \fn capture caps. An earlier change
-// added {0,127}/{0,128} caps for Pattern 2 symmetry, but without a
+// added {0,127}/{0,128} caps, but without a
 // trailing boundary the bounded regex silently TRUNCATED overlong
 // names to the prefix, then performed styleMap.has(prefix). An
 // attacker-crafted ASS defining both a 128-char prefix style and a
@@ -468,7 +468,7 @@ Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\rStyleA\r` + overlong +
 // directions: digit-led name DEFINED in V4+ Styles (must switch to
 // that style) and digit-led name UNDEFINED (must reset to initial,
 // matching the overlong path).
-describe("font-collector \\r digit-led style name (A-R5-1)", () => {
+describe("font-collector \\r digit-led style name", () => {
   it("\\r1MainTitle resolves to the digit-led style when defined", async () => {
     // ass-compiler accepts `Style: 1MainTitle,...`; our \r regex
     // must agree. `{\rStyleA\r1MainTitle}X` should switch to
@@ -564,7 +564,7 @@ Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\rStyleA\r9NonexistentSt
 //      is collected, not skipped).
 //   2. Style-undefined fallback to initialFont still works in
 //      combination with the drawing reset.
-describe("font-collector \\r digit-led drawing-mode reset (A-R6-1)", () => {
+describe("font-collector \\r digit-led drawing-mode reset", () => {
   it("\\p1 in one block, \\r1MainTitle in the next: digit-led \\r resets drawing AND switches style", async () => {
     // Two-block sequence: {\p1}{\r1MainTitle}X. isDrawing is a sticky
     // state that persists across blocks until reset. Block 1's \p1
@@ -657,7 +657,7 @@ Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\p1}{\r9NonexistentStyle
 // to `{\b1\r}`, `{\i1\r}`, `{\p1\r}`. The current code consolidates
 // into one position-sorted walk; these tests pin libass-parity for
 // each divergent shape.
-describe("font-collector \\r resets siblings within the same block (A-R6-2)", () => {
+describe("font-collector \\r resets siblings within the same block", () => {
   it("{\\fnTimes\\r}X resets family to initial — \\fn-then-\\r positional order", async () => {
     // libass: \fn sets family=Times, then \r resets EVERYTHING
     // including family to dialogue initial (Arial). X collected

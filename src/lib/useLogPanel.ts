@@ -91,7 +91,6 @@ export function useLogPanel(): UseLogPanelResult {
       // × per-entry length stays bounded. See MAX_LOG_ENTRY_TEXT_LEN
       // docblock.
       //
-      // Pattern 2 paired-dim surrogate safety:
       // `String.prototype.slice` operates on UTF-16 code units; a cut
       // at `MAX_LOG_ENTRY_TEXT_LEN - 1` can land between a high+low
       // surrogate pair (e.g., a CJK ext-B character or emoji),

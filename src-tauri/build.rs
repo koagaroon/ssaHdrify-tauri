@@ -22,10 +22,10 @@ fn copy_cli_engine_bundle() {
     // cargo:warning so the developer notices the underlying cause.
     let source = match std::fs::read_to_string(&source_path) {
         Ok(content) if content.is_empty() => {
-            // Round 7 Wave 7.6 (A2-R7-1): 0-byte engine.js is the
+            // A 0-byte engine.js is the
             // signature of a partial-write from a still-running
             // `npm run build:engine`, or a manually-truncated bundle
-            // from a botched edit. Pre-W7.6 we'd embed the empty
+            // from a botched edit. Previously we'd embed the empty
             // string and let V8 fail at runtime with an inscrutable
             // "ssaHdrifyCliEngine is undefined" — the cargo:warning
             // surfaces the underlying cause at build time. Fall
@@ -54,9 +54,8 @@ fn missing_engine_stub() -> String {
     const MESSAGE: &str =
         "CLI engine bundle is missing. Run `npm run build:engine` before building ssahdrify-cli.";
     // Every function on globalThis.ssaHdrifyCliEngine that the Rust
-    // shell might call OR might be visible from a call path (CliEngine
-    // wraps some functions that are reachable but not directly invoked
-    // — N-R5-RUSTCLI-03). The CLI's cheap-first ordering reaches the
+    // shell might call or expose from a reachable call path must be
+    // present in the smoke stub. The CLI's cheap-first ordering reaches the
     // resolveX*OutputPath functions FIRST per file; if those aren't
     // stubbed, a missing engine.js produces an inscrutable
     // "ssaHdrifyCliEngine.resolveHdrOutputPath is not a function"

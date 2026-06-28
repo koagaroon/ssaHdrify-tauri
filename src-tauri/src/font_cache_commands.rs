@@ -219,20 +219,15 @@ pub fn migrate_legacy_gui_cache(legacy_dir: &Path, new_dir: &Path) {
         return;
     }
     // Refuse migration if the legacy main file is a reparse point.
-    // The check is positioned immediately
-    // before fs::rename (there is no intermediate validation work in
-    // this function between the check and the rename); on Windows
-    // fs::rename of a same-volume reparse point moves the link
-    // itself, but a CROSS-VOLUME rename falls back to copy-then-
-    // delete which DOES follow the link. The reparse-check + rename
-    // remain stat-then-act on Windows — an attacker who can swap the
-    // file between syscalls still wins — but the window is single-
-    // syscall narrow and the codebase posture (safe_io.rs:266 / :313
-    // also stat-then-act with similar narrowness) is "accept the
-    // residual TOCTOU under P1a, close everything wider". A true
-    // race-free fix would need NtSetInformationFile on a handle
-    // opened with FILE_FLAG_OPEN_REPARSE_POINT; not worth the Win32
-    // interop for the single-user threat model.
+    // The check is positioned immediately before `fs::rename`; there
+    // is no intermediate validation work in this function between the
+    // check and the rename. The operation remains stat-then-act, so an
+    // attacker who can swap the file between syscalls can still win,
+    // but the window is single-syscall narrow and matches the
+    // codebase posture used by the safe I/O helpers. A true race-free
+    // fix would need Windows handle-based rename APIs opened with
+    // `FILE_FLAG_OPEN_REPARSE_POINT`; not worth the platform interop
+    // for the single-user threat model.
     if crate::util::is_reparse_point(&legacy_main) {
         log::warn!(
             "GUI cache migration: legacy main file {} is a reparse point. \
@@ -910,8 +905,7 @@ fn apply_rescan_to_cache<C: RescanCacheWriter>(
     let mut removed_evicted = 0usize;
 
     for (folder, folder_mtime, metadata) in scanned {
-        // (Pattern 2 racing-replace defense):
-        // re-stat the folder mtime IMMEDIATELY before replace_folder.
+        // Re-stat the folder mtime immediately before replace_folder.
         // Phase 2 ran outside the lock, so a parallel
         // `try_record_folder_in_gui_cache` (FontSourceModal's
         // best-effort populate) could have written a fresher row for
@@ -1256,9 +1250,9 @@ pub fn try_record_folder_in_gui_cache(
             log::warn!("GUI cache populate for {folder_path_str} failed: {e}");
         }
         CacheSlotOutcome::Busy => {
-            // success-of-degradation — user's scan
-            // completed; populate skipped because a rescan / clear holds
-            // the slot lock. DEBUG, not WARN (vibe-coding § Log-level).
+            // Success-of-degradation: the user's scan completed, but
+            // populate skipped because a rescan / clear holds the slot
+            // lock. DEBUG, not WARN.
             log::debug!(
                 "GUI cache busy (rescan or clear in progress); skipping populate \
                  for {} this scan — will populate on next add",
@@ -1455,8 +1449,7 @@ pub fn lookup_font_family(
     // crafted path off the wire.
     if let Some(ref r) = result {
         if let Err(e) = crate::fonts::register_cache_provenance(r) {
-            // (Pattern 1 census parity): `{family}`
-            // is interpolated raw here, no `sanitize_for_display` /
+            // `{family}` is interpolated raw here, no `sanitize_for_display` /
             // `stripUnicodeControls` wrap. Safe today because
             // `validate_font_family` (invoked at the top of `lookup_font_family`) already rejected
             // BiDi / zero-width / control characters before reaching
@@ -1475,7 +1468,7 @@ pub fn lookup_font_family(
             return Ok(None);
         }
     }
-    // (Pattern 3 cross-helper coupling): the
+    // Keep the negative-index guarantee local to this cast. The
     // `register_cache_provenance(r)` call above routes through
     // `u32::try_from(hit.face_index())` and returns Ok(None) on
     // negative values (font_cache.rs:298) — so the cast on line below

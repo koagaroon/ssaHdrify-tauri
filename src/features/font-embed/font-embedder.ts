@@ -677,7 +677,7 @@ export async function embedFonts(
   // would both fold to "foo1100" and silently drop one face from
   // the output. Written in escape form (not as the raw byte) so a
   // grep / cat / web diff cannot misread it as the empty string and
-  // file the same false-positive that R1 caught.
+  // file the same false-positive that this guard caught.
   const FACE_DEDUP_SEP = "\u001F";
   const faceDedupKey = (info: FontInfo): string =>
     `${info.filePath}${FACE_DEDUP_SEP}${info.fontIndex}${FACE_DEDUP_SEP}${info.key.bold ? "1" : "0"}${FACE_DEDUP_SEP}${info.key.italic ? "1" : "0"}`;
@@ -723,16 +723,16 @@ export async function embedFonts(
       // the user with no feedback. Reuses the existing `msg_font_skipped`
       // i18n key for consistency with the subsetting-failure path below.
       // (Reuses `label` from the outer scope.)
-      // Pattern 1 sibling completion: `label` is `fontKeyLabel(info.key)`
-      // where info.key.family flows from V8-parsed ASS `\fn` (P1b
+      // `label` is `fontKeyLabel(info.key)`, where info.key.family
+      // flows from V8-parsed ASS `\fn` (P1b
       // attacker-influenced). The subset-failure site below already
       // scrubs; this no-usage-entry sibling stayed raw. Cheap
       // stripUnicodeControls wrap mirrors the subset-failure
-      // sanitizeError(...) posture for the same Pattern 1
-      // single-source-completion reason.
+      // sanitizeError(...) posture for the same single-source
+      // completion reason.
       console.warn(`[ssaHdrify] embedFonts: no usage entry for ${stripUnicodeControls(label)}`);
-      // Pattern 1 sibling parity: wrap info.key.family in
-      // stripUnicodeControls for the t?.() args + English fallback,
+      // Wrap info.key.family in stripUnicodeControls for the t?.()
+      // args + English fallback,
       // mirroring the subset-failure sibling below. Upstream
       // `sanitizeFamily` already strips controls so the surface is
       // closed today; the wrap keeps every sibling output consistent
@@ -793,7 +793,7 @@ export async function embedFonts(
     // happy-path payload; if it overflows the cap, we throw it
     // away and subset each alias separately.
     //
-    // Pattern 2 — bound the iteration cost: early-exit the merge loop
+    // Bound the iteration cost: early-exit the merge loop
     // on the iteration where the union FIRST exceeds the cap. The size
     // check fires AFTER add(), so the Set holds
     // `MAX_SUBSET_CODEPOINTS_FOR_DEDUP + 1` (200,001) entries at the
@@ -896,8 +896,8 @@ export async function embedFonts(
       );
       if (isCancelled?.()) return null;
     } catch (subsetErr) {
-      // sanitizeError (Pattern 1 callsite census). The Rust subset_font
-      // error string can interpolate font-file paths (P1b — fan-sub
+      // sanitizeError keeps this catch arm aligned with the others. The
+      // Rust subset_font error string can interpolate font-file paths (P1b — fan-sub
       // font packs are attacker-influenced content). The error flows
       // into progress.stage which the log panel renders directly;
       // without scrubbing, a font with a BiDi-bearing name or path can
@@ -911,22 +911,20 @@ export async function embedFonts(
       // sanitized onProgress dispatch — re-introducing exactly the
       // BiDi disclosure surface the comment block motivating the scrub
       // argues against. WebView2's dev-tools surface is opt-in in
-      // production, so blast radius is small, but Pattern 1
-      // single-source completion requires every sibling output to use
-      // the same helper.
-      // Pattern 1 defense-in-depth: `usage.key.family` is
-      // upstream-sanitized at font-collector.ts::sanitizeFamily so the
+      // production, so blast radius is small, but every sibling output
+      // should use the same helper.
+      // Defense-in-depth: `usage.key.family` is upstream-sanitized at
+      // font-collector.ts::sanitizeFamily so the
       // BiDi/control surface is closed today. But the comment block
       // above motivates "every sibling output uses the same helper" —
       // that discipline argument applies here too. Cheap defensive
-      // wrap keeps the pattern consistent if upstream sanitizeFamily
+      // wrap keeps the output sites consistent if upstream sanitizeFamily
       // ever loosens.
       console.warn(
         `Font subsetting failed for ${stripUnicodeControls(template.key.family)}, skipping: ${safeErr}`
       );
-      // Pattern 1 sibling parity: wrap template.key.family for t?.()
-      // args + English fallback; same sibling-parity reasoning as the
-      // no-usage-entry path above.
+      // Wrap template.key.family for t?.() args + English fallback;
+      // same sibling-output reasoning as the no-usage-entry path above.
       const familyDisplay = stripUnicodeControls(template.key.family);
       const warning =
         t?.("msg_font_skipped", familyDisplay, safeErr) ?? `Skipped ${familyDisplay}: ${safeErr}`;

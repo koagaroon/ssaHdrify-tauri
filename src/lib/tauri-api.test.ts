@@ -264,12 +264,12 @@ describe("runStreamingScan — Channel state-machine defenses", () => {
 describe("font scan preflight wrappers", () => {
   it("invokes the directory and file-list preflight commands with stable args", async () => {
     invokeMock.mockResolvedValueOnce({ fontFiles: 12, totalBytes: 34 });
-    await expect(preflightFontDirectory("D:/Fonts")).resolves.toEqual({
+    await expect(preflightFontDirectory("D:/example-fonts")).resolves.toEqual({
       fontFiles: 12,
       totalBytes: 34,
     });
     expect(invokeMock).toHaveBeenLastCalledWith("preflight_font_directory", {
-      dir: "D:/Fonts",
+      dir: "D:/example-fonts",
     });
 
     invokeMock.mockResolvedValueOnce({ fontFiles: 2, totalBytes: 56 });
@@ -298,7 +298,7 @@ describe("localized native file dialogs", () => {
     })[key] ?? key;
 
   it("uses translated titles and filters for font files", async () => {
-    openMock.mockResolvedValue(["D:/Fonts/A.ttf"]);
+    openMock.mockResolvedValue(["D:/example-fonts/A.ttf"]);
     await pickFontFiles(zh);
 
     expect(openMock).toHaveBeenCalledWith({

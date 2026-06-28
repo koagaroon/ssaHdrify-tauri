@@ -140,9 +140,8 @@ function App() {
         // Don't block app launch on cache probe failures — the user
         // can still use the app, embed just falls through to system
         // fonts. Log so devs see it during tauri dev.
-        // WARN names the user-visible consequence
-        // (embed falls back to system fonts) per vibe-coding.md
-        // log-level discipline, instead of leaking the internal
+        // WARN names the user-visible consequence (embed falls back
+        // to system fonts) instead of leaking only the internal
         // function name.
         console.warn("Font cache unavailable at launch; embed will use system fonts only:", e);
       }

@@ -487,8 +487,8 @@ type OverrideTag =
  *   `[\p{L}\p{N}_]` (accept digit-led style names that ass-compiler
  *   stores in styleMap without validation). The continuation class
  *   is `[\p{L}\p{N}_-]` — leading + continuation now differ only on
- *   dash (dash-at-start is a typo trap). Pattern 3 sub-question 2
- *   lesson: when a regex change alters what `matchAll` returns for
+ *   dash (dash-at-start is a typo trap). Lesson: when a regex change
+ *   alters what `matchAll` returns for
  *   some input shape, audit every caller that walks the matches for
  *   state-machine effects, AND audit the ENTIRE input-shape catalog
  *   before declaring the fix complete (one shape closed is not the

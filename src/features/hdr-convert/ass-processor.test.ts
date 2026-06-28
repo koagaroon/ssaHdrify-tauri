@@ -205,7 +205,7 @@ describe("processAssContent — style lines", () => {
   });
 });
 
-describe("processAssContent — Wave 5.1 pre-split line-count probe (A-R5-FEFEAT-03)", () => {
+describe("processAssContent — pre-split line-count probe", () => {
   it("rejects pure-newline blob exceeding the line cap before .split allocates", () => {
     // Fixture must EXCEED the > 1_000_000 byte probe gate; a fixture
     // with 600k newlines (600k bytes) falls BELOW the gate, so the

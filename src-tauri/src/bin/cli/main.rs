@@ -1369,7 +1369,7 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
         // next drift-detect re-flags as `modified`, prompting an
         // endless refresh loop . Surface to stderr
         // with the user-visible consequence (folder skipped, not "stat
-        // failed at line N") per vibe-coding no-silent-action.
+        // failed at line N").
         //
         // Routed through `font_cache::try_modified_at` — the helper is
         // pub fn for exactly this kind of cross-binary reuse, and an

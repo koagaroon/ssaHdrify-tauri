@@ -168,7 +168,7 @@ describe("resolveOutputPath — {video_name} and {lang} tokens", () => {
   });
 });
 
-describe("resolveOutputPath — strict-throw on unknown tokens (R12 N-R12-2)", () => {
+describe("resolveOutputPath — strict-throw on unknown tokens", () => {
   // substituteTemplate's strict-throw lives at the helper layer;
   // chain-runtime's validator throws even earlier. HDR's
   // resolveOutputPath is one of the three consumer entry points (Shift

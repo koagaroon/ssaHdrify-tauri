@@ -30,8 +30,8 @@ import { safeMs } from "../../lib/subtitle-parser";
 // / `\\` are defense-in-depth beyond the upstream buildFontFileName
 // sanitizer. `:` and `\\` appear in BOTH sets — that is the structural
 // overlap; `,{}` are unique to this side, `/` is unique to the
-// ass-uuencode side. Pattern 1 census rule for these two sanitizers:
-// both must keep stripping the shared BIDI / control set; the extra
+// ass-uuencode side. Both sanitizers must keep stripping the shared
+// BIDI / control set; the extra
 // boundary-specific chars are intentional and MUST NOT be unified into
 // a single helper without re-checking the per-boundary character
 // implications.
@@ -196,7 +196,7 @@ export function buildAssDocument(
   // definition above.
   // 128-codepoint cap matches `sanitizeFamily` (font-embedder).
   // Without it, a 10 KB font name typed into the HdrConvert style panel
-  // would produce a 10 KB Style line — Pattern 1 cap-consistency.
+  // would produce a 10 KB Style line.
   const safeFontName = style.fontName.replace(FONT_NAME_SANITIZER, "").slice(0, 128) || "Arial";
   lines.push(
     `Style: Default,${safeFontName},${style.fontSize},${style.primaryColor},&H000000FF,${style.outlineColor},&H00000000,0,0,0,0,100,100,0,0,1,${style.outlineWidth},${style.shadowDepth},2,10,10,10,1`

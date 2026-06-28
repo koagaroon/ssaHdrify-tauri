@@ -516,7 +516,7 @@ Dialogue: 0,0:00:05.00,0:00:10.00,Default,{\\fn青鸟华光简粗黑}horizontal
 
   it("matches full face aliases without weakening ordinary family style matching", () => {
     const dreamHanW22: LocalFontEntry = {
-      path: "D:/Fonts/DreamHanSerif-W22.ttc",
+      path: "D:/example-fonts/DreamHanSerif-W22.ttc",
       index: 2,
       families: ["Dream Han Serif SC", "梦源宋体 SC"],
       faceNames: ["Dream Han Serif SC W22", "DreamHanSerifSC-W22"],
@@ -528,18 +528,18 @@ Dialogue: 0,0:00:05.00,0:00:10.00,Default,{\\fn青鸟华光简粗黑}horizontal
     const map = buildUserFontMap([dreamHanW22]);
 
     expect(map.get(userFontKey("Dream Han Serif SC W22", false, false))?.path).toBe(
-      "D:/Fonts/DreamHanSerif-W22.ttc"
+      "D:/example-fonts/DreamHanSerif-W22.ttc"
     );
     expect(map.get(userFontKey("DreamHanSerifSC-W22", false, true))?.index).toBe(2);
     expect(map.get(userFontKey("Dream Han Serif SC", true, false))?.path).toBe(
-      "D:/Fonts/DreamHanSerif-W22.ttc"
+      "D:/example-fonts/DreamHanSerif-W22.ttc"
     );
     expect(map.get(userFontKey("Dream Han Serif SC", false, false))).toBeUndefined();
   });
 
   it("keeps exact family matches ahead of full-face aliases from other faces", () => {
     const exactFamily: LocalFontEntry = {
-      path: "D:/Fonts/ExactSharedSans-Regular.otf",
+      path: "D:/example-fonts/ExactSharedSans-Regular.otf",
       index: 0,
       families: ["Shared Sans"],
       bold: false,
@@ -547,7 +547,7 @@ Dialogue: 0,0:00:05.00,0:00:10.00,Default,{\\fn青鸟华光简粗黑}horizontal
       sizeBytes: 1_000_000,
     };
     const aliasFace: LocalFontEntry = {
-      path: "D:/Fonts/AliasFace-Bold.otf",
+      path: "D:/example-fonts/AliasFace-Bold.otf",
       index: 0,
       families: ["Other Sans"],
       faceNames: ["Shared Sans"],
@@ -559,10 +559,10 @@ Dialogue: 0,0:00:05.00,0:00:10.00,Default,{\\fn青鸟华光简粗黑}horizontal
     const map = buildUserFontMap([exactFamily, aliasFace]);
 
     expect(map.get(userFontKey("Shared Sans", false, false))?.path).toBe(
-      "D:/Fonts/ExactSharedSans-Regular.otf"
+      "D:/example-fonts/ExactSharedSans-Regular.otf"
     );
     expect(map.get(userFontKey("Shared Sans", true, true))?.path).toBe(
-      "D:/Fonts/AliasFace-Bold.otf"
+      "D:/example-fonts/AliasFace-Bold.otf"
     );
   });
 });
@@ -742,7 +742,7 @@ describe("userFontKey", () => {
     expect(new Set([plain, bold, italic, both]).size).toBe(4);
   });
 
-  it("pins exact byte shape of bold/italic flag positions (Wave 7.8 / N3-R7-6)", () => {
+  it("pins exact byte shape of bold/italic flag positions", () => {
     // Distinctness via Set size alone isn't enough — a refactor that
     // swapped bold and italic positions (or used a different
     // separator) would still keep the 4 keys distinct but
@@ -871,7 +871,7 @@ Dialogue: 0,0:00:05.00,0:00:10.00,Alt,你好
     expect(new Set(indicesPassed)).toEqual(new Set([0, 1]));
   });
 
-  it("keeps distinct face tuples whose path-suffix digits and fontIndex digits adjoin (R1 N-R1-1 — Pattern 1 separator parity with userFontKey)", async () => {
+  it("keeps distinct face tuples whose path-suffix digits and fontIndex digits adjoin", async () => {
     // Pre-fix the dedup key was built with FACE_DEDUP_SEP="" (or
     // equivalently a separator a reader could mistake for empty); two
     // distinct face tuples could collide on concatenation. After the

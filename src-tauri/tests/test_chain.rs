@@ -355,21 +355,21 @@ fn chain_overwrite_toggles_skip_vs_replace() {
     let _ = fs::remove_dir_all(dir);
 }
 
-/// W14.5 + W14.6 contract — when V8 has already produced warnings
+/// Warning-carrying failure contract — when V8 has already produced warnings
 /// (oversized-skipped captions or embed pre-resolution diagnostics)
 /// and the chain then takes a post-V8 Failed branch, the warnings
 /// must surface to stderr via `⚠ ...` lines, not silently drop with
 /// only the `✗ ...` status line.
 ///
-/// Pre-W14.5 the warnings vec was lost on every Failed/Skipped
-/// outcome; W14.5 threaded it through the enum variant and print
+/// Previously the warnings vec was lost on every Failed/Skipped
+/// outcome; the fix threaded it through the enum variant and print
 /// loop. Boundary trigger here: oversized caption (>64 KB text) +
 /// pre-existing directory at the predicted output path + `--overwrite`
 /// — the V8 step computes skippedCount > 0, the cheap-first /
 /// post-V8 `output_path.exists()` Skipped branches don't fire under
 /// `--overwrite`, and write_output's fs::remove_file on the
 /// directory target fails on every supported platform (EISDIR /
-/// ERROR_ACCESS_DENIED). Without W14.5's change, the chain would
+/// ERROR_ACCESS_DENIED). Without this change, the chain would
 /// emit only the `✗ failed: …` line; the `Dropped N oversized
 /// caption(s) …` warning would silently vanish.
 #[test]
@@ -449,18 +449,18 @@ fn chain_post_v8_failed_surfaces_oversized_warning() {
         stderr.contains("✗"),
         "expected ✗ failed line in stderr: {stderr}"
     );
-    // ⚠ oversized warning must surface — the W14.5 contract under
-    // test. Pre-W14.5 this line silently vanished on Failed paths.
+    // ⚠ oversized warning must surface — the warning contract under
+    // test. This line used to silently vanish on Failed paths.
     assert!(
         stderr.contains("⚠") && stderr.contains("oversized caption"),
-        "expected ⚠ Dropped N oversized caption(s) warning in stderr (W14.5 contract): {stderr}"
+        "expected ⚠ Dropped N oversized caption(s) warning in stderr: {stderr}"
     );
 
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// W14.7's complement : boundary-pair test pinning the
-/// other reachable Skipped path. The W14.7 test exercises post-V8
+/// Complementary boundary-pair test pinning the
+/// other reachable Skipped path. This test exercises post-V8
 /// Failed + accumulated warnings; this one exercises cheap-first
 /// Skipped, where the warnings vec is structurally empty.
 ///
@@ -471,7 +471,7 @@ fn chain_post_v8_failed_surfaces_oversized_warning() {
 /// substituteTemplate ports support only `{name}` and `{ext}` and
 /// agree byte-for-byte. Unknown tokens cause V8 to throw → Failed,
 /// not Skipped. Pinning the cheap-first Skipped behavior is the
-/// honest contract; the W14.5 Skipped-with-warnings variant exists
+/// honest contract; the Skipped-with-warnings variant exists
 /// for architectural consistency with Failed-with-warnings (see
 /// `ChainEmbedSubsetsResult` reachability comment in main.rs). If a
 /// future chain template adds a token the Rust predictor doesn't
@@ -561,7 +561,7 @@ fn chain_cheap_first_skipped_carries_no_warnings_line() {
     );
 
     // Counter-assertion: exactly ONE ⚠ line surfaces (from input 1's
-    // Written outcome). Pre-W16.4 single-input shape allowed the
+    // Written outcome). The old single-input shape allowed the
     // negative-no-⚠ assertion to pass trivially; here, if a refactor
     // promoted `warnings` out of `process_one_chain_input`'s local
     // scope (function-top declaration shared across the batch loop),

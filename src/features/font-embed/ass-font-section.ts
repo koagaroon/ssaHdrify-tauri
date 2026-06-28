@@ -8,8 +8,8 @@ import { MAX_PARSED_ENTRIES } from "../../lib/subtitle-parser";
 /// without a helper-layer backstop, hostile content reaching this
 /// surface hits unbounded `split(/\r?\n/)` allocation.
 ///
-/// The line-count probe is the paired Pattern 2 fix. Without it, the
-/// byte cap would stand alone: a 50 MB pure-newline blob passes the
+/// The line-count probe pairs with the byte cap. Without it, a 50 MB
+/// pure-newline blob passes the
 /// 100 MB byte gate but then `.split(/\r?\n/)` in the rewrite helper
 /// allocates ~50M empty strings (~2 GB V8 heap) BEFORE any downstream
 /// throw can fire. Mirrors `processAssContent`'s paired cap;

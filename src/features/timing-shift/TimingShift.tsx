@@ -545,8 +545,8 @@ export default function TimingShift() {
             if (abortRef.current?.signal.aborted) break;
 
             await writeText(outputPath, result.content);
-            // Pattern 1 sibling parity with HdrConvert + FontEmbed +
-            // BatchRename. See HdrConvert for rationale.
+            // Match the sibling features: sanitize output display names
+            // before writing them into the visible log.
             const outName = sanitizeForDialog(fileNameFromPath(outputPath));
             addLog(t("msg_saved", outName, result.captionCount), "success");
             successCount++;

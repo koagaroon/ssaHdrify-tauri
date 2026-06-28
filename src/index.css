@@ -116,7 +116,7 @@
      --font-display → hero title (Inter in EN, Smiley Sans in ZH via :lang(zh))
      --font-mono    → numbers, timecodes, tab index chips
      Inter covers Latin/Greek/Cyrillic; CJK fallback is the OS font.
-     Round 6 Wave 6.5 #27: appended "Noto Sans CJK SC" so Linux
+     Append "Noto Sans CJK SC" so Linux
      installs without Microsoft YaHei / PingFang SC (both Windows /
      macOS proprietary) still get a CJK-capable font before falling
      to system-ui (which often lacks CJK on minimal Linux distros). */

@@ -735,7 +735,7 @@ pub fn entries_to_cache_metadata(
     // these borrows mid-loop — the `String` clone of `e.path` for
     // `FontMetadata.file_path` below would no longer be the same
     // memory the HashMap key points to. Switch the HashMap key to
-    // `String` at that point. Pattern 3 lifetime coupling.
+    // `String` at that point.
     let mut mtime_cache: std::collections::HashMap<&str, i64> = std::collections::HashMap::new();
     entries
         .iter()
@@ -925,8 +925,8 @@ fn import_user_font_batch_tx(
     for entry in entries {
         // saturate u64→i64 instead of aborting the
         // batch. Companion `entries_to_cache_metadata` saturates via
-        // `unwrap_or(i64::MAX)` (Pattern 2 policy mismatch — same
-        // conversion, two opposite failure modes). u64 values above
+        // `unwrap_or(i64::MAX)`: same conversion, two opposite failure
+        // modes. u64 values above
         // i64::MAX (8.4 EB) are mathematically impossible for a real
         // font file size, but a hostile cache row crafted with a
         // numeric overflow shouldn't have the power to abort an
@@ -2341,10 +2341,10 @@ fn scan_directory_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
         // visible font count rather than the directory's total entry
         // count — `preflight_directory_inner` uses the same accounting
         // so both speak about the same "directory size" when the XL-
-        // confirm dialog fires. The pre-Wave-4.1 form let the dedup
-        // set fill on every regular file regardless of extension, and
-        // the extension check lived deeper
-        // inside `parse_local_font_file`. A directory of 200k non-font
+        // confirm dialog fires. An earlier form let the dedup set fill
+        // on every regular file regardless of extension, and the
+        // extension check lived deeper inside `parse_local_font_file`.
+        // A directory of 200k non-font
         // files (.txt / .png / etc.) would fill `seen` to the cap and
         // trip `CeilingHit` with 0 faces — but
         // `preflight_directory_inner` counts only font-extension files,
@@ -3931,7 +3931,8 @@ pub fn subset_font(
     all_codepoints.sort();
     all_codepoints.dedup();
 
-    // Attempt subsetting; fall back to full font if it fails.
+    // Attempt subsetting. On failure, return Err; never embed raw
+    // full-font bytes as a fallback.
     //
     // catch_unwind around the fontcull call: the klippa engine is in
     // active development and has had documented panics on malformed
@@ -4036,7 +4037,7 @@ pub fn subset_font(
             // used to bound this path are also gone — see the
             // module-top constants block.
             log::warn!(
-                "Subsetting failed for '{}' (face {}): {} — embed will skip this font (fallback removed in Round 6 W6.9 for data-disclosure safety)",
+                "Subsetting failed for '{}' (face {}): {} — embed will skip this font because unsafe full-font fallback is disabled",
                 filename,
                 font_index,
                 e,
@@ -5214,7 +5215,7 @@ mod tests {
     }
 
     /// Usage on Windows:
-    ///   SSAHDRIFY_TEST_DREAMHAN_SERIF_TTC=C:/Font_files/DreamHanSerif/DreamHanSerif-W22.ttc
+    ///   SSAHDRIFY_TEST_DREAMHAN_SERIF_TTC=<your-font-folder>/DreamHanSerif-W22.ttc
     ///   cargo test --lib -- --ignored parse_local_dream_han_serif_w22_keeps_duplicate_full_name_alias
     #[test]
     #[ignore = "requires SSAHDRIFY_TEST_DREAMHAN_SERIF_TTC pointing to a Dream Han Serif W22 TTC"]
@@ -5547,7 +5548,7 @@ mod tests {
         let err_msg = overflow.unwrap_err();
         assert!(
             err_msg.contains("cache"),
-            "error message must name the cache set (W7.6 N1-R7-5 label distinguishability), got: {err_msg}"
+            "error message must name the cache set, got: {err_msg}"
         );
         // The speculative insert must have been rolled back — set
         // size unchanged.

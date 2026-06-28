@@ -81,7 +81,7 @@ pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
                 // displays as `evilexe.txt` in many UIs. Reject the
                 // whole 200E-202E + 2066-2069 family for symmetry.
                 // range syntax to match the sibling
-                // `validate_font_family` enumeration; pre-W3 these two
+                // `validate_font_family` enumeration; previously these two
                 // validators listed the same codepoints in different
                 // shapes, inviting drift on the next codepoint addition.
                 | '\u{200E}' | '\u{200F}'

@@ -54,7 +54,7 @@ export const VIDEO_EXTS: ReadonlySet<string> = new Set([
 // TimingShift folder-drop filter (which uses `categorize(name) ===
 // "subtitle"`) only to fail with a confusing "Could not detect subtitle
 // format" inside the parser. The two sets disagreed on "is this a
-// subtitle file" — same Pattern 1 / regex-pair coherence family.
+// subtitle file" — the extension bucket and parser must stay coherent.
 // ssaHdrify's target fan-sub workflow doesn't touch .sbv or
 // .lrc (SubViewer is a legacy format mostly seen on older platforms;
 // LRC is karaoke-style lyrics, not subtitles), so the cleanest fix is

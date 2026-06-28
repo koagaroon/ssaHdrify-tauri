@@ -220,8 +220,8 @@ export function convertHdr(request: HdrConversionRequest): HdrConversionResult {
   // (string ops only) and the two paths route through resolveOutputPath
   // with identical defaults — byte equality is structurally guaranteed.
   const outputPath = resolveOutputPath(request.inputPath, outputTemplate, request.eotf);
-  // Filename extraction for the extension-based dispatch below. R2
-  // W1: this used to inline the windows-separator + split logic; now
+  // Filename extraction for the extension-based dispatch below. This
+  // used to inline the windows-separator + split logic; now
   // routed through the shared `fileNameFromPath` so the empty-string
   // fallback + control-char strip stay in lockstep with the GUI side.
   const fileName = fileNameFromPath(request.inputPath);
@@ -239,7 +239,7 @@ export function convertHdr(request: HdrConversionRequest): HdrConversionResult {
     const { captions } = parseSubtitle(preprocessed, DEFAULT_STYLE.fps);
     // Drop oversized-text placeholders before building ASS. parseSrt /
     // parseSub / parseVtt emit `{ text: "", skipped: true }` for captions over
-    // MAX_CAPTION_TEXT_LEN (W11.1 contract); without this filter the
+    // MAX_CAPTION_TEXT_LEN; without this filter the
     // CLI HDR path serializes each as a blank Dialogue line. Mirrors
     // HdrConvert.tsx GUI-side filter. (parseAss placeholders don't
     // reach here — `.ass` goes through the isNativeAss branch above.)
@@ -385,8 +385,7 @@ export function applyFontEmbed(request: FontEmbedApplyRequest): FontEmbedApplyRe
   // so the non-zero path is already covered; the zero-fonts path
   // previously returned content verbatim, leaving the standalone
   // embed CLI flow (process_embed_file's subset_payloads.is_empty()
-  // short-circuit) without shape validation. Pattern 1 helper-
-  // contract uniformity.
+  // short-circuit) without shape validation.
   assertAssShape(request.content);
 
   const fontEntries = request.fonts.map((font) =>
