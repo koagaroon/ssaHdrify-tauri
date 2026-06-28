@@ -20,6 +20,7 @@ import { useLogPanel } from "../../lib/useLogPanel";
 import { LogPanel } from "../../lib/LogPanel";
 import { DropErrorBanner } from "../../lib/DropErrorBanner";
 import NumberInput from "../../lib/NumberInput";
+import { isTimingOffsetInvalid, isTimingSaveDisabled } from "./timing-ui-state";
 import {
   buildConflictMessage,
   normalizeOutputKey,
@@ -186,15 +187,10 @@ export default function TimingShift() {
       setOffsetValue(n);
     }
   };
-  // Derived: text parses cleanly but the magnitude exceeds the per-unit
-  // cap. Without this, the math layer silently clamps in effectiveOffsetMs
-  // and the user sees no feedback on their out-of-range input — the
-  // same no-silent-action class HdrConvert's brightnessOutOfRange
-  // addresses.
-  const offsetOutOfRange = (() => {
-    const n = parseFloat(offsetText);
-    return !Number.isNaN(n) && Math.abs(n) > offsetMax;
-  })();
+  // Derived: the visible input is not currently a finite in-range
+  // number. Without this, Save can proceed against the prior valid
+  // `offsetValue` while the user sees a different value in the field.
+  const offsetInvalid = isTimingOffsetInvalid(offsetText, offsetMax);
 
   const thresholdMs = useMemo(
     () => (useThreshold ? parseDisplayTime(thresholdText) : null),
@@ -418,7 +414,7 @@ export default function TimingShift() {
   }, [clearFile]);
 
   const handleSaveAll = useCallback(async () => {
-    if (fileCount === 0 || thresholdInvalid) return;
+    if (isTimingSaveDisabled({ fileCount, thresholdInvalid, offsetInvalid, busy })) return;
     // Synchronous double-click gate — see HdrConvert::handleConvert
     // for the same idiom. Released in the outer finally below.
     if (busyRef.current) return;
@@ -581,9 +577,19 @@ export default function TimingShift() {
     } finally {
       busyRef.current = false;
     }
-  }, [fileCount, filePaths, effectiveOffsetMs, thresholdMs, thresholdInvalid, addLog, t]);
+  }, [
+    fileCount,
+    filePaths,
+    effectiveOffsetMs,
+    thresholdMs,
+    thresholdInvalid,
+    offsetInvalid,
+    busy,
+    addLog,
+    t,
+  ]);
 
-  const saveDisabled = fileCount === 0 || thresholdInvalid || busy;
+  const saveDisabled = isTimingSaveDisabled({ fileCount, thresholdInvalid, offsetInvalid, busy });
   const saveLabel = fileCount > 1 ? t("btn_save_all", fileCount) : t("btn_save");
 
   return (
@@ -803,7 +809,7 @@ export default function TimingShift() {
             min={-offsetMax}
             max={offsetMax}
             disabled={busy}
-            invalid={offsetOutOfRange}
+            invalid={offsetInvalid}
             className="w-28"
           />
         </div>

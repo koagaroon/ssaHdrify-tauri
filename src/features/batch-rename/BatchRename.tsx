@@ -464,6 +464,7 @@ export default function BatchRename() {
   const handleClearFiles = useCallback(() => {
     pickGenRef.current = pickGenRef.current + 1;
     clearFile("rename");
+    setChosenDir(null);
     setUnknownCount(0);
     setDropError(null);
   }, [clearFile]);
