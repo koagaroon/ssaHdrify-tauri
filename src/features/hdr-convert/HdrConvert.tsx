@@ -293,6 +293,7 @@ export default function HdrConvert() {
     ) {
       return;
     }
+    if (!hdrFiles) return;
     // Synchronous double-click gate — `processing` state lags
     // setProcessing(true) by one render, so a fast second click can
     // pass the disabled gate before React paints. busyRef is written
