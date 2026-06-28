@@ -10,12 +10,11 @@
     /* Bundler mode */
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
-    /* R17 W17.5 (N-R17-76 companion to N-R17-61): cover the
-       scripts/*.mjs build helpers under typecheck so a typo / undefined
-       binding surfaces at `tsc -b` time, not at `node scripts/...` run
-       time. `allowJs` is required for .mjs in `include`; `checkJs`
-       turns on actual type-checking against the JSDoc on
-       scripts/lib/app-version.mjs. The umbrella build script
+    /* Cover the scripts/*.mjs build helpers under typecheck so a typo
+       / undefined binding surfaces at `tsc -b` time, not at `node
+       scripts/...` run time. `allowJs` is required for .mjs in
+       `include`; `checkJs` turns on actual type-checking against the
+       JSDoc on scripts/lib/app-version.mjs. The umbrella build script
        (`package.json::build`) runs `tsc -b` before `vite build`, so
        this catches drift in the shared build path. */
     "allowJs": true,

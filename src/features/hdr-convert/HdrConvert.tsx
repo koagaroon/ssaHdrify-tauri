@@ -18,6 +18,7 @@ import NumberInput from "../../lib/NumberInput";
 import { parseFiniteNumberText } from "../../lib/strict-number";
 import NitViz from "./NitViz";
 import { isHdrBrightnessInvalid, isHdrConvertDisabled } from "./hdr-ui-state";
+import { parseHdrStyleNumberInput } from "./hdr-style-ui-state";
 import { useI18n } from "../../i18n/useI18n";
 import { useFileContext } from "../../lib/FileContext";
 import type { Status } from "../../lib/StatusContext";
@@ -896,8 +897,8 @@ export default function HdrConvert() {
               <NumberInput
                 value={style.fontSize}
                 onChange={(v) => {
-                  const n = parseInt(v, 10);
-                  setStyle({ ...style, fontSize: Number.isNaN(n) ? 48 : n });
+                  const n = parseHdrStyleNumberInput(v, 1, 200);
+                  if (n !== null) setStyle({ ...style, fontSize: n });
                 }}
                 min={1}
                 max={200}
@@ -947,8 +948,8 @@ export default function HdrConvert() {
               <NumberInput
                 value={style.outlineWidth}
                 onChange={(v) => {
-                  const n = parseFloat(v);
-                  setStyle({ ...style, outlineWidth: Number.isNaN(n) ? 2 : n });
+                  const n = parseHdrStyleNumberInput(v, 0, 20);
+                  if (n !== null) setStyle({ ...style, outlineWidth: n });
                 }}
                 min={0}
                 max={20}
@@ -963,8 +964,8 @@ export default function HdrConvert() {
               <NumberInput
                 value={style.shadowDepth}
                 onChange={(v) => {
-                  const n = parseFloat(v);
-                  setStyle({ ...style, shadowDepth: Number.isNaN(n) ? 1 : n });
+                  const n = parseHdrStyleNumberInput(v, 0, 20);
+                  if (n !== null) setStyle({ ...style, shadowDepth: n });
                 }}
                 min={0}
                 max={20}
@@ -979,8 +980,8 @@ export default function HdrConvert() {
               <NumberInput
                 value={style.fps}
                 onChange={(v) => {
-                  const n = parseFloat(v);
-                  setStyle({ ...style, fps: Number.isNaN(n) ? 23.976 : n });
+                  const n = parseHdrStyleNumberInput(v, 1, 120);
+                  if (n !== null) setStyle({ ...style, fps: n });
                 }}
                 min={1}
                 max={120}

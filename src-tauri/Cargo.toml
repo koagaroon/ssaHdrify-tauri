@@ -101,8 +101,7 @@ glob = "0.3.3"
 # (font scan / IPC marshal) become marginally slower; webview-driven
 # UI is unaffected. If a future release wants to peel apart per-binary
 # profiles, Cargo's `[profile.release.package.<name>]` overrides are
-# the way — see the GUI design doc's 2026-05-08 spillover entry for
-# context. Keep this comment if the profile block is reorganized.
+# the way. Keep this comment if the profile block is reorganized.
 # `panic = "abort"` is INTENTIONALLY ABSENT.
 # `fonts::subset_font` uses `std::panic::catch_unwind` to recover
 # from fontcull panics on malformed font data — that recovery path

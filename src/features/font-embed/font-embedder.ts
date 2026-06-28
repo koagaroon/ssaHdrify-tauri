@@ -671,13 +671,11 @@ export async function embedFonts(
   // across every alias that resolved to this face.
   //
   // Separator MUST be U+001F (Unit Separator) — same convention as
-  // userFontKey at line 78 and user_font_key in fonts.rs. An empty
-  // separator collides distinct face tuples whose path digits and
-  // fontIndex digits adjoin: ("foo", 11, 0, 0) and ("foo1", 1, 0, 0)
-  // would both fold to "foo1100" and silently drop one face from
-  // the output. Written in escape form (not as the raw byte) so a
-  // grep / cat / web diff cannot misread it as the empty string and
-  // file the same false-positive that this guard caught.
+  // userFontKey and Rust user_font_key. An empty separator collides
+  // distinct face tuples whose path digits and fontIndex digits adjoin:
+  // ("foo", 11, 0, 0) and ("foo1", 1, 0, 0) would both fold to
+  // "foo1100" and silently drop one face from the output. Written as
+  // an escape sequence so U+001F does not look blank in text diffs.
   const FACE_DEDUP_SEP = "\u001F";
   const faceDedupKey = (info: FontInfo): string =>
     `${info.filePath}${FACE_DEDUP_SEP}${info.fontIndex}${FACE_DEDUP_SEP}${info.key.bold ? "1" : "0"}${FACE_DEDUP_SEP}${info.key.italic ? "1" : "0"}`;

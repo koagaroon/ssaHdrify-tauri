@@ -14,6 +14,11 @@ describe("parseFiniteNumberText", () => {
     expect(parseFiniteNumberText("0x10")).toBeNull();
   });
 
+  it("rejects overlong numeric-looking text before conversion", () => {
+    expect(parseFiniteNumberText("1".repeat(129))).toBeNull();
+    expect(parseFiniteNumberText(`${"1".repeat(120)}e123456789`)).toBeNull();
+  });
+
   it("accepts complete finite decimal text", () => {
     expect(parseFiniteNumberText("1")).toBe(1);
     expect(parseFiniteNumberText("-1.5")).toBe(-1.5);

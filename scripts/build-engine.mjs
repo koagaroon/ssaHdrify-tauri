@@ -8,18 +8,16 @@
 // tauri-api.ts → i18n/strings.ts` drags `footer_version`'s
 // `${__APP_VERSION__}` reference into the bundle; at deno_core load
 // time, V8 throws `ReferenceError: __APP_VERSION__ is not defined`.
-// `tests/test_chain.rs` integration tests were the canary; vitest /
-// cargo unit tests don't exercise the deno_core path so the failure
-// stayed silent. See ssahdrify-tauri design doc § Roadmap → Active.
+// `tests/test_chain.rs` integration tests exercise this deno_core path;
+// Vitest and ordinary cargo unit tests do not.
 //
 // Why a helper script (not inline `--define` in package.json): shell
 // quoting for `--define:NAME='"value"'` differs between POSIX bash,
 // Windows cmd.exe, and PowerShell. Encoding the substitution in JS
 // dodges all of that. Also aligns with the project's "version string
-// is never hardcoded" lock (design doc § Key constraints #2) — this
-// helper resolves the version the same way `vite.config.ts` does, so
-// the engine bundle and the GUI bundle agree on `__APP_VERSION__` at
-// every build.
+// is never hardcoded" rule: this helper resolves the version the same
+// way `vite.config.ts` does, so the engine bundle and the GUI bundle
+// agree on `__APP_VERSION__` at every build.
 //
 // Version-resolver logic moved to
 // `scripts/lib/app-version.mjs` so this script and `vite.config.ts`

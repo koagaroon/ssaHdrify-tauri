@@ -3,9 +3,8 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-// R17 W17.5 (N-R17-64): shared resolver between this config and
-// scripts/build-engine.mjs. See scripts/lib/app-version.mjs for the
-// version-precedence logic and the W17.5 drift incident it closes.
+// Shared resolver between this config and scripts/build-engine.mjs.
+// See scripts/lib/app-version.mjs for the version-precedence logic.
 import { resolveAppVersion } from "./scripts/lib/app-version.mjs";
 
 // ESM-safe equivalent of CommonJS __dirname — Vite injects a shim today, but
