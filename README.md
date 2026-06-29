@@ -4,7 +4,7 @@
 
 > **SSA HDRify 是一款桌面工具，能将 SSA/ASS 字幕的颜色转换为适合 HDR 播放的值，同时提供时间轴偏移、字体嵌入和批量重命名等辅助功能。** 它是 [gky99/ssaHdrify](https://github.com/gky99/ssaHdrify)（Python 原版）的 Tauri 桌面重写版。
 >
-> _SSA HDRify is a desktop tool that converts SSA/ASS subtitle colors into HDR-ready values, with companion tools for timing shift, font embedding, and batch renaming._ It is a Tauri desktop rewrite of [gky99/ssaHdrify](https://github.com/gky99/ssaHdrify) (the original Python version).
+> _SSA HDRify is a desktop tool that converts SSA/ASS subtitle colors into values suitable for HDR playback, with companion tools for timing shift, font embedding, and batch renaming._ It is a Tauri desktop rewrite of [gky99/ssaHdrify](https://github.com/gky99/ssaHdrify) (the original Python version).
 
 ### 浅色主题（中文）/ Light Theme (Chinese)
 
@@ -56,12 +56,12 @@ Windows 用户可从 [Releases](https://github.com/koagaroon/ssaHdrify-tauri/rel
 
 macOS / Linux 用户请参考下方「从源码构建」。
 
-Windows users can download portable, no-installer exe files from [Releases](https://github.com/koagaroon/ssaHdrify-tauri/releases). Use the latest stable build by default; preview builds remain listed on the same page for testing features that have not entered a stable release yet.
+Windows users can download portable, no-install exe files from [Releases](https://github.com/koagaroon/ssaHdrify-tauri/releases). Use the latest stable build by default; preview builds remain listed on the same page for testing features that have not entered a stable release yet.
 
 > [!NOTE]
 > The latest stable release includes the CLI, font cache / diagnostics, `.vtt` HDR conversion, and `.sup` Batch Rename sidecar support. Preview builds may also include fixes or improvements that have not entered the stable line yet.
 
-- **`ssahdrify*.exe`** — graphical interface (GUI), for manual workflows
+- **`ssahdrify*.exe`** — graphical interface (GUI), for manual use
 - **`ssahdrify-cli*.exe`** — command line (CLI), for automation pipelines, batch jobs, and scripts
 
 macOS / Linux users, see "Build from Source" below.
@@ -70,17 +70,17 @@ macOS / Linux users, see "Build from Source" below.
 
 ## 功能 | Features
 
-| 标签页 / Tab                            | 功能 / Description                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **HDR 色彩转换 / HDR Color Conversion** | 将字幕颜色转换为适配 BT.2100 PQ 或 HLG 的 HDR 色彩值 / Convert subtitle colors into HDR values for BT.2100 PQ or HLG                                                                                                                                                                                                                                                                                                                               |
-| **时间轴偏移 / Timing Shift**           | 批量调整字幕时间戳；可从指定时间点之后开始偏移，并实时预览效果 / Batch-adjust subtitle timestamps; optionally start after a chosen timestamp, with live preview                                                                                                                                                                                                                                                                                    |
-| **字体嵌入 / Font Embedding**           | 自动检测字幕引用的字体，在系统字体库或本地字体源中匹配，并把子集化后的字体嵌入 ASS 文件 / Detect fonts referenced by the subtitle, match them from system or local font sources, and embed subset fonts into the ASS file                                                                                                                                                                                                                          |
-| **批量重命名 / Batch Rename**           | 自动匹配视频和字幕，并按视频文件名重命名字幕；当同一视频匹配到多个候选字幕时，可手动选择并调整配对，也可以启用多字幕模式，为每个视频保留多个语言的外挂字幕。 / Automatically match videos with subtitles and rename subtitles to match the video filename; when one video has multiple matching subtitle candidates, manually choose and adjust pairings, or enable multi-subtitle mode to keep multiple language sidecar subtitles for each video |
+| 标签页 / Tab                            | 功能 / Description                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **HDR 色彩转换 / HDR Color Conversion** | 将字幕颜色转换为适配 BT.2100 PQ 或 HLG 的 HDR 色彩值 / Convert subtitle colors into HDR values suitable for BT.2100 PQ or HLG                                                                                                                                                                                                                                                                                                           |
+| **时间轴偏移 / Timing Shift**           | 批量调整字幕时间戳；可从指定时间点之后开始偏移，并实时预览效果 / Batch-adjust subtitle timestamps; optionally start after a chosen timestamp, with live preview                                                                                                                                                                                                                                                                         |
+| **字体嵌入 / Font Embedding**           | 自动检测字幕引用的字体，在系统字体库或本地字体源中匹配，并把子集化后的字体嵌入 ASS 文件 / Detect fonts referenced by the subtitle, match them from system or local font sources, and embed subset fonts into the ASS file                                                                                                                                                                                                               |
+| **批量重命名 / Batch Rename**           | 自动匹配视频和字幕，并按视频文件名重命名字幕；当同一视频匹配到多个候选字幕时，可手动选择并调整配对，也可以启用多字幕模式，为每个视频保留多个语言的外挂字幕。 / Automatically match videos and subtitles, then rename subtitles after the video filename; when one video has multiple subtitle candidates, manually choose and adjust pairings, or enable multi-subtitle mode to keep multiple language sidecar subtitles for each video |
 
 > [!TIP]
 > **完整支持中文路径** — 包含中文、日文或其他非 ASCII 字符的文件路径都可以正常处理。Tauri 和 Rust 底层使用 Unicode API，不受传统 ANSI 编码限制。
 >
-> **Non-ASCII paths are supported** — File paths containing Chinese, Japanese, or other non-ASCII characters are handled correctly. Tauri and Rust use native Unicode APIs under the hood.
+> **Non-ASCII paths are fully supported** — File paths containing Chinese, Japanese, or other non-ASCII characters are handled correctly. Tauri and Rust use native Unicode APIs under the hood.
 
 ---
 
@@ -88,21 +88,21 @@ macOS / Linux users, see "Build from Source" below.
 
 不同功能的格式支持范围并不完全相同；下表是当前行为。`HDR 色彩转换` 会先将 `.srt`、`.sub`、`.vtt` 转换为 ASS 再进行处理。
 
-Format support differs by workflow. The table below describes current behavior. `HDR Color Conversion` first converts `.srt`, `.sub`, and `.vtt` to ASS before processing.
+Format support is not identical across workflows. The table below describes current behavior. `HDR Color Conversion` first converts `.srt`, `.sub`, and `.vtt` to ASS before processing.
 
-| 功能 / Workflow                     | `.ass` / `.ssa`                            | `.srt`                                     | `.sub`                                     | `.vtt`                                                                                 | `.sup`                                                       |
-| ----------------------------------- | ------------------------------------------ | ------------------------------------------ | ------------------------------------------ | -------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| HDR 色彩转换 / HDR Color Conversion | 原生处理 / native                          | 转换为 ASS / convert to ASS                | 转换为 ASS / convert to ASS                | 基本文本 cue 转换为 ASS / basic text cues convert to ASS                               | 不支持 / no                                                  |
-| 时间轴偏移 / Timing Shift           | 保持格式 / preserve format                 | 保持格式 / preserve format                 | 保持格式 / preserve format                 | 重建基础 cue；不保留全部 WebVTT 元数据 / rebuilds basic cues; not full WebVTT metadata | 不支持 / no                                                  |
-| 字体嵌入 / Font Embedding           | 支持 / yes                                 | 不支持 / no                                | 不支持 / no                                | 不支持 / no                                                                            | 不支持 / no                                                  |
-| `diagnose-fonts`                    | 支持 / yes                                 | 不支持 / no                                | 不支持 / no                                | 不支持 / no                                                                            | 不支持 / no                                                  |
-| 批量重命名 / Batch Rename           | 配对、复制或重命名 / pair, copy, or rename | 配对、复制或重命名 / pair, copy, or rename | 配对、复制或重命名 / pair, copy, or rename | 配对、复制或重命名 / pair, copy, or rename                                             | 作为不解析的侧车文件配对、复制或重命名 / opaque sidecar only |
-| `chain`                             | 取决于步骤 / depends on steps              | 取决于步骤 / depends on steps              | 取决于步骤 / depends on steps              | 仅支持本身接受 `.vtt` 的步骤 / only where the chosen step accepts `.vtt`               | 不支持 / no                                                  |
+| 功能 / Workflow                     | `.ass` / `.ssa`                            | `.srt`                                     | `.sub`                                     | `.vtt`                                                                                              | `.sup`                                                       |
+| ----------------------------------- | ------------------------------------------ | ------------------------------------------ | ------------------------------------------ | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| HDR 色彩转换 / HDR Color Conversion | 原生处理 / native                          | 转换为 ASS / convert to ASS                | 转换为 ASS / convert to ASS                | 基本文本 cue 转换为 ASS / basic text cues convert to ASS                                            | 不支持 / no                                                  |
+| 时间轴偏移 / Timing Shift           | 保持格式 / preserve format                 | 保持格式 / preserve format                 | 保持格式 / preserve format                 | 重建基础 cue；不保留全部 WebVTT 元数据 / rebuilds basic cues; does not preserve all WebVTT metadata | 不支持 / no                                                  |
+| 字体嵌入 / Font Embedding           | 支持 / yes                                 | 不支持 / no                                | 不支持 / no                                | 不支持 / no                                                                                         | 不支持 / no                                                  |
+| `diagnose-fonts`                    | 支持 / yes                                 | 不支持 / no                                | 不支持 / no                                | 不支持 / no                                                                                         | 不支持 / no                                                  |
+| 批量重命名 / Batch Rename           | 配对、复制或重命名 / pair, copy, or rename | 配对、复制或重命名 / pair, copy, or rename | 配对、复制或重命名 / pair, copy, or rename | 配对、复制或重命名 / pair, copy, or rename                                                          | 作为不解析的侧车文件配对、复制或重命名 / opaque sidecar only |
+| `chain`                             | 取决于步骤 / depends on steps              | 取决于步骤 / depends on steps              | 取决于步骤 / depends on steps              | 仅支持本身接受 `.vtt` 的步骤 / only where the chosen step accepts `.vtt`                            | 不支持 / no                                                  |
 
 > [!NOTE]
 > 这里的 `.sub` 指 MicroDVD 文本字幕。Blu-ray PGS `.sup` 和 VobSub `.sub/.idx` 属于图像字幕，不适用于 HDR 文本颜色转换、时间轴偏移、ASS 字体嵌入或 `diagnose-fonts`。`.sup` 只会在「批量重命名」中作为不解析内容的侧车文件进行配对、复制或重命名。如需把图像字幕变成文本字幕，请先使用专门的字幕转换/OCR 工具。
 >
-> Here `.sub` means MicroDVD text subtitles. Blu-ray PGS `.sup` and VobSub `.sub/.idx` are image subtitle formats, so HDR text color conversion, Timing Shift, ASS font embedding, and `diagnose-fonts` do not apply. `.sup` is only paired, copied, or renamed as an opaque sidecar in Batch Rename. To turn image subtitles into text subtitles, convert/OCR them with a dedicated subtitle tool first.
+> Here `.sub` means MicroDVD text subtitles. Blu-ray PGS `.sup` and VobSub `.sub/.idx` are image subtitle formats, so HDR text color conversion, Timing Shift, ASS font embedding, and `diagnose-fonts` do not apply. `.sup` is only paired, copied, or renamed as an opaque sidecar in Batch Rename. To turn image subtitles into text subtitles, use a dedicated subtitle conversion/OCR tool first.
 
 ---
 
@@ -141,11 +141,11 @@ Format support differs by workflow. The table below describes current behavior. 
 
 字幕组排版常用字体通常没有安装在系统中。打开「字体来源 / Font Sources」面板，添加需要扫描的本地文件夹；这些字体无需系统安装，也可以参与匹配。
 
-Fonts used in fan-sub typesetting often are not installed system-wide. Open **Font Sources**, add the local folders you want to scan, and those fonts can be matched without installing them into the OS.
+Fonts commonly used in fan-sub typesetting are often not installed system-wide. Open **Font Sources**, add the local folders you want to scan, and those fonts can be matched without installing them into the OS.
 
 支持大型字体文件夹；扫描时会实时显示已读取的字体数量，也可以随时取消。选择约 5000 个字体文件或总量约 5 GiB 以上的来源前，程序会先弹出确认对话框。扫描和缓存写入都有安全上限；超大或异常来源可能提前停止，或仅用于本次会话而不写入持久化缓存，并会在界面/日志中提示。
 
-Large font folders are supported; the scan shows a real-time count of fonts found and can be cancelled at any time. Before scanning a source with about 5000 font files or about 5 GiB of content, the app asks for confirmation. Scanning and cache writes are bounded by safety ceilings; unusually large or malformed sources may stop early or be used only for the current session instead of being persisted, with a visible message.
+Large font folders are supported; the scan shows a real-time count of fonts read and can be cancelled at any time. Before scanning a source with about 5000 font files or about 5 GiB of content, the app asks for confirmation. Scanning and cache writes are bounded by safety ceilings; unusually large or abnormal sources may stop early, or may be used only for the current session instead of being written to the persistent cache, with a visible UI/log message.
 
 > **字体名称匹配 / Font Name Matching**
 >
@@ -155,13 +155,13 @@ Large font folders are supported; the scan shows a real-time count of fonts foun
 >
 > 对 `.ttc` / `.otc` 字体集合，工具会按匹配到的 face index 抽出对应字形并嵌入为单 face 子集。ASS `[Fonts]` 里的 `fontname:` 是生成的嵌入项标签，例如 `dream_han_serif_sc_w22.ttf`，不代表源文件必须是 `.ttf`；实际匹配依赖子集字体内部保留的 `name` 表。
 >
-> For `.ttc` / `.otc` collections, the matched face index is subset into a single-face embedded font. The ASS `[Fonts]` `fontname:` line is a generated attachment label, such as `dream_han_serif_sc_w22.ttf`; it does not mean the source file had to be `.ttf`. Matching relies on the preserved internal `name` table in the subset font.
+> For `.ttc` / `.otc` collections, the matched face index is extracted and embedded as a single-face subset. The ASS `[Fonts]` `fontname:` line is a generated attachment label, such as `dream_han_serif_sc_w22.ttf`; it does not mean the source file had to be `.ttf`. Matching relies on the preserved internal `name` table in the subset font.
 
 ### 批量重命名 / Batch Rename
 
 1. 拖入包含视频和字幕的文件夹（或点击「选择文件 / Select Files」手动选择）；程序会按文件格式自动归类 / Drop a folder containing both videos and subtitles (or click **Select Files** to pick manually); the app categorizes files by format automatically
 2. 应用会按字幕组常见命名方式提取剧集号，并预填配对表 / The app extracts episode numbers from common fan-sub naming patterns and pre-fills the pairing table
-3. 如果出现错配或漏配，可直接在对应行的下拉框中手动选择字幕；选中后该行会自动加入重命名队列 / If the app mispairs or misses a row, choose a subtitle from that row's dropdown; once selected, the row is automatically added to the rename queue
+3. 如果出现错配或漏配，可直接在对应行的下拉框中手动选择字幕；选中后该行会自动加入重命名队列 / If a row is paired incorrectly or missed, choose a subtitle from that row's dropdown; once selected, the row is automatically added to the rename queue
 4. 如果要为同一视频保留多个语言字幕，启用「保留每个视频的多个字幕」；带语言标签的字幕会写成 `Video.sc.ass`、`Video.tc.ass` 这类文件名 / To keep multiple language subtitles for the same video, enable **Keep multiple subtitles per video**; tagged subtitles are written as names such as `Video.sc.ass` and `Video.tc.ass`
 5. 选择输出策略：原文件直接改名 / 复制到视频所在目录 / 复制到自定义目录 / Pick the output strategy: rename in place, copy to the video's directory, or copy to a custom directory
 6. 点击「运行」；如果目标路径已存在按同一规则生成的同名文件，程序会先弹出覆盖确认对话框 / Click **Run**; if a file with the generated name already exists at the target path, an overwrite confirmation appears first
@@ -170,7 +170,7 @@ Large font folders are supported; the scan shows a real-time count of fonts foun
 >
 > 处理流程：清理括号内容 → 按优先级尝试剧集号正则（`S\d+E\d+`、`][NN][`、`- NN`、`第N话`、`EP\d+`）→ 分季并行扫描 → `(season, episode)` 配对键 → LCS 回退 → 最后由手动选择兜底。规则已在多组真实字幕组命名样本上验证过，包括中日双语标题、外挂多语字幕、季度后缀变体等。
 >
-> Pipeline: bracket cleanup → priority-ordered episode regex (`S\d+E\d+`, `][NN][`, `- NN`, `第N话`, `EP\d+`) → parallel season-aware scan → `(season, episode)` pairing key → LCS fallback → manual selection as the final fallback. Pattern coverage was validated against representative real-world fan-sub naming variants, including bilingual CJK titles, externally shipped multi-language subtitles, and season-suffix variants.
+> Pipeline: bracket cleanup → priority-ordered episode regex (`S\d+E\d+`, `][NN][`, `- NN`, `第N话`, `EP\d+`) → parallel season-aware scan → `(season, episode)` pairing key → LCS fallback → manual selection as the final safety net. Pattern coverage has been validated against multiple real-world fan-sub naming samples, including bilingual CJK titles, external multi-language subtitles, and season-suffix variants.
 
 ---
 
@@ -178,13 +178,13 @@ Large font folders are supported; the scan shows a real-time count of fonts foun
 
 `ssahdrify-cli` 是 GUI 的命令行版（CLI），与 GUI 从同一份源代码构建。四个核心功能（HDR 转换 / 时间轴偏移 / 字体嵌入 / 批量重命名）和 GUI 版保持对等；CLI 另外提供 `chain`（一次调用串联多个步骤，只有最后一步写入文件）、`refresh-fonts`（构建或刷新 CLI 字体缓存）和 `diagnose-fonts`（只诊断字体解析，不写字幕）等子命令。
 
-`ssahdrify-cli` is the command-line (CLI) version of the GUI, built from the same source. The four core features (HDR convert / Timing shift / Font embed / Batch rename) stay in parity with the GUI; the CLI additionally exposes `chain` (multiple steps in one invocation, with only the final step writing files), `refresh-fonts` (build or refresh the CLI font cache), and `diagnose-fonts` (diagnose font resolution without writing subtitles).
+`ssahdrify-cli` is the command-line (CLI) version of the GUI, built from the same source. The four core features (HDR convert / Timing shift / Font embed / Batch rename) remain equivalent to the GUI; the CLI additionally provides `chain` (run multiple steps in one invocation, with only the final step writing files), `refresh-fonts` (build or refresh the CLI font cache), and `diagnose-fonts` (diagnose font resolution without writing subtitles).
 
 ### 快速示例 | Quick Examples
 
 下面示例中的 `<font-folder>`、`<series-folder>` 等都是占位符；请替换成你自己电脑上的实际路径。
 
-Placeholders such as `<font-folder>` and `<series-folder>` mean your own local paths; replace them before running the commands.
+Placeholders such as `<font-folder>` and `<series-folder>` stand for real paths on your own computer; replace them before running the commands.
 
 ```text
 # HDR 色彩转换（PQ 曲线）/ HDR conversion (PQ curve)
@@ -218,17 +218,17 @@ ssahdrify-cli rename "<series-folder>" --langs all --dry-run
 
 `rename --langs auto` 保持和 GUI 一致的默认行为：每个视频只选一个字幕，输出文件名精确匹配视频 stem（如 `Video.ass`）。`rename --langs all` 或显式列表（如 `--langs sc,jp`）可以为同一个视频规划多个字幕，并写成带语言后缀的文件名（如 `Video.sc.ass`、`Video.jp.srt`）；没有语言标记的字幕仍使用精确视频名（如 `Video.ass`）。如果多行会写到同一个目标路径，CLI 会在写入前阻止这些冲突行。
 
-`rename --langs auto` keeps the GUI-style behavior: one subtitle per video, named exactly like the video stem (`Video.ass`). `rename --langs all` or an explicit list such as `--langs sc,jp` can plan multiple subtitles for the same video and writes language-suffixed names such as `Video.sc.ass` and `Video.jp.srt`; untagged subtitles still use the exact video name (`Video.ass`). If multiple rows would write to the same target path, the CLI blocks those conflict rows before writing.
+`rename --langs auto` keeps the same default behavior as the GUI: one subtitle per video, with the output filename matching the video stem exactly (`Video.ass`). `rename --langs all` or an explicit list such as `--langs sc,jp` can plan multiple subtitles for the same video and write them with language suffixes such as `Video.sc.ass` and `Video.jp.srt`; untagged subtitles still use the exact video name (`Video.ass`). If multiple rows would write to the same target path, the CLI blocks those conflicting rows before writing.
 
 `shift --map <FILE>` 使用一个只读时间轴映射文件，不运行 Sushi、alass、FFmpeg 或任何音频自动同步工具。JSON 格式可以写成 `{"rules":[{"start":"00:00:00.000","end":"00:05:00.000","offset":"+1s","label":"opening"},{"startMs":5000,"offsetMs":-500}]}`。也可以使用简单 CSV 行：`start,end,offset,label,enabled`，例如 `00:00:00.000,00:05:00.000,+1s,opening,true`。`start` 为闭区间，`end` 为开区间；规则出现重叠时，按文件顺序以最先匹配的为准。映射文件会在批处理开始前先解析和校验，失败时不会写任何字幕。
 
-`shift --map <FILE>` uses a read-only timing-map file; it does not run Sushi, alass, FFmpeg, or any audio auto-sync helper. JSON can look like `{"rules":[{"start":"00:00:00.000","end":"00:05:00.000","offset":"+1s","label":"opening"},{"startMs":5000,"offsetMs":-500}]}`. A simple CSV shape is also accepted: `start,end,offset,label,enabled`, for example `00:00:00.000,00:05:00.000,+1s,opening,true`. `start` is inclusive, `end` is exclusive, and if rules overlap, the first matching row in file order wins. The map is parsed and validated before batch processing starts, so invalid maps do not write subtitle outputs.
+`shift --map <FILE>` uses a read-only timing-map file; it does not run Sushi, alass, FFmpeg, or any audio auto-sync helper. JSON can look like `{"rules":[{"start":"00:00:00.000","end":"00:05:00.000","offset":"+1s","label":"opening"},{"startMs":5000,"offsetMs":-500}]}`. A simple CSV shape is also accepted: `start,end,offset,label,enabled`, for example `00:00:00.000,00:05:00.000,+1s,opening,true`. `start` is inclusive, `end` is exclusive, and overlapping rules use the first matching row in file order. The map is parsed and validated before batch processing starts; if validation fails, no subtitles are written.
 
 ### 全部子命令 | All Subcommands
 
 每个子命令都可通过 `--help` 查看完整参数。
 
-Each subcommand supports `--help` for the full parameter reference.
+Each subcommand can show the full parameter reference with `--help`.
 
 ```bash
 ssahdrify-cli --help
@@ -260,35 +260,35 @@ ssahdrify-cli chain          --help
 >
 > `--json` 目前适用于 `hdr` / `shift` / `embed` / `rename` 和 `diagnose-fonts`。常规子命令会输出固定 schema 的报告，按文件列出 status (`written` / `planned` / `skipped` / `failed`)、output path、encoding、warnings 等字段；stderr 仍可输出供人阅读的诊断信息。`diagnose-fonts --json` 直接输出诊断报告。`chain` v1 会明确提示不支持 JSON，并改用纯文本报告；`refresh-fonts` 使用 stderr 输出状态。
 >
-> `--json` currently applies to `hdr` / `shift` / `embed` / `rename` and `diagnose-fonts`. Normal subcommands emit a fixed-schema report listing per-file status (`written` / `planned` / `skipped` / `failed`), output path, encoding, warnings, and related fields; stderr can still carry human-readable diagnostics. `diagnose-fonts --json` emits the diagnostic report directly. `chain` v1 explicitly reports that JSON output is not supported and falls back to plain text; `refresh-fonts` reports status on stderr.
+> `--json` currently applies to `hdr` / `shift` / `embed` / `rename` and `diagnose-fonts`. Normal subcommands emit a fixed-schema report listing per-file status (`written` / `planned` / `skipped` / `failed`), output path, encoding, warnings, and related fields; stderr can still print human-readable diagnostics. `diagnose-fonts --json` emits the diagnostic report directly. `chain` v1 explicitly reports that JSON output is not supported and uses a plain-text report instead; `refresh-fonts` reports status on stderr.
 >
 > 启用 `--diagnose` 时，JSON 会额外包含完整 `diagnostics` 对象，即使人类输出模式是默认的 summary。未启用 `--diagnose` 时，常规 JSON schema 保持不变。
 >
-> When `--diagnose` is enabled, JSON includes a full `diagnostics` object even when human output is the default summary mode. Without `--diagnose`, the normal JSON schema is unchanged.
+> When `--diagnose` is enabled, JSON additionally includes the full `diagnostics` object even when human output uses the default summary mode. Without `--diagnose`, the normal JSON schema is unchanged.
 >
 > **终端字符串插值安全注意事项 | Terminal string-interpolation safety note**
 >
 > `--json` 按 RFC 8259 输出；BiDi 控制符（U+200E/U+202E 等）、零宽字符，以及 U+2028/U+2029 行分隔符在 JSON 字符串中都是合法字符，因此不会额外转义。如果用 `jq -r` 将 `.input` / `.output` 等字段还原后再插入到终端（例如 `echo`、提示符或其他 CLI 参数），恶意构造的文件名可能影响终端显示。下游脚本应在终端输出边界自行过滤（如 jq 的 `gsub` 或 shell 包装工具）。CLI 自身供人阅读的输出（未启用 `--json`）已在所有打印点调用 `sanitize_for_display`，不受此问题影响。
 >
-> `--json` output follows RFC 8259, but BiDi format characters (U+200E/U+202E etc.), zero-width characters, and the U+2028/U+2029 line separators are valid in JSON strings and are not additionally escaped. If you pipe to `jq -r` to extract `.input` / `.output` and then insert or interpolate those values back into a terminal (`echo`, prompts, or another CLI's arguments), crafted filenames may affect terminal display. Downstream scripts should sanitize at the terminal boundary (for example with jq's `gsub` or a wrapping shell tool). The CLI's own human-readable output (without `--json`) already passes every print site through `sanitize_for_display` and is not affected.
+> `--json` output follows RFC 8259, but BiDi format characters (U+200E/U+202E etc.), zero-width characters, and the U+2028/U+2029 line separators are valid in JSON strings and are not additionally escaped. If you use `jq -r` to restore fields such as `.input` / `.output` and then insert or interpolate those values into a terminal (`echo`, prompts, or another CLI's arguments), crafted filenames may affect terminal display. Downstream scripts should sanitize at the terminal output boundary (for example with jq's `gsub` or a wrapping shell tool). The CLI's own human-readable output (without `--json`) already passes every print site through `sanitize_for_display` and is not affected.
 
 ### 诊断输出 | Diagnostics
 
 `hdr` / `shift` / `embed` / `rename` 支持 `--diagnose[=summary|full]`。`--diagnose` 与 `--diagnose=summary` 等价，会在命令完成后附加紧凑诊断；`--diagnose=full` 会列出逐文件细节，`embed` 还会列出字体解析层级（本次传入的字体源、持久化缓存、系统字体）和缓存状态。`chain` 与 `refresh-fonts` 不支持 `--diagnose`，传入会报错而不是静默忽略。
 
-`hdr` / `shift` / `embed` / `rename` support `--diagnose[=summary|full]`. `--diagnose` and `--diagnose=summary` are equivalent and attach compact diagnostics after the command finishes; `--diagnose=full` lists per-file details, and `embed` also lists font-resolution tiers (current run sources, persistent cache, system fonts) plus cache status. `chain` and `refresh-fonts` do not support `--diagnose`; passing it errors instead of being silently ignored.
+`hdr` / `shift` / `embed` / `rename` support `--diagnose[=summary|full]`. `--diagnose` and `--diagnose=summary` are equivalent and attach compact diagnostics after the command finishes; `--diagnose=full` lists per-file details, and `embed` also lists font-resolution tiers (font sources passed for this run, persistent cache, system fonts) plus cache status. `chain` and `refresh-fonts` do not support `--diagnose`; passing it returns an error instead of being silently ignored.
 
 `diagnose-fonts` 是独立的详细诊断命令，默认输出 verbose 报告，而且只读：不写输出字幕、不刷新或修改字体缓存。它接受字幕输入和字体解析选项：`--font-dir`、`--font-file`、`--no-system-fonts`、`--no-cache`、`--cache-file`、`--lang`、`--json`。需要确认字体文件是否真的能被子集化时，可显式加入 `--subset-check`；该检查只在内存中运行，不写出字幕。
 
-`diagnose-fonts` is the standalone detailed diagnostic command. It is verbose by default and read-only: it does not write output subtitles and does not refresh or mutate the font cache. It accepts subtitle inputs plus font-resolution options: `--font-dir`, `--font-file`, `--no-system-fonts`, `--no-cache`, `--cache-file`, `--lang`, and `--json`. Add `--subset-check` only when you want to verify that resolved font files can actually be subset; the check runs in memory and does not write subtitles.
+`diagnose-fonts` is the standalone detailed diagnostic command. It is verbose by default and read-only: it does not write output subtitles and does not refresh or modify the font cache. It accepts subtitle inputs plus font-resolution options: `--font-dir`, `--font-file`, `--no-system-fonts`, `--no-cache`, `--cache-file`, `--lang`, and `--json`. Add `--subset-check` explicitly when you need to confirm whether resolved font files can actually be subset; the check runs in memory and does not write subtitles.
 
 `diagnose-fonts` 和带 `--diagnose` 的 `embed` 还会输出 package-level Font QA 状态：`complete`、`incomplete` 或 `blocked`。`complete` 表示已检查文件里的字体引用全部解析成功；`incomplete` 表示有缺失字体、警告或被跳过的可选子集化检查；`blocked` 表示文件诊断失败、字体解析错误，或 `--subset-check` 明确失败。
 
-`diagnose-fonts` and `embed --diagnose` also report a package-level Font QA status: `complete`, `incomplete`, or `blocked`. `complete` means all inspected font references resolved; `incomplete` means missing fonts, warnings, or skipped optional subset checks remain; `blocked` means a file diagnostic failed, a font resolution errored, or `--subset-check` explicitly failed.
+`diagnose-fonts` and `embed --diagnose` also report a package-level Font QA status: `complete`, `incomplete`, or `blocked`. `complete` means all font references in the checked files resolved successfully; `incomplete` means missing fonts, warnings, or skipped optional subset checks remain; `blocked` means a file diagnostic failed, a font resolution errored, or `--subset-check` explicitly failed.
 
 为避免诊断命令在异常字幕/字体组合上长时间运行，`--subset-check` 有命令级预算：最多 128 次子集化调用，累计子集输出约 100 MiB；超出后剩余检查会标记为 skipped，并输出一次 budget exhausted 警告。
 
-To keep diagnostics bounded on unusual subtitle/font combinations, `--subset-check` uses one command-level budget: up to 128 subset calls and about 100 MiB of cumulative subset output. After that, remaining checks are marked skipped and one budget-exhausted warning is emitted.
+To prevent diagnostics from running too long on unusual subtitle/font combinations, `--subset-check` uses one command-level budget: up to 128 subset calls and about 100 MiB of cumulative subset output. After that, remaining checks are marked skipped and one budget-exhausted warning is emitted.
 
 ```bash
 # 附加紧凑诊断 / Attach compact diagnostics
@@ -309,13 +309,13 @@ ssahdrify-cli embed --font-dir "<font-folder>" --on-missing fail --fail-fast --d
 
 `embed` 默认仍使用 `--on-missing warn`：能嵌入的字体会继续嵌入，缺失或子集化失败的字体会变成 warning。此时输出文件可能已经写出，但 summary 会明确显示 `written with warnings / incomplete`，避免把部分成功误读成“全部字体都成功”。
 
-`embed` still defaults to `--on-missing warn`: fonts that can be embedded are embedded, and missing or failed-to-subset fonts become warnings. In that case the output file may be written, but the summary explicitly says `written with warnings / incomplete` so partial success is not mistaken for “all fonts succeeded.”
+`embed` still defaults to `--on-missing warn`: fonts that can be embedded continue to be embedded, while missing fonts or subset failures become warnings. In that case the output file may already be written, but the summary explicitly says `written with warnings / incomplete` so partial success is not mistaken for “all fonts succeeded.”
 
 ### 字体缓存 | Font Cache
 
 `embed` 每次启动通常都要扫描每个 `--font-dir` 下的字体文件，构建查找表（一般几秒到几十秒；5000+ 字体可能需要几分钟）。**持久化字体缓存**能将这一过程变为一次性操作：先运行 `refresh-fonts`，将字体元数据写入磁盘上的 SQLite 文件；之后 `embed` 会在缓存仍有效时直接复用它，跳过扫描。对于字幕组按集批量处理尤其有用。
 
-The `embed` subcommand normally rescans every `--font-dir` on each invocation to build its lookup table (usually seconds to tens of seconds; minutes for 5000+ font collections). The **persistent font cache** makes that process a one-time step: run `refresh-fonts` to write font metadata into a SQLite file on disk, then later `embed` calls reuse it while the cache is still valid. This is especially useful for fan-sub teams processing episodes in batches.
+The `embed` subcommand normally scans the font files under each `--font-dir` every time it starts to build its lookup table (usually seconds to tens of seconds; minutes for 5000+ font collections). The **persistent font cache** turns this into a one-time step: run `refresh-fonts` to write font metadata into a SQLite file on disk, then later `embed` calls reuse it while the cache is still valid. This is especially useful for fan-sub teams processing episodes in batches.
 
 #### 工作流 | Workflow
 
@@ -359,7 +359,7 @@ Use `--cache-file <PATH>` to choose a different path.
 
 `embed` 启动时会对缓存做轻量校验：对每个已缓存文件夹执行一次 `stat()`，检查 mtime 是否变化。如果发现漂移（说明你添加 / 删除 / 替换 / 重命名了字体文件），CLI 会在 stderr 列出发生变化的文件夹，本次运行自动退回无缓存模式（使用 `--font-dir` 或系统字体），并提示你运行 `refresh-fonts` 更新。**缓存不会被静默重建**——缓存写入必须由 `refresh-fonts` 显式触发。
 
-`embed` runs a lightweight cache validation at startup: one `stat()` per cached folder checks for mtime drift. If drift is detected (you added / deleted / replaced / renamed font files), the CLI lists the changed folders on stderr, falls back to no-cache for this run (using `--font-dir` or system fonts), and tells you to run `refresh-fonts`. **The cache is never silently rebuilt** — cache writes are always explicit via `refresh-fonts`.
+`embed` runs a lightweight cache validation at startup: one `stat()` per cached folder checks whether mtime changed. If drift is detected (meaning you added / deleted / replaced / renamed font files), the CLI lists the changed folders on stderr, automatically falls back to no-cache mode for this run (using `--font-dir` or system fonts), and tells you to run `refresh-fonts`. **The cache is never silently rebuilt** — cache writes are always triggered explicitly by `refresh-fonts`.
 
 #### 限制 | Limitations
 
@@ -372,10 +372,10 @@ Use `--cache-file <PATH>` to choose a different path.
 
 - Each `--font-dir` is scanned one level deep (non-recursive), matching `embed --font-dir` semantics. Pass each leaf folder explicitly for tree-shaped collections.
 - The font cache tracks at most 256 source folders. For larger font trees, organize fonts into fewer leaf folders or split work across separate cache files.
-- A single cached source can safely persist about **20,000 font faces**. If it exceeds that cap, `refresh-fonts` skips that source, while the GUI can still use the current session index but will not persist acceleration for that oversized source.
+- A single cached source can safely persist about **20,000 font faces**. If it exceeds that cap, `refresh-fonts` skips that source, while the GUI can still use the current session index but will not write a persistent cache for that oversized source.
 - A single font file is capped at **64 MiB** for scanning/subsetting; larger files are refused with an error.
 - GUI and CLI use separate cache files to avoid SQLite lock contention; a single binary opens exactly one cache at a time (default path or `--cache-file` override). `chain` v1 does not consult the cache; its embed step always uses explicit `--font-dir` or system fonts.
-- There is no automatic schema migration across releases. Version mismatch surfaces as an explicit prompt to delete the cache file and rerun `refresh-fonts`.
+- Cache schema is not migrated automatically across releases. If the version does not match, the CLI explicitly tells you to delete the cache file and rerun `refresh-fonts`.
 
 ---
 
@@ -383,7 +383,7 @@ Use `--cache-file <PATH>` to choose a different path.
 
 SSA/ASS 字幕自身不带色彩空间元数据，渲染器通常会按 SDR 处理，结果是字幕在 HDR 画面里显得过饱和、过亮。播放 HDR 视频时，显示设备会进入 HDR 模式，但字幕仍按 SDR 混合，色差就来自这里。
 
-SSA/ASS subtitles do not carry color-space metadata, so renderers usually treat them as SDR content, making subtitles look oversaturated and overly bright in HDR video. When an HDR video plays, the display enters HDR mode, but subtitles are still blended as SDR; that is where the color mismatch comes from.
+SSA/ASS subtitles do not carry color-space metadata, so renderers usually treat them as SDR content. The result is that subtitles can look oversaturated and overly bright in HDR video. When an HDR video plays, the display enters HDR mode, but subtitles are still blended as SDR; that is where the color mismatch comes from.
 
 > 如果你的播放器已经能正确处理字幕亮度（例如 mpv 的 `blend-subtitles=video`，或 madVR 配合 xy-SubFilter 的字幕色彩管理），则不需要本工具。
 >
@@ -393,7 +393,7 @@ _相关讨论 / Related discussion: [libass/libass#297](https://github.com/libas
 
 相关工具 / Related tool: [arition/SubRenamer](https://github.com/arition/SubRenamer) 也是视频与字幕重命名工作流的一个选择（按字母序 + 下标配对）。本项目的批量重命名功能（Tab 4）则使用面向字幕组命名习惯的正则配对流程，代码独立实现。
 
-For subtitle-and-video rename workflows, [arition/SubRenamer](https://github.com/arition/SubRenamer) is another option (alphabetical + index pairing). This project's Batch Rename feature (Tab 4) uses an independently implemented regex pairing flow built around common fan-sub naming patterns.
+For video-and-subtitle rename workflows, [arition/SubRenamer](https://github.com/arition/SubRenamer) is another option (alphabetical + index pairing). This project's Batch Rename feature (Tab 4) uses an independently implemented regex pairing flow built around common fan-sub naming patterns.
 
 ---
 
@@ -423,7 +423,7 @@ PQ mode is verified pixel-exact against the Python version (colour-science). HLG
 
 由于字幕混合链路和 HDR 显示环境很复杂（HDMI 元数据协商、显示器色调映射等），实际效果主要保证“红还是红、蓝还是蓝”的基础观感，不适合严格校色场景。
 
-Due to the complexity of subtitle blending pipelines and HDR display environments (HDMI metadata negotiation, display tone mapping, etc.), the result is intended to preserve basic color identity, not to satisfy strict color-accuracy or color-grading requirements.
+Due to the complexity of subtitle blending pipelines and HDR display environments (HDMI metadata negotiation, display tone mapping, etc.), the result is mainly intended to preserve the basic impression that “red stays red and blue stays blue.” It is not meant for strict color-accuracy or color-grading workflows.
 
 ---
 
@@ -459,7 +459,7 @@ npm run build:all
 
 在 Windows 上，便携式 exe 会生成到 `src-tauri/target/release/`，可直接运行，无需安装。`tauri.conf.json` 目前设置了 `bundle.active: false`，因此默认生成便携式二进制文件，而不是安装包。
 
-On Windows, portable executables are produced under `src-tauri/target/release/` and can be run directly, with no install step required. `tauri.conf.json` currently sets `bundle.active: false`, so the default output is portable binaries rather than installers.
+On Windows, portable executables are produced under `src-tauri/target/release/` and can be run directly with no installation required. `tauri.conf.json` currently sets `bundle.active: false`, so the default output is portable binaries rather than installers.
 
 Expected Windows release build outputs:
 
@@ -542,9 +542,9 @@ This project is licensed under the [GNU General Public License v3.0 or later](LI
 
 本项目是 [ssaHdrify](https://github.com/gky99/ssaHdrify) 的 Tauri 桌面重写版，原项目由 ying (2021) 创建，后由 gky99 (2024-2025) 维护。原项目同样采用 GPL-3.0 授权。
 
-This is a Tauri desktop rewrite of [ssaHdrify](https://github.com/gky99/ssaHdrify),
-originally created by ying (2021) and later maintained by gky99 (2024-2025).
-The original project is also licensed under GPL-3.0.
+This project is a Tauri desktop rewrite of [ssaHdrify](https://github.com/gky99/ssaHdrify).
+The original project was created by ying (2021) and later maintained by gky99 (2024-2025).
+It is also licensed under GPL-3.0.
 
 HDR 色彩转换算法由 TypeScript（基于 [Color.js](https://colorjs.io/)）重新实现，方案参考了 Python 原版（使用 [colour-science](https://www.colour-science.org/)）。没有逐字复制代码；实现本身是新的，但按许可证语境仍按衍生作品处理。
 
@@ -567,7 +567,7 @@ original TypeScript written for this project.
 
 下表列出主要直接依赖和随应用分发的资产；完整的传递依赖链请分别参见 `package-lock.json` 和 `src-tauri/Cargo.lock`。
 
-The tables below list the main direct dependencies and bundled assets. For the complete transitive dependency chain, see `package-lock.json` and `src-tauri/Cargo.lock`, respectively.
+The tables below list the main direct dependencies and bundled assets. For the full transitive dependency chain, see `package-lock.json` and `src-tauri/Cargo.lock`, respectively.
 
 #### 运行时依赖（随应用分发）| Runtime (shipped with the application)
 
