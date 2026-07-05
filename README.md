@@ -49,7 +49,7 @@
 Windows 用户可从 [Releases](https://github.com/koagaroon/ssaHdrify-tauri/releases) 页面下载免安装的便携版 exe。建议优先使用最新稳定版；预览版也会保留在同一页面，用于测试尚未进入稳定版的功能。
 
 > [!NOTE]
-> 最新稳定版已包含 CLI、字体缓存 / 诊断、`.vtt` HDR 转换和 `.sup` 批量重命名侧车支持；预览版可能额外包含尚未进入稳定版的修复或改进。
+> 预览版可能包含尚未进入稳定版的修复或改进。
 
 - **`ssahdrify*.exe`** — 图形界面（GUI），适合手动操作
 - **`ssahdrify-cli*.exe`** — 命令行（CLI），适合自动化流水线、批处理和脚本化场景
@@ -59,7 +59,7 @@ macOS / Linux 用户请参考下方「从源码构建」。
 Windows users can download portable, no-install exe files from [Releases](https://github.com/koagaroon/ssaHdrify-tauri/releases). Use the latest stable build by default; preview builds remain listed on the same page for testing features that have not entered a stable release yet.
 
 > [!NOTE]
-> The latest stable release includes the CLI, font cache / diagnostics, `.vtt` HDR conversion, and `.sup` Batch Rename sidecar support. Preview builds may also include fixes or improvements that have not entered the stable line yet.
+> Preview builds may include fixes or improvements that have not entered the stable line yet.
 
 - **`ssahdrify*.exe`** — graphical interface (GUI), for manual use
 - **`ssahdrify-cli*.exe`** — command line (CLI), for automation pipelines, batch jobs, and scripts
@@ -186,7 +186,7 @@ Large font folders are supported; the scan shows a real-time count of fonts read
 
 Placeholders such as `<font-folder>` and `<series-folder>` stand for real paths on your own computer; replace them before running the commands.
 
-```text
+```bash
 # HDR 色彩转换（PQ 曲线）/ HDR conversion (PQ curve)
 ssahdrify-cli hdr --eotf pq input.ass
 
@@ -230,7 +230,11 @@ ssahdrify-cli rename "<series-folder>" --langs all --dry-run
 
 Each subcommand can show the full parameter reference with `--help`.
 
-```bash
+<!-- Deliberately `text`, not `bash`: GitHub's shell grammar would highlight the
+     `shift` subcommand as the shell builtin, coloring one row of this uniform
+     list for no reason. This block has no strings/comments, so `text` loses nothing. -->
+
+```text
 ssahdrify-cli --help
 ssahdrify-cli hdr            --help
 ssahdrify-cli shift          --help
