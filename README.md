@@ -489,9 +489,9 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端测试 / Rust bac
 >
 > Release builds use native TypeScript 7 for type-checking. ESLint and `typescript-eslint` continue to use TypeScript 6's programmatic API through the official `@typescript/typescript6` compatibility package, and CI checks both toolchains. Use the `npm run typecheck:*` scripts above instead of relying on bare `tsc` / `npx tsc` resolution order.
 >
-> Dependabot 当前不会自动更新 npm 别名，因此 `Dependency currency` 工作流每周直接检查 npm 官方注册表中的 TypeScript 7 和 TypeScript 6 兼容包版本。
+> Dependabot 当前不会自动更新 npm 别名，因此 `Dependency currency` 工作流每周直接检查 npm 官方注册表中的 TypeScript 7、TypeScript 6 兼容包和实际 TypeScript 6 引擎版本。
 >
-> Dependabot currently skips npm aliases during version updates, so the `Dependency currency` workflow checks the TypeScript 7 and TypeScript 6 compatibility-package versions directly against the official npm registry each week.
+> Dependabot currently skips npm aliases during version updates, so the `Dependency currency` workflow checks TypeScript 7, the TypeScript 6 compatibility wrapper, and the effective TypeScript 6 engine directly against the official npm registry each week.
 
 ---
 
