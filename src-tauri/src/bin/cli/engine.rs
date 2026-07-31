@@ -257,10 +257,21 @@ pub struct ChainRunRequest {
 
 pub struct CliEngine {
     runtime: JsRuntime,
+    // deno_core captures this runtime's handle when constructing the
+    // isolate; keep it alive so delayed V8 foreground tasks can run.
+    // This field stays after `runtime` so the isolate unregisters first.
+    _task_runtime: tokio::runtime::Runtime,
 }
 
 impl CliEngine {
     pub fn new() -> Result<Self, String> {
+        let task_runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_time()
+            .build()
+            .map_err(|err| format!("failed to create CLI engine task runtime: {err}"))?;
+        let task_runtime_guard = task_runtime.enter();
+
         // (scope tightening): only the `extensions`
         // field is explicitly pinned to empty — the CLI engine runs
         // only pure text transformations (no fs / net / timer ops).
@@ -273,10 +284,13 @@ impl CliEngine {
         // become available here. Re-audit `RuntimeOptions`'s field
         // list on every deno_core bump alongside the API-binding
         // audit pinned in Cargo.toml's deno_core pin WHY.
+        // In 0.409, both residual lazy-source tables default to empty,
+        // and the default module loader remains capability-free.
         let mut runtime = JsRuntime::new(RuntimeOptions {
             extensions: vec![],
             ..Default::default()
         });
+        drop(task_runtime_guard);
 
         // Inject platform globals BEFORE the engine bundle runs:
         // `src/lib/platform.ts` defaults to POSIX /
@@ -355,7 +369,10 @@ impl CliEngine {
                     .to_string(),
             );
         }
-        Ok(Self { runtime })
+        Ok(Self {
+            runtime,
+            _task_runtime: task_runtime,
+        })
     }
 
     pub fn convert_hdr(
@@ -519,7 +536,7 @@ impl CliEngine {
         //      subset of valid JS expression syntax (escapes ", \, and
         //      control chars; emits U+2028/U+2029 as literal bytes,
         //      legal inside JS string literals since ES2019).
-        //   2. V8 14.7 (deno_core 0.400) is well past ES2019.
+        //   2. V8 15.0 (deno_core 0.409) is well past ES2019.
         //   3. function_name comes from a hardcoded &'static str at
         //      every call site — never user-controlled.
         // If any invariant shifts, move to a v8 function-call path

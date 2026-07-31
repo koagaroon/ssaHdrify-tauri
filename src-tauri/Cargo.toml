@@ -47,20 +47,22 @@ tauri = { version = "2.11.5", features = [] }
 tauri-plugin-log = "2.9.0"
 tauri-plugin-dialog = "2.7.2"
 tauri-plugin-fs = "2.5.1"
-# Exact-pinned (not semver `0.400`) because deno_core changes its
+# Exact-pinned (not a semver-compatible range) because deno_core changes its
 # public API at most patch boundaries — V8 binding signatures
 # (`execute_script`, `JsRuntime`, scope macros) and feature-flag
-# defaults shift between 0.400.0 and 0.401.0. The CLI engine bundle
+# defaults shift between releases. The CLI engine bundle
 # (`scripts/build-engine.mjs`) compiles to an iife that THIS exact
 # deno_core version loads; bumping requires reading the deno_core
 # changelog AND re-running the CLI engine integration tests
 # (`tests/test_chain.rs`) to confirm the V8 entry-points still match.
+# Since 0.409, rusty_v8 bundles ICU data; do not restore deno_core's
+# removed `include_icu_data` default feature as a separate copy.
 # Rationale documented so a future
 # `cargo update`-style "just bump the pin" decision pauses for the
 # binding audit first.
-deno_core = "=0.400.0"
+deno_core = "=0.409.0"
 clap = { version = "4.6.4", features = ["derive"] }
-tokio = { version = "1.53.1", features = ["rt"] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "time"] }
 font-kit = "0.14"
 once_cell = "1"
 rusqlite = { version = "0.39", features = ["bundled"] }
