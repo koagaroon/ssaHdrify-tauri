@@ -1665,10 +1665,8 @@ fn parse_legacy_name_table_entries(
                         families.insert(name);
                     }
                 }
-                4 | 6 => {
-                    if face_name_variants.len() < MAX_FACE_NAME_VARIANTS_PER_FACE {
-                        face_name_variants.insert(name);
-                    }
+                4 | 6 if face_name_variants.len() < MAX_FACE_NAME_VARIANTS_PER_FACE => {
+                    face_name_variants.insert(name);
                 }
                 _ => {}
             }
