@@ -21,7 +21,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: ["22.13.0", "24"]
+        include:
+          - node: "22.13.0"
+            check_latest: false
+            audit: false
+          - node: "24"
+            check_latest: true
+            audit: true
+          - node: "26"
+            check_latest: true
+            audit: false
 
     steps:
       - name: Check out the repository
@@ -31,13 +40,23 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ matrix.node }}
+          check-latest: ${{ matrix.check_latest }}
           cache: npm
+
+      - name: Use the declared npm version
+        shell: pwsh
+        run: |
+          $npmVersion = node -p "require('./package.json').packageManager.split('@').at(-1)"
+          npm install --global "npm@$npmVersion"
+          if ((npm --version) -ne $npmVersion) {
+            throw "Expected npm $npmVersion, got $(npm --version)"
+          }
 
       - name: Install locked Node dependencies
         run: npm ci
 
       - name: Audit the complete Node dependency graph
-        if: matrix.node == '24'
+        if: matrix.audit
         run: npm audit
 
       - name: Check TypeScript 6 and TypeScript 7
@@ -71,7 +90,17 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
+          check-latest: true
           cache: npm
+
+      - name: Use the declared npm version
+        shell: pwsh
+        run: |
+          $npmVersion = node -p "require('./package.json').packageManager.split('@').at(-1)"
+          npm install --global "npm@$npmVersion"
+          if ((npm --version) -ne $npmVersion) {
+            throw "Expected npm $npmVersion, got $(npm --version)"
+          }
 
       - name: Cache Cargo downloads
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -102,6 +131,9 @@ jobs:
       - name: Build the embedded TypeScript engine
         run: npm run build:engine
 
+      - name: Install the current stable Rust toolchain
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy --no-self-update
+
       - name: Check Rust formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
 
@@ -126,7 +158,17 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
+          check-latest: true
           cache: npm
+
+      - name: Use the declared npm version
+        shell: pwsh
+        run: |
+          $npmVersion = node -p "require('./package.json').packageManager.split('@').at(-1)"
+          npm install --global "npm@$npmVersion"
+          if ((npm --version) -ne $npmVersion) {
+            throw "Expected npm $npmVersion, got $(npm --version)"
+          }
 
       - name: Cache Cargo downloads
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

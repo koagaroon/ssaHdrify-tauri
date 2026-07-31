@@ -4,11 +4,13 @@ const toolchains = [
   {
     label: "release",
     packageUrl: new URL("../node_modules/typescript/package.json", import.meta.url),
+    expectedPackageName: "typescript",
     expectedMajor: 6,
   },
   {
     label: "pilot",
     packageUrl: new URL("../node_modules/@typescript/native/package.json", import.meta.url),
+    expectedPackageName: "typescript",
     expectedMajor: 7,
   },
 ];
@@ -17,6 +19,17 @@ for (const toolchain of toolchains) {
   const packageJson = JSON.parse(await readFile(toolchain.packageUrl, "utf8"));
   const version = packageJson.version;
   const major = Number.parseInt(version, 10);
+  const compilerBin = packageJson.bin?.tsc;
+  const normalizedCompilerBin =
+    typeof compilerBin === "string" ? compilerBin.replace(/^\.\//u, "") : "";
+
+  if (packageJson.name !== toolchain.expectedPackageName || normalizedCompilerBin !== "bin/tsc") {
+    throw new Error(
+      `Expected the ${toolchain.label} compiler package to be ${toolchain.expectedPackageName} with bin/tsc, got ${String(packageJson.name)} with ${String(compilerBin)}`
+    );
+  }
+
+  await readFile(new URL(compilerBin, toolchain.packageUrl));
 
   if (major !== toolchain.expectedMajor) {
     throw new Error(

@@ -435,8 +435,9 @@ Due to the complexity of subtitle blending pipelines and HDR display environment
 
 ### 前置条件 | Prerequisites
 
-- [Node.js](https://nodejs.org/) (v22.13+ or v24.x)
-- [Rust 工具链 / Rust toolchain](https://rustup.rs/) (1.91+)
+- [Node.js](https://nodejs.org/) (v22.13 minimum, v24 LTS recommended, or v26 Current)
+- npm 11.19.0（由 `packageManager` 声明并由 CI 强制 / declared by `packageManager` and enforced in CI）
+- [Rust 工具链 / Rust toolchain](https://rustup.rs/) (1.91 minimum; latest stable recommended)
 - Windows: WebView2 (Windows 10/11 已预装 / pre-installed on Windows 10/11)
 - macOS / Linux: 参考 / see [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)
 
@@ -484,9 +485,9 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端测试 / Rust bac
 >
 > `npm test` defaults to watch mode (development); use `npm run test:run` for a single-pass run.
 >
-> 发布构建和 ESLint 使用受支持的 TypeScript 6 兼容包；原生 TypeScript 7 使用独立缓存运行兼容性检查。两个包都会提供名为 `tsc` 的命令，因此请使用上面的 `npm run typecheck:*` 脚本；全新安装后的裸 `tsc` / `npx tsc` 会指向 TypeScript 7。
+> 发布构建和 ESLint 使用受支持的 TypeScript 6 编译器；原生 TypeScript 7 使用独立缓存运行兼容性检查。两个包都会提供名为 `tsc` 的命令，因此请使用上面的 `npm run typecheck:*` 脚本；不要依赖裸 `tsc` / `npx tsc` 的解析顺序。
 >
-> Release builds and ESLint use the supported TypeScript 6 compatibility package. Native TypeScript 7 runs as a compatibility check with separate caches. Both packages expose a binary named `tsc`, so use the `npm run typecheck:*` scripts above; after a clean install, bare `tsc` / `npx tsc` resolves to TypeScript 7.
+> Release builds and ESLint use the supported TypeScript 6 compiler. Native TypeScript 7 runs as a compatibility check with separate caches. Both packages expose a binary named `tsc`, so use the `npm run typecheck:*` scripts above instead of relying on bare `tsc` / `npx tsc` resolution order.
 
 ---
 
