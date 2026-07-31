@@ -422,9 +422,36 @@
   flex: 1;
 }
 
-.app-footer .ver {
+.footer-license-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
   color: var(--text-muted);
+  font: inherit;
+  letter-spacing: inherit;
   white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color 0.15s,
+    color 0.15s;
+}
+
+.footer-license-button:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.footer-license-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.footer-license-button:disabled {
+  cursor: default;
 }
 
 /* N-of-M progress chip — sits between the status message and the right-side
@@ -1375,6 +1402,123 @@
   overflow-y: auto;
   flex: 1;
   min-height: 0;
+}
+
+/* ── About and license notices ─────────────────────────── */
+.licenses-modal {
+  width: min(720px, calc(100vw - 32px));
+}
+
+.licenses-body {
+  gap: 14px;
+}
+
+.licenses-legal-note {
+  padding: 10px 12px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.license-notice-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.license-notice {
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-app);
+  overflow: hidden;
+}
+
+.license-notice[open] {
+  border-color: var(--border);
+}
+
+.license-notice-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 12px;
+  color: var(--text-primary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.license-notice-summary:hover {
+  background: var(--bg-hover);
+}
+
+.license-notice-summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.license-notice-name {
+  min-width: 0;
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.license-notice-id {
+  padding: 2px 7px;
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.license-notice-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 12px 12px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.license-notice-source {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+}
+
+.license-notice-source code {
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.license-full-text-label {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.license-full-text {
+  max-height: 280px;
+  padding: 12px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.45;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
 }
 
 /* Option card — 40px rounded icon + title + subtitle. Both picker

@@ -5,11 +5,13 @@ import TimingShift from "./features/timing-shift/TimingShift";
 import FontEmbed from "./features/font-embed/FontEmbed";
 import BatchRename from "./features/batch-rename/BatchRename";
 import FontCacheDriftModal from "./features/font-embed/FontCacheDriftModal";
+import AboutLicensesModal from "./AboutLicensesModal";
 import { useI18n } from "./i18n/useI18n";
 import { useTheme } from "./theme/useTheme";
 import type { ThemeMode } from "./theme/useTheme";
 import { useStatus, type StatusTab } from "./lib/StatusContext";
 import { useClickOutside } from "./lib/useClickOutside";
+import { resolveAppModalVisibility } from "./lib/modal-coordination";
 import { TAB_LABEL_KEYS } from "./lib/tab-labels";
 import {
   openFontCache,
@@ -72,6 +74,7 @@ function App() {
   }, []);
 
   const [themeOpen, setThemeOpen] = useState(false);
+  const [licensesOpen, setLicensesOpen] = useState(false);
   const themeRef = useRef<HTMLDivElement>(null);
   // Close on click-outside + Escape — see useClickOutside for the
   // armed-on-next-tick rationale.
@@ -182,6 +185,12 @@ function App() {
     setCacheDrift({ added: [], modified: [], removed: [] });
     void refreshCacheStatus();
   }, [refreshCacheStatus]);
+
+  const handleLicensesClose = useCallback(() => {
+    setLicensesOpen(false);
+  }, []);
+
+  const modalVisibility = resolveAppModalVisibility(showCacheModal, licensesOpen);
 
   return (
     <div className="stage">
@@ -465,18 +474,31 @@ function App() {
             </span>
           )}
           <span className="spacer" />
-          <span className="ver">{t("footer_version")}</span>
+          <button
+            type="button"
+            className="footer-license-button"
+            onClick={() => {
+              if (!showCacheModal) setLicensesOpen(true);
+            }}
+            disabled={showCacheModal}
+            aria-haspopup="dialog"
+          >
+            <span>{t("footer_version")}</span>
+            <span aria-hidden="true">·</span>
+            <span>{t("licenses_open")}</span>
+          </button>
         </footer>
       </div>
 
       <FontCacheDriftModal
-        open={showCacheModal}
+        open={modalVisibility.cache}
         status={cacheStatus}
         drift={cacheDrift}
         onClose={handleCacheModalClose}
         onRescanComplete={handleCacheActionComplete}
         onClearComplete={handleCacheActionComplete}
       />
+      <AboutLicensesModal open={modalVisibility.licenses} onClose={handleLicensesClose} />
     </div>
   );
 }

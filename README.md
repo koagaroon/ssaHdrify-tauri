@@ -528,7 +528,8 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端测试 / Rust bac
 ## 致谢 | Credits
 
 - 原项目 / Original project: [ying](https://github.com/ying) (2021), [gky99/ssaHdrify](https://github.com/gky99/ssaHdrify) (2024-2025)
-- <a href="https://www.flaticon.com/free-icons/hdr" title="hdr icons">Hdr icons created by Freepik - Flaticon</a>
+- 应用图标 / App icon: 为本项目制作的 H-transition 图形，源文件见 `src-tauri/icons/source.svg` / H-transition artwork created for this project; source: `src-tauri/icons/source.svg`
+- 部分界面图标 / Some interface glyphs: [Feather Icons](https://github.com/feathericons/feather)（MIT）
 
 ---
 
@@ -575,28 +576,29 @@ The tables below list the main direct dependencies and bundled assets. For the f
 
 #### 运行时依赖（随应用分发）| Runtime (shipped with the application)
 
-| 组件 / Component                                                             | 许可证 / License                     | 用途 / Usage                                                                                                   |
-| ---------------------------------------------------------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
-| [Tauri](https://tauri.app/)                                                  | Apache-2.0 OR MIT                    | 桌面应用框架 / Desktop app framework                                                                           |
-| [Tauri plugins](https://v2.tauri.app/plugin/)                                | Apache-2.0 OR MIT                    | 对话框、文件访问和日志插件 / Dialog, filesystem, and logging plugins                                           |
-| [React](https://react.dev/) / React DOM                                      | MIT                                  | UI 框架 / UI framework                                                                                         |
-| [React Window](https://github.com/bvaughn/react-window)                      | MIT                                  | 大列表虚拟滚动 / Virtualized large lists                                                                       |
-| [Color.js](https://colorjs.io/)                                              | MIT                                  | HDR 色彩空间转换 (PQ/HLG) / HDR color space conversion                                                         |
-| [ass-compiler](https://github.com/weizhenye/ass-compiler)                    | MIT                                  | ASS 字幕解析（字体收集）/ ASS subtitle parsing for font collection                                             |
-| [font-kit](https://github.com/servo/font-kit)                                | MIT OR Apache-2.0                    | 跨平台系统字体发现 (Rust) / Cross-platform system font discovery                                               |
-| [fontcull](https://github.com/bearcove/fontcull)                             | MIT / MIT OR Apache-2.0              | 字体子集化（含 fontcull-klippa、fontcull-skrifa）/ Font subsetting (includes fontcull-klippa, fontcull-skrifa) |
-| [chardetng](https://github.com/hsivonen/chardetng)                           | MIT OR Apache-2.0                    | 编码检测 (Firefox 引擎) / Encoding detection (Firefox's engine)                                                |
-| [encoding_rs](https://github.com/hsivonen/encoding_rs)                       | (Apache-2.0 OR MIT) AND BSD-3-Clause | 编码转换 / Encoding conversion                                                                                 |
-| [rusqlite](https://github.com/rusqlite/rusqlite)                             | MIT                                  | 字体缓存和本地字体索引 / Font cache and local font index                                                       |
-| [serde](https://serde.rs/) / serde_json                                      | MIT OR Apache-2.0                    | Rust 序列化 / Rust serialization                                                                               |
-| [deno_core](https://github.com/denoland/deno)                                | MIT                                  | 嵌入式 V8 JS 运行时（CLI）/ Embedded V8 JS runtime (CLI)                                                       |
-| [V8](https://v8.dev/)                                                        | BSD-3-Clause                         | JavaScript 引擎（经 deno_core 嵌入，CLI）/ JavaScript engine via deno_core (CLI)                               |
-| [clap](https://github.com/clap-rs/clap)                                      | MIT OR Apache-2.0                    | CLI 参数解析（CLI）/ CLI argument parsing (CLI)                                                                |
-| [env_logger](https://github.com/rust-cli/env_logger)                         | MIT OR Apache-2.0                    | CLI 日志后端 stderr（CLI）/ CLI logging backend on stderr (CLI)                                                |
-| [sys-locale](https://github.com/1Password/sys-locale)                        | MIT OR Apache-2.0                    | OS 区域设置检测（驱动 `--lang` 自动检测，CLI）/ OS locale detection driving `--lang` auto (CLI)                |
-| [base64](https://github.com/marshallpierce/rust-base64)                      | MIT OR Apache-2.0                    | Rust 侧字体载荷 base64 编码 / Base64 encoding for Rust-side font payloads                                      |
-| [unicode-normalization](https://github.com/unicode-rs/unicode-normalization) | MIT OR Apache-2.0                    | Unicode 路径 / 输出键规范化 / Unicode path and output-key normalization                                        |
-| [rfd](https://github.com/PolyMeilex/rfd)                                     | MIT                                  | 启动失败时的原生错误对话框 / Native error dialog for startup failures                                          |
+| 组件 / Component                                                             | 许可证 / License                               | 用途 / Usage                                                                                                   |
+| ---------------------------------------------------------------------------- | ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| [Tauri](https://tauri.app/)                                                  | Apache-2.0 OR MIT                              | 桌面应用框架 / Desktop app framework                                                                           |
+| [Tauri plugins](https://v2.tauri.app/plugin/)                                | Apache-2.0 OR MIT                              | 对话框、文件访问和日志插件 / Dialog, filesystem, and logging plugins                                           |
+| [React](https://react.dev/) / React DOM                                      | MIT                                            | UI 框架 / UI framework                                                                                         |
+| [React Window](https://github.com/bvaughn/react-window)                      | MIT                                            | 大列表虚拟滚动 / Virtualized large lists                                                                       |
+| [Color.js](https://colorjs.io/)                                              | MIT                                            | HDR 色彩空间转换 (PQ/HLG) / HDR color space conversion                                                         |
+| [ass-compiler](https://github.com/weizhenye/ass-compiler)                    | MIT                                            | ASS 字幕解析（字体收集）/ ASS subtitle parsing for font collection                                             |
+| [font-kit](https://github.com/servo/font-kit)                                | MIT OR Apache-2.0                              | 跨平台系统字体发现 (Rust) / Cross-platform system font discovery                                               |
+| [fontcull](https://github.com/bearcove/fontcull)                             | MIT / MIT OR Apache-2.0                        | 字体子集化（含 fontcull-klippa、fontcull-skrifa）/ Font subsetting (includes fontcull-klippa, fontcull-skrifa) |
+| [chardetng](https://github.com/hsivonen/chardetng)                           | MIT OR Apache-2.0                              | 编码检测 (Firefox 引擎) / Encoding detection (Firefox's engine)                                                |
+| [encoding_rs](https://github.com/hsivonen/encoding_rs)                       | (Apache-2.0 OR MIT) AND BSD-3-Clause           | 编码转换 / Encoding conversion                                                                                 |
+| [rusqlite](https://github.com/rusqlite/rusqlite)                             | MIT                                            | 字体缓存和本地字体索引 / Font cache and local font index                                                       |
+| [serde](https://serde.rs/) / serde_json                                      | MIT OR Apache-2.0                              | Rust 序列化 / Rust serialization                                                                               |
+| [deno_core](https://github.com/denoland/deno)                                | MIT                                            | 嵌入式 V8 JS 运行时（CLI）/ Embedded V8 JS runtime (CLI)                                                       |
+| [V8](https://v8.dev/)                                                        | BSD-3-Clause                                   | JavaScript 引擎（经 deno_core 嵌入，CLI）/ JavaScript engine via deno_core (CLI)                               |
+| [clap](https://github.com/clap-rs/clap)                                      | MIT OR Apache-2.0                              | CLI 参数解析（CLI）/ CLI argument parsing (CLI)                                                                |
+| [env_logger](https://github.com/rust-cli/env_logger)                         | MIT OR Apache-2.0                              | CLI 日志后端 stderr（CLI）/ CLI logging backend on stderr (CLI)                                                |
+| [sys-locale](https://github.com/1Password/sys-locale)                        | MIT OR Apache-2.0                              | OS 区域设置检测（驱动 `--lang` 自动检测，CLI）/ OS locale detection driving `--lang` auto (CLI)                |
+| [base64](https://github.com/marshallpierce/rust-base64)                      | MIT OR Apache-2.0                              | Rust 侧字体载荷 base64 编码 / Base64 encoding for Rust-side font payloads                                      |
+| [unicode-normalization](https://github.com/unicode-rs/unicode-normalization) | MIT OR Apache-2.0                              | Unicode 路径 / 输出键规范化 / Unicode path and output-key normalization                                        |
+| [rfd](https://github.com/PolyMeilex/rfd)                                     | MIT                                            | 启动失败时的原生错误对话框 / Native error dialog for startup failures                                          |
+| [Feather Icons](https://github.com/feathericons/feather)                     | [MIT](src/assets/licenses/feather-LICENSE.txt) | 主题切换等内联界面图标 / Inline interface glyphs, including the theme toggle                                   |
 
 #### 捆绑字体（随应用分发）| Bundled Fonts (shipped with the application)
 
@@ -605,9 +607,13 @@ The tables below list the main direct dependencies and bundled assets. For the f
 | [Inter](https://rsms.me/inter/) · © The Inter Project Authors                                                                 | [SIL Open Font License 1.1](src/assets/fonts/inter/LICENSE.txt) · OFL-1.1       | 英文界面正文与标题 / English UI body + display face                                             |
 | [Smiley Sans 得意黑](https://github.com/atelier-anchor/smiley-sans) · © 2022–2024 [atelierAnchor](https://atelier-anchor.com) | [SIL Open Font License 1.1](src/assets/fonts/smiley-sans/LICENSE.txt) · OFL-1.1 | 中文界面标题展示字体（仅用于标题）/ Chinese-mode application title display face (headline only) |
 
-> OFL-1.1 允许这些字体与任何软件一起捆绑、嵌入和再分发，包括 GPL-3.0 项目；字体及其衍生作品必须继续以 OFL 授权，不得单独销售，且修改版本不得使用其保留字体名称。
+> OFL-1.1 允许这些字体与任何软件一起捆绑、嵌入和再分发，包括 GPL-3.0 项目；字体及其衍生作品必须继续以 OFL 授权，不得单独销售，且修改版本不得使用相应许可证声明的保留字体名称。随附的 Smiley Sans 许可证声明了 `Smiley` 和 `得意黑`；随附的 Inter 许可证未声明保留字体名称。
 >
-> OFL-1.1 allows these fonts to be bundled, embedded, and redistributed alongside any software, including GPL-3.0 projects. The fonts and their derivatives must remain licensed under OFL, must not be sold on their own, and modified versions must not use the Reserved Font Names (`Inter`, `Smiley`, `得意黑`).
+> OFL-1.1 allows these fonts to be bundled, embedded, and redistributed alongside any software, including GPL-3.0 projects. The fonts and their derivatives must remain licensed under OFL, must not be sold on their own, and modified versions must not use Reserved Font Names declared by their respective licenses. The bundled Smiley Sans license declares `Smiley` and `得意黑`; the bundled Inter license declares none.
+
+桌面版可从页脚的 **许可证** 打开离线声明，阅读项目 GPL 正文、两款捆绑字体的完整 OFL 文本，以及 Feather Icons 的 MIT 声明。
+
+In the desktop app, choose **Licenses** in the footer to read offline copies of the project GPL, both bundled fonts' complete OFL texts, and the Feather Icons MIT notice.
 
 #### 构建时依赖（不随应用分发）| Build-time only (not shipped)
 

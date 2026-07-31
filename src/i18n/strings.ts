@@ -91,6 +91,35 @@ export const strings: Record<string, StringEntry> = {
     en: `SSA HDRify ${__APP_VERSION__}`,
     zh: `SSA HDRify ${__APP_VERSION__}`,
   },
+  licenses_open: { en: "Licenses", zh: "许可证" },
+  licenses_title: { en: "About & Licenses", zh: "关于与许可证" },
+  licenses_intro: {
+    en: "Offline copies of the application license and notices for bundled fonts and adapted interface icons.",
+    zh: "应用许可证、捆绑字体及改编界面图标声明的离线副本。",
+  },
+  licenses_exact_text_note: {
+    en: "Legal texts below are embedded verbatim in English. Chinese UI text is an informal navigation aid, not a legal translation.",
+    zh: "下列英文法律文本均为逐字嵌入；中文界面文字仅用于辅助阅读，不构成法律翻译。",
+  },
+  licenses_close: { en: "Close licenses", zh: "关闭许可证" },
+  licenses_source: { en: "Source", zh: "来源" },
+  licenses_full_text: { en: "Full license text", zh: "完整许可证正文" },
+  licenses_ssahdrify_summary: {
+    en: "Copyright © 2021 ying, 2024–2025 gky99, and 2026 koagaroon. SSA HDRify is licensed under GPL-3.0-or-later and comes with absolutely no warranty; see the full terms below.",
+    zh: "版权所有 © 2021 ying、2024–2025 gky99、2026 koagaroon。SSA HDRify 以 GPL-3.0-or-later 授权，且不附带任何保证；完整条款见下方。",
+  },
+  licenses_inter_summary: {
+    en: "Bundled interface font. Copyright © 2016 The Inter Project Authors. The bundled license declares no Reserved Font Name.",
+    zh: "捆绑界面字体。版权所有 © 2016 The Inter Project Authors。随附许可证未声明保留字体名称。",
+  },
+  licenses_smiley_sans_summary: {
+    en: "Bundled display font. Copyright © 2022–2024 atelierAnchor. Reserved Font Names: Smiley and 得意黑.",
+    zh: "捆绑展示字体。版权所有 © 2022–2024 atelierAnchor。保留字体名称：Smiley、得意黑。",
+  },
+  licenses_feather_summary: {
+    en: "Some interface glyphs are adapted from Feather Icons. Copyright © 2013–2023 Cole Bemis.",
+    zh: "部分界面图标改编自 Feather Icons。版权所有 © 2013–2023 Cole Bemis。",
+  },
 
   // ── Theme ───────────────────────────────────────────────
   theme_auto: { en: "Follow System", zh: "跟随系统" },

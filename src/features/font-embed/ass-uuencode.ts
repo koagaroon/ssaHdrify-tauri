@@ -29,10 +29,11 @@ import { ASCII_CONTROL_CHARS, BIDI_AND_ZERO_WIDTH_CHARS } from "../../lib/unicod
  */
 
 /**
- * Hard cap on input size. The Rust backend already refuses font files over
- * 50 MB; this guard defends the encoder itself from being handed oversized
- * data through a bypass or refactor. 50 MB of input yields ~67 MB of encoded
- * text plus the `fontname:` header overhead — well past any realistic subset.
+ * Independent TypeScript encoder cap. Rust permits source font files up to
+ * 64 MiB and separately caps each command's aggregate subset payload; this
+ * guard limits the later string-building allocation even when a caller
+ * bypasses those layers. 50 MiB of input yields about 67 MiB of encoded text
+ * plus the `fontname:` header overhead — well past any realistic subset.
  */
 export const MAX_FONT_DATA_SIZE = 50 * 1024 * 1024;
 

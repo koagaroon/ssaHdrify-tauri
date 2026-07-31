@@ -110,11 +110,9 @@ export default function FontEmbed() {
   const { t } = useI18n();
   const { fontsFiles, setFontsFiles, clearFile, isFileInUse } = useFileContext();
 
-  // Per-file state — populated for the FIRST file when a selection lands.
-  // In single-file mode the user interacts with this grid + checkbox set
-  // directly. In batch mode the grid is hidden; remaining files are
-  // analyzed during the embed loop using the Rust-owned local font-source
-  // index.
+  // Aggregated font state for the unified detection grid and checkbox
+  // selection. Every selected file is analyzed during ingest; single-file
+  // mode is N=1 of the same path, and batch rows are the cross-file union.
   const [fonts, setFonts] = useState<FontInfo[]>([]);
   const [fontUsages, setFontUsages] = useState<FontUsage[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -1421,9 +1419,8 @@ export default function FontEmbed() {
       {/* Log */}
       <LogPanel logs={logs} onClear={clearLogs} scrollRef={logScrollRef} />
 
-      {/* Font source modal — uses first file's usages for coverage stats
-           in single-file mode; in batch the modal still shows but the
-           coverage is for file #1 only (representative sample). */}
+      {/* The modal receives the same aggregated usage union as the grid,
+          so its coverage statistics represent the whole selection. */}
       <FontSourceModal
         open={sourceModalOpen}
         onClose={() => setSourceModalOpen(false)}

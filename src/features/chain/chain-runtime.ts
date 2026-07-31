@@ -159,16 +159,15 @@ function embedTransform(ctx: TransformContext, params: EmbedStepParams): Transfo
   // stay sync (matching every other engine call boundary) without
   // needing async TS→Rust callbacks mid-chain.
   //
-  // Per-subset byte-length defense lives at the
-  // Rust shell (`process_one_chain_input` enforces
-  // `MAX_CHAIN_SUBSET_TOTAL_BYTES = 200 MB` on the raw bytes before
-  // base64 + serde_json marshal; `MAX_FONT_DATA_SIZE = 50 MB` bounds
-  // each individual subset upstream in subset_font). This transform
-  // trusts that upstream — `decodeBase64` below has no local cap.
+  // Resource budgets are layered. Before V8, the Rust shell caps the
+  // aggregate raw subset payload at 100 MiB and subset_font rejects
+  // source font files above 64 MiB. After decoding, buildFontEntry's
+  // encoder applies its own stricter 50 MiB per-subset cap. decodeBase64
+  // itself has no local cap, so the Rust preflight remains load-bearing.
   // Today the chain V8 entry is ONLY reached via the Rust shell;
   // any future caller that constructs a ChainPlan from another
-  // source (a TS-side fixture, an HTTP-API entry) must enforce
-  // its own per-subset size cap before reaching here.
+  // source (a TS-side fixture, an HTTP-API entry) must cap the payload
+  // before decoding rather than relying only on the encoder's later guard.
   if (params.subsets === undefined) {
     throw new Error(
       "embed step in chain requires pre-resolved font subsets " +

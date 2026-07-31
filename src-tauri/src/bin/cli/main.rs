@@ -95,15 +95,7 @@ struct GlobalOptions {
     /// Skip the persistent font cache for this run. Cache file is left
     /// untouched. Use when you want a fresh scan without affecting
     /// the cached state. 本次运行跳过持久化字体缓存；缓存文件保持不变。
-    ///
-    /// `global = true` is intentional even though only `embed` /
-    /// `diagnose-fonts` / `refresh-fonts` / `chain` consume the flag.
-    /// The clap idiom for cross-subcommand flags is one declaration
-    /// here; per-subcommand declaration would mean N duplicates +
-    /// drift surface. Subcommands that don't read the flag (hdr /
-    /// shift / rename) silently ignore it — standard clap behavior,
-    /// not a no-silent-action violation: the flag has no observable
-    /// effect anywhere it isn't read, so there's nothing to surface.
+    // Declared globally so cache-aware subcommands share one parser definition.
     #[arg(long, global = true)]
     no_cache: bool,
 
@@ -113,11 +105,8 @@ struct GlobalOptions {
     /// on Linux, `~/Library/Application Support/ssahdrify/` on macOS,
     /// always named `cli_font_cache.sqlite3`. Useful for testing or
     /// non-default layouts. 覆盖字体缓存文件路径。
-    ///
-    /// Same `global = true` rationale as `no_cache` above: one
-    /// declaration, cross-subcommand visible. Commands that read the
-    /// cache validate the path before opening it; chain reports that
-    /// the flag has no effect because chain v1 never uses the cache.
+    // Global for the same shared-parser reason as no_cache. Cache-aware
+    // commands validate the path before opening it; chain reports it as inert.
     #[arg(long, global = true, value_name = "PATH")]
     cache_file: Option<PathBuf>,
 
@@ -6685,7 +6674,7 @@ mod tests {
     // alias would only add indirection.
     use app_lib::fonts::USER_FONT_DB_FILENAME;
     use clap::error::ErrorKind;
-    use clap::Parser;
+    use clap::{CommandFactory, Parser};
     use std::fs;
     use std::path::{Path, PathBuf};
 
@@ -6732,6 +6721,26 @@ mod tests {
             MAX_RESOLVED_FONT_CODEPOINTS,
             MAX_SUBSET_CODEPOINTS_FOR_DEDUP,
         );
+    }
+
+    #[test]
+    fn global_help_stays_user_facing() {
+        let help = Cli::command().render_long_help().to_string();
+
+        assert!(help.contains("Skip the persistent font cache for this run."));
+        assert!(help.contains("Override the default font cache file path."));
+
+        for internal_phrase in [
+            "global = true",
+            "drift surface",
+            "no-silent-action violation",
+            "The clap idiom",
+        ] {
+            assert!(
+                !help.contains(internal_phrase),
+                "CLI help leaked internal implementation rationale: {internal_phrase}"
+            );
+        }
     }
 
     #[test]

@@ -46,9 +46,9 @@ export interface TimingFilesState {
 export interface FontsFilesState {
   filePaths: string[];
   fileNames: string[];
-  /** Content of `filePaths[0]` only — used in single-file mode for the
-   *  detection grid + per-font selection. In batch (length > 1) the grid
-   *  is hidden and remaining files are analyzed during the embed loop. */
+  /** Content of the first successfully analyzed file, or an empty string
+   *  if none succeeded. Full-batch content and analysis live in FontEmbed's
+   *  per-file cache; the detection grid aggregates that cache in every mode. */
   firstFileContent: string;
 }
 
