@@ -1,19 +1,67 @@
 version: 2
 
+# Version-update holds below do not suppress Dependabot security updates.
 updates:
-  # Routine npm and Cargo version PRs stay disabled. Vulnerability alerts
-  # remain enabled, and dependency refreshes are reviewed manually.
   - package-ecosystem: npm
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 3
+    groups:
+      routine-npm-patches:
+        patterns:
+          - "*"
+        update-types:
+          - patch
+    ignore:
+      # TS7 remains a manually advanced compatibility pilot.
+      - dependency-name: "@typescript/native"
+        update-types:
+          - "version-update:semver-patch"
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
+
+      # TS7 must not replace the production TS6 release gate automatically.
+      - dependency-name: typescript
+        update-types:
+          - "version-update:semver-major"
+
+      # These typings intentionally enforce the Node 22.13 API floor.
+      - dependency-name: "@types/node"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
 
   - package-ecosystem: cargo
     directory: /src-tauri
     schedule:
       interval: weekly
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 3
+    groups:
+      routine-cargo-patches:
+        patterns:
+          - "*"
+        update-types:
+          - patch
+    ignore:
+      # Every deno_core release requires a V8/API/runtime audit.
+      - dependency-name: deno_core
+        update-types:
+          - "version-update:semver-patch"
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
+
+      # rusqlite 0.40's SQLite bindings require Rust 1.95; keep the 1.91 floor.
+      - dependency-name: rusqlite
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
+
+      # Tauri's dialog plugin still constrains the shared graph to rfd 0.16.
+      - dependency-name: rfd
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
 
   - package-ecosystem: github-actions
     directory: /
