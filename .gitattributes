@@ -1,0 +1,16 @@
+# Keep repository text and cross-platform checkouts deterministic.
+* text=auto eol=lf
+
+# Encoding-sensitive subtitle fixtures must remain byte-for-byte exact.
+src-tauri/tests/fixtures/*.ass binary
+
+# Bundled binary assets.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.icns binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
