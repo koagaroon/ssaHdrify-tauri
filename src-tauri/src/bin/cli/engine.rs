@@ -567,18 +567,22 @@ mod tests {
 
     #[test]
     fn font_subset_payload_serializes_bytes_as_base64() {
-        let request = FontEmbedApplyRequest {
-            content: "[Script Info]\nScriptType: v4.00+\n".to_string(),
-            fonts: vec![FontSubsetPayload {
-                font_name: "arial.ttf".to_string(),
-                data: vec![0, 1, 2],
-            }],
-        };
+        const CASES: &[(&[u8], &str)] = &[(&[0], "AA=="), (&[0, 1], "AAE="), (&[0, 1, 2], "AAEC")];
 
-        let json = serde_json::to_value(&request).expect("serialize request");
-        let font = &json["fonts"][0];
-        assert_eq!(font["fontName"], "arial.ttf");
-        assert_eq!(font["dataB64"], "AAEC");
-        assert!(font.get("data").is_none());
+        for &(data, expected) in CASES {
+            let request = FontEmbedApplyRequest {
+                content: "[Script Info]\nScriptType: v4.00+\n".to_string(),
+                fonts: vec![FontSubsetPayload {
+                    font_name: "arial.ttf".to_string(),
+                    data: data.to_vec(),
+                }],
+            };
+
+            let json = serde_json::to_value(&request).expect("serialize request");
+            let font = &json["fonts"][0];
+            assert_eq!(font["fontName"], "arial.ttf");
+            assert_eq!(font["dataB64"], expected);
+            assert!(font.get("data").is_none());
+        }
     }
 }

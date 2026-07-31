@@ -84,7 +84,7 @@ env_logger = "0.11"
 # was removed along with the fontcull-parse-fail fallback
 # path. The justification is still load-bearing: MAX_FONT_DATA_SIZE
 # guards subset_font's data return on the Ok path.)
-base64 = "0.22"
+base64 = { version = "0.23", default-features = false, features = ["std"] }
 # Direct dep on rfd matches the transitive version pulled in by
 # tauri-plugin-dialog. Used at app setup to surface init failures via a
 # native MessageBox: a Windows GUI subsystem app has no visible stdout
