@@ -270,13 +270,16 @@ fn refresh_fonts_rejects_folder_count_over_cache_cap() {
     ];
 
     for i in 0..=MAX_CACHED_FOLDERS {
-        let dir = work.join(format!("fonts-{i:04}"));
-        fs::create_dir_all(&dir).expect("failed to create font dir");
+        let relative_dir = format!("fonts-{i:04}");
+        fs::create_dir_all(work.join(&relative_dir)).expect("failed to create font dir");
         args.push("--font-dir".to_string());
-        args.push(dir.to_string_lossy().into_owned());
+        args.push(relative_dir);
     }
 
+    // Relative arguments keep this boundary test below Windows' process
+    // command-line limit while the CLI still resolves 257 distinct folders.
     let output = Command::new(cli_path())
+        .current_dir(&work)
         .args(&args)
         .output()
         .expect("failed to spawn ssahdrify-cli");
