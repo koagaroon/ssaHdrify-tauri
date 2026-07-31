@@ -14,14 +14,7 @@ updates:
         update-types:
           - patch
     ignore:
-      # TS7 remains a manually advanced compatibility pilot.
-      - dependency-name: "@typescript/native"
-        update-types:
-          - "version-update:semver-patch"
-          - "version-update:semver-minor"
-          - "version-update:semver-major"
-
-      # TS7 must not replace the production TS6 release gate automatically.
+      # This alias supplies the TS6 API until programmatic consumers support TS7.
       - dependency-name: typescript
         update-types:
           - "version-update:semver-major"

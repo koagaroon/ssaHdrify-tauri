@@ -477,7 +477,7 @@ src-tauri/target/release/ssahdrify-cli.exe
 
 ```bash
 npm run test:run                                  # 前端单元测试 / Frontend unit tests
-npm run typecheck:all                             # TypeScript 6 release gate + TypeScript 7 pilot
+npm run typecheck:all                             # TypeScript 7 release gate + TypeScript 6 API compatibility
 cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端测试 / Rust backend tests
 ```
 
@@ -485,9 +485,9 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端测试 / Rust bac
 >
 > `npm test` defaults to watch mode (development); use `npm run test:run` for a single-pass run.
 >
-> 发布构建和 ESLint 使用受支持的 TypeScript 6 编译器；原生 TypeScript 7 使用独立缓存运行兼容性检查。两个包都会提供名为 `tsc` 的命令，因此请使用上面的 `npm run typecheck:*` 脚本；不要依赖裸 `tsc` / `npx tsc` 的解析顺序。
+> 发布构建使用原生 TypeScript 7 类型检查；ESLint 和 `typescript-eslint` 通过官方 `@typescript/typescript6` 兼容包继续使用 TypeScript 6 的程序化 API。CI 会检查两个工具链。请使用上面的 `npm run typecheck:*` 脚本；不要依赖裸 `tsc` / `npx tsc` 的解析顺序。
 >
-> Release builds and ESLint use the supported TypeScript 6 compiler. Native TypeScript 7 runs as a compatibility check with separate caches. Both packages expose a binary named `tsc`, so use the `npm run typecheck:*` scripts above instead of relying on bare `tsc` / `npx tsc` resolution order.
+> Release builds use native TypeScript 7 for type-checking. ESLint and `typescript-eslint` continue to use TypeScript 6's programmatic API through the official `@typescript/typescript6` compatibility package, and CI checks both toolchains. Use the `npm run typecheck:*` scripts above instead of relying on bare `tsc` / `npx tsc` resolution order.
 
 ---
 
@@ -623,16 +623,16 @@ In the desktop app, choose **Licenses** in the footer to read offline copies of 
 
 #### 构建时依赖（不随应用分发）| Build-time only (not shipped)
 
-| 组件 / Component                                   | 许可证 / License  | 用途 / Usage                                                                                 |
-| -------------------------------------------------- | ----------------- | -------------------------------------------------------------------------------------------- |
-| [Tailwind CSS](https://tailwindcss.com/)           | MIT               | CSS 工具框架 / CSS utility framework                                                         |
-| [TypeScript](https://www.typescriptlang.org/)      | Apache-2.0        | TypeScript 6 发布检查 + TypeScript 7 兼容性检查 / TS6 release gate + TS7 compatibility check |
-| [Vite](https://vite.dev/)                          | MIT               | 构建工具 / Build tool                                                                        |
-| [Tauri CLI](https://tauri.app/)                    | MIT OR Apache-2.0 | Tauri 构建入口 / Tauri build entry point                                                     |
-| [ESLint](https://eslint.org/)                      | MIT               | 代码检查 / Linting                                                                           |
-| [Stylelint](https://stylelint.io/)                 | MIT               | CSS 代码检查 / CSS linting                                                                   |
-| [Prettier](https://prettier.io/)                   | MIT               | 代码格式化 / Code formatter                                                                  |
-| [Vitest](https://vitest.dev/)                      | MIT               | 单元测试 / Unit testing                                                                      |
-| [js-base64](https://github.com/dankogai/js-base64) | BSD-3-Clause      | 测试侧 base64 wire-format 编码 / Test-side base64 wire-format encoding                       |
-| [esbuild](https://esbuild.github.io/)              | MIT               | 为 CLI 嵌入打包 engine.js / Bundles engine.js for CLI embedding                              |
-| [GitHub Actions](https://github.com/actions)       | MIT               | CI 检出、Node 配置、缓存和依赖审查 / CI checkout, Node setup, caching, and dependency review |
+| 组件 / Component                                   | 许可证 / License  | 用途 / Usage                                                                                     |
+| -------------------------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------ |
+| [Tailwind CSS](https://tailwindcss.com/)           | MIT               | CSS 工具框架 / CSS utility framework                                                             |
+| [TypeScript](https://www.typescriptlang.org/)      | Apache-2.0        | TypeScript 7 发布检查 + TypeScript 6 API 兼容层 / TS7 release gate + TS6 API compatibility layer |
+| [Vite](https://vite.dev/)                          | MIT               | 构建工具 / Build tool                                                                            |
+| [Tauri CLI](https://tauri.app/)                    | MIT OR Apache-2.0 | Tauri 构建入口 / Tauri build entry point                                                         |
+| [ESLint](https://eslint.org/)                      | MIT               | 代码检查 / Linting                                                                               |
+| [Stylelint](https://stylelint.io/)                 | MIT               | CSS 代码检查 / CSS linting                                                                       |
+| [Prettier](https://prettier.io/)                   | MIT               | 代码格式化 / Code formatter                                                                      |
+| [Vitest](https://vitest.dev/)                      | MIT               | 单元测试 / Unit testing                                                                          |
+| [js-base64](https://github.com/dankogai/js-base64) | BSD-3-Clause      | 测试侧 base64 wire-format 编码 / Test-side base64 wire-format encoding                           |
+| [esbuild](https://esbuild.github.io/)              | MIT               | 为 CLI 嵌入打包 engine.js / Bundles engine.js for CLI embedding                                  |
+| [GitHub Actions](https://github.com/actions)       | MIT               | CI 检出、Node 配置、缓存和依赖审查 / CI checkout, Node setup, caching, and dependency review     |

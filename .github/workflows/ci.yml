@@ -59,7 +59,7 @@ jobs:
         if: matrix.audit
         run: npm audit
 
-      - name: Check TypeScript 6 and TypeScript 7
+      - name: Check TypeScript 7 release and TypeScript 6 API compatibility
         run: npm run typecheck:all
 
       - name: Lint JavaScript and formatting
