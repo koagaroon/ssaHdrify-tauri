@@ -14,6 +14,9 @@ updates:
         update-types:
           - patch
     ignore:
+      # Dependabot currently skips npm aliases in version-update jobs. The
+      # dependency-currency workflow checks both TypeScript aliases weekly.
+      # Keep this hold as the intended boundary if alias updating is supported.
       # This alias supplies the TS6 API until programmatic consumers support TS7.
       - dependency-name: typescript
         update-types:

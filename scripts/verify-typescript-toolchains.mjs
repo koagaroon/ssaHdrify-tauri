@@ -1,4 +1,7 @@
 import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
+
+const require = createRequire(import.meta.url);
 
 const toolchains = [
   {
@@ -8,6 +11,8 @@ const toolchains = [
     expectedBinName: "tsc",
     expectedBinPath: "bin/tsc",
     expectedMajor: 7,
+    getEffectiveVersion: () => undefined,
+    expectedEffectiveMajor: null,
   },
   {
     label: "API compatibility",
@@ -16,6 +21,8 @@ const toolchains = [
     expectedBinName: "tsc6",
     expectedBinPath: "bin/tsc6",
     expectedMajor: 6,
+    getEffectiveVersion: () => require("typescript").version,
+    expectedEffectiveMajor: 6,
   },
 ];
 
@@ -44,5 +51,20 @@ for (const toolchain of toolchains) {
     );
   }
 
-  console.log(`TypeScript ${toolchain.label}: ${version}`);
+  const effectiveVersion = toolchain.getEffectiveVersion();
+
+  if (toolchain.expectedEffectiveMajor !== null) {
+    const effectiveMajor =
+      typeof effectiveVersion === "string" ? Number.parseInt(effectiveVersion, 10) : Number.NaN;
+
+    if (effectiveMajor !== toolchain.expectedEffectiveMajor) {
+      throw new Error(
+        `Expected the ${toolchain.label} TypeScript engine to be major ${toolchain.expectedEffectiveMajor}, got ${String(effectiveVersion)}`
+      );
+    }
+  }
+
+  const versionSummary =
+    effectiveVersion === undefined ? version : `wrapper ${version}, engine ${effectiveVersion}`;
+  console.log(`TypeScript ${toolchain.label}: ${versionSummary}`);
 }
