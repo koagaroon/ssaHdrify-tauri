@@ -6707,19 +6707,15 @@ mod tests {
     /// strictly less than the subset cap or the per-alias call could
     /// itself overflow `subset_font`. Same cross-language drift
     /// defense rationale that motivated `dedup_cap_matches_ipc_cap`:
-    /// the relationship is load-bearing, written down in one prose
-    /// comment, and there is no compiler check today.
+    /// the relationship is load-bearing, so this test target carries a
+    /// compile-time assertion rather than relying on prose alone.
     #[test]
     fn resolved_font_cap_fits_subset_cap() {
-        assert!(
+        const _: () = assert!(
             MAX_RESOLVED_FONT_CODEPOINTS < MAX_SUBSET_CODEPOINTS_FOR_DEDUP,
-            "MAX_RESOLVED_FONT_CODEPOINTS ({}) must be strictly less \
-             than MAX_SUBSET_CODEPOINTS_FOR_DEDUP ({}) — the cap-busting \
-             fallback subsets each alias independently and its safety \
-             claim depends on per-alias codepoints fitting under the \
-             subset cap.",
-            MAX_RESOLVED_FONT_CODEPOINTS,
-            MAX_SUBSET_CODEPOINTS_FOR_DEDUP,
+            "MAX_RESOLVED_FONT_CODEPOINTS must stay strictly less than \
+             MAX_SUBSET_CODEPOINTS_FOR_DEDUP so each fallback subset fits \
+             under the cap."
         );
     }
 

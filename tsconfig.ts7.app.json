@@ -1,0 +1,6 @@
+{
+  "extends": "./tsconfig.app.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.ts7.tsbuildinfo"
+  }
+}

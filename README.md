@@ -435,8 +435,8 @@ Due to the complexity of subtitle blending pipelines and HDR display environment
 
 ### 前置条件 | Prerequisites
 
-- [Node.js](https://nodejs.org/) (v20+)
-- [Rust 工具链 / Rust toolchain](https://rustup.rs/) (1.77.2+)
+- [Node.js](https://nodejs.org/) (v22.13+ or v24.x)
+- [Rust 工具链 / Rust toolchain](https://rustup.rs/) (1.91+)
 - Windows: WebView2 (Windows 10/11 已预装 / pre-installed on Windows 10/11)
 - macOS / Linux: 参考 / see [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)
 
@@ -444,7 +444,7 @@ Due to the complexity of subtitle blending pipelines and HDR display environment
 
 ```bash
 cd ssaHdrify-tauri
-npm install
+npm ci
 npm run tauri dev
 ```
 
@@ -476,12 +476,17 @@ src-tauri/target/release/ssahdrify-cli.exe
 
 ```bash
 npm run test:run                                  # 前端单元测试 / Frontend unit tests
+npm run typecheck:all                             # TypeScript 6 release gate + TypeScript 7 pilot
 cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端测试 / Rust backend tests
 ```
 
 > `npm test` 默认进入 watch 模式（开发用）；`npm run test:run` 是单次运行。
 >
 > `npm test` defaults to watch mode (development); use `npm run test:run` for a single-pass run.
+>
+> 发布构建和 ESLint 使用受支持的 TypeScript 6 兼容包；原生 TypeScript 7 使用独立缓存运行兼容性检查。两个包都会提供名为 `tsc` 的命令，因此请使用上面的 `npm run typecheck:*` 脚本；全新安装后的裸 `tsc` / `npx tsc` 会指向 TypeScript 7。
+>
+> Release builds and ESLint use the supported TypeScript 6 compatibility package. Native TypeScript 7 runs as a compatibility check with separate caches. Both packages expose a binary named `tsc`, so use the `npm run typecheck:*` scripts above; after a clean install, bare `tsc` / `npx tsc` resolves to TypeScript 7.
 
 ---
 
@@ -617,15 +622,16 @@ In the desktop app, choose **Licenses** in the footer to read offline copies of 
 
 #### 构建时依赖（不随应用分发）| Build-time only (not shipped)
 
-| 组件 / Component                                   | 许可证 / License  | 用途 / Usage                                                           |
-| -------------------------------------------------- | ----------------- | ---------------------------------------------------------------------- |
-| [Tailwind CSS](https://tailwindcss.com/)           | MIT               | CSS 工具框架 / CSS utility framework                                   |
-| [TypeScript](https://www.typescriptlang.org/)      | Apache-2.0        | 类型检查 / Type checking                                               |
-| [Vite](https://vite.dev/)                          | MIT               | 构建工具 / Build tool                                                  |
-| [Tauri CLI](https://tauri.app/)                    | MIT OR Apache-2.0 | Tauri 构建入口 / Tauri build entry point                               |
-| [ESLint](https://eslint.org/)                      | MIT               | 代码检查 / Linting                                                     |
-| [Stylelint](https://stylelint.io/)                 | MIT               | CSS 代码检查 / CSS linting                                             |
-| [Prettier](https://prettier.io/)                   | MIT               | 代码格式化 / Code formatter                                            |
-| [Vitest](https://vitest.dev/)                      | MIT               | 单元测试 / Unit testing                                                |
-| [js-base64](https://github.com/dankogai/js-base64) | BSD-3-Clause      | 测试侧 base64 wire-format 编码 / Test-side base64 wire-format encoding |
-| [esbuild](https://esbuild.github.io/)              | MIT               | 为 CLI 嵌入打包 engine.js / Bundles engine.js for CLI embedding        |
+| 组件 / Component                                   | 许可证 / License  | 用途 / Usage                                                                                 |
+| -------------------------------------------------- | ----------------- | -------------------------------------------------------------------------------------------- |
+| [Tailwind CSS](https://tailwindcss.com/)           | MIT               | CSS 工具框架 / CSS utility framework                                                         |
+| [TypeScript](https://www.typescriptlang.org/)      | Apache-2.0        | TypeScript 6 发布检查 + TypeScript 7 兼容性检查 / TS6 release gate + TS7 compatibility check |
+| [Vite](https://vite.dev/)                          | MIT               | 构建工具 / Build tool                                                                        |
+| [Tauri CLI](https://tauri.app/)                    | MIT OR Apache-2.0 | Tauri 构建入口 / Tauri build entry point                                                     |
+| [ESLint](https://eslint.org/)                      | MIT               | 代码检查 / Linting                                                                           |
+| [Stylelint](https://stylelint.io/)                 | MIT               | CSS 代码检查 / CSS linting                                                                   |
+| [Prettier](https://prettier.io/)                   | MIT               | 代码格式化 / Code formatter                                                                  |
+| [Vitest](https://vitest.dev/)                      | MIT               | 单元测试 / Unit testing                                                                      |
+| [js-base64](https://github.com/dankogai/js-base64) | BSD-3-Clause      | 测试侧 base64 wire-format 编码 / Test-side base64 wire-format encoding                       |
+| [esbuild](https://esbuild.github.io/)              | MIT               | 为 CLI 嵌入打包 engine.js / Bundles engine.js for CLI embedding                              |
+| [GitHub Actions](https://github.com/actions)       | MIT               | CI 检出、Node 配置、缓存和依赖审查 / CI checkout, Node setup, caching, and dependency review |

@@ -520,9 +520,7 @@ function resolveEmbedOutputPathInternal(inputPath: string, template = "{name}.em
 // bare filenames.
 
 type LanguageSelection =
-  | { kind: "auto" }
-  | { kind: "all" }
-  | { kind: "list"; languages: Set<string> };
+  { kind: "auto" } | { kind: "all" } | { kind: "list"; languages: Set<string> };
 
 interface CategorizedRenamePaths {
   videos: string[];

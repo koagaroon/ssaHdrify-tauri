@@ -197,6 +197,16 @@ describe("buildAssDocument", () => {
     // No Dialogue lines
     expect(result).not.toContain("Dialogue:");
   });
+
+  it("does not reveal a second tag when nested unknown HTML-like markup is stripped", () => {
+    const result = buildAssDocument([
+      { start: 0, end: 1000, text: "<scr<script>ipt>alert</script>" },
+    ]);
+    const dialogue = result.split("\n").find((line) => line.startsWith("Dialogue:"));
+
+    expect(dialogue).toBeDefined();
+    expect(dialogue).not.toMatch(/<[^>]*>/);
+  });
 });
 
 // ── Format detection helpers ─────────────────────────────

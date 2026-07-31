@@ -283,9 +283,7 @@ fn split_into_step_segments(argv: &[String]) -> Result<Vec<Vec<String>>, String>
     let mut segments: Vec<Vec<String>> = vec![Vec::new()];
     for tok in argv {
         if tok == STEP_SEPARATOR {
-            // `map_or(true, ...)` covers None + empty Vec. Swap to
-            // `is_none_or` only after Cargo.toml `rust-version` ≥ 1.82.
-            if segments.last().map_or(true, Vec::is_empty) {
+            if segments.last().is_none_or(Vec::is_empty) {
                 return Err(format!(
                     "empty step segment around `{STEP_SEPARATOR}` (chain requires \
                      `<step1> {STEP_SEPARATOR} <step2>...` form)"

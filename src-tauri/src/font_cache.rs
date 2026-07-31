@@ -1949,7 +1949,11 @@ mod tests {
             Vec::new(),
         );
         cache
-            .replace_folder(&real_folder_path(&font_dir), 100, &[arial.clone()])
+            .replace_folder(
+                &real_folder_path(&font_dir),
+                100,
+                std::slice::from_ref(&arial),
+            )
             .unwrap();
         let result = cache
             .lookup_family("Arial", false, false)
@@ -2205,7 +2209,11 @@ mod tests {
             Vec::new(),
         );
         cache
-            .replace_folder(&real_folder_path(&font_dir), 100, &[font.clone()])
+            .replace_folder(
+                &real_folder_path(&font_dir),
+                100,
+                std::slice::from_ref(&font),
+            )
             .unwrap();
 
         fs::write(Path::new(&font.file_path), b"changed font fixture bytes")

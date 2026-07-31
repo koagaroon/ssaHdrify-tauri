@@ -1,0 +1,164 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend quality (Node ${{ matrix.node }}, Windows)
+    runs-on: windows-2025
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22.13.0", "24"]
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install locked Node dependencies
+        run: npm ci
+
+      - name: Audit the complete Node dependency graph
+        if: matrix.node == '24'
+        run: npm audit
+
+      - name: Check TypeScript 6 and TypeScript 7
+        run: npm run typecheck:all
+
+      - name: Lint JavaScript and formatting
+        run: npm run lint:js
+
+      - name: Lint CSS
+        run: npm run lint:css
+
+      - name: Run frontend tests
+        run: npm run test:run
+
+      - name: Build the production frontend
+        run: npm run build
+
+  rust:
+    name: Rust quality (Windows)
+    runs-on: windows-2025
+    timeout-minutes: 120
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: "1"
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Cache Cargo downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-cargo-
+
+      - name: Keep the Cargo target on the Cargo registry drive
+        shell: pwsh
+        run: |
+          $cargoHome = if ([string]::IsNullOrWhiteSpace($env:CARGO_HOME)) {
+            Join-Path $env:USERPROFILE ".cargo"
+          } else {
+            $env:CARGO_HOME
+          }
+          $targetDir = Join-Path $cargoHome "ssahdrify-target"
+          "CARGO_TARGET_DIR=$targetDir" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install locked Node dependencies
+        run: npm ci
+
+      - name: Build the embedded TypeScript engine
+        run: npm run build:engine
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+
+      - name: Run Clippy on every Rust target
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
+
+      - name: Run the locked Rust test suite
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+
+  rust-msrv:
+    name: Rust 1.91 compatibility (Windows)
+    runs-on: windows-2025
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Cache Cargo downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-cargo-
+
+      - name: Keep the MSRV target on the Cargo registry drive
+        shell: pwsh
+        run: |
+          $cargoHome = if ([string]::IsNullOrWhiteSpace($env:CARGO_HOME)) {
+            Join-Path $env:USERPROFILE ".cargo"
+          } else {
+            $env:CARGO_HOME
+          }
+          $targetDir = Join-Path $cargoHome "ssahdrify-msrv-target"
+          "CARGO_TARGET_DIR=$targetDir" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install locked Node dependencies
+        run: npm ci
+
+      - name: Build the embedded TypeScript engine
+        run: npm run build:engine
+
+      - name: Install the minimum supported Rust toolchain
+        run: rustup toolchain install 1.91.0 --profile minimal --no-self-update
+
+      - name: Check every target with Rust 1.91
+        run: rustup run 1.91.0 cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets

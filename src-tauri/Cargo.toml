@@ -6,7 +6,7 @@ authors = ["koagaroon"]
 license = "GPL-3.0-or-later"
 repository = "https://github.com/koagaroon/ssaHdrify-tauri"
 edition = "2021"
-rust-version = "1.77.2"
+rust-version = "1.91"
 # Required because the crate now ships two bin targets (the implicit
 # `ssahdrify` GUI binary from src/main.rs + the explicit `[[bin]]`
 # entry for `ssahdrify-cli`). Without `default-run`, `cargo run` and
@@ -36,17 +36,17 @@ name = "ssahdrify-cli"
 path = "src/bin/cli/main.rs"
 
 [build-dependencies]
-tauri-build = { version = "2.5.6", features = [] }
+tauri-build = { version = "2.6.3", features = [] }
 serde_json = "1.0"
 
 [dependencies]
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
-tauri = { version = "2.10.3", features = [] }
-tauri-plugin-log = "2"
-tauri-plugin-dialog = "2"
-tauri-plugin-fs = "2"
+tauri = { version = "2.11.5", features = [] }
+tauri-plugin-log = "2.9.0"
+tauri-plugin-dialog = "2.7.2"
+tauri-plugin-fs = "2.5.1"
 # Exact-pinned (not semver `0.400`) because deno_core changes its
 # public API at most patch boundaries — V8 binding signatures
 # (`execute_script`, `JsRuntime`, scope macros) and feature-flag
@@ -59,8 +59,8 @@ tauri-plugin-fs = "2"
 # `cargo update`-style "just bump the pin" decision pauses for the
 # binding audit first.
 deno_core = "=0.400.0"
-clap = { version = "4.5.53", features = ["derive"] }
-tokio = { version = "1.52.2", features = ["rt"] }
+clap = { version = "4.6.4", features = ["derive"] }
+tokio = { version = "1.53.1", features = ["rt"] }
 font-kit = "0.14"
 once_cell = "1"
 rusqlite = { version = "0.39", features = ["bundled"] }

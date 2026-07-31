@@ -15,8 +15,8 @@
        scripts/...` run time. `allowJs` is required for .mjs in
        `include`; `checkJs` turns on actual type-checking against the
        JSDoc on scripts/lib/app-version.mjs. The umbrella build script
-       (`package.json::build`) runs `tsc -b` before `vite build`, so
-       this catches drift in the shared build path. */
+       (`package.json::build`) runs `npm run typecheck:ts6` before
+       `vite build`, so this catches drift in the shared build path. */
     "allowJs": true,
     "checkJs": true,
     "verbatimModuleSyntax": true,

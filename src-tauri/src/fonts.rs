@@ -1327,7 +1327,7 @@ fn sanitize_cmap12_invalid_groups(
         };
         if record_offset
             .checked_add(8)
-            .map_or(true, |end| end > cmap_end)
+            .is_none_or(|end| end > cmap_end)
         {
             break;
         }
@@ -1454,7 +1454,7 @@ fn sanitize_cmap12_invalid_groups(
 }
 
 fn decode_utf16be_name(raw: &[u8]) -> Option<String> {
-    if raw.len() % 2 != 0 {
+    if !raw.len().is_multiple_of(2) {
         return None;
     }
     let code_units: Vec<u16> = raw
@@ -1465,7 +1465,7 @@ fn decode_utf16be_name(raw: &[u8]) -> Option<String> {
 }
 
 fn raw_looks_utf16be_ascii(raw: &[u8]) -> bool {
-    raw.len() >= 4 && raw.len() % 2 == 0 && raw.chunks_exact(2).all(|chunk| chunk[0] == 0)
+    raw.len() >= 4 && raw.len().is_multiple_of(2) && raw.chunks_exact(2).all(|chunk| chunk[0] == 0)
 }
 
 fn clean_legacy_name(decoded: String) -> Option<String> {
@@ -1594,7 +1594,7 @@ fn parse_legacy_name_table_entries(
             else {
                 break;
             };
-            if record.checked_add(12).map_or(true, |end| end > name_end) {
+            if record.checked_add(12).is_none_or(|end| end > name_end) {
                 break;
             }
             let Some(platform) = read_be_u16(data, record) else {
@@ -4996,7 +4996,7 @@ mod tests {
             if let Err(error) = subset_with_index(&font_data, face_index, &codepoints) {
                 failures.push(format!("{path}#{face_index}: {error}"));
             }
-            if checked % 100 == 0 {
+            if checked.is_multiple_of(100) {
                 eprintln!("subset cache batch progress: {checked} checked from offset {offset}");
             }
         }
@@ -5357,7 +5357,7 @@ mod tests {
             italic: false,
             size_bytes: temp_font_size,
         };
-        let metadata = entries_to_cache_metadata(&[entry.clone()]);
+        let metadata = entries_to_cache_metadata(std::slice::from_ref(&entry));
         assert_eq!(metadata.len(), 1);
         let keys: HashSet<String> = metadata[0]
             .family_keys
