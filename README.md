@@ -462,6 +462,10 @@ npm run build:cli
 npm run build:all
 ```
 
+`npm run build:all` 会依次生成 GUI 和 CLI 两个原生发布版可执行文件；GUI 阶段由 Tauri 的 `beforeBuildCommand` 自动运行 TypeScript 7 类型检查和 Vite 前端构建。
+
+`npm run build:all` produces both native release executables in sequence. During the GUI stage, Tauri's `beforeBuildCommand` automatically runs the TypeScript 7 type-check and Vite frontend build.
+
 在 Windows 上，便携式 exe 会生成到 `src-tauri/target/release/`，可直接运行，无需安装。`tauri.conf.json` 目前设置了 `bundle.active: false`，因此默认生成便携式二进制文件，而不是安装包。
 
 On Windows, portable executables are produced under `src-tauri/target/release/` and can be run directly with no installation required. `tauri.conf.json` currently sets `bundle.active: false`, so the default output is portable binaries rather than installers.
