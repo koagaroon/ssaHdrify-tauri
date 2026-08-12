@@ -8,7 +8,7 @@
     "node": "^22.13.0 || ^24.0.0 || ^26.0.0"
   },
   "allowScripts": {
-    "esbuild@0.28.1": true
+    "esbuild@0.28.2": true
   },
   "//": "Build script taxonomy: `build` = GUI frontend release prerequisite (native TypeScript 7 release typecheck + vite build, invoked by `tauri build` through beforeBuildCommand); TypeScript 6 remains the API-compatibility toolchain for ESLint/typescript-eslint and a transition check in `typecheck:all`. Use the explicit npm scripts instead of bare `tsc` / `npx tsc`. `build:gui` = vite build only (skip typecheck, faster local rebuild); `build:engine` = esbuild → dist-engine/engine.js (the CLI binary's V8 bundle, embedded via include_str!); `build:cli` = TypeScript 7 release typecheck + build:engine + cargo --release --bin ssahdrify-cli; `build:all` = native Tauri GUI build (which invokes `build`) + build:cli (CLI). Lint umbrella (`lint`) runs JS+CSS+Rust; `lint:fix` autofixes what it can.",
   "scripts": {
@@ -51,11 +51,11 @@
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^6.0.5",
-    "esbuild": "^0.28.1",
-    "eslint": "^10.8.0",
+    "esbuild": "^0.28.2",
+    "eslint": "^10.8.1",
     "eslint-plugin-react-hooks": "^7.1.1",
-    "eslint-plugin-react-refresh": "^0.5.3",
-    "globals": "^17.10.0",
+    "eslint-plugin-react-refresh": "^0.5.4",
+    "globals": "^17.11.0",
     "js-base64": "^3.9.2",
     "prettier": "3.9.6",
     "stylelint": "^17.14.1",
@@ -63,7 +63,7 @@
     "tailwindcss": "^4.3.3",
     "typescript": "npm:@typescript/typescript6@6.0.2",
     "typescript-eslint": "^8.67.0",
-    "vite": "^8.2.0",
+    "vite": "^8.2.1",
     "vitest": "^4.1.10"
   }
 }
