@@ -50,13 +50,15 @@ updates:
           - "version-update:semver-minor"
           - "version-update:semver-major"
 
-      # rusqlite 0.40's SQLite bindings require Rust 1.95; keep the 1.91 floor.
+      # rusqlite 0.40.2 passes the Rust 1.91 gate but bundles SQLite 3.53.2;
+      # keep 0.39 until upstream bundles SQLite 3.53.4 or newer.
       - dependency-name: rusqlite
         update-types:
           - "version-update:semver-minor"
           - "version-update:semver-major"
 
-      # Tauri's dialog plugin still constrains the shared graph to rfd 0.16.
+      # Keep shared rfd 0.16 until tauri-plugin-dialog supports 0.17;
+      # its current XDG feature mapping is incompatible with rfd 0.17.
       - dependency-name: rfd
         update-types:
           - "version-update:semver-minor"

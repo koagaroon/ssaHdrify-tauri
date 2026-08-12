@@ -83,17 +83,17 @@ const cargoPolicies = {
     mode: /** @type {const} */ ("manual"),
     reason:
       "Every deno_core release requires a manual V8, API, and runtime audit before updating the exact pin.",
-    reviewedThrough: "0.409.0",
+    reviewedThrough: "0.410.0",
   },
   rusqlite: {
     mode: /** @type {const} */ ("hold-line"),
     reason:
-      "Keep the 0.39 line while the project supports Rust 1.91; newer bindings currently raise the Rust floor.",
+      "Keep 0.39 until rusqlite bundles SQLite 3.53.4 or newer; 0.40.2 passed the Rust 1.91 gate but bundles SQLite 3.53.2.",
   },
   rfd: {
     mode: /** @type {const} */ ("hold-line"),
     reason:
-      "Keep the 0.16 line while tauri-plugin-dialog constrains the shared dialog dependency graph.",
+      "Keep 0.16 until tauri-plugin-dialog officially supports rfd 0.17; direct defaults stay disabled so the plugin alone selects the shared Linux backend.",
   },
 };
 
