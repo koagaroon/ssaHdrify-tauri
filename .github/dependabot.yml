@@ -1,12 +1,15 @@
 version: 2
 
-# Version-update holds below do not suppress Dependabot security updates.
+# Routine version-update PRs stay disabled so dependency maintenance can be
+# reviewed on one human branch. Security updates use separate repository
+# settings and limits.
+# The groups and holds below remain ready if routine updates are re-enabled.
 updates:
   - package-ecosystem: npm
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 0
     groups:
       routine-npm-patches:
         patterns:
@@ -32,7 +35,7 @@ updates:
     directory: /src-tauri
     schedule:
       interval: weekly
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 0
     groups:
       routine-cargo-patches:
         patterns:
@@ -63,7 +66,7 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 2
+    open-pull-requests-limit: 0
     groups:
       github-actions:
         patterns:
