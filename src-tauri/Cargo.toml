@@ -60,7 +60,7 @@ tauri-plugin-fs = "2.5.1"
 # Rationale documented so a future
 # `cargo update`-style "just bump the pin" decision pauses for the
 # binding audit first.
-deno_core = "=0.409.0"
+deno_core = "=0.410.0"
 clap = { version = "4.6.4", features = ["derive"] }
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "time"] }
 font-kit = "0.14"
