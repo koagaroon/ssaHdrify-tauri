@@ -28,7 +28,7 @@
     "test": "vitest",
     "test:run": "vitest run",
     "typecheck:versions": "node scripts/verify-typescript-toolchains.mjs",
-    "check:typescript-currency": "node scripts/check-typescript-currency.mjs",
+    "check:dependency-currency": "node scripts/check-dependency-currency.mjs",
     "typecheck:ts6": "node ./node_modules/typescript/bin/tsc6 -b",
     "typecheck:ts7": "node ./node_modules/@typescript/native/bin/tsc -b tsconfig.ts7.json",
     "typecheck:all": "npm run typecheck:versions && npm run typecheck:ts7 && npm run typecheck:ts6"
