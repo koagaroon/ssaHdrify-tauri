@@ -7,8 +7,8 @@ import {
   preflightFontFiles,
   scanFontDirectory,
   scanFontFiles,
+  type FontDirectoryScope,
   type FontScanPreflight,
-  type FontScanReason,
   type FontScanResult,
 } from "../../lib/tauri-api";
 import { ask } from "@tauri-apps/plugin-dialog";
@@ -20,16 +20,26 @@ import { fontKeyLabel } from "./font-collector";
 import { userFontKey } from "./font-embedder";
 import { formatFontScanBytes, shouldWarnLargeFontScan } from "./font-source-warning";
 
-export interface FontSource {
+interface FontSourceBase {
   /** Stable id used as a React key and for removal. */
   id: string;
-  /** "dir" = picked a folder, "files" = picked individual files. */
-  kind: "dir" | "files";
   /** Display label: folder basename or "N files". */
   label: string;
   /** Number of font faces this source contributed after dedup. */
   count: number;
 }
+
+export type FontSource =
+  | (FontSourceBase & {
+      kind: "dir";
+      /** Explicitly distinguishes top-level-only from nested traversal. */
+      scope: FontDirectoryScope;
+      /** Picked root retained for the full-path tooltip. */
+      root: string;
+    })
+  | (FontSourceBase & {
+      kind: "files";
+    });
 
 /** Diagnostic Rust returns after attempting to add a source. */
 export interface AddSourceResult {
@@ -174,13 +184,14 @@ export default function FontSourceModal(props: Props) {
   // Rust cancellation is targeted by scan id, so late cancel commands from a
   // previous run cannot affect the next scan.
   const activeScanIdRef = useRef<number | null>(null);
-  // True only once a real scan is running (scanId assigned), i.e. AFTER the OS
-  // picker + large-scan confirm resolve. `busy` / `scanning` flip true earlier
-  // (in claimScanFlow, so the parent lock spans the whole pick/confirm arc), so
-  // gating the progress row + inline Cancel on `scanStarted` — not `scanning` —
-  // keeps the "Scanned N fonts…" row and its Cancel button from rendering while
-  // the native dialogs are up, where there is no scanId to cancel anyway.
-  const [scanStarted, setScanStarted] = useState(false);
+  // The progress row follows the active native phase, not the broader busy
+  // lock. Directory discovery shows an indeterminate inspection message;
+  // parsing shows the streamed face count. Native picker/confirm dialogs have
+  // no active scan id, so neither phase (nor the Cancel button) renders there.
+  const [scanPhase, setScanPhase] = useState<null | "inspecting" | "scanning">(null);
+  // Shows that either the inline Cancel button or a dismiss action has sent
+  // the targeted cancellation request and is waiting for the worker to stop.
+  const [cancelRequested, setCancelRequested] = useState(false);
   // Set when the user dismisses (Esc / scrim / ✕) during the pre-scan window
   // (busy but no scanId yet). runScanFlow checks it after the picker/confirm
   // awaits resolve and bails before starting the scan, so a dismiss in that
@@ -216,6 +227,8 @@ export default function FontSourceModal(props: Props) {
     // second dismiss closes the modal normally.
     const activeScanId = activeScanIdRef.current;
     if (activeScanId !== null) {
+      cancelPendingRef.current = true;
+      setCancelRequested(true);
       cancelFontScan(activeScanId).catch((e: unknown) => {
         // Surface the IPC failure inside the modal so the user understands
         // why the dismiss didn't take effect; without this they're stuck
@@ -228,6 +241,7 @@ export default function FontSourceModal(props: Props) {
         const message = sanitizeError(e);
         console.warn("cancelFontScan failed:", e);
         setError(t("font_scan_cancel_failed", message));
+        setCancelRequested(false);
       });
       return;
     }
@@ -331,11 +345,11 @@ export default function FontSourceModal(props: Props) {
   // Compose the post-scan info message. When Rust reports an early stop AND
   // some entries were duplicates, fold both facts into a single message
   // instead of letting the stop notice clobber the dedup notice. The
-  // three-way switch on `reason` replaces the prior (cancelled, ceilingHit)
+  // Explicit reason switch replaces the prior (cancelled, ceilingHit)
   // boolean pair — see fonts::ScanStopReason for the wire contract.
   const reportSourceAdded = useCallback(
-    (result: AddSourceResult, reason: FontScanReason) => {
-      switch (reason) {
+    (result: FontScanResult) => {
+      switch (result.reason) {
         case "ceilingHit":
           setError(null);
           setInfo(t("font_scan_ceiling_hit", result.added));
@@ -348,7 +362,16 @@ export default function FontSourceModal(props: Props) {
             setInfo(t("font_scan_cancelled", result.added));
           }
           return;
+        case "incompleteIo":
+          setError(null);
+          setInfo(t("font_scan_incomplete_io", result.added));
+          return;
         case "natural":
+          if (result.cacheDisposition === "sessionOnly") {
+            setError(null);
+            setInfo(t("font_scan_session_only", result.added));
+            return;
+          }
           applyAddResult(result);
           return;
       }
@@ -356,13 +379,6 @@ export default function FontSourceModal(props: Props) {
     [t, applyAddResult]
   );
 
-  // Tracks whether the user has clicked Cancel during the current
-  // scan, so the inline cancel button can show a transitional
-  // "Cancelling…" state until the scan worker actually settles
-  // (drives release of the busy lock via setScanningWithParent(false)
-  // in handleAddFolder/Files's finally). Without this the user
-  // wonders if the click registered.
-  const [cancelRequested, setCancelRequested] = useState(false);
   // Reset cancellation request whenever a new scan starts (scanning
   // flips false→true) so the next scan starts with a clean cancel UI.
   useEffect(() => {
@@ -372,6 +388,10 @@ export default function FontSourceModal(props: Props) {
   const handleCancelScan = useCallback(() => {
     const scanId = activeScanIdRef.current;
     if (scanId === null) return;
+    // If discovery finishes naturally at the same moment this click lands,
+    // the stale targeted cancel cannot affect the fresh parse id. This local
+    // marker additionally prevents the parse phase from starting at all.
+    cancelPendingRef.current = true;
     setCancelRequested(true);
     // .catch — visible state stays correct because the running scan
     // checks font_scan_cancelled independently, but a real bug in the
@@ -397,6 +417,7 @@ export default function FontSourceModal(props: Props) {
     if (busyRef.current) return false;
     busyRef.current = true;
     setBusy(true);
+    setCancelRequested(false);
     // Notify the parent IMMEDIATELY so its sourceLocked = sourceBusy ||
     // modalScanning evaluates true across the entire pick/preflight/
     // confirm window. Previously setScanningWithParent fired only after
@@ -421,7 +442,7 @@ export default function FontSourceModal(props: Props) {
     // assume it's a defect.
     busyRef.current = false;
     setBusy(false);
-    setScanStarted(false);
+    setScanPhase(null);
     setScanningWithParent(false);
   }, [setScanningWithParent]);
 
@@ -457,7 +478,12 @@ export default function FontSourceModal(props: Props) {
   const runScanFlow = useCallback(
     async function <T>(opts: {
       pickInput: () => Promise<T | null>;
-      preflight: (input: T) => Promise<FontScanPreflight>;
+      preflight: (
+        input: T,
+        scanId: number | null
+      ) => Promise<FontScanPreflight & { reason?: "natural" | "userCancel" }>;
+      /** Directory discovery can be long enough to need its own cancel id. */
+      cancellablePreflight?: boolean;
       scan: (
         input: T,
         sourceId: string,
@@ -472,21 +498,44 @@ export default function FontSourceModal(props: Props) {
       setInfo(null);
       // Clear any stale pre-scan dismiss request left by a prior flow.
       cancelPendingRef.current = false;
-      let scanId: number | null = null;
+      let activeStepId: number | null = null;
       try {
         const input = await opts.pickInput();
         if (input === null) return;
-        const preflight = await opts.preflight(input);
+
+        // Directory discovery gets a distinct targeted id from font parsing.
+        // A late cancel aimed at this phase therefore cannot cancel the fresh
+        // parse worker that follows it.
+        const preflightId = opts.cancellablePreflight ? newScanId() : null;
+        if (preflightId !== null) {
+          activeStepId = preflightId;
+          activeScanIdRef.current = preflightId;
+          setScanPhase("inspecting");
+        }
+        const preflight = await opts.preflight(input, preflightId);
+        if (preflightId !== null && activeScanIdRef.current === preflightId) {
+          activeScanIdRef.current = null;
+        }
+        activeStepId = null;
+        setScanPhase(null);
+        if (preflight.reason === "userCancel" || cancelPendingRef.current) {
+          if (opts.cancellablePreflight) {
+            setError(null);
+            setInfo(t("font_scan_inspection_cancelled"));
+          }
+          return;
+        }
         const confirmed = await confirmLargeFontScan(preflight);
         if (!confirmed) return;
         // Honor an Esc / scrim / ✕ dismiss that landed while the picker or
         // confirm dialog was up (see requestClose's pre-scan branch). Bail
         // before any scan id / source id is minted — nothing has mutated yet.
         if (cancelPendingRef.current) return;
-        scanId = newScanId();
+        const scanId = newScanId();
+        activeStepId = scanId;
         const sourceId = newSourceId();
         activeScanIdRef.current = scanId;
-        setScanStarted(true);
+        setScanPhase("scanning");
         resetScanProgress();
         // setScanningWithParent(true) already fired inside claimScanFlow
         // — the parent lock spans the full pick/preflight/confirm/scan
@@ -511,6 +560,8 @@ export default function FontSourceModal(props: Props) {
             } else {
               setInfo(t("font_scan_cancelled", 0));
             }
+          } else if (scan.reason === "incompleteIo") {
+            setInfo(t("font_scan_incomplete_io", 0));
           } else if (scan.duplicated > 0) {
             setError(t("font_sources_all_duplicate"));
           } else {
@@ -519,8 +570,7 @@ export default function FontSourceModal(props: Props) {
           return;
         }
         onAddSource(opts.buildSource(input, sourceId, scan.added));
-        const result = { added: scan.added, duplicated: scan.duplicated };
-        reportSourceAdded(result, scan.reason);
+        reportSourceAdded(scan);
       } catch (e) {
         // sanitizeForDialog: the catch covers the full scan pipeline
         // (picker / preflight / streaming scan), so the error message
@@ -528,7 +578,7 @@ export default function FontSourceModal(props: Props) {
         // are attacker-influenced (untrusted-input).
         setError(sanitizeError(e));
       } finally {
-        if (scanId !== null && activeScanIdRef.current === scanId) {
+        if (activeStepId !== null && activeScanIdRef.current === activeStepId) {
           activeScanIdRef.current = null;
         }
         // setScanningWithParent(false) is owned by releaseScanFlow now —
@@ -555,16 +605,22 @@ export default function FontSourceModal(props: Props) {
     ]
   );
 
-  const handleAddFolder = useCallback(
-    () =>
+  const runDirectoryFlow = useCallback(
+    (scope: FontDirectoryScope) =>
       runScanFlow<string>({
         pickInput: () => pickFontDirectory(t),
-        preflight: (dir) => preflightFontDirectory(dir),
+        cancellablePreflight: true,
+        preflight: (dir, scanId) => {
+          if (scanId === null) throw new Error("Directory preflight requires a scan id");
+          return preflightFontDirectory(dir, scope, scanId);
+        },
         scan: (dir, sourceId, scanId, onProgress) =>
-          scanFontDirectory(dir, sourceId, scanId, onProgress),
+          scanFontDirectory(dir, scope, sourceId, scanId, onProgress),
         buildSource: (dir, sourceId, count) => ({
           id: sourceId,
           kind: "dir",
+          scope,
+          root: dir,
           label: basename(dir),
           count,
         }),
@@ -580,6 +636,9 @@ export default function FontSourceModal(props: Props) {
       }),
     [runScanFlow, t]
   );
+
+  const handleAddFolder = useCallback(() => runDirectoryFlow("shallow"), [runDirectoryFlow]);
+  const handleAddFontLibrary = useCallback(() => runDirectoryFlow("recursive"), [runDirectoryFlow]);
 
   const handleAddFiles = useCallback(
     () =>
@@ -691,8 +750,15 @@ export default function FontSourceModal(props: Props) {
                 const safeLabel = sanitizeForDialog(src.label);
                 const label =
                   src.kind === "dir"
-                    ? t("font_sources_folder_entry", safeLabel, src.count)
+                    ? t(
+                        src.scope === "recursive"
+                          ? "font_sources_library_entry"
+                          : "font_sources_folder_entry",
+                        safeLabel,
+                        src.count
+                      )
                     : safeLabel;
+                const sourceTooltip = src.kind === "dir" ? sanitizeForDialog(src.root) : undefined;
                 return (
                   <li
                     key={src.id}
@@ -703,7 +769,9 @@ export default function FontSourceModal(props: Props) {
                       color: "var(--text-primary)",
                     }}
                   >
-                    <span className="truncate mr-3">{label}</span>
+                    <span className="truncate mr-3" title={sourceTooltip}>
+                      {label}
+                    </span>
                     <button
                       type="button"
                       onClick={() => onRemoveSource(src.id)}
@@ -725,7 +793,7 @@ export default function FontSourceModal(props: Props) {
             </ul>
           )}
 
-          {/* Option cards — two picker entry points */}
+          {/* Option cards — explicit shallow folder, recursive library, or files. */}
           <button type="button" onClick={handleAddFolder} disabled={busy} className="modal-opt">
             <span className="modal-opt-icon" aria-hidden="true">
               <svg
@@ -746,6 +814,34 @@ export default function FontSourceModal(props: Props) {
                 {busy ? t("font_sources_scanning") : t("font_sources_add_folder")}
               </div>
               <div className="modal-opt-sub">{t("font_sources_add_folder_sub")}</div>
+            </div>
+          </button>
+          <button
+            type="button"
+            onClick={handleAddFontLibrary}
+            disabled={busy}
+            className="modal-opt"
+          >
+            <span className="modal-opt-icon" aria-hidden="true">
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
+                <path d="M8 12h8M8 16h5" />
+              </svg>
+            </span>
+            <div className="modal-opt-text">
+              <div className="modal-opt-title">
+                {busy ? t("font_sources_scanning") : t("font_sources_add_library")}
+              </div>
+              <div className="modal-opt-sub">{t("font_sources_add_library_sub")}</div>
             </div>
           </button>
           <button type="button" onClick={handleAddFiles} disabled={busy} className="modal-opt">
@@ -772,7 +868,7 @@ export default function FontSourceModal(props: Props) {
             </div>
           </button>
 
-          {scanStarted && (
+          {scanPhase !== null && (
             <div
               className="rounded-lg px-3 py-2 flex items-center justify-between gap-3"
               style={{
@@ -782,8 +878,13 @@ export default function FontSourceModal(props: Props) {
               }}
               role="status"
               aria-live="polite"
+              aria-busy="true"
             >
-              <span className="text-sm">{t("font_scan_progress", scanProgress)}</span>
+              <span className="text-sm">
+                {scanPhase === "inspecting"
+                  ? t("font_scan_inspecting_folders")
+                  : t("font_scan_progress", scanProgress)}
+              </span>
               <button
                 type="button"
                 onClick={handleCancelScan}

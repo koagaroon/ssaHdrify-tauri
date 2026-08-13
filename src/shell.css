@@ -1521,8 +1521,8 @@
   user-select: text;
 }
 
-/* Option card — 40px rounded icon + title + subtitle. Both picker
-   paths (folder, files) get one. */
+/* Option card — 40px rounded icon + title + subtitle. Each source picker
+   path (shallow folder, recursive library, files) gets one. */
 .modal-opt {
   display: grid;
   grid-template-columns: 40px 1fr;

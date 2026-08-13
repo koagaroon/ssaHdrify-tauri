@@ -404,8 +404,8 @@ export const strings: Record<string, StringEntry> = {
     zh: "字体来源（{0}）",
   },
   font_sources_loaded_summary: {
-    en: "{0} local font(s) loaded from {1} source(s)",
-    zh: "已从 {1} 个来源加载 {0} 个本地字体",
+    en: "{0} font entries across {1} source(s) (shared fonts count in each source)",
+    zh: "{1} 个字体来源中共有 {0} 个字体条目（共享字体会在每个来源中分别计数）",
   },
   badge_local: { en: "Local", zh: "本地" },
   badge_cache: { en: "Cache", zh: "缓存" },
@@ -414,8 +414,8 @@ export const strings: Record<string, StringEntry> = {
   // Font source modal
   font_sources_title: { en: "Font Sources", zh: "字体来源" },
   font_sources_modal_sub: {
-    en: "Pick a folder or individual files — duplicates are filtered automatically",
-    zh: "可选择文件夹或单独文件，重复项会自动过滤",
+    en: "Pick a top-level folder, a nested font library, or individual files — duplicates are filtered automatically",
+    zh: "可选择仅第一层文件夹、包含子文件夹的字体库或单独文件，重复项会自动过滤",
   },
   font_sources_add_folder_sub: {
     en: "Scan top-level font files in a folder",
@@ -425,15 +425,24 @@ export const strings: Record<string, StringEntry> = {
     en: "Pick one or more individual font files",
     zh: "选择一个或多个字体文件",
   },
+  font_sources_add_library_sub: {
+    en: "Scan font files in this folder and all subfolders",
+    zh: "扫描此文件夹及其所有子文件夹中的字体文件",
+  },
   font_sources_empty_hint: {
-    en: "No local sources yet. Add a folder or individual files to match fonts without installing them system-wide.",
-    zh: "尚未添加本地字体来源。添加文件夹或独立文件即可在不安装字体的情况下完成匹配。",
+    en: "No local sources yet. Add a folder, a font library, or individual files to match fonts without installing them system-wide.",
+    zh: "尚未添加本地字体来源。添加文件夹、字体库或独立文件，即可在不安装字体的情况下完成匹配。",
   },
   font_sources_add_folder: { en: "Add Folder", zh: "添加文件夹" },
+  font_sources_add_library: { en: "Add Font Library", zh: "添加字体库" },
   font_sources_add_files: { en: "Add Files", zh: "添加文件" },
   font_sources_folder_entry: {
-    en: "{0} ({1} fonts)",
-    zh: "{0}（{1} 个字体）",
+    en: "{0} (top level · {1} fonts)",
+    zh: "{0}（仅第一层 · {1} 个字体）",
+  },
+  font_sources_library_entry: {
+    en: "{0} (folder + all subfolders · {1} fonts)",
+    zh: "{0}（本文件夹及所有子文件夹 · {1} 个字体）",
   },
   font_sources_files_entry: {
     en: "{0} file(s) ({1} fonts)",
@@ -448,6 +457,10 @@ export const strings: Record<string, StringEntry> = {
     zh: "所选 {0} 个文件中未找到字体。",
   },
   font_sources_scanning: { en: "Scanning…", zh: "扫描中…" },
+  font_scan_inspecting_folders: {
+    en: "Inspecting font folders…",
+    zh: "正在检查字体文件夹…",
+  },
   font_scan_progress: {
     en: "Scanned {0} fonts so far…",
     zh: "已扫描 {0} 个字体…",
@@ -459,16 +472,28 @@ export const strings: Record<string, StringEntry> = {
     zh: "取消请求失败：{0}",
   },
   font_scan_cancelled: {
-    en: "Scan cancelled — kept {0} font(s).",
-    zh: "已取消扫描，保留 {0} 个字体。",
+    en: "Scan cancelled — kept {0} font(s) for this session; this source was not cached.",
+    zh: "已取消扫描——本次会话保留 {0} 个字体，但未缓存此来源。",
   },
   font_scan_cancelled_with_dupes: {
-    en: "Scan cancelled — kept {0} new font(s); {1} were already loaded.",
-    zh: "已取消扫描，保留 {0} 个新字体；{1} 个为已加载的重复项。",
+    en: "Scan cancelled — kept {0} new font(s) for this session; {1} were already loaded. This source was not cached.",
+    zh: "已取消扫描——本次会话保留 {0} 个新字体；{1} 个为已加载的重复项。此来源未缓存。",
+  },
+  font_scan_inspection_cancelled: {
+    en: "Folder inspection cancelled — no fonts were loaded.",
+    zh: "已取消文件夹检查，尚未加载字体。",
   },
   font_scan_ceiling_hit: {
-    en: "Source too large — kept the first {0} font(s).",
-    zh: "字体来源过大，仅保留前 {0} 个字体。",
+    en: "Source too large — kept the first {0} font(s) for this session; this source was not cached.",
+    zh: "字体来源过大——本次会话仅保留前 {0} 个字体，但未缓存此来源。",
+  },
+  font_scan_incomplete_io: {
+    en: "Scan incomplete — part of the library changed or could not be read. {0} font(s) were loaded for this session; the source was not cached.",
+    zh: "扫描未完成——字体库的一部分发生变化或无法读取。本次会话已加载 {0} 个字体，但未缓存此来源。",
+  },
+  font_scan_session_only: {
+    en: "Loaded {0} font(s) for this session, but the source was not cached. Add it again after restarting.",
+    zh: "已为本次会话加载 {0} 个字体，但未缓存此来源；重启后请重新添加。",
   },
   font_scan_large_warning_title: { en: "Large Font Source", zh: "大型字体来源" },
   font_scan_large_warning: {
@@ -514,11 +539,16 @@ export const strings: Record<string, StringEntry> = {
     zh: "字体缓存已过期",
   },
   font_cache_drift_summary: {
-    en: "{0} folder(s) changed since the cache was last refreshed: {1} modified, {2} removed.",
-    zh: "自上次刷新以来，有 {0} 个文件夹发生变化：{1} 个被修改，{2} 个已移除。",
+    en: "{0} font source(s) changed since the cache was last refreshed: {1} modified, {2} removed.",
+    zh: "自上次刷新以来，有 {0} 个字体来源发生变化：{1} 个被修改，{2} 个已移除。",
   },
   font_cache_drift_modified_label: { en: "Modified:", zh: "已修改：" },
   font_cache_drift_removed_label: { en: "Removed:", zh: "已移除：" },
+  font_cache_source_scope_shallow: { en: "top level", zh: "仅第一层" },
+  font_cache_source_scope_recursive: {
+    en: "folder + all subfolders",
+    zh: "本文件夹及所有子文件夹",
+  },
   font_cache_drift_close_hint: {
     en: "Closing this dialog (✕ / Esc) is the same as “Use as-is”.",
     zh: "关闭此对话框（✕ / Esc）等同于「保持原样使用」。",
@@ -529,12 +559,12 @@ export const strings: Record<string, StringEntry> = {
   font_cache_rescanning: { en: "Rescanning font cache…", zh: "正在重新扫描字体缓存…" },
   font_cache_clearing: { en: "Clearing cache…", zh: "正在清除缓存…" },
   font_cache_rescan_done: {
-    en: "Rescanned {0} folder(s); evicted {1}.",
-    zh: "已重新扫描 {0} 个文件夹；移除 {1} 个。",
+    en: "Rescanned {0} font source(s); removed cached data for {1} source(s).",
+    zh: "已重新扫描 {0} 个字体来源；已移除 {1} 个来源的缓存数据。",
   },
   font_cache_rescan_skipped_label: {
-    en: "{0} folder(s) could not be re-scanned — their cached entries have been dropped:",
-    zh: "{0} 个文件夹无法重新扫描 —— 其缓存条目已移除：",
+    en: "{0} font source(s) could not be refreshed cleanly. Stale entries were dropped where possible:",
+    zh: "{0} 个字体来源未能完整刷新；系统已尽可能移除过期缓存条目：",
   },
   font_cache_cleared: { en: "Font cache cleared.", zh: "字体缓存已清除。" },
   font_cache_unavailable_banner: {

@@ -218,6 +218,8 @@ export default function FontEmbed() {
   // active scan.
   const sourceLocked = sourceBusy || modalScanning;
 
+  // This is a source-entry total, not a unique-font total: one font that
+  // belongs to two sources contributes one entry to each source.
   const fontSourceEntryCount = useMemo(
     () => fontSources.reduce((sum, src) => sum + src.count, 0),
     [fontSources]
@@ -555,20 +557,12 @@ export default function FontEmbed() {
   const handleRemoveFontSource = useCallback(
     (id: string) => {
       void (async () => {
-        // Look up the source's kind before the remove call — needed to
-        // gate the persistent cache eviction . Defaults
-        // to "files" (NOT "dir") when the source isn't found: dir-mode
-        // removal triggers a `try_remove_folder_from_gui_cache` side
-        // effect, and an unknown id falling into that branch could evict
-        // an unrelated tracked folder if a previous source label
-        // collided. files-mode never touches the persistent cache, so
-        // it's the safe fallback for the (in-practice unreachable)
-        // source-not-found path.
-        const source = fontSources.find((s) => s.id === id);
-        const kind = source?.kind ?? "files";
         setSourceBusy(true);
         try {
-          await removeFontSource(id, kind);
+          // Rust reads kind/root/scope from its source record. Keeping that
+          // ownership on one side prevents stale frontend state from evicting
+          // the wrong persistent-cache source.
+          await removeFontSource(id);
           const nextSources = fontSources.filter((s) => s.id !== id);
           setFontSources(nextSources);
           await reanalyzeWithSources();

@@ -206,6 +206,7 @@ fn scans_os_font_directory_streams_progress_and_registers_source() {
         channel,
         next_test_scan_id(),
         "scan-test-os-fonts".to_string(),
+        None,
     )) {
         panic!("scan_font_directory failed for '{dir}': {e}");
     }
@@ -404,6 +405,7 @@ fn rejects_empty_directory_path() {
         early_error_channel(),
         next_test_scan_id(),
         "invalid-empty".to_string(),
+        None,
     ))
     .unwrap_err();
     assert!(
@@ -421,6 +423,7 @@ fn rejects_directory_path_with_control_characters() {
         early_error_channel(),
         next_test_scan_id(),
         "invalid-control".to_string(),
+        None,
     ))
     .unwrap_err();
     assert!(
@@ -438,11 +441,12 @@ fn rejects_nonexistent_directory_path() {
         early_error_channel(),
         next_test_scan_id(),
         "invalid-missing".to_string(),
+        None,
     ))
     .unwrap_err();
     assert!(
-        err.contains("Cannot resolve directory path"),
-        "nonexistent path should hit the canonicalize-failure branch in scan_font_directory; got: {err}"
+        err.contains("Cannot inspect font library root"),
+        "nonexistent path should hit the fail-closed root metadata probe in scan_font_directory; got: {err}"
     );
 }
 
@@ -468,6 +472,7 @@ fn prerun_cancel_for_old_id_does_not_affect_subsequent_scan() {
         channel,
         fresh_scan_id,
         "scan-test-stale".to_string(),
+        None,
     )) {
         panic!("scan_font_directory failed for '{dir}': {e}");
     }
@@ -492,6 +497,7 @@ fn mid_scan_cancel_keeps_partial_results_when_directory_is_large_enough() {
         full_channel,
         next_test_scan_id(),
         "scan-test-full".to_string(),
+        None,
     )) {
         panic!("baseline scan_font_directory failed for '{dir}': {e}");
     }
@@ -513,6 +519,7 @@ fn mid_scan_cancel_keeps_partial_results_when_directory_is_large_enough() {
         cancel_channel,
         scan_id,
         "scan-test-cancel".to_string(),
+        None,
     )) {
         panic!("cancel scan_font_directory failed for '{dir}': {e}");
     }

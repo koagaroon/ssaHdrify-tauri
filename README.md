@@ -139,13 +139,13 @@ Format support is not identical across workflows. The table below describes curr
 4. 选择输出位置：默认保存到源字幕旁，也可以保存到指定文件夹；指定文件夹模式会将输出平铺到该文件夹，重复输出名会自动跳过 / Choose the output location: save beside each source subtitle by default, or save into a chosen folder; chosen-folder mode writes flat outputs into that folder and skips duplicate output names
 5. 点击「嵌入已选字体」，将子集化后的字体数据写入 `.embedded.ass` 输出文件 / Click **Embed Selected Fonts** to write the subset font data into `.embedded.ass` output files
 
-字幕组排版常用字体通常没有安装在系统中。打开「字体来源 / Font Sources」面板，添加需要扫描的本地文件夹；这些字体无需系统安装，也可以参与匹配。
+字幕组排版常用字体通常没有安装在系统中。打开「字体来源 / Font Sources」面板：选择「添加文件夹 / Add Folder」只扫描所选文件夹这一层；选择「添加字体库 / Add Font Library」会扫描所选根目录及其所有子文件夹。这些字体无需系统安装，也可以参与匹配。
 
-Fonts commonly used in fan-sub typesetting are often not installed system-wide. Open **Font Sources**, add the local folders you want to scan, and those fonts can be matched without installing them into the OS.
+Fonts commonly used in fan-sub typesetting are often not installed system-wide. Open **Font Sources**: **Add Folder** scans only the selected folder, while **Add Font Library** scans the selected root and all of its subfolders. These fonts can be matched without installing them into the OS.
 
-支持大型字体文件夹；扫描时会实时显示已读取的字体数量，也可以随时取消。选择约 5000 个字体文件或总量约 5 GiB 以上的来源前，程序会先弹出确认对话框。扫描和缓存写入都有安全上限；超大或异常来源可能提前停止，或仅用于本次会话而不写入持久化缓存，并会在界面/日志中提示。
+支持大型字体文件夹和多层字体库；发现文件与解析字体时都会显示进度，也可以随时取消。选择约 5000 个字体文件或总量约 5 GiB 以上的来源前，程序会先弹出确认对话框。扫描和缓存写入都有安全上限；超大、扫描中变化、无法完整读取或被取消的来源可能提前停止，或仅用于本次会话而不写入持久化缓存，并会在界面/日志中提示。递归扫描不会跟随符号链接、junction（目录联接）或其他 reparse point（重解析点）。
 
-Large font folders are supported; the scan shows a real-time count of fonts read and can be cancelled at any time. Before scanning a source with about 5000 font files or about 5 GiB of content, the app asks for confirmation. Scanning and cache writes are bounded by safety ceilings; unusually large or abnormal sources may stop early, or may be used only for the current session instead of being written to the persistent cache, with a visible UI/log message.
+Large font folders and nested libraries are supported; discovery and parsing show progress and can be cancelled. Before scanning a source with about 5000 font files or about 5 GiB of content, the app asks for confirmation. Scanning and cache writes are bounded by safety ceilings; unusually large, changing, unreadable, or cancelled sources may stop early or remain available only for the current session instead of being written to the persistent cache, with a visible UI/log message. Recursive scans do not follow symbolic links, junctions, or other reparse points.
 
 > **字体名称匹配 / Font Name Matching**
 >
@@ -199,11 +199,14 @@ ssahdrify-cli shift --map timing-map.json input.srt
 # 字体嵌入：从指定文件夹查找字体 / Font embed: search a folder for fonts
 ssahdrify-cli embed --font-dir "<font-folder>" input.ass
 
+# 字体嵌入：递归搜索整个字体库树 / Font embed: recursively search a font-library tree
+ssahdrify-cli embed --recursive-font-dir "<font-library-root>" input.ass
+
 # 字体解析诊断：不写输出文件 / Font diagnostics: no output subtitle writes
 ssahdrify-cli diagnose-fonts --font-dir "<font-folder>" input.ass
 
 # 持久化字体缓存：先扫描一次，后续 embed 复用 / Persistent font cache: scan once, reuse later
-ssahdrify-cli refresh-fonts --font-dir "<font-folder>"
+ssahdrify-cli refresh-fonts --recursive-font-dir "<font-library-root>"
 ssahdrify-cli embed input.ass            # 自动使用缓存 / uses cache automatically
 
 # 链式调用：一次完成 HDR 转换和时间轴偏移，只有最后一步写文件 / Chain: HDR + shift in one command, only the final step writes
@@ -317,15 +320,18 @@ ssahdrify-cli embed --font-dir "<font-folder>" --on-missing fail --fail-fast --d
 
 ### 字体缓存 | Font Cache
 
-`embed` 每次启动通常都要扫描每个 `--font-dir` 下的字体文件，构建查找表（一般几秒到几十秒；5000+ 字体可能需要几分钟）。**持久化字体缓存**能将这一过程变为一次性操作：先运行 `refresh-fonts`，将字体元数据写入磁盘上的 SQLite 文件；之后 `embed` 会在缓存仍有效时直接复用它，跳过扫描。对于字幕组按集批量处理尤其有用。
+`embed` 每次启动通常都要扫描每个 `--font-dir`（浅层）或 `--recursive-font-dir`（递归）下的字体文件，构建查找表（一般几秒到几十秒；5000+ 字体可能需要几分钟）。**持久化字体缓存**能将这一过程变为一次性操作：先运行 `refresh-fonts`，将字体元数据写入磁盘上的 SQLite 文件；之后 `embed` 会在缓存仍有效时直接复用它，跳过扫描。对于字幕组按集批量处理尤其有用。
 
-The `embed` subcommand normally scans the font files under each `--font-dir` every time it starts to build its lookup table (usually seconds to tens of seconds; minutes for 5000+ font collections). The **persistent font cache** turns this into a one-time step: run `refresh-fonts` to write font metadata into a SQLite file on disk, then later `embed` calls reuse it while the cache is still valid. This is especially useful for fan-sub teams processing episodes in batches.
+The `embed` subcommand normally scans the font files under each shallow `--font-dir` or recursive `--recursive-font-dir` every time it starts to build its lookup table (usually seconds to tens of seconds; minutes for 5000+ font collections). The **persistent font cache** turns this into a one-time step: run `refresh-fonts` to write font metadata into a SQLite file on disk, then later `embed` calls reuse it while the cache is still valid. This is especially useful for fan-sub teams processing episodes in batches.
 
 #### 工作流 | Workflow
 
 ```bash
 # 一次性扫描字体目录，构建缓存 / Scan once to build the cache
 ssahdrify-cli refresh-fonts --font-dir "<anime-font-folder>" --font-dir "<latin-font-folder>"
+
+# 也可以把一棵字体目录树作为一个来源 / Or track one whole directory tree as one source
+ssahdrify-cli refresh-fonts --recursive-font-dir "<font-library-root>"
 
 # 后续 embed 自动复用缓存（不再扫描） / Subsequent embed uses cache (no scan)
 ssahdrify-cli embed input.ass
@@ -361,25 +367,27 @@ Use `--cache-file <PATH>` to choose a different path.
 
 #### 漂移检测 | Drift Detection
 
-`embed` 启动时会对缓存做轻量校验：对每个已缓存文件夹执行一次 `stat()`，检查 mtime 是否变化。如果发现漂移（说明你添加 / 删除 / 替换 / 重命名了字体文件），CLI 会在 stderr 列出发生变化的文件夹，本次运行自动退回无缓存模式（使用 `--font-dir` 或系统字体），并提示你运行 `refresh-fonts` 更新。**缓存不会被静默重建**——缓存写入必须由 `refresh-fonts` 显式触发。
+`embed` 启动时会校验每个缓存来源的目录清单和候选字体文件元数据，包括递归来源的子文件夹。如果发现漂移（说明你添加 / 删除 / 替换 / 重命名了字体文件或文件夹），CLI 会在 stderr 列出发生变化的来源及其扫描范围，本次运行自动退回无缓存模式（使用显式字体来源或系统字体），并提示你运行 `refresh-fonts` 更新。**缓存不会被静默重建**——缓存写入必须由 `refresh-fonts` 显式触发。
 
-`embed` runs a lightweight cache validation at startup: one `stat()` per cached folder checks whether mtime changed. If drift is detected (meaning you added / deleted / replaced / renamed font files), the CLI lists the changed folders on stderr, automatically falls back to no-cache mode for this run (using `--font-dir` or system fonts), and tells you to run `refresh-fonts`. **The cache is never silently rebuilt** — cache writes are always triggered explicitly by `refresh-fonts`.
+At startup, `embed` validates each cached source's directory inventory and candidate-font metadata, including nested folders for recursive sources. If drift is detected (meaning you added, deleted, replaced, or renamed font files or folders), the CLI lists the changed source and its scan scope on stderr, automatically falls back to no-cache mode for this run (using explicit font sources or system fonts), and tells you to run `refresh-fonts`. **The cache is never silently rebuilt** — cache writes are always triggered explicitly by `refresh-fonts`.
 
 #### 限制 | Limitations
 
-- 每个 `--font-dir` 只扫描一层（不递归），与 `embed --font-dir` 语义一致。树状字体目录需要逐层显式传入。
-- 字体缓存最多记录 256 个源文件夹；更大的字体树请先整理为更少的叶子目录，或拆成多个缓存文件使用。
-- 单个缓存来源最多安全写入约 **20,000 个 font faces**；超过时 `refresh-fonts` 会跳过该来源，GUI 本次扫描可继续使用会话索引，但不会为该超大来源写入持久化缓存。
+- `--font-dir` 和 GUI 的「添加文件夹 / Add Folder」始终只扫描一层；`--recursive-font-dir` 和「添加字体库 / Add Font Library」才会递归扫描。两种范围可以同时用于同一个根目录，并作为独立来源管理。
+- 字体缓存最多记录 256 个来源。单个递归扫描还受 4096 个真实目录、64 层深度、50,000 个候选字体文件、128 GiB 候选文件总量和 200,000 个目录项等安全上限约束。
+- 单个缓存来源最多安全写入 **32,768 个 font faces**。超过上限、用户取消、遇到读取不完整或扫描期间来源变化时，结果不会作为完整缓存发布；GUI 已成功读取的部分字体可以仅在当前会话继续使用，并会明确提示。
 - 单个字体文件的扫描/子集化读取上限为 **64 MiB**；超过会被拒绝并报告错误。
-- GUI 和 CLI 各自使用独立缓存文件，避免 SQLite 锁竞争；同一个可执行文件同时只会读写一个缓存文件（默认路径或 `--cache-file` 覆盖路径）。`chain` v1 暂不读取缓存（其中的 embed 步始终使用显式 `--font-dir` 或系统字体）。
-- 跨版本不会自动迁移缓存结构；版本不匹配时，CLI 会明确提示删除缓存文件并重新运行 `refresh-fonts`。
+- 递归扫描不会跟随符号链接、Windows junction 或其他 reparse point（重解析点），从而避免越过所选字体库根目录或形成目录循环。
+- GUI 和 CLI 各自使用独立缓存文件，避免 SQLite 锁竞争；同一个可执行文件同时只会读写一个缓存文件（默认路径或 `--cache-file` 覆盖路径）。`chain` v1 暂不读取缓存（其中的 embed 步始终使用显式 `--font-dir`、`--recursive-font-dir` 或系统字体）。
+- 跨版本不会自动迁移缓存结构。本次递归来源支持采用 cache schema v6；旧缓存会进入明确的一次性重建流程。CLI 会提示删除旧缓存文件并重新运行 `refresh-fonts`，GUI 会在确认后重建，不会静默改写。
 
-- Each `--font-dir` is scanned one level deep (non-recursive), matching `embed --font-dir` semantics. Pass each leaf folder explicitly for tree-shaped collections.
-- The font cache tracks at most 256 source folders. For larger font trees, organize fonts into fewer leaf folders or split work across separate cache files.
-- A single cached source can safely persist about **20,000 font faces**. If it exceeds that cap, `refresh-fonts` skips that source, while the GUI can still use the current session index but will not write a persistent cache for that oversized source.
+- `--font-dir` and GUI **Add Folder** always scan one level; only `--recursive-font-dir` and **Add Font Library** recurse. The same root can be tracked independently in both scopes.
+- The font cache tracks at most 256 sources. A recursive scan is also bounded to 4096 real directories, 64 levels, 50,000 candidate font files, 128 GiB of candidate-file data, and 200,000 directory entries.
+- A single cached source can safely persist **32,768 font faces**. A ceiling hit, user cancellation, incomplete read, or source mutation prevents publication as a complete cache; successfully parsed GUI results may remain available for the current session with an explicit notice.
 - A single font file is capped at **64 MiB** for scanning/subsetting; larger files are refused with an error.
-- GUI and CLI use separate cache files to avoid SQLite lock contention; a single binary opens exactly one cache at a time (default path or `--cache-file` override). `chain` v1 does not consult the cache; its embed step always uses explicit `--font-dir` or system fonts.
-- Cache schema is not migrated automatically across releases. If the version does not match, the CLI explicitly tells you to delete the cache file and rerun `refresh-fonts`.
+- Recursive scans do not follow symbolic links, Windows junctions, or other reparse points, which prevents traversal outside the chosen library root and directory cycles.
+- GUI and CLI use separate cache files to avoid SQLite lock contention; a single binary opens exactly one cache at a time (default path or `--cache-file` override). `chain` v1 does not consult the cache; its embed step always uses explicit `--font-dir`, `--recursive-font-dir`, or system fonts.
+- Cache schemas are not migrated silently. Recursive source support uses cache schema v6, so an older cache goes through a visible one-time rebuild flow: the CLI asks you to remove it and rerun `refresh-fonts`, while the GUI rebuilds only after confirmation.
 
 ---
 

@@ -52,6 +52,7 @@ import {
   pickRenameInputs,
   preflightFontDirectory,
   preflightFontFiles,
+  removeFontSource,
   scanFontDirectory,
   scanFontFiles,
 } from "./tauri-api";
@@ -87,7 +88,7 @@ describe("runStreamingScan — sync delivery (batches arrive during invoke)", ()
     });
 
     const seenTotals: number[] = [];
-    const result = await scanFontDirectory("/fake/dir", "source-a", 101, (total) => {
+    const result = await scanFontDirectory("/fake/dir", "shallow", "source-a", 101, (total) => {
       seenTotals.push(total);
     });
 
@@ -99,7 +100,12 @@ describe("runStreamingScan — sync delivery (batches arrive during invoke)", ()
     expect(seenTotals).toEqual([2, 3]);
     expect(invokeMock).toHaveBeenCalledWith(
       "scan_font_directory",
-      expect.objectContaining({ dir: "/fake/dir", sourceId: "source-a", scanId: 101 })
+      expect.objectContaining({
+        dir: "/fake/dir",
+        scope: "shallow",
+        sourceId: "source-a",
+        scanId: 101,
+      })
     );
   });
 
@@ -113,7 +119,7 @@ describe("runStreamingScan — sync delivery (batches arrive during invoke)", ()
       });
     });
 
-    const result = await scanFontDirectory("/empty/dir", "source-empty", 102);
+    const result = await scanFontDirectory("/empty/dir", "shallow", "source-empty", 102);
     expect(result).toEqual({ added: 0, duplicated: 0, reason: "natural" });
   });
 
@@ -131,12 +137,65 @@ describe("runStreamingScan — sync delivery (batches arrive during invoke)", ()
       });
     });
 
-    const result = await scanFontDirectory("/huge/dir", "source-huge", 105);
+    const result = await scanFontDirectory("/huge/dir", "recursive", "source-huge", 105);
     expect(result).toEqual({
       added: 100_000,
       duplicated: 0,
       reason: "ceilingHit",
     });
+  });
+
+  it("propagates incomplete-I/O and session-only cache status", async () => {
+    invokeMock.mockImplementation(async () => {
+      channelInstances[0]!.onmessage?.({
+        kind: "done",
+        reason: "incompleteIo",
+        added: 18,
+        duplicated: 2,
+      });
+      return { cacheDisposition: "sessionOnly" };
+    });
+
+    const result = await scanFontDirectory(
+      "/changing/library",
+      "recursive",
+      "source-incomplete",
+      106
+    );
+    expect(result).toEqual({
+      added: 18,
+      duplicated: 2,
+      reason: "incompleteIo",
+      cacheDisposition: "sessionOnly",
+    });
+    expect(invokeMock).toHaveBeenCalledWith("scan_font_directory", {
+      dir: "/changing/library",
+      scope: "recursive",
+      sourceId: "source-incomplete",
+      scanId: 106,
+      progress: channelInstances[0],
+    });
+  });
+
+  it("accepts a bare cache-disposition response while remaining compatible with void", async () => {
+    invokeMock.mockImplementation(async () => {
+      channelInstances[0]!.onmessage?.({
+        kind: "done",
+        reason: "natural",
+        added: 1,
+        duplicated: 0,
+      });
+      return "cached";
+    });
+
+    await expect(scanFontDirectory("/library", "recursive", "source-cached", 107)).resolves.toEqual(
+      {
+        added: 1,
+        duplicated: 0,
+        reason: "natural",
+        cacheDisposition: "cached",
+      }
+    );
   });
 });
 
@@ -219,7 +278,7 @@ describe("runStreamingScan — Channel state-machine defenses", () => {
       ch.onmessage?.({ kind: "done", reason: "ceilingHit", added: 999, duplicated: 999 });
     });
 
-    const result = await scanFontDirectory("/dir", "src-dupdone", 301);
+    const result = await scanFontDirectory("/dir", "shallow", "src-dupdone", 301);
     expect(result).toEqual({ added: 3, duplicated: 1, reason: "natural" });
   });
 
@@ -234,7 +293,9 @@ describe("runStreamingScan — Channel state-machine defenses", () => {
       ch.onmessage?.({ kind: "batch", total: 99 });
     });
 
-    const result = await scanFontDirectory("/dir", "src-latebatch", 302, (t) => seen.push(t));
+    const result = await scanFontDirectory("/dir", "shallow", "src-latebatch", 302, (t) =>
+      seen.push(t)
+    );
     expect(result.added).toBe(5);
     expect(seen).toEqual([2]); // the post-Done 99 never reached onBatch
   });
@@ -255,7 +316,9 @@ describe("runStreamingScan — Channel state-machine defenses", () => {
       ch.onmessage?.({ kind: "batch", total: 99 });
     });
 
-    const result = await scanFontDirectory("/dir", "src-unknown", 303, (t) => seen.push(t));
+    const result = await scanFontDirectory("/dir", "shallow", "src-unknown", 303, (t) =>
+      seen.push(t)
+    );
     expect(result).toEqual({ added: 0, duplicated: 0, reason: "natural" });
     expect(seen).toEqual([1]); // only the pre-unknown batch reached onBatch
   });
@@ -263,13 +326,16 @@ describe("runStreamingScan — Channel state-machine defenses", () => {
 
 describe("font scan preflight wrappers", () => {
   it("invokes the directory and file-list preflight commands with stable args", async () => {
-    invokeMock.mockResolvedValueOnce({ fontFiles: 12, totalBytes: 34 });
-    await expect(preflightFontDirectory("D:/example-fonts")).resolves.toEqual({
+    invokeMock.mockResolvedValueOnce({ fontFiles: 12, totalBytes: 34, reason: "natural" });
+    await expect(preflightFontDirectory("D:/example-fonts", "recursive", 401)).resolves.toEqual({
       fontFiles: 12,
       totalBytes: 34,
+      reason: "natural",
     });
     expect(invokeMock).toHaveBeenLastCalledWith("preflight_font_directory", {
       dir: "D:/example-fonts",
+      scope: "recursive",
+      scanId: 401,
     });
 
     invokeMock.mockResolvedValueOnce({ fontFiles: 2, totalBytes: 56 });
@@ -279,6 +345,33 @@ describe("font scan preflight wrappers", () => {
     });
     expect(invokeMock).toHaveBeenLastCalledWith("preflight_font_files", {
       paths: ["D:/A.ttf", "D:/B.otf"],
+    });
+  });
+
+  it("preserves a targeted recursive-inspection cancellation result", async () => {
+    invokeMock.mockResolvedValueOnce({ fontFiles: 0, totalBytes: 0, reason: "userCancel" });
+
+    await expect(preflightFontDirectory("D:/library", "recursive", 402)).resolves.toEqual({
+      fontFiles: 0,
+      totalBytes: 0,
+      reason: "userCancel",
+    });
+    expect(invokeMock).toHaveBeenLastCalledWith("preflight_font_directory", {
+      dir: "D:/library",
+      scope: "recursive",
+      scanId: 402,
+    });
+  });
+});
+
+describe("font source removal", () => {
+  it("sends only the source id so Rust owns cache-eviction metadata", async () => {
+    invokeMock.mockResolvedValueOnce(undefined);
+
+    await removeFontSource("source-owned-by-rust");
+
+    expect(invokeMock).toHaveBeenLastCalledWith("remove_font_source", {
+      sourceId: "source-owned-by-rust",
     });
   });
 });
@@ -433,7 +526,7 @@ describe("runStreamingScan — async-after-resolve regression", () => {
       });
     });
 
-    const result = await scanFontDirectory("/large/dir", "source-large", 103);
+    const result = await scanFontDirectory("/large/dir", "recursive", "source-large", 103);
     // If runStreamingScan returned at `await invoke`, this would still be 0.
     // The Done sentinel + donePromise guarantee we wait for the full set.
     expect(result.added).toBe(3);
@@ -455,7 +548,7 @@ describe("runStreamingScan — async-after-resolve regression", () => {
       });
     });
 
-    const result = await scanFontDirectory("/cancelled/dir", "source-cancelled", 104);
+    const result = await scanFontDirectory("/cancelled/dir", "recursive", "source-cancelled", 104);
     expect(result).toEqual({ added: 40, duplicated: 0, reason: "userCancel" });
   });
 });

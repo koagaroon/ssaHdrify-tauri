@@ -14,6 +14,38 @@ use std::time::{Duration, Instant};
 
 use crate::util::{validate_ipc_path, MAX_INPUT_PATHS};
 
+pub use crate::font_cache::FontDirectoryScope;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
+enum FontSourceKind {
+    RecursiveDirectory = 0,
+    ShallowDirectory = 1,
+    Files = 2,
+}
+
+impl FontSourceKind {
+    fn for_directory(scope: FontDirectoryScope) -> Self {
+        match scope {
+            FontDirectoryScope::Shallow => Self::ShallowDirectory,
+            FontDirectoryScope::Recursive => Self::RecursiveDirectory,
+        }
+    }
+
+    fn as_i32(self) -> i32 {
+        self as i32
+    }
+}
+
+fn scan_reason_code(reason: ScanStopReason) -> i32 {
+    match reason {
+        ScanStopReason::Natural => 0,
+        ScanStopReason::UserCancel => 1,
+        ScanStopReason::CeilingHit => 2,
+        ScanStopReason::IncompleteIo => 3,
+    }
+}
+
 /// Allowed font file extensions (lowercase).
 // Exposed `pub` so integration tests (test_scan.rs) can pattern-match
 // against the same canonical list instead of re-enumerating a sibling
@@ -133,7 +165,31 @@ pub const USER_FONT_DB_FILENAME: &str = "user-font-sources.session.sqlite3";
 /// a system root or a hostile fixture, and either way the user wants
 /// "directory too large to preview" feedback rather than a frozen UI
 /// while millions of canonicalize calls run.
-const MAX_PREFLIGHT_ENTRIES: usize = 200_000;
+pub(crate) const MAX_PREFLIGHT_ENTRIES: usize = 200_000;
+
+/// Maximum number of real directories a recursive font-library scan may
+/// retain in its bounded traversal/cache manifest. The representative large
+/// library used by this project has 157 leaf folders, so 4,096 leaves ample
+/// headroom without allowing a picked drive root to grow memory without bound.
+pub(crate) const MAX_SCAN_DIRECTORIES: usize = 4_096;
+
+/// Maximum nesting beneath a selected recursive library root. Font packs are
+/// normally one to four levels deep; 64 prevents pathological directory trees
+/// from turning the iterative walker into an unbounded path-retention task.
+pub(crate) const MAX_SCAN_DEPTH: usize = 64;
+
+/// Global candidate-file budget for one directory scan. This is independent
+/// of the face ceiling because TTC/OTC files can contain multiple faces.
+pub(crate) const MAX_SCAN_FONT_FILES: usize = 50_000;
+
+/// Global amount of candidate font data a scan may inspect. The known large
+/// corpus is about 54 GiB; 128 GiB accommodates it while bounding total I/O
+/// even though each individual file also has the 64 MiB cap.
+pub(crate) const MAX_SCAN_TOTAL_FONT_BYTES: u64 = 128 * 1024 * 1024 * 1024;
+
+/// Bound on path bytes retained by the recursive DFS stack and per-directory
+/// sorted entry vectors. This is a separate memory budget from entry count.
+pub(crate) const MAX_SCAN_PATH_BYTES: usize = 64 * 1024 * 1024;
 
 /// Maximum codepoint count per `subset_font` call. Bounds fontcull's
 /// IntSet allocation against attacker-influenced IPC payloads. A
@@ -292,18 +348,28 @@ fn init_user_font_schema(conn: &Connection) -> Result<(), String> {
         "
         CREATE TABLE IF NOT EXISTS font_sources (
             source_id TEXT PRIMARY KEY,
-            source_order INTEGER NOT NULL UNIQUE
+            source_order INTEGER NOT NULL UNIQUE,
+            source_kind INTEGER NOT NULL CHECK(source_kind IN (0, 1, 2)),
+            root_path TEXT,
+            scan_reason INTEGER NOT NULL CHECK(scan_reason IN (-1, 0, 1, 2, 3)),
+            CHECK((source_kind = 2 AND root_path IS NULL)
+               OR (source_kind IN (0, 1) AND root_path IS NOT NULL))
         );
         CREATE TABLE IF NOT EXISTS font_faces (
             face_id INTEGER PRIMARY KEY,
-            source_id TEXT NOT NULL,
             path TEXT NOT NULL,
             face_index INTEGER NOT NULL,
             bold INTEGER NOT NULL,
             italic INTEGER NOT NULL,
             size_bytes INTEGER NOT NULL,
-            FOREIGN KEY(source_id) REFERENCES font_sources(source_id) ON DELETE CASCADE,
             UNIQUE(path, face_index)
+        );
+        CREATE TABLE IF NOT EXISTS font_source_faces (
+            source_id TEXT NOT NULL,
+            face_id INTEGER NOT NULL,
+            PRIMARY KEY(source_id, face_id),
+            FOREIGN KEY(source_id) REFERENCES font_sources(source_id) ON DELETE CASCADE,
+            FOREIGN KEY(face_id) REFERENCES font_faces(face_id) ON DELETE CASCADE
         );
         CREATE TABLE IF NOT EXISTS font_family_keys (
             family_name_key TEXT NOT NULL,
@@ -311,17 +377,19 @@ fn init_user_font_schema(conn: &Connection) -> Result<(), String> {
             italic INTEGER NOT NULL,
             key_kind INTEGER NOT NULL CHECK(key_kind IN (0, 1)),
             face_id INTEGER NOT NULL,
-            source_order INTEGER NOT NULL,
             FOREIGN KEY(face_id) REFERENCES font_faces(face_id) ON DELETE CASCADE
         );
         CREATE INDEX IF NOT EXISTS idx_font_family_lookup
-            ON font_family_keys(family_name_key, key_kind, bold, italic, source_order DESC, face_id DESC);
+            ON font_family_keys(family_name_key, key_kind, bold, italic, face_id);
         CREATE INDEX IF NOT EXISTS idx_font_family_face
             ON font_family_keys(face_id);
-        CREATE INDEX IF NOT EXISTS idx_font_faces_source
-            ON font_faces(source_id);
+        CREATE INDEX IF NOT EXISTS idx_font_source_faces_face
+            ON font_source_faces(face_id);
         CREATE INDEX IF NOT EXISTS idx_font_faces_path_index
             ON font_faces(path, face_index);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_font_sources_root_kind
+            ON font_sources(root_path, source_kind)
+            WHERE root_path IS NOT NULL;
         ",
     )
     .map_err(|e| db_error("schema setup failed", e))
@@ -523,7 +591,7 @@ pub enum ScanProgress {
     },
 }
 
-/// Why a font scan stopped. Three legitimate states; the prior
+/// Why a font scan stopped. Four legitimate states; the prior
 /// `(cancelled: bool, ceiling_hit: bool)` pair allowed a fourth
 /// `(false, true)` combination by construction that the runtime never
 /// actually emitted. Single-variant enum
@@ -549,6 +617,10 @@ pub enum ScanStopReason {
     ///
     /// Partial results are preserved on the way out in both cases.
     CeilingHit,
+    /// One or more descendant paths became unreadable or unstable during a
+    /// directory walk. Already-imported faces remain available for this
+    /// session, but this outcome is never eligible for persistent caching.
+    IncompleteIo,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -557,6 +629,19 @@ struct ScanOutcome {
     /// Why this scan stopped. Forwarded into `ScanProgress::Done.reason`
     /// after the SQLite import completes.
     reason: ScanStopReason,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StreamingScanCommandResult {
+    outcome: ScanOutcome,
+    import: ImportOutcome,
+    cache_truncated: bool,
+}
+
+fn is_cache_publication_eligible(result: &StreamingScanCommandResult) -> bool {
+    result.outcome.reason == ScanStopReason::Natural
+        && !result.cache_truncated
+        && result.import.added > 0
 }
 
 #[derive(Debug, Clone)]
@@ -716,8 +801,8 @@ pub struct LocalFontEntry {
 /// Convert scan entries to persistent-cache rows, dedup-statting each
 /// distinct file path once (TTC files contribute N entries with the
 /// same `path`, so a naive per-entry stat was N+1 syscalls per TTC).
-/// Shared between GUI's `try_record_folder_in_gui_cache` +
-/// `entries_to_metadata` callers and CLI's `run_refresh_fonts` loop.
+/// Shared by the GUI's locked cache publisher, drift rescan, and the CLI's
+/// `run_refresh_fonts` loop.
 ///
 /// Saturating u64→i64 on `size_bytes` and u32→i32 on `face_index`
 /// keeps with the codebase's cast-discipline pattern; the limits are
@@ -725,7 +810,7 @@ pub struct LocalFontEntry {
 /// saturate makes intent visible.
 pub fn entries_to_cache_metadata(
     entries: &[LocalFontEntry],
-) -> Vec<crate::font_cache::FontMetadata> {
+) -> Result<Vec<crate::font_cache::FontMetadata>, String> {
     // (lifetime tie WHY): `mtime_cache`'s key is
     // `&str` borrowed from `entries[i].path` — the same borrow that
     // `iter().map()` walks below. The borrow lives only as long as
@@ -738,52 +823,47 @@ pub fn entries_to_cache_metadata(
     // memory the HashMap key points to. Switch the HashMap key to
     // `String` at that point.
     let mut mtime_cache: std::collections::HashMap<&str, i64> = std::collections::HashMap::new();
-    entries
-        .iter()
-        .filter_map(|e| {
-            // Route through the shared `try_modified_at` helper in
-            // `font_cache.rs` so every stat-time extraction site stays
-            // single-source. An earlier version reproduced the helper
-            // body inline; a future change to the helper (e.g., its
-            // `.ok()?` for pre-epoch mtime safety) would have left this
-            // site behind.
-            //
-            // Same try_modified_at helper guards two callers unevenly:
-            // the FOLDER mtime path filters entries when try_modified_at
-            // returns None (avoids epoch-zero re-trigger of refresh on
-            // next run); the FILE mtime path here still falls back to
-            // 0, persisting epoch-zero into SQLite's
-            // cached_fonts.file_mtime. Lookups now verify the cached
-            // row against the live file before trusting a cache hit,
-            // so rows with unreadable mtimes would be unusable. Drop
-            // them at write time instead of persisting an epoch-zero
-            // sentinel that cannot be distinguished from a real
-            // 1970-01-01 timestamp later.
-            let mtime = *mtime_cache.entry(e.path.as_str()).or_insert_with(|| {
-                crate::font_cache::try_modified_at(Path::new(e.path.as_str())).unwrap_or(-1)
+    let mut metadata = Vec::with_capacity(entries.len());
+    for e in entries {
+        // Route through the shared `try_modified_at` helper in
+        // `font_cache.rs` so every stat-time extraction site stays
+        // single-source. An earlier version reproduced the helper
+        // body inline; a future change to the helper (e.g., its
+        // `.ok()?` for pre-epoch mtime safety) would have left this
+        // site behind.
+        //
+        // Fail the whole publication when a scanned face becomes unreadable.
+        // A source-level cache row must describe one complete, stable scan;
+        // silently dropping a face would make the row look authoritative
+        // until some later drift happens to invalidate it.
+        let mtime = *mtime_cache.entry(e.path.as_str()).or_insert_with(|| {
+            crate::font_cache::try_modified_at(Path::new(e.path.as_str())).unwrap_or(-1)
+        });
+        if mtime < 0 {
+            return Err(format!(
+                "Font metadata changed or became unreadable before caching: {}",
+                e.path
+            ));
+        }
+        let mut family_keys: Vec<crate::font_cache::FamilyKey> = Vec::new();
+        for family_name in &e.families {
+            family_keys.push(crate::font_cache::FamilyKey {
+                family_name: family_name.clone(),
+                bold: e.bold,
+                italic: e.italic,
             });
-            if mtime < 0 {
-                return None;
-            }
-            let mut family_keys: Vec<crate::font_cache::FamilyKey> = Vec::new();
-            for family_name in &e.families {
-                family_keys.push(crate::font_cache::FamilyKey {
-                    family_name: family_name.clone(),
-                    bold: e.bold,
-                    italic: e.italic,
-                });
-            }
+        }
 
-            Some(crate::font_cache::FontMetadata {
-                file_path: e.path.clone(),
-                file_size: i64::try_from(e.size_bytes).unwrap_or(i64::MAX),
-                file_mtime: mtime,
-                face_index: i32::try_from(e.index).unwrap_or(i32::MAX),
-                family_keys,
-                face_name_aliases: e.face_names.clone(),
-            })
-        })
-        .collect()
+        metadata.push(crate::font_cache::FontMetadata {
+            file_path: e.path.clone(),
+            file_size: i64::try_from(e.size_bytes).unwrap_or(i64::MAX),
+            file_mtime: mtime,
+            face_index: i32::try_from(e.index).unwrap_or(i32::MAX),
+            family_keys,
+            face_name_aliases: e.face_names.clone(),
+        });
+    }
+    Ok(metadata)
 }
 
 // Visibility asymmetry WHY: module-private (not `pub(crate)` like
@@ -841,7 +921,7 @@ fn validate_font_source_id(source_id: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn has_allowed_font_extension(path: &Path) -> bool {
+pub(crate) fn has_allowed_font_extension(path: &Path) -> bool {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -850,8 +930,18 @@ fn has_allowed_font_extension(path: &Path) -> bool {
     ALLOWED_FONT_EXTENSIONS.contains(&ext.as_str())
 }
 
-fn create_user_font_source_tx(tx: &Transaction<'_>, source_id: &str) -> Result<i64, String> {
+fn create_user_font_source_tx(
+    tx: &Transaction<'_>,
+    source_id: &str,
+    source_kind: FontSourceKind,
+    root_path: Option<&str>,
+) -> Result<i64, String> {
     validate_font_source_id(source_id)?;
+    match (source_kind, root_path) {
+        (FontSourceKind::Files, None) => {}
+        (FontSourceKind::ShallowDirectory | FontSourceKind::RecursiveDirectory, Some(_)) => {}
+        _ => return Err("Font source kind and root path do not match".to_string()),
+    }
     let source_order: i64 = tx
         .query_row(
             "SELECT COALESCE(MAX(source_order), 0) + 1 FROM font_sources",
@@ -860,8 +950,10 @@ fn create_user_font_source_tx(tx: &Transaction<'_>, source_id: &str) -> Result<i
         )
         .map_err(|e| db_error("source order query failed", e))?;
     tx.execute(
-        "INSERT INTO font_sources(source_id, source_order) VALUES (?1, ?2)",
-        params![source_id, source_order],
+        "INSERT INTO font_sources(
+            source_id, source_order, source_kind, root_path, scan_reason
+         ) VALUES (?1, ?2, ?3, ?4, -1)",
+        params![source_id, source_order, source_kind.as_i32(), root_path],
     )
     .map_err(|e| {
         if matches!(
@@ -874,7 +966,7 @@ fn create_user_font_source_tx(tx: &Transaction<'_>, source_id: &str) -> Result<i
                 _
             )
         ) {
-            "Font source id already exists".to_string()
+            "That font source is already loaded".to_string()
         } else {
             db_error("source insert failed", e)
         }
@@ -885,7 +977,6 @@ fn create_user_font_source_tx(tx: &Transaction<'_>, source_id: &str) -> Result<i
 fn import_user_font_batch_tx(
     tx: &Transaction<'_>,
     source_id: &str,
-    source_order: i64,
     entries: Vec<LocalFontEntry>,
 ) -> Result<ImportOutcome, String> {
     let mut added = 0;
@@ -894,31 +985,38 @@ fn import_user_font_batch_tx(
         .prepare(
             "
             INSERT OR IGNORE INTO font_faces(
-                source_id, path, face_index, bold, italic, size_bytes
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                path, face_index, bold, italic, size_bytes
+            ) VALUES (?1, ?2, ?3, ?4, ?5)
             ",
         )
         .map_err(|e| db_error("face insert prepare failed", e))?;
-    // WHY plain INSERT (not OR IGNORE) for the family_keys table:
-    // the `font_family_keys` schema in `init_user_font_db` has NO
-    // UNIQUE constraint on (family_name_key, key_kind, face_id,
-    // source_order), so there is nothing for an IGNORE clause to
-    // suppress. A font with multiple localized family names
-    // legitimately produces multiple rows sharing the same `face_id`
-    // — that's the normal case. Any genuine SQLite error from this
-    // INSERT (disk full, table dropped mid-tx) is a real failure we
-    // want to surface via db_error, not silently swallow.
-    // `insert_face` above uses INSERT OR IGNORE because font_faces
-    // DOES have a UNIQUE constraint on (path, face_index) for
-    // cross-source dedup — the IGNORE there short-circuits the
-    // duplicate-source case, which is intentional. The asymmetry is
-    // by design.
+    let mut insert_membership = tx
+        .prepare("INSERT OR IGNORE INTO font_source_faces(source_id, face_id) VALUES (?1, ?2)")
+        .map_err(|e| db_error("source-face insert prepare failed", e))?;
+    let mut membership_exists = tx
+        .prepare(
+            "SELECT EXISTS(
+                 SELECT 1 FROM font_source_faces
+                 WHERE source_id = ?1 AND face_id = ?2
+             )",
+        )
+        .map_err(|e| db_error("source-face lookup prepare failed", e))?;
+    let mut update_face = tx
+        .prepare(
+            "UPDATE font_faces
+             SET bold = ?2, italic = ?3, size_bytes = ?4
+             WHERE face_id = ?1",
+        )
+        .map_err(|e| db_error("face refresh prepare failed", e))?;
+    let mut delete_keys = tx
+        .prepare("DELETE FROM font_family_keys WHERE face_id = ?1")
+        .map_err(|e| db_error("family-key refresh prepare failed", e))?;
     let mut insert_key = tx
         .prepare(
             "
             INSERT INTO font_family_keys(
-                family_name_key, bold, italic, key_kind, face_id, source_order
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                family_name_key, bold, italic, key_kind, face_id
+            ) VALUES (?1, ?2, ?3, ?4, ?5)
             ",
         )
         .map_err(|e| db_error("family-key insert prepare failed", e))?;
@@ -935,54 +1033,101 @@ fn import_user_font_batch_tx(
         let size_bytes = i64::try_from(entry.size_bytes).unwrap_or(i64::MAX);
         let changed = insert_face
             .execute(params![
-                source_id,
-                entry.path,
+                &entry.path,
                 entry.index,
                 if entry.bold { 1 } else { 0 },
                 if entry.italic { 1 } else { 0 },
                 size_bytes
             ])
             .map_err(|e| db_error("face insert failed", e))?;
-        if changed == 0 {
-            // Face already indexed under an earlier source — dedup on
-            // canonical (path, face_index). Skipping the family-key inserts
-            // below intentionally leaves the original `source_order`
-            // authoritative; re-adding the same path under a new source_id
-            // does NOT promote the face to a newer lookup priority. Any
-            // future change that "promotes on re-add" must also reconcile
-            // with `db_lookup_prefers_newer_source_for_same_family_key`.
-            duplicated += 1;
-            continue;
-        }
-        added += 1;
-        let face_id = tx.last_insert_rowid();
-        for family in entry.families {
+        let face_id = if changed > 0 {
+            tx.last_insert_rowid()
+        } else {
+            let face_id = tx
+                .query_row(
+                    "SELECT face_id FROM font_faces WHERE path = ?1 AND face_index = ?2",
+                    params![&entry.path, entry.index],
+                    |row| row.get(0),
+                )
+                .map_err(|e| db_error("existing face lookup failed", e))?;
+            let already_owned: bool = membership_exists
+                .query_row(params![source_id, face_id], |row| row.get(0))
+                .map_err(|e| db_error("source-face lookup failed", e))?;
+            if already_owned {
+                // Two parsed entries for the same path/index in one source are
+                // duplicates, not a rescan. Keep the first entry's metadata and
+                // keys; otherwise the last duplicate silently rewrites which
+                // family resolves from that source.
+                duplicated += 1;
+                continue;
+            }
+            // A later overlapping source may be scanning a replacement at the
+            // same path/index. The face is shared globally, so refresh its
+            // parsed attributes and lookup keys before adding the new owner;
+            // otherwise stale family names survive even after the original
+            // source is removed.
+            update_face
+                .execute(params![
+                    face_id,
+                    i32::from(entry.bold),
+                    i32::from(entry.italic),
+                    size_bytes
+                ])
+                .map_err(|e| db_error("face refresh failed", e))?;
+            delete_keys
+                .execute(params![face_id])
+                .map_err(|e| db_error("family-key refresh failed", e))?;
+            face_id
+        };
+
+        for family in &entry.families {
             insert_key
                 .execute(params![
-                    crate::font_cache::family_lookup_key(&family),
+                    crate::font_cache::family_lookup_key(family),
                     i32::from(entry.bold),
                     i32::from(entry.italic),
                     USER_FONT_KEY_KIND_FAMILY,
                     face_id,
-                    source_order
                 ])
                 .map_err(|e| db_error("family-key insert failed", e))?;
         }
-        for face_name in entry.face_names {
+        for face_name in &entry.face_names {
             insert_key
                 .execute(params![
-                    crate::font_cache::family_lookup_key(&face_name),
+                    crate::font_cache::family_lookup_key(face_name),
                     0,
                     0,
                     USER_FONT_KEY_KIND_FACE_ALIAS,
                     face_id,
-                    source_order
                 ])
                 .map_err(|e| db_error("face-name key insert failed", e))?;
+        }
+
+        if insert_membership
+            .execute(params![source_id, face_id])
+            .map_err(|e| db_error("source-face insert failed", e))?
+            > 0
+        {
+            added += 1;
+        } else {
+            duplicated += 1;
         }
     }
 
     Ok(ImportOutcome { added, duplicated })
+}
+
+fn finish_user_font_source_tx(
+    tx: &Transaction<'_>,
+    source_id: &str,
+    reason: ScanStopReason,
+) -> Result<(), String> {
+    tx.execute(
+        "UPDATE font_sources SET scan_reason = ?2 WHERE source_id = ?1",
+        params![source_id, scan_reason_code(reason)],
+    )
+    .map_err(|e| db_error("source completion update failed", e))?;
+    Ok(())
 }
 
 fn remove_empty_user_font_source_tx(
@@ -998,6 +1143,19 @@ fn remove_empty_user_font_source_tx(
         params![source_id],
     )
     .map_err(|e| db_error("empty source cleanup failed", e))?;
+    delete_orphan_user_font_faces_tx(tx)?;
+    Ok(())
+}
+
+fn delete_orphan_user_font_faces_tx(tx: &Transaction<'_>) -> Result<(), String> {
+    tx.execute(
+        "DELETE FROM font_faces
+         WHERE NOT EXISTS (
+             SELECT 1 FROM font_source_faces sf WHERE sf.face_id = font_faces.face_id
+         )",
+        [],
+    )
+    .map_err(|e| db_error("orphan face cleanup failed", e))?;
     Ok(())
 }
 
@@ -1138,7 +1296,7 @@ const MAX_CMAP12_REWRITE_OFFSETS_PER_FACE: usize = 4_096;
 /// for that source. Defense-in-depth against GUI cache OOM and
 /// refresh-fonts OOM: real font libraries top out at a few thousand
 /// faces; 20k is 5× margin over anything legitimate.
-pub const MAX_CACHE_POPULATE_FACES: usize = 20_000;
+pub const MAX_CACHE_POPULATE_FACES: usize = 32_768;
 
 fn bounded_font_family_name(chars: impl Iterator<Item = char>) -> Option<String> {
     // Stream-trim instead of `take(N).collect().trim()`: truncating before
@@ -2042,6 +2200,260 @@ pub struct FontScanPreflight {
     total_bytes: u64,
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FontDirectoryScanPreflight {
+    font_files: usize,
+    total_bytes: u64,
+    reason: ScanStopReason,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FontDirectoryScanCommandResult {
+    cache_disposition: FontCacheDisposition,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+enum FontCacheDisposition {
+    Cached,
+    SessionOnly,
+}
+
+#[derive(Debug, Clone)]
+struct DiscoveredFontFile {
+    path: PathBuf,
+    size_bytes: u64,
+    modified_at: i64,
+}
+
+#[derive(Debug, Clone)]
+struct DirectoryDiscovery {
+    files: Vec<DiscoveredFontFile>,
+    directories: Vec<crate::font_cache::FolderSnapshot>,
+    candidate_files: Vec<crate::font_cache::FileSnapshot>,
+    reason: ScanStopReason,
+}
+
+fn checked_canonical_path(path: &Path, root: &Path) -> Result<PathBuf, String> {
+    let canonical = path
+        .canonicalize()
+        .map_err(|_| "A font-library entry became unreadable".to_string())?;
+    if !canonical.starts_with(root) {
+        return Err("A font-library entry resolved outside the selected root".to_string());
+    }
+    let normalized = normalize_canonical_path(
+        canonical
+            .to_str()
+            .ok_or_else(|| "A font-library path is not valid UTF-8".to_string())?,
+    );
+    validate_ipc_path(&normalized, "Discovered font")?;
+    Ok(canonical)
+}
+
+/// Deterministic, iterative depth-first discovery shared by recursive
+/// preflight and parsing. It never follows symlinks/junctions/reparse points,
+/// applies global budgets across the selected root, and polls cancellation
+/// during metadata walking rather than waiting for font parsing to begin.
+fn discover_font_files(
+    canonical_root: &Path,
+    scope: FontDirectoryScope,
+    scan_id: u64,
+) -> Result<DirectoryDiscovery, String> {
+    match crate::util::try_is_reparse_point(canonical_root) {
+        Ok(false) => {}
+        Ok(true) => return Err("Font library root cannot be a symlink or junction".to_string()),
+        Err(_) => return Err("Cannot inspect font library root".to_string()),
+    }
+
+    let mut stack = vec![(canonical_root.to_path_buf(), 0usize)];
+    let mut files = Vec::new();
+    let mut seen_font_paths = HashSet::new();
+    let mut directories = Vec::new();
+    let mut candidate_files = Vec::new();
+    let mut visited_entries = 0usize;
+    let mut visited_directories = 0usize;
+    let mut retained_path_bytes = canonical_root.as_os_str().len();
+    let mut total_font_bytes = 0u64;
+    let mut incomplete_io = false;
+
+    macro_rules! discovery_result {
+        ($reason:expr) => {
+            DirectoryDiscovery {
+                files,
+                directories,
+                candidate_files,
+                reason: $reason,
+            }
+        };
+    }
+
+    while let Some((directory, depth)) = stack.pop() {
+        if font_scan_cancelled(scan_id) {
+            return Ok(discovery_result!(ScanStopReason::UserCancel));
+        }
+        if visited_directories >= MAX_SCAN_DIRECTORIES || depth > MAX_SCAN_DEPTH {
+            return Ok(discovery_result!(ScanStopReason::CeilingHit));
+        }
+        visited_directories += 1;
+
+        let normalized_directory = normalize_canonical_path(
+            directory
+                .to_str()
+                .ok_or_else(|| "A font-library directory is not valid UTF-8".to_string())?,
+        );
+        if validate_ipc_path(&normalized_directory, "Discovered directory").is_err() {
+            if directory == canonical_root {
+                return Err("Font library root cannot be represented safely".to_string());
+            }
+            incomplete_io = true;
+            continue;
+        }
+        match crate::font_cache::try_modified_at(&directory) {
+            Some(folder_mtime) => directories.push(crate::font_cache::FolderSnapshot {
+                folder_path: normalized_directory,
+                folder_mtime,
+            }),
+            None if directory == canonical_root => {
+                return Err("Cannot read font library root timestamp".to_string())
+            }
+            None => {
+                incomplete_io = true;
+                continue;
+            }
+        }
+
+        let read = match fs::read_dir(&directory) {
+            Ok(read) => read,
+            Err(error) if directory == canonical_root => {
+                log::warn!("read font-library root failed: {error}");
+                return Err("Cannot read directory".to_string());
+            }
+            Err(error) => {
+                log::info!("read nested font directory failed: {error}");
+                incomplete_io = true;
+                continue;
+            }
+        };
+
+        let mut children = Vec::new();
+        for entry in read {
+            if font_scan_cancelled(scan_id) {
+                return Ok(discovery_result!(ScanStopReason::UserCancel));
+            }
+            if visited_entries >= MAX_PREFLIGHT_ENTRIES {
+                return Ok(discovery_result!(ScanStopReason::CeilingHit));
+            }
+            visited_entries += 1;
+            match entry {
+                Ok(entry) => {
+                    let path = entry.path();
+                    retained_path_bytes =
+                        retained_path_bytes.saturating_add(path.as_os_str().len());
+                    if retained_path_bytes > MAX_SCAN_PATH_BYTES {
+                        return Ok(discovery_result!(ScanStopReason::CeilingHit));
+                    }
+                    children.push(path);
+                }
+                Err(_) => incomplete_io = true,
+            }
+        }
+        children.sort();
+
+        let mut nested = Vec::new();
+        for path in children {
+            if font_scan_cancelled(scan_id) {
+                return Ok(discovery_result!(ScanStopReason::UserCancel));
+            }
+            match crate::util::try_is_reparse_point(&path) {
+                Ok(true) => continue,
+                Err(_) => {
+                    incomplete_io = true;
+                    continue;
+                }
+                Ok(false) => {}
+            }
+            let metadata = match fs::symlink_metadata(&path) {
+                Ok(metadata) => metadata,
+                Err(_) => {
+                    incomplete_io = true;
+                    continue;
+                }
+            };
+            if metadata.is_dir() {
+                if scope == FontDirectoryScope::Recursive {
+                    match checked_canonical_path(&path, canonical_root) {
+                        Ok(canonical) => nested.push(canonical),
+                        Err(_) => incomplete_io = true,
+                    }
+                }
+                continue;
+            }
+            if !metadata.is_file() || !has_allowed_font_extension(&path) {
+                continue;
+            }
+            if files.len() >= MAX_SCAN_FONT_FILES {
+                return Ok(discovery_result!(ScanStopReason::CeilingHit));
+            }
+            let canonical = match checked_canonical_path(&path, canonical_root) {
+                Ok(canonical) => canonical,
+                Err(_) => {
+                    incomplete_io = true;
+                    continue;
+                }
+            };
+            let dedup_key = normalize_canonical_path(&canonical.to_string_lossy());
+            if !seen_font_paths.insert(dedup_key) {
+                continue;
+            }
+            total_font_bytes = total_font_bytes.saturating_add(metadata.len());
+            if total_font_bytes > MAX_SCAN_TOTAL_FONT_BYTES {
+                return Ok(discovery_result!(ScanStopReason::CeilingHit));
+            }
+            let normalized_file = normalize_canonical_path(
+                canonical
+                    .to_str()
+                    .ok_or_else(|| "A font-library file is not valid UTF-8".to_string())?,
+            );
+            let file_mtime = match crate::font_cache::try_modified_at(&canonical) {
+                Some(file_mtime) => {
+                    candidate_files.push(crate::font_cache::FileSnapshot {
+                        file_path: normalized_file,
+                        file_size: i64::try_from(metadata.len()).unwrap_or(i64::MAX),
+                        file_mtime,
+                    });
+                    file_mtime
+                }
+                None => {
+                    incomplete_io = true;
+                    -1
+                }
+            };
+            files.push(DiscoveredFontFile {
+                path: canonical,
+                size_bytes: metadata.len(),
+                modified_at: file_mtime,
+            });
+        }
+
+        // LIFO stack: push in reverse so the alphabetically-first directory
+        // is visited first and the same source resolves identically each run.
+        for nested_dir in nested.into_iter().rev() {
+            stack.push((nested_dir, depth + 1));
+        }
+    }
+
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    directories.sort_by(|a, b| a.folder_path.cmp(&b.folder_path));
+    candidate_files.sort_by(|a, b| a.file_path.cmp(&b.file_path));
+    Ok(discovery_result!(if incomplete_io {
+        ScanStopReason::IncompleteIo
+    } else {
+        ScanStopReason::Natural
+    }))
+}
+
 fn add_preflight_file(path: &Path, out: &mut FontScanPreflight) {
     if !has_allowed_font_extension(path) {
         return;
@@ -2054,61 +2466,6 @@ fn add_preflight_file(path: &Path, out: &mut FontScanPreflight) {
     }
     out.font_files += 1;
     out.total_bytes = out.total_bytes.saturating_add(metadata.len());
-}
-
-fn preflight_directory_inner(canonical_dir: &Path) -> Result<FontScanPreflight, String> {
-    let read = fs::read_dir(canonical_dir).map_err(|e| {
-        log::warn!(
-            "preflight read_dir failed for '{}': {e}",
-            canonical_dir.display()
-        );
-        "Cannot read directory".to_string()
-    })?;
-    let mut out = FontScanPreflight {
-        font_files: 0,
-        total_bytes: 0,
-    };
-    for (visited, entry) in read.enumerate() {
-        // Cap fires BEFORE we touch the entry (canonicalize / metadata),
-        // so the worst-case CPU cost is bounded at MAX_PREFLIGHT_ENTRIES
-        // canonicalize calls — not MAX+1.
-        if visited >= MAX_PREFLIGHT_ENTRIES {
-            return Err(format!(
-                "Directory has too many entries to preview (>{MAX_PREFLIGHT_ENTRIES})"
-            ));
-        }
-        let Ok(entry) = entry else {
-            continue;
-        };
-        let path = entry.path();
-        // Skip reparse points (symlinks / Windows junctions / OneDrive
-        // placeholders) BEFORE any metadata or canonicalize call. The
-        // earlier ordering called `path.is_file()` first, which goes
-        // through `std::fs::metadata` and follows symlinks — for a
-        // symlink pointing to a regular file, the kernel resolved the
-        // reparse point and opened the target as a side effect even
-        // though we then skipped the entry. The starts_with guard at
-        // the bottom kept the result correct, but the design intent
-        // ("preview never chases symlinks") was not actually upheld in
-        // the trace. `scan_directory_inner` intentionally takes a
-        // different policy on in-directory symlinks; preview's job is
-        // strictly size estimation, so refusing to touch them at all
-        // is the right invariant.
-        if crate::util::is_reparse_point(&path) {
-            continue;
-        }
-        if !path.is_file() {
-            continue;
-        }
-        let Ok(canonical) = path.canonicalize() else {
-            continue;
-        };
-        if !canonical.starts_with(canonical_dir) {
-            continue;
-        }
-        add_preflight_file(&canonical, &mut out);
-    }
-    Ok(out)
 }
 
 fn preflight_files_inner(paths: Vec<String>) -> FontScanPreflight {
@@ -2169,9 +2526,24 @@ fn preflight_files_inner(paths: Vec<String>) -> FontScanPreflight {
 }
 
 #[tauri::command]
-pub async fn preflight_font_directory(dir: String) -> Result<FontScanPreflight, String> {
+pub async fn preflight_font_directory(
+    dir: String,
+    scope: Option<FontDirectoryScope>,
+    scan_id: u64,
+) -> Result<FontDirectoryScanPreflight, String> {
+    if scan_id == NO_SCAN_ID {
+        return Err("Scan id must be non-zero".to_string());
+    }
     validate_ipc_path(&dir, "Directory")?;
+    let scope = scope.unwrap_or(FontDirectoryScope::Shallow);
+    let active_scan = begin_font_scan(scan_id)?;
     tauri::async_runtime::spawn_blocking(move || {
+        let _active_scan = active_scan;
+        match crate::util::try_is_reparse_point(Path::new(&dir)) {
+            Ok(false) => {}
+            Ok(true) => return Err("Font library root cannot be a symlink or junction".to_string()),
+            Err(_) => return Err("Cannot inspect font library root".to_string()),
+        }
         let canonical_dir = Path::new(&dir).canonicalize().map_err(|e| {
             log::warn!("preflight canonicalize directory failed: {e}");
             "Cannot resolve directory path".to_string()
@@ -2179,7 +2551,27 @@ pub async fn preflight_font_directory(dir: String) -> Result<FontScanPreflight, 
         if !canonical_dir.is_dir() {
             return Err("Not a directory".to_string());
         }
-        preflight_directory_inner(&canonical_dir)
+        let discovery = discover_font_files(&canonical_dir, scope, scan_id)?;
+        match discovery.reason {
+            ScanStopReason::CeilingHit => {
+                return Err("Font library is too large to inspect safely".to_string())
+            }
+            ScanStopReason::IncompleteIo => {
+                return Err(
+                    "Font library changed or became unreadable during inspection".to_string(),
+                )
+            }
+            ScanStopReason::Natural | ScanStopReason::UserCancel => {}
+        }
+        let mut total_bytes = 0u64;
+        for file in &discovery.files {
+            total_bytes = total_bytes.saturating_add(file.size_bytes);
+        }
+        Ok(FontDirectoryScanPreflight {
+            font_files: discovery.files.len(),
+            total_bytes,
+            reason: discovery.reason,
+        })
     })
     .await
     .map_err(|e| format!("Font preflight worker failed: {e}"))?
@@ -2198,214 +2590,113 @@ pub async fn preflight_font_files(paths: Vec<String>) -> Result<FontScanPrefligh
         .map_err(|e| format!("Font preflight worker failed: {e}"))?
 }
 
-/// Streaming scan of a user-picked directory (one level deep). Faces are
-/// emitted to `emit_batch` in chunks of up to `SCAN_BATCH_SIZE` (or every
-/// `SCAN_BATCH_INTERVAL` when parsing is slower than batching). Returns the
-/// total face count on success, or an error if the directory is unreadable.
-/// Cancellation via `cancel_font_scan(scan_id)` returns a cancelled outcome
-/// with all already-emitted batches retained by the caller.
-///
-/// Does NOT recurse — the `Fonts/` convention is flat by tradition, and
-/// limiting recursion keeps the "only files under the picked directory"
-/// security reasoning straightforward.
-///
-/// Bytes-cap posture : per-file size is capped at
-/// `MAX_FONT_DATA_SIZE` (64 MB) and face count at `MAX_FONTS_PER_SCAN`
-/// (100k). There is NO cumulative-bytes ceiling on the scan as a
-/// whole. Peak memory stays bounded because each file's bytes are
-/// dropped before the next iteration (fs::read + parse run in
-/// sequence, not in parallel), AND the user-facing
-/// `preflight_font_directory` reports total bytes BEFORE the scan
-/// starts so an XL-confirmation modal can warn the user. Untrusted
-/// subtitle / font content is bounded by the
-/// preflight gate; adding a cumulative cap would be
-/// defensive-complexity for a scenario the preflight already covers.
-/// Revisit if a future flow bypasses preflight (e.g., direct
-/// drag-drop into the scan command without going through the source
-/// modal's XL confirmation).
-fn scan_directory_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
+/// Scope-aware directory scanner used by the new library surface. Discovery
+/// is a separate bounded phase so cancellation works while walking a large
+/// tree, then files are parsed in deterministic path order and streamed in
+/// the same small batches as the legacy shallow scanner.
+fn scan_directory_with_scope_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
     canonical_dir: &Path,
+    scope: FontDirectoryScope,
     scan_id: u64,
+    mut captured_snapshot: Option<&mut Option<crate::font_cache::CacheSourceSnapshot>>,
     mut emit_batch: F,
 ) -> Result<ScanOutcome, String> {
-    let read = fs::read_dir(canonical_dir).map_err(|e| {
-        log::warn!("read_dir failed for '{}': {e}", canonical_dir.display());
-        "Cannot read directory".to_string()
-    })?;
+    let mut discovery = discover_font_files(canonical_dir, scope, scan_id)?;
+    if discovery.reason == ScanStopReason::UserCancel {
+        return Ok(ScanOutcome {
+            total: 0,
+            reason: ScanStopReason::UserCancel,
+        });
+    }
 
-    let mut buffer: Vec<LocalFontEntry> = Vec::new();
-    let mut total: usize = 0;
+    if discovery.reason == ScanStopReason::Natural {
+        if let Some(slot) = captured_snapshot.as_mut() {
+            **slot = Some(crate::font_cache::CacheSourceSnapshot {
+                source_root: normalize_canonical_path(
+                    canonical_dir
+                        .to_str()
+                        .ok_or_else(|| "Font library root is not valid UTF-8".to_string())?,
+                ),
+                scope,
+                directories: std::mem::take(&mut discovery.directories),
+                files: std::mem::take(&mut discovery.candidate_files),
+            });
+        }
+    }
+
+    let discovery_reason = discovery.reason;
+    let mut buffer = Vec::new();
+    let mut total = 0usize;
     let mut last_emit = Instant::now();
-    // Mirror the dedup `scan_files_inner` and `preflight_files_inner`
-    // apply: a directory containing two siblings that resolve to the
-    // same canonical path (e.g., `Foo.ttf` plus a same-directory
-    // symlink `Bar.ttf` → `Foo.ttf`) would otherwise re-parse the
-    // bytes twice and rely on SQLite's `UNIQUE(path, face_index)` to
-    // surface them as `duplicated`. Wastes IO/parse cost.
-    let mut seen: HashSet<String> = HashSet::new();
-    // Tracks whether the visited-entry cap fired so the post-loop
-    // reason routes to `CeilingHit` instead of falling through to
-    // `Natural` (previously the cap was silent to the UI).
-    let mut dedup_ceiling_hit = false;
-
-    // `visited` (via `read.enumerate()`) bounds the iteration cost at
-    // `MAX_PREFLIGHT_ENTRIES`. An earlier change deliberately moved the
-    // dedup gate behind `has_allowed_font_extension` so non-font files
-    // no longer fill `seen` and falsely report a
-    // ceiling hit — but that left CLI paths (`scan_directory_collecting`,
-    // `import_font_directory_for_cli`, `refresh-fonts`) without any
-    // bound on a directory of millions of non-font files (GUI runs
-    // preflight first; CLI does not). Counting every entry here closes
-    // the gap and mirrors `preflight_directory_inner`'s
-    // `visited >= MAX_PREFLIGHT_ENTRIES` contract, so scan and preflight
-    // speak about the same directory size. The cap also indirectly
-    // bounds `seen` memory: `seen.insert` happens at most once per
-    // visited entry, so `seen.len() <= visited <= MAX_PREFLIGHT_ENTRIES`.
-    for (visited, entry) in read.enumerate() {
+    for discovered in discovery.files {
         if font_scan_cancelled(scan_id) {
-            // Flush any in-flight batch before returning so the frontend
-            // sees every face parsed before cancellation. Cancellation is
-            // polled between files; a single large font parse must finish
-            // before this branch can run.
             if !buffer.is_empty() {
                 emit_batch(std::mem::take(&mut buffer))?;
             }
-            log::info!(
-                "font scan {} cancelled in directory '{}' after {} faces",
-                scan_id,
-                canonical_dir.display(),
-                total
-            );
             return Ok(ScanOutcome {
                 total,
                 reason: ScanStopReason::UserCancel,
             });
         }
-
-        // Cap fires BEFORE we touch the entry (canonicalize / metadata),
-        // so the worst-case CPU cost is bounded at `MAX_PREFLIGHT_ENTRIES`
-        // canonicalize calls — not MAX+1.
-        if visited >= MAX_PREFLIGHT_ENTRIES {
-            log::warn!(
-                "font scan {} visited {MAX_PREFLIGHT_ENTRIES} entries in '{}'; \
-                 stopping early to bound iteration cost (partial results preserved)",
-                scan_id,
-                canonical_dir.display()
-            );
-            dedup_ceiling_hit = true;
-            break;
-        }
-
-        let entry = match entry {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        let path = entry.path();
-        // Skip reparse points (symlinks / Windows junctions / OneDrive
-        // placeholders) BEFORE any metadata or canonicalize call, matching
-        // preflight_directory_inner's policy. The earlier design followed
-        // symlinks via canonicalize + starts_with containment; that left
-        // a preflight↔scan mismatch where a malicious font pack could
-        // hide thousands of font files behind top-level symlinks (preflight
-        // reported few/zero files → "huge folder" warning never fired →
-        // scan parsed everything). With input-provenance treated as
-        // untrusted (subtitle/font packs from public release channels),
-        // refusing to chase symlinks in scan keeps the size warning honest
-        // and bounds parse work to what the user actually picked. Cost:
-        // packager workflows that ship fonts as symlinks to a shared
-        // store stop working — those are rare on Windows desktop, and
-        // affected users can resolve the symlinks before importing.
-        if crate::util::is_reparse_point(&path) {
-            continue;
-        }
-        if !path.is_file() {
-            continue;
-        }
-
-        // Defense-in-depth: even with the reparse-point skip above,
-        // canonicalize + starts_with stays as a backstop against any
-        // future reparse-point family the helper doesn't yet recognize
-        // (junctions, hardlinks-via-NTFS-features, future Win API types).
-        let canonical = match path.canonicalize() {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-        if !canonical.starts_with(canonical_dir) {
-            continue;
-        }
-        // The dedup `seen` set fills only on font-eligible extensions
-        // (see `has_allowed_font_extension` below). Counting only font
-        // files here, after the visited-cap above bounds total
-        // iteration cost, means the dedup set sizes track the user-
-        // visible font count rather than the directory's total entry
-        // count — `preflight_directory_inner` uses the same accounting
-        // so both speak about the same "directory size" when the XL-
-        // confirm dialog fires. An earlier form let the dedup set fill
-        // on every regular file regardless of extension, and the
-        // extension check lived deeper inside `parse_local_font_file`.
-        // A directory of 200k non-font
-        // files (.txt / .png / etc.) would fill `seen` to the cap and
-        // trip `CeilingHit` with 0 faces — but
-        // `preflight_directory_inner` counts only font-extension files,
-        // so the XL-size confirmation modal never fires (untrusted-input: hostile
-        // pack defeats the safety check). Aligning scan's accounting
-        // with preflight's means both speak about the same "directory
-        // size."
-        if !has_allowed_font_extension(&canonical) {
-            continue;
-        }
-        if !seen.insert(normalize_canonical_path(&canonical.to_string_lossy())) {
-            continue;
-        }
-
-        for font_entry in parse_local_font_file(&canonical, scan_id) {
-            buffer.push(font_entry);
-            total += 1;
-            if total > MAX_FONTS_PER_SCAN {
+        let live_size = match fs::metadata(&discovered.path) {
+            Ok(metadata) if metadata.is_file() => metadata.len(),
+            _ => {
                 if !buffer.is_empty() {
                     emit_batch(std::mem::take(&mut buffer))?;
                 }
-                // info, not warn — release builds (level WARN+) would
-                // otherwise emit user paths into log files. Most other
-                // path-bearing logs in this module already use info for
-                // the same reason; this one was the odd one out.
-                log::info!(
-                    "font scan {} hit the {MAX_FONTS_PER_SCAN}-face ceiling in directory '{}'",
-                    scan_id,
-                    canonical_dir.display()
-                );
+                return Ok(ScanOutcome {
+                    total,
+                    reason: ScanStopReason::IncompleteIo,
+                });
+            }
+        };
+        if live_size != discovered.size_bytes {
+            if !buffer.is_empty() {
+                emit_batch(std::mem::take(&mut buffer))?;
+            }
+            return Ok(ScanOutcome {
+                total,
+                reason: ScanStopReason::IncompleteIo,
+            });
+        }
+        let parsed_entries = parse_local_font_file(&discovered.path, scan_id);
+        let stable_after_parse = fs::metadata(&discovered.path)
+            .ok()
+            .filter(|metadata| metadata.is_file() && metadata.len() == discovered.size_bytes)
+            .and_then(|_| crate::font_cache::try_modified_at(&discovered.path))
+            .is_some_and(|modified_at| modified_at == discovered.modified_at);
+        if !stable_after_parse {
+            if !buffer.is_empty() {
+                emit_batch(std::mem::take(&mut buffer))?;
+            }
+            return Ok(ScanOutcome {
+                total,
+                reason: ScanStopReason::IncompleteIo,
+            });
+        }
+        for font_entry in parsed_entries {
+            buffer.push(font_entry);
+            total += 1;
+            if total > MAX_FONTS_PER_SCAN {
+                emit_batch(std::mem::take(&mut buffer))?;
                 return Ok(ScanOutcome {
                     total,
                     reason: ScanStopReason::CeilingHit,
                 });
             }
-
             if buffer.len() >= SCAN_BATCH_SIZE || last_emit.elapsed() >= SCAN_BATCH_INTERVAL {
                 emit_batch(std::mem::take(&mut buffer))?;
                 last_emit = Instant::now();
             }
         }
     }
-
     if !buffer.is_empty() {
         emit_batch(buffer)?;
     }
-
-    // Post-loop cancellation re-check . The top-of-loop
-    // `font_scan_cancelled` only fires on the NEXT iteration; when
-    // `parse_local_font_file`'s per-face cancel poll fires inside the
-    // FINAL directory entry / file, the loop exits naturally and the
-    // outer reason would otherwise read as Natural — UI sees "completed
-    // normally" while the partial buffer is silently kept. Cancel
-    // wins over `dedup_ceiling_hit` because the cap-triggered break
-    // and a subsequent user cancel are both "stopped early"; reporting
-    // UserCancel matches what the user expects to see.
     let reason = if font_scan_cancelled(scan_id) {
         ScanStopReason::UserCancel
-    } else if dedup_ceiling_hit {
-        ScanStopReason::CeilingHit
     } else {
-        ScanStopReason::Natural
+        discovery_reason
     };
     Ok(ScanOutcome { total, reason })
 }
@@ -2425,16 +2716,22 @@ fn scan_directory_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
 /// `log_label` is the human-readable scan target (directory path, or
 /// "local font files" for the file-list command) — folded into the
 /// completion log line.
+struct StreamingScanSource<'a> {
+    source_id: &'a str,
+    source_kind: FontSourceKind,
+    root_path: Option<&'a str>,
+    log_label: &'a str,
+}
+
 fn run_streaming_scan_command<S>(
     scan_id: u64,
-    source_id: &str,
+    source: StreamingScanSource<'_>,
     progress: tauri::ipc::Channel<ScanProgress>,
-    log_label: &str,
     // When `Some`, every batch is cloned into the supplied Vec before
     // being passed downstream to the session-DB import. The directory
-    // scan path uses this to feed `try_record_folder_in_gui_cache`
+    // scan path uses this to feed the locked source-cache publisher
     // after commit; the file-list scan path passes `None` because it
-    // has no folder anchor for the cache's drift model. Bounded by
+    // has no directory-source identity for the cache's drift model. Bounded by
     // MAX_CACHE_POPULATE_FACES.
     //
     // Cap-hit policy: when the cap fires mid-scan, the function returns
@@ -2442,7 +2739,7 @@ fn run_streaming_scan_command<S>(
     // populate MUST be skipped. The Vec is truncated to fit (in-session
     // memory bound) but the caller does not write a row to the
     // persistent cache. An earlier design routed the truncated Vec
-    // through `try_record_folder_in_gui_cache`
+    // through the persistent-cache publisher
     // on the theory that partial cache acceleration beats none, but
     // persistent cache rows are folder-anchored by mtime — a truncated
     // folder whose mtime doesn't change later is indistinguishable
@@ -2458,7 +2755,7 @@ fn run_streaming_scan_command<S>(
     // OOM defense still holds: peak memory is bounded by the cap.
     mut collected_for_cache: Option<&mut Vec<LocalFontEntry>>,
     scan_body: S,
-) -> Result<bool /* cache_truncated */, String>
+) -> Result<StreamingScanCommandResult, String>
 where
     S: FnOnce(
         u64,
@@ -2469,7 +2766,7 @@ where
     let tx = conn
         .transaction()
         .map_err(|e| db_error("transaction start failed", e))?;
-    let source_order = create_user_font_source_tx(&tx, source_id)?;
+    create_user_font_source_tx(&tx, source.source_id, source.source_kind, source.root_path)?;
     let mut import = ImportOutcome::default();
     let mut progress_total = 0usize;
     // Tracks whether the cap was hit mid-scan and the collected Vec
@@ -2537,7 +2834,7 @@ where
         // circuits via `?` and the next outer `?` rolls the whole scan
         // back without leaving the user staring at a count that
         // overshoots the registered source.
-        let batch_import = import_user_font_batch_tx(&tx, source_id, source_order, batch)?;
+        let batch_import = import_user_font_batch_tx(&tx, source.source_id, batch)?;
         progress_total += batch_size;
         import.added += batch_import.added;
         import.duplicated += batch_import.duplicated;
@@ -2546,7 +2843,8 @@ where
         });
         Ok(())
     })?;
-    remove_empty_user_font_source_tx(&tx, source_id, import.added)?;
+    finish_user_font_source_tx(&tx, source.source_id, outcome.reason)?;
+    remove_empty_user_font_source_tx(&tx, source.source_id, import.added)?;
     tx.commit()
         .map_err(|e| db_error("transaction commit failed", e))?;
 
@@ -2575,7 +2873,8 @@ where
     }
 
     log::info!(
-        "{log_label} with scan {scan_id}: {} faces total, {} added, {} duplicate{}",
+        "{} with scan {scan_id}: {} faces total, {} added, {} duplicate{}",
+        source.log_label,
         outcome.total,
         import.added,
         import.duplicated,
@@ -2583,13 +2882,20 @@ where
             ScanStopReason::Natural => "",
             ScanStopReason::UserCancel => " (cancelled)",
             ScanStopReason::CeilingHit => " (ceiling hit)",
+            ScanStopReason::IncompleteIo => " (incomplete I/O)",
         }
     );
-    Ok(cache_truncated)
+    Ok(StreamingScanCommandResult {
+        outcome,
+        import,
+        cache_truncated,
+    })
 }
 
 fn run_blocking_scan_import<S>(
     source_id: &str,
+    source_kind: FontSourceKind,
+    root_path: Option<&str>,
     scan_body: S,
 ) -> Result<FontSourceImportSummary, String>
 where
@@ -2603,14 +2909,15 @@ where
     let tx = conn
         .transaction()
         .map_err(|e| db_error("transaction start failed", e))?;
-    let source_order = create_user_font_source_tx(&tx, source_id)?;
+    create_user_font_source_tx(&tx, source_id, source_kind, root_path)?;
     let mut import = ImportOutcome::default();
     let outcome = scan_body(NO_SCAN_ID, &mut |batch| {
-        let batch_import = import_user_font_batch_tx(&tx, source_id, source_order, batch)?;
+        let batch_import = import_user_font_batch_tx(&tx, source_id, batch)?;
         import.added += batch_import.added;
         import.duplicated += batch_import.duplicated;
         Ok(())
     })?;
+    finish_user_font_source_tx(&tx, source_id, outcome.reason)?;
     remove_empty_user_font_source_tx(&tx, source_id, import.added)?;
     tx.commit()
         .map_err(|e| db_error("transaction commit failed", e))?;
@@ -2638,6 +2945,13 @@ where
 /// abort. Acceptable for refresh-fonts which is a foreground
 /// operation under user attention.
 pub fn scan_directory_collecting(dir: &Path) -> Result<Vec<LocalFontEntry>, String> {
+    scan_directory_collecting_with_scope(dir, FontDirectoryScope::Shallow)
+}
+
+pub fn scan_directory_collecting_with_scope(
+    dir: &Path,
+    scope: FontDirectoryScope,
+) -> Result<Vec<LocalFontEntry>, String> {
     // (considered, rejected): GUI's
     // scan_font_directory validates inside because it's an IPC entry
     // point (untrusted JS string). The CLI's scan_directory_collecting
@@ -2648,6 +2962,16 @@ pub fn scan_directory_collecting(dir: &Path) -> Result<Vec<LocalFontEntry>, Stri
     // entry point (`run_refresh_fonts` validates each --font-dir
     // argv) — the proper boundary. CLI/GUI asymmetry of "where the
     // entry point lives" is intrinsic, not a missing defense.
+    match crate::util::try_is_reparse_point(dir) {
+        Ok(false) => {}
+        Ok(true) => {
+            return Err(format!(
+                "Font source root cannot be a symlink or junction: {}",
+                dir.display()
+            ))
+        }
+        Err(e) => return Err(format!("Cannot inspect directory '{}': {e}", dir.display())),
+    }
     let canonical = dir
         .canonicalize()
         .map_err(|e| format!("Cannot resolve directory '{}': {e}", dir.display()))?;
@@ -2655,7 +2979,7 @@ pub fn scan_directory_collecting(dir: &Path) -> Result<Vec<LocalFontEntry>, Stri
         return Err(format!("Not a directory: {}", canonical.display()));
     }
     let mut entries: Vec<LocalFontEntry> = Vec::new();
-    scan_directory_inner(&canonical, NO_SCAN_ID, |batch| {
+    let outcome = scan_directory_with_scope_inner(&canonical, scope, NO_SCAN_ID, None, |batch| {
         // Defense-in-depth against refresh-fonts OOM on crafted font
         // folders: fail fast if a single source would
         // push us past the cache-populate cap. The CLI caller in
@@ -2673,6 +2997,12 @@ pub fn scan_directory_collecting(dir: &Path) -> Result<Vec<LocalFontEntry>, Stri
         entries.extend(batch);
         Ok(())
     })?;
+    if outcome.reason != ScanStopReason::Natural {
+        return Err(format!(
+            "Font source scan was incomplete ({:?}); persistent cache was not changed",
+            outcome.reason
+        ));
+    }
     Ok(entries)
 }
 
@@ -2680,12 +3010,25 @@ pub fn import_font_directory_for_cli(
     dir: &Path,
     source_id: &str,
 ) -> Result<FontSourceImportSummary, String> {
+    import_font_directory_for_cli_with_scope(dir, source_id, FontDirectoryScope::Shallow)
+}
+
+pub fn import_font_directory_for_cli_with_scope(
+    dir: &Path,
+    source_id: &str,
+    scope: FontDirectoryScope,
+) -> Result<FontSourceImportSummary, String> {
     // Canonicalize: the font scanner indexes by the resolved path so
     // sources reached via different symlinks aren't double-imported.
     // (CLI's --output-dir handling deliberately does NOT canonicalize
     // — see absolute_path() in bin/cli/main.rs — because output paths
     // round-trip through user-facing diagnostics where the user-typed
     // form should be preserved. Indexing has no such constraint.)
+    match crate::util::try_is_reparse_point(dir) {
+        Ok(false) => {}
+        Ok(true) => return Err("Font source root cannot be a symlink or junction".to_string()),
+        Err(_) => return Err("Cannot inspect font source root".to_string()),
+    }
     let canonical_dir = dir.canonicalize().map_err(|e| {
         log::warn!("canonicalize directory failed: {e}");
         "Cannot resolve directory path".to_string()
@@ -2693,9 +3036,15 @@ pub fn import_font_directory_for_cli(
     if !canonical_dir.is_dir() {
         return Err("Not a directory".to_string());
     }
-    run_blocking_scan_import(source_id, |scan_id, emit_batch| {
-        scan_directory_inner(&canonical_dir, scan_id, emit_batch)
-    })
+    let root_path = normalize_canonical_path(&canonical_dir.to_string_lossy());
+    run_blocking_scan_import(
+        source_id,
+        FontSourceKind::for_directory(scope),
+        Some(&root_path),
+        |scan_id, emit_batch| {
+            scan_directory_with_scope_inner(&canonical_dir, scope, scan_id, None, emit_batch)
+        },
+    )
 }
 
 pub fn import_font_files_for_cli(
@@ -2708,9 +3057,12 @@ pub fn import_font_files_for_cli(
             paths.len()
         ));
     }
-    run_blocking_scan_import(source_id, |scan_id, emit_batch| {
-        scan_files_inner(paths, scan_id, emit_batch)
-    })
+    run_blocking_scan_import(
+        source_id,
+        FontSourceKind::Files,
+        None,
+        |scan_id, emit_batch| scan_files_inner(paths, scan_id, emit_batch),
+    )
 }
 
 /// Tauri command wrapping `scan_directory_inner` with a typed progress
@@ -2722,13 +3074,19 @@ pub async fn scan_font_directory(
     progress: tauri::ipc::Channel<ScanProgress>,
     scan_id: u64,
     source_id: String,
-) -> Result<(), String> {
+    scope: Option<FontDirectoryScope>,
+) -> Result<FontDirectoryScanCommandResult, String> {
     if scan_id == NO_SCAN_ID {
         return Err("Scan id must be non-zero".to_string());
     }
     validate_ipc_path(&dir, "Directory")?;
     validate_font_source_id(&source_id)?;
+    let scope = scope.unwrap_or(FontDirectoryScope::Shallow);
 
+    let cache_mutation =
+        crate::font_cache_commands::CacheMutationGuard::try_acquire().map_err(|_| {
+            "A font-cache operation is running; wait for it to finish and retry".to_string()
+        })?;
     let active_scan = begin_font_scan(scan_id)?;
     tauri::async_runtime::spawn_blocking(move || {
         // The guard's only job is to clear ACTIVE_SCAN_ID on Drop when
@@ -2737,6 +3095,12 @@ pub async fn scan_font_directory(
         // already transferred ownership; this just keeps it alive
         // through every return path inside).
         let _active_scan = active_scan;
+        let cache_mutation = cache_mutation;
+        match crate::util::try_is_reparse_point(Path::new(&dir)) {
+            Ok(false) => {}
+            Ok(true) => return Err("Font library root cannot be a symlink or junction".to_string()),
+            Err(_) => return Err("Cannot inspect font library root".to_string()),
+        }
         let canonical_dir = Path::new(&dir).canonicalize().map_err(|e| {
             log::warn!("canonicalize directory failed: {e}");
             "Cannot resolve directory path".to_string()
@@ -2755,38 +3119,81 @@ pub async fn scan_font_directory(
         // reporter, sanitize at the shipper boundary, not here — the
         // local INFO line is the right diagnostic granularity.
         let log_label = format!("Scanned font directory '{}'", canonical_dir.display());
-        // Collect entries for the GUI persistent cache.
-        // Best-effort: if the cache populate later fails or the cache
-        // handle isn't available, the user-visible scan still
-        // succeeded. Empty Vec when the scan returns no faces is fine
-        // — `try_record_folder_in_gui_cache` will write an empty
-        // folder row, which `diff_against` later treats as a known
-        // folder with no faces (consistent with the cache's data
-        // model).
         let mut entries_for_cache: Vec<LocalFontEntry> = Vec::new();
-        let cache_truncated = run_streaming_scan_command(
-            scan_id,
-            &source_id,
-            progress,
-            &log_label,
-            Some(&mut entries_for_cache),
-            |scan_id, emit_batch| scan_directory_inner(&canonical_dir, scan_id, emit_batch),
-        )?;
-        // Skip persistent cache populate when the scan was truncated.
-        // A truncated row would be indistinguishable from a full row to
-        // mtime-based drift
-        // detection, leaving the user cornered into "Clear cache"
-        // recovery for cache-rejected font lookups. Session-DB still
-        // has the full scan and is the tier-1 lookup, so in-session
-        // embeds aren't affected. Across launches the user needs to
-        // re-scan a smaller folder (or accept session-DB-only).
-        if !cache_truncated {
-            crate::font_cache_commands::try_record_folder_in_gui_cache(
-                &canonical_dir,
-                &entries_for_cache,
-            );
+        let mut cache_snapshot = None;
+        let root_path = normalize_canonical_path(
+            canonical_dir
+                .to_str()
+                .ok_or_else(|| "Font directory path is not valid UTF-8".to_string())?,
+        );
+        let existing_source = open_user_font_db()?
+            .query_row(
+                "SELECT 1 FROM font_sources
+                 WHERE source_id = ?1 OR (root_path = ?2 AND source_kind = ?3)
+                 LIMIT 1",
+                params![
+                    &source_id,
+                    &root_path,
+                    FontSourceKind::for_directory(scope).as_i32()
+                ],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(|e| db_error("duplicate source lookup failed", e))?
+            .is_some();
+        if existing_source {
+            return Err("That font source is already loaded".to_string());
         }
-        Ok(())
+        // Invalidate an older persistent snapshot before importing this
+        // source. A cancelled or incomplete replacement must not leave the
+        // old complete cache silently active behind the partial session view.
+        crate::font_cache_commands::remove_source_from_gui_cache_locked(
+            &cache_mutation,
+            &root_path,
+            scope,
+        )?;
+        let scan_result = run_streaming_scan_command(
+            scan_id,
+            StreamingScanSource {
+                source_id: &source_id,
+                source_kind: FontSourceKind::for_directory(scope),
+                root_path: Some(&root_path),
+                log_label: &log_label,
+            },
+            progress,
+            Some(&mut entries_for_cache),
+            |scan_id, emit_batch| {
+                scan_directory_with_scope_inner(
+                    &canonical_dir,
+                    scope,
+                    scan_id,
+                    Some(&mut cache_snapshot),
+                    emit_batch,
+                )
+            },
+        )?;
+
+        let eligible = is_cache_publication_eligible(&scan_result);
+        let cache_disposition = if eligible {
+            if let Some(snapshot) = cache_snapshot {
+                match crate::font_cache_commands::record_source_in_gui_cache_locked(
+                    &cache_mutation,
+                    &snapshot,
+                    &entries_for_cache,
+                ) {
+                    Ok(()) => FontCacheDisposition::Cached,
+                    Err(error) => {
+                        log::warn!("GUI font-cache publication skipped: {error}");
+                        FontCacheDisposition::SessionOnly
+                    }
+                }
+            } else {
+                FontCacheDisposition::SessionOnly
+            }
+        } else {
+            FontCacheDisposition::SessionOnly
+        };
+        Ok(FontDirectoryScanCommandResult { cache_disposition })
     })
     .await
     .map_err(|e| format!("Font scan worker failed: {e}"))?
@@ -2926,8 +3333,8 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
     //
     // the post-loop classification is intentionally
     // 2-way (cancel / natural) rather than the 3-way (cancel / ceiling /
-    // natural) in `scan_directory_inner`. The reason is structural —
-    // scan_directory_inner has a `visited >= MAX_PREFLIGHT_ENTRIES`
+    // natural) in the scoped directory scanner. The reason is structural —
+    // directory discovery has a `visited >= MAX_PREFLIGHT_ENTRIES`
     // bound that sets `dedup_ceiling_hit = true` and `break`s, falling
     // through to the post-loop where the flag selects `CeilingHit`. This
     // function takes a pre-validated `paths` vector (`MAX_INPUT_PATHS`
@@ -2971,9 +3378,13 @@ pub async fn scan_font_files(
         let _active_scan = active_scan; // see scan_font_directory for the WHY
         run_streaming_scan_command(
             scan_id,
-            &source_id,
+            StreamingScanSource {
+                source_id: &source_id,
+                source_kind: FontSourceKind::Files,
+                root_path: None,
+                log_label: "Scanned local font files",
+            },
             progress,
-            "Scanned local font files",
             // No GUI cache populate for file-list scans: the cache's
             // drift model is folder-anchored (folder mtime vs cached
             // mtime), and an arbitrary file list has no single folder
@@ -2981,9 +3392,9 @@ pub async fn scan_font_files(
             None,
             |scan_id, emit_batch| scan_files_inner(paths, scan_id, emit_batch),
         )
-        // File-list scans pass `None` for the collected Vec, so
-        // cache_truncated is always false here. Discard the bool.
-        .map(|_truncated| ())
+        // File-list scans are intentionally session-only; discard the
+        // directory-cache publication details.
+        .map(|_| ())
     })
     .await
     .map_err(|e| format!("Font scan worker failed: {e}"))?
@@ -3078,10 +3489,13 @@ pub fn resolve_user_font(
         SELECT f.path, f.face_index
         FROM font_family_keys k
         JOIN font_faces f ON f.face_id = k.face_id
+        JOIN font_source_faces sf ON sf.face_id = f.face_id
+        JOIN font_sources s ON s.source_id = sf.source_id
         WHERE k.family_name_key = ?1
           AND ((k.key_kind = ?2 AND k.bold = ?3 AND k.italic = ?4)
                OR (k.key_kind = ?5 AND k.bold = 0 AND k.italic = 0))
-        ORDER BY k.key_kind, k.source_order DESC, k.face_id DESC
+        ORDER BY k.key_kind, s.source_kind DESC, s.source_order DESC,
+                 f.path, f.face_index
         LIMIT 1
         ",
         params![
@@ -3105,6 +3519,11 @@ pub fn resolve_user_font(
 #[tauri::command]
 pub fn remove_font_source(source_id: String, kind: Option<String>) -> Result<(), String> {
     validate_font_source_id(&source_id)?;
+    let _mutation_guard =
+        crate::font_cache_commands::CacheMutationGuard::try_acquire().map_err(|_| {
+            "Cache rescan in progress — wait for it to finish, then retry removing the source."
+                .to_string()
+        })?;
     let mut conn = open_user_font_db()?;
     let tx = conn
         .transaction()
@@ -3119,86 +3538,41 @@ pub fn remove_font_source(source_id: String, kind: Option<String>) -> Result<(),
     // we need on the Rust side comes from the Acquire ordering
     // .
     reject_during_active_scan("Cannot remove font source while a scan is running")?;
-    // Only dir-mode sources populate the persistent GUI cache
-    // (try_record_folder_in_gui_cache is called from
-    // scan_font_directory; scan_font_files explicitly passes None for
-    // the cache collector — see comment in scan_font_files). So we
-    // ONLY derive an evict_folder when this source is a dir.
-    //
-    // the prior unconditional "grab any face path's
-    // parent → evict" would wrongly evict a coincident dir source's
-    // cache row when the user removed a files-mode source whose face
-    // happened to share a parent (e.g. files source picking
-    // `D:\Fonts\extra.ttf` from inside an existing dir source `D:\Fonts`).
-    // Kind comes from the frontend's FontSource model where the
-    // dir/files distinction was already tracked.
-    //
-    // `kind` is Option<> for forward compatibility — an older frontend
-    // bundle or a missed callsite passes None and falls back to the
-    // safe path (no eviction). The cost is a stale cache row that
-    // next-launch drift detection picks up, vs the over-evict that
-    // would silently break a different source's cache acceleration.
-    // Accepted local-user risk: frontend in-process trust. `kind` is the lone IPC
-    // argument here whose value flows from the
-    // frontend without server-side cross-check against SQL state.
-    // The rest of the validation pattern (e.g., source_id through
-    // `validate_font_source_id`, paths through `validate_ipc_path`)
-    // treats every input as untrusted; `kind` is the exception. The
-    // current threat model (single-user desktop, in-process frontend)
-    // doesn't cross the trust boundary at the IPC layer, so a buggy
-    // frontend passing the wrong kind would surface as user-visible
-    // misbehavior (stale cache rows for a removed dir source, or
-    // skipped cache eviction for a renamed files source) rather than
-    // as an exploit. If the project ships in a server / multi-tenant
-    // shape later, derive `is_dir_source` from a join against
-    // `gui_font_cache.cached_folders` instead of trusting `kind`.
-    let is_dir_source = kind.as_deref() == Some("dir");
-    // `LIMIT 1` without `ORDER BY` returns an
-    // arbitrary row, which is correct UNDER the current one-level
-    // scan invariant — every face in a dir-mode source shares the
-    // same `parent()` directory (the user-picked folder), so any
-    // single face's parent is the right eviction key. If
-    // `scan_font_directory` ever grows recursive descent (multi-level
-    // walks into subdirectories), a single dir source could contain
-    // faces from multiple parents and this `LIMIT 1` would pick one
-    // arbitrarily — at that point switch the schema to store
-    // `folder_path` on `font_sources` directly so the eviction key
-    // is no longer inferred. A schema column is the deeper fix but
-    // requires a migration; this comment pins the invariant the
-    // current shape depends on.
-    let evict_folder: Option<String> = if is_dir_source {
-        tx.query_row(
-            "SELECT path FROM font_faces WHERE source_id = ?1 LIMIT 1",
+    let _ = kind; // Compatibility argument from older frontend bundles; server state is authoritative.
+    let source_record: Option<(i32, Option<String>)> = tx
+        .query_row(
+            "SELECT source_kind, root_path FROM font_sources WHERE source_id = ?1",
             params![source_id],
-            |r| r.get::<_, String>(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()
-        .map_err(|e| db_error("source-faces lookup failed", e))?
-        .and_then(|p| {
-            Path::new(&p).parent().map(|pp| {
-                // font_faces.path is normalized at insert
-                // (`canonical_string = normalize_canonical_path(...)`),
-                // so `parent()` already returns the prefix-stripped form
-                // matching the cache write key. Calling
-                // normalize_canonical_path again here is a no-op for
-                // current data but makes the contract self-evident at
-                // the call site.
-                normalize_canonical_path(&pp.to_string_lossy())
-            })
-        })
-    } else {
-        None
+        .map_err(|e| db_error("source lookup failed", e))?;
+    let Some((source_kind, root_path)) = source_record else {
+        return Err("Font source no longer exists".to_string());
     };
+    if let Some(root) = root_path.as_deref() {
+        let scope = match source_kind {
+            0 => FontDirectoryScope::Recursive,
+            1 => FontDirectoryScope::Shallow,
+            _ => return Err("Stored font source kind is invalid".to_string()),
+        };
+        // Cache-first failure ordering: losing acceleration is recoverable;
+        // deleting session ownership while stale persistent rows survive is not.
+        crate::font_cache_commands::remove_source_from_gui_cache_locked(
+            &_mutation_guard,
+            root,
+            scope,
+        )?;
+    }
     tx.execute(
         "DELETE FROM font_sources WHERE source_id = ?1",
         params![source_id],
     )
     .map_err(|e| db_error("source delete failed", e))?;
+    delete_orphan_user_font_faces_tx(&tx)?;
     tx.commit()
         .map_err(|e| db_error("source delete commit failed", e))?;
-    if let Some(folder) = evict_folder {
-        crate::font_cache_commands::try_remove_folder_from_gui_cache(&folder);
-    }
+    clear_cache_provenance();
     Ok(())
 }
 
@@ -3223,18 +3597,15 @@ pub fn clear_font_sources() -> Result<(), String> {
         .map_err(|e| db_error("transaction start failed", e))?;
     // Same in-transaction guard as remove_font_source — see WHY there.
     reject_during_active_scan("Cannot clear font sources while a scan is running")?;
+    // Cache-first failure ordering matches individual removal: if the
+    // persistent transaction fails, leave the session sources untouched so
+    // the user can retry without losing ownership state.
+    crate::font_cache_commands::clear_all_sources_in_gui_cache_locked(&_mutation_guard)?;
     tx.execute("DELETE FROM font_sources", [])
         .map_err(|e| db_error("source clear failed", e))?;
+    delete_orphan_user_font_faces_tx(&tx)?;
     tx.commit()
         .map_err(|e| db_error("source clear commit failed", e))?;
-    // Mirror remove_font_source's symmetry: a session-DB clear must
-    // also evict the persistent cache, otherwise the next embed pass
-    // resolves to paths whose session-DB provenance was just cleared
-    // and subset_font rejects them with "Font path was not discovered
-    // by a scan command". Use the locked variant — we hold the guard
-    // already from this fn's top, so re-acquiring would CAS-fail /
-    // silently skip (the original guard-bug).
-    crate::font_cache_commands::clear_all_folders_in_gui_cache_locked(&_mutation_guard);
     // Drop the in-process cache-provenance set. Without this, paths
     // registered earlier in the
     // session via `lookup_family` cache hits would survive
@@ -3363,6 +3734,13 @@ pub fn clear_cache_provenance() {
     if let Ok(mut cache) = ALLOWED_CACHE_FONT_PATHS.lock() {
         cache.clear();
     }
+}
+
+#[cfg(test)]
+pub(crate) fn cache_provenance_contains(path: &str, face_index: u32) -> bool {
+    ALLOWED_CACHE_FONT_PATHS
+        .lock()
+        .is_ok_and(|cache| cache.contains(&(path.to_string(), face_index)))
 }
 
 /// Register a persistent-cache lookup hit into the cache provenance
@@ -4228,6 +4606,42 @@ mod tests {
     /// Renamed from `DB_TEST_LOCK` once the cancel tests revealed it
     /// wasn't DB-only.
     static SCAN_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn cache_candidate(
+        reason: ScanStopReason,
+        added: usize,
+        cache_truncated: bool,
+    ) -> StreamingScanCommandResult {
+        StreamingScanCommandResult {
+            outcome: ScanOutcome {
+                total: added,
+                reason,
+            },
+            import: ImportOutcome {
+                added,
+                duplicated: 0,
+            },
+            cache_truncated,
+        }
+    }
+
+    #[test]
+    fn persistent_cache_publication_requires_a_natural_complete_nonempty_scan() {
+        assert!(is_cache_publication_eligible(&cache_candidate(
+            ScanStopReason::Natural,
+            1,
+            false,
+        )));
+        for candidate in [
+            cache_candidate(ScanStopReason::Natural, 0, false),
+            cache_candidate(ScanStopReason::Natural, 1, true),
+            cache_candidate(ScanStopReason::UserCancel, 1, false),
+            cache_candidate(ScanStopReason::CeilingHit, 1, false),
+            cache_candidate(ScanStopReason::IncompleteIo, 1, false),
+        ] {
+            assert!(!is_cache_publication_eligible(&candidate));
+        }
+    }
 
     /// Tripwire: a behavioral test for `MAX_FAMILY_VARIANTS_PER_FACE`
     /// needs a real font with > 8
@@ -5272,10 +5686,12 @@ mod tests {
     fn commit_entries(source_id: &str, entries: Vec<LocalFontEntry>) -> ImportOutcome {
         let mut conn = open_user_font_db().expect("test DB should open");
         let tx = conn.transaction().expect("transaction should start");
-        let source_order =
-            create_user_font_source_tx(&tx, source_id).expect("source should insert");
-        let outcome = import_user_font_batch_tx(&tx, source_id, source_order, entries)
-            .expect("batch should import");
+        create_user_font_source_tx(&tx, source_id, FontSourceKind::Files, None)
+            .expect("source should insert");
+        let outcome =
+            import_user_font_batch_tx(&tx, source_id, entries).expect("batch should import");
+        finish_user_font_source_tx(&tx, source_id, ScanStopReason::Natural)
+            .expect("source should finish");
         remove_empty_user_font_source_tx(&tx, source_id, outcome.added)
             .expect("empty source cleanup should work");
         tx.commit().expect("transaction should commit");
@@ -5323,6 +5739,21 @@ mod tests {
     }
 
     #[test]
+    fn cache_metadata_conversion_fails_if_a_scanned_face_disappears() {
+        let _guard = SCAN_TEST_LOCK.lock().unwrap();
+        let missing_path = std::env::temp_dir().join(format!(
+            "ssahdrify-missing-cache-face-{}.ttf",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&missing_path);
+        let missing_path_text = missing_path.to_string_lossy().into_owned();
+        let error =
+            entries_to_cache_metadata(&[sample_entry(&missing_path_text, "Missing Cache Face", 0)])
+                .expect_err("a missing scanned face must abort cache publication");
+        assert!(error.contains(&missing_path_text));
+    }
+
+    #[test]
     fn full_face_names_match_without_weakening_family_style_matching() {
         let _guard = SCAN_TEST_LOCK.lock().unwrap();
         init_test_user_font_db("face-name-alias");
@@ -5355,7 +5786,7 @@ mod tests {
             italic: false,
             size_bytes: temp_font_size,
         };
-        let metadata = entries_to_cache_metadata(std::slice::from_ref(&entry));
+        let metadata = entries_to_cache_metadata(std::slice::from_ref(&entry)).unwrap();
         assert_eq!(metadata.len(), 1);
         let keys: HashSet<String> = metadata[0]
             .family_keys
@@ -5512,6 +5943,27 @@ mod tests {
     }
 
     #[test]
+    fn cache_mutation_invalidation_clears_registered_lookup_provenance() {
+        let _guard = SCAN_TEST_LOCK.lock().unwrap();
+        let snapshot: HashSet<(String, u32)> = ALLOWED_CACHE_FONT_PATHS.lock().unwrap().clone();
+        ALLOWED_CACHE_FONT_PATHS.lock().unwrap().clear();
+        let path = "C:\\Fonts\\ReplacedAfterLookup.ttf";
+        let hit = crate::font_cache::FontLookupResult {
+            font_path: path.to_string(),
+            face_index: 0,
+        };
+        register_cache_provenance(&hit).unwrap();
+        assert!(cache_provenance_contains(path, 0));
+
+        clear_cache_provenance();
+        assert!(
+            !cache_provenance_contains(path, 0),
+            "a cache replacement or eviction must revoke earlier lookup trust"
+        );
+        *ALLOWED_CACHE_FONT_PATHS.lock().unwrap() = snapshot;
+    }
+
+    #[test]
     fn cache_provenance_gate_is_capped_at_max_provenance() {
         let _guard = SCAN_TEST_LOCK.lock().unwrap();
         let snapshot: HashSet<(String, u32)> = ALLOWED_CACHE_FONT_PATHS.lock().unwrap().clone();
@@ -5605,16 +6057,124 @@ mod tests {
         assert!(!is_user_font_face_registered("C:\\Fonts\\A.ttf", 0).unwrap());
     }
 
+    #[test]
+    fn db_overlapping_sources_keep_independent_face_ownership() {
+        let _guard = SCAN_TEST_LOCK.lock().unwrap();
+        init_test_user_font_db("overlapping-ownership");
+        let shared = sample_entry("C:\\Fonts\\Shared.ttf", "Shared Sans", 0);
+        commit_entries("source-parent", vec![shared.clone()]);
+        commit_entries("source-child", vec![shared]);
+
+        let conn = open_user_font_db().unwrap();
+        let memberships: i64 = conn
+            .query_row("SELECT COUNT(*) FROM font_source_faces", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let faces: i64 = conn
+            .query_row("SELECT COUNT(*) FROM font_faces", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(memberships, 2);
+        assert_eq!(faces, 1);
+        drop(conn);
+
+        remove_font_source("source-parent".to_string(), None).unwrap();
+        let resolved = resolve_user_font("Shared Sans".to_string(), false, false)
+            .unwrap()
+            .expect("remaining owner should keep the shared face available");
+        assert_eq!(resolved.path, "C:\\Fonts\\Shared.ttf");
+
+        remove_font_source("source-child".to_string(), None).unwrap();
+        assert!(resolve_user_font("Shared Sans".to_string(), false, false)
+            .unwrap()
+            .is_none());
+        assert!(!is_user_font_face_registered("C:\\Fonts\\Shared.ttf", 0).unwrap());
+    }
+
+    #[test]
+    fn overlapping_rescan_refreshes_shared_face_metadata_and_keys() {
+        let _guard = SCAN_TEST_LOCK.lock().unwrap();
+        init_test_user_font_db("overlapping-refresh");
+        let path = "C:\\Fonts\\Replaced.ttf";
+        commit_entries("source-parent", vec![sample_entry(path, "Old Family", 0)]);
+
+        let mut replacement = sample_entry(path, "New Family", 0);
+        replacement.bold = true;
+        replacement.size_bytes = 456;
+        commit_entries("source-child", vec![replacement]);
+
+        assert!(resolve_user_font("Old Family".to_string(), false, false)
+            .unwrap()
+            .is_none());
+        let refreshed = resolve_user_font("New Family".to_string(), true, false)
+            .unwrap()
+            .expect("new metadata from the overlapping rescan should replace stale keys");
+        assert_eq!(refreshed.path, path);
+
+        remove_font_source("source-parent".to_string(), None).unwrap();
+        assert!(resolve_user_font("New Family".to_string(), true, false)
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn recursive_discovery_is_opt_in_and_deterministic() {
+        use std::io::Write as _;
+        let root = std::env::temp_dir().join(format!(
+            "ssahdrify-recursive-discovery-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let nested = root.join("b").join("deeper");
+        fs::create_dir_all(&nested).unwrap();
+        fs::create_dir_all(root.join("a")).unwrap();
+        for relative in ["top.ttf", "a/first.otf", "b/deeper/last.ttc"] {
+            let path = root.join(relative);
+            fs::File::create(path)
+                .unwrap()
+                .write_all(b"not-a-real-font")
+                .unwrap();
+        }
+        let canonical = root.canonicalize().unwrap();
+
+        let shallow = discover_font_files(&canonical, FontDirectoryScope::Shallow, NO_SCAN_ID)
+            .expect("shallow discovery should succeed");
+        assert_eq!(shallow.reason, ScanStopReason::Natural);
+        assert_eq!(shallow.files.len(), 1);
+        assert_eq!(shallow.directories.len(), 1);
+
+        let recursive = discover_font_files(&canonical, FontDirectoryScope::Recursive, NO_SCAN_ID)
+            .expect("recursive discovery should succeed");
+        assert_eq!(recursive.reason, ScanStopReason::Natural);
+        assert_eq!(recursive.files.len(), 3);
+        assert_eq!(recursive.directories.len(), 4);
+        let ordered: Vec<_> = recursive
+            .files
+            .iter()
+            .map(|file| {
+                file.path
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        assert_eq!(ordered, vec!["first.otf", "last.ttc", "top.ttf"]);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
     /// `scan_directory_inner` on a non-existent path surfaces the read_dir
     /// error as the user-facing string. The closure is never called.
     #[test]
     fn directory_inner_rejects_missing_dir() {
         let mut emitted: Vec<Vec<LocalFontEntry>> = Vec::new();
         let bogus = Path::new("Z:\\absolutely-not-a-real-directory\\for-testing");
-        let result = scan_directory_inner(bogus, 1, |batch| {
-            emitted.push(batch);
-            Ok(())
-        });
+        let result =
+            scan_directory_with_scope_inner(bogus, FontDirectoryScope::Shallow, 1, None, |batch| {
+                emitted.push(batch);
+                Ok(())
+            });
         assert!(result.is_err());
         assert!(emitted.is_empty());
     }
@@ -5653,10 +6213,16 @@ mod tests {
         }
 
         let mut emitted: Vec<Vec<LocalFontEntry>> = Vec::new();
-        let outcome = scan_directory_inner(&dir, NO_SCAN_ID, |batch| {
-            emitted.push(batch);
-            Ok(())
-        })
+        let outcome = scan_directory_with_scope_inner(
+            &dir,
+            FontDirectoryScope::Shallow,
+            NO_SCAN_ID,
+            None,
+            |batch| {
+                emitted.push(batch);
+                Ok(())
+            },
+        )
         .expect("non-font directory should complete naturally");
         assert_eq!(outcome.total, 0);
         assert_eq!(outcome.reason, ScanStopReason::Natural);
