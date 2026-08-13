@@ -27,6 +27,20 @@ describe("i18n strings", () => {
       expect(placeholders(entry.zh), `${key} placeholders`).toEqual(placeholders(entry.en));
     }
   });
+
+  it("describes cache identities as font sources and aggregate counts as source entries", () => {
+    expect(strings["font_cache_drift_summary"]!.en).toContain("font source(s)");
+    expect(strings["font_cache_drift_summary"]!.zh).toContain("字体来源");
+    expect(strings["font_cache_rescan_done"]!.en).toContain("font source(s)");
+    expect(strings["font_cache_rescan_done"]!.zh).toContain("字体来源");
+
+    expect(strings["font_sources_loaded_summary"]!.en).toContain("font entries");
+    expect(strings["font_sources_loaded_summary"]!.en).toContain(
+      "shared fonts count in each source"
+    );
+    expect(strings["font_sources_loaded_summary"]!.zh).toContain("字体条目");
+    expect(strings["font_sources_loaded_summary"]!.zh).toContain("分别计数");
+  });
 });
 
 describe("translate runtime substitution", () => {

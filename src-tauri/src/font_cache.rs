@@ -1,8 +1,8 @@
 //! Persistent font cache — metadata index across app lifetimes.
 //!
 //! Memoizes the expensive scan-and-name-table-read step of font-source
-//! resolution. The cache stores per-folder mtime, per-file mtime/size,
-//! and the family-name lookup keys; it does NOT cache subset bytes
+//! resolution. The cache stores source-owned directory and candidate-file
+//! snapshots, parsed faces, and family-name lookup keys; it does NOT cache subset bytes
 //! (subsetting is per-subtitle and depends on glyph sets that vary).
 //!
 //! Decoupled from the existing GUI session DB (`init_user_font_db` in
@@ -14,30 +14,31 @@
 //!
 //! This file owns the Tauri-free cache module: schema (NFC +
 //! Unicode-lowercase lookup key + exact-family/face-alias key kind),
-//! open / create / version check, per-folder scan write, drift detection,
+//! open / create / version check, per-source scan write, drift detection,
 //! family-name lookup. The
 //! GUI-only IPC surface lives in `font_cache_commands.rs`; the CLI's
 //! `refresh-fonts` and embed-time cache integration live in
 //! `bin/cli/main.rs`.
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection, OpenFlags};
+use serde::{Deserialize, Serialize};
 
-/// Read a folder's mtime as Unix seconds, returning None when either
+/// Read a filesystem entry's mtime as Unix nanoseconds, returning None when either
 /// the metadata stat or the `modified()` call fails. This is the
 /// canonical mtime-stat helper for every drift / populate site
 /// (GUI's detect / rescan / clear flows + CLI's drift check + every
-/// `replace_folder` callsite). Internal callers use this rather than
+/// source-publication callsite). Internal callers use this rather than
 /// inline `metadata().modified()` so drift detection uses identical
 /// stat semantics across all consumers.
 ///
-/// Failure modes route to None: folder gone (NotFound), permission
-/// denied, network share offline, no-mtime FS. Callers treat None as
-/// "omit from snapshot" → `diff_against` reports the folder as
-/// `removed`. A folder whose `metadata().is_ok()` but whose
-/// `modified()` fails is consistently classified as "not statable"
-/// here.
+/// Failure modes route to `None`: path gone (`NotFound`), permission denied,
+/// or a filesystem without a readable modification time. Source drift callers
+/// separately distinguish a genuinely missing/reparse root from an existing
+/// real directory whose complete snapshot could not be read; the latter is
+/// conservatively treated as modified so stale rows are not trusted silently.
 pub fn try_modified_at(path: &Path) -> Option<i64> {
     let modified = std::fs::metadata(path).ok()?.modified().ok()?;
     // pre-epoch mtimes previously fell through
@@ -51,11 +52,11 @@ pub fn try_modified_at(path: &Path) -> Option<i64> {
     // to prevent. `.ok()?` propagates SystemTimeError → None
     // through the same `?` chain as the prior `metadata` / `modified`
     // fail sites above.
-    let secs = modified
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?
-        .as_secs();
-    Some(secs as i64)
+    let elapsed = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
+    let seconds = i64::try_from(elapsed.as_secs()).ok()?;
+    seconds
+        .checked_mul(1_000_000_000)?
+        .checked_add(i64::from(elapsed.subsec_nanos()))
 }
 
 /// Unified per-user data directory shared by both binaries
@@ -202,15 +203,15 @@ fn reject_cache_reparse_paths(cache_path: &Path) -> Result<(), CacheError> {
 /// rules, or face-index encoding, bump first. Long-term: persist a
 /// git-describe-derived build_id in cache_meta alongside the
 /// version number to catch unbumped semantic shifts.
-pub const SCHEMA_VERSION: i32 = 5;
+pub const SCHEMA_VERSION: i32 = 6;
 
 const KEY_KIND_FAMILY: i32 = 0;
 const KEY_KIND_FACE_ALIAS: i32 = 1;
 
-/// DoS-class sanity cap on the number of `cached_folders` rows
-/// `list_folders` / `diff_against` will return. A hostile cache file
+/// DoS-class sanity cap on the number of `cached_sources` rows
+/// `list_sources` / `diff_sources` will return. A hostile cache file
 /// (untrusted-input via `--cache-file`) populated with hundreds of fabricated
-/// folder rows — especially UNC paths to dead servers — would otherwise
+/// source rows — especially UNC paths to dead servers — would otherwise
 /// spin every detect call through a per-row stat loop, bounded only by
 /// per-stat OS timeout. The cap fires inside `list_folders` and refuses
 /// to return the result; downstream `diff_against` /
@@ -218,7 +219,91 @@ const KEY_KIND_FACE_ALIAS: i32 = 1;
 /// at rebuilding the cache. Realistic working caches hold a handful to
 /// dozens of folders, so 256 stays generous without being a practical
 /// stat-storm budget.
-pub const MAX_CACHED_FOLDERS: usize = 256;
+pub const MAX_CACHED_SOURCES: usize = 256;
+
+/// Compatibility name retained for CLI call sites that still count source roots.
+/// In schema v6 a "folder" row means one source root; nested directories live in
+/// `cached_directories` and are governed by [`MAX_CACHED_DIRECTORIES`].
+pub const MAX_CACHED_FOLDERS: usize = MAX_CACHED_SOURCES;
+
+/// Global sanity cap for real directories tracked across every cached source.
+/// Recursive libraries need one row per visited directory so a nested add/remove
+/// changes freshness even when the root directory's own mtime does not. The
+/// representative 18k-font library has 157 directories; 4096 leaves ample room
+/// while bounding startup metadata work for a hostile cache file.
+pub const MAX_CACHED_DIRECTORIES: usize = 4_096;
+
+/// Global byte budget for source-root, visited-directory, and candidate-file
+/// paths materialized by [`FontCache::list_sources`]. Per-source traversal is
+/// already capped at `MAX_SCAN_PATH_BYTES`; this second ceiling prevents many
+/// individually-valid sources (or a crafted `--cache-file`) from making one
+/// drift check allocate hundreds of megabytes of path text.
+const MAX_CACHED_SNAPSHOT_PATH_BYTES: usize = 128 * 1024 * 1024;
+
+fn checked_projected_count(
+    existing: i64,
+    incoming: usize,
+    cap: usize,
+    label: &str,
+) -> Result<usize, CacheError> {
+    let projected = usize::try_from(existing)
+        .unwrap_or(usize::MAX)
+        .checked_add(incoming)
+        .ok_or_else(|| CacheError::Io(format!("{label} row count overflowed")))?;
+    if projected > cap {
+        return Err(CacheError::Io(format!(
+            "{label} would exceed the {cap}-row global sanity cap"
+        )));
+    }
+    Ok(projected)
+}
+
+fn snapshot_retained_path_bytes(snapshot: &CacheSourceSnapshot) -> Result<usize, CacheError> {
+    std::iter::once(snapshot.source_root.len())
+        .chain(
+            snapshot
+                .directories
+                .iter()
+                .map(|directory| directory.folder_path.len()),
+        )
+        .chain(snapshot.files.iter().map(|file| file.file_path.len()))
+        .try_fold(0usize, |total, bytes| {
+            total
+                .checked_add(bytes)
+                .ok_or_else(|| CacheError::Io("source path-byte count overflowed".to_string()))
+        })
+}
+
+fn checked_projected_path_bytes(existing: i64, incoming: usize) -> Result<usize, CacheError> {
+    let projected = usize::try_from(existing)
+        .unwrap_or(usize::MAX)
+        .checked_add(incoming)
+        .ok_or_else(|| CacheError::Io("cached snapshot path-byte count overflowed".to_string()))?;
+    if projected > MAX_CACHED_SNAPSHOT_PATH_BYTES {
+        return Err(CacheError::Io(format!(
+            "cached snapshot paths would exceed the {MAX_CACHED_SNAPSHOT_PATH_BYTES}-byte global sanity cap"
+        )));
+    }
+    Ok(projected)
+}
+
+fn enforce_cached_path_byte_budgets(
+    source_path_bytes: usize,
+    total_path_bytes: usize,
+) -> Result<(), CacheError> {
+    if source_path_bytes > crate::fonts::MAX_SCAN_PATH_BYTES {
+        return Err(CacheError::Io(format!(
+            "one cached source exceeds the {}-byte retained-path limit; rebuild required",
+            crate::fonts::MAX_SCAN_PATH_BYTES
+        )));
+    }
+    if total_path_bytes > MAX_CACHED_SNAPSHOT_PATH_BYTES {
+        return Err(CacheError::Io(format!(
+            "cached snapshot paths exceed the {MAX_CACHED_SNAPSHOT_PATH_BYTES}-byte global sanity cap; cache file appears corrupted or hostile — rebuild required"
+        )));
+    }
+    Ok(())
+}
 
 fn reject_unsupported_cached_namespace_path(path: &str, source: &str) -> Result<(), CacheError> {
     let normalized = path.replace('/', "\\").to_ascii_lowercase();
@@ -238,10 +323,18 @@ fn reject_unsupported_cached_namespace_path(path: &str, source: &str) -> Result<
 }
 
 fn reject_unsupported_cached_folder_path(path: &str) -> Result<(), CacheError> {
-    reject_unsupported_cached_namespace_path(path, "cached_folders.folder_path")
+    crate::util::validate_ipc_path(path, "cached_sources.source_root").map_err(CacheError::Io)?;
+    reject_unsupported_cached_namespace_path(path, "cached_sources.source_root")
+}
+
+fn reject_unsupported_cached_directory_path(path: &str) -> Result<(), CacheError> {
+    crate::util::validate_ipc_path(path, "cached_directories.directory_path")
+        .map_err(CacheError::Io)?;
+    reject_unsupported_cached_namespace_path(path, "cached_directories.directory_path")
 }
 
 fn reject_unsupported_cached_font_path(path: &str) -> Result<(), CacheError> {
+    crate::util::validate_ipc_path(path, "cached_fonts.font_path").map_err(CacheError::Io)?;
     reject_unsupported_cached_namespace_path(path, "cached_fonts.font_path")
 }
 
@@ -253,17 +346,17 @@ fn validate_cached_font_hit(
 ) -> Result<(), CacheError> {
     let folder_canonical = Path::new(folder_path).canonicalize().map_err(|e| {
         CacheError::Io(format!(
-            "cached_folders.folder_path no longer points at a readable folder; rebuild required: {e}"
+            "cached_sources.source_root no longer points at a readable folder; rebuild required: {e}"
         ))
     })?;
     let folder_metadata = std::fs::metadata(&folder_canonical).map_err(|e| {
         CacheError::Io(format!(
-            "cached_folders.folder_path no longer points at a readable folder; rebuild required: {e}"
+            "cached_sources.source_root no longer points at a readable folder; rebuild required: {e}"
         ))
     })?;
     if !folder_metadata.is_dir() {
         return Err(CacheError::Io(
-            "cached_folders.folder_path no longer points at a folder; rebuild required".to_string(),
+            "cached_sources.source_root no longer points at a folder; rebuild required".to_string(),
         ));
     }
 
@@ -274,7 +367,7 @@ fn validate_cached_font_hit(
     })?;
     if !font_canonical.starts_with(&folder_canonical) {
         return Err(CacheError::Io(
-            "cached_fonts.font_path is outside cached_folders.folder_path; \
+            "cached_fonts.font_path is outside cached_sources.source_root; \
              cache file appears corrupted or hostile — rebuild required"
                 .to_string(),
         ));
@@ -331,7 +424,7 @@ pub(crate) fn family_lookup_key(family_name: &str) -> String {
 }
 
 /// One font face's metadata, ready to be written into the cache by
-/// `FontCache::replace_folder`. The cache module deliberately does NOT
+/// `FontCache::replace_source`. The cache module deliberately does NOT
 /// parse fonts — the caller (existing scan path in `app_lib::fonts`,
 /// or a test fixture, or future scan code) produces these records and
 /// hands them to the cache for persistence. This keeps font-parsing
@@ -342,7 +435,7 @@ pub struct FontMetadata {
     pub file_path: String,
     /// File size in bytes from the OS at scan time.
     pub file_size: i64,
-    /// File mtime as Unix seconds.
+    /// File mtime as Unix nanoseconds.
     pub file_mtime: i64,
     /// 0 for non-TTC; >=0 for TrueType Collection (face index inside).
     pub face_index: i32,
@@ -367,7 +460,108 @@ pub struct FamilyKey {
     pub italic: bool,
 }
 
-/// One row from `cached_folders`, returned by `FontCache::list_folders`.
+/// Whether a source contains only its root-level font files or every real
+/// subdirectory below the root. Symlinks, junctions, and other reparse points
+/// are never part of either scope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FontDirectoryScope {
+    Shallow,
+    Recursive,
+}
+
+impl FontDirectoryScope {
+    fn db_value(self) -> i32 {
+        match self {
+            Self::Shallow => 0,
+            Self::Recursive => 1,
+        }
+    }
+
+    fn from_db(value: i32) -> Result<Self, CacheError> {
+        match value {
+            0 => Ok(Self::Shallow),
+            1 => Ok(Self::Recursive),
+            _ => Err(CacheError::Io(format!(
+                "cached_sources.scope has invalid value {value}; rebuild required"
+            ))),
+        }
+    }
+}
+
+/// Stable composite identity for one cached source. Scope is part of the key:
+/// users may deliberately add the same canonical root once shallow and once
+/// recursively, then remove either source without disturbing the other.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CacheSourceKey {
+    pub source_root: String,
+    pub scope: FontDirectoryScope,
+}
+
+impl PartialEq<&str> for CacheSourceKey {
+    fn eq(&self, other: &&str) -> bool {
+        self.scope == FontDirectoryScope::Shallow && self.source_root == *other
+    }
+}
+
+impl PartialEq<String> for CacheSourceKey {
+    fn eq(&self, other: &String) -> bool {
+        self.scope == FontDirectoryScope::Shallow && self.source_root == *other
+    }
+}
+
+/// One real directory observed while scanning a source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FolderSnapshot {
+    pub folder_path: String,
+    pub folder_mtime: i64,
+}
+
+/// One allowed-extension regular file observed during metadata traversal.
+/// Candidate files are tracked even when font parsing fails: replacing a
+/// malformed/oversized file in place must invalidate the source cache.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileSnapshot {
+    pub file_path: String,
+    pub file_size: i64,
+    pub file_mtime: i64,
+}
+
+/// Complete freshness snapshot captured during a successful source scan.
+/// Recursive sources contain the root plus every visited real directory;
+/// shallow sources contain the root only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CacheSourceSnapshot {
+    pub source_root: String,
+    pub scope: FontDirectoryScope,
+    pub directories: Vec<FolderSnapshot>,
+    pub files: Vec<FileSnapshot>,
+}
+
+impl CacheSourceSnapshot {
+    pub fn key(&self) -> CacheSourceKey {
+        CacheSourceKey {
+            source_root: self.source_root.clone(),
+            scope: self.scope,
+        }
+    }
+}
+
+/// One source row plus its owned directory snapshot, returned by
+/// [`FontCache::list_sources`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CacheSourceRecord {
+    pub source_root: String,
+    pub scope: FontDirectoryScope,
+    pub source_order: i64,
+    pub last_scanned_at: i64,
+    pub directories: Vec<FolderSnapshot>,
+    pub files: Vec<FileSnapshot>,
+}
+
+/// Transitional root-only view used by older shallow-only callers. New code
+/// should use [`CacheSourceRecord`] so scope and nested snapshots are retained.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FolderRecord {
     pub folder_path: String,
@@ -375,7 +569,438 @@ pub struct FolderRecord {
     pub last_scanned_at: i64,
 }
 
-/// Drift detection result. Each variant lists folder paths grouped by
+impl CacheSourceRecord {
+    pub fn key(&self) -> CacheSourceKey {
+        CacheSourceKey {
+            source_root: self.source_root.clone(),
+            scope: self.scope,
+        }
+    }
+}
+
+fn normalized_canonical_path(path: &Path) -> Result<(PathBuf, String), String> {
+    let raw_path = path
+        .to_str()
+        .ok_or_else(|| "Font source path is not valid UTF-8".to_string())?;
+    reject_unsupported_cached_namespace_path(raw_path, "font source path")
+        .map_err(|e| e.to_string())?;
+    match crate::util::try_is_reparse_point(path) {
+        Ok(false) => {}
+        Ok(true) => {
+            return Err(format!(
+                "refusing to track a symlink, junction, or reparse point: {}",
+                path.display()
+            ));
+        }
+        Err(e) => {
+            return Err(format!(
+                "cannot verify source path is not a reparse point {}: {e}",
+                path.display()
+            ));
+        }
+    }
+    let canonical = path
+        .canonicalize()
+        .map_err(|e| format!("canonicalize {}: {e}", path.display()))?;
+    let canonical_str = canonical
+        .to_str()
+        .ok_or_else(|| "Canonical font source path is not valid UTF-8".to_string())?;
+    let normalized = crate::fonts::normalize_canonical_path(canonical_str);
+    crate::util::validate_ipc_path(&normalized, "Font source")?;
+    reject_unsupported_cached_namespace_path(&normalized, "font source path")
+        .map_err(|e| e.to_string())?;
+    Ok((canonical, normalized))
+}
+
+/// Resolve one user-selected root into the exact composite key persisted by
+/// schema v6, without walking the tree. Useful for CLI dry-run planning and
+/// deduplication before the expensive scan begins.
+pub fn cache_source_key(
+    source_root: &Path,
+    scope: FontDirectoryScope,
+) -> Result<CacheSourceKey, String> {
+    let (_, source_root) = normalized_canonical_path(source_root)?;
+    Ok(CacheSourceKey { source_root, scope })
+}
+
+/// Build the metadata-only freshness snapshot used by drift detection and by
+/// the publication stability check. Recursive traversal is deterministic and
+/// never follows symlinks, junctions, or other reparse points.
+pub fn snapshot_source_directories(
+    source_root: &Path,
+    scope: FontDirectoryScope,
+) -> Result<CacheSourceSnapshot, String> {
+    let (canonical_root, normalized_root) = normalized_canonical_path(source_root)?;
+    let root_metadata = std::fs::metadata(&canonical_root)
+        .map_err(|e| format!("read source metadata {}: {e}", source_root.display()))?;
+    if !root_metadata.is_dir() {
+        return Err(format!(
+            "Font source is not a directory: {}",
+            source_root.display()
+        ));
+    }
+
+    let root_mtime = try_modified_at(&canonical_root)
+        .ok_or_else(|| format!("Source directory mtime is unreadable: {normalized_root}"))?;
+    let mut directories = vec![FolderSnapshot {
+        folder_path: normalized_root.clone(),
+        folder_mtime: root_mtime,
+    }];
+    let mut files = Vec::new();
+
+    let mut seen = HashSet::from([canonical_root.clone()]);
+    let mut pending = vec![(canonical_root.clone(), 0usize)];
+    let mut visited_entries = 0usize;
+    let mut retained_path_bytes = normalized_root.len();
+    let mut total_candidate_bytes = 0u64;
+    while let Some((directory, depth)) = pending.pop() {
+        let read_dir = std::fs::read_dir(&directory)
+            .map_err(|e| format!("read directory {}: {e}", directory.display()))?;
+        let mut children = Vec::new();
+        for entry in read_dir {
+            let entry = entry
+                .map_err(|e| format!("read directory entry in {}: {e}", directory.display()))?;
+            children.push(entry.path());
+        }
+        children.sort();
+
+        // Reverse push preserves ascending traversal with a LIFO stack. Final
+        // output is sorted too, so database contents never depend on OS order.
+        for child in children {
+            visited_entries = visited_entries.saturating_add(1);
+            if visited_entries > crate::fonts::MAX_PREFLIGHT_ENTRIES {
+                return Err(format!(
+                    "Font source exceeds the {}-entry traversal limit",
+                    crate::fonts::MAX_PREFLIGHT_ENTRIES
+                ));
+            }
+            match crate::util::try_is_reparse_point(&child) {
+                Ok(false) => {}
+                Ok(true) => continue,
+                Err(e) => {
+                    return Err(format!(
+                        "cannot verify directory entry is not a reparse point {}: {e}",
+                        child.display()
+                    ));
+                }
+            }
+            let metadata = std::fs::symlink_metadata(&child)
+                .map_err(|e| format!("read directory-entry metadata {}: {e}", child.display()))?;
+            if metadata.is_file() && crate::fonts::has_allowed_font_extension(&child) {
+                let canonical_file = child
+                    .canonicalize()
+                    .map_err(|e| format!("canonicalize font candidate {}: {e}", child.display()))?;
+                if !canonical_file.starts_with(&canonical_root) {
+                    return Err(format!(
+                        "Font candidate escaped the selected source root: {}",
+                        child.display()
+                    ));
+                }
+                let canonical_file_str = canonical_file
+                    .to_str()
+                    .ok_or_else(|| "Font candidate path is not valid UTF-8".to_string())?;
+                let normalized = crate::fonts::normalize_canonical_path(canonical_file_str);
+                crate::util::validate_ipc_path(&normalized, "Font candidate")?;
+                reject_unsupported_cached_font_path(&normalized).map_err(|e| e.to_string())?;
+                if files.len() >= crate::fonts::MAX_SCAN_FONT_FILES {
+                    return Err(format!(
+                        "Font source exceeds the {}-candidate-file cache limit",
+                        crate::fonts::MAX_SCAN_FONT_FILES
+                    ));
+                }
+                retained_path_bytes = retained_path_bytes
+                    .checked_add(normalized.len())
+                    .ok_or_else(|| "Font-source path-byte count overflowed".to_string())?;
+                if retained_path_bytes > crate::fonts::MAX_SCAN_PATH_BYTES {
+                    return Err(format!(
+                        "Font source exceeds the {}-byte retained-path limit",
+                        crate::fonts::MAX_SCAN_PATH_BYTES
+                    ));
+                }
+                total_candidate_bytes = total_candidate_bytes
+                    .checked_add(metadata.len())
+                    .ok_or_else(|| "Font-source candidate-byte count overflowed".to_string())?;
+                if total_candidate_bytes > crate::fonts::MAX_SCAN_TOTAL_FONT_BYTES {
+                    return Err(format!(
+                        "Font source exceeds the {}-byte candidate-font limit",
+                        crate::fonts::MAX_SCAN_TOTAL_FONT_BYTES
+                    ));
+                }
+                files.push(FileSnapshot {
+                    file_path: normalized,
+                    file_size: i64::try_from(metadata.len()).unwrap_or(i64::MAX),
+                    file_mtime: try_modified_at(&canonical_file).ok_or_else(|| {
+                        format!(
+                            "Font candidate mtime is unreadable: {}",
+                            canonical_file.display()
+                        )
+                    })?,
+                });
+                continue;
+            }
+            if scope == FontDirectoryScope::Shallow || !metadata.is_dir() {
+                continue;
+            }
+            let child_depth = depth.saturating_add(1);
+            if child_depth > crate::fonts::MAX_SCAN_DEPTH {
+                return Err(format!(
+                    "Font source exceeds the {}-level recursion limit",
+                    crate::fonts::MAX_SCAN_DEPTH
+                ));
+            }
+            let canonical_child = child
+                .canonicalize()
+                .map_err(|e| format!("canonicalize directory {}: {e}", child.display()))?;
+            if !canonical_child.starts_with(&canonical_root) {
+                return Err(format!(
+                    "Directory escaped the selected source root during traversal: {}",
+                    child.display()
+                ));
+            }
+            if !seen.insert(canonical_child.clone()) {
+                continue;
+            }
+            if seen.len() > MAX_CACHED_DIRECTORIES {
+                return Err(format!(
+                    "Font source exceeds the {MAX_CACHED_DIRECTORIES}-directory cache limit"
+                ));
+            }
+            let canonical_child_str = canonical_child
+                .to_str()
+                .ok_or_else(|| "Nested font directory path is not valid UTF-8".to_string())?;
+            let normalized = crate::fonts::normalize_canonical_path(canonical_child_str);
+            crate::util::validate_ipc_path(&normalized, "Font directory")?;
+            reject_unsupported_cached_directory_path(&normalized).map_err(|e| e.to_string())?;
+            retained_path_bytes = retained_path_bytes
+                .checked_add(normalized.len())
+                .ok_or_else(|| "Font-source path-byte count overflowed".to_string())?;
+            if retained_path_bytes > crate::fonts::MAX_SCAN_PATH_BYTES {
+                return Err(format!(
+                    "Font source exceeds the {}-byte retained-path limit",
+                    crate::fonts::MAX_SCAN_PATH_BYTES
+                ));
+            }
+            let modified_at = try_modified_at(&canonical_child)
+                .ok_or_else(|| format!("Directory mtime is unreadable: {normalized}"))?;
+            directories.push(FolderSnapshot {
+                folder_path: normalized,
+                folder_mtime: modified_at,
+            });
+            pending.push((canonical_child, child_depth));
+        }
+    }
+    directories.sort_by(|a, b| a.folder_path.cmp(&b.folder_path));
+    files.sort_by(|a, b| a.file_path.cmp(&b.file_path));
+    Ok(CacheSourceSnapshot {
+        source_root: normalized_root,
+        scope,
+        directories,
+        files,
+    })
+}
+
+fn validate_source_snapshot_shape(
+    snapshot: &CacheSourceSnapshot,
+    fonts: &[FontMetadata],
+) -> Result<(), CacheError> {
+    reject_unsupported_cached_folder_path(&snapshot.source_root)?;
+    if snapshot.directories.is_empty() {
+        return Err(CacheError::Io(
+            "source snapshot must contain its root directory".to_string(),
+        ));
+    }
+    if snapshot.directories.len() > MAX_CACHED_DIRECTORIES {
+        return Err(CacheError::Io(format!(
+            "source snapshot exceeds the {MAX_CACHED_DIRECTORIES}-directory cache limit"
+        )));
+    }
+    if snapshot.scope == FontDirectoryScope::Shallow && snapshot.directories.len() != 1 {
+        return Err(CacheError::Io(
+            "shallow source snapshot must contain exactly its root directory".to_string(),
+        ));
+    }
+    if snapshot.files.len() > crate::fonts::MAX_SCAN_FONT_FILES {
+        return Err(CacheError::Io(format!(
+            "source snapshot exceeds the {}-candidate-file limit",
+            crate::fonts::MAX_SCAN_FONT_FILES
+        )));
+    }
+    if fonts.len() > crate::fonts::MAX_CACHE_POPULATE_FACES {
+        return Err(CacheError::Io(format!(
+            "source snapshot exceeds the {}-face cache limit",
+            crate::fonts::MAX_CACHE_POPULATE_FACES
+        )));
+    }
+
+    let source_root = Path::new(&snapshot.source_root);
+    let mut directory_paths = HashSet::with_capacity(snapshot.directories.len());
+    let mut retained_path_bytes = snapshot.source_root.len();
+    for directory in &snapshot.directories {
+        reject_unsupported_cached_directory_path(&directory.folder_path)?;
+        let directory_path = Path::new(&directory.folder_path);
+        if !directory_path.starts_with(source_root) {
+            return Err(CacheError::Io(format!(
+                "tracked directory is outside its source root: {}",
+                directory.folder_path
+            )));
+        }
+        if !directory_paths.insert(directory.folder_path.as_str()) {
+            return Err(CacheError::Io(format!(
+                "source snapshot contains duplicate directory: {}",
+                directory.folder_path
+            )));
+        }
+        retained_path_bytes = retained_path_bytes
+            .checked_add(directory.folder_path.len())
+            .ok_or_else(|| CacheError::Io("source path-byte count overflowed".to_string()))?;
+    }
+    if !directory_paths.contains(snapshot.source_root.as_str()) {
+        return Err(CacheError::Io(
+            "source snapshot does not contain its root directory".to_string(),
+        ));
+    }
+
+    let mut candidate_paths = HashMap::with_capacity(snapshot.files.len());
+    let mut total_candidate_bytes = 0u64;
+    for file in &snapshot.files {
+        reject_unsupported_cached_font_path(&file.file_path)?;
+        let file_path = Path::new(&file.file_path);
+        if !file_path.starts_with(source_root) {
+            return Err(CacheError::Io(format!(
+                "candidate font is outside its source root: {}",
+                file.file_path
+            )));
+        }
+        let parent = file_path.parent().ok_or_else(|| {
+            CacheError::Io(format!("candidate font has no parent: {}", file.file_path))
+        })?;
+        let parent = parent.to_str().ok_or_else(|| {
+            CacheError::Io(format!(
+                "candidate font parent is not valid UTF-8: {}",
+                file.file_path
+            ))
+        })?;
+        if !directory_paths.contains(parent) {
+            return Err(CacheError::Io(format!(
+                "candidate font parent was not visited by the source scan: {}",
+                file.file_path
+            )));
+        }
+        if file.file_size < 0
+            || file.file_mtime < 0
+            || candidate_paths
+                .insert(file.file_path.as_str(), (file.file_size, file.file_mtime))
+                .is_some()
+        {
+            return Err(CacheError::Io(format!(
+                "candidate font snapshot has invalid or duplicate metadata: {}",
+                file.file_path
+            )));
+        }
+        retained_path_bytes = retained_path_bytes
+            .checked_add(file.file_path.len())
+            .ok_or_else(|| CacheError::Io("source path-byte count overflowed".to_string()))?;
+        total_candidate_bytes = total_candidate_bytes
+            .checked_add(u64::try_from(file.file_size).unwrap_or(u64::MAX))
+            .ok_or_else(|| CacheError::Io("source candidate-byte count overflowed".to_string()))?;
+    }
+    if retained_path_bytes > crate::fonts::MAX_SCAN_PATH_BYTES {
+        return Err(CacheError::Io(format!(
+            "source snapshot exceeds the {}-byte retained-path limit",
+            crate::fonts::MAX_SCAN_PATH_BYTES
+        )));
+    }
+    if total_candidate_bytes > crate::fonts::MAX_SCAN_TOTAL_FONT_BYTES {
+        return Err(CacheError::Io(format!(
+            "source snapshot exceeds the {}-byte candidate-font limit",
+            crate::fonts::MAX_SCAN_TOTAL_FONT_BYTES
+        )));
+    }
+
+    let mut faces = HashSet::with_capacity(fonts.len());
+    for font in fonts {
+        reject_unsupported_cached_font_path(&font.file_path)?;
+        let font_path = Path::new(&font.file_path);
+        if !font_path.starts_with(source_root) {
+            return Err(CacheError::Io(format!(
+                "cached font is outside its source root: {}",
+                font.file_path
+            )));
+        }
+        let Some((candidate_size, candidate_mtime)) = candidate_paths.get(font.file_path.as_str())
+        else {
+            return Err(CacheError::Io(format!(
+                "parsed font was not present in the candidate-file snapshot: {}",
+                font.file_path
+            )));
+        };
+        if font.file_size != *candidate_size || font.file_mtime != *candidate_mtime {
+            return Err(CacheError::Io(format!(
+                "parsed font metadata differs from its candidate-file snapshot: {}",
+                font.file_path
+            )));
+        }
+        let parent = font_path.parent().ok_or_else(|| {
+            CacheError::Io(format!(
+                "cached font has no parent directory: {}",
+                font.file_path
+            ))
+        })?;
+        let parent = parent.to_str().ok_or_else(|| {
+            CacheError::Io(format!(
+                "cached font parent is not valid UTF-8: {}",
+                font.file_path
+            ))
+        })?;
+        if !directory_paths.contains(parent) {
+            return Err(CacheError::Io(format!(
+                "cached font parent was not visited by the source scan: {}",
+                font.file_path
+            )));
+        }
+        if font.face_index < 0 || font.file_size < 0 || font.file_mtime < 0 {
+            return Err(CacheError::Io(format!(
+                "cached font has invalid negative metadata: {}",
+                font.file_path
+            )));
+        }
+        if !faces.insert((font.file_path.as_str(), font.face_index)) {
+            return Err(CacheError::Io(format!(
+                "source snapshot contains duplicate font face: {}#{}",
+                font.file_path, font.face_index
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Re-stat a completed scan before publication. This closes the window where
+/// files or nested directories change between traversal and the SQLite write;
+/// partial or already-stale scan output is never promoted into the cache.
+pub fn validate_cache_source_stability(
+    snapshot: &CacheSourceSnapshot,
+    fonts: &[FontMetadata],
+) -> Result<(), CacheError> {
+    validate_source_snapshot_shape(snapshot, fonts)?;
+    let live = snapshot_source_directories(Path::new(&snapshot.source_root), snapshot.scope)
+        .map_err(CacheError::Io)?;
+    let mut expected_directories = snapshot.directories.clone();
+    expected_directories.sort_by(|a, b| a.folder_path.cmp(&b.folder_path));
+    let mut expected_files = snapshot.files.clone();
+    expected_files.sort_by(|a, b| a.file_path.cmp(&b.file_path));
+    if live.source_root != snapshot.source_root
+        || live.directories != expected_directories
+        || live.files != expected_files
+    {
+        return Err(CacheError::Io(
+            "font source changed while it was being scanned; scan again before caching".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Drift detection result. Each variant lists composite source identities grouped by
 /// what change is needed; the caller iterates these to decide actions
 /// (rescan modified ones, evict removed ones, scan added ones).
 ///
@@ -384,21 +1009,19 @@ pub struct FolderRecord {
 /// as-is.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DriftReport {
-    /// Folders present on the filesystem but not in the cache.
+    /// Sources present in the supplied snapshot but not in the cache.
     /// Need a fresh scan to populate cache rows.
-    pub added: Vec<String>,
-    /// Folders in both cache and filesystem, but `folder_mtime`
-    /// differs. Need a rescan to update files added/removed/renamed
-    /// inside the folder.
-    pub modified: Vec<String>,
-    /// Folders in the cache but not on the filesystem (deleted, moved
-    /// outside the current source roots, etc.). Need eviction.
-    pub removed: Vec<String>,
+    pub added: Vec<CacheSourceKey>,
+    /// Sources in both cache and filesystem whose directory or candidate-file
+    /// snapshot differs. Need a complete rescan of the source root.
+    pub modified: Vec<CacheSourceKey>,
+    /// Sources in the cache but not in the supplied snapshot. Need eviction.
+    pub removed: Vec<CacheSourceKey>,
 }
 
 impl DriftReport {
     /// True when the cache is fully in sync with the filesystem
-    /// snapshot — no folders need scanning, rescanning, or eviction.
+    /// snapshot — no sources need scanning, rescanning, or eviction.
     /// CLI uses this to decide whether to print the drift warning at
     /// startup; GUI uses it to decide whether to show the modal.
     pub fn is_empty(&self) -> bool {
@@ -677,212 +1300,274 @@ impl FontCache {
         }
     }
 
-    /// Insert or replace all rows for one folder. Atomic — wraps the
-    /// delete-and-rewrite in a single transaction so a partial
-    /// failure leaves the previous state intact rather than partial
-    /// rows.
-    ///
-    /// Use cases:
-    /// - First-time scan of a folder: cache has no rows for it, this
-    ///   inserts them.
-    /// - Refresh after drift: cache has stale rows for this folder,
-    ///   this replaces them with the current scan output.
-    ///
-    /// `last_scanned_at` is set to current Unix seconds. The
-    /// `folder_mtime` value comes from the caller's `stat()` of the
-    /// folder at scan time — it's the value drift detection compares
-    /// against on next startup.
+    /// Atomically replace one source and every row it owns. Source identity is
+    /// `(source_root, scope)`, so overlapping roots and shallow/recursive views
+    /// of the same root cannot steal or delete each other's faces.
+    pub fn replace_source(
+        &mut self,
+        snapshot: &CacheSourceSnapshot,
+        fonts: &[FontMetadata],
+    ) -> Result<(), CacheError> {
+        validate_source_snapshot_shape(snapshot, fonts)?;
+        let scope = snapshot.scope.db_value();
+        let other_source_count: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM cached_sources \
+                 WHERE NOT (source_root = ?1 AND scope = ?2)",
+                params![snapshot.source_root, scope],
+                |row| row.get(0),
+            )
+            .map_err(|e| CacheError::Io(format!("count cached_sources: {e}")))?;
+        if usize::try_from(other_source_count).unwrap_or(usize::MAX) >= MAX_CACHED_SOURCES {
+            return Err(CacheError::Io(format!(
+                "cached_sources is at the {MAX_CACHED_SOURCES}-source sanity cap"
+            )));
+        }
+        let other_directory_count: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM cached_directories \
+                 WHERE NOT (source_root = ?1 AND scope = ?2)",
+                params![snapshot.source_root, scope],
+                |row| row.get(0),
+            )
+            .map_err(|e| CacheError::Io(format!("count cached_directories: {e}")))?;
+        checked_projected_count(
+            other_directory_count,
+            snapshot.directories.len(),
+            MAX_CACHED_DIRECTORIES,
+            "cached_directories",
+        )?;
+        let other_file_count: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM cached_source_files \
+                 WHERE NOT (source_root = ?1 AND scope = ?2)",
+                params![snapshot.source_root, scope],
+                |row| row.get(0),
+            )
+            .map_err(|e| CacheError::Io(format!("count cached_source_files: {e}")))?;
+        checked_projected_count(
+            other_file_count,
+            snapshot.files.len(),
+            crate::fonts::MAX_PREFLIGHT_ENTRIES,
+            "cached_source_files",
+        )?;
+        let other_path_bytes: i64 = self
+            .conn
+            .query_row(
+                "SELECT \
+                   COALESCE((SELECT SUM(length(CAST(source_root AS BLOB))) \
+                             FROM cached_sources \
+                             WHERE NOT (source_root = ?1 AND scope = ?2)), 0) + \
+                   COALESCE((SELECT SUM(length(CAST(directory_path AS BLOB))) \
+                             FROM cached_directories \
+                             WHERE NOT (source_root = ?1 AND scope = ?2)), 0) + \
+                   COALESCE((SELECT SUM(length(CAST(file_path AS BLOB))) \
+                             FROM cached_source_files \
+                             WHERE NOT (source_root = ?1 AND scope = ?2)), 0)",
+                params![snapshot.source_root, scope],
+                |row| row.get(0),
+            )
+            .map_err(|e| CacheError::Io(format!("count cached snapshot path bytes: {e}")))?;
+        checked_projected_path_bytes(other_path_bytes, snapshot_retained_path_bytes(snapshot)?)?;
+
+        let now = current_unix_seconds().ok_or_else(|| {
+            CacheError::Io("system clock is before Unix epoch (1970-01-01)".to_string())
+        })?;
+        let source_order: i64 = self
+            .conn
+            .query_row(
+                "SELECT COALESCE(\
+                    (SELECT source_order FROM cached_sources \
+                     WHERE source_root = ?1 AND scope = ?2), \
+                    (SELECT COALESCE(MAX(source_order), 0) + 1 FROM cached_sources)\
+                 )",
+                params![snapshot.source_root, scope],
+                |row| row.get(0),
+            )
+            .map_err(|e| CacheError::Io(format!("compute source order: {e}")))?;
+
+        let tx = self
+            .conn
+            .transaction()
+            .map_err(|e| CacheError::Io(format!("begin transaction: {e}")))?;
+        tx.execute(
+            "DELETE FROM cached_sources WHERE source_root = ?1 AND scope = ?2",
+            params![snapshot.source_root, scope],
+        )
+        .map_err(|e| CacheError::Io(format!("delete previous source: {e}")))?;
+        tx.execute(
+            "INSERT INTO cached_sources(source_root, scope, source_order, last_scanned_at) \
+             VALUES(?1, ?2, ?3, ?4)",
+            params![snapshot.source_root, scope, source_order, now],
+        )
+        .map_err(|e| CacheError::Io(format!("insert source: {e}")))?;
+
+        for directory in &snapshot.directories {
+            tx.execute(
+                "INSERT INTO cached_directories(\
+                    source_root, scope, directory_path, directory_mtime\
+                 ) VALUES(?1, ?2, ?3, ?4)",
+                params![
+                    snapshot.source_root,
+                    scope,
+                    directory.folder_path,
+                    directory.folder_mtime
+                ],
+            )
+            .map_err(|e| CacheError::Io(format!("insert tracked directory: {e}")))?;
+        }
+        for file in &snapshot.files {
+            tx.execute(
+                "INSERT INTO cached_source_files(\
+                    source_root, scope, file_path, file_size, file_mtime\
+                 ) VALUES(?1, ?2, ?3, ?4, ?5)",
+                params![
+                    snapshot.source_root,
+                    scope,
+                    file.file_path,
+                    file.file_size,
+                    file.file_mtime
+                ],
+            )
+            .map_err(|e| CacheError::Io(format!("insert candidate file: {e}")))?;
+        }
+        for font in fonts {
+            tx.execute(
+                "INSERT INTO cached_fonts(\
+                    source_root, scope, font_path, face_index, file_size, file_mtime\
+                 ) VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    snapshot.source_root,
+                    scope,
+                    font.file_path,
+                    font.face_index,
+                    font.file_size,
+                    font.file_mtime,
+                ],
+            )
+            .map_err(|e| CacheError::Io(format!("insert font {}: {e}", font.file_path)))?;
+
+            for key in &font.family_keys {
+                tx.execute(
+                    "INSERT OR IGNORE INTO cached_family_keys(\
+                        source_root, scope, font_path, face_index, family_name, \
+                        family_name_key, key_kind, bold, italic\
+                     ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    params![
+                        snapshot.source_root,
+                        scope,
+                        font.file_path,
+                        font.face_index,
+                        key.family_name,
+                        family_lookup_key(&key.family_name),
+                        KEY_KIND_FAMILY,
+                        i32::from(key.bold),
+                        i32::from(key.italic),
+                    ],
+                )
+                .map_err(|e| CacheError::Io(format!("insert family key: {e}")))?;
+            }
+            for alias in &font.face_name_aliases {
+                tx.execute(
+                    "INSERT OR IGNORE INTO cached_family_keys(\
+                        source_root, scope, font_path, face_index, family_name, \
+                        family_name_key, key_kind, bold, italic\
+                     ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, 0)",
+                    params![
+                        snapshot.source_root,
+                        scope,
+                        font.file_path,
+                        font.face_index,
+                        alias,
+                        family_lookup_key(alias),
+                        KEY_KIND_FACE_ALIAS,
+                    ],
+                )
+                .map_err(|e| CacheError::Io(format!("insert face-name alias: {e}")))?;
+            }
+        }
+        tx.commit()
+            .map_err(|e| CacheError::Io(format!("commit source replacement: {e}")))
+    }
+
+    /// Delete exactly one `(root, scope)` source and all owned rows. Foreign-key
+    /// cascades make this one transaction and preserve overlapping owners.
+    pub fn remove_source(
+        &mut self,
+        source_root: &str,
+        scope: FontDirectoryScope,
+    ) -> Result<(), CacheError> {
+        reject_unsupported_cached_folder_path(source_root)?;
+        let tx = self
+            .conn
+            .transaction()
+            .map_err(|e| CacheError::Io(format!("begin transaction: {e}")))?;
+        tx.execute(
+            "DELETE FROM cached_sources WHERE source_root = ?1 AND scope = ?2",
+            params![source_root, scope.db_value()],
+        )
+        .map_err(|e| CacheError::Io(format!("delete source: {e}")))?;
+        tx.commit()
+            .map_err(|e| CacheError::Io(format!("commit source removal: {e}")))
+    }
+
+    /// Remove every source atomically without dropping/recreating the cache.
+    pub fn clear_sources(&mut self) -> Result<usize, CacheError> {
+        let tx = self
+            .conn
+            .transaction()
+            .map_err(|e| CacheError::Io(format!("begin transaction: {e}")))?;
+        let removed = tx
+            .execute("DELETE FROM cached_sources", [])
+            .map_err(|e| CacheError::Io(format!("clear cached sources: {e}")))?;
+        tx.commit()
+            .map_err(|e| CacheError::Io(format!("commit source clear: {e}")))?;
+        Ok(removed)
+    }
+
+    /// Compatibility wrapper for shallow-only call sites while the CLI moves
+    /// to source snapshots. New code should call [`Self::replace_source`].
     pub fn replace_folder(
         &mut self,
         folder_path: &str,
         folder_mtime: i64,
         fonts: &[FontMetadata],
     ) -> Result<(), CacheError> {
-        // (considered, rejected): callers reach this
-        // function with already-canonicalized paths (Windows
-        // canonicalize() produces `\\?\C:\…` verbatim form, which
-        // `validate_ipc_path` correctly rejects as a fs:scope-bypass
-        // primitive at the IPC layer but is legitimate when stored
-        // internally after canonicalize). Validating here would block
-        // the normal write flow. The CLI-side untrusted boundary is at
-        // `run_refresh_fonts` (--font-dir argv validated pre-canonicalize);
-        // the GUI side validates at scan_font_directory IPC entry.
-        // Rows written through this function are internal
-        // canonicalize()-output. Rows read back from an existing cache
-        // are still validated at list/lookup boundaries because
-        // --cache-file and local cache tampering make persisted SQLite
-        // state attacker-influenced.
-        let other_folder_count = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM cached_folders WHERE folder_path <> ?1",
-                params![folder_path],
-                |row| row.get::<_, i64>(0),
-            )
-            .map_err(|e| CacheError::Io(format!("count cached_folders: {e}")))?;
-        let other_folder_count = usize::try_from(other_folder_count).map_err(|_| {
-            CacheError::Io("cached_folders row count is negative or too large".to_string())
-        })?;
-        if other_folder_count >= MAX_CACHED_FOLDERS {
-            return Err(CacheError::Io(format!(
-                "cached_folders table is at the {MAX_CACHED_FOLDERS}-row sanity cap; \
-                 cannot add another folder"
-            )));
-        }
-
-        let tx = self
-            .conn
-            .transaction()
-            .map_err(|e| CacheError::Io(format!("begin transaction: {e}")))?;
-
-        // Delete in dependency order: family_keys → fonts → folder.
-        // FK enforcement is on (PRAGMA foreign_keys=ON in
-        // open_or_create); reverse order would violate the constraints.
-        tx.execute(
-            "DELETE FROM cached_family_keys WHERE font_path IN \
-             (SELECT font_path FROM cached_fonts WHERE folder_path = ?1)",
-            params![folder_path],
+        let mut files: Vec<FileSnapshot> = fonts
+            .iter()
+            .map(|font| FileSnapshot {
+                file_path: font.file_path.clone(),
+                file_size: font.file_size,
+                file_mtime: font.file_mtime,
+            })
+            .collect();
+        files.sort_by(|a, b| a.file_path.cmp(&b.file_path));
+        files.dedup_by(|a, b| a.file_path == b.file_path);
+        self.replace_source(
+            &CacheSourceSnapshot {
+                source_root: folder_path.to_string(),
+                scope: FontDirectoryScope::Shallow,
+                directories: vec![FolderSnapshot {
+                    folder_path: folder_path.to_string(),
+                    folder_mtime,
+                }],
+                files,
+            },
+            fonts,
         )
-        .map_err(|e| CacheError::Io(format!("delete family_keys: {e}")))?;
-        tx.execute(
-            "DELETE FROM cached_fonts WHERE folder_path = ?1",
-            params![folder_path],
-        )
-        .map_err(|e| CacheError::Io(format!("delete fonts: {e}")))?;
-        tx.execute(
-            "DELETE FROM cached_folders WHERE folder_path = ?1",
-            params![folder_path],
-        )
-        .map_err(|e| CacheError::Io(format!("delete folder: {e}")))?;
-
-        // surface SystemTimeError as CacheError
-        // rather than persisting epoch-zero into last_scanned_at — the
-        // 0 sentinel would otherwise collide with "this folder was
-        // last scanned at the Unix epoch start" semantics if any
-        // future caller treats last_scanned_at as a meaningful
-        // timestamp.
-        let now = current_unix_seconds().ok_or_else(|| {
-            CacheError::Io("system clock is before Unix epoch (1970-01-01)".to_string())
-        })?;
-        tx.execute(
-            "INSERT INTO cached_folders(folder_path, folder_mtime, last_scanned_at) \
-             VALUES(?1, ?2, ?3)",
-            params![folder_path, folder_mtime, now],
-        )
-        .map_err(|e| CacheError::Io(format!("insert folder: {e}")))?;
-
-        for font in fonts {
-            tx.execute(
-                "INSERT INTO cached_fonts(font_path, folder_path, file_size, file_mtime, face_index) \
-                 VALUES(?1, ?2, ?3, ?4, ?5)",
-                params![
-                    font.file_path,
-                    folder_path,
-                    font.file_size,
-                    font.file_mtime,
-                    font.face_index,
-                ],
-            )
-            .map_err(|e| CacheError::Io(format!("insert font {}: {e}", font.file_path)))?;
-
-            for key in &font.family_keys {
-                let lookup_key = family_lookup_key(&key.family_name);
-                // INSERT OR IGNORE so two raw family names that normalize
-                // to the same lookup_key (e.g., 'Café' as NFC + 'Cafe\u{301}'
-                // as NFD; or 'Foo' + 'foo' with bold/italic identical)
-                // don't violate the (font_path, face_index,
-                // family_name_key, key_kind, bold, italic) primary key
-                // and abort the whole folder populate. The first variant lands;
-                // subsequent normalized-duplicates are dropped — they'd
-                // produce identical lookup results anyway since
-                // family_lookup_key is what later queries match on. A
-                // legitimate diagnostic family_name is still preserved
-                // for the surviving row.
-                tx.execute(
-                    "INSERT OR IGNORE INTO cached_family_keys(\
-                        font_path, face_index, family_name, family_name_key, key_kind, bold, italic\
-                     ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                    params![
-                        font.file_path,
-                        font.face_index,
-                        key.family_name,
-                        lookup_key,
-                        KEY_KIND_FAMILY,
-                        i32::from(key.bold),
-                        i32::from(key.italic),
-                    ],
-                )
-                .map_err(|e| {
-                    CacheError::Io(format!("insert family_key for {}: {e}", font.file_path))
-                })?;
-            }
-            for alias in &font.face_name_aliases {
-                let lookup_key = family_lookup_key(alias);
-                tx.execute(
-                    "INSERT OR IGNORE INTO cached_family_keys(\
-                        font_path, face_index, family_name, family_name_key, key_kind, bold, italic\
-                     ) VALUES(?1, ?2, ?3, ?4, ?5, 0, 0)",
-                    params![
-                        font.file_path,
-                        font.face_index,
-                        alias,
-                        lookup_key,
-                        KEY_KIND_FACE_ALIAS,
-                    ],
-                )
-                .map_err(|e| {
-                    CacheError::Io(format!(
-                        "insert face-name alias for {}: {e}",
-                        font.file_path
-                    ))
-                })?;
-            }
-        }
-
-        tx.commit()
-            .map_err(|e| CacheError::Io(format!("commit transaction: {e}")))?;
-        Ok(())
     }
 
-    /// Remove all rows for one folder (folder + its fonts + their
-    /// family_keys). Atomic via transaction. Use case: drift
-    /// detection found this folder is gone from the filesystem.
+    /// Compatibility wrapper for legacy shallow-only callers.
     pub fn remove_folder(&mut self, folder_path: &str) -> Result<(), CacheError> {
-        // Symmetric to replace_folder: folder_path is the canonicalized
-        // form persisted in cached_folders.folder_path, which on
-        // Windows starts with `\\?\` and would fail validate_ipc_path.
-        // No validation here — caller is internal Rust code working
-        // from trusted canonical strings, not IPC input.
-        let tx = self
-            .conn
-            .transaction()
-            .map_err(|e| CacheError::Io(format!("begin transaction: {e}")))?;
-        tx.execute(
-            "DELETE FROM cached_family_keys WHERE font_path IN \
-             (SELECT font_path FROM cached_fonts WHERE folder_path = ?1)",
-            params![folder_path],
-        )
-        .map_err(|e| CacheError::Io(format!("delete family_keys: {e}")))?;
-        tx.execute(
-            "DELETE FROM cached_fonts WHERE folder_path = ?1",
-            params![folder_path],
-        )
-        .map_err(|e| CacheError::Io(format!("delete fonts: {e}")))?;
-        tx.execute(
-            "DELETE FROM cached_folders WHERE folder_path = ?1",
-            params![folder_path],
-        )
-        .map_err(|e| CacheError::Io(format!("delete folder: {e}")))?;
-        tx.commit()
-            .map_err(|e| CacheError::Io(format!("commit transaction: {e}")))?;
-        Ok(())
+        self.remove_source(folder_path, FontDirectoryScope::Shallow)
     }
 
-    /// Compare cached folders against a snapshot of currently-existing
-    /// folders. Caller is responsible for producing the snapshot
-    /// (walking source roots and `stat()`-ing each font-bearing
-    /// folder) — keeps filesystem-walking code out of the cache
-    /// module so this function is pure / unit-testable.
+    /// Compatibility comparison for legacy shallow-only callers. New code uses
+    /// [`FontCache::diff_sources`] with complete directory and candidate-file
+    /// snapshots.
     ///
     /// The drift categories follow the locked design:
     /// - **added**: in the filesystem snapshot but not in the cache.
@@ -899,9 +1584,8 @@ impl FontCache {
         &self,
         current_folders: &[(String, i64)],
     ) -> Result<DriftReport, CacheError> {
-        // Pre-build a map of cached folders keyed by path. Single
-        // O(N) read of cached_folders; subsequent membership checks
-        // are O(1).
+        // Pre-build a map of the shallow compatibility view keyed by root path;
+        // subsequent membership checks are O(1).
         let cached: std::collections::HashMap<String, i64> = self
             .list_folders()?
             .into_iter()
@@ -920,9 +1604,15 @@ impl FontCache {
 
         for (path, current_mtime) in &current {
             match cached.get(*path) {
-                None => report.added.push((*path).to_string()),
+                None => report.added.push(CacheSourceKey {
+                    source_root: (*path).to_string(),
+                    scope: FontDirectoryScope::Shallow,
+                }),
                 Some(cached_mtime) if cached_mtime != current_mtime => {
-                    report.modified.push((*path).to_string());
+                    report.modified.push(CacheSourceKey {
+                        source_root: (*path).to_string(),
+                        scope: FontDirectoryScope::Shallow,
+                    });
                 }
                 Some(_) => {
                     // mtime matches — unchanged, no report entry
@@ -932,7 +1622,10 @@ impl FontCache {
 
         for cached_path in cached.keys() {
             if !current.contains_key(cached_path.as_str()) {
-                report.removed.push(cached_path.clone());
+                report.removed.push(CacheSourceKey {
+                    source_root: cached_path.clone(),
+                    scope: FontDirectoryScope::Shallow,
+                });
             }
         }
 
@@ -947,7 +1640,7 @@ impl FontCache {
 
     /// Look up a font face by family name + bold/italic flags. Returns
     /// `Some(FontLookupResult { font_path, face_index })` for the
-    /// first match, or `None` if no font in the cache advertises the
+    /// preferred match, or `None` if no font in the cache advertises the
     /// requested family + style combination.
     ///
     /// Match semantics: NFC-normalize + full Unicode lowercase via
@@ -963,11 +1656,11 @@ impl FontCache {
     /// (NOT ASCII-only lowercase — `to_ascii_lowercase` would miss
     /// `É` / `Ñ` / `Ü` and break Latin-extended / CJK lookups.)
     ///
-    /// Determinism: when multiple fonts advertise the same family
-    /// alias (rare; typically alternate weights or different
-    /// foundries' versions of a famous name), the result is sorted
-    /// by `(font_path, face_index)` and the first row returned. Same
-    /// query gives the same answer across runs.
+    /// Resolution order matches the in-session database: exact family/style
+    /// keys beat face-name aliases; shallow sources beat recursive sources;
+    /// the newest source wins within a tier; path and face index break any
+    /// remaining tie deterministically. The same source set therefore resolves
+    /// the same way before and after an app restart.
     ///
     /// Note on shared helper: persistent cache and session DB use
     /// different schemas (`cached_family_keys` vs `font_family_keys`)
@@ -984,16 +1677,18 @@ impl FontCache {
     ) -> Result<Option<FontLookupResult>, CacheError> {
         let lookup_key = family_lookup_key(family_name);
         let row: Result<(String, i32, String, i64, i64), _> = self.conn.query_row(
-            "SELECT k.font_path, k.face_index, d.folder_path, f.file_size, f.file_mtime \
+            "SELECT k.font_path, k.face_index, s.source_root, f.file_size, f.file_mtime \
              FROM cached_family_keys k \
              INNER JOIN cached_fonts f \
-               ON f.font_path = k.font_path AND f.face_index = k.face_index \
-             INNER JOIN cached_folders d \
-               ON d.folder_path = f.folder_path \
+               ON f.source_root = k.source_root AND f.scope = k.scope \
+              AND f.font_path = k.font_path AND f.face_index = k.face_index \
+             INNER JOIN cached_sources s \
+               ON s.source_root = f.source_root AND s.scope = f.scope \
              WHERE k.family_name_key = ?1 \
                AND ((k.key_kind = ?2 AND k.bold = ?3 AND k.italic = ?4) \
                     OR (k.key_kind = ?5 AND k.bold = 0 AND k.italic = 0)) \
-             ORDER BY k.key_kind, k.font_path, k.face_index \
+             ORDER BY k.key_kind ASC, s.scope ASC, s.source_order DESC, \
+                      k.font_path ASC, k.face_index ASC \
              LIMIT 1",
             params![
                 lookup_key,
@@ -1019,44 +1714,212 @@ impl FontCache {
         }
     }
 
-    /// List every folder currently tracked in the cache. Used by
-    /// drift detection to iterate cached folders and check each
-    /// against the filesystem.
-    pub fn list_folders(&self) -> Result<Vec<FolderRecord>, CacheError> {
+    /// List every source with the full directory and candidate-file snapshot.
+    pub fn list_sources(&self) -> Result<Vec<CacheSourceRecord>, CacheError> {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT folder_path, folder_mtime, last_scanned_at \
-                 FROM cached_folders ORDER BY folder_path",
+                "SELECT source_root, scope, source_order, last_scanned_at \
+                 FROM cached_sources ORDER BY source_root, scope",
             )
-            .map_err(|e| CacheError::Io(format!("prepare list_folders: {e}")))?;
+            .map_err(|e| CacheError::Io(format!("prepare list_sources: {e}")))?;
         let rows = stmt
             .query_map([], |row| {
-                Ok(FolderRecord {
-                    folder_path: row.get(0)?,
-                    folder_mtime: row.get(1)?,
-                    last_scanned_at: row.get(2)?,
-                })
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i32>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
             })
-            .map_err(|e| CacheError::Io(format!("execute list_folders: {e}")))?;
+            .map_err(|e| CacheError::Io(format!("execute list_sources: {e}")))?;
         let mut out = Vec::new();
+        let mut total_directory_rows = 0usize;
+        let mut total_file_rows = 0usize;
+        let mut total_path_bytes = 0usize;
         for row in rows {
-            let folder = row.map_err(|e| CacheError::Io(format!("read row: {e}")))?;
-            reject_unsupported_cached_folder_path(&folder.folder_path)?;
-            out.push(folder);
-            // DoS-class sanity cap: a hostile cache file with many
-            // fabricated folder rows would otherwise drive every
-            // drift-detect call through a per-stat loop bounded only
-            // by OS timeout. Refuse upfront and let the caller surface
-            // a rebuild prompt.
-            if out.len() > MAX_CACHED_FOLDERS {
+            let (source_root, scope_value, source_order, last_scanned_at) =
+                row.map_err(|e| CacheError::Io(format!("read source row: {e}")))?;
+            reject_unsupported_cached_folder_path(&source_root)?;
+            let mut source_path_bytes = source_root.len();
+            total_path_bytes = total_path_bytes
+                .checked_add(source_root.len())
+                .ok_or_else(|| CacheError::Io("cached path-byte count overflowed".to_string()))?;
+            enforce_cached_path_byte_budgets(source_path_bytes, total_path_bytes)?;
+            let scope = FontDirectoryScope::from_db(scope_value)?;
+            let mut directory_stmt = self
+                .conn
+                .prepare(
+                    "SELECT directory_path, directory_mtime FROM cached_directories \
+                     WHERE source_root = ?1 AND scope = ?2 ORDER BY directory_path",
+                )
+                .map_err(|e| CacheError::Io(format!("prepare source directories: {e}")))?;
+            let directory_rows = directory_stmt
+                .query_map(params![source_root, scope_value], |row| {
+                    Ok(FolderSnapshot {
+                        folder_path: row.get(0)?,
+                        folder_mtime: row.get(1)?,
+                    })
+                })
+                .map_err(|e| CacheError::Io(format!("read source directories: {e}")))?;
+            let mut directories = Vec::new();
+            for directory in directory_rows {
+                let directory =
+                    directory.map_err(|e| CacheError::Io(format!("read directory row: {e}")))?;
+                reject_unsupported_cached_directory_path(&directory.folder_path)?;
+                source_path_bytes = source_path_bytes
+                    .checked_add(directory.folder_path.len())
+                    .ok_or_else(|| {
+                        CacheError::Io("cached source path-byte count overflowed".to_string())
+                    })?;
+                total_path_bytes = total_path_bytes
+                    .checked_add(directory.folder_path.len())
+                    .ok_or_else(|| {
+                        CacheError::Io("cached path-byte count overflowed".to_string())
+                    })?;
+                enforce_cached_path_byte_budgets(source_path_bytes, total_path_bytes)?;
+                directories.push(directory);
+                total_directory_rows = total_directory_rows.saturating_add(1);
+                if directories.len() > MAX_CACHED_DIRECTORIES {
+                    return Err(CacheError::Io(format!(
+                        "cached_directories exceeds the {MAX_CACHED_DIRECTORIES}-row sanity cap"
+                    )));
+                }
+                if total_directory_rows > MAX_CACHED_DIRECTORIES {
+                    return Err(CacheError::Io(format!(
+                        "cached_directories exceeds the {MAX_CACHED_DIRECTORIES}-row global \
+                         sanity cap; cache file appears corrupted or hostile — rebuild required"
+                    )));
+                }
+            }
+            let mut file_stmt = self
+                .conn
+                .prepare(
+                    "SELECT file_path, file_size, file_mtime FROM cached_source_files \
+                     WHERE source_root = ?1 AND scope = ?2 ORDER BY file_path",
+                )
+                .map_err(|e| CacheError::Io(format!("prepare source files: {e}")))?;
+            let file_rows = file_stmt
+                .query_map(params![source_root, scope_value], |row| {
+                    Ok(FileSnapshot {
+                        file_path: row.get(0)?,
+                        file_size: row.get(1)?,
+                        file_mtime: row.get(2)?,
+                    })
+                })
+                .map_err(|e| CacheError::Io(format!("read source files: {e}")))?;
+            let mut files = Vec::new();
+            for file in file_rows {
+                let file = file.map_err(|e| CacheError::Io(format!("read file row: {e}")))?;
+                reject_unsupported_cached_font_path(&file.file_path)?;
+                source_path_bytes = source_path_bytes
+                    .checked_add(file.file_path.len())
+                    .ok_or_else(|| {
+                        CacheError::Io("cached source path-byte count overflowed".to_string())
+                    })?;
+                total_path_bytes = total_path_bytes
+                    .checked_add(file.file_path.len())
+                    .ok_or_else(|| {
+                        CacheError::Io("cached path-byte count overflowed".to_string())
+                    })?;
+                enforce_cached_path_byte_budgets(source_path_bytes, total_path_bytes)?;
+                files.push(file);
+                total_file_rows = total_file_rows.saturating_add(1);
+                if files.len() > crate::fonts::MAX_SCAN_FONT_FILES {
+                    return Err(CacheError::Io(format!(
+                        "one cached source exceeds the {}-candidate-file limit; rebuild required",
+                        crate::fonts::MAX_SCAN_FONT_FILES
+                    )));
+                }
+                if total_file_rows > crate::fonts::MAX_PREFLIGHT_ENTRIES {
+                    return Err(CacheError::Io(format!(
+                        "cached_source_files exceeds the {}-row global sanity cap; \
+                         cache file appears corrupted or hostile — rebuild required",
+                        crate::fonts::MAX_PREFLIGHT_ENTRIES
+                    )));
+                }
+            }
+            out.push(CacheSourceRecord {
+                source_root,
+                scope,
+                source_order,
+                last_scanned_at,
+                directories,
+                files,
+            });
+            if out.len() > MAX_CACHED_SOURCES {
                 return Err(CacheError::Io(format!(
-                    "cached_folders table exceeds {MAX_CACHED_FOLDERS}-row sanity cap; \
+                    "cached_sources table exceeds {MAX_CACHED_SOURCES}-row sanity cap; \
                      cache file appears corrupted or hostile — rebuild required"
                 )));
             }
         }
         Ok(out)
+    }
+
+    /// Compare complete source snapshots. Any nested directory or candidate-
+    /// file delta collapses to the owning source key in `modified`.
+    pub fn diff_sources(
+        &self,
+        current_sources: &[CacheSourceSnapshot],
+    ) -> Result<DriftReport, CacheError> {
+        let cached: HashMap<CacheSourceKey, (Vec<FolderSnapshot>, Vec<FileSnapshot>)> = self
+            .list_sources()?
+            .into_iter()
+            .map(|source| (source.key(), (source.directories, source.files)))
+            .collect();
+        let current: HashMap<CacheSourceKey, (&[FolderSnapshot], &[FileSnapshot])> =
+            current_sources
+                .iter()
+                .map(|source| {
+                    (
+                        source.key(),
+                        (source.directories.as_slice(), source.files.as_slice()),
+                    )
+                })
+                .collect();
+        let mut report = DriftReport::default();
+        for (key, (directories, files)) in &current {
+            match cached.get(key) {
+                None => report.added.push(key.clone()),
+                Some((cached_directories, cached_files))
+                    if cached_directories.as_slice() != *directories
+                        || cached_files.as_slice() != *files =>
+                {
+                    report.modified.push(key.clone());
+                }
+                Some(_) => {}
+            }
+        }
+        for key in cached.keys() {
+            if !current.contains_key(key) {
+                report.removed.push(key.clone());
+            }
+        }
+        report.added.sort();
+        report.modified.sort();
+        report.removed.sort();
+        Ok(report)
+    }
+
+    /// Transitional shallow-root view. New code should call `list_sources`.
+    pub fn list_folders(&self) -> Result<Vec<FolderRecord>, CacheError> {
+        self.list_sources()?
+            .into_iter()
+            .map(|source| {
+                let root_mtime = source
+                    .directories
+                    .iter()
+                    .find(|directory| directory.folder_path == source.source_root)
+                    .map(|directory| directory.folder_mtime)
+                    .ok_or_else(|| CacheError::Io("source root snapshot missing".to_string()))?;
+                Ok(FolderRecord {
+                    folder_path: source.source_root,
+                    folder_mtime: root_mtime,
+                    last_scanned_at: source.last_scanned_at,
+                })
+            })
+            .collect()
     }
 }
 
@@ -1083,55 +1946,87 @@ fn current_unix_seconds() -> Option<i64> {
 /// Schema SQL — one statement per table. Tables match the current
 /// persistent font-cache layout.
 ///
-/// `cached_folders.last_scanned_at`: Unix timestamp (seconds since
-/// epoch) of when this folder was last walked by `refresh-fonts`. Used
-/// for diagnostics ("last refresh: 2 days ago") and for "is this row
-/// older than the user's font collection?" sanity checks. NOT used as
-/// the primary drift signal — that's `folder_mtime` compared against
-/// the live `stat()`.
+/// `cached_sources.last_scanned_at` is a diagnostic Unix-seconds timestamp.
+/// Freshness instead compares nanosecond mtimes and sizes stored in
+/// `cached_directories` and `cached_source_files`.
 ///
-/// `cached_fonts` PK is composite `(font_path, face_index)`: a single
+/// Every owned table includes `(source_root, scope)` in its key. A single
+/// physical face may therefore belong to overlapping sources without either
+/// source stealing the other's row. `cached_fonts` additionally keys by
+/// `(font_path, face_index)`: a single
 /// TTC file (TrueType Collection) holds multiple faces, each with its
 /// own family names and addressable independently for subsetting. The
 /// composite key lets one font_path appear N times — once per face.
 /// `face_index` is 0 for non-TTC files; >=0 for TTC.
 ///
-/// `cached_family_keys` PK includes `(family_name, bold, italic,
-/// font_path, face_index)` so the same face_index of the same file
+/// `cached_family_keys` PK includes normalized family/style identity plus
+/// source + face identity, so the same face_index of the same file
 /// can appear for multiple family aliases — CJK fonts especially
 /// advertise family names in several language IDs (Latin + Simplified
 /// Chinese + Traditional + Japanese + Korean) on one face. Embed-time
 /// lookup must hit whichever locale the subtitle author wrote.
 const SCHEMA_SQL: &str = r#"
-CREATE TABLE cached_folders (
-    folder_path     TEXT PRIMARY KEY,
-    folder_mtime    INTEGER NOT NULL,
-    last_scanned_at INTEGER NOT NULL
+CREATE TABLE cached_sources (
+    source_root     TEXT NOT NULL,
+    scope           INTEGER NOT NULL CHECK(scope IN (0, 1)),
+    source_order    INTEGER NOT NULL UNIQUE,
+    last_scanned_at INTEGER NOT NULL,
+    PRIMARY KEY (source_root, scope)
 );
-CREATE TABLE cached_fonts (
-    font_path       TEXT NOT NULL,
-    face_index      INTEGER NOT NULL,
-    folder_path     TEXT NOT NULL,
+CREATE TABLE cached_directories (
+    source_root     TEXT NOT NULL,
+    scope           INTEGER NOT NULL,
+    directory_path TEXT NOT NULL,
+    directory_mtime INTEGER NOT NULL,
+    PRIMARY KEY (source_root, scope, directory_path),
+    FOREIGN KEY (source_root, scope) REFERENCES cached_sources(source_root, scope)
+        ON DELETE CASCADE
+);
+CREATE TABLE cached_source_files (
+    source_root     TEXT NOT NULL,
+    scope           INTEGER NOT NULL,
+    file_path       TEXT NOT NULL,
     file_size       INTEGER NOT NULL,
     file_mtime      INTEGER NOT NULL,
-    PRIMARY KEY (font_path, face_index),
-    FOREIGN KEY (folder_path) REFERENCES cached_folders(folder_path)
+    PRIMARY KEY (source_root, scope, file_path),
+    FOREIGN KEY (source_root, scope) REFERENCES cached_sources(source_root, scope)
+        ON DELETE CASCADE
+);
+CREATE TABLE cached_fonts (
+    source_root     TEXT NOT NULL,
+    scope           INTEGER NOT NULL,
+    font_path       TEXT NOT NULL,
+    face_index      INTEGER NOT NULL CHECK(face_index >= 0),
+    file_size       INTEGER NOT NULL CHECK(file_size >= 0),
+    file_mtime      INTEGER NOT NULL CHECK(file_mtime >= 0),
+    PRIMARY KEY (source_root, scope, font_path, face_index),
+    FOREIGN KEY (source_root, scope) REFERENCES cached_sources(source_root, scope)
+        ON DELETE CASCADE,
+    FOREIGN KEY (source_root, scope, font_path)
+        REFERENCES cached_source_files(source_root, scope, file_path)
+        ON DELETE CASCADE
 );
 CREATE TABLE cached_family_keys (
-    font_path        TEXT NOT NULL,
-    face_index       INTEGER NOT NULL,
-    family_name      TEXT NOT NULL,
-    -- v2: NFC-normalized + full Unicode lowercase form of family_name,
-    -- the actual lookup key. family_name kept verbatim for
-    -- diagnostics + future case-preserving display.
-    family_name_key  TEXT NOT NULL,
-    -- v4: 0 = exact family-name row with style-specific match,
-    -- 1 = full-face/PostScript alias row with style-insensitive match.
-    key_kind         INTEGER NOT NULL CHECK(key_kind IN (0, 1)),
-    bold             INTEGER NOT NULL,
-    italic           INTEGER NOT NULL,
-    PRIMARY KEY (family_name_key, key_kind, bold, italic, font_path, face_index),
-    FOREIGN KEY (font_path, face_index) REFERENCES cached_fonts(font_path, face_index)
+    source_root      TEXT NOT NULL,
+    scope             INTEGER NOT NULL,
+    font_path         TEXT NOT NULL,
+    face_index        INTEGER NOT NULL,
+    family_name       TEXT NOT NULL,
+    family_name_key   TEXT NOT NULL,
+    key_kind          INTEGER NOT NULL CHECK(key_kind IN (0, 1)),
+    bold              INTEGER NOT NULL,
+    italic            INTEGER NOT NULL,
+    PRIMARY KEY (
+        source_root, scope, family_name_key, key_kind, bold, italic,
+        font_path, face_index
+    ),
+    FOREIGN KEY (source_root, scope, font_path, face_index)
+        REFERENCES cached_fonts(source_root, scope, font_path, face_index)
+        ON DELETE CASCADE
+);
+CREATE INDEX idx_cached_family_lookup ON cached_family_keys(
+    family_name_key, key_kind, bold, italic,
+    source_root, scope, font_path, face_index
 );
 CREATE TABLE cache_meta (
     key             TEXT PRIMARY KEY,
@@ -1227,17 +2122,18 @@ mod tests {
         let (_guard, path) = temp_cache_path();
         let cache = FontCache::open_or_create(&path).expect("fresh cache opens");
 
-        // All four tables present.
+        // All six schema-v6 tables present.
         let table_count: i32 = cache
             .conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN \
-                 ('cached_folders', 'cached_fonts', 'cached_family_keys', 'cache_meta')",
+                 ('cached_sources', 'cached_directories', 'cached_source_files', \
+                  'cached_fonts', 'cached_family_keys', 'cache_meta')",
                 [],
                 |r| r.get(0),
             )
             .expect("query schema tables");
-        assert_eq!(table_count, 4, "expected all four tables created");
+        assert_eq!(table_count, 6, "expected all six tables created");
 
         // schema_version row written.
         let version: String = cache
@@ -1249,6 +2145,79 @@ mod tests {
             )
             .expect("query schema_version");
         assert_eq!(version, SCHEMA_VERSION.to_string());
+    }
+
+    #[test]
+    fn family_lookup_uses_the_family_first_index() {
+        let (_guard, path) = temp_cache_path();
+        let cache = FontCache::open_or_create(&path).expect("fresh cache opens");
+        let mut statement = cache
+            .conn
+            .prepare(
+                "EXPLAIN QUERY PLAN \
+                 SELECT k.font_path, k.face_index, s.source_root, f.file_size, f.file_mtime \
+                 FROM cached_family_keys k \
+                 INNER JOIN cached_fonts f \
+                   ON f.source_root = k.source_root AND f.scope = k.scope \
+                  AND f.font_path = k.font_path AND f.face_index = k.face_index \
+                 INNER JOIN cached_sources s \
+                   ON s.source_root = f.source_root AND s.scope = f.scope \
+                 WHERE k.family_name_key = ?1 \
+                   AND ((k.key_kind = ?2 AND k.bold = ?3 AND k.italic = ?4) \
+                        OR (k.key_kind = ?5 AND k.bold = 0 AND k.italic = 0)) \
+                 ORDER BY k.key_kind, s.scope, s.source_order DESC, \
+                          k.font_path, k.face_index LIMIT 1",
+            )
+            .unwrap();
+        let details: Vec<String> = statement
+            .query_map(params!["demo", 0, 0, 0, 1], |row| row.get(3))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert!(
+            details
+                .iter()
+                .any(|detail| detail.contains("idx_cached_family_lookup")),
+            "lookup plan must use the family-first index: {details:?}"
+        );
+    }
+
+    #[test]
+    fn projected_global_cache_budgets_accept_boundary_and_reject_one_over() {
+        assert_eq!(
+            checked_projected_count(199_999, 1, 200_000, "candidate rows").unwrap(),
+            200_000
+        );
+        assert!(checked_projected_count(200_000, 1, 200_000, "candidate rows").is_err());
+
+        assert_eq!(
+            checked_projected_path_bytes(
+                i64::try_from(MAX_CACHED_SNAPSHOT_PATH_BYTES - 1).unwrap(),
+                1,
+            )
+            .unwrap(),
+            MAX_CACHED_SNAPSHOT_PATH_BYTES
+        );
+        assert!(checked_projected_path_bytes(
+            i64::try_from(MAX_CACHED_SNAPSHOT_PATH_BYTES).unwrap(),
+            1,
+        )
+        .is_err());
+        assert!(enforce_cached_path_byte_budgets(
+            crate::fonts::MAX_SCAN_PATH_BYTES,
+            MAX_CACHED_SNAPSHOT_PATH_BYTES,
+        )
+        .is_ok());
+        assert!(enforce_cached_path_byte_budgets(
+            crate::fonts::MAX_SCAN_PATH_BYTES + 1,
+            MAX_CACHED_SNAPSHOT_PATH_BYTES,
+        )
+        .is_err());
+        assert!(enforce_cached_path_byte_budgets(
+            crate::fonts::MAX_SCAN_PATH_BYTES,
+            MAX_CACHED_SNAPSHOT_PATH_BYTES + 1,
+        )
+        .is_err());
     }
 
     #[test]
@@ -1440,10 +2409,12 @@ mod tests {
     }
 
     fn canonical_path_string(path: &Path) -> String {
-        path.canonicalize()
+        let canonical = path
+            .canonicalize()
             .expect("canonicalize test path")
             .to_string_lossy()
-            .into_owned()
+            .into_owned();
+        crate::fonts::normalize_canonical_path(&canonical)
     }
 
     fn real_folder_path(folder: &Path) -> String {
@@ -1475,6 +2446,83 @@ mod tests {
             family_keys,
             face_name_aliases,
         }
+    }
+
+    fn source_snapshot_for_fonts(
+        source_root: &str,
+        scope: FontDirectoryScope,
+        fonts: &[FontMetadata],
+    ) -> CacheSourceSnapshot {
+        let mut files: Vec<FileSnapshot> = fonts
+            .iter()
+            .map(|font| FileSnapshot {
+                file_path: font.file_path.clone(),
+                file_size: font.file_size,
+                file_mtime: font.file_mtime,
+            })
+            .collect();
+        files.sort_by(|a, b| a.file_path.cmp(&b.file_path));
+        files.dedup_by(|a, b| a.file_path == b.file_path);
+        CacheSourceSnapshot {
+            source_root: source_root.to_string(),
+            scope,
+            directories: vec![FolderSnapshot {
+                folder_path: source_root.to_string(),
+                folder_mtime: try_modified_at(Path::new(source_root)).unwrap_or(1),
+            }],
+            files,
+        }
+    }
+
+    fn insert_raw_lookup_fixture(
+        cache: &FontCache,
+        source_root: &str,
+        font_path: &str,
+        file_size: i64,
+        file_mtime: i64,
+        family: &str,
+    ) {
+        cache
+            .conn
+            .pragma_update(None, "foreign_keys", "OFF")
+            .unwrap();
+        cache
+            .conn
+            .execute(
+                "INSERT INTO cached_sources(source_root, scope, source_order, last_scanned_at) \
+                 VALUES(?1, 0, 1, 1)",
+                params![source_root],
+            )
+            .unwrap();
+        cache
+            .conn
+            .execute(
+                "INSERT INTO cached_fonts(\
+                    source_root, scope, font_path, face_index, file_size, file_mtime\
+                 ) VALUES(?1, 0, ?2, 0, ?3, ?4)",
+                params![source_root, font_path, file_size, file_mtime],
+            )
+            .unwrap();
+        cache
+            .conn
+            .execute(
+                "INSERT INTO cached_family_keys(\
+                    source_root, scope, font_path, face_index, family_name, \
+                    family_name_key, key_kind, bold, italic\
+                 ) VALUES(?1, 0, ?2, 0, ?3, ?4, ?5, 0, 0)",
+                params![
+                    source_root,
+                    font_path,
+                    family,
+                    family_lookup_key(family),
+                    KEY_KIND_FAMILY
+                ],
+            )
+            .unwrap();
+        cache
+            .conn
+            .pragma_update(None, "foreign_keys", "ON")
+            .unwrap();
     }
 
     #[test]
@@ -1710,29 +2758,24 @@ mod tests {
     }
 
     #[test]
-    fn list_folders_accepts_local_extended_windows_paths() {
+    fn cache_rejects_un_normalized_extended_windows_paths() {
         let (_guard, path) = temp_cache_path();
         let mut cache = FontCache::open_or_create(&path).expect("open");
-        cache
+        let err = cache
             .replace_folder(r"\\?\C:\Fonts\Anime", 1_700_000_000, &[])
-            .unwrap();
-
-        let folders = cache.list_folders().expect("list");
-        assert_eq!(folders[0].folder_path, r"\\?\C:\Fonts\Anime");
+            .unwrap_err();
+        assert!(err.to_string().contains("reserved device namespace"));
     }
 
     #[test]
     fn list_folders_rejects_network_namespace_rows_before_stat_callers() {
         let (_guard, path) = temp_cache_path();
         let mut cache = FontCache::open_or_create(&path).expect("open");
-        cache
+        let err = cache
             .replace_folder(r"\\?\UNC\dead-host\Fonts", 1_700_000_000, &[])
-            .unwrap();
-
-        let err = cache.list_folders().unwrap_err();
+            .unwrap_err();
         assert!(
-            err.to_string()
-                .contains("cached_folders.folder_path contains a network or device-namespace path"),
+            err.to_string().contains("reserved device namespace"),
             "expected cached folder namespace rejection, got: {err}"
         );
     }
@@ -1745,11 +2788,11 @@ mod tests {
             cache
                 .conn
                 .execute(
-                    "INSERT INTO cached_folders(folder_path, folder_mtime, last_scanned_at) \
-                     VALUES(?1, ?2, ?3)",
+                    "INSERT INTO cached_sources(source_root, scope, source_order, last_scanned_at) \
+                     VALUES(?1, 0, ?2, ?3)",
                     params![
                         format!("/hostile/{i:04}"),
-                        1_700_000_000_i64,
+                        i64::try_from(i).unwrap(),
                         1_700_000_001_i64
                     ],
                 )
@@ -1759,7 +2802,7 @@ mod tests {
         let err = cache.list_folders().unwrap_err();
         assert!(
             err.to_string().contains(&format!(
-                "cached_folders table exceeds {MAX_CACHED_FOLDERS}-row sanity cap"
+                "cached_sources table exceeds {MAX_CACHED_FOLDERS}-row sanity cap"
             )),
             "expected cached_folders sanity-cap error, got: {err}"
         );
@@ -1784,7 +2827,7 @@ mod tests {
             .unwrap_err();
         assert!(
             err.to_string().contains(&format!(
-                "cached_folders table is at the {MAX_CACHED_FOLDERS}-row sanity cap"
+                "cached_sources is at the {MAX_CACHED_FOLDERS}-source sanity cap"
             )),
             "expected replace_folder cap error, got: {err}"
         );
@@ -1918,17 +2961,26 @@ mod tests {
         let empty = DriftReport::default();
         assert!(empty.is_empty());
         let with_added = DriftReport {
-            added: vec!["x".to_string()],
+            added: vec![CacheSourceKey {
+                source_root: "x".to_string(),
+                scope: FontDirectoryScope::Shallow,
+            }],
             ..Default::default()
         };
         assert!(!with_added.is_empty());
         let with_modified = DriftReport {
-            modified: vec!["x".to_string()],
+            modified: vec![CacheSourceKey {
+                source_root: "x".to_string(),
+                scope: FontDirectoryScope::Shallow,
+            }],
             ..Default::default()
         };
         assert!(!with_modified.is_empty());
         let with_removed = DriftReport {
-            removed: vec!["x".to_string()],
+            removed: vec![CacheSourceKey {
+                source_root: "x".to_string(),
+                scope: FontDirectoryScope::Shallow,
+            }],
             ..Default::default()
         };
         assert!(!with_removed.is_empty());
@@ -1996,8 +3048,9 @@ mod tests {
             .conn
             .execute(
                 "INSERT INTO cached_family_keys(\
-                    font_path, face_index, family_name, family_name_key, key_kind, bold, italic\
-                 ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    source_root, scope, font_path, face_index, family_name, \
+                    family_name_key, key_kind, bold, italic\
+                 ) VALUES('/orphan', 0, ?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![
                     "/orphan/arial.ttf",
                     0,
@@ -2028,50 +3081,18 @@ mod tests {
         let (_guard, path) = temp_cache_path();
         let cache = FontCache::open_or_create(&path).expect("open");
         let bad_font_path = r"\\?\UNC\dead-host\Fonts\arial.ttf";
-        cache
-            .conn
-            .execute(
-                "INSERT INTO cached_folders(folder_path, folder_mtime, last_scanned_at) \
-                 VALUES(?1, ?2, ?3)",
-                params!["/test/dir", 1_700_000_000, 1_700_000_000],
-            )
-            .unwrap();
-        cache
-            .conn
-            .execute(
-                "INSERT INTO cached_fonts(font_path, folder_path, file_size, file_mtime, face_index) \
-                 VALUES(?1, ?2, ?3, ?4, ?5)",
-                params![
-                    bad_font_path,
-                    "/test/dir",
-                    100_000,
-                    1_700_000_000,
-                    0,
-                ],
-            )
-            .unwrap();
-        cache
-            .conn
-            .execute(
-                "INSERT INTO cached_family_keys(\
-                    font_path, face_index, family_name, family_name_key, key_kind, bold, italic\
-                 ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                params![
-                    bad_font_path,
-                    0,
-                    "Arial",
-                    family_lookup_key("Arial"),
-                    KEY_KIND_FAMILY,
-                    0,
-                    0,
-                ],
-            )
-            .unwrap();
+        insert_raw_lookup_fixture(
+            &cache,
+            "/test/dir",
+            bad_font_path,
+            100_000,
+            1_700_000_000,
+            "Arial",
+        );
 
         let err = cache.lookup_family("Arial", false, false).unwrap_err();
         assert!(
-            err.to_string()
-                .contains("cached_fonts.font_path contains a network or device-namespace path"),
+            err.to_string().contains("reserved device namespace"),
             "expected cached font namespace rejection, got: {err}"
         );
     }
@@ -2082,50 +3103,18 @@ mod tests {
         let cache = FontCache::open_or_create(&path).expect("open");
         let bad_folder_path = r"\\?\UNC\dead-host\Fonts";
         let local_font_path = r"C:\Fonts\arial.ttf";
-        cache
-            .conn
-            .execute(
-                "INSERT INTO cached_folders(folder_path, folder_mtime, last_scanned_at) \
-                 VALUES(?1, ?2, ?3)",
-                params![bad_folder_path, 1_700_000_000, 1_700_000_000],
-            )
-            .unwrap();
-        cache
-            .conn
-            .execute(
-                "INSERT INTO cached_fonts(font_path, folder_path, file_size, file_mtime, face_index) \
-                 VALUES(?1, ?2, ?3, ?4, ?5)",
-                params![
-                    local_font_path,
-                    bad_folder_path,
-                    100_000,
-                    1_700_000_000,
-                    0,
-                ],
-            )
-            .unwrap();
-        cache
-            .conn
-            .execute(
-                "INSERT INTO cached_family_keys(\
-                    font_path, face_index, family_name, family_name_key, key_kind, bold, italic\
-                 ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                params![
-                    local_font_path,
-                    0,
-                    "Arial",
-                    family_lookup_key("Arial"),
-                    KEY_KIND_FAMILY,
-                    0,
-                    0,
-                ],
-            )
-            .unwrap();
+        insert_raw_lookup_fixture(
+            &cache,
+            bad_folder_path,
+            local_font_path,
+            100_000,
+            1_700_000_000,
+            "Arial",
+        );
 
         let err = cache.lookup_family("Arial", false, false).unwrap_err();
         assert!(
-            err.to_string()
-                .contains("cached_folders.folder_path contains a network or device-namespace path"),
+            err.to_string().contains("reserved device namespace"),
             "expected cached folder namespace rejection, got: {err}"
         );
     }
@@ -2146,52 +3135,21 @@ mod tests {
         );
         let outside_font_path = outside_font.file_path.clone();
 
-        cache
-            .conn
-            .execute(
-                "INSERT INTO cached_folders(folder_path, folder_mtime, last_scanned_at) \
-                 VALUES(?1, ?2, ?3)",
-                params![trusted_folder_path.as_str(), 1_700_000_000, 1_700_000_000],
-            )
-            .unwrap();
-        cache
-            .conn
-            .execute(
-                "INSERT INTO cached_fonts(font_path, folder_path, file_size, file_mtime, face_index) \
-                 VALUES(?1, ?2, ?3, ?4, ?5)",
-                params![
-                    outside_font_path.as_str(),
-                    trusted_folder_path.as_str(),
-                    outside_font.file_size,
-                    outside_font.file_mtime,
-                    0,
-                ],
-            )
-            .unwrap();
-        cache
-            .conn
-            .execute(
-                "INSERT INTO cached_family_keys(\
-                    font_path, face_index, family_name, family_name_key, key_kind, bold, italic\
-                 ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                params![
-                    outside_font_path.as_str(),
-                    0,
-                    "Private Sans",
-                    family_lookup_key("Private Sans"),
-                    KEY_KIND_FAMILY,
-                    0,
-                    0,
-                ],
-            )
-            .unwrap();
+        insert_raw_lookup_fixture(
+            &cache,
+            &trusted_folder_path,
+            &outside_font_path,
+            outside_font.file_size,
+            outside_font.file_mtime,
+            "Private Sans",
+        );
 
         let err = cache
             .lookup_family("Private Sans", false, false)
             .unwrap_err();
         assert!(
             err.to_string()
-                .contains("cached_fonts.font_path is outside cached_folders.folder_path"),
+                .contains("cached_fonts.font_path is outside cached_sources.source_root"),
             "expected outside-folder cache rejection, got: {err}"
         );
     }
@@ -2467,5 +3425,359 @@ mod tests {
         let (_guard, path) = temp_nested_cache_path();
         FontCache::open_or_create(&path).expect("creates nested parents");
         assert!(path.exists());
+    }
+
+    #[test]
+    fn try_modified_at_preserves_nanosecond_precision() {
+        let guard = TempCacheDir::new();
+        let file = guard.0.join("mtime.ttf");
+        fs::write(&file, b"mtime fixture").unwrap();
+        let modified = fs::metadata(&file)
+            .unwrap()
+            .modified()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap();
+        let expected = i64::try_from(modified.as_secs()).unwrap() * 1_000_000_000
+            + i64::from(modified.subsec_nanos());
+        assert_eq!(try_modified_at(&file), Some(expected));
+    }
+
+    #[test]
+    fn candidate_file_change_marks_recursive_source_modified() {
+        let (guard, path) = temp_cache_path();
+        let mut cache = FontCache::open_or_create(&path).unwrap();
+        let root = guard.0.join("library");
+        let nested = root.join("nested");
+        fs::create_dir_all(&nested).unwrap();
+        let malformed = nested.join("broken.ttf");
+        fs::write(&malformed, b"bad").unwrap();
+
+        let original = snapshot_source_directories(&root, FontDirectoryScope::Recursive).unwrap();
+        cache.replace_source(&original, &[]).unwrap();
+        // Size is a second independent freshness signal, so this remains
+        // deterministic even on filesystems with coarse mtime resolution.
+        fs::write(&malformed, b"now a different candidate").unwrap();
+        let changed = snapshot_source_directories(&root, FontDirectoryScope::Recursive).unwrap();
+        let report = cache.diff_sources(&[changed]).unwrap();
+        assert_eq!(report.modified, vec![original.key()]);
+    }
+
+    #[test]
+    fn same_root_scopes_own_faces_independently() {
+        let (guard, path) = temp_cache_path();
+        let mut cache = FontCache::open_or_create(&path).unwrap();
+        let root = guard.0.join("shared-root");
+        let font = real_font_metadata(
+            &root,
+            "shared.ttf",
+            0,
+            vec![family_key("Shared Sans", false, false)],
+            Vec::new(),
+        );
+        let source_root = real_folder_path(&root);
+        let shallow = source_snapshot_for_fonts(
+            &source_root,
+            FontDirectoryScope::Shallow,
+            std::slice::from_ref(&font),
+        );
+        let recursive = source_snapshot_for_fonts(
+            &source_root,
+            FontDirectoryScope::Recursive,
+            std::slice::from_ref(&font),
+        );
+        cache
+            .replace_source(&shallow, std::slice::from_ref(&font))
+            .unwrap();
+        cache
+            .replace_source(&recursive, std::slice::from_ref(&font))
+            .unwrap();
+        let owned_faces: i64 = cache
+            .conn
+            .query_row("SELECT COUNT(*) FROM cached_fonts", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(owned_faces, 2);
+
+        cache
+            .remove_source(&source_root, FontDirectoryScope::Recursive)
+            .unwrap();
+        let remaining_faces: i64 = cache
+            .conn
+            .query_row("SELECT COUNT(*) FROM cached_fonts", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(remaining_faces, 1);
+        assert!(cache
+            .lookup_family("Shared Sans", false, false)
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn transactional_clear_success_leaves_no_cached_sources() {
+        let (guard, path) = temp_cache_path();
+        let mut cache = FontCache::open_or_create(&path).unwrap();
+        let root = guard.0.join("clear-source");
+        let font = real_font_metadata(
+            &root,
+            "clear.ttf",
+            0,
+            vec![family_key("Clear Sans", false, false)],
+            Vec::new(),
+        );
+        let source_root = real_folder_path(&root);
+        let snapshot = source_snapshot_for_fonts(
+            &source_root,
+            FontDirectoryScope::Shallow,
+            std::slice::from_ref(&font),
+        );
+        cache
+            .replace_source(&snapshot, std::slice::from_ref(&font))
+            .unwrap();
+
+        assert_eq!(cache.clear_sources().unwrap(), 1);
+        assert!(cache.list_sources().unwrap().is_empty());
+        assert!(cache
+            .lookup_family("Clear Sans", false, false)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn lookup_prefers_shallow_then_newest_source() {
+        let (guard, path) = temp_cache_path();
+        let mut cache = FontCache::open_or_create(&path).unwrap();
+        let shallow_old_dir = guard.0.join("shallow-old");
+        let recursive_dir = guard.0.join("recursive-newer");
+        let shallow_new_dir = guard.0.join("shallow-newest");
+        let shallow_old = real_font_metadata(
+            &shallow_old_dir,
+            "font.ttf",
+            0,
+            vec![family_key("Priority Sans", false, false)],
+            Vec::new(),
+        );
+        let recursive = real_font_metadata(
+            &recursive_dir,
+            "font.ttf",
+            0,
+            vec![family_key("Priority Sans", false, false)],
+            Vec::new(),
+        );
+        let shallow_new = real_font_metadata(
+            &shallow_new_dir,
+            "font.ttf",
+            0,
+            vec![family_key("Priority Sans", false, false)],
+            Vec::new(),
+        );
+        let shallow_old_root = real_folder_path(&shallow_old_dir);
+        let recursive_root = real_folder_path(&recursive_dir);
+        let shallow_new_root = real_folder_path(&shallow_new_dir);
+        cache
+            .replace_source(
+                &source_snapshot_for_fonts(
+                    &shallow_old_root,
+                    FontDirectoryScope::Shallow,
+                    std::slice::from_ref(&shallow_old),
+                ),
+                std::slice::from_ref(&shallow_old),
+            )
+            .unwrap();
+        cache
+            .replace_source(
+                &source_snapshot_for_fonts(
+                    &recursive_root,
+                    FontDirectoryScope::Recursive,
+                    std::slice::from_ref(&recursive),
+                ),
+                std::slice::from_ref(&recursive),
+            )
+            .unwrap();
+        let hit = cache
+            .lookup_family("Priority Sans", false, false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(hit.font_path, shallow_old.file_path);
+
+        cache
+            .replace_source(
+                &source_snapshot_for_fonts(
+                    &shallow_new_root,
+                    FontDirectoryScope::Shallow,
+                    std::slice::from_ref(&shallow_new),
+                ),
+                std::slice::from_ref(&shallow_new),
+            )
+            .unwrap();
+        // Refreshing an older source updates its content but not its addition
+        // order; the newer shallow source must remain the winner.
+        cache
+            .replace_source(
+                &source_snapshot_for_fonts(
+                    &shallow_old_root,
+                    FontDirectoryScope::Shallow,
+                    std::slice::from_ref(&shallow_old),
+                ),
+                std::slice::from_ref(&shallow_old),
+            )
+            .unwrap();
+        let hit = cache
+            .lookup_family("Priority Sans", false, false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(hit.font_path, shallow_new.file_path);
+    }
+
+    #[test]
+    fn lookup_prefers_exact_family_across_scopes_before_shallow_alias() {
+        let (guard, path) = temp_cache_path();
+        let mut cache = FontCache::open_or_create(&path).unwrap();
+        let shallow_dir = guard.0.join("shallow-alias");
+        let recursive_dir = guard.0.join("recursive-exact");
+        let shallow_alias = real_font_metadata(
+            &shallow_dir,
+            "alias.ttf",
+            0,
+            vec![family_key("Unrelated Family", false, false)],
+            vec!["Cross Scope Sans".to_string()],
+        );
+        let recursive_exact = real_font_metadata(
+            &recursive_dir,
+            "exact.ttf",
+            0,
+            vec![family_key("Cross Scope Sans", false, false)],
+            Vec::new(),
+        );
+        let shallow_root = real_folder_path(&shallow_dir);
+        let recursive_root = real_folder_path(&recursive_dir);
+        cache
+            .replace_source(
+                &source_snapshot_for_fonts(
+                    &shallow_root,
+                    FontDirectoryScope::Shallow,
+                    std::slice::from_ref(&shallow_alias),
+                ),
+                std::slice::from_ref(&shallow_alias),
+            )
+            .unwrap();
+        cache
+            .replace_source(
+                &source_snapshot_for_fonts(
+                    &recursive_root,
+                    FontDirectoryScope::Recursive,
+                    std::slice::from_ref(&recursive_exact),
+                ),
+                std::slice::from_ref(&recursive_exact),
+            )
+            .unwrap();
+
+        let hit = cache
+            .lookup_family("Cross Scope Sans", false, false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(hit.font_path, recursive_exact.file_path);
+    }
+
+    #[test]
+    fn cache_accepts_representative_20130_face_source() {
+        let (_guard, path) = temp_cache_path();
+        let mut cache = FontCache::open_or_create(&path).unwrap();
+        let mut fonts = Vec::with_capacity(20_130);
+        let mut files = Vec::with_capacity(20_130);
+        for index in 0..20_130 {
+            let file_path = format!("/large/font-{index:05}.ttf");
+            fonts.push(synthetic_font(&file_path, "Large Library Sans"));
+            files.push(FileSnapshot {
+                file_path,
+                file_size: 100_000,
+                file_mtime: 1_700_000_000_000_000_000,
+            });
+        }
+        let snapshot = CacheSourceSnapshot {
+            source_root: "/large".to_string(),
+            scope: FontDirectoryScope::Recursive,
+            directories: vec![FolderSnapshot {
+                folder_path: "/large".to_string(),
+                folder_mtime: 1_700_000_000_000_000_000,
+            }],
+            files,
+        };
+        // Align synthetic helper's legacy seconds fixture with schema-v6 ns.
+        for font in &mut fonts {
+            font.file_mtime = 1_700_000_000_000_000_000;
+        }
+        cache.replace_source(&snapshot, &fonts).unwrap();
+        let face_count: i64 = cache
+            .conn
+            .query_row("SELECT COUNT(*) FROM cached_fonts", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(face_count, 20_130);
+    }
+
+    #[test]
+    fn cache_accepts_4096_directory_snapshot() {
+        let (_guard, path) = temp_cache_path();
+        let mut cache = FontCache::open_or_create(&path).unwrap();
+        let mut directories = vec![FolderSnapshot {
+            folder_path: "/tree".to_string(),
+            folder_mtime: 1,
+        }];
+        directories.extend((1..MAX_CACHED_DIRECTORIES).map(|index| FolderSnapshot {
+            folder_path: format!("/tree/d-{index:04}"),
+            folder_mtime: i64::try_from(index).unwrap(),
+        }));
+        cache
+            .replace_source(
+                &CacheSourceSnapshot {
+                    source_root: "/tree".to_string(),
+                    scope: FontDirectoryScope::Recursive,
+                    directories,
+                    files: Vec::new(),
+                },
+                &[],
+            )
+            .unwrap();
+        let directory_count: i64 = cache
+            .conn
+            .query_row("SELECT COUNT(*) FROM cached_directories", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(directory_count, MAX_CACHED_DIRECTORIES as i64);
+    }
+
+    #[test]
+    fn snapshot_rejects_bidi_candidate_path() {
+        let guard = TempCacheDir::new();
+        let root = guard.0.join("bidi-library");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("evil\u{202e}ttf.ttf"), b"candidate").unwrap();
+        let err = snapshot_source_directories(&root, FontDirectoryScope::Shallow).unwrap_err();
+        assert!(err.contains("contains invalid characters"), "got: {err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn snapshot_rejects_non_utf8_source_root() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+        let guard = TempCacheDir::new();
+        let invalid = guard.0.join(OsString::from_vec(vec![b'f', 0xff]));
+        fs::create_dir_all(&invalid).unwrap();
+        let err = snapshot_source_directories(&invalid, FontDirectoryScope::Shallow).unwrap_err();
+        assert!(err.contains("not valid UTF-8"), "got: {err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn snapshot_rejects_symlink_root_before_canonicalizing() {
+        use std::os::unix::fs::symlink;
+        let guard = TempCacheDir::new();
+        let target = guard.0.join("real-library");
+        let linked = guard.0.join("linked-library");
+        fs::create_dir_all(&target).unwrap();
+        symlink(&target, &linked).unwrap();
+        let err = snapshot_source_directories(&linked, FontDirectoryScope::Recursive).unwrap_err();
+        assert!(err.contains("reparse point"), "got: {err}");
     }
 }

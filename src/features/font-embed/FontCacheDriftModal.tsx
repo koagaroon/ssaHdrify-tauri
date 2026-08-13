@@ -26,7 +26,7 @@ interface Props {
   onClose: () => void;
   /** Fires when Rescan completes successfully. Parent should re-run
    *  detect_drift and clear `drift` state. The modal stays mounted
-   *  showing the "Rescanned N folders" success line until the user
+   *  showing the "Rescanned N font sources" success line until the user
    *  dismisses (X / scrim / Use as-is) — auto-close was dropped so
    *  the result count stays visible. */
   onRescanComplete: () => void;
@@ -58,9 +58,10 @@ export default function FontCacheDriftModal({
   // font_cache_cleared exist precisely so the user sees what happened.
   // null while the modal is in pre-op or working state.
   const [doneMessage, setDoneMessage] = useState<string | null>(null);
-  // Phase-2 skipped folders from the last rescan. Rendered as a
+  // Phase-2 skipped font sources from the last rescan. Rendered as a
   // partial-success block beneath the doneMessage so the user knows
-  // which folders couldn't be refreshed (rows already evicted Rust-side).
+  // which sources couldn't be refreshed (Rust attempts fail-closed eviction;
+  // an eviction failure is included in the row's reason).
   const [skippedFolders, setSkippedFolders] = useState<FontCacheSkippedFolder[]>([]);
 
   // Esc closes only when not working — closing mid-rescan would orphan
@@ -269,11 +270,16 @@ export default function FontCacheDriftModal({
                         (duplicate-key warning + one row dropped). The slice is
                         a static display list that never reorders, so the index
                         is a stable, collision-free key. */}
-                    {drift!.modified.slice(0, 8).map((p, i) => {
-                      const safe = sanitizeForDialog(p);
+                    {drift!.modified.slice(0, 8).map((source, i) => {
+                      const safe = sanitizeForDialog(source.sourceRoot);
+                      const scope = t(
+                        source.scope === "recursive"
+                          ? "font_cache_source_scope_recursive"
+                          : "font_cache_source_scope_shallow"
+                      );
                       return (
                         <li key={i} style={{ wordBreak: "break-all" }}>
-                          {safe}
+                          {safe} ({scope})
                         </li>
                       );
                     })}
@@ -290,11 +296,16 @@ export default function FontCacheDriftModal({
                   <ul style={{ paddingLeft: "1rem", listStyle: "disc" }}>
                     {/* Key by index — same sanitized-path collision reason as
                         the modified list above. */}
-                    {drift!.removed.slice(0, 8).map((p, i) => {
-                      const safe = sanitizeForDialog(p);
+                    {drift!.removed.slice(0, 8).map((source, i) => {
+                      const safe = sanitizeForDialog(source.sourceRoot);
+                      const scope = t(
+                        source.scope === "recursive"
+                          ? "font_cache_source_scope_recursive"
+                          : "font_cache_source_scope_shallow"
+                      );
                       return (
                         <li key={i} style={{ wordBreak: "break-all" }}>
-                          {safe}
+                          {safe} ({scope})
                         </li>
                       );
                     })}
@@ -360,9 +371,16 @@ export default function FontCacheDriftModal({
                   // Key by index for the same sanitized-collision reason.
                   const safeFolder = sanitizeForDialog(sk.folder);
                   const safeReason = sanitizeForDialog(sk.reason);
+                  const scope = t(
+                    sk.scope === "recursive"
+                      ? "font_cache_source_scope_recursive"
+                      : "font_cache_source_scope_shallow"
+                  );
                   return (
                     <li key={i} style={{ wordBreak: "break-all" }}>
-                      <span style={{ color: "var(--text-primary)" }}>{safeFolder}</span>
+                      <span style={{ color: "var(--text-primary)" }}>
+                        {safeFolder} ({scope})
+                      </span>
                       {" — "}
                       {safeReason}
                     </li>

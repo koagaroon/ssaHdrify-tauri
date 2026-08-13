@@ -25,7 +25,7 @@ import { pathsEqualOnFs } from "./path-validation";
 
 // ── Types ────────────────────────────────────────────────
 
-export type TabId = "hdr" | "timing" | "fonts" | "rename";
+export type TabId = "hdr" | "timing" | "fonts" | "rename" | "style";
 
 export interface HdrFileState {
   filePaths: string[];
@@ -63,16 +63,27 @@ export interface BatchRenameFilesState {
   subtitleNames: string[];
 }
 
+/** Tab 5 (Style Edit) keeps only the selected ASS/SSA identities in the
+ *  shared cross-tab state. Decoded text, source revisions, and parsed style
+ *  plans stay inside the feature component because no other tab consumes
+ *  them and they can be comparatively large. */
+export interface StyleFilesState {
+  filePaths: string[];
+  fileNames: string[];
+}
+
 interface FileContextValue {
   hdrFiles: HdrFileState | null;
   timingFiles: TimingFilesState | null;
   fontsFiles: FontsFilesState | null;
   renameFiles: BatchRenameFilesState | null;
+  styleFiles: StyleFilesState | null;
 
   setHdrFiles: (state: HdrFileState | null) => void;
   setTimingFiles: (state: TimingFilesState | null) => void;
   setFontsFiles: (state: FontsFilesState | null) => void;
   setRenameFiles: (state: BatchRenameFilesState | null) => void;
+  setStyleFiles: (state: StyleFilesState | null) => void;
   clearFile: (tab: TabId) => void;
 
   /**
@@ -91,6 +102,7 @@ export function FileProvider({ children }: { children: ReactNode }) {
   const [timingFiles, setTimingFiles] = useState<TimingFilesState | null>(null);
   const [fontsFiles, setFontsFiles] = useState<FontsFilesState | null>(null);
   const [renameFiles, setRenameFiles] = useState<BatchRenameFilesState | null>(null);
+  const [styleFiles, setStyleFiles] = useState<StyleFilesState | null>(null);
 
   const isFileInUse = useCallback(
     (path: string, excludeTab?: TabId): TabId | null => {
@@ -120,9 +132,12 @@ export function FileProvider({ children }: { children: ReactNode }) {
       ) {
         return "rename";
       }
+      if (excludeTab !== "style" && styleFiles?.filePaths.some((p) => pathsEqualOnFs(p, path))) {
+        return "style";
+      }
       return null;
     },
-    [hdrFiles, timingFiles, fontsFiles, renameFiles]
+    [hdrFiles, timingFiles, fontsFiles, renameFiles, styleFiles]
   );
 
   const clearFile = useCallback((tab: TabId) => {
@@ -138,6 +153,9 @@ export function FileProvider({ children }: { children: ReactNode }) {
         break;
       case "rename":
         setRenameFiles(null);
+        break;
+      case "style":
+        setStyleFiles(null);
         break;
       default: {
         // Exhaustiveness pin: when a new TabId variant is added, this
@@ -160,14 +178,16 @@ export function FileProvider({ children }: { children: ReactNode }) {
       timingFiles,
       fontsFiles,
       renameFiles,
+      styleFiles,
       setHdrFiles,
       setTimingFiles,
       setFontsFiles,
       setRenameFiles,
+      setStyleFiles,
       clearFile,
       isFileInUse,
     }),
-    [hdrFiles, timingFiles, fontsFiles, renameFiles, clearFile, isFileInUse]
+    [hdrFiles, timingFiles, fontsFiles, renameFiles, styleFiles, clearFile, isFileInUse]
   );
 
   return <FileContext.Provider value={value}>{children}</FileContext.Provider>;

@@ -167,6 +167,16 @@ export interface ReadTextResult {
   text: string;
   /** Detected encoding (e.g. "UTF-8", "GBK", "Big5", "Shift_JIS", "UTF-16LE") */
   encoding: string;
+  /** Stable backend encoding identifier used for lossless writes. */
+  encodingId: string;
+  /** Whether the original file carried a supported byte-order mark. */
+  hadBom: boolean;
+  /** True when malformed source bytes had to be replaced during decoding. */
+  lossy: boolean;
+  /** SHA-256 of the exact source bytes used for this read. */
+  sourceRevision: string;
+  /** Exact source byte length for bounded batch planning. */
+  sourceByteLength: number;
 }
 
 /**
@@ -210,6 +220,29 @@ export async function outputPathExists(path: string): Promise<boolean> {
  *  and asks the user before invoking writeText. */
 export async function writeText(path: string, content: string): Promise<void> {
   await invoke("safe_write_text_file", { path, content, overwrite: true });
+}
+
+export interface StyleEditWriteRequest {
+  sourcePath: string;
+  expectedRevision: string;
+  outputPath: string;
+  content: string;
+}
+
+/**
+ * Write a previewed ASS/SSA style edit to a new sibling file.
+ *
+ * Rust re-reads and hashes the source, preserves its original encoding/BOM,
+ * and uses an exclusive create-new destination open. A stale source or an output
+ * that appeared after preview fails without replacing any file.
+ */
+export async function writeStyleEditOutput(request: StyleEditWriteRequest): Promise<void> {
+  await invoke("safe_write_style_edit_output", {
+    sourcePath: request.sourcePath,
+    expectedRevision: request.expectedRevision,
+    outputPath: request.outputPath,
+    content: request.content,
+  });
 }
 
 /** Rename / move a file. Atomic when the platform supports the requested
@@ -329,14 +362,24 @@ export interface LocalFontEntry {
 // branch wouldn't match and the frontend hangs awaiting Done). When
 // editing one side, edit the other in the same commit.
 /** Wire-format mirror of `fonts::ScanStopReason`. Bare lowercased
- *  camelCase strings — units enums in serde serialize this way. Three
- *  legitimate states; see the Rust enum for full semantics.
+ *  camelCase strings — unit enums in serde serialize this way. See the
+ *  Rust enum for full semantics.
  *
  *  - `natural`: scan finished walking the entire input.
  *  - `userCancel`: user pressed Cancel mid-scan.
  *  - `ceilingHit`: MAX_FONTS_PER_SCAN defense-in-depth fired (frontend
- *    surfaces "source too large" rather than "cancelled"). */
-export type FontScanReason = "natural" | "userCancel" | "ceilingHit";
+ *    surfaces "source too large" rather than "cancelled").
+ *  - `incompleteIo`: traversal changed or became unreadable after preflight;
+ *    reached faces remain session-only and the source is not cached. */
+export type FontScanReason = "natural" | "userCancel" | "ceilingHit" | "incompleteIo";
+
+/** Explicit directory-walk scope. Existing folder scans remain shallow;
+ *  recursive traversal is only enabled by the dedicated font-library flow. */
+export type FontDirectoryScope = "shallow" | "recursive";
+
+/** Whether a completed directory scan was published to the persistent cache.
+ *  A session-only source remains usable until SSA HDRify exits. */
+export type FontCacheDisposition = "cached" | "sessionOnly";
 
 type RawScanProgress =
   | { kind: "batch"; total: number }
@@ -361,6 +404,9 @@ export interface FontScanResult {
    *  `(cancelled, ceilingHit)` boolean pair which encoded only three
    *  legitimate states across four flag combinations. */
   reason: FontScanReason;
+  /** Present for directory scans on backends that report cache publication.
+   *  Optional so the GUI remains compatible with an older backend response. */
+  cacheDisposition?: FontCacheDisposition;
 }
 
 export interface FontScanPreflight {
@@ -368,8 +414,17 @@ export interface FontScanPreflight {
   totalBytes: number;
 }
 
-export async function preflightFontDirectory(dir: string): Promise<FontScanPreflight> {
-  return invoke<FontScanPreflight>("preflight_font_directory", { dir });
+export interface FontDirectoryScanPreflight extends FontScanPreflight {
+  /** Directory discovery is cancellable before font parsing begins. */
+  reason: "natural" | "userCancel";
+}
+
+export async function preflightFontDirectory(
+  dir: string,
+  scope: FontDirectoryScope,
+  scanId: number
+): Promise<FontDirectoryScanPreflight> {
+  return invoke<FontDirectoryScanPreflight>("preflight_font_directory", { dir, scope, scanId });
 }
 
 export async function preflightFontFiles(paths: string[]): Promise<FontScanPreflight> {
@@ -377,7 +432,8 @@ export async function preflightFontFiles(paths: string[]): Promise<FontScanPrefl
 }
 
 /**
- * Scan a user-picked directory (one level deep) for font files. Rust keeps
+ * Scan a user-picked directory for font files using the explicit shallow or
+ * recursive scope. Rust keeps
  * the heavy source index; the frontend receives progress counts plus how
  * many faces were registered after dedup. TTC files may contribute multiple
  * faces sharing the same path.
@@ -389,11 +445,12 @@ export async function preflightFontFiles(paths: string[]): Promise<FontScanPrefl
  */
 export async function scanFontDirectory(
   dir: string,
+  scope: FontDirectoryScope,
   sourceId: string,
   scanId: number,
   onBatch?: ScanProgressCallback
 ): Promise<FontScanResult> {
-  return runStreamingScan("scan_font_directory", { dir, sourceId, scanId }, onBatch);
+  return runStreamingScan("scan_font_directory", { dir, scope, sourceId, scanId }, onBatch);
 }
 
 /** Scan a user-supplied list of individual font file paths. Same streaming
@@ -422,13 +479,10 @@ export async function resolveUserFont(
   return invoke<FontLookupResult | null>("resolve_user_font", { family, bold, italic });
 }
 
-/** Remove a font source from the session index. `kind` ("dir" or "files")
- *  determines whether the persistent cache eviction runs — only dir-mode
- *  sources populated the cache in the first place, so files-mode removals
- *  must skip eviction to avoid wrongly evicting a coincident dir source
- *  whose folder shares a parent with the removed file. */
-export async function removeFontSource(sourceId: string, kind: "dir" | "files"): Promise<void> {
-  await invoke("remove_font_source", { sourceId, kind });
+/** Remove a font source. Rust owns the source kind, root, and scope, so the
+ *  frontend cannot accidentally request cache eviction for the wrong source. */
+export async function removeFontSource(sourceId: string): Promise<void> {
+  await invoke("remove_font_source", { sourceId });
 }
 
 export async function clearFontSources(): Promise<void> {
@@ -455,28 +509,33 @@ export interface FontCacheStatus {
 
 /** Drift between cache and live filesystem. `added` is always empty in the
  *  current GUI flow (we don't walk source roots from this command). */
-export interface FontCacheDriftReport {
-  added: string[];
-  modified: string[];
-  removed: string[];
+export interface FontCacheDriftSource {
+  sourceRoot: string;
+  scope: FontDirectoryScope;
 }
 
-/** One folder that didn't make it through a clean rescan. `kind`
- *  distinguishes Phase-2 scan failure (couldn't read the folder) from
+export interface FontCacheDriftReport {
+  added: FontCacheDriftSource[];
+  modified: FontCacheDriftSource[];
+  removed: FontCacheDriftSource[];
+}
+
+/** One font source that didn't make it through a clean rescan. `kind`
+ *  distinguishes Phase-2 scan failure (couldn't read the source) from
  *  Phase-3 apply failure (couldn't write the cache row). The modal
  *  renders both kinds in the same partial-success block. */
 export type FontCacheSkipKind = "scanFailed" | "applyFailed";
 
 export interface FontCacheSkippedFolder {
   folder: string;
+  scope: FontDirectoryScope;
   reason: string;
   kind: FontCacheSkipKind;
 }
 
-/** Outcome of rescanFontCacheDrift. `skipped` is non-empty when Phase 2
- *  scan errors out for some folders — the stale rows have been evicted
- *  (so font lookups fall through cleanly) but the user should know which
- *  folders need attention. */
+/** Outcome of rescanFontCacheDrift. `skipped` is non-empty when a scan or
+ *  cache write fails for some sources. Rust attempts fail-closed eviction of
+ *  their stale rows; an eviction failure is included in the source reason. */
 export interface FontCacheRescanResult {
   modifiedRescanned: number;
   removedEvicted: number;
@@ -488,12 +547,12 @@ export async function openFontCache(): Promise<FontCacheStatus> {
   return invoke<FontCacheStatus>("open_font_cache");
 }
 
-/** Detect drift between cached folders and live filesystem. */
+/** Detect drift between cached font sources and the live filesystem. */
 export async function detectFontCacheDrift(): Promise<FontCacheDriftReport> {
   return invoke<FontCacheDriftReport>("detect_font_cache_drift");
 }
 
-/** Bring the cache back into sync: re-scan modified folders, evict removed
+/** Bring the cache back into sync: re-scan modified sources, evict removed
  *  ones. May take a while on large libraries — show a spinner. */
 export async function rescanFontCacheDrift(): Promise<FontCacheRescanResult> {
   return invoke<FontCacheRescanResult>("rescan_font_cache_drift");
@@ -616,7 +675,16 @@ async function runStreamingScan(
     }
   };
   try {
-    await invoke(command, { ...args, progress: channel });
+    const commandResult = await invoke<unknown>(command, { ...args, progress: channel });
+    const rawDisposition =
+      typeof commandResult === "string"
+        ? commandResult
+        : commandResult !== null && typeof commandResult === "object"
+          ? (commandResult as { cacheDisposition?: unknown }).cacheDisposition
+          : undefined;
+    if (rawDisposition === "cached" || rawDisposition === "sessionOnly") {
+      result.cacheDisposition = rawDisposition;
+    }
   } catch (err) {
     // Rust returned Err — no Done was emitted, so `donePromise` is still
     // unresolved. Reset the provisional batch count UNCONDITIONALLY so

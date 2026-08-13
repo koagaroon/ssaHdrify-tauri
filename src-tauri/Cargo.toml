@@ -1,6 +1,6 @@
 [package]
 name = "ssahdrify"
-version = "1.6.1-preview.1"
+version = "1.7.0-preview.1"
 description = "SDR subtitle to HDR color space converter with font embedding and timing tools"
 authors = ["koagaroon"]
 license = "GPL-3.0-or-later"
@@ -60,7 +60,7 @@ tauri-plugin-fs = "2.5.1"
 # Rationale documented so a future
 # `cargo update`-style "just bump the pin" decision pauses for the
 # binding audit first.
-deno_core = "=0.409.0"
+deno_core = "=0.410.0"
 clap = { version = "4.6.4", features = ["derive"] }
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "time"] }
 font-kit = "0.14"
@@ -68,6 +68,7 @@ once_cell = "1"
 rusqlite = { version = "0.39", features = ["bundled"] }
 chardetng = "1.0"
 encoding_rs = "0.8"
+sha2 = "0.11.0"
 fontcull = "2"
 fontcull-klippa = "0.1"
 fontcull-skrifa = "0.39"
@@ -92,7 +93,13 @@ base64 = { version = "0.23", default-features = false, features = ["std"] }
 # native MessageBox: a Windows GUI subsystem app has no visible stdout
 # or stderr, so the previous `eprintln!` + `process::exit` path was
 # silent — the user just saw the app fail to launch with no signal.
-rfd = "0.16"
+#
+# Keep default features disabled. tauri-plugin-dialog supplies the shared
+# GTK3 backend and Windows common-controls feature; enabling rfd's defaults
+# would also select XDG Portal/Wayland, and rfd 0.16 rejects that
+# dual-backend combination
+# on Linux/BSD.
+rfd = { version = "0.16", default-features = false }
 
 [dev-dependencies]
 glob = "0.3.3"

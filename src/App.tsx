@@ -4,6 +4,7 @@ import HdrConvert from "./features/hdr-convert/HdrConvert";
 import TimingShift from "./features/timing-shift/TimingShift";
 import FontEmbed from "./features/font-embed/FontEmbed";
 import BatchRename from "./features/batch-rename/BatchRename";
+import StyleEdit from "./features/style-edit/StyleEdit";
 import FontCacheDriftModal from "./features/font-embed/FontCacheDriftModal";
 import AboutLicensesModal from "./AboutLicensesModal";
 import { useI18n } from "./i18n/useI18n";
@@ -461,6 +462,15 @@ function App() {
             style={{ display: activeTab === "rename" ? "block" : "none" }}
           >
             <BatchRename />
+          </div>
+          <div
+            id="panel-style"
+            role="tabpanel"
+            aria-labelledby="tab-style"
+            aria-hidden={activeTab !== "style"}
+            style={{ display: activeTab === "style" ? "block" : "none" }}
+          >
+            <StyleEdit />
           </div>
         </main>
 

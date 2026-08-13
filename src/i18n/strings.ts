@@ -47,6 +47,37 @@ export const strings: Record<string, StringEntry> = {
     en: "Ready to embed · {0} font(s) across {1} file(s)",
     zh: "可嵌入 · 跨 {1} 个文件的 {0} 个字体",
   },
+  status_style_idle: { en: "No ASS/SSA files loaded", zh: "未加载 ASS/SSA 文件" },
+  status_style_analyzing: { en: "Analyzing styles…", zh: "正在分析样式…" },
+  status_style_needs_operation: {
+    en: "Enable at least one style operation",
+    zh: "请至少启用一项样式操作",
+  },
+  status_style_invalid_operation: {
+    en: "Fix the highlighted style operation",
+    zh: "请修正标出的样式操作",
+  },
+  status_style_preview_error: {
+    en: "Some files cannot be analyzed",
+    zh: "部分文件无法分析",
+  },
+  status_style_pending: {
+    en: "Ready to write · {0} style change(s) across {1} file(s)",
+    zh: "可写入 · {1} 个文件中有 {0} 项样式更改",
+  },
+  status_style_busy: { en: "Writing style edits…", zh: "正在写入样式更改…" },
+  status_style_done: { en: "Style edits complete", zh: "样式编辑完成" },
+  status_style_partial: {
+    en: "Style edits completed with issues",
+    zh: "样式编辑已完成，但有问题",
+  },
+  status_style_error: { en: "Style edit failed", zh: "样式编辑失败" },
+  status_style_cancelled: { en: "Style edit cancelled", zh: "已取消样式编辑" },
+  status_style_noop: { en: "Nothing to change", zh: "无需更改" },
+  msg_style_output_probe_error: {
+    en: "Could not check output {0}: {1}",
+    zh: "无法检查输出文件 {0}：{1}",
+  },
   file_empty: { en: "No file selected", zh: "未选择文件" },
   files_selected_title: {
     en: "Selected subtitle files ({0})",
@@ -78,6 +109,7 @@ export const strings: Record<string, StringEntry> = {
   tab_timing: { en: "Time Shift", zh: "时间轴偏移" },
   tab_fonts: { en: "Font Embed", zh: "字体嵌入" },
   tab_rename: { en: "Batch Rename", zh: "批量重命名" },
+  tab_style: { en: "Style Edit", zh: "样式编辑" },
   // Titlebar window controls — localized so screen readers and tooltip
   // hovers stay consistent with the app's current language.
   titlebar_minimize: { en: "Minimize", zh: "最小化" },
@@ -404,8 +436,8 @@ export const strings: Record<string, StringEntry> = {
     zh: "字体来源（{0}）",
   },
   font_sources_loaded_summary: {
-    en: "{0} local font(s) loaded from {1} source(s)",
-    zh: "已从 {1} 个来源加载 {0} 个本地字体",
+    en: "{0} font entries across {1} source(s) (shared fonts count in each source)",
+    zh: "{1} 个字体来源中共有 {0} 个字体条目（共享字体会在每个来源中分别计数）",
   },
   badge_local: { en: "Local", zh: "本地" },
   badge_cache: { en: "Cache", zh: "缓存" },
@@ -414,8 +446,8 @@ export const strings: Record<string, StringEntry> = {
   // Font source modal
   font_sources_title: { en: "Font Sources", zh: "字体来源" },
   font_sources_modal_sub: {
-    en: "Pick a folder or individual files — duplicates are filtered automatically",
-    zh: "可选择文件夹或单独文件，重复项会自动过滤",
+    en: "Pick a top-level folder, a nested font library, or individual files — duplicates are filtered automatically",
+    zh: "可选择仅第一层文件夹、包含子文件夹的字体库或单独文件，重复项会自动过滤",
   },
   font_sources_add_folder_sub: {
     en: "Scan top-level font files in a folder",
@@ -425,15 +457,24 @@ export const strings: Record<string, StringEntry> = {
     en: "Pick one or more individual font files",
     zh: "选择一个或多个字体文件",
   },
+  font_sources_add_library_sub: {
+    en: "Scan font files in this folder and all subfolders",
+    zh: "扫描此文件夹及其所有子文件夹中的字体文件",
+  },
   font_sources_empty_hint: {
-    en: "No local sources yet. Add a folder or individual files to match fonts without installing them system-wide.",
-    zh: "尚未添加本地字体来源。添加文件夹或独立文件即可在不安装字体的情况下完成匹配。",
+    en: "No local sources yet. Add a folder, a font library, or individual files to match fonts without installing them system-wide.",
+    zh: "尚未添加本地字体来源。添加文件夹、字体库或独立文件，即可在不安装字体的情况下完成匹配。",
   },
   font_sources_add_folder: { en: "Add Folder", zh: "添加文件夹" },
+  font_sources_add_library: { en: "Add Font Library", zh: "添加字体库" },
   font_sources_add_files: { en: "Add Files", zh: "添加文件" },
   font_sources_folder_entry: {
-    en: "{0} ({1} fonts)",
-    zh: "{0}（{1} 个字体）",
+    en: "{0} (top level · {1} fonts)",
+    zh: "{0}（仅第一层 · {1} 个字体）",
+  },
+  font_sources_library_entry: {
+    en: "{0} (folder + all subfolders · {1} fonts)",
+    zh: "{0}（本文件夹及所有子文件夹 · {1} 个字体）",
   },
   font_sources_files_entry: {
     en: "{0} file(s) ({1} fonts)",
@@ -448,6 +489,10 @@ export const strings: Record<string, StringEntry> = {
     zh: "所选 {0} 个文件中未找到字体。",
   },
   font_sources_scanning: { en: "Scanning…", zh: "扫描中…" },
+  font_scan_inspecting_folders: {
+    en: "Inspecting font folders…",
+    zh: "正在检查字体文件夹…",
+  },
   font_scan_progress: {
     en: "Scanned {0} fonts so far…",
     zh: "已扫描 {0} 个字体…",
@@ -459,16 +504,28 @@ export const strings: Record<string, StringEntry> = {
     zh: "取消请求失败：{0}",
   },
   font_scan_cancelled: {
-    en: "Scan cancelled — kept {0} font(s).",
-    zh: "已取消扫描，保留 {0} 个字体。",
+    en: "Scan cancelled — kept {0} font(s) for this session; this source was not cached.",
+    zh: "已取消扫描——本次会话保留 {0} 个字体，但未缓存此来源。",
   },
   font_scan_cancelled_with_dupes: {
-    en: "Scan cancelled — kept {0} new font(s); {1} were already loaded.",
-    zh: "已取消扫描，保留 {0} 个新字体；{1} 个为已加载的重复项。",
+    en: "Scan cancelled — kept {0} new font(s) for this session; {1} were already loaded. This source was not cached.",
+    zh: "已取消扫描——本次会话保留 {0} 个新字体；{1} 个为已加载的重复项。此来源未缓存。",
+  },
+  font_scan_inspection_cancelled: {
+    en: "Folder inspection cancelled — no fonts were loaded.",
+    zh: "已取消文件夹检查，尚未加载字体。",
   },
   font_scan_ceiling_hit: {
-    en: "Source too large — kept the first {0} font(s).",
-    zh: "字体来源过大，仅保留前 {0} 个字体。",
+    en: "Source too large — kept the first {0} font(s) for this session; this source was not cached.",
+    zh: "字体来源过大——本次会话仅保留前 {0} 个字体，但未缓存此来源。",
+  },
+  font_scan_incomplete_io: {
+    en: "Scan incomplete — part of the library changed or could not be read. {0} font(s) were loaded for this session; the source was not cached.",
+    zh: "扫描未完成——字体库的一部分发生变化或无法读取。本次会话已加载 {0} 个字体，但未缓存此来源。",
+  },
+  font_scan_session_only: {
+    en: "Loaded {0} font(s) for this session, but the source was not cached. Add it again after restarting.",
+    zh: "已为本次会话加载 {0} 个字体，但未缓存此来源；重启后请重新添加。",
   },
   font_scan_large_warning_title: { en: "Large Font Source", zh: "大型字体来源" },
   font_scan_large_warning: {
@@ -514,11 +571,16 @@ export const strings: Record<string, StringEntry> = {
     zh: "字体缓存已过期",
   },
   font_cache_drift_summary: {
-    en: "{0} folder(s) changed since the cache was last refreshed: {1} modified, {2} removed.",
-    zh: "自上次刷新以来，有 {0} 个文件夹发生变化：{1} 个被修改，{2} 个已移除。",
+    en: "{0} font source(s) changed since the cache was last refreshed: {1} modified, {2} removed.",
+    zh: "自上次刷新以来，有 {0} 个字体来源发生变化：{1} 个被修改，{2} 个已移除。",
   },
   font_cache_drift_modified_label: { en: "Modified:", zh: "已修改：" },
   font_cache_drift_removed_label: { en: "Removed:", zh: "已移除：" },
+  font_cache_source_scope_shallow: { en: "top level", zh: "仅第一层" },
+  font_cache_source_scope_recursive: {
+    en: "folder + all subfolders",
+    zh: "本文件夹及所有子文件夹",
+  },
   font_cache_drift_close_hint: {
     en: "Closing this dialog (✕ / Esc) is the same as “Use as-is”.",
     zh: "关闭此对话框（✕ / Esc）等同于「保持原样使用」。",
@@ -529,12 +591,12 @@ export const strings: Record<string, StringEntry> = {
   font_cache_rescanning: { en: "Rescanning font cache…", zh: "正在重新扫描字体缓存…" },
   font_cache_clearing: { en: "Clearing cache…", zh: "正在清除缓存…" },
   font_cache_rescan_done: {
-    en: "Rescanned {0} folder(s); evicted {1}.",
-    zh: "已重新扫描 {0} 个文件夹；移除 {1} 个。",
+    en: "Rescanned {0} font source(s); removed cached data for {1} source(s).",
+    zh: "已重新扫描 {0} 个字体来源；已移除 {1} 个来源的缓存数据。",
   },
   font_cache_rescan_skipped_label: {
-    en: "{0} folder(s) could not be re-scanned — their cached entries have been dropped:",
-    zh: "{0} 个文件夹无法重新扫描 —— 其缓存条目已移除：",
+    en: "{0} font source(s) could not be refreshed cleanly. Stale entries were dropped where possible:",
+    zh: "{0} 个字体来源未能完整刷新；系统已尽可能移除过期缓存条目：",
   },
   font_cache_cleared: { en: "Font cache cleared.", zh: "字体缓存已清除。" },
   font_cache_unavailable_banner: {
@@ -747,5 +809,151 @@ export const strings: Record<string, StringEntry> = {
   msg_rename_all_already_named: {
     en: "All {0} subtitle file(s) already match their videos — nothing to do.",
     zh: "全部 {0} 个字幕文件已与视频同名 — 无需操作。",
+  },
+
+  // ── Style Edit (Tab 5) ──────────────────────────────────
+  style_drop_hint: {
+    en: "Tip: drag .ass / .ssa files or a folder onto the file strip above. Other files are skipped automatically.",
+    zh: "提示：可将 .ass / .ssa 文件或文件夹拖到上方文件栏，其他文件会自动忽略。",
+  },
+  style_operations_title: { en: "Style operations", zh: "样式操作" },
+  style_operations_hint: {
+    en: "Enable either operation or both. Changes apply only to checked Style rows.",
+    zh: "可启用任一项或同时启用两项；更改只应用于已勾选的 Style 行。",
+  },
+  style_change_font_family: { en: "Change font family", zh: "更改字体族" },
+  style_target_font_family: { en: "New font family", zh: "新字体族" },
+  style_target_font_placeholder: { en: "e.g. Microsoft YaHei", zh: "例如：Microsoft YaHei" },
+  style_filter_source_family: {
+    en: "Only replace one existing font family",
+    zh: "仅替换指定的现有字体族",
+  },
+  style_source_font_family: { en: "Existing font family", zh: "现有字体族" },
+  style_source_font_placeholder: { en: "Family to replace", zh: "要替换的字体族" },
+  style_change_font_size: { en: "Change font size", zh: "更改字号" },
+  style_target_font_size: { en: "New font size", zh: "新字号" },
+  style_font_size_range: { en: "1–200", zh: "1–200" },
+  style_inline_untouched: {
+    en: "Inline \\fn and \\fs override tags stay unchanged in this version.",
+    zh: "此版本不会更改行内 \\fn 和 \\fs 覆盖标签。",
+  },
+  style_output_note: {
+    en: "Outputs are new sibling files named .styled.ass / .styled.ssa. Existing outputs are never overwritten.",
+    zh: "输出为源文件旁的新 .styled.ass / .styled.ssa 文件；绝不覆盖已有输出。",
+  },
+  style_preview_title: {
+    en: "Style preview · {0} row(s) across {1} file(s)",
+    zh: "样式预览 · {1} 个文件中的 {0} 行",
+  },
+  style_preview_change_summary: {
+    en: "{0} effective change(s)",
+    zh: "{0} 项有效更改",
+  },
+  style_select_all: { en: "Select all", zh: "全选" },
+  style_clear_selection: { en: "Clear", zh: "清除" },
+  style_no_preview: {
+    en: "Load ASS/SSA files to inspect their Style rows.",
+    zh: "加载 ASS/SSA 文件以检查其中的 Style 行。",
+  },
+  style_col_file: { en: "File", zh: "文件" },
+  style_col_style: { en: "Style", zh: "样式" },
+  style_col_font_family: { en: "Font family", zh: "字体族" },
+  style_col_font_size: { en: "Size", zh: "字号" },
+  style_col_result: { en: "Result", zh: "结果" },
+  style_row_select_aria: {
+    en: "Select style {0} in {1}",
+    zh: "选择 {1} 中的样式 {0}",
+  },
+  style_row_will_change: { en: "Will change", zh: "将更改" },
+  style_row_no_change: { en: "No change", zh: "无更改" },
+  style_row_parse_error: { en: "Cannot preview", zh: "无法预览" },
+  style_no_editable_styles: { en: "No editable Style rows", zh: "没有可编辑的 Style 行" },
+  style_font_error_required: { en: "Enter a font family.", zh: "请输入字体族。" },
+  style_font_error_surrounding_whitespace: {
+    en: "Remove leading or trailing spaces.",
+    zh: "请移除开头或结尾的空格。",
+  },
+  style_font_error_too_long: {
+    en: "Font family must be 128 characters or fewer.",
+    zh: "字体族不得超过 128 个字符。",
+  },
+  style_font_error_comma: {
+    en: "Font family cannot contain a comma.",
+    zh: "字体族不能包含逗号。",
+  },
+  style_font_error_control: {
+    en: "Font family contains an invisible or control character.",
+    zh: "字体族包含不可见字符或控制字符。",
+  },
+  style_font_size_error: {
+    en: "Enter a font size from 1 to 200.",
+    zh: "请输入 1 到 200 之间的字号。",
+  },
+  btn_write_style_edits: { en: "Write ({0})", zh: "写入（{0}）" },
+  btn_writing_style_edits: { en: "Writing…", zh: "写入中…" },
+  msg_no_ass_in_drop: {
+    en: "No ASS/SSA files found in the dropped items",
+    zh: "拖入的内容中没有 ASS/SSA 文件",
+  },
+  msg_style_too_many_rows: {
+    en: "Selection contains more than {0} Style rows. Split the batch so every change can be previewed.",
+    zh: "所选内容超过 {0} 个 Style 行。请拆分批量，以便完整预览每项更改。",
+  },
+  msg_style_source_bytes_too_large: {
+    en: "Batch source files exceed the {1} MB safety cap (reached {0} MB). Split the selection.",
+    zh: "批量源文件超过 {1} MB 安全上限（已达 {0} MB）。请拆分选择。",
+  },
+  msg_style_decoded_bytes_too_large: {
+    en: "Decoded batch text exceeds the {1} MB memory cap (reached {0} MB). Split the selection.",
+    zh: "批量解码文本超过 {1} MB 内存上限（已达 {0} MB）。请拆分选择。",
+  },
+  msg_style_lossy_encoding: {
+    en: "Cannot safely edit {0}: its text encoding could not be decoded without data loss.",
+    zh: "无法安全编辑 {0}：该文件的文本编码无法无损解码。",
+  },
+  msg_style_parse_error: {
+    en: "Cannot analyze {0}: {1}",
+    zh: "无法分析 {0}：{1}",
+  },
+  msg_style_outputs_exist: {
+    en: "{0} output file(s) already exist. No files were written; remove or rename those outputs first.",
+    zh: "已有 {0} 个输出文件。未写入任何文件；请先移除或重命名这些输出。",
+  },
+  msg_style_duplicate_outputs: {
+    en: "Multiple inputs resolve to the same .styled output. No files were written.",
+    zh: "多个输入会生成同一个 .styled 输出。未写入任何文件。",
+  },
+  msg_style_start: {
+    en: "Starting style edit: {0} file(s), {1} selected change(s)",
+    zh: "开始样式编辑：{0} 个文件，{1} 项已选更改",
+  },
+  msg_style_written: {
+    en: "Written: {0} ({1} Style row(s) changed)",
+    zh: "已写入：{0}（更改了 {1} 个 Style 行）",
+  },
+  msg_style_file_noop: {
+    en: "Skipped {0}: no selected Style rows would change",
+    zh: "已跳过 {0}：所选 Style 行无需更改",
+  },
+  msg_style_write_error: {
+    en: "Error writing {0}: {1}",
+    zh: "写入 {0} 出错：{1}",
+  },
+  msg_style_complete: {
+    en: "Style edit complete: {0} written, {1} unchanged, {2} failed",
+    zh: "样式编辑完成：写入 {0} 个，未更改 {1} 个，失败 {2} 个",
+  },
+  msg_style_all_failed: {
+    en: "Style edit failed on all {0} writable file(s)",
+    zh: "全部 {0} 个可写文件均编辑失败",
+  },
+  msg_style_all_noop: {
+    en: "Nothing to write — no selected Style rows would change.",
+    zh: "无需写入——所选 Style 行均无需更改。",
+  },
+  msg_style_cancelled: { en: "Style edit cancelled.", zh: "已取消样式编辑。" },
+  msg_style_cancelled_summary: {
+    en: "Style edit cancelled: {0} written, {1} failed, {2} not started",
+    zh: "已取消样式编辑：写入 {0} 个，失败 {1} 个，未开始 {2} 个",
   },
 };

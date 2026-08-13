@@ -176,15 +176,16 @@ enum Command {
     /// Embed fonts into ASS subtitle files. 将字体嵌入 ASS 字幕文件。
     ///
     /// Tips / 提示:
-    ///   --font-dir and --font-file are repeatable — pass once per folder/file.
-    ///   --font-dir 与 --font-file 可重复传入：每个目录或文件传一次。
+    ///   --font-dir, --recursive-font-dir, and --font-file are repeatable.
+    ///   --font-dir、--recursive-font-dir 与 --font-file 均可重复传入。
     ///
-    ///   Font cache (when present): used automatically. With --font-dir,
-    ///   the cache merges with the dirs you supplied; without --font-dir,
-    ///   the cache is the primary source. Pass --no-cache to skip the
-    ///   cache for one run, or run `refresh-fonts` to rebuild it.
-    ///   字体缓存（如已存在）：自动使用。提供 --font-dir 时与缓存合并；
-    ///   不提供时缓存为主源。--no-cache 跳过本次；refresh-fonts 重建。
+    ///   Font cache (when present): used automatically. Explicit font
+    ///   sources merge with it; without them, the cache is the primary
+    ///   source. Pass --no-cache to skip it for one run, or run
+    ///   `refresh-fonts` to rebuild it.
+    ///   字体缓存（如已存在）会自动使用；显式字体源会与缓存合并。
+    ///   未提供显式字体源时缓存为主源。--no-cache 跳过本次；
+    ///   refresh-fonts 重建。
     Embed(EmbedCommandArgs),
     /// Pair subtitles with videos and rename subtitles to match. 配对视频和字幕，按视频名重命名字幕。
     Rename(RenameCommandArgs),
@@ -193,18 +194,18 @@ enum Command {
     /// 诊断 ASS/SSA 字体解析，不写出字幕文件。
     DiagnoseFonts(DiagnoseFontsArgs),
 
-    /// Build or refresh the persistent font cache. Always requires
-    /// at least one --font-dir (cache-recorded source roots are not
-    /// auto-rescanned; user must specify).
-    /// 构建或刷新持久化字体缓存。始终必须传至少一个 --font-dir
-    /// （缓存记录的 source roots 不会自动 rescan，用户必须显式指定）。
+    /// Build or refresh the persistent font cache. Always requires at
+    /// least one --font-dir or --recursive-font-dir (cache-recorded
+    /// source roots are not auto-rescanned; user must specify).
+    /// 构建或刷新持久化字体缓存。始终必须传至少一个 --font-dir 或
+    /// --recursive-font-dir（缓存记录的 source roots 不会自动 rescan，
+    /// 用户必须显式指定）。
     ///
-    /// Each --font-dir is treated as a flat font folder (one level,
-    /// non-recursive) — same semantics as `embed`'s --font-dir. To
-    /// index a tree, pass each leaf folder explicitly.
+    /// --font-dir scans one level; --recursive-font-dir scans the root
+    /// and its ordinary subfolders without following links or junctions.
     ///
     /// Example / 示例:
-    ///   ssahdrify-cli refresh-fonts --font-dir ./Fonts/Anime --font-dir ./Fonts/Latin
+    ///   ssahdrify-cli refresh-fonts --recursive-font-dir ./FontLibrary
     RefreshFonts(RefreshFontsArgs),
 
     /// Chain multiple steps in one invocation; only the terminal step writes to disk.
@@ -313,16 +314,29 @@ struct ShiftCommandArgs {
 
 #[derive(Args, Debug)]
 pub(crate) struct EmbedArgs {
-    /// Add a font folder (repeatable). 添加字体目录（可重复传入）。
+    /// Add a shallow font folder (repeatable). 添加浅层字体目录（可重复传入）。
     ///
-    /// Pass once per folder; ssahdrify-cli scans all of them and embeds
-    /// whatever the subtitle references.
-    /// 每个目录传一次；ssahdrify-cli 会全部扫描并嵌入字幕引用到的字体。
+    /// Pass once per folder; only font files directly inside each folder
+    /// are scanned. Use --recursive-font-dir for a whole folder tree.
+    /// 每个目录传一次；只扫描目录直接包含的字体文件。完整目录树请使用
+    /// --recursive-font-dir。
     ///
     /// Example / 示例:
     ///   ssahdrify-cli embed --font-dir ./fonts --font-dir C:/MyFonts subs.ass
     #[arg(long = "font-dir", value_name = "DIR")]
     font_dirs: Vec<PathBuf>,
+
+    /// Add a recursive font library root (repeatable). 添加递归字体库根目录（可重复传入）。
+    ///
+    /// Scans the root and all ordinary subfolders. Symbolic links,
+    /// junctions, and other reparse points are not followed.
+    /// 扫描根目录及所有普通子目录；不会跟随符号链接、目录联接或其他
+    /// 重解析点（reparse point）。
+    ///
+    /// Example / 示例:
+    ///   ssahdrify-cli embed --recursive-font-dir ./FontLibrary subs.ass
+    #[arg(long = "recursive-font-dir", value_name = "DIR")]
+    recursive_font_dirs: Vec<PathBuf>,
 
     /// Add a specific font file (repeatable). 添加具体字体文件（可重复传入）。
     ///
@@ -403,9 +417,15 @@ struct RenameCommandArgs {
 
 #[derive(Args, Debug)]
 struct DiagnoseFontsArgs {
-    /// Add a font folder for this diagnostic run (repeatable). 添加本次诊断使用的字体目录（可重复传入）。
+    /// Add a shallow font folder for this diagnostic run (repeatable).
+    /// 添加本次诊断使用的浅层字体目录（可重复传入）。
     #[arg(long = "font-dir", value_name = "DIR")]
     font_dirs: Vec<PathBuf>,
+
+    /// Add a recursive font library root for this diagnostic run (repeatable).
+    /// 添加本次诊断使用的递归字体库根目录（可重复传入）。
+    #[arg(long = "recursive-font-dir", value_name = "DIR")]
+    recursive_font_dirs: Vec<PathBuf>,
 
     /// Add a specific font file for this diagnostic run (repeatable). 添加本次诊断使用的字体文件（可重复传入）。
     #[arg(long = "font-file", value_name = "FILE")]
@@ -428,6 +448,7 @@ impl DiagnoseFontsArgs {
     fn to_embed_args(&self) -> EmbedArgs {
         EmbedArgs {
             font_dirs: self.font_dirs.clone(),
+            recursive_font_dirs: self.recursive_font_dirs.clone(),
             font_files: self.font_files.clone(),
             no_system_fonts: self.no_system_fonts,
             on_missing: MissingFontAction::Warn,
@@ -460,16 +481,52 @@ impl RenameMode {
 
 #[derive(Args, Debug)]
 struct RefreshFontsArgs {
-    /// Add a font folder to scan (repeatable). Required — pass at
-    /// least once. 添加要扫描的字体目录（可重复传入），必须至少传一次。
+    /// Add a shallow font folder to scan (repeatable). Pass this or
+    /// --recursive-font-dir at least once. 添加要浅层扫描的字体目录
+    /// （可重复传入）；必须至少传入此参数或 --recursive-font-dir 之一。
     ///
     /// Each folder is scanned one level deep (non-recursive); same
-    /// semantics as `embed --font-dir`. To index a tree of fonts,
-    /// pass each leaf folder explicitly.
+    /// semantics as `embed --font-dir`. Use --recursive-font-dir to
+    /// index a tree from one root.
     /// 每个目录扫描一层（不递归）；与 `embed --font-dir` 语义一致。
-    /// 树状字体目录请逐层显式传入。
-    #[arg(long = "font-dir", value_name = "DIR", required = true)]
+    /// 树状字体目录请使用 --recursive-font-dir。
+    #[arg(
+        long = "font-dir",
+        value_name = "DIR",
+        required_unless_present = "recursive_font_dirs"
+    )]
     font_dirs: Vec<PathBuf>,
+
+    /// Add a recursive font library root to scan (repeatable). Pass this
+    /// or --font-dir at least once. 添加要递归扫描的字体库根目录（可重复传入）；
+    /// 必须至少传入此参数或 --font-dir 之一。
+    #[arg(
+        long = "recursive-font-dir",
+        value_name = "DIR",
+        required_unless_present = "font_dirs"
+    )]
+    recursive_font_dirs: Vec<PathBuf>,
+}
+
+fn refresh_font_directory_sources(
+    args: &RefreshFontsArgs,
+) -> impl Iterator<Item = (&Path, app_lib::fonts::FontDirectoryScope, &'static str)> {
+    args.recursive_font_dirs
+        .iter()
+        .map(|path| {
+            (
+                path.as_path(),
+                app_lib::fonts::FontDirectoryScope::Recursive,
+                "--recursive-font-dir",
+            )
+        })
+        .chain(args.font_dirs.iter().map(|path| {
+            (
+                path.as_path(),
+                app_lib::fonts::FontDirectoryScope::Shallow,
+                "--font-dir",
+            )
+        }))
 }
 
 // (visibility asymmetry WHY): `output_template`
@@ -509,7 +566,7 @@ struct ChainArgs {
 // discriminated union (see src/features/chain/chain-types.ts).
 // Living in main.rs keeps the field-access privacy minimal — chain
 // step variants need to read `eotf`, `nits`, `offset`, `after`,
-// `font_dirs`, etc., which are private to main.rs.
+// `font_dirs`, `recursive_font_dirs`, etc., which are private to main.rs.
 //
 // The TS side (`runChain` registry) is the contract: any drift in
 // field naming, optionality, or value form will fail at runtime. The
@@ -564,6 +621,12 @@ impl ShiftArgs {
 }
 
 impl EmbedArgs {
+    fn has_user_font_sources(&self) -> bool {
+        !self.recursive_font_dirs.is_empty()
+            || !self.font_dirs.is_empty()
+            || !self.font_files.is_empty()
+    }
+
     pub(crate) fn to_chain_step(&self) -> serde_json::Value {
         // Path → string conversion uses `to_string_lossy` so non-UTF-8
         // path bytes (Windows wide chars converted via WTF-8, or the
@@ -578,6 +641,11 @@ impl EmbedArgs {
             .iter()
             .map(|p| p.to_string_lossy().into_owned())
             .collect();
+        let recursive_font_dirs: Vec<String> = self
+            .recursive_font_dirs
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
         let font_files: Vec<String> = self
             .font_files
             .iter()
@@ -587,6 +655,7 @@ impl EmbedArgs {
             "kind": "embed",
             "params": {
                 "fontDirs": font_dirs,
+                "recursiveFontDirs": recursive_font_dirs,
                 "fontFiles": font_files,
                 "noSystemFonts": self.no_system_fonts,
                 "onMissing": match self.on_missing {
@@ -721,6 +790,12 @@ struct CacheDiagnostic {
     modified_folders: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     removed_folders: Vec<String>,
+    /// Scope-aware source identities for new JSON consumers. The legacy
+    /// `*Folders` arrays remain raw path strings for backward compatibility.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    modified_sources: Vec<app_lib::font_cache::CacheSourceKey>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    removed_sources: Vec<app_lib::font_cache::CacheSourceKey>,
 }
 
 #[derive(Debug, Serialize, Clone, Copy)]
@@ -747,6 +822,8 @@ impl CacheDiagnostic {
             expected_schema: None,
             modified_folders: Vec::new(),
             removed_folders: Vec::new(),
+            modified_sources: Vec::new(),
+            removed_sources: Vec::new(),
         }
     }
 }
@@ -1172,13 +1249,13 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
 
     validate_cache_file_arg(globals)?;
 
-    // validate each --font-dir argv early —
+    // Validate each directory-source argv early —
     // fail-fast before opening the cache or starting any scan. The
     // downstream scan_directory_collecting now validates too (defense
     // in depth), but the early check produces a cleaner per-arg
     // error message at the right level. `--cache-file` (also argv untrusted-input)
     // is already validated at the top of run() before any subcommand.
-    for dir in &args.font_dirs {
+    for (dir, _scope, flag_name) in refresh_font_directory_sources(&args) {
         // Refuse non-UTF-8 paths upfront via `to_str()` rather than
         // routing `to_string_lossy()` through the validator. With
         // lossy substitution, WTF-16-surrogate / non-UTF-8 bytes
@@ -1187,12 +1264,13 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
         // bytes than what validate_ipc_path checked. Sibling pattern
         // to the `--cache-file` refusal at the top of run().
         let dir_str = dir.to_str().ok_or_else(|| {
-            "--font-dir: path contains non-UTF-8 bytes; refuse upfront so the IPC \
-             validator and the subsequent scan / cache write agree on the same \
-             byte sequence"
-                .to_string()
+            format!(
+                "{flag_name}: path contains non-UTF-8 bytes; refuse upfront so the IPC \
+                 validator and the subsequent scan / cache write agree on the same \
+                 byte sequence"
+            )
         })?;
-        app_lib::util::validate_ipc_path(dir_str, "--font-dir")?;
+        app_lib::util::validate_ipc_path(dir_str, flag_name)?;
     }
 
     // Resolve cache file path: user override (--cache-file) or default
@@ -1202,22 +1280,44 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
         None => app_lib::font_cache::default_cli_cache_path()?,
     };
 
-    let mut canonical_font_dirs: Vec<(PathBuf, String)> = Vec::with_capacity(args.font_dirs.len());
-    let mut final_folder_paths: HashSet<String> = HashSet::new();
-    for dir in &args.font_dirs {
+    let source_count = args.font_dirs.len() + args.recursive_font_dirs.len();
+    let mut canonical_font_dirs: Vec<(
+        PathBuf,
+        String,
+        app_lib::font_cache::CacheSourceKey,
+        &'static str,
+    )> = Vec::with_capacity(source_count);
+    let mut final_source_keys: HashSet<app_lib::font_cache::CacheSourceKey> = HashSet::new();
+    for (dir, scope, flag_name) in refresh_font_directory_sources(&args) {
         let abs_dir = absolute_path(dir)?;
+        match app_lib::util::try_is_reparse_point(&abs_dir) {
+            Ok(false) => {}
+            Ok(true) => {
+                return Err(format!(
+                    "{flag_name}: refusing a symlink, junction, or reparse-point root: {}",
+                    sanitize_for_display(&abs_dir.display().to_string())
+                ));
+            }
+            Err(error) => {
+                return Err(format!(
+                    "{flag_name}: cannot verify that the source root is not a reparse point ({}): {error}",
+                    sanitize_for_display(&abs_dir.display().to_string())
+                ));
+            }
+        }
         let canonical = abs_dir
             .canonicalize()
             .map_err(|e| format!("cannot canonicalize {}: {e}", abs_dir.display()))?;
         let folder_path_str = display_path(&canonical);
-        final_folder_paths.insert(folder_path_str.clone());
-        canonical_font_dirs.push((canonical, folder_path_str));
+        let source_key = app_lib::font_cache::cache_source_key(&canonical, scope)?;
+        final_source_keys.insert(source_key.clone());
+        canonical_font_dirs.push((canonical, folder_path_str, source_key, flag_name));
     }
-    if final_folder_paths.len() > app_lib::font_cache::MAX_CACHED_FOLDERS {
+    if final_source_keys.len() > app_lib::font_cache::MAX_CACHED_SOURCES {
         return Err(format!(
-            "refresh-fonts would track {} unique source folders, exceeding the {}-folder cache sanity cap. Reduce --font-dir inputs and rebuild a smaller cache.",
-            final_folder_paths.len(),
-            app_lib::font_cache::MAX_CACHED_FOLDERS
+            "refresh-fonts would track {} unique sources, exceeding the {}-source cache sanity cap. Reduce --font-dir / --recursive-font-dir inputs and rebuild a smaller cache.",
+            final_source_keys.len(),
+            app_lib::font_cache::MAX_CACHED_SOURCES
         ));
     }
 
@@ -1230,11 +1330,11 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
         if cache_path.exists() {
             match app_lib::font_cache::FontCache::open_existing_read_only(&cache_path) {
                 Ok(existing) => {
-                    for folder in existing
-                        .list_folders()
-                        .map_err(|e| format!("reading existing cache folders: {e}"))?
+                    for source in existing
+                        .list_sources()
+                        .map_err(|e| format!("reading existing cache sources: {e}"))?
                     {
-                        final_folder_paths.insert(folder.folder_path);
+                        final_source_keys.insert(source.key());
                     }
                 }
                 Err(app_lib::font_cache::CacheError::SchemaVersionMismatch { found, expected }) => {
@@ -1250,15 +1350,15 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
                 Err(e) => return Err(format!("opening cache: {e}")),
             }
         }
-        if final_folder_paths.len() > app_lib::font_cache::MAX_CACHED_FOLDERS {
+        if final_source_keys.len() > app_lib::font_cache::MAX_CACHED_SOURCES {
             return Err(format!(
-                "refresh-fonts would track {} total cached folders, exceeding the {}-folder cache sanity cap. Delete the cache file or rebuild it with fewer --font-dir sources.",
-                final_folder_paths.len(),
-                app_lib::font_cache::MAX_CACHED_FOLDERS
+                "refresh-fonts would track {} total cached sources, exceeding the {}-source cache sanity cap. Delete the cache file or rebuild it with fewer directory sources.",
+                final_source_keys.len(),
+                app_lib::font_cache::MAX_CACHED_SOURCES
             ));
         }
         if !globals.quiet {
-            let n = args.font_dirs.len();
+            let n = source_count;
             eprintln!(
                 "{}",
                 localize(
@@ -1270,9 +1370,9 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
                     format!("ℹ 预演：将扫描 {n} 个源根目录并更新缓存。未写入任何更改："),
                 )
             );
-            for dir in &args.font_dirs {
+            for (dir, _scope, flag_name) in refresh_font_directory_sources(&args) {
                 let dir_disp = sanitize_for_display(&dir.to_string_lossy());
-                eprintln!("    {dir_disp}");
+                eprintln!("    {flag_name} {dir_disp}");
             }
             let cache_disp = sanitize_for_display(&cache_path.display().to_string());
             eprintln!(
@@ -1295,7 +1395,7 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
         // hdr / shift / embed / rename / chain but English from this
         // subcommand. Cache file path interpolation stays sanitized via
         // sanitize_for_display per the existing print-boundary contract.
-        let n = args.font_dirs.len();
+        let n = source_count;
         eprintln!(
             "{}",
             localize(
@@ -1304,13 +1404,13 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
                 format!("ℹ 正在刷新缓存。扫描 {n} 个源根目录："),
             )
         );
-        for dir in &args.font_dirs {
+        for (dir, _scope, flag_name) in refresh_font_directory_sources(&args) {
             // Sanitize the per-source-root header print (argv is now
             // validate_ipc_path-clean above, but double-sanitize on
             // already-clean strings is a no-op and matches every other
             // refresh-fonts print site).
             let dir_disp = sanitize_for_display(&dir.to_string_lossy());
-            eprintln!("    {dir_disp}");
+            eprintln!("    {flag_name} {dir_disp}");
         }
     }
 
@@ -1333,52 +1433,56 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
         Err(e) => return Err(format!("opening cache: {e}")),
     };
 
-    for folder in cache
-        .list_folders()
-        .map_err(|e| format!("reading existing cache folders: {e}"))?
+    for source in cache
+        .list_sources()
+        .map_err(|e| format!("reading existing cache sources: {e}"))?
     {
-        final_folder_paths.insert(folder.folder_path);
+        final_source_keys.insert(source.key());
     }
-    if final_folder_paths.len() > app_lib::font_cache::MAX_CACHED_FOLDERS {
+    if final_source_keys.len() > app_lib::font_cache::MAX_CACHED_SOURCES {
         return Err(format!(
-            "refresh-fonts would track {} total cached folders, exceeding the {}-folder cache sanity cap. Delete the cache file or rebuild it with fewer --font-dir sources.",
-            final_folder_paths.len(),
-            app_lib::font_cache::MAX_CACHED_FOLDERS
+            "refresh-fonts would track {} total cached sources, exceeding the {}-source cache sanity cap. Delete the cache file or rebuild it with fewer directory sources.",
+            final_source_keys.len(),
+            app_lib::font_cache::MAX_CACHED_SOURCES
         ));
     }
 
     let mut total_fonts: usize = 0;
-    let mut total_folders: usize = 0;
+    let mut total_sources: usize = 0;
 
-    for (canonical, folder_path_str) in &canonical_font_dirs {
-        // Stat the folder for mtime — drift detection on next run
-        // compares this against live stat. None → skip the folder
-        // (matches the GUI `stat_mtime` behavior): a transient stat
-        // failure would otherwise write an epoch-zero row that the
-        // next drift-detect re-flags as `modified`, prompting an
-        // endless refresh loop . Surface to stderr
-        // with the user-visible consequence (folder skipped, not "stat
-        // failed at line N").
-        //
-        // Routed through `font_cache::try_modified_at` — the helper is
-        // pub fn for exactly this kind of cross-binary reuse, and an
-        // inline duplicate would drift over time.
-        let folder_mtime = match app_lib::font_cache::try_modified_at(canonical) {
-            Some(m) => m,
-            None => {
+    for (canonical, folder_path_str, source_key, flag_name) in &canonical_font_dirs {
+        // Capture every directory and candidate font file before parsing.
+        // Recursive sources need the nested snapshot because a root folder's
+        // own mtime does not reliably change when a grandchild changes.
+        let source_snapshot = match app_lib::font_cache::snapshot_source_directories(
+            canonical,
+            source_key.scope,
+        ) {
+            Ok(snapshot) => snapshot,
+            Err(err) => {
+                cache
+                        .remove_source(&source_key.source_root, source_key.scope)
+                        .map_err(|remove_error| {
+                            let folder_disp = sanitize_for_display(folder_path_str);
+                            localize(
+                                globals,
+                                format!(
+                                    "{flag_name} {folder_disp} failed and its stale cache row could not be evicted: {remove_error}"
+                                ),
+                                format!(
+                                    "{flag_name} {folder_disp} 失败，且无法清除其过期缓存记录：{remove_error}"
+                                ),
+                            )
+                        })?;
                 if !globals.quiet {
-                    // Sanitize before stderr interpolation, then localize.
                     let folder_disp = sanitize_for_display(folder_path_str);
+                    let err_disp = sanitize_for_display(&err);
                     eprintln!(
                         "{}",
                         localize(
                             globals,
-                            format!(
-                                "  ⚠ {folder_disp}: skipped — folder mtime unreadable (would cache as epoch-zero and re-trigger refresh next run)"
-                            ),
-                            format!(
-                                "  ⚠ {folder_disp}：已跳过——文件夹 mtime 不可读（否则会以 epoch-zero 缓存并导致下次再触发刷新）"
-                            ),
+                            format!("  ⚠ {flag_name} {folder_disp}: skipped — {err_disp}"),
+                            format!("  ⚠ {flag_name} {folder_disp}：已跳过——{err_disp}"),
                         )
                     );
                 }
@@ -1386,27 +1490,38 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
             }
         };
 
-        // Scan the folder. Non-recursive — matches `embed`'s
-        // --font-dir semantics exactly. Per-source error (e.g. cache-
-        // populate cap exceeded for malicious / oversized packs) is
-        // logged and skipped so one bad source doesn't abort the whole
-        // refresh run — refresh-fonts is multi-dir by design.
-        let entries = match app_lib::fonts::scan_directory_collecting(canonical) {
+        // Scan with the explicit per-source scope. Per-source errors
+        // are logged and skipped so one bad source doesn't abort the
+        // whole refresh run — refresh-fonts is multi-source by design.
+        let entries = match app_lib::fonts::scan_directory_collecting_with_scope(
+            canonical,
+            source_key.scope,
+        ) {
             Ok(e) => e,
             Err(err) => {
+                cache
+                    .remove_source(&source_key.source_root, source_key.scope)
+                    .map_err(|remove_error| {
+                        let folder_disp = sanitize_for_display(folder_path_str);
+                        localize(
+                            globals,
+                            format!(
+                                "{flag_name} {folder_disp} failed and its stale cache row could not be evicted: {remove_error}"
+                            ),
+                            format!(
+                                "{flag_name} {folder_disp} 失败，且无法清除其过期缓存记录：{remove_error}"
+                            ),
+                        )
+                    })?;
                 if !globals.quiet {
-                    // Refresh-fonts print sites also need sanitize at
-                    // the boundary. `folder_path_str` is display_path
-                    // output (operational); print sites wrap with
-                    // sanitize_for_display, then localize.
                     let folder_disp = sanitize_for_display(folder_path_str);
                     let err_disp = sanitize_for_display(&err);
                     eprintln!(
                         "{}",
                         localize(
                             globals,
-                            format!("  ⚠ {folder_disp}: skipped — {err_disp}"),
-                            format!("  ⚠ {folder_disp}：已跳过——{err_disp}"),
+                            format!("  ⚠ {flag_name} {folder_disp}: skipped — {err_disp}"),
+                            format!("  ⚠ {flag_name} {folder_disp}：已跳过——{err_disp}"),
                         )
                     );
                 }
@@ -1418,12 +1533,126 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
         // contribute multiple entries with one path) + saturating cast
         // discipline + family-key flattening.
         let metadata: Vec<app_lib::font_cache::FontMetadata> =
-            app_lib::fonts::entries_to_cache_metadata(&entries);
+            match app_lib::fonts::entries_to_cache_metadata(&entries) {
+                Ok(metadata) => metadata,
+                Err(err) => {
+                    cache
+                        .remove_source(&source_key.source_root, source_key.scope)
+                        .map_err(|remove_error| {
+                            let folder_disp = sanitize_for_display(folder_path_str);
+                            localize(
+                                globals,
+                                format!(
+                                    "{flag_name} {folder_disp} became unreadable and its stale cache row could not be evicted: {remove_error}"
+                                ),
+                                format!(
+                                    "{flag_name} {folder_disp} 变得无法读取，且无法清除其过期缓存记录：{remove_error}"
+                                ),
+                            )
+                        })?;
+                    if !globals.quiet {
+                        let folder_disp = sanitize_for_display(folder_path_str);
+                        let err_disp = sanitize_for_display(&err);
+                        eprintln!(
+                            "{}",
+                            localize(
+                                globals,
+                                format!("  ⚠ {flag_name} {folder_disp}: skipped — {err_disp}"),
+                                format!("  ⚠ {flag_name} {folder_disp}：已跳过——{err_disp}"),
+                            )
+                        );
+                    }
+                    continue;
+                }
+            };
+
+        if metadata.is_empty() {
+            cache
+                .remove_source(&source_key.source_root, source_key.scope)
+                .map_err(|error| {
+                    localize(
+                        globals,
+                        format!("evict empty font source cache: {error}"),
+                        format!("清除空字体来源缓存失败：{error}"),
+                    )
+                })?;
+            if !globals.quiet {
+                let folder_disp = sanitize_for_display(folder_path_str);
+                eprintln!(
+                    "{}",
+                    localize(
+                        globals,
+                        format!(
+                            "  ⚠ {flag_name} {folder_disp}: skipped — no readable font faces found"
+                        ),
+                        format!("  ⚠ {flag_name} {folder_disp}：已跳过——未找到可读取的字体面"),
+                    )
+                );
+            }
+            continue;
+        }
 
         let font_count = metadata.len();
-        cache
-            .replace_folder(folder_path_str, folder_mtime, &metadata)
-            .map_err(|e| format!("writing cache for {}: {e}", folder_path_str))?;
+        if let Err(error) =
+            app_lib::font_cache::validate_cache_source_stability(&source_snapshot, &metadata)
+        {
+            cache
+                .remove_source(&source_key.source_root, source_key.scope)
+                .map_err(|remove_error| {
+                    let folder_disp = sanitize_for_display(folder_path_str);
+                    localize(
+                        globals,
+                        format!(
+                            "validating cache source {folder_disp} failed ({error}) and stale-row eviction also failed: {remove_error}"
+                        ),
+                        format!(
+                            "验证缓存字体来源 {folder_disp} 失败（{error}），且清除过期记录也失败：{remove_error}"
+                        ),
+                    )
+                })?;
+            if !globals.quiet {
+                let folder_disp = sanitize_for_display(folder_path_str);
+                let error_disp = sanitize_for_display(&error.to_string());
+                eprintln!(
+                    "{}",
+                    localize(
+                        globals,
+                        format!("  ⚠ {flag_name} {folder_disp}: skipped — {error_disp}"),
+                        format!("  ⚠ {flag_name} {folder_disp}：已跳过——{error_disp}"),
+                    )
+                );
+            }
+            continue;
+        }
+        if let Err(error) = cache.replace_source(&source_snapshot, &metadata) {
+            cache
+                .remove_source(&source_key.source_root, source_key.scope)
+                .map_err(|remove_error| {
+                    let folder_disp = sanitize_for_display(folder_path_str);
+                    localize(
+                        globals,
+                        format!(
+                            "writing cache for {folder_disp} failed ({error}) and stale-row eviction also failed: {remove_error}"
+                        ),
+                        format!(
+                            "写入 {folder_disp} 的缓存失败（{error}），且清除过期记录也失败：{remove_error}"
+                        ),
+                    )
+                })?;
+            if !globals.quiet {
+                let folder_disp = sanitize_for_display(folder_path_str);
+                let error_disp = sanitize_for_display(&error.to_string());
+                eprintln!(
+                    "{}",
+                    localize(
+                        globals,
+                        format!("  ⚠ {flag_name} {folder_disp}: skipped — {error_disp}"),
+                        format!("  ⚠ {flag_name} {folder_disp}：已跳过——{error_disp}"),
+                    )
+                );
+            }
+            continue;
+        }
 
         if !globals.quiet {
             // sanitize_for_display on the success line too — same
@@ -1434,22 +1663,27 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
                 localize(
                     globals,
                     format!(
-                        "  ✓ {folder_disp}: indexed {font_count} font face{}",
+                        "  ✓ {flag_name} {folder_disp}: indexed {font_count} font face{}",
                         s_if(font_count)
                     ),
-                    format!("  ✓ {folder_disp}：已索引 {font_count} 个字体面"),
+                    format!("  ✓ {flag_name} {folder_disp}：已索引 {font_count} 个字体面"),
                 )
             );
         }
         total_fonts += font_count;
-        total_folders += 1;
+        total_sources += 1;
     }
 
-    if total_folders == 0 {
-        let source_count = args.font_dirs.len();
-        return Err(format!(
-            "refresh-fonts could not index any source folders; all {source_count} --font-dir argument{} were skipped. Pass at least one readable font directory.",
-            s_if(source_count),
+    if total_sources == 0 {
+        return Err(localize(
+            globals,
+            format!(
+                "refresh-fonts could not index any font source; all {source_count} directory-source argument{} were skipped. Pass at least one readable --font-dir or --recursive-font-dir.",
+                s_if(source_count),
+            ),
+            format!(
+                "refresh-fonts 未能索引任何字体来源；{source_count} 个目录来源参数均已跳过。请至少传入一个可读取的 --font-dir 或 --recursive-font-dir。"
+            ),
         ));
     }
 
@@ -1460,12 +1694,12 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
             localize(
                 globals,
                 format!(
-                    "✓ Cache updated: {total_fonts} font face{} indexed across {total_folders} folder{}.",
+                    "✓ Cache updated: {total_fonts} font face{} indexed across {total_sources} font source{}.",
                     s_if(total_fonts),
-                    s_if(total_folders)
+                    s_if(total_sources)
                 ),
                 format!(
-                    "✓ 缓存已更新：在 {total_folders} 个文件夹中索引了 {total_fonts} 个字体面。"
+                    "✓ 缓存已更新：在 {total_sources} 个字体来源中索引了 {total_fonts} 个字体面。"
                 ),
             )
         );
@@ -1616,8 +1850,7 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
                 // variants — invariant holds by construction.
                 unreachable!("find_embed_step_index returned a non-Embed index");
             };
-            let use_user_fonts =
-                !embed_args.font_dirs.is_empty() || !embed_args.font_files.is_empty();
+            let use_user_fonts = embed_args.has_user_font_sources();
             if use_user_fonts {
                 Some(init_cli_font_sources(globals, embed_args)?)
             } else {
@@ -3129,12 +3362,12 @@ fn run_embed(
     diagnose: Option<DiagnoseMode>,
 ) -> Result<ExitCode, String> {
     app_lib::fonts::init_system_dirs();
-    let use_user_fonts = !args.font_dirs.is_empty() || !args.font_files.is_empty();
+    let use_user_fonts = args.has_user_font_sources();
     // Skip the user-font scan in dry-run mode. process_embed_file's
     // cheap-first ordering returns Planned BEFORE reading content or
     // resolving fonts, so dry-run never needs the SQLite source index.
-    // Saves a 17k-font-folder scan when the user passes --font-dir
-    // alongside --dry-run just to preview output paths.
+    // Saves a large directory scan when the user passes an explicit
+    // font source alongside --dry-run just to preview output paths.
     let _font_db_dir = if use_user_fonts && !globals.dry_run {
         Some(init_cli_font_sources(globals, &args)?)
     } else {
@@ -3225,9 +3458,9 @@ fn prepare_font_cache_for_resolution(
                 "{}",
                 localize(
                     globals,
-                    "ℹ Cache disabled (--no-cache). Using --font-dir / system fonts only."
+                    "ℹ Cache disabled (--no-cache). Using explicit font sources / system fonts only."
                         .to_string(),
-                    "ℹ 已禁用缓存（--no-cache）。仅使用 --font-dir / 系统字体。".to_string(),
+                    "ℹ 已禁用缓存（--no-cache）。仅使用显式字体源 / 系统字体。".to_string(),
                 )
             );
         }
@@ -3263,7 +3496,7 @@ fn run_diagnose_fonts(
     validate_diagnose_fonts_globals(globals)?;
     app_lib::fonts::init_system_dirs();
     let embed_args = args.to_embed_args();
-    let use_user_fonts = !embed_args.font_dirs.is_empty() || !embed_args.font_files.is_empty();
+    let use_user_fonts = embed_args.has_user_font_sources();
     let _font_db_dir = if use_user_fonts {
         Some(init_cli_font_sources(globals, &embed_args)?)
     } else {
@@ -3782,8 +4015,8 @@ fn prepare_embed_cache(
                 "{}",
                 localize(
                     globals,
-                    "  Run `ssahdrify-cli refresh-fonts --font-dir <DIR>...` to build one (--font-dir is repeatable).".to_string(),
-                    "  运行 `ssahdrify-cli refresh-fonts --font-dir <DIR>...` 建立缓存（--font-dir 可重复）。".to_string(),
+                    "  Run `ssahdrify-cli refresh-fonts --font-dir <DIR>...` for flat folders or use repeatable `--recursive-font-dir <DIR>` for library trees.".to_string(),
+                    "  运行 `ssahdrify-cli refresh-fonts --font-dir <DIR>...` 建立浅层目录缓存，或对字体库树使用可重复的 `--recursive-font-dir <DIR>`。".to_string(),
                 )
             );
         }
@@ -3876,10 +4109,9 @@ fn prepare_embed_cache(
         }
     };
 
-    // Drift check: walk cached folders' stat()s and compare against
-    // recorded mtimes. "Added" folders aren't detectable here — we'd
-    // need to walk source roots, which embed doesn't have. So the
-    // report covers modified + removed; added is empty by design.
+    // Drift check: rebuild a metadata-only snapshot for every cached source.
+    // Recursive sources include all visited real directories and candidate
+    // font files, so nested changes are visible even when the root mtime is not.
     let drift = match check_cache_drift(&cache) {
         Ok(report) => report,
         Err(e) => {
@@ -3921,16 +4153,17 @@ fn prepare_embed_cache(
                 localize(
                     globals,
                     format!(
-                        "⚠ Cache drift detected — {drift_count} folder(s) changed since last refresh:"
+                        "⚠ Cache drift detected — {drift_count} source(s) changed since last refresh:"
                     ),
-                    format!("⚠ 检测到字体缓存漂移 —— 自上次刷新以来 {drift_count} 个目录已变化："),
+                    format!("⚠ 检测到字体缓存漂移 —— 自上次刷新以来 {drift_count} 个字体源已变化："),
                 )
             );
-            for f in &drift.modified {
-                // Drift folder strings originate from the SQLite cache
-                // (cached_folders.folder_path). Under --cache-file argv
-                // override, those rows are untrusted-input (attacker may craft).
-                let f_disp = sanitize_for_display(f);
+            for source in &drift.modified {
+                // Source roots originate from SQLite. Under --cache-file argv
+                // override those rows are untrusted-input, so sanitize at the
+                // terminal boundary and surface scope to disambiguate a root
+                // cached both shallowly and recursively.
+                let f_disp = format_cache_source_for_display(source);
                 eprintln!(
                     "{}",
                     localize(
@@ -3940,8 +4173,8 @@ fn prepare_embed_cache(
                     )
                 );
             }
-            for f in &drift.removed {
-                let f_disp = sanitize_for_display(f);
+            for source in &drift.removed {
+                let f_disp = format_cache_source_for_display(source);
                 eprintln!(
                     "{}",
                     localize(
@@ -3955,9 +4188,9 @@ fn prepare_embed_cache(
                 "{}",
                 localize(
                     globals,
-                    "  Skipping cache for this run; using --font-dir / system fonts only."
+                    "  Skipping cache for this run; using explicit font sources / system fonts only."
                         .to_string(),
-                    "  本次运行将跳过缓存，仅使用 --font-dir / 系统字体。".to_string(),
+                    "  本次运行将跳过缓存，仅使用显式字体源 / 系统字体。".to_string(),
                 )
             );
             eprintln!(
@@ -3972,10 +4205,20 @@ fn prepare_embed_cache(
         let mut diagnostic = CacheDiagnostic::new(
             Some(cache_path_json),
             CacheDiagnosticStatus::Drift,
-            Some("cached font folders changed since last refresh".to_string()),
+            Some("cached font sources changed since last refresh".to_string()),
         );
-        diagnostic.modified_folders = drift.modified.clone();
-        diagnostic.removed_folders = drift.removed.clone();
+        diagnostic.modified_folders = drift
+            .modified
+            .iter()
+            .map(|source| source.source_root.clone())
+            .collect();
+        diagnostic.removed_folders = drift
+            .removed
+            .iter()
+            .map(|source| source.source_root.clone())
+            .collect();
+        diagnostic.modified_sources = drift.modified.clone();
+        diagnostic.removed_sources = drift.removed.clone();
         return PreparedFontCache {
             cache: None,
             diagnostic,
@@ -3983,21 +4226,21 @@ fn prepare_embed_cache(
     }
 
     // Cache is valid. Announce per locked transparency design:
-    // Situation A (--font-dir provided) → "cache + dirs" merge
-    // announcement; Situation B (no --font-dir) → implicit cache
+    // Situation A (an explicit source provided) → "cache + sources"
+    // announcement; Situation B (no explicit source) → implicit cache
     // use announcement.
-    let user_supplied_dirs = !args.font_dirs.is_empty() || !args.font_files.is_empty();
+    let user_supplied_sources = args.has_user_font_sources();
     if !globals.quiet {
-        if user_supplied_dirs {
+        if user_supplied_sources {
             eprintln!(
                 "{}",
                 localize(
                     globals,
                     format!(
-                        "ℹ Using font cache (at {cache_path_disp}) plus the --font-dir / --font-file paths you supplied."
+                        "ℹ Using font cache (at {cache_path_disp}) plus the --font-dir / --recursive-font-dir / --font-file paths you supplied."
                     ),
                     format!(
-                        "ℹ 正在使用字体缓存（位于 {cache_path_disp}）以及你通过 --font-dir / --font-file 指定的路径。"
+                        "ℹ 正在使用字体缓存（位于 {cache_path_disp}）以及你通过 --font-dir / --recursive-font-dir / --font-file 指定的路径。"
                     ),
                 )
             );
@@ -4030,39 +4273,56 @@ fn prepare_embed_cache(
     }
 }
 
-/// Walk every folder the cache has indexed, stat() each one, and
-/// build a snapshot for drift detection. Folders that no longer
-/// exist (or that we can't stat) get omitted from the snapshot,
-/// which `diff_against` then reports as `removed`.
-///
-/// `added` is intentionally not detectable here: embed doesn't walk
-/// source roots, so we can't see folders the user has on disk but
-/// hasn't yet cached. Those land in the cache via `refresh-fonts`,
-/// not via embed-time drift detection.
+fn format_cache_source_for_display(source: &app_lib::font_cache::CacheSourceKey) -> String {
+    let root = sanitize_for_display(&source.source_root);
+    let scope = match source.scope {
+        app_lib::font_cache::FontDirectoryScope::Shallow => "shallow",
+        app_lib::font_cache::FontDirectoryScope::Recursive => "recursive",
+    };
+    format!("{root} [{scope}]")
+}
+
+/// Rebuild the complete metadata snapshot for every cached source. A genuinely
+/// missing or reparse-point root is removed. A real directory whose nested
+/// snapshot cannot be completed is conservatively modified, matching the GUI
+/// drift classifier. `added` remains empty because this check starts from
+/// cache-owned roots only.
 fn check_cache_drift(
     cache: &app_lib::font_cache::FontCache,
 ) -> Result<app_lib::font_cache::DriftReport, String> {
-    let cached_folders = cache
-        .list_folders()
-        .map_err(|e| format!("list cached folders: {e}"))?;
-    let mut snapshot: Vec<(String, i64)> = Vec::with_capacity(cached_folders.len());
-    for folder in &cached_folders {
-        // route through the shared `try_modified_at`
-        // helper so CLI and GUI drift detection use identical stat
-        // semantics. A future fix to the metadata-or-modified
-        // failure-mode handling automatically flows to both sides.
-        // None → omit from snapshot → `diff_against` reports as
-        // `removed` (slight false-positive for permission-denied
-        // folders, but the user wants to know either way).
-        if let Some(mtime) =
-            app_lib::font_cache::try_modified_at(std::path::Path::new(&folder.folder_path))
-        {
-            snapshot.push((folder.folder_path.clone(), mtime));
+    let cached_sources = cache
+        .list_sources()
+        .map_err(|e| format!("list cached font sources: {e}"))?;
+    let mut snapshots = Vec::with_capacity(cached_sources.len());
+    let mut unreadable_existing = Vec::new();
+    for source in &cached_sources {
+        match app_lib::font_cache::snapshot_source_directories(
+            Path::new(&source.source_root),
+            source.scope,
+        ) {
+            Ok(snapshot) => snapshots.push(snapshot),
+            Err(_) => {
+                let root = Path::new(&source.source_root);
+                let is_clean_real_directory =
+                    matches!(app_lib::util::try_is_reparse_point(root), Ok(false))
+                        && fs::symlink_metadata(root).is_ok_and(|metadata| metadata.is_dir());
+                if is_clean_real_directory {
+                    unreadable_existing.push(source.key());
+                }
+            }
         }
     }
-    cache
-        .diff_against(&snapshot)
-        .map_err(|e| format!("compute drift: {e}"))
+    let mut report = cache
+        .diff_sources(&snapshots)
+        .map_err(|e| format!("compute source drift: {e}"))?;
+    for key in unreadable_existing {
+        report.removed.retain(|removed| removed != &key);
+        if !report.modified.contains(&key) {
+            report.modified.push(key);
+        }
+    }
+    report.modified.sort();
+    Ok(report)
 }
 
 fn init_cli_font_sources(
@@ -4084,10 +4344,50 @@ fn init_cli_font_sources(
     // Drop runs (latent bug, no current caller retries, but the
     // helper makes the cleanup explicit).
     let import_result: Result<(), String> = (|| -> Result<(), String> {
+        // Import by ascending source kind: recursive libraries first,
+        // shallow folders second, explicit files last. The backend orders
+        // lookup by source kind and then newest source order, giving explicit
+        // files the strongest override while preserving deterministic
+        // last-argument-wins behavior within each kind.
+        for (index, dir) in args.recursive_font_dirs.iter().enumerate() {
+            let dir = absolute_path(dir)?;
+            let source_id = format!("cli-recursive-dir-{index}");
+            let summary = app_lib::fonts::import_font_directory_for_cli_with_scope(
+                &dir,
+                &source_id,
+                app_lib::fonts::FontDirectoryScope::Recursive,
+            )?;
+            require_complete_cli_font_source(
+                globals,
+                "recursive font library",
+                "递归字体库",
+                Some(&dir),
+                &summary,
+            )?;
+            emit_font_source_summary(
+                globals,
+                "recursive font library",
+                "递归字体库",
+                Some(&dir),
+                &summary,
+            );
+        }
+
         for (index, dir) in args.font_dirs.iter().enumerate() {
             let dir = absolute_path(dir)?;
             let source_id = format!("cli-dir-{index}");
-            let summary = app_lib::fonts::import_font_directory_for_cli(&dir, &source_id)?;
+            let summary = app_lib::fonts::import_font_directory_for_cli_with_scope(
+                &dir,
+                &source_id,
+                app_lib::fonts::FontDirectoryScope::Shallow,
+            )?;
+            require_complete_cli_font_source(
+                globals,
+                "font dir",
+                "字体目录",
+                Some(&dir),
+                &summary,
+            )?;
             emit_font_source_summary(globals, "font dir", "字体目录", Some(&dir), &summary);
         }
 
@@ -4098,6 +4398,7 @@ fn init_cli_font_sources(
                 .map(|path| absolute_path(path).map(|path| display_path(&path)))
                 .collect();
             let summary = app_lib::fonts::import_font_files_for_cli(paths?, "cli-files")?;
+            require_complete_cli_font_source(globals, "font files", "字体文件", None, &summary)?;
             // Funnel through emit_font_source_summary so ScanStopReason
             // (UserCancel / CeilingHit) surfaces with the same suffix as
             // font-dir summaries. Path is None — font files are a flat
@@ -4116,6 +4417,47 @@ fn init_cli_font_sources(
             Err(e)
         }
     }
+}
+
+fn require_complete_cli_font_source(
+    globals: &GlobalOptions,
+    label_en: &str,
+    label_zh: &str,
+    path: Option<&Path>,
+    summary: &app_lib::fonts::FontSourceImportSummary,
+) -> Result<(), String> {
+    if summary.reason == app_lib::fonts::ScanStopReason::Natural {
+        return Ok(());
+    }
+    let reason_en = match summary.reason {
+        app_lib::fonts::ScanStopReason::Natural => unreachable!(),
+        app_lib::fonts::ScanStopReason::UserCancel => "was cancelled",
+        app_lib::fonts::ScanStopReason::CeilingHit => "hit a safety ceiling",
+        app_lib::fonts::ScanStopReason::IncompleteIo => {
+            "encountered a changing or unreadable entry"
+        }
+    };
+    let reason_zh = match summary.reason {
+        app_lib::fonts::ScanStopReason::Natural => unreachable!(),
+        app_lib::fonts::ScanStopReason::UserCancel => "已取消",
+        app_lib::fonts::ScanStopReason::CeilingHit => "达到安全上限",
+        app_lib::fonts::ScanStopReason::IncompleteIo => "遇到发生变化或无法读取的项目",
+    };
+    let path_en = path
+        .map(|value| format!(" ({})", sanitize_for_display(&display_path(value))))
+        .unwrap_or_default();
+    let path_zh = path
+        .map(|value| format!("（{}）", sanitize_for_display(&display_path(value))))
+        .unwrap_or_default();
+    Err(localize(
+        globals,
+        format!(
+            "{label_en}{path_en} scan {reason_en}; partial font results were discarded. Retry with a smaller, stable, readable source."
+        ),
+        format!(
+            "{label_zh}{path_zh}扫描{reason_zh}；已丢弃不完整的字体结果。请使用更小、稳定且可读取的来源后重试。"
+        ),
+    ))
 }
 
 fn create_cli_font_db_dir() -> Result<PathBuf, String> {
@@ -4156,6 +4498,10 @@ fn emit_font_source_summary(
         app_lib::fonts::ScanStopReason::Natural => ("", ""),
         app_lib::fonts::ScanStopReason::UserCancel => (" (cancelled)", "（已取消）"),
         app_lib::fonts::ScanStopReason::CeilingHit => (" (ceiling hit)", "（已达上限）"),
+        app_lib::fonts::ScanStopReason::IncompleteIo => (
+            " (incomplete: unreadable entry)",
+            "（不完整：存在不可读项目）",
+        ),
     };
     // Path suffix is optional: font dirs always have one; font files
     // are a flat list with no single "source path" so the suffix is
@@ -4486,7 +4832,7 @@ fn resolve_chain_embed_subsets(
     input_path: &str,
     content: &str,
 ) -> ChainEmbedSubsetsResult {
-    let use_user_fonts = !embed_args.font_dirs.is_empty() || !embed_args.font_files.is_empty();
+    let use_user_fonts = embed_args.has_user_font_sources();
 
     // output_template is unused at the chain level (the chain-global
     // template wins) but plan_font_embed expects one. The default
@@ -4511,7 +4857,7 @@ fn resolve_chain_embed_subsets(
 
     // Chain's embed step doesn't use the persistent cache (yet) — chain
     // pre-resolution runs against the input content with whatever
-    // --font-dir the embed step itself was given. Cache integration
+    // explicit font sources the embed step itself was given. Cache integration
     // for chain is a future expansion; for now, pass None.
     //
     // Propagate both warning lists to the caller so chain mode and
@@ -4928,7 +5274,7 @@ fn resolve_embed_font(
         };
     }
 
-    // Lookup tier 1: session DB populated by --font-dir for THIS run
+    // Lookup tier 1: session DB populated by explicit font sources for THIS run
     // (Situation A's explicit "merge in these dirs" inputs).
     if use_user_fonts {
         match app_lib::fonts::resolve_user_font(font.family.clone(), font.bold, font.italic) {
@@ -4978,14 +5324,17 @@ fn resolve_embed_font(
             FontTierStatus::Disabled,
             None,
             None,
-            Some("no --font-dir or --font-file source was provided".to_string()),
+            Some(
+                "no --font-dir, --recursive-font-dir, or --font-file source was provided"
+                    .to_string(),
+            ),
         );
     }
 
     // Lookup tier 2: persistent cache. Implements Situation A's
-    // "merge with cache" semantic (when --font-dir is also provided,
+    // "merge with cache" semantic (when an explicit source is also provided,
     // cache fills in fonts the user didn't explicitly hand) and
-    // Situation B's "implicit cache use" (when no --font-dir, cache
+    // Situation B's "implicit cache use" (when no explicit source, cache
     // is the primary source). Cache is None when --no-cache is set,
     // when the cache file doesn't exist, or when drift detection
     // fell us back to no-cache for this run.
@@ -5664,15 +6013,15 @@ fn diagnostic_next_actions(
             CacheDiagnosticStatus::Missing => {
                 push_action(
                     "cache-refresh",
-                    "Build a font cache with `ssahdrify-cli refresh-fonts --font-dir <DIR>...`.",
-                    "用 `ssahdrify-cli refresh-fonts --font-dir <DIR>...` 建立字体缓存。",
+                    "Build a font cache with `ssahdrify-cli refresh-fonts --font-dir <DIR>...` for flat folders or `--recursive-font-dir <DIR>...` for library trees.",
+                    "用 `ssahdrify-cli refresh-fonts --font-dir <DIR>...` 建立浅层目录缓存，或对字体库树使用 `--recursive-font-dir <DIR>...`。",
                 );
             }
             CacheDiagnosticStatus::Drift => {
                 push_action(
                     "cache-refresh",
-                    "Run `ssahdrify-cli refresh-fonts --font-dir <DIR>...` after changing a cached font folder.",
-                    "字体目录变化后，运行 `ssahdrify-cli refresh-fonts --font-dir <DIR>...` 刷新缓存。",
+                    "Run `ssahdrify-cli refresh-fonts` with each changed source's original `--font-dir` or `--recursive-font-dir` scope.",
+                    "字体源变化后，使用各源原本的 `--font-dir` 或 `--recursive-font-dir` 范围运行 `ssahdrify-cli refresh-fonts`。",
                 );
             }
             CacheDiagnosticStatus::SchemaMismatch => {
@@ -5707,8 +6056,8 @@ fn diagnostic_next_actions(
     if has_unresolved && (has_local_disabled || has_cache_miss_or_unavailable) {
         push_action(
             "font-source",
-            "If you expected these fonts to embed, pass `--font-dir <DIR>` or `--font-file <FILE>` for the font pack.",
-            "如果你希望这些字体被嵌入，请为字体包传入 `--font-dir <DIR>` 或 `--font-file <FILE>`。",
+            "If you expected these fonts to embed, pass `--font-dir <DIR>` for a flat folder, `--recursive-font-dir <DIR>` for a library tree, or `--font-file <FILE>` for one file.",
+            "如果你希望这些字体被嵌入，请为浅层目录传入 `--font-dir <DIR>`、为字体库树传入 `--recursive-font-dir <DIR>`，或为单个文件传入 `--font-file <FILE>`。",
         );
     }
 
@@ -6653,17 +7002,21 @@ fn parse_timestamp_part(part: &str, label: &str) -> Result<i64, String> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use super::run_refresh_fonts;
     use super::{
         apply_effective_embedded_font_names, apply_subset_checks_to_diagnostics,
-        build_font_qa_summary, classify_locale, copy_file_output, create_cli_font_db_dir,
-        diagnostic_next_actions, display_path, duplicate_rename_output_keys, engine,
-        group_resolved_fonts_by_face, normalize_output_key, parse_duration_ms, parse_timestamp_ms,
-        predict_chain_output_path, relocate_output_path, resolve_embed_fonts, sanitize_for_display,
-        substitute_template, write_output, Cli, Command, CommandDiagnostics, CommandReport,
+        build_font_qa_summary, check_cache_drift, classify_locale, copy_file_output,
+        create_cli_font_db_dir, diagnostic_next_actions, display_path,
+        duplicate_rename_output_keys, engine, group_resolved_fonts_by_face, normalize_output_key,
+        parse_duration_ms, parse_timestamp_ms, predict_chain_output_path,
+        refresh_font_directory_sources, relocate_output_path, require_complete_cli_font_source,
+        resolve_embed_fonts, sanitize_for_display, substitute_template, write_output,
+        CacheDiagnostic, CacheDiagnosticStatus, Cli, Command, CommandDiagnostics, CommandReport,
         DiagnoseMode, DiagnosticSubsetBudget, EmbedArgs, FileDiagnostic, FileReport, FileStatus,
         FontDiagnostic, FontQaStatus, FontSubsetCheckDiagnostic, FontSubsetCheckStatus,
-        GlobalOptions, MissingFontAction, OutputLang, ResolvedEmbedFont, TempFontDbDir,
-        MAX_DIAGNOSTIC_SUBSET_CALLS, MAX_DIAGNOSTIC_SUBSET_TOTAL_BYTES,
+        GlobalOptions, MissingFontAction, OutputLang, RefreshFontsArgs, ResolvedEmbedFont,
+        TempFontDbDir, MAX_DIAGNOSTIC_SUBSET_CALLS, MAX_DIAGNOSTIC_SUBSET_TOTAL_BYTES,
         MAX_RESOLVED_FONT_CODEPOINTS, MAX_SHIFT_OFFSET_MS, MAX_SUBSET_CODEPOINTS_FOR_DEDUP,
     };
     // Import the canonical filename literal directly from app_lib so the
@@ -6814,6 +7167,140 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::UnknownArgument);
     }
 
+    #[test]
+    fn embed_parses_repeatable_recursive_font_dirs() {
+        let cli = Cli::try_parse_from([
+            "ssahdrify-cli",
+            "embed",
+            "--recursive-font-dir",
+            "library-a",
+            "--recursive-font-dir",
+            "library-b",
+            "input.ass",
+        ])
+        .expect("recursive font library flags should be repeatable");
+
+        let Command::Embed(args) = cli.command else {
+            panic!("expected embed command");
+        };
+        assert_eq!(
+            args.args.recursive_font_dirs,
+            vec![PathBuf::from("library-a"), PathBuf::from("library-b")]
+        );
+        assert!(args.args.font_dirs.is_empty());
+        assert!(args.args.has_user_font_sources());
+    }
+
+    #[test]
+    fn diagnose_fonts_parses_recursive_and_shallow_sources_together() {
+        let cli = Cli::try_parse_from([
+            "ssahdrify-cli",
+            "diagnose-fonts",
+            "--recursive-font-dir",
+            "library",
+            "--font-dir",
+            "flat",
+            "input.ass",
+        ])
+        .expect("diagnose-fonts should accept mixed directory scopes");
+
+        let Command::DiagnoseFonts(args) = cli.command else {
+            panic!("expected diagnose-fonts command");
+        };
+        assert_eq!(args.recursive_font_dirs, vec![PathBuf::from("library")]);
+        assert_eq!(args.font_dirs, vec![PathBuf::from("flat")]);
+    }
+
+    #[test]
+    fn refresh_fonts_accepts_recursive_source_without_shallow_source() {
+        let cli = Cli::try_parse_from([
+            "ssahdrify-cli",
+            "refresh-fonts",
+            "--recursive-font-dir",
+            "library",
+        ])
+        .expect("either directory-source flag should satisfy refresh-fonts");
+
+        let Command::RefreshFonts(args) = cli.command else {
+            panic!("expected refresh-fonts command");
+        };
+        assert!(args.font_dirs.is_empty());
+        assert_eq!(args.recursive_font_dirs, vec![PathBuf::from("library")]);
+    }
+
+    #[test]
+    fn refresh_fonts_keeps_legacy_shallow_source_valid() {
+        let cli = Cli::try_parse_from(["ssahdrify-cli", "refresh-fonts", "--font-dir", "flat"])
+            .expect("the existing shallow flag must remain valid by itself");
+
+        let Command::RefreshFonts(args) = cli.command else {
+            panic!("expected refresh-fonts command");
+        };
+        assert_eq!(args.font_dirs, vec![PathBuf::from("flat")]);
+        assert!(args.recursive_font_dirs.is_empty());
+    }
+
+    #[test]
+    fn refresh_fonts_accepts_mixed_directory_scopes() {
+        let cli = Cli::try_parse_from([
+            "ssahdrify-cli",
+            "refresh-fonts",
+            "--recursive-font-dir",
+            "library",
+            "--font-dir",
+            "flat",
+        ])
+        .expect("refresh-fonts should accept mixed directory scopes");
+
+        let Command::RefreshFonts(args) = cli.command else {
+            panic!("expected refresh-fonts command");
+        };
+        assert_eq!(args.recursive_font_dirs, vec![PathBuf::from("library")]);
+        assert_eq!(args.font_dirs, vec![PathBuf::from("flat")]);
+    }
+
+    #[test]
+    fn refresh_source_iteration_prioritizes_recursive_before_shallow() {
+        let args = RefreshFontsArgs {
+            font_dirs: vec![PathBuf::from("flat-a"), PathBuf::from("flat-b")],
+            recursive_font_dirs: vec![PathBuf::from("library-a"), PathBuf::from("library-b")],
+        };
+        let sources: Vec<(PathBuf, app_lib::fonts::FontDirectoryScope)> =
+            refresh_font_directory_sources(&args)
+                .map(|(path, scope, _flag)| (path.to_path_buf(), scope))
+                .collect();
+
+        assert_eq!(
+            sources,
+            vec![
+                (
+                    PathBuf::from("library-a"),
+                    app_lib::fonts::FontDirectoryScope::Recursive,
+                ),
+                (
+                    PathBuf::from("library-b"),
+                    app_lib::fonts::FontDirectoryScope::Recursive,
+                ),
+                (
+                    PathBuf::from("flat-a"),
+                    app_lib::fonts::FontDirectoryScope::Shallow,
+                ),
+                (
+                    PathBuf::from("flat-b"),
+                    app_lib::fonts::FontDirectoryScope::Shallow,
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn refresh_fonts_rejects_missing_directory_source() {
+        let err = Cli::try_parse_from(["ssahdrify-cli", "refresh-fonts"])
+            .expect_err("refresh-fonts requires one directory-source flag");
+
+        assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
+    }
+
     /// Construct a default GlobalOptions for tests that need to call
     /// fs-touching helpers (write_output / copy_file_output etc.) which
     /// take `&GlobalOptions` for stat-failure warning localization.
@@ -6830,6 +7317,146 @@ mod tests {
             cache_file: None,
             fail_fast: false,
         }
+    }
+
+    #[test]
+    fn cache_drift_json_keeps_raw_paths_and_adds_scope_aware_sources() {
+        let modified = app_lib::font_cache::CacheSourceKey {
+            source_root: "C:\\Fonts\\Library".to_string(),
+            scope: app_lib::font_cache::FontDirectoryScope::Recursive,
+        };
+        let removed = app_lib::font_cache::CacheSourceKey {
+            source_root: "C:\\Fonts\\Flat".to_string(),
+            scope: app_lib::font_cache::FontDirectoryScope::Shallow,
+        };
+        let mut diagnostic = CacheDiagnostic::new(
+            None,
+            CacheDiagnosticStatus::Drift,
+            Some("changed".to_string()),
+        );
+        diagnostic.modified_folders = vec![modified.source_root.clone()];
+        diagnostic.removed_folders = vec![removed.source_root.clone()];
+        diagnostic.modified_sources = vec![modified.clone()];
+        diagnostic.removed_sources = vec![removed.clone()];
+
+        let json = serde_json::to_value(diagnostic).unwrap();
+        assert_eq!(json["modifiedFolders"][0], modified.source_root);
+        assert_eq!(json["removedFolders"][0], removed.source_root);
+        assert_eq!(json["modifiedSources"][0]["scope"], "recursive");
+        assert_eq!(json["removedSources"][0]["scope"], "shallow");
+        assert!(
+            !json["modifiedFolders"][0]
+                .as_str()
+                .unwrap()
+                .contains("[recursive]"),
+            "machine-readable paths must not contain terminal decoration"
+        );
+    }
+
+    #[test]
+    fn incomplete_cli_font_imports_are_rejected_instead_of_used_partially() {
+        let globals = test_globals();
+        for reason in [
+            app_lib::fonts::ScanStopReason::UserCancel,
+            app_lib::fonts::ScanStopReason::CeilingHit,
+            app_lib::fonts::ScanStopReason::IncompleteIo,
+        ] {
+            let summary = app_lib::fonts::FontSourceImportSummary {
+                total: 12,
+                added: 10,
+                duplicated: 2,
+                reason,
+            };
+            let error = require_complete_cli_font_source(
+                &globals,
+                "recursive font library",
+                "递归字体库",
+                Some(Path::new("library")),
+                &summary,
+            )
+            .expect_err("partial non-interactive imports must fail closed");
+            assert!(error.contains("partial font results were discarded"));
+        }
+    }
+
+    #[test]
+    fn cli_drift_marks_existing_unreadable_recursive_source_modified() {
+        let guard = TempFontDbDir(create_cli_font_db_dir().unwrap());
+        let root = guard.0.join("library");
+        fs::create_dir_all(&root).unwrap();
+        let original = app_lib::font_cache::snapshot_source_directories(
+            &root,
+            app_lib::font_cache::FontDirectoryScope::Recursive,
+        )
+        .unwrap();
+        let cache_path = guard.0.join("drift-cache.sqlite3");
+        let mut cache = app_lib::font_cache::FontCache::open_or_create(&cache_path).unwrap();
+        cache.replace_source(&original, &[]).unwrap();
+        fs::write(root.join("evil\u{202e}name.ttf"), b"candidate").unwrap();
+
+        let report = check_cache_drift(&cache).unwrap();
+        assert_eq!(report.modified, vec![original.key()]);
+        assert!(report.removed.is_empty());
+    }
+
+    #[test]
+    fn recursive_snapshot_and_cache_identity_include_nested_candidate() {
+        let guard = TempFontDbDir(create_cli_font_db_dir().unwrap());
+        let root = guard.0.join("library");
+        let nested = root.join("nested").join("deeper");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(
+            nested.join("candidate.ttf"),
+            b"not parsed in this metadata test",
+        )
+        .unwrap();
+        let args = RefreshFontsArgs {
+            font_dirs: Vec::new(),
+            recursive_font_dirs: vec![root.clone()],
+        };
+        let (source_path, scope, flag) = refresh_font_directory_sources(&args).next().unwrap();
+        assert_eq!(flag, "--recursive-font-dir");
+        let snapshot =
+            app_lib::font_cache::snapshot_source_directories(source_path, scope).unwrap();
+        assert_eq!(
+            snapshot.scope,
+            app_lib::font_cache::FontDirectoryScope::Recursive
+        );
+        assert_eq!(snapshot.files.len(), 1);
+
+        let cache_path = guard.0.join("recursive-cache.sqlite3");
+        let mut cache = app_lib::font_cache::FontCache::open_or_create(&cache_path).unwrap();
+        cache.replace_source(&snapshot, &[]).unwrap();
+        let sources = cache.list_sources().unwrap();
+        assert_eq!(sources.len(), 1);
+        assert_eq!(
+            sources[0].scope,
+            app_lib::font_cache::FontDirectoryScope::Recursive
+        );
+        assert_eq!(sources[0].files.len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recursive_refresh_rejects_a_symlink_root_before_canonicalizing() {
+        use std::os::unix::fs::symlink;
+
+        let guard = TempFontDbDir(create_cli_font_db_dir().unwrap());
+        let target = guard.0.join("real-library");
+        let linked = guard.0.join("linked-library");
+        fs::create_dir_all(&target).unwrap();
+        symlink(&target, &linked).unwrap();
+        let mut globals = test_globals();
+        globals.cache_file = Some(guard.0.join("cache.sqlite3"));
+        let error = run_refresh_fonts(
+            &globals,
+            RefreshFontsArgs {
+                font_dirs: Vec::new(),
+                recursive_font_dirs: vec![linked],
+            },
+        )
+        .expect_err("the CLI writer path must reject a linked root");
+        assert!(error.contains("reparse-point root"));
     }
 
     #[test]
@@ -6955,6 +7582,7 @@ mod tests {
         let globals = test_globals();
         let args = EmbedArgs {
             font_dirs: Vec::new(),
+            recursive_font_dirs: Vec::new(),
             font_files: Vec::new(),
             no_system_fonts: true,
             on_missing: MissingFontAction::Warn,

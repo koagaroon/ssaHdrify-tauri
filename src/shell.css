@@ -335,6 +335,20 @@
   color: var(--accent);
 }
 
+/* Five feature tabs still fit the default 960 px window. Compress the
+   inter-tab gap at the supported 640 px minimum instead of allowing the
+   appended Style Edit tab to disappear beyond the header. */
+@media (width <= 720px) {
+  .tabs {
+    gap: 10px;
+  }
+
+  .tab {
+    gap: 5px;
+    font-size: 12px;
+  }
+}
+
 /* ── Main — tab panel host ───────────────────────────────── */
 .app-main {
   flex: 1 1 0;
@@ -547,6 +561,214 @@
    sharing the same season+episode) at a glance. Subtle, not loud. */
 .preview-table-row.preview-row-warning {
   background: color-mix(in srgb, var(--warning) 6%, transparent);
+}
+
+/* ── Style Edit workbench ──────────────────────────────── */
+.style-operations-panel {
+  padding: 12px 14px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+}
+
+.style-operations-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.style-operations-heading strong {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.style-operations-heading span {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.style-operation-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.style-operation {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-app);
+}
+
+.style-operation[data-enabled="false"] {
+  background: var(--bg-input);
+  filter: grayscale(0.6);
+}
+
+.style-operation-toggle,
+.style-source-filter-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.style-source-filter-toggle {
+  margin-top: 9px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.style-operation-fields {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.style-field-label {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.style-text-input {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.style-text-input:disabled {
+  border-color: var(--border-light);
+  color: var(--text-muted);
+  cursor: not-allowed;
+  filter: grayscale(1);
+}
+
+.style-text-input[aria-invalid="true"] {
+  border-color: var(--error);
+}
+
+.style-field-error {
+  color: var(--error);
+  font-size: 11px;
+}
+
+.style-edit-note {
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.style-preview-title {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.style-preview-title-summary {
+  min-width: 0;
+  flex: 1;
+}
+
+.style-preview-title-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.style-preview-action {
+  padding: 2px 8px;
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 10px;
+  text-transform: none;
+  letter-spacing: normal;
+  cursor: pointer;
+}
+
+.style-preview-action:hover:not(:disabled) {
+  border-color: var(--border);
+  color: var(--text-primary);
+}
+
+.style-preview-action:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+  filter: grayscale(1);
+}
+
+.style-preview-table .preview-table-row.style-preview-noop {
+  background: color-mix(in srgb, var(--text-muted) 5%, transparent);
+  color: var(--text-secondary);
+}
+
+.style-preview-table .preview-table-row.style-preview-error {
+  background: color-mix(in srgb, var(--error) 7%, transparent);
+}
+
+.style-preview-value {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+}
+
+.style-preview-before,
+.style-preview-after {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.style-preview-after {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.style-preview-arrow {
+  flex: none;
+  color: var(--accent);
+}
+
+.style-preview-result-change {
+  color: var(--success);
+  font-weight: 600;
+}
+
+.style-preview-result-noop {
+  color: var(--text-secondary);
+}
+
+.style-preview-result-error {
+  color: var(--error);
+}
+
+@media (width <= 720px) {
+  .style-operation-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .style-preview-table .preview-table-head,
+  .style-preview-table .preview-table-row {
+    gap: 6px;
+    padding-inline: 8px;
+  }
 }
 
 /* Per-row subtitle picker — universal dropdown in the Batch Rename
@@ -1521,8 +1743,8 @@
   user-select: text;
 }
 
-/* Option card — 40px rounded icon + title + subtitle. Both picker
-   paths (folder, files) get one. */
+/* Option card — 40px rounded icon + title + subtitle. Each source picker
+   path (shallow folder, recursive library, files) gets one. */
 .modal-opt {
   display: grid;
   grid-template-columns: 40px 1fr;

@@ -6,18 +6,18 @@
 //! library API and asserts contracts the unit tests can't see:
 //!
 //! 1. `refresh-fonts --font-dir D --cache-file F` produces an
-//!    SQLite file at F with one `cached_folders` row whose path
-//!    matches D's canonicalized form, and `cache_meta.schema_version`
+//!    SQLite file at F with one shallow cached source whose normalized
+//!    canonical path matches D, and `cache_meta.schema_version`
 //!    matches `font_cache::SCHEMA_VERSION`.
 //! 2. Re-running `refresh-fonts` against the same dir is idempotent
-//!    — `cached_folders` still has exactly one row for that path,
-//!    not two.
+//!    — the cache still has exactly one shallow source identity for
+//!    that path, not two.
 //! 3. `refresh-fonts --no-cache <whatever>` errors out as
 //!    contradictory (locked design: refresh-fonts requires the cache
 //!    by definition).
 //! 4. `refresh-fonts` exits non-zero when every requested source is
 //!    skipped, instead of printing a false cache-updated success line.
-//! 5. `refresh-fonts` refuses to create a cache with more folder rows
+//! 5. `refresh-fonts` refuses to create a cache with more source rows
 //!    than the read-side sanity cap will accept.
 //! 6. `embed --cache-file <existing-cache> --no-cache` runs without
 //!    touching the cache file — file mtime stays unchanged across
@@ -25,13 +25,12 @@
 //!    both sides.
 //! 7. `embed` against a cache whose folder mtime has drifted prints
 //!    the drift report on stderr and falls back to no-cache.
+//! 8. `refresh-fonts --recursive-font-dir` reaches a nested font and persists
+//!    the root with recursive scope.
 //!
-//! Test doesn't use real font files — empty `.ttf` files in a temp
-//! directory are enough to exercise the cache writer and reader; the
-//! folder-level rows (which are what drift detection inspects) get
-//! populated regardless of whether the parser found any faces inside.
-//! Tests that require actual face resolution are scoped to the unit
-//! test layer in `font_cache.rs` and `font-embedder.test.ts`.
+//! The cache deliberately refuses to publish a source with zero readable
+//! faces, so the helper copies one operating-system font into each temporary
+//! source. The copy is test-only and is removed with the temporary directory.
 //!
 //! Run with:
 //!     cd src-tauri && cargo test --test test_font_cache --release
@@ -42,7 +41,10 @@ use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
-use app_lib::font_cache::{FontCache, MAX_CACHED_FOLDERS};
+use app_lib::font_cache::{cache_source_key, FontCache, FontDirectoryScope, MAX_CACHED_FOLDERS};
+
+mod common;
+use common::make_real_font_dir as make_font_dir;
 
 const FIXTURE_ASS: &str = concat!(
     "[Script Info]\n",
@@ -76,17 +78,6 @@ fn write_fixture_ass(dir: &Path, name: &str) -> PathBuf {
     let path = dir.join(name);
     fs::write(&path, FIXTURE_ASS).expect("failed to write fixture ASS");
     path
-}
-
-/// Make a font folder containing one empty `.ttf` so the scanner has
-/// something to walk; parser failure is fine — the cache writer's
-/// `replace_folder` call still creates the folder row (the unit of
-/// drift tracking).
-fn make_font_dir(dir: &Path) -> PathBuf {
-    let font_dir = dir.join("fonts");
-    fs::create_dir_all(&font_dir).expect("failed to create fonts subdir");
-    fs::write(font_dir.join("placeholder.ttf"), b"").expect("failed to write placeholder ttf");
-    font_dir
 }
 
 fn cache_path(dir: &Path) -> PathBuf {
@@ -157,9 +148,10 @@ fn refresh_fonts_creates_cache_with_one_folder_row() {
         1,
         "expected exactly 1 cached folder, got {folders:?}"
     );
-    let canonical_font_dir = font_dir.canonicalize().expect("canonicalize font dir");
     let stored = &folders[0].folder_path;
-    let canonical_str = canonical_font_dir.display().to_string();
+    let canonical_str = cache_source_key(&font_dir, FontDirectoryScope::Shallow)
+        .expect("derive normalized cache source key")
+        .source_root;
     assert_eq!(
         stored, &canonical_str,
         "cached folder path mismatch: stored={stored}, canonical={canonical_str}"
@@ -196,6 +188,40 @@ fn refresh_fonts_idempotent_no_duplicate_folder_rows() {
         1,
         "two consecutive refreshes must yield exactly 1 row, got {folders:?}"
     );
+
+    let _ = fs::remove_dir_all(work);
+}
+
+#[test]
+fn refresh_fonts_recursive_source_reaches_nested_font_and_persists_scope() {
+    let work = temp_dir("recursive-create");
+    let library_root = work.join("library");
+    make_font_dir(&library_root.join("collection").join("family"));
+    let cache_path = cache_path(&work);
+
+    let output = run_cli(&[
+        "--cache-file",
+        cache_path.to_str().unwrap(),
+        "refresh-fonts",
+        "--recursive-font-dir",
+        library_root.to_str().unwrap(),
+    ]);
+    assert!(
+        output.status.success(),
+        "recursive refresh-fonts failed: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let inspect = FontCache::open_or_create(&cache_path).expect("open recursive cache");
+    let sources = inspect.list_sources().expect("list recursive sources");
+    assert_eq!(
+        sources.len(),
+        1,
+        "expected one recursive source: {sources:?}"
+    );
+    let expected = cache_source_key(&library_root, FontDirectoryScope::Recursive)
+        .expect("derive recursive cache source key");
+    assert_eq!(sources[0].key(), expected);
 
     let _ = fs::remove_dir_all(work);
 }
@@ -244,11 +270,12 @@ fn refresh_fonts_errors_when_every_source_is_skipped() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("Not a directory"),
+        stderr.contains("not a directory"),
         "stderr should show why the source was skipped: {stderr}"
     );
     assert!(
-        stderr.contains("could not index any source folders"),
+        stderr.contains("could not index any font source")
+            || stderr.contains("未能索引任何字体来源"),
         "stderr should refuse the all-skipped refresh as a failed run: {stderr}"
     );
     assert!(
@@ -291,7 +318,7 @@ fn refresh_fonts_rejects_folder_count_over_cache_cap() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains(&format!(
-            "exceeding the {MAX_CACHED_FOLDERS}-folder cache sanity cap"
+            "exceeding the {MAX_CACHED_FOLDERS}-source cache sanity cap"
         )),
         "stderr should explain the cache folder cap: {stderr}"
     );

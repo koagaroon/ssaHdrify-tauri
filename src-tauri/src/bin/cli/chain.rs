@@ -263,7 +263,7 @@ pub fn parse_chain_argv(
              multiple embed steps are not yet supported. Run separate \
              chains; or, when the embed steps share --no-system-fonts \
              and --on-missing settings, combine font sources (--font-dir \
-             / --font-file) into a single embed step."
+             / --recursive-font-dir / --font-file) into a single embed step."
         ));
     }
 
@@ -691,8 +691,8 @@ mod tests {
 
     // `parse_terminal_embed_step_with_repeatable_font_flags` previously
     // lived here, but it only asserted `files` — accumulation behavior
-    // for `--font-dir` / `--font-file` is covered by
-    // `marshal_embed_step_renames_to_camel_case` below where the per-Args
+    // for `--font-dir` / `--recursive-font-dir` / `--font-file` is covered by
+    // `marshal_embed_step_with_mixed_sources_renames_to_camel_case` below where the per-Args
     // fields are visible. Test-name-as-contract: the deleted title
     // promised repeatable-flag coverage it didn't actually exercise.
 
@@ -995,9 +995,11 @@ mod tests {
     }
 
     #[test]
-    fn marshal_embed_step_renames_to_camel_case() {
+    fn marshal_embed_step_with_mixed_sources_renames_to_camel_case() {
         let argv = argv_of(&[
             "embed",
+            "--recursive-font-dir",
+            "./library",
             "--font-dir",
             "./fonts",
             "--font-file",
@@ -1011,9 +1013,58 @@ mod tests {
         let payload = plan.to_runtime_payload("/tmp/cat.ass", "ass body");
         let params = &payload["plan"]["steps"][0]["params"];
         assert_eq!(params["fontDirs"][0], "./fonts");
+        assert_eq!(params["recursiveFontDirs"][0], "./library");
         assert_eq!(params["fontFiles"][0], "./SmileySans.ttf");
         assert_eq!(params["noSystemFonts"], true);
         assert_eq!(params["onMissing"], "fail");
+    }
+
+    #[test]
+    fn parse_and_marshal_embed_with_shallow_source_only() {
+        let argv = argv_of(&["embed", "--font-dir", "./fonts", "cat.ass"]);
+        let plan = parse_chain_argv(&argv, None).unwrap();
+        let ParsedStep::Embed(args) = &plan.steps[0] else {
+            panic!("expected Embed");
+        };
+        assert_eq!(args.font_dirs, vec![PathBuf::from("./fonts")]);
+        assert!(args.recursive_font_dirs.is_empty());
+
+        let params =
+            &plan.to_runtime_payload("/tmp/cat.ass", "ass body")["plan"]["steps"][0]["params"];
+        assert_eq!(params["fontDirs"][0], "./fonts");
+        assert_eq!(params["recursiveFontDirs"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn parse_and_marshal_embed_with_recursive_source_only() {
+        let argv = argv_of(&["embed", "--recursive-font-dir", "./library", "cat.ass"]);
+        let plan = parse_chain_argv(&argv, None).unwrap();
+        let ParsedStep::Embed(args) = &plan.steps[0] else {
+            panic!("expected Embed");
+        };
+        assert!(args.font_dirs.is_empty());
+        assert_eq!(args.recursive_font_dirs, vec![PathBuf::from("./library")]);
+
+        let params =
+            &plan.to_runtime_payload("/tmp/cat.ass", "ass body")["plan"]["steps"][0]["params"];
+        assert_eq!(params["fontDirs"], serde_json::json!([]));
+        assert_eq!(params["recursiveFontDirs"][0], "./library");
+    }
+
+    #[test]
+    fn parse_and_marshal_embed_with_no_explicit_font_sources() {
+        let argv = argv_of(&["embed", "cat.ass"]);
+        let plan = parse_chain_argv(&argv, None).unwrap();
+        let ParsedStep::Embed(args) = &plan.steps[0] else {
+            panic!("expected Embed");
+        };
+        assert!(!args.has_user_font_sources());
+
+        let params =
+            &plan.to_runtime_payload("/tmp/cat.ass", "ass body")["plan"]["steps"][0]["params"];
+        assert_eq!(params["fontDirs"], serde_json::json!([]));
+        assert_eq!(params["recursiveFontDirs"], serde_json::json!([]));
+        assert_eq!(params["fontFiles"], serde_json::json!([]));
     }
 
     #[test]

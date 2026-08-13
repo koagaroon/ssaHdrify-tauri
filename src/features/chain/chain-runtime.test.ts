@@ -236,6 +236,7 @@ describe("runChain — embed step", () => {
           kind: "embed",
           params: {
             fontDirs: [],
+            recursiveFontDirs: [],
             fontFiles: [],
             noSystemFonts: false,
             onMissing: "warn",
@@ -269,6 +270,7 @@ describe("runChain — embed step", () => {
           kind: "embed",
           params: {
             fontDirs: [],
+            recursiveFontDirs: [],
             fontFiles: [],
             noSystemFonts: false,
             onMissing: "warn",
@@ -292,6 +294,7 @@ describe("runChain — embed step", () => {
           kind: "embed",
           params: {
             fontDirs: [],
+            recursiveFontDirs: [],
             fontFiles: [],
             noSystemFonts: false,
             onMissing: "warn",
@@ -317,6 +320,7 @@ describe("runChain — embed step", () => {
           kind: "embed",
           params: {
             fontDirs: [],
+            recursiveFontDirs: [],
             fontFiles: [],
             noSystemFonts: false,
             onMissing: "warn",

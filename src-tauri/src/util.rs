@@ -348,18 +348,27 @@ pub fn strip_visual_line_breaks(s: &str) -> String {
 /// the single source of truth.
 #[cfg(windows)]
 pub fn is_reparse_point(path: &Path) -> bool {
+    try_is_reparse_point(path).unwrap_or(false)
+}
+
+/// Fallible counterpart used by recursive walkers. A metadata failure must
+/// not be confused with "ordinary entry": callers can mark the traversal
+/// incomplete instead of following a path whose link status is unknown.
+#[cfg(windows)]
+pub fn try_is_reparse_point(path: &Path) -> std::io::Result<bool> {
     use std::os::windows::fs::MetadataExt;
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
-    std::fs::symlink_metadata(path)
-        .map(|m| m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0)
-        .unwrap_or(false)
+    std::fs::symlink_metadata(path).map(|m| m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0)
 }
 
 #[cfg(not(windows))]
 pub fn is_reparse_point(path: &Path) -> bool {
-    std::fs::symlink_metadata(path)
-        .map(|m| m.file_type().is_symlink())
-        .unwrap_or(false)
+    try_is_reparse_point(path).unwrap_or(false)
+}
+
+#[cfg(not(windows))]
+pub fn try_is_reparse_point(path: &Path) -> std::io::Result<bool> {
+    std::fs::symlink_metadata(path).map(|m| m.file_type().is_symlink())
 }
 
 #[cfg(test)]

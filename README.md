@@ -76,6 +76,7 @@ macOS / Linux users, see "Build from Source" below.
 | **时间轴偏移 / Timing Shift**           | 批量调整字幕时间戳；可从指定时间点之后开始偏移，并实时预览效果 / Batch-adjust subtitle timestamps; optionally start after a chosen timestamp, with live preview                                                                                                                                                                                                                                                                         |
 | **字体嵌入 / Font Embedding**           | 自动检测字幕引用的字体，在系统字体库或本地字体源中匹配，并把子集化后的字体嵌入 ASS 文件 / Detect fonts referenced by the subtitle, match them from system or local font sources, and embed subset fonts into the ASS file                                                                                                                                                                                                               |
 | **批量重命名 / Batch Rename**           | 自动匹配视频和字幕，并按视频文件名重命名字幕；当同一视频匹配到多个候选字幕时，可手动选择并调整配对，也可以启用多字幕模式，为每个视频保留多个语言的外挂字幕。 / Automatically match videos and subtitles, then rename subtitles after the video filename; when one video has multiple subtitle candidates, manually choose and adjust pairings, or enable multi-subtitle mode to keep multiple language sidecar subtitles for each video |
+| **样式编辑 / Style Edit**               | 批量预览并修改 ASS/SSA `Style:` 行的字体族和字号。两项操作可独立启用，也可以只替换指定的原字体；行内 `\fn` / `\fs` 标签保持不变。 / Preview and batch-edit font family and size in ASS/SSA `Style:` rows. Enable either operation independently, optionally filter one source family, and leave inline `\fn` / `\fs` tags untouched.                                                                                                    |
 
 > [!TIP]
 > **完整支持中文路径** — 包含中文、日文或其他非 ASCII 字符的文件路径都可以正常处理。Tauri 和 Rust 底层使用 Unicode API，不受传统 ANSI 编码限制。
@@ -95,6 +96,7 @@ Format support is not identical across workflows. The table below describes curr
 | HDR 色彩转换 / HDR Color Conversion | 原生处理 / native                          | 转换为 ASS / convert to ASS                | 转换为 ASS / convert to ASS                | 基本文本 cue 转换为 ASS / basic text cues convert to ASS                                            | 不支持 / no                                                  |
 | 时间轴偏移 / Timing Shift           | 保持格式 / preserve format                 | 保持格式 / preserve format                 | 保持格式 / preserve format                 | 重建基础 cue；不保留全部 WebVTT 元数据 / rebuilds basic cues; does not preserve all WebVTT metadata | 不支持 / no                                                  |
 | 字体嵌入 / Font Embedding           | 支持 / yes                                 | 不支持 / no                                | 不支持 / no                                | 不支持 / no                                                                                         | 不支持 / no                                                  |
+| 样式编辑 / Style Edit               | 支持 / yes                                 | 不支持 / no                                | 不支持 / no                                | 不支持 / no                                                                                         | 不支持 / no                                                  |
 | `diagnose-fonts`                    | 支持 / yes                                 | 不支持 / no                                | 不支持 / no                                | 不支持 / no                                                                                         | 不支持 / no                                                  |
 | 批量重命名 / Batch Rename           | 配对、复制或重命名 / pair, copy, or rename | 配对、复制或重命名 / pair, copy, or rename | 配对、复制或重命名 / pair, copy, or rename | 配对、复制或重命名 / pair, copy, or rename                                                          | 作为不解析的侧车文件配对、复制或重命名 / opaque sidecar only |
 | `chain`                             | 取决于步骤 / depends on steps              | 取决于步骤 / depends on steps              | 取决于步骤 / depends on steps              | 仅支持本身接受 `.vtt` 的步骤 / only where the chosen step accepts `.vtt`                            | 不支持 / no                                                  |
@@ -139,13 +141,13 @@ Format support is not identical across workflows. The table below describes curr
 4. 选择输出位置：默认保存到源字幕旁，也可以保存到指定文件夹；指定文件夹模式会将输出平铺到该文件夹，重复输出名会自动跳过 / Choose the output location: save beside each source subtitle by default, or save into a chosen folder; chosen-folder mode writes flat outputs into that folder and skips duplicate output names
 5. 点击「嵌入已选字体」，将子集化后的字体数据写入 `.embedded.ass` 输出文件 / Click **Embed Selected Fonts** to write the subset font data into `.embedded.ass` output files
 
-字幕组排版常用字体通常没有安装在系统中。打开「字体来源 / Font Sources」面板，添加需要扫描的本地文件夹；这些字体无需系统安装，也可以参与匹配。
+字幕组排版常用字体通常没有安装在系统中。打开「字体来源 / Font Sources」面板：选择「添加文件夹 / Add Folder」只扫描所选文件夹这一层；选择「添加字体库 / Add Font Library」会扫描所选根目录及其所有子文件夹。这些字体无需系统安装，也可以参与匹配。
 
-Fonts commonly used in fan-sub typesetting are often not installed system-wide. Open **Font Sources**, add the local folders you want to scan, and those fonts can be matched without installing them into the OS.
+Fonts commonly used in fan-sub typesetting are often not installed system-wide. Open **Font Sources**: **Add Folder** scans only the selected folder, while **Add Font Library** scans the selected root and all of its subfolders. These fonts can be matched without installing them into the OS.
 
-支持大型字体文件夹；扫描时会实时显示已读取的字体数量，也可以随时取消。选择约 5000 个字体文件或总量约 5 GiB 以上的来源前，程序会先弹出确认对话框。扫描和缓存写入都有安全上限；超大或异常来源可能提前停止，或仅用于本次会话而不写入持久化缓存，并会在界面/日志中提示。
+支持大型字体文件夹和多层字体库；发现文件与解析字体时都会显示进度，也可以随时取消。选择约 5000 个字体文件或总量约 5 GiB 以上的来源前，程序会先弹出确认对话框。扫描和缓存写入都有安全上限；超大、扫描中变化、无法完整读取或被取消的来源可能提前停止，或仅用于本次会话而不写入持久化缓存，并会在界面/日志中提示。递归扫描不会跟随符号链接、junction（目录联接）或其他 reparse point（重解析点）。
 
-Large font folders are supported; the scan shows a real-time count of fonts read and can be cancelled at any time. Before scanning a source with about 5000 font files or about 5 GiB of content, the app asks for confirmation. Scanning and cache writes are bounded by safety ceilings; unusually large or abnormal sources may stop early, or may be used only for the current session instead of being written to the persistent cache, with a visible UI/log message.
+Large font folders and nested libraries are supported; discovery and parsing show progress and can be cancelled. Before scanning a source with about 5000 font files or about 5 GiB of content, the app asks for confirmation. Scanning and cache writes are bounded by safety ceilings; unusually large, changing, unreadable, or cancelled sources may stop early or remain available only for the current session instead of being written to the persistent cache, with a visible UI/log message. Recursive scans do not follow symbolic links, junctions, or other reparse points.
 
 > **字体名称匹配 / Font Name Matching**
 >
@@ -156,6 +158,22 @@ Large font folders are supported; the scan shows a real-time count of fonts read
 > 对 `.ttc` / `.otc` 字体集合，工具会按匹配到的 face index 抽出对应字形并嵌入为单 face 子集。ASS `[Fonts]` 里的 `fontname:` 是生成的嵌入项标签，例如 `dream_han_serif_sc_w22.ttf`，不代表源文件必须是 `.ttf`；实际匹配依赖子集字体内部保留的 `name` 表。
 >
 > For `.ttc` / `.otc` collections, the matched face index is extracted and embedded as a single-face subset. The ASS `[Fonts]` `fontname:` line is a generated attachment label, such as `dream_han_serif_sc_w22.ttf`; it does not mean the source file had to be `.ttf`. Matching relies on the preserved internal `name` table in the subset font.
+
+### 样式编辑 / Style Edit
+
+1. 选择一个或多个 ASS/SSA 文件；应用会读取每个文件的 `[V4+ Styles]` 或 `[V4 Styles]` 表，并在写入前列出全部 `Style:` 行 / Select one or more ASS/SSA files; the app reads each `[V4+ Styles]` or `[V4 Styles]` table and lists every `Style:` row before writing
+2. 独立启用「更改字体族」和/或「更改字号」。字体族操作还可以限定为只替换一个指定的原字体 / Independently enable **Change font family** and/or **Change font size**. The family operation can optionally replace only one specified source family
+3. 在预览表中逐行确认旧值和新值；默认勾选所有会发生变化的行，也可以取消任意行 / Review old and new values row by row; every effective change is checked by default, and any row can be cleared
+4. 点击「写入」。输出固定为源文件旁的 `.styled.ass` / `.styled.ssa` 新文件；如果目标已存在，本次不会覆盖它 / Click **Write**. Output is always a new sibling `.styled.ass` / `.styled.ssa` file; an existing target is never overwritten
+
+编辑器只修改样式表中的 `Fontname` 和 `Fontsize` 字段，并按文件自己的 `Format:` 列顺序解析。它不会全局替换对话或注释文字，也不会更改行内 `\fn` / `\fs` 覆盖标签。输出保留源文件的受支持文本编码、BOM（字节顺序标记）和换行符；如果源文件在预览后发生变化，安全写入会拒绝使用过期计划。
+
+The editor changes only `Fontname` and `Fontsize` fields in the style table and follows each file's own `Format:` column order. It does not globally replace dialogue or comment text, and it leaves inline `\fn` / `\fs` override tags untouched. Output preserves the source's supported text encoding, byte-order mark (BOM), and line endings; if a source changes after preview, the safe writer rejects the stale plan.
+
+> [!NOTE]
+> 样式编辑目前仅在 GUI 中提供，不属于 CLI 或 `chain`。每个源文件上限为 50 MiB；单次选择上限为 500 个文件、200 MiB 源文件字节、内存中保留的 200 MiB 解码文本和 2,000 个 Style 行。超过任一上限时会拒绝整个选择，以保证写入前的预览完整。
+>
+> Style Edit is currently GUI-only and is not part of the CLI or `chain`. Each source file is capped at 50 MiB; one selection is capped at 500 files, 200 MiB of source bytes, 200 MiB of decoded text retained in memory, and 2,000 Style rows. Exceeding any limit rejects the whole selection so the pre-write preview remains complete.
 
 ### 批量重命名 / Batch Rename
 
@@ -176,9 +194,9 @@ Large font folders are supported; the scan shows a real-time count of fonts read
 
 ## CLI 使用 | CLI Usage
 
-`ssahdrify-cli` 是 GUI 的命令行版（CLI），与 GUI 从同一份源代码构建。四个核心功能（HDR 转换 / 时间轴偏移 / 字体嵌入 / 批量重命名）和 GUI 版保持对等；CLI 另外提供 `chain`（一次调用串联多个步骤，只有最后一步写入文件）、`refresh-fonts`（构建或刷新 CLI 字体缓存）和 `diagnose-fonts`（只诊断字体解析，不写字幕）等子命令。
+`ssahdrify-cli` 与 GUI 从同一份源代码构建，并提供 HDR 转换、时间轴偏移、字体嵌入和批量重命名。新增的样式编辑器目前仅在 GUI 中提供。CLI 另外提供 `chain`（一次调用串联多个步骤，只有最后一步写入文件）、`refresh-fonts`（构建或刷新 CLI 字体缓存）和 `diagnose-fonts`（只诊断字体解析，不写字幕）等子命令。
 
-`ssahdrify-cli` is the command-line (CLI) version of the GUI, built from the same source. The four core features (HDR convert / Timing shift / Font embed / Batch rename) remain equivalent to the GUI; the CLI additionally provides `chain` (run multiple steps in one invocation, with only the final step writing files), `refresh-fonts` (build or refresh the CLI font cache), and `diagnose-fonts` (diagnose font resolution without writing subtitles).
+`ssahdrify-cli` is built from the same source as the GUI and provides HDR Convert, Time Shift, Font Embed, and Batch Rename. The new Style Edit workbench is currently GUI-only. The CLI also provides `chain` (run multiple steps with only the last step writing), `refresh-fonts` (build or refresh the CLI font cache), and `diagnose-fonts` (read-only font diagnostics).
 
 ### 快速示例 | Quick Examples
 
@@ -199,11 +217,14 @@ ssahdrify-cli shift --map timing-map.json input.srt
 # 字体嵌入：从指定文件夹查找字体 / Font embed: search a folder for fonts
 ssahdrify-cli embed --font-dir "<font-folder>" input.ass
 
+# 字体嵌入：递归搜索整个字体库树 / Font embed: recursively search a font-library tree
+ssahdrify-cli embed --recursive-font-dir "<font-library-root>" input.ass
+
 # 字体解析诊断：不写输出文件 / Font diagnostics: no output subtitle writes
 ssahdrify-cli diagnose-fonts --font-dir "<font-folder>" input.ass
 
 # 持久化字体缓存：先扫描一次，后续 embed 复用 / Persistent font cache: scan once, reuse later
-ssahdrify-cli refresh-fonts --font-dir "<font-folder>"
+ssahdrify-cli refresh-fonts --recursive-font-dir "<font-library-root>"
 ssahdrify-cli embed input.ass            # 自动使用缓存 / uses cache automatically
 
 # 链式调用：一次完成 HDR 转换和时间轴偏移，只有最后一步写文件 / Chain: HDR + shift in one command, only the final step writes
@@ -317,15 +338,18 @@ ssahdrify-cli embed --font-dir "<font-folder>" --on-missing fail --fail-fast --d
 
 ### 字体缓存 | Font Cache
 
-`embed` 每次启动通常都要扫描每个 `--font-dir` 下的字体文件，构建查找表（一般几秒到几十秒；5000+ 字体可能需要几分钟）。**持久化字体缓存**能将这一过程变为一次性操作：先运行 `refresh-fonts`，将字体元数据写入磁盘上的 SQLite 文件；之后 `embed` 会在缓存仍有效时直接复用它，跳过扫描。对于字幕组按集批量处理尤其有用。
+`embed` 每次启动通常都要扫描每个 `--font-dir`（浅层）或 `--recursive-font-dir`（递归）下的字体文件，构建查找表（一般几秒到几十秒；5000+ 字体可能需要几分钟）。**持久化字体缓存**能将这一过程变为一次性操作：先运行 `refresh-fonts`，将字体元数据写入磁盘上的 SQLite 文件；之后 `embed` 会在缓存仍有效时直接复用它，跳过扫描。对于字幕组按集批量处理尤其有用。
 
-The `embed` subcommand normally scans the font files under each `--font-dir` every time it starts to build its lookup table (usually seconds to tens of seconds; minutes for 5000+ font collections). The **persistent font cache** turns this into a one-time step: run `refresh-fonts` to write font metadata into a SQLite file on disk, then later `embed` calls reuse it while the cache is still valid. This is especially useful for fan-sub teams processing episodes in batches.
+The `embed` subcommand normally scans the font files under each shallow `--font-dir` or recursive `--recursive-font-dir` every time it starts to build its lookup table (usually seconds to tens of seconds; minutes for 5000+ font collections). The **persistent font cache** turns this into a one-time step: run `refresh-fonts` to write font metadata into a SQLite file on disk, then later `embed` calls reuse it while the cache is still valid. This is especially useful for fan-sub teams processing episodes in batches.
 
 #### 工作流 | Workflow
 
 ```bash
 # 一次性扫描字体目录，构建缓存 / Scan once to build the cache
 ssahdrify-cli refresh-fonts --font-dir "<anime-font-folder>" --font-dir "<latin-font-folder>"
+
+# 也可以把一棵字体目录树作为一个来源 / Or track one whole directory tree as one source
+ssahdrify-cli refresh-fonts --recursive-font-dir "<font-library-root>"
 
 # 后续 embed 自动复用缓存（不再扫描） / Subsequent embed uses cache (no scan)
 ssahdrify-cli embed input.ass
@@ -361,25 +385,27 @@ Use `--cache-file <PATH>` to choose a different path.
 
 #### 漂移检测 | Drift Detection
 
-`embed` 启动时会对缓存做轻量校验：对每个已缓存文件夹执行一次 `stat()`，检查 mtime 是否变化。如果发现漂移（说明你添加 / 删除 / 替换 / 重命名了字体文件），CLI 会在 stderr 列出发生变化的文件夹，本次运行自动退回无缓存模式（使用 `--font-dir` 或系统字体），并提示你运行 `refresh-fonts` 更新。**缓存不会被静默重建**——缓存写入必须由 `refresh-fonts` 显式触发。
+`embed` 启动时会校验每个缓存来源的目录清单和候选字体文件元数据，包括递归来源的子文件夹。如果发现漂移（说明你添加 / 删除 / 替换 / 重命名了字体文件或文件夹），CLI 会在 stderr 列出发生变化的来源及其扫描范围，本次运行自动退回无缓存模式（使用显式字体来源或系统字体），并提示你运行 `refresh-fonts` 更新。**缓存不会被静默重建**——缓存写入必须由 `refresh-fonts` 显式触发。
 
-`embed` runs a lightweight cache validation at startup: one `stat()` per cached folder checks whether mtime changed. If drift is detected (meaning you added / deleted / replaced / renamed font files), the CLI lists the changed folders on stderr, automatically falls back to no-cache mode for this run (using `--font-dir` or system fonts), and tells you to run `refresh-fonts`. **The cache is never silently rebuilt** — cache writes are always triggered explicitly by `refresh-fonts`.
+At startup, `embed` validates each cached source's directory inventory and candidate-font metadata, including nested folders for recursive sources. If drift is detected (meaning you added, deleted, replaced, or renamed font files or folders), the CLI lists the changed source and its scan scope on stderr, automatically falls back to no-cache mode for this run (using explicit font sources or system fonts), and tells you to run `refresh-fonts`. **The cache is never silently rebuilt** — cache writes are always triggered explicitly by `refresh-fonts`.
 
 #### 限制 | Limitations
 
-- 每个 `--font-dir` 只扫描一层（不递归），与 `embed --font-dir` 语义一致。树状字体目录需要逐层显式传入。
-- 字体缓存最多记录 256 个源文件夹；更大的字体树请先整理为更少的叶子目录，或拆成多个缓存文件使用。
-- 单个缓存来源最多安全写入约 **20,000 个 font faces**；超过时 `refresh-fonts` 会跳过该来源，GUI 本次扫描可继续使用会话索引，但不会为该超大来源写入持久化缓存。
+- `--font-dir` 和 GUI 的「添加文件夹 / Add Folder」始终只扫描一层；`--recursive-font-dir` 和「添加字体库 / Add Font Library」才会递归扫描。两种范围可以同时用于同一个根目录，并作为独立来源管理。
+- 字体缓存最多记录 256 个来源。单个递归扫描还受 4096 个真实目录、64 层深度、50,000 个候选字体文件、128 GiB 候选文件总量和 200,000 个目录项等安全上限约束。
+- 单个缓存来源最多安全写入 **32,768 个 font faces**。超过上限、用户取消、遇到读取不完整或扫描期间来源变化时，结果不会作为完整缓存发布；GUI 已成功读取的部分字体可以仅在当前会话继续使用，并会明确提示。
 - 单个字体文件的扫描/子集化读取上限为 **64 MiB**；超过会被拒绝并报告错误。
-- GUI 和 CLI 各自使用独立缓存文件，避免 SQLite 锁竞争；同一个可执行文件同时只会读写一个缓存文件（默认路径或 `--cache-file` 覆盖路径）。`chain` v1 暂不读取缓存（其中的 embed 步始终使用显式 `--font-dir` 或系统字体）。
-- 跨版本不会自动迁移缓存结构；版本不匹配时，CLI 会明确提示删除缓存文件并重新运行 `refresh-fonts`。
+- 递归扫描不会跟随符号链接、Windows junction 或其他 reparse point（重解析点），从而避免越过所选字体库根目录或形成目录循环。
+- GUI 和 CLI 各自使用独立缓存文件，避免 SQLite 锁竞争；同一个可执行文件同时只会读写一个缓存文件（默认路径或 `--cache-file` 覆盖路径）。`chain` v1 暂不读取缓存（其中的 embed 步始终使用显式 `--font-dir`、`--recursive-font-dir` 或系统字体）。
+- 跨版本不会自动迁移缓存结构。本次递归来源支持采用 cache schema v6；旧缓存会进入明确的一次性重建流程。CLI 会提示删除旧缓存文件并重新运行 `refresh-fonts`，GUI 会在确认后重建，不会静默改写。
 
-- Each `--font-dir` is scanned one level deep (non-recursive), matching `embed --font-dir` semantics. Pass each leaf folder explicitly for tree-shaped collections.
-- The font cache tracks at most 256 source folders. For larger font trees, organize fonts into fewer leaf folders or split work across separate cache files.
-- A single cached source can safely persist about **20,000 font faces**. If it exceeds that cap, `refresh-fonts` skips that source, while the GUI can still use the current session index but will not write a persistent cache for that oversized source.
+- `--font-dir` and GUI **Add Folder** always scan one level; only `--recursive-font-dir` and **Add Font Library** recurse. The same root can be tracked independently in both scopes.
+- The font cache tracks at most 256 sources. A recursive scan is also bounded to 4096 real directories, 64 levels, 50,000 candidate font files, 128 GiB of candidate-file data, and 200,000 directory entries.
+- A single cached source can safely persist **32,768 font faces**. A ceiling hit, user cancellation, incomplete read, or source mutation prevents publication as a complete cache; successfully parsed GUI results may remain available for the current session with an explicit notice.
 - A single font file is capped at **64 MiB** for scanning/subsetting; larger files are refused with an error.
-- GUI and CLI use separate cache files to avoid SQLite lock contention; a single binary opens exactly one cache at a time (default path or `--cache-file` override). `chain` v1 does not consult the cache; its embed step always uses explicit `--font-dir` or system fonts.
-- Cache schema is not migrated automatically across releases. If the version does not match, the CLI explicitly tells you to delete the cache file and rerun `refresh-fonts`.
+- Recursive scans do not follow symbolic links, Windows junctions, or other reparse points, which prevents traversal outside the chosen library root and directory cycles.
+- GUI and CLI use separate cache files to avoid SQLite lock contention; a single binary opens exactly one cache at a time (default path or `--cache-file` override). `chain` v1 does not consult the cache; its embed step always uses explicit `--font-dir`, `--recursive-font-dir`, or system fonts.
+- Cache schemas are not migrated silently. Recursive source support uses cache schema v6, so an older cache goes through a visible one-time rebuild flow: the CLI asks you to remove it and rerun `refresh-fonts`, while the GUI rebuilds only after confirmation.
 
 ---
 
@@ -493,9 +519,9 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端测试 / Rust bac
 >
 > Release builds use native TypeScript 7 for type-checking. ESLint and `typescript-eslint` continue to use TypeScript 6's programmatic API through the official `@typescript/typescript6` compatibility package, and CI checks both toolchains. Use the `npm run typecheck:*` scripts above instead of relying on bare `tsc` / `npx tsc` resolution order.
 >
-> Dependabot 当前不会自动更新 npm 别名，因此 `Dependency currency` 工作流每周直接检查 npm 官方注册表中的 TypeScript 7、TypeScript 6 兼容包和实际 TypeScript 6 引擎版本。
+> `Dependency Watch` 是只读的每周检查：它监视直接 npm 和 Cargo 依赖、TypeScript 别名工具链，以及锁定到完整提交哈希的 GitHub Actions。发现普通更新时，它只让工作流运行显示红色并写入汇总；不会创建分支或拉取请求。依赖安全漏洞由 GitHub Dependabot Alerts 单独监视。
 >
-> Dependabot currently skips npm aliases during version updates, so the `Dependency currency` workflow checks TypeScript 7, the TypeScript 6 compatibility wrapper, and the effective TypeScript 6 engine directly against the official npm registry each week.
+> `Dependency Watch` is a read-only weekly check for direct npm and Cargo dependencies, the aliased TypeScript toolchain, and GitHub Actions pinned to full commit hashes. When an ordinary update exists, it only marks the workflow run red and writes a summary; it cannot create a branch or pull request. GitHub Dependabot Alerts separately monitor dependency security vulnerabilities.
 
 ---
 
@@ -503,8 +529,9 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端测试 / Rust bac
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│  Shared TypeScript engine                                                    │
-│  - 4 features: HDR Convert, Time Shift, Font Embed, Batch Rename             │
+│  Shared TypeScript modules                                                   │
+│  - GUI: HDR, Shift, Embed, Rename, and Style Edit                            │
+│  - CLI: HDR, Shift, Embed, and Rename (Style Edit is GUI-only)               │
 │  - Color.js (PQ/HLG color math), ass-compiler (font collection)              │
 │  - Custom subtitle parser, fan-sub regex pairing engine                      │
 └──────────────┬───────────────────────────────────────┬───────────────────────┘
@@ -517,7 +544,7 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端测试 / Rust bac
 │                              │ │                                             │
 │  Tauri 2 + React +           │ │  clap (argv parsing)                        │
 │  Tailwind frontend           │ │  deno_core / V8 (embedded JS bundle)        │
-│  - 4 tabs                    │ │  - feature and utility subcommands          │
+│  - 5 tabs                    │ │  - feature and utility subcommands          │
 │  - i18n (zh/en),             │ │  - JSON reports + font diagnostics          │
 │    dark/light/auto theme     │ │  - env_logger (stderr warnings)             │
 │  - FontSourceModal UI        │ │  - sys-locale (--lang auto)                 │
@@ -611,6 +638,7 @@ The tables below list the main direct dependencies and bundled assets. For the f
 | [sys-locale](https://github.com/1Password/sys-locale)                        | MIT OR Apache-2.0                              | OS 区域设置检测（驱动 `--lang` 自动检测，CLI）/ OS locale detection driving `--lang` auto (CLI)                |
 | [base64](https://github.com/marshallpierce/rust-base64)                      | MIT OR Apache-2.0                              | Rust 侧字体载荷 base64 编码 / Base64 encoding for Rust-side font payloads                                      |
 | [unicode-normalization](https://github.com/unicode-rs/unicode-normalization) | MIT OR Apache-2.0                              | Unicode 路径 / 输出键规范化 / Unicode path and output-key normalization                                        |
+| [sha2](https://github.com/RustCrypto/hashes)                                 | MIT OR Apache-2.0                              | 样式编辑源文件 SHA-256 修订指纹 / SHA-256 source-revision fingerprints for Style Edit                          |
 | [rfd](https://github.com/PolyMeilex/rfd)                                     | MIT                                            | 启动失败时的原生错误对话框 / Native error dialog for startup failures                                          |
 | [Feather Icons](https://github.com/feathericons/feather)                     | [MIT](src/assets/licenses/feather-LICENSE.txt) | 主题切换等内联界面图标 / Inline interface glyphs, including the theme toggle                                   |
 

@@ -284,7 +284,7 @@ impl CliEngine {
         // become available here. Re-audit `RuntimeOptions`'s field
         // list on every deno_core bump alongside the API-binding
         // audit pinned in Cargo.toml's deno_core pin WHY.
-        // In 0.409, both residual lazy-source tables default to empty,
+        // In 0.410, both residual lazy-source tables default to empty,
         // and the default module loader remains capability-free.
         let mut runtime = JsRuntime::new(RuntimeOptions {
             extensions: vec![],
@@ -536,7 +536,7 @@ impl CliEngine {
         //      subset of valid JS expression syntax (escapes ", \, and
         //      control chars; emits U+2028/U+2029 as literal bytes,
         //      legal inside JS string literals since ES2019).
-        //   2. V8 15.0 (deno_core 0.409) is well past ES2019.
+        //   2. V8 15.0 (deno_core 0.410) is well past ES2019.
         //   3. function_name comes from a hardcoded &'static str at
         //      every call site — never user-controlled.
         // If any invariant shifts, move to a v8 function-call path

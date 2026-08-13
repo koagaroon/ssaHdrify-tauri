@@ -35,9 +35,9 @@ export interface ShiftStepParams {
 /**
  * Embed step parameters carried in the chain runtime payload.
  *
- * `fontDirs`, `fontFiles`, `noSystemFonts`, and
+ * `fontDirs`, `recursiveFontDirs`, `fontFiles`, `noSystemFonts`, and
  * `onMissing` are populated by the Rust shell but NEVER read by the
- * TS embed transform — Rust resolves all four upstream and bakes
+ * TS embed transform — Rust resolves all five upstream and bakes
  * the result into `subsets` before invoking runChain, so the TS side
  * sees only the pre-resolved bytes. The fields stay on the payload
  * shape for two reasons:
@@ -57,7 +57,10 @@ export interface ShiftStepParams {
  * note instead.
  */
 export interface EmbedStepParams {
+  /** Shallow folders: only directly contained font files are scanned. */
   fontDirs: string[];
+  /** Recursive library roots: ordinary subfolders are scanned too. */
+  recursiveFontDirs: string[];
   fontFiles: string[];
   noSystemFonts: boolean;
   onMissing: "warn" | "fail";

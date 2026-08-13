@@ -10,6 +10,9 @@ use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
+mod common;
+use common::make_real_font_dir as make_font_dir;
+
 const MISSING_FONT_ASS: &str = concat!(
     "[Script Info]\n",
     "ScriptType: v4.00+\n",
@@ -43,13 +46,6 @@ fn write_missing_font_ass(dir: &Path) -> PathBuf {
     let path = dir.join("missing-font.ass");
     fs::write(&path, MISSING_FONT_ASS).expect("failed to write fixture ASS");
     path
-}
-
-fn make_font_dir(dir: &Path) -> PathBuf {
-    let font_dir = dir.join("fonts");
-    fs::create_dir_all(&font_dir).expect("failed to create fonts subdir");
-    fs::write(font_dir.join("placeholder.ttf"), b"").expect("failed to write placeholder ttf");
-    font_dir
 }
 
 fn sqlite_sidecar_path(path: &Path, suffix: &str) -> PathBuf {
@@ -172,7 +168,9 @@ fn diagnose_fonts_reports_missing_without_writing_output() {
     );
     assert!(
         stdout.contains("next actions:")
-            && stdout.contains("pass `--font-dir <DIR>` or `--font-file <FILE>`"),
+            && stdout.contains("pass `--font-dir <DIR>` for a flat folder")
+            && stdout.contains("`--recursive-font-dir <DIR>` for a library tree")
+            && stdout.contains("`--font-file <FILE>` for one file"),
         "standalone diagnostics should suggest a concrete font-source next step: stdout={stdout}"
     );
     assert!(
@@ -211,7 +209,10 @@ fn diagnose_fonts_next_actions_are_localized() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("下一步建议：") && stdout.contains("请为字体包传入"),
+        stdout.contains("下一步建议：")
+            && stdout.contains("为浅层目录传入 `--font-dir <DIR>`")
+            && stdout.contains("为字体库树传入 `--recursive-font-dir <DIR>`")
+            && stdout.contains("为单个文件传入 `--font-file <FILE>`"),
         "next-action guidance should be localized under --lang zh: stdout={stdout}"
     );
 
@@ -598,7 +599,9 @@ fn embed_diagnose_failed_missing_font_suggests_full_details() {
     assert!(
         stderr.contains("next actions:")
             && stderr.contains("Rerun with `--diagnose=full`")
-            && stderr.contains("pass `--font-dir <DIR>` or `--font-file <FILE>`"),
+            && stderr.contains("pass `--font-dir <DIR>` for a flat folder")
+            && stderr.contains("`--recursive-font-dir <DIR>` for a library tree")
+            && stderr.contains("`--font-file <FILE>` for one file"),
         "compact diagnostics should give actionable guidance even without warnings: stderr={stderr}"
     );
 

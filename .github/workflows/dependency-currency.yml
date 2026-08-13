@@ -1,4 +1,4 @@
-name: Dependency currency
+name: Dependency Watch
 
 on:
   schedule:
@@ -8,15 +8,21 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: dependency-watch-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  typescript-aliases:
-    name: TypeScript alias currency
+  ordinary-updates:
+    name: Ordinary dependency updates
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 15
 
     steps:
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -24,5 +30,16 @@ jobs:
           node-version: "26"
           check-latest: true
 
-      - name: Check aliased TypeScript package versions
-        run: node scripts/check-typescript-currency.mjs
+      - name: Cache Cargo registry metadata
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/registry/src
+          key: dependency-watch-cargo-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+
+      - name: Check ordinary dependency versions
+        run: npm run check:dependency-currency
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
