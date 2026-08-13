@@ -76,6 +76,7 @@ macOS / Linux users, see "Build from Source" below.
 | **时间轴偏移 / Timing Shift**           | 批量调整字幕时间戳；可从指定时间点之后开始偏移，并实时预览效果 / Batch-adjust subtitle timestamps; optionally start after a chosen timestamp, with live preview                                                                                                                                                                                                                                                                         |
 | **字体嵌入 / Font Embedding**           | 自动检测字幕引用的字体，在系统字体库或本地字体源中匹配，并把子集化后的字体嵌入 ASS 文件 / Detect fonts referenced by the subtitle, match them from system or local font sources, and embed subset fonts into the ASS file                                                                                                                                                                                                               |
 | **批量重命名 / Batch Rename**           | 自动匹配视频和字幕，并按视频文件名重命名字幕；当同一视频匹配到多个候选字幕时，可手动选择并调整配对，也可以启用多字幕模式，为每个视频保留多个语言的外挂字幕。 / Automatically match videos and subtitles, then rename subtitles after the video filename; when one video has multiple subtitle candidates, manually choose and adjust pairings, or enable multi-subtitle mode to keep multiple language sidecar subtitles for each video |
+| **样式编辑 / Style Edit**               | 批量预览并修改 ASS/SSA `Style:` 行的字体族和字号。两项操作可独立启用，也可以只替换指定的原字体；行内 `\fn` / `\fs` 标签保持不变。 / Preview and batch-edit font family and size in ASS/SSA `Style:` rows. Enable either operation independently, optionally filter one source family, and leave inline `\fn` / `\fs` tags untouched.                                                                                                    |
 
 > [!TIP]
 > **完整支持中文路径** — 包含中文、日文或其他非 ASCII 字符的文件路径都可以正常处理。Tauri 和 Rust 底层使用 Unicode API，不受传统 ANSI 编码限制。
@@ -95,6 +96,7 @@ Format support is not identical across workflows. The table below describes curr
 | HDR 色彩转换 / HDR Color Conversion | 原生处理 / native                          | 转换为 ASS / convert to ASS                | 转换为 ASS / convert to ASS                | 基本文本 cue 转换为 ASS / basic text cues convert to ASS                                            | 不支持 / no                                                  |
 | 时间轴偏移 / Timing Shift           | 保持格式 / preserve format                 | 保持格式 / preserve format                 | 保持格式 / preserve format                 | 重建基础 cue；不保留全部 WebVTT 元数据 / rebuilds basic cues; does not preserve all WebVTT metadata | 不支持 / no                                                  |
 | 字体嵌入 / Font Embedding           | 支持 / yes                                 | 不支持 / no                                | 不支持 / no                                | 不支持 / no                                                                                         | 不支持 / no                                                  |
+| 样式编辑 / Style Edit               | 支持 / yes                                 | 不支持 / no                                | 不支持 / no                                | 不支持 / no                                                                                         | 不支持 / no                                                  |
 | `diagnose-fonts`                    | 支持 / yes                                 | 不支持 / no                                | 不支持 / no                                | 不支持 / no                                                                                         | 不支持 / no                                                  |
 | 批量重命名 / Batch Rename           | 配对、复制或重命名 / pair, copy, or rename | 配对、复制或重命名 / pair, copy, or rename | 配对、复制或重命名 / pair, copy, or rename | 配对、复制或重命名 / pair, copy, or rename                                                          | 作为不解析的侧车文件配对、复制或重命名 / opaque sidecar only |
 | `chain`                             | 取决于步骤 / depends on steps              | 取决于步骤 / depends on steps              | 取决于步骤 / depends on steps              | 仅支持本身接受 `.vtt` 的步骤 / only where the chosen step accepts `.vtt`                            | 不支持 / no                                                  |
@@ -157,6 +159,22 @@ Large font folders and nested libraries are supported; discovery and parsing sho
 >
 > For `.ttc` / `.otc` collections, the matched face index is extracted and embedded as a single-face subset. The ASS `[Fonts]` `fontname:` line is a generated attachment label, such as `dream_han_serif_sc_w22.ttf`; it does not mean the source file had to be `.ttf`. Matching relies on the preserved internal `name` table in the subset font.
 
+### 样式编辑 / Style Edit
+
+1. 选择一个或多个 ASS/SSA 文件；应用会读取每个文件的 `[V4+ Styles]` 或 `[V4 Styles]` 表，并在写入前列出全部 `Style:` 行 / Select one or more ASS/SSA files; the app reads each `[V4+ Styles]` or `[V4 Styles]` table and lists every `Style:` row before writing
+2. 独立启用「更改字体族」和/或「更改字号」。字体族操作还可以限定为只替换一个指定的原字体 / Independently enable **Change font family** and/or **Change font size**. The family operation can optionally replace only one specified source family
+3. 在预览表中逐行确认旧值和新值；默认勾选所有会发生变化的行，也可以取消任意行 / Review old and new values row by row; every effective change is checked by default, and any row can be cleared
+4. 点击「写入」。输出固定为源文件旁的 `.styled.ass` / `.styled.ssa` 新文件；如果目标已存在，本次不会覆盖它 / Click **Write**. Output is always a new sibling `.styled.ass` / `.styled.ssa` file; an existing target is never overwritten
+
+编辑器只修改样式表中的 `Fontname` 和 `Fontsize` 字段，并按文件自己的 `Format:` 列顺序解析。它不会全局替换对话或注释文字，也不会更改行内 `\fn` / `\fs` 覆盖标签。输出保留源文件的受支持文本编码、BOM（字节顺序标记）和换行符；如果源文件在预览后发生变化，安全写入会拒绝使用过期计划。
+
+The editor changes only `Fontname` and `Fontsize` fields in the style table and follows each file's own `Format:` column order. It does not globally replace dialogue or comment text, and it leaves inline `\fn` / `\fs` override tags untouched. Output preserves the source's supported text encoding, byte-order mark (BOM), and line endings; if a source changes after preview, the safe writer rejects the stale plan.
+
+> [!NOTE]
+> 样式编辑目前仅在 GUI 中提供，不属于 CLI 或 `chain`。每个源文件上限为 50 MiB；单次选择上限为 500 个文件、200 MiB 源文件字节、内存中保留的 200 MiB 解码文本和 2,000 个 Style 行。超过任一上限时会拒绝整个选择，以保证写入前的预览完整。
+>
+> Style Edit is currently GUI-only and is not part of the CLI or `chain`. Each source file is capped at 50 MiB; one selection is capped at 500 files, 200 MiB of source bytes, 200 MiB of decoded text retained in memory, and 2,000 Style rows. Exceeding any limit rejects the whole selection so the pre-write preview remains complete.
+
 ### 批量重命名 / Batch Rename
 
 1. 拖入包含视频和字幕的文件夹（或点击「选择文件 / Select Files」手动选择）；程序会按文件格式自动归类 / Drop a folder containing both videos and subtitles (or click **Select Files** to pick manually); the app categorizes files by format automatically
@@ -176,9 +194,9 @@ Large font folders and nested libraries are supported; discovery and parsing sho
 
 ## CLI 使用 | CLI Usage
 
-`ssahdrify-cli` 是 GUI 的命令行版（CLI），与 GUI 从同一份源代码构建。四个核心功能（HDR 转换 / 时间轴偏移 / 字体嵌入 / 批量重命名）和 GUI 版保持对等；CLI 另外提供 `chain`（一次调用串联多个步骤，只有最后一步写入文件）、`refresh-fonts`（构建或刷新 CLI 字体缓存）和 `diagnose-fonts`（只诊断字体解析，不写字幕）等子命令。
+`ssahdrify-cli` 与 GUI 从同一份源代码构建，并提供 HDR 转换、时间轴偏移、字体嵌入和批量重命名。新增的样式编辑器目前仅在 GUI 中提供。CLI 另外提供 `chain`（一次调用串联多个步骤，只有最后一步写入文件）、`refresh-fonts`（构建或刷新 CLI 字体缓存）和 `diagnose-fonts`（只诊断字体解析，不写字幕）等子命令。
 
-`ssahdrify-cli` is the command-line (CLI) version of the GUI, built from the same source. The four core features (HDR convert / Timing shift / Font embed / Batch rename) remain equivalent to the GUI; the CLI additionally provides `chain` (run multiple steps in one invocation, with only the final step writing files), `refresh-fonts` (build or refresh the CLI font cache), and `diagnose-fonts` (diagnose font resolution without writing subtitles).
+`ssahdrify-cli` is built from the same source as the GUI and provides HDR Convert, Time Shift, Font Embed, and Batch Rename. The new Style Edit workbench is currently GUI-only. The CLI also provides `chain` (run multiple steps with only the last step writing), `refresh-fonts` (build or refresh the CLI font cache), and `diagnose-fonts` (read-only font diagnostics).
 
 ### 快速示例 | Quick Examples
 
@@ -511,8 +529,9 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端测试 / Rust bac
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│  Shared TypeScript engine                                                    │
-│  - 4 features: HDR Convert, Time Shift, Font Embed, Batch Rename             │
+│  Shared TypeScript modules                                                   │
+│  - GUI: HDR, Shift, Embed, Rename, and Style Edit                            │
+│  - CLI: HDR, Shift, Embed, and Rename (Style Edit is GUI-only)               │
 │  - Color.js (PQ/HLG color math), ass-compiler (font collection)              │
 │  - Custom subtitle parser, fan-sub regex pairing engine                      │
 └──────────────┬───────────────────────────────────────┬───────────────────────┘
@@ -525,7 +544,7 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端测试 / Rust bac
 │                              │ │                                             │
 │  Tauri 2 + React +           │ │  clap (argv parsing)                        │
 │  Tailwind frontend           │ │  deno_core / V8 (embedded JS bundle)        │
-│  - 4 tabs                    │ │  - feature and utility subcommands          │
+│  - 5 tabs                    │ │  - feature and utility subcommands          │
 │  - i18n (zh/en),             │ │  - JSON reports + font diagnostics          │
 │    dark/light/auto theme     │ │  - env_logger (stderr warnings)             │
 │  - FontSourceModal UI        │ │  - sys-locale (--lang auto)                 │
@@ -619,6 +638,7 @@ The tables below list the main direct dependencies and bundled assets. For the f
 | [sys-locale](https://github.com/1Password/sys-locale)                        | MIT OR Apache-2.0                              | OS 区域设置检测（驱动 `--lang` 自动检测，CLI）/ OS locale detection driving `--lang` auto (CLI)                |
 | [base64](https://github.com/marshallpierce/rust-base64)                      | MIT OR Apache-2.0                              | Rust 侧字体载荷 base64 编码 / Base64 encoding for Rust-side font payloads                                      |
 | [unicode-normalization](https://github.com/unicode-rs/unicode-normalization) | MIT OR Apache-2.0                              | Unicode 路径 / 输出键规范化 / Unicode path and output-key normalization                                        |
+| [sha2](https://github.com/RustCrypto/hashes)                                 | MIT OR Apache-2.0                              | 样式编辑源文件 SHA-256 修订指纹 / SHA-256 source-revision fingerprints for Style Edit                          |
 | [rfd](https://github.com/PolyMeilex/rfd)                                     | MIT                                            | 启动失败时的原生错误对话框 / Native error dialog for startup failures                                          |
 | [Feather Icons](https://github.com/feathericons/feather)                     | [MIT](src/assets/licenses/feather-LICENSE.txt) | 主题切换等内联界面图标 / Inline interface glyphs, including the theme toggle                                   |
 

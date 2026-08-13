@@ -167,6 +167,16 @@ export interface ReadTextResult {
   text: string;
   /** Detected encoding (e.g. "UTF-8", "GBK", "Big5", "Shift_JIS", "UTF-16LE") */
   encoding: string;
+  /** Stable backend encoding identifier used for lossless writes. */
+  encodingId: string;
+  /** Whether the original file carried a supported byte-order mark. */
+  hadBom: boolean;
+  /** True when malformed source bytes had to be replaced during decoding. */
+  lossy: boolean;
+  /** SHA-256 of the exact source bytes used for this read. */
+  sourceRevision: string;
+  /** Exact source byte length for bounded batch planning. */
+  sourceByteLength: number;
 }
 
 /**
@@ -210,6 +220,29 @@ export async function outputPathExists(path: string): Promise<boolean> {
  *  and asks the user before invoking writeText. */
 export async function writeText(path: string, content: string): Promise<void> {
   await invoke("safe_write_text_file", { path, content, overwrite: true });
+}
+
+export interface StyleEditWriteRequest {
+  sourcePath: string;
+  expectedRevision: string;
+  outputPath: string;
+  content: string;
+}
+
+/**
+ * Write a previewed ASS/SSA style edit to a new sibling file.
+ *
+ * Rust re-reads and hashes the source, preserves its original encoding/BOM,
+ * and uses an exclusive create-new destination open. A stale source or an output
+ * that appeared after preview fails without replacing any file.
+ */
+export async function writeStyleEditOutput(request: StyleEditWriteRequest): Promise<void> {
+  await invoke("safe_write_style_edit_output", {
+    sourcePath: request.sourcePath,
+    expectedRevision: request.expectedRevision,
+    outputPath: request.outputPath,
+    content: request.content,
+  });
 }
 
 /** Rename / move a file. Atomic when the platform supports the requested

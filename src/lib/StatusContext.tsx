@@ -32,7 +32,7 @@ export interface Status {
   progress?: StatusProgress | undefined;
 }
 
-export type StatusTab = "hdr" | "timing" | "fonts" | "rename";
+export type StatusTab = "hdr" | "timing" | "fonts" | "rename" | "style";
 
 export interface StatusContextValue {
   statuses: Record<StatusTab, Status>;
@@ -57,6 +57,7 @@ export const DEFAULT_STATUSES: Record<StatusTab, Status> = Object.freeze({
   timing: Object.freeze({ ...DEFAULT_STATUS }),
   fonts: Object.freeze({ ...DEFAULT_STATUS }),
   rename: Object.freeze({ ...DEFAULT_STATUS }),
+  style: Object.freeze({ ...DEFAULT_STATUS }),
 }) as Record<StatusTab, Status>;
 
 export const StatusContext = createContext<StatusContextValue>({

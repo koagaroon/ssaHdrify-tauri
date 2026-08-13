@@ -6,6 +6,8 @@
 
 use crate::util::is_reparse_point;
 use chardetng::EncodingDetector;
+use sha2::{Digest, Sha256};
+use std::fmt::Write as FmtWrite;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
@@ -22,7 +24,35 @@ fn ext_is_allowed(path: &Path) -> bool {
     ALLOWED_TEXT_EXTENSIONS.contains(&ext.as_str())
 }
 
-const MAX_TEXT_SIZE: u64 = 50 * 1024 * 1024; // 50 MB
+pub(crate) const MAX_TEXT_SIZE: u64 = 50 * 1024 * 1024; // 50 MB
+
+fn source_revision(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    let mut revision = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        write!(&mut revision, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    revision
+}
+
+fn decoded_result(
+    text: String,
+    encoding: String,
+    encoding_id: &str,
+    had_bom: bool,
+    lossy: bool,
+    source_bytes: &[u8],
+) -> ReadTextResult {
+    ReadTextResult {
+        text,
+        encoding,
+        encoding_id: encoding_id.to_string(),
+        had_bom,
+        lossy,
+        source_revision: source_revision(source_bytes),
+        source_byte_length: source_bytes.len() as u64,
+    }
+}
 
 /// Allowed subtitle file extensions for `read_text_detect_encoding` AND
 /// the safe_io write/copy/rename commands — read and write sides must
@@ -101,25 +131,44 @@ pub(crate) fn decode_bytes(bytes: &[u8]) -> ReadTextResult {
         // return UTF-8-lossy mojibake of GBK bytes — content and label
         // disagree, and the content is much worse than `cow` already
         // contained.
-        return ReadTextResult {
-            text: cow.into_owned(),
-            encoding: format!("{} (lossy)", encoding.name()),
-        };
+        return decoded_result(
+            cow.into_owned(),
+            format!("{} (lossy)", encoding.name()),
+            encoding.name(),
+            false,
+            true,
+            bytes,
+        );
     }
 
-    ReadTextResult {
-        text: cow.into_owned(),
-        encoding: encoding.name().to_string(),
-    }
+    decoded_result(
+        cow.into_owned(),
+        encoding.name().to_string(),
+        encoding.name(),
+        false,
+        false,
+        bytes,
+    )
 }
 
 /// Result of reading a text file with encoding detection.
-#[derive(serde::Serialize)]
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ReadTextResult {
     /// File content decoded to UTF-8
     pub text: String,
     /// Detected encoding name (e.g. "UTF-8", "GBK", "Big5", "Shift_JIS")
     pub encoding: String,
+    /// Stable encoding_rs identifier used by the style editor's strict writer.
+    pub encoding_id: String,
+    /// Whether the original byte stream began with a supported BOM.
+    pub had_bom: bool,
+    /// Whether decoding replaced malformed source bytes.
+    pub lossy: bool,
+    /// SHA-256 of the exact source bytes used for this decoded result.
+    pub source_revision: String,
+    /// Exact byte length used for bounded batch planning in the GUI.
+    pub source_byte_length: u64,
 }
 
 /// Read a file, detect its encoding, and return UTF-8 text + encoding
@@ -331,6 +380,11 @@ pub fn read_text_detect_encoding_inner(
         ));
     }
 
+    if bytes.starts_with(&[0xFF, 0xFE, 0x00, 0x00]) || bytes.starts_with(&[0x00, 0x00, 0xFE, 0xFF])
+    {
+        return Err("UTF-32 subtitle encoding is not supported".to_string());
+    }
+
     Ok(decode_bytes(&bytes))
 }
 
@@ -361,49 +415,57 @@ fn detect_bom(bytes: &[u8]) -> Option<ReadTextResult> {
         let payload = &bytes[3..];
         let lossy = std::str::from_utf8(payload).is_err();
         let text = String::from_utf8_lossy(payload).into_owned();
-        return Some(ReadTextResult {
+        return Some(decoded_result(
             text,
-            encoding: if lossy {
+            if lossy {
                 "UTF-8 (BOM, lossy)".to_string()
             } else {
                 "UTF-8 (BOM)".to_string()
             },
-        });
+            "UTF-8",
+            true,
+            lossy,
+            bytes,
+        ));
     }
 
     // UTF-16 LE BOM (FF FE).
     //
-    // Trap note: UTF-32LE BOM is `FF FE 00 00` — a strict
-    // byte-prefix superset of the UTF-16LE BOM. A UTF-32LE-encoded
-    // file enters this branch and decodes as UTF-16LE (every other
-    // code unit is 0x00, decoded as NUL → garbled output). Subtitle
-    // files are essentially never UTF-32, so the trade-off is
-    // accepted: a clear "unsupported" error from a hypothetical
-    // dedicated UTF-32 branch above this one isn't worth the cost
-    // until a real UTF-32 subtitle case appears.
+    // The file-reading boundary rejects UTF-32LE's longer BOM before this
+    // helper is called. Decode the remaining payload without another BOM
+    // sniff so a legitimate leading U+FEFF character is not stripped or
+    // interpreted as an encoding switch.
     if bytes.starts_with(&[0xFF, 0xFE]) {
-        let (cow, _, had_errors) = encoding_rs::UTF_16LE.decode(&bytes[2..]);
-        return Some(ReadTextResult {
-            text: cow.into_owned(),
-            encoding: if had_errors {
+        let (cow, had_errors) = encoding_rs::UTF_16LE.decode_without_bom_handling(&bytes[2..]);
+        return Some(decoded_result(
+            cow.into_owned(),
+            if had_errors {
                 "UTF-16LE (lossy)".to_string()
             } else {
                 "UTF-16LE".to_string()
             },
-        });
+            "UTF-16LE",
+            true,
+            had_errors,
+            bytes,
+        ));
     }
 
     // UTF-16 BE BOM (FE FF)
     if bytes.starts_with(&[0xFE, 0xFF]) {
-        let (cow, _, had_errors) = encoding_rs::UTF_16BE.decode(&bytes[2..]);
-        return Some(ReadTextResult {
-            text: cow.into_owned(),
-            encoding: if had_errors {
+        let (cow, had_errors) = encoding_rs::UTF_16BE.decode_without_bom_handling(&bytes[2..]);
+        return Some(decoded_result(
+            cow.into_owned(),
+            if had_errors {
                 "UTF-16BE (lossy)".to_string()
             } else {
                 "UTF-16BE".to_string()
             },
-        });
+            "UTF-16BE",
+            true,
+            had_errors,
+            bytes,
+        ));
     }
 
     None
@@ -453,6 +515,24 @@ mod tests {
     }
 
     #[test]
+    fn read_result_exposes_exact_source_revision_and_camel_case_wire_fields() {
+        let result = decode_bytes(b"abc");
+        assert_eq!(result.source_byte_length, 3);
+        assert_eq!(
+            result.source_revision,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["encodingId"], "UTF-8");
+        assert_eq!(json["hadBom"], false);
+        assert_eq!(json["lossy"], false);
+        assert_eq!(json["sourceByteLength"], 3);
+        assert_eq!(json["sourceRevision"], result.source_revision);
+        assert!(json.get("source_revision").is_none());
+    }
+
+    #[test]
     fn empty_after_bom_strip() {
         // A file containing ONLY a UTF-8 BOM and nothing else should
         // decode cleanly to an empty string with the BOM-stripped
@@ -473,6 +553,28 @@ mod tests {
         let result = decode_bytes(&bytes);
         assert_eq!(result.encoding, "UTF-16BE");
         assert_eq!(result.text, "AB");
+    }
+
+    #[test]
+    fn utf16_payload_leading_bom_character_is_preserved() {
+        let le = decode_bytes(&[0xFF, 0xFE, 0xFF, 0xFE, 0x41, 0x00]);
+        assert_eq!(le.encoding, "UTF-16LE");
+        assert_eq!(le.text, "\u{feff}A");
+
+        let be = decode_bytes(&[0xFE, 0xFF, 0xFE, 0xFF, 0x00, 0x41]);
+        assert_eq!(be.encoding, "UTF-16BE");
+        assert_eq!(be.text, "\u{feff}A");
+    }
+
+    #[test]
+    fn reader_refuses_utf32_bom_instead_of_misdecoding_as_utf16() {
+        let path = temp_file_path("utf32", "ass");
+        std::fs::write(&path, [0xFF, 0xFE, 0x00, 0x00, b'A', 0x00, 0x00, 0x00]).unwrap();
+
+        let err = read_text_detect_encoding_inner(&path.to_string_lossy(), |_| true).unwrap_err();
+
+        assert!(err.contains("UTF-32"), "got: {err}");
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

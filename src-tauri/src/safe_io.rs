@@ -54,7 +54,7 @@
 //! future safe_io fixes auto-propagate to both binaries
 //! instead of needing parallel fixes in each.
 
-use crate::encoding::ALLOWED_TEXT_EXTENSIONS;
+use crate::encoding::{read_text_detect_encoding_inner, ALLOWED_TEXT_EXTENSIONS, MAX_TEXT_SIZE};
 use crate::util::{is_reparse_point, validate_ipc_path};
 use std::fs;
 use std::io::Write;
@@ -96,6 +96,17 @@ fn check_subtitle_extension(path: &Path, label: &str) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+fn check_ass_style_extension(path: &Path, label: &str) -> Result<String, String> {
+    let ext = path_extension_lower(path);
+    if matches!(ext.as_str(), "ass" | "ssa") {
+        return Ok(ext);
+    }
+    Err(format!(
+        "{label} path must end with .ass or .ssa; got {}",
+        pretty_ext(&ext)
+    ))
 }
 
 fn check_copy_rename_extensions(src: &Path, dst: &Path) -> Result<(), String> {
@@ -438,6 +449,96 @@ fn create_new_and_write_bytes(path: &Path, content: &[u8]) -> Result<(), String>
         .map_err(|e| format!("Failed to write destination: {e}"))
 }
 
+fn create_new_and_write_bytes_exclusive(path: &Path, content: &[u8]) -> Result<(), String> {
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|e| format!("Failed to create destination: {e}"))?;
+
+    // Keep a partial create-new file if write_all fails. Deleting by pathname
+    // after closing would race with another process replacing that pathname,
+    // which could make error cleanup delete a file we did not create.
+    file.write_all(content).map_err(|error| {
+        format!("Failed to write destination; a partial output may remain: {error}")
+    })?;
+    file.sync_all().map_err(|error| {
+        format!("Failed to flush destination; a partial output may remain: {error}")
+    })
+}
+
+fn encode_text_preserving_source(
+    content: &str,
+    encoding_id: &str,
+    had_bom: bool,
+) -> Result<Vec<u8>, String> {
+    // Bound the IPC string before allocating another encoded buffer; the
+    // final encoded byte count is checked too.
+    // A single-byte legacy source can expand to three UTF-8 bytes per input
+    // byte after decoding. Style edits add only bounded family/size fields,
+    // so 4x is a conservative allocation ceiling while the encoded output
+    // remains capped at the original 50 MiB file ceiling below.
+    const MAX_STYLE_EDIT_UTF8_CONTENT: usize = (MAX_TEXT_SIZE as usize) * 4;
+    if content.len() > MAX_STYLE_EDIT_UTF8_CONTENT {
+        return Err("Edited subtitle content exceeds the 200 MB text limit".to_string());
+    }
+
+    let bom: &[u8] = if had_bom {
+        match encoding_id {
+            "UTF-8" => &[0xEF, 0xBB, 0xBF],
+            "UTF-16LE" => &[0xFF, 0xFE],
+            "UTF-16BE" => &[0xFE, 0xFF],
+            _ => return Err("Only Unicode source encodings may carry a BOM".to_string()),
+        }
+    } else {
+        &[]
+    };
+
+    // encoding_rs intentionally has no UTF-16 encoder: WHATWG text
+    // encoding treats UTF-16 labels as decode-only and emits UTF-8 when
+    // asked to encode. Preserve UTF-16 explicitly so a BOM is never paired
+    // with UTF-8 payload bytes.
+    let encoded = match encoding_id {
+        "UTF-16LE" => content
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>(),
+        "UTF-16BE" => content
+            .encode_utf16()
+            .flat_map(u16::to_be_bytes)
+            .collect::<Vec<_>>(),
+        _ => {
+            let encoding =
+                encoding_rs::Encoding::for_label(encoding_id.as_bytes()).ok_or_else(|| {
+                    "Source encoding is not supported for lossless output".to_string()
+                })?;
+            if encoding.name() != encoding_id {
+                return Err("Source encoding identifier is not canonical".to_string());
+            }
+            let (encoded, _, had_errors) = encoding.encode(content);
+            if had_errors {
+                return Err(format!(
+                    "The edited text cannot be represented in the original {encoding_id} encoding"
+                ));
+            }
+            encoded.into_owned()
+        }
+    };
+
+    let output_len = bom
+        .len()
+        .checked_add(encoded.len())
+        .ok_or_else(|| "Edited subtitle size overflow".to_string())?;
+    if output_len > MAX_TEXT_SIZE as usize {
+        return Err("Encoded output exceeds the 50 MB subtitle limit".to_string());
+    }
+
+    let mut output = Vec::with_capacity(output_len);
+    output.extend_from_slice(bom);
+    output.extend_from_slice(&encoded);
+    Ok(output)
+}
+
 // ── Inner helpers (testable without an AppHandle) ────────────────
 
 // no top-of-function `is_reparse_point` re-check
@@ -487,6 +588,100 @@ pub fn safe_write_text_file_inner(
     ensure_parent_dir(path_ref)?;
     clear_existing_destination(path_ref, overwrite)?;
     create_new_and_write_bytes(path_ref, content.as_bytes())
+}
+
+/// Create a new ASS/SSA style-edit output while preserving the source
+/// encoding and refusing a stale preview. The expected revision is SHA-256
+/// over the exact bytes returned by the earlier encoding-aware read.
+pub fn safe_write_style_edit_output_inner(
+    source_path: &str,
+    expected_revision: &str,
+    output_path: &str,
+    content: &str,
+    is_allowed: impl Fn(&Path) -> bool,
+) -> Result<(), String> {
+    if expected_revision.len() != 64
+        || !expected_revision
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err("Invalid source revision".to_string());
+    }
+
+    validate_ipc_path(source_path, "Source")?;
+    validate_ipc_path(output_path, "Output")?;
+    let source_ref = Path::new(source_path);
+    let output_ref = Path::new(output_path);
+    let source_ext = check_ass_style_extension(source_ref, "Source")?;
+    let output_ext = check_ass_style_extension(output_ref, "Output")?;
+    if source_ext != output_ext {
+        return Err("Style-edit output must preserve the source .ass/.ssa extension".to_string());
+    }
+    if source_ref == output_ref {
+        return Err("Style-edit output must not be the source file".to_string());
+    }
+    // Catch case-only or separator/spelling aliases while the source still
+    // exists. The later exclusive create-new open remains the race-time gate.
+    reject_same_canonical_path(source_ref, output_ref)?;
+
+    let source_parent = source_ref
+        .parent()
+        .ok_or_else(|| "Source subtitle has no parent directory".to_string())?
+        .canonicalize()
+        .map_err(|e| format!("Failed to resolve source directory: {e}"))?;
+    let output_parent = output_ref
+        .parent()
+        .ok_or_else(|| "Output subtitle has no parent directory".to_string())?
+        .canonicalize()
+        .map_err(|e| format!("Failed to resolve output directory: {e}"))?;
+    if source_parent != output_parent {
+        return Err("Style-edit output must be a sibling of the source file".to_string());
+    }
+
+    check_scope_allows(&is_allowed, output_ref, "Output")?;
+    check_scope_allows_resolved(&is_allowed, output_ref, "Output")?;
+
+    let source = read_text_detect_encoding_inner(source_path, &is_allowed)?;
+    if source.lossy {
+        return Err(
+            "Source decoding was lossy; refusing to write an irreversible edit".to_string(),
+        );
+    }
+    if source.source_revision != expected_revision.to_ascii_lowercase() {
+        return Err(
+            "Source changed after preview; review the file again before writing".to_string(),
+        );
+    }
+
+    let bytes = encode_text_preserving_source(content, &source.encoding_id, source.had_bom)?;
+    let final_source = read_text_detect_encoding_inner(source_path, &is_allowed)?;
+    if final_source.source_revision != expected_revision.to_ascii_lowercase() {
+        return Err(
+            "Source changed after preview; review the file again before writing".to_string(),
+        );
+    }
+    // Encoding may be relatively expensive at the 200 MiB decoded-content
+    // boundary. Narrow the source/ancestor swap window before the exclusive
+    // destination open by repeating the authoritative path and revision
+    // checks after that work.
+    let final_source_parent = source_ref
+        .parent()
+        .ok_or_else(|| "Source subtitle has no parent directory".to_string())?
+        .canonicalize()
+        .map_err(|e| format!("Failed to re-resolve source directory: {e}"))?;
+    let final_output_parent = output_ref
+        .parent()
+        .ok_or_else(|| "Output subtitle has no parent directory".to_string())?
+        .canonicalize()
+        .map_err(|e| format!("Failed to re-resolve output directory: {e}"))?;
+    if final_source_parent != final_output_parent || final_source_parent != source_parent {
+        return Err("Style-edit source or output directory changed before writing".to_string());
+    }
+    check_scope_allows(&is_allowed, output_ref, "Output")?;
+    check_scope_allows_resolved(&is_allowed, output_ref, "Output")?;
+    // No overwrite path exists for this command. create_new is the
+    // authoritative collision/race gate even when preview saw no output.
+    create_new_and_write_bytes_exclusive(output_ref, &bytes)
 }
 
 pub fn safe_copy_file_inner(
@@ -614,6 +809,26 @@ pub fn safe_write_text_file(
 ) -> Result<(), String> {
     let scope = crate::fs_policy::app_fs_scope(&app)?;
     safe_write_text_file_inner(&path, &content, overwrite, move |p| scope.is_allowed(p))
+}
+
+/// Write a previewed style edit to a new sibling file. Existing outputs are
+/// never replaced; the exclusive create-new open is the final collision gate.
+#[tauri::command]
+pub fn safe_write_style_edit_output(
+    app: tauri::AppHandle,
+    source_path: String,
+    expected_revision: String,
+    output_path: String,
+    content: String,
+) -> Result<(), String> {
+    let scope = crate::fs_policy::app_fs_scope(&app)?;
+    safe_write_style_edit_output_inner(
+        &source_path,
+        &expected_revision,
+        &output_path,
+        &content,
+        move |path| scope.is_allowed(path),
+    )
 }
 
 /// Copy `src` to `dst` safely. Both endpoints pass the same gates as
@@ -787,6 +1002,258 @@ mod tests {
         .unwrap_err();
         assert!(err.contains("denied by"), "got: {err}");
         assert!(!dir.join("out.ass").exists());
+    }
+
+    fn read_revision(path: &Path) -> String {
+        read_text_detect_encoding_inner(&path.to_string_lossy(), allow_all)
+            .unwrap()
+            .source_revision
+    }
+
+    #[test]
+    fn style_edit_writer_creates_new_output_and_preserves_source() {
+        let dir = temp_dir("style_edit_basic");
+        let source = dir.join("episode.ass");
+        let output = dir.join("episode.styled.ass");
+        fs::write(&source, b"[V4+ Styles]\r\nStyle: Default,Arial,48\r\n").unwrap();
+        let revision = read_revision(&source);
+
+        safe_write_style_edit_output_inner(
+            &source.to_string_lossy(),
+            &revision,
+            &output.to_string_lossy(),
+            "[V4+ Styles]\r\nStyle: Default,Microsoft YaHei,48\r\n",
+            allow_all,
+        )
+        .unwrap();
+
+        assert_eq!(
+            fs::read(&source).unwrap(),
+            b"[V4+ Styles]\r\nStyle: Default,Arial,48\r\n"
+        );
+        assert_eq!(
+            fs::read(&output).unwrap(),
+            b"[V4+ Styles]\r\nStyle: Default,Microsoft YaHei,48\r\n"
+        );
+    }
+
+    #[test]
+    fn style_edit_writer_refuses_existing_output_without_changing_it() {
+        let dir = temp_dir("style_edit_collision");
+        let source = dir.join("episode.ass");
+        let output = dir.join("episode.styled.ass");
+        fs::write(&source, b"source").unwrap();
+        fs::write(&output, b"keep me").unwrap();
+        let revision = read_revision(&source);
+
+        let err = safe_write_style_edit_output_inner(
+            &source.to_string_lossy(),
+            &revision,
+            &output.to_string_lossy(),
+            "replacement",
+            allow_all,
+        )
+        .unwrap_err();
+
+        assert!(err.contains("create destination"), "got: {err}");
+        assert_eq!(fs::read(&output).unwrap(), b"keep me");
+    }
+
+    #[test]
+    fn style_edit_writer_refuses_stale_source_revision() {
+        let dir = temp_dir("style_edit_stale");
+        let source = dir.join("episode.ass");
+        let output = dir.join("episode.styled.ass");
+        fs::write(&source, b"first").unwrap();
+        let revision = read_revision(&source);
+        fs::write(&source, b"second").unwrap();
+
+        let err = safe_write_style_edit_output_inner(
+            &source.to_string_lossy(),
+            &revision,
+            &output.to_string_lossy(),
+            "planned from first",
+            allow_all,
+        )
+        .unwrap_err();
+
+        assert!(err.contains("changed after preview"), "got: {err}");
+        assert!(!output.exists());
+    }
+
+    #[test]
+    fn style_edit_writer_preserves_utf8_bom() {
+        let dir = temp_dir("style_edit_utf8_bom");
+        let source = dir.join("episode.ssa");
+        let output = dir.join("episode.styled.ssa");
+        fs::write(&source, [0xEF, 0xBB, 0xBF, b'o', b'l', b'd']).unwrap();
+        let revision = read_revision(&source);
+
+        safe_write_style_edit_output_inner(
+            &source.to_string_lossy(),
+            &revision,
+            &output.to_string_lossy(),
+            "new",
+            allow_all,
+        )
+        .unwrap();
+
+        assert_eq!(
+            fs::read(&output).unwrap(),
+            [0xEF, 0xBB, 0xBF, b'n', b'e', b'w']
+        );
+    }
+
+    #[test]
+    fn style_edit_writer_preserves_utf16le_bom() {
+        let dir = temp_dir("style_edit_utf16le");
+        let source = dir.join("episode.ass");
+        let output = dir.join("episode.styled.ass");
+        fs::write(&source, [0xFF, 0xFE, b'A', 0x00]).unwrap();
+        let revision = read_revision(&source);
+
+        safe_write_style_edit_output_inner(
+            &source.to_string_lossy(),
+            &revision,
+            &output.to_string_lossy(),
+            "AB",
+            allow_all,
+        )
+        .unwrap();
+
+        assert_eq!(
+            fs::read(&output).unwrap(),
+            [0xFF, 0xFE, b'A', 0x00, b'B', 0x00]
+        );
+    }
+
+    #[test]
+    fn style_edit_writer_preserves_utf16be_bom() {
+        let dir = temp_dir("style_edit_utf16be");
+        let source = dir.join("episode.ass");
+        let output = dir.join("episode.styled.ass");
+        fs::write(&source, [0xFE, 0xFF, 0x00, b'A']).unwrap();
+        let revision = read_revision(&source);
+
+        safe_write_style_edit_output_inner(
+            &source.to_string_lossy(),
+            &revision,
+            &output.to_string_lossy(),
+            "AB",
+            allow_all,
+        )
+        .unwrap();
+
+        assert_eq!(
+            fs::read(&output).unwrap(),
+            [0xFE, 0xFF, 0x00, b'A', 0x00, b'B']
+        );
+    }
+
+    #[test]
+    fn style_edit_encoding_round_trips_common_legacy_encodings() {
+        for (encoding_id, text) in [
+            ("GBK", "简体字幕"),
+            ("Big5", "繁體字幕"),
+            ("Shift_JIS", "日本語字幕"),
+        ] {
+            let bytes = encode_text_preserving_source(text, encoding_id, false).unwrap();
+            let encoding = encoding_rs::Encoding::for_label(encoding_id.as_bytes()).unwrap();
+            let (decoded, _, had_errors) = encoding.decode(&bytes);
+            assert!(!had_errors, "{encoding_id} output should decode cleanly");
+            assert_eq!(decoded, text, "{encoding_id} round trip");
+        }
+    }
+
+    #[test]
+    fn style_edit_writer_refuses_lossy_source() {
+        let dir = temp_dir("style_edit_lossy");
+        let source = dir.join("episode.ass");
+        let output = dir.join("episode.styled.ass");
+        fs::write(&source, [0xEF, 0xBB, 0xBF, 0xFF]).unwrap();
+        let revision = read_revision(&source);
+
+        let err = safe_write_style_edit_output_inner(
+            &source.to_string_lossy(),
+            &revision,
+            &output.to_string_lossy(),
+            "replacement",
+            allow_all,
+        )
+        .unwrap_err();
+
+        assert!(err.contains("lossy"), "got: {err}");
+        assert!(!output.exists());
+    }
+
+    #[test]
+    fn style_edit_encoding_rejects_unrepresentable_text() {
+        let err = encode_text_preserving_source("微软雅黑", "windows-1252", false).unwrap_err();
+        assert!(err.contains("cannot be represented"), "got: {err}");
+    }
+
+    #[test]
+    fn style_edit_writer_requires_matching_ass_or_ssa_extension() {
+        let dir = temp_dir("style_edit_extension");
+        let source = dir.join("episode.ass");
+        let output = dir.join("episode.styled.ssa");
+        fs::write(&source, b"source").unwrap();
+        let revision = read_revision(&source);
+
+        let err = safe_write_style_edit_output_inner(
+            &source.to_string_lossy(),
+            &revision,
+            &output.to_string_lossy(),
+            "replacement",
+            allow_all,
+        )
+        .unwrap_err();
+
+        assert!(err.contains("preserve the source"), "got: {err}");
+        assert!(!output.exists());
+    }
+
+    #[test]
+    fn style_edit_writer_refuses_the_source_path_as_output() {
+        let dir = temp_dir("style_edit_self_output");
+        let source = dir.join("episode.ass");
+        fs::write(&source, b"source").unwrap();
+        let revision = read_revision(&source);
+
+        let err = safe_write_style_edit_output_inner(
+            &source.to_string_lossy(),
+            &revision,
+            &source.to_string_lossy(),
+            "replacement",
+            allow_all,
+        )
+        .unwrap_err();
+
+        assert!(err.contains("must not be the source"), "got: {err}");
+        assert_eq!(fs::read(&source).unwrap(), b"source");
+    }
+
+    #[test]
+    fn style_edit_writer_requires_a_sibling_output() {
+        let dir = temp_dir("style_edit_sibling");
+        let other = dir.join("other");
+        fs::create_dir_all(&other).unwrap();
+        let source = dir.join("episode.ass");
+        let output = other.join("episode.styled.ass");
+        fs::write(&source, b"source").unwrap();
+        let revision = read_revision(&source);
+
+        let err = safe_write_style_edit_output_inner(
+            &source.to_string_lossy(),
+            &revision,
+            &output.to_string_lossy(),
+            "replacement",
+            allow_all,
+        )
+        .unwrap_err();
+
+        assert!(err.contains("sibling"), "got: {err}");
+        assert!(!output.exists());
     }
 
     #[test]

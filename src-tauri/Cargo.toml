@@ -68,6 +68,7 @@ once_cell = "1"
 rusqlite = { version = "0.39", features = ["bundled"] }
 chardetng = "1.0"
 encoding_rs = "0.8"
+sha2 = "0.11.0"
 fontcull = "2"
 fontcull-klippa = "0.1"
 fontcull-skrifa = "0.39"

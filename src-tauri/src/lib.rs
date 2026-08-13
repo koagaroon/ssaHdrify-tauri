@@ -139,6 +139,7 @@ pub fn run() {
             font_cache_commands::lookup_font_family,
             safe_io::safe_output_path_exists,
             safe_io::safe_write_text_file,
+            safe_io::safe_write_style_edit_output,
             safe_io::safe_copy_file,
             safe_io::safe_rename_file,
         ])

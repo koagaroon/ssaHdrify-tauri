@@ -55,6 +55,7 @@ import {
   removeFontSource,
   scanFontDirectory,
   scanFontFiles,
+  writeStyleEditOutput,
 } from "./tauri-api";
 
 beforeEach(() => {
@@ -69,6 +70,26 @@ describe("outputPathExists", () => {
     await expect(outputPathExists("D:/Anime/out.ass")).resolves.toBe(true);
     expect(invokeMock).toHaveBeenCalledWith("safe_output_path_exists", {
       path: "D:/Anime/out.ass",
+    });
+  });
+});
+
+describe("writeStyleEditOutput", () => {
+  it("passes the source revision and create-new output plan to Rust", async () => {
+    invokeMock.mockResolvedValueOnce(undefined);
+
+    await writeStyleEditOutput({
+      sourcePath: "D:/Anime/episode.ass",
+      expectedRevision: "a".repeat(64),
+      outputPath: "D:/Anime/episode.styled.ass",
+      content: "[V4+ Styles]",
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith("safe_write_style_edit_output", {
+      sourcePath: "D:/Anime/episode.ass",
+      expectedRevision: "a".repeat(64),
+      outputPath: "D:/Anime/episode.styled.ass",
+      content: "[V4+ Styles]",
     });
   });
 });

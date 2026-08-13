@@ -14,6 +14,8 @@ interface NumberInputProps {
   className?: string;
   /** id forwarded to the inner <input> so a sibling <label htmlFor> works */
   id?: string;
+  /** Optional help/error element id for screen-reader context. */
+  ariaDescribedBy?: string | undefined;
   /**
    * Caller-derived invalid signal. When true, the border switches to
    * var(--error) so the user sees the out-of-range / unparseable
@@ -31,6 +33,7 @@ export default function NumberInput({
   disabled = false,
   className = "",
   id,
+  ariaDescribedBy,
   invalid = false,
 }: NumberInputProps) {
   const numStep = typeof step === "string" ? parseFiniteNumberText(step) : step;
@@ -62,6 +65,8 @@ export default function NumberInput({
       <input
         type="number"
         id={id}
+        aria-invalid={invalid || undefined}
+        aria-describedby={ariaDescribedBy}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         min={min}
