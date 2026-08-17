@@ -19,6 +19,11 @@ describe("parseFiniteNumberText", () => {
     expect(parseFiniteNumberText(`${"1".repeat(120)}e123456789`)).toBeNull();
   });
 
+  it("accepts numeric text exactly at the 128-character limit", () => {
+    const atLimit = "1".repeat(128);
+    expect(parseFiniteNumberText(atLimit)).toBe(Number(atLimit));
+  });
+
   it("accepts complete finite decimal text", () => {
     expect(parseFiniteNumberText("1")).toBe(1);
     expect(parseFiniteNumberText("-1.5")).toBe(-1.5);

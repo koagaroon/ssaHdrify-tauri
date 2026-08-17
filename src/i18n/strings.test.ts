@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { strings, type Lang } from "./strings";
+import { LANGS, strings } from "./strings";
 import { translate } from "./useI18n";
 
-const LANGS: Lang[] = ["en", "zh"];
 const PLACEHOLDER_RE = /\{(\d+)\}/g;
 
 /**

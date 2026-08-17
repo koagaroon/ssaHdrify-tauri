@@ -255,6 +255,10 @@ export default function FontEmbed() {
   // selection — see buildConflictMessage / FileContext for rationale.
   const ingestPaths = useCallback(
     async (paths: string[], gen: number) => {
+      // A font-source scan/mutation changes the resolver underneath this
+      // batch. Keep the two workflows mutually exclusive so one selection is
+      // always analyzed against a single source-index generation.
+      if (sourceLocked) return;
       const conflictMsg = buildConflictMessage(paths, "fonts", isFileInUse, t);
       if (conflictMsg) {
         setDropError(conflictMsg);
@@ -271,6 +275,13 @@ export default function FontEmbed() {
       }
       setDropError(null);
 
+      // The accepted selection is now authoritative. Clear both halves of
+      // the previous batch before any await so an all-read/analyze failure
+      // cannot leave an old file strip or let a later source refresh revive
+      // stale per-file analyses. Rejected conflict/count checks above keep
+      // the previous selection by design; only an accepted ingest resets it.
+      perFileAnalysisRef.current = new Map();
+      setFontsFiles(null);
       setFonts([]);
       setFontUsages([]);
       setSelected(new Set());
@@ -349,8 +360,8 @@ export default function FontEmbed() {
         }
 
         if (cache.size === 0) {
-          // No file made it through (all reads failed). Don't enter a
-          // half-loaded state.
+          // No file made it through. The accepted-ingest reset above already
+          // cleared both the visible strip and the authoritative cache.
           return;
         }
 
@@ -364,11 +375,15 @@ export default function FontEmbed() {
         // FontsFilesState.firstFileContent slot — the field is kept for
         // FileContext compatibility but the cache is the authoritative
         // store from here on.
-        const firstSuccessfulPath = paths.find((p) => cache.has(p)) ?? paths[0]!;
-        const firstContent = cache.get(firstSuccessfulPath)?.content ?? "";
-        const names = paths.map(fileNameFromPath);
+        // Publish exactly the cache-backed subset. Failed reads were already
+        // reported once above; keeping them in filePaths would make Embed hit
+        // an impossible cache miss and report the same failure a second time.
+        const successfulPaths = paths.filter((path) => cache.has(path));
+        const firstSuccessfulPath = successfulPaths[0]!;
+        const firstContent = cache.get(firstSuccessfulPath)!.content;
+        const names = successfulPaths.map(fileNameFromPath);
         setFontsFiles({
-          filePaths: paths,
+          filePaths: successfulPaths,
           fileNames: names,
           firstFileContent: firstContent,
         });
@@ -379,7 +394,7 @@ export default function FontEmbed() {
         if (gen === pickGenRef.current) setAnalyzing(false);
       }
     },
-    [isFileInUse, setFontsFiles, addLog, t]
+    [sourceLocked, isFileInUse, setFontsFiles, addLog, t]
   );
 
   const handlePickFiles = useCallback(async () => {
@@ -439,7 +454,7 @@ export default function FontEmbed() {
     // first analysis pass (gen counter saves correctness but the work
     // is thrown away) and produce a confusing "pick disabled, drop
     // accepted" UX.
-    disabled: embedding || analyzing,
+    disabled: embedding || analyzing || sourceLocked,
     t,
   });
 
@@ -733,7 +748,10 @@ export default function FontEmbed() {
             const cached = perFileAnalysisRef.current.get(filePath);
             if (!cached) {
               issueCount++;
-              addLog(t("msg_fonts_error", safeFileName, "analysis cache miss"), "error");
+              addLog(
+                t("msg_fonts_error", safeFileName, t("msg_fonts_analysis_unavailable")),
+                "error"
+              );
               continue;
             }
             if (abortRef.current?.signal.aborted) break;
@@ -1117,11 +1135,12 @@ export default function FontEmbed() {
         )}
         <button
           onClick={handlePickFiles}
-          disabled={analyzing || embedding}
+          disabled={analyzing || embedding || sourceLocked}
           className="flex-none px-5 rounded-lg font-medium text-sm transition-colors"
           style={{
-            background: analyzing || embedding ? "var(--bg-input)" : "var(--accent)",
-            color: analyzing || embedding ? "var(--text-muted)" : "white",
+            background:
+              analyzing || embedding || sourceLocked ? "var(--bg-input)" : "var(--accent)",
+            color: analyzing || embedding || sourceLocked ? "var(--text-muted)" : "white",
             height: "38px",
           }}
         >
@@ -1217,10 +1236,10 @@ export default function FontEmbed() {
       <div className="flex items-center gap-2">
         <button
           onClick={() => setSourceModalOpen(true)}
-          disabled={embedding}
+          disabled={embedding || analyzing || sourceLocked}
           className="px-5 rounded-lg font-medium text-sm transition-colors"
           style={
-            embedding
+            embedding || analyzing || sourceLocked
               ? {
                   background: "var(--accent-disabled-bg)",
                   color: "var(--accent-disabled-text)",
@@ -1245,18 +1264,28 @@ export default function FontEmbed() {
         {fontSources.length > 0 && (
           <button
             onClick={handleClearFontSources}
-            disabled={embedding || sourceLocked}
+            disabled={embedding || analyzing || sourceLocked}
             className="flex-none px-3 rounded-lg text-lg font-bold transition-colors"
             style={{
-              background: embedding || sourceLocked ? "var(--bg-input)" : "var(--cancel-bg)",
-              color: embedding || sourceLocked ? "var(--text-muted)" : "var(--cancel-text)",
+              background:
+                embedding || analyzing || sourceLocked ? "var(--bg-input)" : "var(--cancel-bg)",
+              color:
+                embedding || analyzing || sourceLocked ? "var(--text-muted)" : "var(--cancel-text)",
               height: "38px",
             }}
             // Mirror the Modal's per-row remove tooltip pattern: when
             // disabled-by-busy, the tooltip should match the disabled
             // state instead of the action label that's not currently
             // available.
-            title={sourceLocked ? t("font_sources_scanning") : t("btn_clear_font_sources")}
+            title={
+              embedding
+                ? t("btn_embedding")
+                : analyzing
+                  ? t("btn_analyzing")
+                  : sourceLocked
+                    ? t("font_sources_scanning")
+                    : t("btn_clear_font_sources")
+            }
           >
             ✕
           </button>
@@ -1369,7 +1398,17 @@ export default function FontEmbed() {
                     ) : (
                       <span />
                     )}
-                    <span className={"badge " + (info.filePath ? "badge-green" : "badge-red")}>
+                    <span
+                      className={"badge " + (info.filePath ? "badge-green" : "badge-red")}
+                      title={info.error ?? undefined}
+                      aria-label={
+                        info.filePath
+                          ? t("fonts_found")
+                          : info.error
+                            ? `${t("fonts_missing")}: ${info.error}`
+                            : t("fonts_missing")
+                      }
+                    >
                       {info.filePath ? t("fonts_found") : t("fonts_missing")}
                     </span>
                   </label>
@@ -1438,6 +1477,7 @@ export default function FontEmbed() {
         usages={fontUsages}
         localCoveredKeys={localCoveredKeys}
         hasSubtitle={fileCount > 0}
+        mutationLocked={analyzing || embedding || sourceBusy}
         onAddSource={handleAddFontSource}
         onRemoveSource={handleRemoveFontSource}
         onScanStateChange={setModalScanning}

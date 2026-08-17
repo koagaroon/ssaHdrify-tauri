@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  MAX_TIMING_PREVIEW_ENTRIES,
+  MAX_TIMING_PREVIEW_TOOLTIP_CODEPOINTS,
   MAX_TIMING_OFFSET_MS,
   compileTimingMapRules,
   findTimingMapRule,
   normalizeTimingMapRules,
   parseTimingMapText,
+  previewShiftSubtitles,
   shiftSubtitles,
   shiftSubtitlesCompact,
   shiftSubtitlesWithTimingMap,
@@ -35,6 +38,76 @@ describe("shiftSubtitles", () => {
     expect(result.content).toContain("00:00:01,000 --> 00:00:02,000");
     expect(result.content).toContain("00:00:06,000 --> 00:00:07,000");
     expect(result.content).toContain("00:00:10,000 --> 00:00:11,000");
+  });
+
+  it("uses a parse-only preview that matches full shift timings without returning content", () => {
+    const options = { offsetMs: 1000.9, thresholdMs: 5000 };
+    const preview = previewShiftSubtitles(SRT_SAMPLE, options);
+    const full = shiftSubtitles(SRT_SAMPLE, options);
+
+    expect("content" in preview).toBe(false);
+    expect(preview.format).toBe(full.format);
+    expect(preview.captionCount).toBe(full.captionCount);
+    expect(preview.shiftableCount).toBe(full.captionCount - full.skippedCount);
+    expect(preview.skippedCount).toBe(full.skippedCount);
+    expect(preview.maxCaptionStart).toBe(9000);
+    expect(preview.preview).toEqual(full.preview);
+    expect(preview.previewTruncated).toBe(false);
+  });
+
+  it("caps retained preview rows at the exact boundary while preserving full-file metadata", () => {
+    const makeSrt = (count: number) =>
+      Array.from({ length: count }, (_, index) => {
+        const hours = String(Math.floor(index / 3600)).padStart(2, "0");
+        const minutes = String(Math.floor((index % 3600) / 60)).padStart(2, "0");
+        const seconds = String(index % 60).padStart(2, "0");
+        return `${index + 1}\n${hours}:${minutes}:${seconds},000 --> ${hours}:${minutes}:${seconds},500\ncaption ${index + 1}`;
+      }).join("\n\n");
+
+    const atBoundary = previewShiftSubtitles(makeSrt(MAX_TIMING_PREVIEW_ENTRIES), {
+      offsetMs: 1,
+    });
+    const overBoundary = previewShiftSubtitles(makeSrt(MAX_TIMING_PREVIEW_ENTRIES + 1), {
+      offsetMs: 1,
+    });
+
+    expect(MAX_TIMING_PREVIEW_ENTRIES).toBe(5_000);
+    expect(atBoundary.preview).toHaveLength(MAX_TIMING_PREVIEW_ENTRIES);
+    expect(atBoundary.previewTruncated).toBe(false);
+    expect(overBoundary.captionCount).toBe(MAX_TIMING_PREVIEW_ENTRIES + 1);
+    expect(overBoundary.shiftableCount).toBe(MAX_TIMING_PREVIEW_ENTRIES + 1);
+    expect(overBoundary.preview).toHaveLength(MAX_TIMING_PREVIEW_ENTRIES);
+    expect(overBoundary.preview.at(-1)?.index).toBe(MAX_TIMING_PREVIEW_ENTRIES);
+    expect(overBoundary.previewTruncated).toBe(true);
+    // Metadata scans the full parsed file rather than only retained rows.
+    expect(overBoundary.maxCaptionStart).toBe(MAX_TIMING_PREVIEW_ENTRIES * 1000);
+  });
+
+  it("counts oversized placeholders separately from shiftable preview rows", () => {
+    const input =
+      `1\n00:00:01,000 --> 00:00:02,000\n${"Z".repeat(65_000)}\n\n` +
+      "2\n00:00:03,000 --> 00:00:04,000\nNORMAL\n";
+
+    const result = previewShiftSubtitles(input, { offsetMs: 1000 });
+
+    expect(result.captionCount).toBe(2);
+    expect(result.shiftableCount).toBe(1);
+    expect(result.skippedCount).toBe(1);
+    expect(result.preview).toHaveLength(1);
+    expect(result.previewTruncated).toBe(false);
+  });
+
+  it("caps tooltip text by Unicode code point without splitting surrogate pairs", () => {
+    const longCaption = "🙂".repeat(MAX_TIMING_PREVIEW_TOOLTIP_CODEPOINTS + 5);
+    const input = `1\n00:00:01,000 --> 00:00:02,000\n${longCaption}\n`;
+
+    const result = previewShiftSubtitles(input, { offsetMs: 0 });
+    const tooltip = result.preview[0]!.tooltipText;
+
+    expect(MAX_TIMING_PREVIEW_TOOLTIP_CODEPOINTS).toBe(512);
+    expect(Array.from(tooltip)).toHaveLength(MAX_TIMING_PREVIEW_TOOLTIP_CODEPOINTS);
+    expect(tooltip.endsWith("…")).toBe(true);
+    expect(tooltip.includes("\uFFFD")).toBe(false);
   });
 });
 
@@ -204,6 +277,9 @@ describe("normalizeTimingMapRules", () => {
   it("rejects invalid timing-map rows before output generation", () => {
     expect(() => normalizeTimingMapRules([{ startMs: -1, offsetMs: 0 }])).toThrow(/startMs/);
     expect(() => normalizeTimingMapRules([{ startMs: 1000, endMs: 1000, offsetMs: 0 }])).toThrow(
+      /endMs/
+    );
+    expect(() => normalizeTimingMapRules([{ startMs: 1000, endMs: 999, offsetMs: 0 }])).toThrow(
       /endMs/
     );
     expect(() => normalizeTimingMapRules([{ startMs: 0, offsetMs: NaN }])).toThrow(/offsetMs/);

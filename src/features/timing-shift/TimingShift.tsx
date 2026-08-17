@@ -9,7 +9,8 @@ import {
 } from "../../lib/tauri-api";
 import { ask } from "@tauri-apps/plugin-dialog";
 import {
-  shiftSubtitles,
+  previewShiftSubtitles,
+  shiftSubtitlesCompact,
   formatDisplayTime,
   parseDisplayTime,
   deriveShiftedPath,
@@ -42,8 +43,9 @@ type Direction = "slower" | "faster";
 /** Cap to ±1 year to prevent integer precision loss for extreme inputs. */
 const MAX_OFFSET_MS = 365 * 24 * 3600 * 1000;
 
-// Preview list virtualization — defends against preview DOM explosion
-// at the parser's 500k-entry ceiling. A naive preview.map(...) would
+// Preview list virtualization — the engine now retains at most 5,000 rows,
+// but rendering even that many DOM nodes eagerly would still be wasteful. A
+// naive preview.map(...) would
 // materialize one DOM node per caption regardless of scroll position,
 // freezing the WebView on large inputs even though only a few rows fit
 // in the 280px viewport at any time. react-window constrains the
@@ -61,6 +63,28 @@ interface PreviewRowData {
   formatTime: (ms: number) => string;
   origLabel: string;
   shiftedLabel: string;
+}
+
+interface TimingPreviewState {
+  preview: PreviewEntry[];
+  captionCount: number;
+  shiftableCount: number;
+  maxCaptionStart: number;
+  detectedFormat: string;
+  previewTruncated: boolean;
+  error: string | null;
+}
+
+function emptyTimingPreviewState(error: string | null = null): TimingPreviewState {
+  return {
+    preview: [],
+    captionCount: 0,
+    shiftableCount: 0,
+    maxCaptionStart: 0,
+    detectedFormat: "",
+    previewTruncated: false,
+    error,
+  };
 }
 
 function PreviewRow({
@@ -90,7 +114,7 @@ function PreviewRow({
       <span className="t-new" title={`${shiftedLabel}: ${formatTime(entry.shiftedStart)}`}>
         {formatTime(entry.shiftedStart)}
       </span>
-      <span className="txt" title={entry.fullText}>
+      <span className="txt" title={entry.tooltipText}>
         {entry.text}
       </span>
     </div>
@@ -101,7 +125,18 @@ export default function TimingShift() {
   const { t } = useI18n();
   const { timingFiles, setTimingFiles, clearFile, isFileInUse } = useFileContext();
 
-  const [detectedFormat, setDetectedFormat] = useState<string>("");
+  const [previewState, setPreviewState] = useState<TimingPreviewState>(() =>
+    emptyTimingPreviewState()
+  );
+  const {
+    preview,
+    captionCount,
+    shiftableCount,
+    maxCaptionStart,
+    detectedFormat,
+    previewTruncated,
+    error: previewError,
+  } = previewState;
   // Two-slot shadow mirroring HdrConvert's `brightness` /
   // `brightnessText`: `offsetValue` is the validated integer used by
   // `effectiveOffsetMs` math; `offsetText` is the raw input string the
@@ -114,8 +149,6 @@ export default function TimingShift() {
   const [direction, setDirection] = useState<Direction>("slower");
   const [useThreshold, setUseThreshold] = useState(false);
   const [thresholdText, setThresholdText] = useState("00:05:00.000");
-  const [preview, setPreview] = useState<PreviewEntry[]>([]);
-  const [captionCount, setCaptionCount] = useState(0);
   const [busy, setBusy] = useState(false);
   // Same shape as HdrConvert — "cancelled" is its own visible state so
   // the footer and log can both acknowledge that the user stepped back
@@ -200,15 +233,12 @@ export default function TimingShift() {
   );
   const thresholdInvalid = useThreshold && thresholdMs === null;
 
-  // Last caption's START time — shiftSubtitle uses `c.start >= threshold`,
-  // so a threshold past the last START produces zero shifts even if it
-  // falls before the last caption's END.
-  const maxCaptionStart = useMemo(
-    () => preview.reduce((max, e) => Math.max(max, e.originalStart), 0),
-    [preview]
-  );
+  // Full-file maximum, returned by the parse-only engine even when the
+  // retained preview rows are capped. shiftSubtitle uses
+  // `c.start >= threshold`, so a threshold past the last START produces
+  // zero shifts even if it falls before the last caption's END.
   const thresholdExceedsFile =
-    useThreshold && thresholdMs !== null && maxCaptionStart > 0 && thresholdMs > maxCaptionStart;
+    useThreshold && thresholdMs !== null && captionCount > 0 && thresholdMs > maxCaptionStart;
 
   const filePaths = useMemo(() => timingFiles?.filePaths ?? [], [timingFiles]);
   const fileNames = useMemo(() => timingFiles?.fileNames ?? [], [timingFiles]);
@@ -247,45 +277,43 @@ export default function TimingShift() {
   // is honest; we don't re-render the timeline as the loop runs.
   useEffect(() => {
     if (!firstFileContent) {
-      setPreview([]);
-      setCaptionCount(0);
-      setDetectedFormat("");
+      setPreviewState(emptyTimingPreviewState());
       return;
     }
-    if (thresholdInvalid) {
+    if (offsetInvalid || thresholdInvalid) {
       if (debounceRef.current) clearTimeout(debounceRef.current);
-      // Clear the derived chips too, not just the preview: leaving
-      // captionCount / detectedFormat set would show a stale count + format
-      // badge over a blank timeline. The empty-content branch above resets
-      // all three for the same consistency reason.
-      setPreview([]);
-      setCaptionCount(0);
-      setDetectedFormat("");
+      // Clear all derived preview state: leaving count/format/max/error from
+      // the prior valid input would contradict the visible invalid input.
+      setPreviewState(emptyTimingPreviewState());
       return;
     }
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
       try {
-        const result = shiftSubtitles(firstFileContent, {
+        const result = previewShiftSubtitles(firstFileContent, {
           offsetMs: effectiveOffsetMs,
           thresholdMs: thresholdMs ?? undefined,
         });
-        setPreview(result.preview);
-        setCaptionCount(result.captionCount);
-        setDetectedFormat(result.format.toUpperCase());
-      } catch {
-        // Keep all derived preview state aligned with the current file.
-        // Otherwise a malformed or zero-cue replacement would leave the
-        // previous file's timeline, count, and format visible.
-        setPreview([]);
-        setCaptionCount(0);
-        setDetectedFormat("");
+        setPreviewState({
+          preview: result.preview,
+          captionCount: result.captionCount,
+          shiftableCount: result.shiftableCount,
+          maxCaptionStart: result.maxCaptionStart,
+          detectedFormat: result.format.toUpperCase(),
+          previewTruncated: result.previewTruncated,
+          error: null,
+        });
+      } catch (error) {
+        // Publish failure atomically with cleared derived state. Keeping an
+        // independent error flag let old count/format chips survive a failed
+        // parse for one render; one object makes those states inseparable.
+        setPreviewState(emptyTimingPreviewState(t("timing_preview_error", sanitizeError(error))));
       }
     }, 200);
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [firstFileContent, effectiveOffsetMs, thresholdMs, thresholdInvalid]);
+  }, [firstFileContent, effectiveOffsetMs, offsetInvalid, thresholdMs, thresholdInvalid, t]);
 
   // Reset last-save outcome on selection change so "done" / "cancelled"
   // don't linger after the user picks a brand-new batch.
@@ -414,9 +442,7 @@ export default function TimingShift() {
   const handleClearFiles = useCallback(() => {
     pickGenRef.current = pickGenRef.current + 1;
     clearFile("timing");
-    setPreview([]);
-    setCaptionCount(0);
-    setDetectedFormat("");
+    setPreviewState(emptyTimingPreviewState());
     setDropError(null);
   }, [clearFile]);
 
@@ -533,7 +559,7 @@ export default function TimingShift() {
 
             if (abortRef.current?.signal.aborted) break;
 
-            const result = shiftSubtitles(content, {
+            const result = shiftSubtitlesCompact(content, {
               offsetMs: effectiveOffsetMs,
               thresholdMs: thresholdMs ?? undefined,
             });
@@ -790,6 +816,12 @@ export default function TimingShift() {
       {/* Selection-rejected banner — same UX as HdrConvert. */}
       <DropErrorBanner message={dropError} onDismiss={() => setDropError(null)} />
 
+      {/* Parse/cap failures must stay visible even when the log is collapsed. */}
+      <DropErrorBanner
+        message={previewError}
+        onDismiss={() => setPreviewState((state) => ({ ...state, error: null }))}
+      />
+
       {/* Drop-zone discoverability hint — visible only when idle. */}
       {fileCount === 0 && !dropError && (
         <p className="text-xs ml-1" style={{ color: "var(--text-muted)" }}>
@@ -969,9 +1001,18 @@ export default function TimingShift() {
         <div className="timeline-preview" aria-live="polite">
           <div className="timeline-preview-head">
             <span>
-              {fileCount > 1
-                ? t("preview_title_first", preview.length, primaryFileName)
-                : t("preview_title", preview.length)}
+              {previewTruncated
+                ? fileCount > 1
+                  ? t(
+                      "preview_title_first_truncated",
+                      preview.length,
+                      shiftableCount,
+                      primaryFileName
+                    )
+                  : t("preview_title_truncated", preview.length, shiftableCount)
+                : fileCount > 1
+                  ? t("preview_title_first", shiftableCount, primaryFileName)
+                  : t("preview_title", shiftableCount)}
             </span>
           </div>
           <div className="timeline-row timeline-row-header" aria-hidden="true">

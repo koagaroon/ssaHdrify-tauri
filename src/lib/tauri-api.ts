@@ -314,17 +314,20 @@ export async function findSystemFont(
 
 /** Subset a font file to only include the specified codepoints.
  *
- *  Wire format: Rust returns the bytes base64-encoded (`subset_font_b64`)
- *  to dodge the JSON `[byte, byte, ...]` form's ~4–5× expansion. The
- *  worst-case 10 MB subset would otherwise produce a ~50 MB IPC payload
- *  + main-thread JSON parse pass; base64 is ~1.33×. */
+ *  Wire format: `subset_font_bytes` returns raw bytes on Windows/Linux. Tauri
+ *  2.11 serializes raw responses as numeric JSON arrays on Apple WebViews, so
+ *  those targets retain the smaller base64 form. */
 export async function subsetFont(
   fontPath: string,
   fontIndex: number,
   codepoints: number[]
 ): Promise<Uint8Array> {
-  const b64: string = await invoke("subset_font_b64", { fontPath, fontIndex, codepoints });
-  return decodeBase64Bytes(b64);
+  const payload = await invoke<ArrayBuffer | string>("subset_font_bytes", {
+    fontPath,
+    fontIndex,
+    codepoints,
+  });
+  return typeof payload === "string" ? decodeBase64Bytes(payload) : new Uint8Array(payload);
 }
 
 /** One font face discovered in a user-picked directory or file list.

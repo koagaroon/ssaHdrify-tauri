@@ -5317,7 +5317,8 @@ fn group_resolved_fonts_by_face(
 ///
 /// CLI lens: `subset_font` is an in-process Rust call from this
 /// binary, not an IPC boundary. The "IPC cap" framing only applies
-/// on the GUI / Tauri path where `subset_font_b64` wraps it.
+/// on the GUI / Tauri path where `subset_font_bytes` uses raw bytes on
+/// Windows/Linux and a base64 fallback on Apple targets.
 ///
 /// Cross-language drift defense: `dedup_cap_matches_ipc_cap` in
 /// `mod tests` pins the equality with

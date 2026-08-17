@@ -255,24 +255,29 @@ export function convertHdr(request: HdrConversionRequest): HdrConversionResult {
 }
 
 export function convertShift(request: ShiftConversionRequest): ShiftConversionResult {
+  // Rust currently omits absent optionals, but canonicalize nullish values at
+  // this JS boundary for direct and future JSON callers without widening the
+  // public TypeScript contract.
+  const timingMapRules = request.timingMapRules ?? undefined;
+  const thresholdMs = request.thresholdMs ?? undefined;
   let result:
     | ReturnType<typeof shiftSubtitlesCompact>
     | ReturnType<typeof shiftSubtitlesWithTimingMapCompact>;
-  if (request.timingMapRules !== undefined) {
+  if (timingMapRules !== undefined) {
     if (request.offsetMs !== 0) {
       throw new Error("Timing map shift cannot be combined with a non-zero offsetMs");
     }
-    if (request.thresholdMs !== undefined) {
+    if (thresholdMs !== undefined) {
       throw new Error("Timing map shift cannot be combined with thresholdMs");
     }
     result = shiftSubtitlesWithTimingMapCompact(request.content, {
-      rules: request.timingMapRules,
+      rules: timingMapRules,
     });
   } else {
-    assertFiniteShiftMs(request.offsetMs, request.thresholdMs);
+    assertFiniteShiftMs(request.offsetMs, thresholdMs);
     result = shiftSubtitlesCompact(request.content, {
       offsetMs: request.offsetMs,
-      thresholdMs: request.thresholdMs,
+      thresholdMs,
     });
   }
 

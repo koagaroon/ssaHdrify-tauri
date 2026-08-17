@@ -475,6 +475,18 @@ describe("deriveRenameOutputPath — exact basename match (no lang suffix)", () 
     expect(deriveRenameOutputPath(video, subSc, "rename", null)).toBe(expected);
   });
 
+  it("uses the subtitle directory for rename and the video directory for copy", () => {
+    const separatedVideo = "D:\\video\\Show.S01E01.mkv";
+    const separatedSubtitle = "C:\\subs\\old-name.ass";
+
+    expect(deriveRenameOutputPath(separatedVideo, separatedSubtitle, "rename", null)).toBe(
+      "C:\\subs\\Show.S01E01.ass"
+    );
+    expect(deriveRenameOutputPath(separatedVideo, separatedSubtitle, "copy_to_video", null)).toBe(
+      "D:\\video\\Show.S01E01.ass"
+    );
+  });
+
   it("copy_to_chosen → target dir is the chosen directory", () => {
     const chosen = "D:\\out";
     const out = deriveRenameOutputPath(video, subSc, "copy_to_chosen", chosen);

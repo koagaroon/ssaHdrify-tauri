@@ -241,7 +241,25 @@ export async function analyzeFonts(
     }
 
     if (useRustUserFonts) {
-      const localResult = await resolveUserFont(usage.key.family, usage.key.bold, usage.key.italic);
+      let localResult: Awaited<ReturnType<typeof resolveUserFont>>;
+      try {
+        localResult = await resolveUserFont(usage.key.family, usage.key.bold, usage.key.italic);
+      } catch (error) {
+        // A session-index failure belongs to this font, not the whole
+        // subtitle batch. Fail this priority tier closed: silently using a
+        // lower-priority cache/system face after an explicitly supplied local
+        // source malfunctioned could embed the wrong font. This mirrors the
+        // CLI resolver's local-tier error policy while allowing later font
+        // families/files to continue analyzing.
+        infos.push({
+          ...base,
+          filePath: null,
+          fontIndex: 0,
+          error: sanitizeError(error),
+          source: null,
+        });
+        continue;
+      }
       if (localResult) {
         if (isDev) console.debug(`[ssaHdrify] '${usage.key.family}' → LOCAL ${localResult.path}`);
         infos.push({

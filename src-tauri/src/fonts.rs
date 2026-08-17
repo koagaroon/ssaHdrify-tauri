@@ -4272,9 +4272,10 @@ fn is_in_system_fonts_dir(canonical: &Path) -> bool {
 ///
 /// Public IPC entry point + the CLI's standalone-embed callsite both
 /// invoke this function as a regular `pub fn`; the GUI reaches it through
-/// `ipc_commands::subset_font_b64`, which runs the base64 helper below on the
-/// blocking pool so the frontend doesn't pay the JSON `[byte, ...]` expansion
-/// (~4–5× per byte → ~50 MB on a worst-case 10 MB subset).
+/// `ipc_commands::subset_font_bytes`, which runs this function on the blocking
+/// pool. Windows/Linux use a raw `tauri::ipc::Response`; Apple targets retain
+/// base64 because Tauri 2.11's eval fallback JSON-serializes raw bytes as a
+/// numeric array there. Both forms avoid the worst wire shape on their target.
 /// CLI's chain mode marshals subsets via base64 inline (see
 /// `process_one_chain_input`); CLI's standalone embed bundles them
 /// into `engine::FontSubsetPayload` and ships through the engine's
@@ -4284,9 +4285,10 @@ fn is_in_system_fonts_dir(canonical: &Path) -> bool {
 /// **IMPORTANT **: do NOT add `#[tauri::command]`
 /// to this function. The Vec<u8> return shape would JSON-encode as
 /// `[byte, byte, ...]` over the GUI IPC wire, hitting the same ~4-5×
-/// expansion `subset_font_b64` exists specifically to dodge. The GUI-side IPC
-/// path MUST go through `ipc_commands::subset_font_b64`; adding the attribute
-/// here would silently bypass that guard and pressure V8 heap on every embed.
+/// expansion the target-aware wrapper exists specifically to dodge. The
+/// GUI-side IPC path MUST go through `ipc_commands::subset_font_bytes`; adding
+/// the attribute here would silently bypass that guard and pressure the JS heap
+/// on every embed.
 /// Future direct exposure must go through an explicit security and
 /// resource-budget audit.
 pub fn subset_font(
@@ -4696,23 +4698,6 @@ pub fn subset_font(
             Err(format!("Subsetting failed: {e}"))
         }
     }
-}
-
-/// Blocking base64 implementation called by `ipc_commands::subset_font_b64`
-/// so the GUI's frontend doesn't pay the JSON `[byte, byte, …]` expansion.
-/// Pre-fix this returned `Vec<u8>` directly; serde-json would write each
-/// byte as decimal+comma (~4–5× per byte), and a 10 MB legitimate subset
-/// would expand to ~50 MB IPC payload + a main-thread JSON parse pass.
-/// Frontend `subsetFont()` decodes with the shared local byte decoder
-/// instead of relying on host-provided Web APIs.
-pub fn subset_font_b64(
-    font_path: String,
-    font_index: u32,
-    codepoints: Vec<u32>,
-) -> Result<String, String> {
-    use base64::Engine as _;
-    let bytes = subset_font(font_path, font_index, codepoints)?;
-    Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
 }
 
 /// Returns true if `font_data` begins with the **TrueType / OpenType

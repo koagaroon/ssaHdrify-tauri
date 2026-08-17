@@ -214,19 +214,31 @@ export function detectFormat(content: string): SubtitleFormat {
 
 // ── Timestamp Parsing ─────────────────────────────────────
 
+function requireSafeTimestampMs(totalMs: number, label: string, source: string): number {
+  if (!Number.isSafeInteger(totalMs)) {
+    throw new Error(`${label} timestamp exceeds JavaScript's safe integer range: ${source}`);
+  }
+  return totalMs;
+}
+
 /** Parse "HH:MM:SS,mmm" (SRT) or "HH:MM:SS.mmm" to ms */
 function parseSrtTime(ts: string): number {
   // Hours capped at 12 digits — far past any legitimate timestamp,
   // bounded so a 400-digit `\d+` saturating parseInt to Infinity is
-  // structurally impossible.
-  const m = ts.match(/(\d{1,12}):(\d{2}):(\d{2})[,.](\d{3})/);
+  // structurally impossible. The exact millisecond total is checked below
+  // because even a bounded 12-digit hour can exceed Number.MAX_SAFE_INTEGER.
+  const m = ts.match(/^(\d{1,12}):(\d{2}):(\d{2})[,.](\d{3})$/);
   if (!m) return 0;
   const minutes = parseInt(m[2]!, 10);
   const seconds = parseInt(m[3]!, 10);
   if (minutes >= 60 || seconds >= 60) {
     throw new Error(`Invalid SRT timestamp (minutes and seconds must be below 60): ${ts}`);
   }
-  return parseInt(m[1]!, 10) * 3600000 + minutes * 60000 + seconds * 1000 + parseInt(m[4]!, 10);
+  return requireSafeTimestampMs(
+    parseInt(m[1]!, 10) * 3600000 + minutes * 60000 + seconds * 1000 + parseInt(m[4]!, 10),
+    "SRT",
+    ts
+  );
 }
 
 /** Parse VTT timestamps — supports both "HH:MM:SS.mmm" and "MM:SS.mmm" (no hours) */
@@ -245,8 +257,10 @@ function parseVttTime(ts: string): number {
     if (minutes >= 60 || seconds >= 60) {
       throw new Error(`Invalid WebVTT timestamp (minutes and seconds must be below 60): ${ts}`);
     }
-    return (
-      parseInt(full[1]!, 10) * 3600000 + minutes * 60000 + seconds * 1000 + parseInt(full[4]!, 10)
+    return requireSafeTimestampMs(
+      parseInt(full[1]!, 10) * 3600000 + minutes * 60000 + seconds * 1000 + parseInt(full[4]!, 10),
+      "WebVTT",
+      ts
     );
   }
   // MM:SS.mmm (no hours — valid per WebVTT spec)
@@ -264,22 +278,25 @@ function parseVttTime(ts: string): number {
 
 /** Parse "H:MM:SS.cc" (ASS centiseconds) to ms */
 function parseAssTime(ts: string): number {
-  const m = ts.match(/(\d{1,12}):(\d{2}):(\d{2})\.(\d{2})/);
+  const m = ts.match(/^(\d{1,12}):(\d{2}):(\d{2})\.(\d{2})$/);
   if (!m) return 0;
   const minutes = parseInt(m[2]!, 10);
   const seconds = parseInt(m[3]!, 10);
   if (minutes >= 60 || seconds >= 60) {
     throw new Error(`Invalid ASS/SSA timestamp (minutes and seconds must be below 60): ${ts}`);
   }
-  return (
-    parseInt(m[1]!, 10) * 3600000 + minutes * 60000 + seconds * 1000 + parseInt(m[4]!, 10) * 10
+  return requireSafeTimestampMs(
+    parseInt(m[1]!, 10) * 3600000 + minutes * 60000 + seconds * 1000 + parseInt(m[4]!, 10) * 10,
+    "ASS/SSA",
+    ts
   );
 }
 
 /**
  * Floor a millisecond value to a safe non-negative finite integer.
  *
- * NaN / Infinity collapse to 0; negatives clamp to 0. Without this,
+ * NaN / Infinity collapse to 0; negatives clamp to 0; larger values clamp
+ * to Number.MAX_SAFE_INTEGER. Without this,
  * a malformed upstream caption (NaN start / end) would produce a
  * literal "NaN:NaN:NaN.NaN" timestamp and corrupt the whole file.
  * Extracted from formatSrtTime / formatAssTime / srt-converter
@@ -288,7 +305,7 @@ function parseAssTime(ts: string): number {
 export function safeMs(ms: number): number {
   if (!Number.isFinite(ms)) return 0;
   if (ms < 0) return 0;
-  return ms;
+  return Math.min(Math.floor(ms), Number.MAX_SAFE_INTEGER);
 }
 
 /** Format ms → "HH:MM:SS,mmm" (SRT) */
@@ -330,12 +347,12 @@ export function parseDisplayTime(ts: string): number | null {
   const minutes = parseInt(m[2]!, 10);
   const seconds = parseInt(m[3]!, 10);
   if (minutes >= 60 || seconds >= 60) return null;
-  return (
+  const totalMs =
     parseInt(m[1]!, 10) * 3600000 +
     minutes * 60000 +
     seconds * 1000 +
-    parseInt(m[4]!.padEnd(3, "0"), 10)
-  );
+    parseInt(m[4]!.padEnd(3, "0"), 10);
+  return Number.isSafeInteger(totalMs) ? totalMs : null;
 }
 
 // ── SRT Parser ────────────────────────────────────────────
@@ -425,9 +442,9 @@ function parseSrt(content: string): Caption[] {
     // count via msg_oversized_skipped — closes the no-silent-action
     // gap (an earlier `continue` lost a 64 KB+ caption without any
     // user signal). The placeholder counts toward MAX_PARSED_ENTRIES
-    // (same as parseAss / parseSub), and buildSrt filters them out
-    // before serialization so disk output is unchanged. Iteration
-    // cost is still bounded by MAX_RAW_BLOCKS (above).
+    // (same as parseAss / parseSub), and buildSrt omits them from the
+    // rebuilt output. The feature layer reports that intentional drop;
+    // iteration cost is still bounded by MAX_RAW_BLOCKS (above).
     if (text.length > MAX_CAPTION_TEXT_LEN) {
       captions.push({
         raw: block.trim(),
@@ -452,8 +469,8 @@ function buildSrt(captions: Caption[]): string {
   // filter skipped placeholders before
   // serialization. parseSrt now pushes them for oversized text so the
   // feature layer can count and surface the drop; buildSrt rebuilds
-  // from the captions array, so filtering here keeps disk output
-  // pristine (no numbered cues with empty bodies). Cue numbering
+  // from the captions array, so filtering here leaves only legitimate
+  // cues (no numbered cues with empty bodies). Cue numbering
   // reflects legitimate captions only because we filter before map.
   return (
     captions
@@ -801,8 +818,8 @@ function parseSub(content: string, fps: number = DEFAULT_FPS): Caption[] {
     // was unbounded by the per-caption cap; a crafted 50 MB MicroDVD
     // file with millions of oversized entries could spin the
     // `subLineRe.exec` loop without tripping any ceiling (the 50 MB
-    // upstream file cap was the only backstop). buildSub filters
-    // skipped placeholders out, so disk output is unchanged.
+    // upstream file cap was the only backstop). buildSub omits skipped
+    // placeholders, while the feature layer reports that intentional drop.
     const text = match[3]!;
     if (text.length > MAX_CAPTION_TEXT_LEN) {
       count += 1;
@@ -939,8 +956,8 @@ export function transformSubtitleTimings(
     }
     return {
       ...next,
-      start: Math.max(0, next.start),
-      end: Math.max(0, next.end),
+      start: safeMs(next.start),
+      end: safeMs(next.end),
     };
   });
 

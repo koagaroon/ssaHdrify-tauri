@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  formatDisplayTime,
   parseDisplayTime,
   parseSubtitle,
+  safeMs,
   shiftSubtitle,
   transformSubtitleTimings,
 } from "./subtitle-parser";
@@ -59,22 +61,25 @@ describe("parseSubtitle", () => {
     expect(result.captions[0]!.text).toBe("real cue");
   });
 
-  it("accepts NOTE as a standards-valid WebVTT cue identifier", () => {
-    const content = [
-      "WEBVTT",
-      "",
-      "NOTE",
-      "00:00:01.000 --> 00:00:02.000 align:start",
-      "this is a cue, not a comment block",
-      "",
-    ].join("\n");
+  it.each(["NOTE", "STYLE", "REGION"])(
+    "accepts %s as a standards-valid WebVTT cue identifier",
+    (cueId) => {
+      const content = [
+        "WEBVTT",
+        "",
+        cueId,
+        "00:00:01.000 --> 00:00:02.000 align:start",
+        "this is a cue, not a comment block",
+        "",
+      ].join("\n");
 
-    const result = parseSubtitle(content);
+      const result = parseSubtitle(content);
 
-    expect(result.captions).toHaveLength(1);
-    expect(result.captions[0]!.cueId).toBe("NOTE");
-    expect(result.captions[0]!.text).toBe("this is a cue, not a comment block");
-  });
+      expect(result.captions).toHaveLength(1);
+      expect(result.captions[0]!.cueId).toBe(cueId);
+      expect(result.captions[0]!.text).toBe("this is a cue, not a comment block");
+    }
+  );
 
   it("parses ASS Dialogue lines and reports format=ass", () => {
     const content =
@@ -308,16 +313,61 @@ describe("parseSubtitle", () => {
   });
 });
 
+describe("safeMs / formatDisplayTime", () => {
+  it.each([
+    [1234.9, 1234, "00:00:01.234"],
+    [-1234.9, 0, "00:00:00.000"],
+    [Number.MAX_SAFE_INTEGER + 1, Number.MAX_SAFE_INTEGER, "2501999792:59:00.991"],
+    [NaN, 0, "00:00:00.000"],
+    [Infinity, 0, "00:00:00.000"],
+    [-Infinity, 0, "00:00:00.000"],
+  ])("canonicalizes %s to integer milliseconds", (input, expectedMs, expectedDisplay) => {
+    expect(safeMs(input)).toBe(expectedMs);
+    expect(formatDisplayTime(input)).toBe(expectedDisplay);
+  });
+});
+
 describe("transformSubtitleTimings", () => {
-  it("rejects non-finite transformed timestamps before formatting output", () => {
+  it.each(["start", "end"] as const)(
+    "rejects a non-finite transformed %s before formatting output",
+    (field) => {
+      const srt = ["1", "00:00:01,000 --> 00:00:02,000", "hello", ""].join("\n");
+
+      expect(() =>
+        transformSubtitleTimings(srt, (caption) => ({
+          ...caption,
+          [field]: NaN,
+        }))
+      ).toThrow(/non-finite timestamp/);
+    }
+  );
+
+  it("canonicalizes fractional transformed timestamps in data, preview, and serialization", () => {
     const srt = ["1", "00:00:01,000 --> 00:00:02,000", "hello", ""].join("\n");
 
-    expect(() =>
-      transformSubtitleTimings(srt, (caption) => ({
-        ...caption,
-        start: NaN,
-      }))
-    ).toThrow(/non-finite timestamp/);
+    const result = transformSubtitleTimings(srt, (caption) => ({
+      ...caption,
+      start: 1234.9,
+      end: 2345.9,
+    }));
+
+    expect(result.shifted[0]).toMatchObject({ start: 1234, end: 2345 });
+    expect(formatDisplayTime(result.shifted[0]!.start)).toBe("00:00:01.234");
+    expect(formatDisplayTime(result.shifted[0]!.end)).toBe("00:00:02.345");
+    expect(result.output).toBe("1\n00:00:01,234 --> 00:00:02,345\nhello\n");
+  });
+
+  it("clamps large finite negative transformed timestamps consistently", () => {
+    const srt = ["1", "00:00:01,000 --> 00:00:02,000", "hello", ""].join("\n");
+
+    const result = transformSubtitleTimings(srt, (caption) => ({
+      ...caption,
+      start: -Number.MAX_SAFE_INTEGER,
+      end: -1_000_000_000_000.5,
+    }));
+
+    expect(result.shifted[0]).toMatchObject({ start: 0, end: 0 });
+    expect(result.output).toBe("1\n00:00:00,000 --> 00:00:00,000\nhello\n");
   });
 
   it("rewrites only WebVTT cue timestamps and preserves the exact surrounding structure", () => {
@@ -533,19 +583,18 @@ describe("parseSubtitle / shiftSubtitle — oversized-ASS-Dialogue placeholder a
     expect(result.captions).toHaveLength(0);
   });
 
-  it("parses 12-digit-hour VTT timing (upper bound)", () => {
-    // Use a 12-digit fixture so the at-limit test pins the boundary
-    // from the inside. An earlier attempt used a 9-digit fixture and
-    // called it "upper bound"; a regression lowering the bound to
-    // `\d{2,11}` would have left both tests green (9 digits passes,
-    // 13 fails) without exercising the actual 12-digit edge. The
-    // 12-digit fixture + the 13-digit over-bound counter-test (below)
-    // pin the boundary from both sides: at-limit must pass and
-    // over-limit must fail.
-    const longHour = "999999999999"; // 12 digits, exactly at {2,12} upper bound
-    const content = `WEBVTT\r\n\r\n${longHour}:00:01.000 --> ${longHour}:00:02.000\r\nLine\r\n`;
+  it("round-trips the largest whole-hour VTT value within the safe-integer boundary", () => {
+    const longHour = "2501999792";
+    const content = `WEBVTT\n\n${longHour}:00:01.000 --> ${longHour}:00:02.000\nLine\n`;
     const result = parseSubtitle(content);
     expect(result.captions).toHaveLength(1);
+    expect(shiftSubtitle(content, 0).output).toBe(content);
+  });
+
+  it("rejects a syntactically bounded VTT timestamp beyond the safe-integer boundary", () => {
+    const unsafeHour = "999999999999";
+    const content = `WEBVTT\n\n${unsafeHour}:00:01.000 --> ${unsafeHour}:00:02.000\nLine\n`;
+    expect(() => parseSubtitle(content)).toThrow(/safe integer range/);
   });
 
   it("rejects 13-digit-hour VTT timing (upper bound enforced)", () => {
@@ -565,12 +614,19 @@ describe("parseSubtitle / shiftSubtitle — oversized-ASS-Dialogue placeholder a
   // a refactor that loosens the cap (`\d{1,13}`) or tightens it
   // (`\d{1,11}`) trips a test.
 
-  it("parses 12-digit-hour SRT timing (upper bound)", () => {
-    const longHour = "999999999999"; // 12 digits
+  it("round-trips the largest whole-hour SRT value within the safe-integer boundary", () => {
+    const longHour = "2501999792";
     const content = `1\n${longHour}:00:01,000 --> ${longHour}:00:02,000\nLine\n`;
     const result = parseSubtitle(content);
     expect(result.format).toBe("srt");
     expect(result.captions).toHaveLength(1);
+    expect(shiftSubtitle(content, 0).output).toBe(content);
+  });
+
+  it("rejects a syntactically bounded SRT timestamp beyond the safe-integer boundary", () => {
+    const unsafeHour = "999999999999";
+    const content = `1\n${unsafeHour}:00:01,000 --> ${unsafeHour}:00:02,000\nLine\n`;
+    expect(() => parseSubtitle(content)).toThrow(/safe integer range/);
   });
 
   it("rejects 13-digit-hour SRT timing (upper bound enforced)", () => {
@@ -589,8 +645,8 @@ describe("parseSubtitle / shiftSubtitle — oversized-ASS-Dialogue placeholder a
     expect(() => parseSubtitle(content)).toThrow("Could not detect subtitle format");
   });
 
-  it("parses 12-digit-hour ASS Dialogue (upper bound)", () => {
-    const longHour = "999999999999"; // 12 digits
+  it("round-trips the largest whole-hour ASS value within the safe-integer boundary", () => {
+    const longHour = "2501999792";
     const ass =
       "[Script Info]\n\n[V4+ Styles]\nFormat: Name\nStyle: Default\n\n" +
       "[Events]\nFormat: Layer, Start, End, Style, Text\n" +
@@ -599,6 +655,16 @@ describe("parseSubtitle / shiftSubtitle — oversized-ASS-Dialogue placeholder a
     expect(result.format).toBe("ass");
     expect(result.captions).toHaveLength(1);
     expect(result.captions[0]!.text).toContain("Hello");
+    expect(shiftSubtitle(ass, 0).output).toBe(ass);
+  });
+
+  it("rejects a syntactically bounded ASS timestamp beyond the safe-integer boundary", () => {
+    const unsafeHour = "999999999999";
+    const ass =
+      "[Script Info]\n\n[V4+ Styles]\nFormat: Name\nStyle: Default\n\n" +
+      "[Events]\nFormat: Layer, Start, End, Style, Text\n" +
+      `Dialogue: 0,${unsafeHour}:00:01.00,${unsafeHour}:00:02.00,Default,Hello\n`;
+    expect(() => parseSubtitle(ass)).toThrow(/safe integer range/);
   });
 
   it("rejects 13-digit-hour ASS Dialogue (upper bound enforced)", () => {

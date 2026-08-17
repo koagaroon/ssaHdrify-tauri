@@ -124,7 +124,7 @@ pub fn run() {
             ipc_commands::expand_dropped_paths,
             ipc_commands::read_text_detect_encoding,
             ipc_commands::find_system_font,
-            ipc_commands::subset_font_b64,
+            ipc_commands::subset_font_bytes,
             fonts::preflight_font_directory,
             fonts::preflight_font_files,
             fonts::scan_font_directory,
