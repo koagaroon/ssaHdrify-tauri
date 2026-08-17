@@ -5775,7 +5775,10 @@ fn expand_rename_inputs(globals: &GlobalOptions, paths: &[PathBuf]) -> Result<Ve
         .iter()
         .map(|path| absolute_path(path).map(|path| display_path(&path)))
         .collect();
-    let expanded = app_lib::dropzone::expand_dropped_paths(absolute_paths?)?;
+    // CLI argv paths are user-authored and have no Tauri AppHandle. Bypass
+    // only the GUI filesystem scope while retaining validation, reparse-point
+    // rejection, one-level walking, and both path-count caps.
+    let expanded = app_lib::dropzone::expand_dropped_paths_inner(absolute_paths?, |_| true)?;
 
     if expanded.files.is_empty() {
         return Err("no regular files found in rename input paths".to_string());
@@ -6824,8 +6827,9 @@ fn output_path_exists(globals: &GlobalOptions, path: &Path) -> bool {
 //   - `check_subtitle_extension` confines the destination to the
 //     subtitle-extension whitelist (defense-in-depth against argv
 //     typo redirecting to `.desktop` / `.lnk` persistence paths).
-//   - `clear_existing_destination` lstat's the destination before any
-//     remove_file (refuses reparse points there).
+//   - write / copy use `clear_existing_destination` before replacement;
+//     rename uses non-mutating destination inspection so an OS rename
+//     failure cannot erase the prior destination. Both reject reparse points.
 //   - copy / rename additionally enforce `reject_reparse_source` +
 //     `reject_same_canonical_path` (the case-only NTFS self-overwrite
 //     trap closed for the GUI) + the late re-check before
@@ -6839,10 +6843,10 @@ fn output_path_exists(globals: &GlobalOptions, path: &Path) -> bool {
 // owns all decisions internally. Higher-level callers still use
 // `output_path_exists` (preserved as a standalone CLI helper above)
 // for the cheap-first skip-when-exists check + `--quiet`-respecting
-// stderr WARN on stat failure. safe_io's `clear_existing_destination`
-// provides the second-layer fail-shut on the race between the higher-
-// level check and the write. Error wording at the safe_io boundary
-// bubbles through `failed_report` and is sanitized at the print
+// stderr WARN on stat failure. safe_io's destination inspection/removal
+// helpers provide the second-layer fail-shut on the race between the higher-
+// level check and the final filesystem operation. Error wording at the safe_io
+// boundary bubbles through `failed_report` and is sanitized at the print
 // boundary by `emit_file_report`'s `sanitize_for_display`.
 fn write_output(
     _globals: &GlobalOptions,

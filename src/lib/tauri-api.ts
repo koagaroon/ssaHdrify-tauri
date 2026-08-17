@@ -743,9 +743,9 @@ export interface ExpandedPaths {
 /**
  * Expand a list of paths from a drag-drop event into a flat list of file
  * paths. Folders are walked one level deep; files pass through unchanged.
- * Hidden entries, symlinks, and reparse points are skipped on the Rust
- * side. Returns `{ files: [], truncated: false }` when nothing usable
- * was dropped.
+ * Filesystem-scope-denied paths, hidden entries, symlinks, and reparse
+ * points are skipped on the Rust side. Returns
+ * `{ files: [], truncated: false }` when nothing usable was dropped.
  */
 export async function expandDroppedPaths(paths: string[]): Promise<ExpandedPaths> {
   return invoke<ExpandedPaths>("expand_dropped_paths", { paths });
