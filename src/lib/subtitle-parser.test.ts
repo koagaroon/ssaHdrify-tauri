@@ -587,7 +587,7 @@ describe("parseSubtitle / shiftSubtitle — oversized-ASS-Dialogue placeholder a
 
   // ── Parser boundary pins ──
 
-  it("parses single-digit-hour VTT timing as zero (bounded-hour regex)", () => {
+  it("rejects a single-digit-hour VTT timing line as non-shiftable", () => {
     // The VTT hour group is bounded `\d{2,12}`, so a stray
     // single-digit hour like "1:00:00.000" doesn't satisfy the
     // HH:MM:SS form. The MM:SS arm still matches ("1:00.000" is
@@ -599,6 +599,7 @@ describe("parseSubtitle / shiftSubtitle — oversized-ASS-Dialogue placeholder a
     expect(result.format).toBe("vtt");
     // The cue's timing line failed to match → block skipped → zero captions.
     expect(result.captions).toHaveLength(0);
+    expect(() => shiftSubtitle(content, 1000)).toThrow(/No shiftable subtitle cues/);
   });
 
   it("round-trips the largest whole-hour VTT value within the safe-integer boundary", () => {
