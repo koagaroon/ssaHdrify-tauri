@@ -404,9 +404,9 @@ pub fn read_text_detect_encoding_inner(
     decode_bytes(&bytes)
 }
 
-/// Tauri command wrapper. Resolves the app-owned fs scope then
-/// delegates to `read_text_detect_encoding_inner`.
-#[tauri::command]
+/// Blocking command implementation. The async Tauri boundary in
+/// `ipc_commands` moves scope resolution, file reading, and decoding to the
+/// blocking pool before calling this function.
 pub fn read_text_detect_encoding(
     app: tauri::AppHandle,
     path: String,

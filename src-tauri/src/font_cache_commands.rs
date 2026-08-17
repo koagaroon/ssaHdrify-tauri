@@ -1,10 +1,10 @@
-//! Tauri command wrappers for the persistent font cache.
+//! Blocking implementations and shared state for the persistent font cache.
 //!
 //! `font_cache.rs` itself stays Tauri-free so the CLI binary can use it
-//! without pulling in the GUI's IPC layer. This module is the GUI-only
-//! IPC surface: a static `Mutex<Option<FontCache>>` initialized once
-//! during Tauri setup, plus the five commands the React drift modal +
-//! embed-time lookup tier call into.
+//! without pulling in the GUI's IPC layer. The async Tauri wrappers live in
+//! `ipc_commands`; this module owns the static `Mutex<Option<FontCache>>`
+//! initialized during Tauri setup plus the synchronous operations used by the
+//! React drift modal and embed-time lookup tier.
 //!
 //! The GUI command surface stays deliberately small: cache status,
 //! drift detection, drift rescan, clear/rebuild, and lookup. The
@@ -505,12 +505,11 @@ fn classify_unreadable_existing_as_modified(
     report.modified.sort();
 }
 
-// ---- Tauri commands ----------------------------------------------------
+// ---- Blocking cache operations -----------------------------------------
 
 /// Report the current cache status. Useful for the launch-time check
 /// (frontend asks "is cache ready?" before calling detect_drift) and
 /// for re-checking after `clear_font_cache`.
-#[tauri::command]
 pub fn open_font_cache() -> Result<CacheStatus, String> {
     let path = GUI_FONT_CACHE_PATH
         .lock()
@@ -583,7 +582,6 @@ pub fn open_font_cache() -> Result<CacheStatus, String> {
 /// lock. A mismatch means the filesystem snapshot describes an obsolete source
 /// set, so this call returns `DriftReport::default()` and a later check starts
 /// from the current cache.
-#[tauri::command]
 pub fn detect_font_cache_drift() -> Result<DriftReport, String> {
     // Phase 1: snapshot the cached source list + capture the cache
     // generation under the lock. Capturing the generation INSIDE the
@@ -676,7 +674,6 @@ fn finalize_drift(
 /// `detect_font_cache_drift`) so this command does not scan new sources — those
 /// enter through guarded publication after a successful directory scan or the
 /// CLI's `refresh-fonts` subcommand.
-#[tauri::command]
 pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
     // Block parallel `clear_font_cache` between Phase 1 and Phase 3 so
     // Clear can't drop+recreate the cache mid-rescan and have Phase 3's
@@ -1018,7 +1015,6 @@ fn apply_rescan_to_cache<C: RescanCacheWriter>(
 ///
 /// Used as the "Clear cache" button in the drift modal AND as the
 /// rebuild path when `open_font_cache` reports `schema_mismatch`.
-#[tauri::command]
 pub fn clear_font_cache() -> Result<(), String> {
     // Refuse mid-rescan AND block a concurrent rescan from starting
     // while clear is running. Acquiring the guard via CAS (not just
@@ -1202,7 +1198,6 @@ pub(crate) fn clear_all_sources_in_gui_cache_locked(
 /// (already serde-derived for IPC) instead of wrapping cache's
 /// internal `FontLookupResult` (different field names: font_path/face_index
 /// vs path/index, different int types).
-#[tauri::command]
 pub fn lookup_font_family(
     family: String,
     bold: bool,

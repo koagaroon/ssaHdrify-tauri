@@ -4,6 +4,7 @@ pub mod font_cache;
 pub mod font_cache_commands;
 pub mod fonts;
 pub mod fs_policy;
+mod ipc_commands;
 pub mod safe_io;
 pub mod util;
 
@@ -120,28 +121,30 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            dropzone::expand_dropped_paths,
-            encoding::read_text_detect_encoding,
-            fonts::find_system_font,
-            fonts::subset_font_b64,
+            ipc_commands::expand_dropped_paths,
+            ipc_commands::read_text_detect_encoding,
+            ipc_commands::find_system_font,
+            ipc_commands::subset_font_b64,
             fonts::preflight_font_directory,
             fonts::preflight_font_files,
             fonts::scan_font_directory,
             fonts::scan_font_files,
+            // Atomic-only control path: keep cancellation immediately available
+            // even when Tauri's blocking pool is busy with font or file work.
             fonts::cancel_font_scan,
-            fonts::resolve_user_font,
-            fonts::remove_font_source,
-            fonts::clear_font_sources,
-            font_cache_commands::open_font_cache,
-            font_cache_commands::detect_font_cache_drift,
-            font_cache_commands::rescan_font_cache_drift,
-            font_cache_commands::clear_font_cache,
-            font_cache_commands::lookup_font_family,
-            safe_io::safe_output_path_exists,
-            safe_io::safe_write_text_file,
-            safe_io::safe_write_style_edit_output,
-            safe_io::safe_copy_file,
-            safe_io::safe_rename_file,
+            ipc_commands::resolve_user_font,
+            ipc_commands::remove_font_source,
+            ipc_commands::clear_font_sources,
+            ipc_commands::open_font_cache,
+            ipc_commands::detect_font_cache_drift,
+            ipc_commands::rescan_font_cache_drift,
+            ipc_commands::clear_font_cache,
+            ipc_commands::lookup_font_family,
+            ipc_commands::safe_output_path_exists,
+            ipc_commands::safe_write_text_file,
+            ipc_commands::safe_write_style_edit_output,
+            ipc_commands::safe_copy_file,
+            ipc_commands::safe_rename_file,
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {

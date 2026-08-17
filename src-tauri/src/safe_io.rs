@@ -871,12 +871,13 @@ fn safe_rename_file_inner_with_rename(
     rename_file(src_ref, dst_ref).map_err(|e| format!("Failed to rename file: {e}"))
 }
 
-// ── Tauri commands (production) ────────────────────────────────
+// ── Blocking command implementations ───────────────────────────
+// Async Tauri wrappers live in `ipc_commands`; keeping all scope resolution
+// and filesystem work here lets the CLI/tests reuse the same exact behavior.
 
 /// Check whether an output path already exists before a GUI overwrite
 /// preflight. This intentionally covers subtitle text outputs and
 /// rename-only sidecars, but not arbitrary files.
-#[tauri::command]
 pub fn safe_output_path_exists(app: tauri::AppHandle, path: String) -> Result<bool, String> {
     let scope = crate::fs_policy::app_fs_scope(&app)?;
     safe_output_path_exists_inner(&path, move |p| scope.is_allowed(p))
@@ -884,7 +885,6 @@ pub fn safe_output_path_exists(app: tauri::AppHandle, path: String) -> Result<bo
 /// Write a text file safely. Layered defenses: scope deny enforcement,
 /// subtitle-extension whitelist, symlink rejection on destination,
 /// atomic `create_new(true)` open.
-#[tauri::command]
 pub fn safe_write_text_file(
     app: tauri::AppHandle,
     path: String,
@@ -897,7 +897,6 @@ pub fn safe_write_text_file(
 
 /// Write a previewed style edit to a new sibling file. Existing outputs are
 /// never replaced; the exclusive create-new open is the final collision gate.
-#[tauri::command]
 pub fn safe_write_style_edit_output(
     app: tauri::AppHandle,
     source_path: String,
@@ -920,7 +919,6 @@ pub fn safe_write_style_edit_output(
 /// reparse-point-rejected (a symlinked input would otherwise resolve
 /// to e.g. `~/.ssh/id_rsa` and copy its bytes as if they were a
 /// subtitle).
-#[tauri::command]
 pub fn safe_copy_file(
     app: tauri::AppHandle,
     src: String,
@@ -936,7 +934,6 @@ pub fn safe_copy_file(
 /// unsupported moves fail without pre-deleting an existing destination. Both
 /// endpoints are reparse-checked before the final call so planted shortcuts
 /// fail shut.
-#[tauri::command]
 pub fn safe_rename_file(
     app: tauri::AppHandle,
     src: String,

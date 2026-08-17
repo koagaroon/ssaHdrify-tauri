@@ -1191,7 +1191,6 @@ fn is_user_font_face_registered(canonical_path: &str, face_index: u32) -> Result
 /// Find a system font file path by family name, bold, and italic flags.
 /// Returns the path + face index. Prefers TTF/TTC over OTF/OTC for subtitle
 /// renderer compatibility (libass/VSFilter don't support OTF bold).
-#[tauri::command]
 pub fn find_system_font(
     family: String,
     bold: bool,
@@ -3458,9 +3457,9 @@ pub fn cancel_font_scan(scan_id: u64) {
     CANCEL_SCAN_ID.fetch_max(scan_id, Ordering::Release);
 }
 
-/// Look up a font face in the user's local source index by family
-/// + bold + italic. Returns `None` if no match — callers fall back
-/// to system fonts.
+/// Look up a font face in the user's local source index by family plus the
+/// bold and italic flags. Returns `None` if no match — callers fall back to
+/// system fonts.
 ///
 /// Stale-path note: a path returned here is one that was on disk at
 /// the time of the most-recent scan that produced this row. If the
@@ -3471,7 +3470,6 @@ pub fn cancel_font_scan(scan_id: u64) {
 /// embed-pass IO without changing the outcome (subset_font would
 /// fail the same way half a second later). The scan-then-resolve
 /// model assumes the user doesn't shuffle font files mid-embed.
-#[tauri::command]
 pub fn resolve_user_font(
     family: String,
     bold: bool,
@@ -3516,7 +3514,6 @@ pub fn resolve_user_font(
     .map_err(|e| db_error("lookup failed", e))
 }
 
-#[tauri::command]
 pub fn remove_font_source(source_id: String, kind: Option<String>) -> Result<(), String> {
     validate_font_source_id(&source_id)?;
     let _mutation_guard =
@@ -3576,7 +3573,6 @@ pub fn remove_font_source(source_id: String, kind: Option<String>) -> Result<(),
     Ok(())
 }
 
-#[tauri::command]
 pub fn clear_font_sources() -> Result<(), String> {
     // Acquire CacheMutationGuard upfront so session-DB clear and
     // persistent-cache eviction commit atomically.
@@ -3997,10 +3993,10 @@ fn is_in_system_fonts_dir(canonical: &Path) -> bool {
 /// Returns an error on subsetting failure instead of embedding the full font.
 ///
 /// Public IPC entry point + the CLI's standalone-embed callsite both
-/// invoke this function as a regular `pub fn`; the `#[tauri::command]`
-/// shim `subset_font_b64` below wraps it for the GUI's IPC path with
-/// base64 encoding so the frontend doesn't pay the JSON `[byte, ...]`
-/// expansion (~4–5× per byte → ~50 MB on a worst-case 10 MB subset).
+/// invoke this function as a regular `pub fn`; the GUI reaches it through
+/// `ipc_commands::subset_font_b64`, which runs the base64 helper below on the
+/// blocking pool so the frontend doesn't pay the JSON `[byte, ...]` expansion
+/// (~4–5× per byte → ~50 MB on a worst-case 10 MB subset).
 /// CLI's chain mode marshals subsets via base64 inline (see
 /// `process_one_chain_input`); CLI's standalone embed bundles them
 /// into `engine::FontSubsetPayload` and ships through the engine's
@@ -4010,11 +4006,11 @@ fn is_in_system_fonts_dir(canonical: &Path) -> bool {
 /// **IMPORTANT **: do NOT add `#[tauri::command]`
 /// to this function. The Vec<u8> return shape would JSON-encode as
 /// `[byte, byte, ...]` over the GUI IPC wire, hitting the same ~4-5×
-/// expansion `subset_font_b64` exists specifically to dodge. The
-/// GUI-side IPC path MUST go through `subset_font_b64`; adding the
-/// attribute here would silently bypass that guard and pressure V8
-/// heap on every embed. Future direct exposure must go through an
-/// explicit security and resource-budget audit.
+/// expansion `subset_font_b64` exists specifically to dodge. The GUI-side IPC
+/// path MUST go through `ipc_commands::subset_font_b64`; adding the attribute
+/// here would silently bypass that guard and pressure V8 heap on every embed.
+/// Future direct exposure must go through an explicit security and
+/// resource-budget audit.
 pub fn subset_font(
     font_path: String,
     font_index: u32,
@@ -4424,14 +4420,13 @@ pub fn subset_font(
     }
 }
 
-/// IPC wrapper around `subset_font` that base64-encodes the result so
-/// the GUI's frontend doesn't pay the JSON `[byte, byte, …]` expansion.
+/// Blocking base64 implementation called by `ipc_commands::subset_font_b64`
+/// so the GUI's frontend doesn't pay the JSON `[byte, byte, …]` expansion.
 /// Pre-fix this returned `Vec<u8>` directly; serde-json would write each
 /// byte as decimal+comma (~4–5× per byte), and a 10 MB legitimate subset
 /// would expand to ~50 MB IPC payload + a main-thread JSON parse pass.
 /// Frontend `subsetFont()` decodes with the shared local byte decoder
 /// instead of relying on host-provided Web APIs.
-#[tauri::command]
 pub fn subset_font_b64(
     font_path: String,
     font_index: u32,

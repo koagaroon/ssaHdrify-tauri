@@ -182,9 +182,9 @@ where
     })
 }
 
-/// Tauri command wrapper. Resolve the app-owned scope before any path is
-/// touched, then delegate to the testable inner implementation.
-#[tauri::command]
+/// Blocking command implementation. The async Tauri boundary in
+/// `ipc_commands` moves scope resolution and path expansion to the blocking
+/// pool before calling this function.
 pub fn expand_dropped_paths(
     app: tauri::AppHandle,
     paths: Vec<String>,
