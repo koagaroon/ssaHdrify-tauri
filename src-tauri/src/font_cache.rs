@@ -208,6 +208,27 @@ pub const SCHEMA_VERSION: i32 = 6;
 const KEY_KIND_FAMILY: i32 = 0;
 const KEY_KIND_FACE_ALIAS: i32 = 1;
 
+/// Filesystem-probe budget for one family lookup. A normal cache has one or
+/// two same-family candidates; a hostile or badly stale cache could otherwise
+/// make a single lookup hold the cache mutex across thousands of canonicalize
+/// and metadata calls (including slow mapped-drive failures).
+const MAX_CACHE_LOOKUP_CANDIDATES: usize = 64;
+
+const FAMILY_LOOKUP_SQL: &str =
+    "SELECT k.font_path, k.face_index, s.source_root, f.file_size, f.file_mtime \
+     FROM cached_family_keys k \
+     INNER JOIN cached_fonts f \
+       ON f.source_root = k.source_root AND f.scope = k.scope \
+      AND f.font_path = k.font_path AND f.face_index = k.face_index \
+     INNER JOIN cached_sources s \
+       ON s.source_root = f.source_root AND s.scope = f.scope \
+     WHERE k.family_name_key = ?1 \
+       AND ((k.key_kind = ?2 AND k.bold = ?3 AND k.italic = ?4) \
+            OR (k.key_kind = ?5 AND k.bold = 0 AND k.italic = 0)) \
+     ORDER BY k.key_kind ASC, s.scope ASC, s.source_order DESC, \
+              k.font_path ASC, k.face_index ASC \
+     LIMIT ?6";
+
 /// DoS-class sanity cap on the number of `cached_sources` rows
 /// `list_sources` / `diff_sources` will return. A hostile cache file
 /// (untrusted-input via `--cache-file`) populated with hundreds of fabricated
@@ -396,6 +417,49 @@ fn validate_cached_font_hit(
     }
 
     Ok(())
+}
+
+fn validate_cached_font_candidate(
+    font_path: &str,
+    face_index: i32,
+    folder_path: &str,
+    cached_file_size: i64,
+    cached_file_mtime: i64,
+) -> Result<(), CacheError> {
+    reject_unsupported_cached_folder_path(folder_path)?;
+    reject_unsupported_cached_font_path(font_path)?;
+    let face_index_supported =
+        u32::try_from(face_index).is_ok_and(|index| index <= crate::fonts::MAX_SUBSET_FONT_INDEX);
+    if !face_index_supported {
+        return Err(CacheError::Io(
+            "cached_fonts.face_index is outside the supported range; cache file appears corrupted or hostile — rebuild required"
+                .to_string(),
+        ));
+    }
+    let extension_allowed = Path::new(font_path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.to_ascii_lowercase())
+        .is_some_and(|extension| {
+            crate::fonts::ALLOWED_FONT_EXTENSIONS.contains(&extension.as_str())
+        });
+    if !extension_allowed {
+        return Err(CacheError::Io(
+            "cached_fonts.font_path has an unsupported font extension; cache file appears corrupted or hostile — rebuild required"
+                .to_string(),
+        ));
+    }
+    validate_cached_font_hit(font_path, folder_path, cached_file_size, cached_file_mtime)
+}
+
+fn warn_skipped_cache_candidates(skipped: usize) {
+    if skipped > 0 {
+        // Deliberately path- and family-free: FontCache is also callable by
+        // internal code that has not passed the IPC family-name validator.
+        log::warn!(
+            "font cache lookup skipped {skipped} stale or invalid higher-priority candidate(s); rebuild the font cache to restore source priority"
+        );
+    }
 }
 
 /// Normalize a family-name string into the lookup key used by
@@ -1676,41 +1740,86 @@ impl FontCache {
         italic: bool,
     ) -> Result<Option<FontLookupResult>, CacheError> {
         let lookup_key = family_lookup_key(family_name);
-        let row: Result<(String, i32, String, i64, i64), _> = self.conn.query_row(
-            "SELECT k.font_path, k.face_index, s.source_root, f.file_size, f.file_mtime \
-             FROM cached_family_keys k \
-             INNER JOIN cached_fonts f \
-               ON f.source_root = k.source_root AND f.scope = k.scope \
-              AND f.font_path = k.font_path AND f.face_index = k.face_index \
-             INNER JOIN cached_sources s \
-               ON s.source_root = f.source_root AND s.scope = f.scope \
-             WHERE k.family_name_key = ?1 \
-               AND ((k.key_kind = ?2 AND k.bold = ?3 AND k.italic = ?4) \
-                    OR (k.key_kind = ?5 AND k.bold = 0 AND k.italic = 0)) \
-             ORDER BY k.key_kind ASC, s.scope ASC, s.source_order DESC, \
-                      k.font_path ASC, k.face_index ASC \
-             LIMIT 1",
-            params![
+        let mut statement = self
+            .conn
+            .prepare(FAMILY_LOOKUP_SQL)
+            .map_err(|error| CacheError::Io(format!("prepare lookup_family: {error}")))?;
+        let candidate_limit = i64::try_from(MAX_CACHE_LOOKUP_CANDIDATES + 1)
+            .expect("cache lookup candidate limit fits i64");
+        let mut rows = statement
+            .query(params![
                 lookup_key,
                 KEY_KIND_FAMILY,
                 i32::from(bold),
                 i32::from(italic),
-                KEY_KIND_FACE_ALIAS
-            ],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
-        );
-        match row {
-            Ok((font_path, face_index, folder_path, file_size, file_mtime)) => {
-                reject_unsupported_cached_folder_path(&folder_path)?;
-                reject_unsupported_cached_font_path(&font_path)?;
-                validate_cached_font_hit(&font_path, &folder_path, file_size, file_mtime)?;
-                Ok(Some(FontLookupResult {
-                    font_path,
-                    face_index,
-                }))
+                KEY_KIND_FACE_ALIAS,
+                candidate_limit,
+            ])
+            .map_err(|error| CacheError::Io(format!("query lookup_family: {error}")))?;
+
+        let mut skipped = 0usize;
+        let mut first_validation_error = None;
+        while let Some(row) = rows
+            .next()
+            .map_err(|error| CacheError::Io(format!("read lookup_family row: {error}")))?
+        {
+            if skipped >= MAX_CACHE_LOOKUP_CANDIDATES {
+                warn_skipped_cache_candidates(skipped);
+                return Err(first_validation_error.unwrap_or_else(|| {
+                    CacheError::Io(format!(
+                        "font cache lookup exceeds the {MAX_CACHE_LOOKUP_CANDIDATES}-candidate filesystem-probe budget; rebuild required"
+                    ))
+                }));
             }
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(CacheError::Io(format!("lookup_family: {e}"))),
+            let candidate = (
+                row.get::<_, String>(0),
+                row.get::<_, i32>(1),
+                row.get::<_, String>(2),
+                row.get::<_, i64>(3),
+                row.get::<_, i64>(4),
+            );
+            let (font_path, face_index, folder_path, file_size, file_mtime) = match candidate {
+                (Ok(font_path), Ok(face_index), Ok(folder_path), Ok(file_size), Ok(file_mtime)) => {
+                    (font_path, face_index, folder_path, file_size, file_mtime)
+                }
+                _ => {
+                    skipped += 1;
+                    if first_validation_error.is_none() {
+                        first_validation_error = Some(CacheError::Io(
+                            "lookup_family row has invalid column types; rebuild required"
+                                .to_string(),
+                        ));
+                    }
+                    continue;
+                }
+            };
+            match validate_cached_font_candidate(
+                &font_path,
+                face_index,
+                &folder_path,
+                file_size,
+                file_mtime,
+            ) {
+                Ok(()) => {
+                    warn_skipped_cache_candidates(skipped);
+                    return Ok(Some(FontLookupResult {
+                        font_path,
+                        face_index,
+                    }));
+                }
+                Err(error) => {
+                    skipped += 1;
+                    if first_validation_error.is_none() {
+                        first_validation_error = Some(error);
+                    }
+                }
+            }
+        }
+
+        warn_skipped_cache_candidates(skipped);
+        match first_validation_error {
+            Some(error) => Err(error),
+            None => Ok(None),
         }
     }
 
@@ -2151,26 +2260,20 @@ mod tests {
     fn family_lookup_uses_the_family_first_index() {
         let (_guard, path) = temp_cache_path();
         let cache = FontCache::open_or_create(&path).expect("fresh cache opens");
-        let mut statement = cache
-            .conn
-            .prepare(
-                "EXPLAIN QUERY PLAN \
-                 SELECT k.font_path, k.face_index, s.source_root, f.file_size, f.file_mtime \
-                 FROM cached_family_keys k \
-                 INNER JOIN cached_fonts f \
-                   ON f.source_root = k.source_root AND f.scope = k.scope \
-                  AND f.font_path = k.font_path AND f.face_index = k.face_index \
-                 INNER JOIN cached_sources s \
-                   ON s.source_root = f.source_root AND s.scope = f.scope \
-                 WHERE k.family_name_key = ?1 \
-                   AND ((k.key_kind = ?2 AND k.bold = ?3 AND k.italic = ?4) \
-                        OR (k.key_kind = ?5 AND k.bold = 0 AND k.italic = 0)) \
-                 ORDER BY k.key_kind, s.scope, s.source_order DESC, \
-                          k.font_path, k.face_index LIMIT 1",
-            )
-            .unwrap();
+        let explain_sql = format!("EXPLAIN QUERY PLAN {FAMILY_LOOKUP_SQL}");
+        let mut statement = cache.conn.prepare(&explain_sql).unwrap();
         let details: Vec<String> = statement
-            .query_map(params!["demo", 0, 0, 0, 1], |row| row.get(3))
+            .query_map(
+                params![
+                    "demo",
+                    0,
+                    0,
+                    0,
+                    1,
+                    i64::try_from(MAX_CACHE_LOOKUP_CANDIDATES + 1).unwrap()
+                ],
+                |row| row.get(3),
+            )
             .unwrap()
             .map(Result::unwrap)
             .collect();
@@ -3183,6 +3286,171 @@ mod tests {
                 .contains("cached_fonts metadata no longer matches the live font file"),
             "expected stale cached font metadata rejection, got: {err}"
         );
+    }
+
+    #[test]
+    fn lookup_family_skips_stale_newest_candidate_and_returns_valid_older_source() {
+        let (guard, path) = temp_cache_path();
+        let mut cache = FontCache::open_or_create(&path).expect("open");
+        let older_dir = guard.0.join("fallback-older");
+        let newer_dir = guard.0.join("fallback-newer");
+        let older = real_font_metadata(
+            &older_dir,
+            "older.ttf",
+            0,
+            vec![family_key("Fallback Sans", false, false)],
+            Vec::new(),
+        );
+        let newer = real_font_metadata(
+            &newer_dir,
+            "newer.ttf",
+            0,
+            vec![family_key("Fallback Sans", false, false)],
+            Vec::new(),
+        );
+        cache
+            .replace_folder(
+                &real_folder_path(&older_dir),
+                100,
+                std::slice::from_ref(&older),
+            )
+            .unwrap();
+        cache
+            .replace_folder(
+                &real_folder_path(&newer_dir),
+                200,
+                std::slice::from_ref(&newer),
+            )
+            .unwrap();
+        fs::remove_file(&newer.file_path).expect("make highest-priority cache row stale");
+
+        let result = cache
+            .lookup_family("Fallback Sans", false, false)
+            .expect("a valid lower-ranked cache candidate should recover the lookup")
+            .expect("older source should match");
+        assert_eq!(result.font_path, older.file_path);
+        assert_eq!(result.face_index, 0);
+    }
+
+    #[test]
+    fn lookup_family_skips_malformed_top_row_and_returns_valid_lower_source() {
+        let (guard, path) = temp_cache_path();
+        let mut cache = FontCache::open_or_create(&path).expect("open");
+        let valid_dir = guard.0.join("malformed-row-valid");
+        let malformed_dir = guard.0.join("malformed-row-top");
+        let valid = real_font_metadata(
+            &valid_dir,
+            "valid.ttf",
+            0,
+            vec![family_key("Malformed Fallback", false, false)],
+            Vec::new(),
+        );
+        cache
+            .replace_folder(
+                &real_folder_path(&valid_dir),
+                100,
+                std::slice::from_ref(&valid),
+            )
+            .unwrap();
+        let malformed =
+            real_font_metadata(&malformed_dir, "malformed.ttf", 0, Vec::new(), Vec::new());
+        let malformed_root = real_folder_path(&malformed_dir);
+        cache
+            .conn
+            .pragma_update(None, "foreign_keys", "OFF")
+            .unwrap();
+        cache
+            .conn
+            .execute(
+                "INSERT INTO cached_sources(source_root, scope, source_order, last_scanned_at) \
+                 VALUES(?1, 0, 999, 1)",
+                params![&malformed_root],
+            )
+            .unwrap();
+        cache
+            .conn
+            .execute(
+                "INSERT INTO cached_fonts(\
+                    source_root, scope, font_path, face_index, file_size, file_mtime\
+                 ) VALUES(?1, 0, ?2, 'not-an-int', ?3, ?4)",
+                params![
+                    &malformed_root,
+                    &malformed.file_path,
+                    malformed.file_size,
+                    malformed.file_mtime
+                ],
+            )
+            .unwrap();
+        cache
+            .conn
+            .execute(
+                "INSERT INTO cached_family_keys(\
+                    source_root, scope, font_path, face_index, family_name, \
+                    family_name_key, key_kind, bold, italic\
+                 ) VALUES(?1, 0, ?2, 'not-an-int', ?3, ?4, ?5, 0, 0)",
+                params![
+                    &malformed_root,
+                    &malformed.file_path,
+                    "Malformed Fallback",
+                    family_lookup_key("Malformed Fallback"),
+                    KEY_KIND_FAMILY
+                ],
+            )
+            .unwrap();
+        cache
+            .conn
+            .pragma_update(None, "foreign_keys", "ON")
+            .unwrap();
+
+        let result = cache
+            .lookup_family("Malformed Fallback", false, false)
+            .expect("malformed top row should not suppress a valid candidate")
+            .expect("valid lower source should match");
+        assert_eq!(result.font_path, valid.file_path);
+        assert_eq!(result.face_index, 0);
+    }
+
+    #[test]
+    fn lookup_family_skips_over_limit_face_index_and_returns_valid_lower_source() {
+        let (guard, path) = temp_cache_path();
+        let mut cache = FontCache::open_or_create(&path).expect("open");
+        let valid_dir = guard.0.join("index-limit-valid");
+        let invalid_dir = guard.0.join("index-limit-top");
+        let valid = real_font_metadata(
+            &valid_dir,
+            "valid.ttf",
+            0,
+            vec![family_key("Index Fallback", false, false)],
+            Vec::new(),
+        );
+        cache
+            .replace_folder(
+                &real_folder_path(&valid_dir),
+                100,
+                std::slice::from_ref(&valid),
+            )
+            .unwrap();
+        let invalid = real_font_metadata(
+            &invalid_dir,
+            "invalid.ttf",
+            i32::try_from(crate::fonts::MAX_SUBSET_FONT_INDEX + 1).unwrap(),
+            vec![family_key("Index Fallback", false, false)],
+            Vec::new(),
+        );
+        cache
+            .replace_folder(
+                &real_folder_path(&invalid_dir),
+                200,
+                std::slice::from_ref(&invalid),
+            )
+            .unwrap();
+
+        let result = cache
+            .lookup_family("Index Fallback", false, false)
+            .expect("over-limit top row should not suppress a valid candidate")
+            .expect("valid lower source should match");
+        assert_eq!(result.font_path, valid.file_path);
+        assert_eq!(result.face_index, 0);
     }
 
     #[test]

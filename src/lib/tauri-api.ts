@@ -604,9 +604,12 @@ export async function lookupFontFamily(
  *  has the inline Cancel button (cancelFontScan) to abort. Adding a
  *  timeout here would race legitimate slow scans (XL font collection
  *  on a slow disk can take 30+ seconds) and produce false-cancel
- *  signals the Rust side never sent. If a future stuck-IPC failure
- *  mode emerges, a watchdog should live in the Tauri command layer
- *  (Rust-side timeout on spawn_blocking), not here. */
+ *  signals the Rust side never sent. Tauri, not React, owns the Channel
+ *  callback registration until Rust drops the sender; hiding/remounting
+ *  this modal does not unregister it, and a full reload destroys the old
+ *  promise realm. If a future stuck-IPC failure mode emerges, a watchdog
+ *  should live in the Tauri command layer (Rust-side timeout on
+ *  spawn_blocking), not here. */
 async function runStreamingScan(
   command: "scan_font_directory" | "scan_font_files",
   args: Record<string, unknown>,

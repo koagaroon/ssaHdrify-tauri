@@ -213,7 +213,7 @@ pub const MAX_SUBSET_CODEPOINTS: usize = 200_000;
 /// any legitimate font collection and inside u8 range so the value
 /// fits the OpenType `numFonts` field shape. Extracted from an inline
 /// `255` literal in `subset_font`.
-const MAX_SUBSET_FONT_INDEX: u32 = 255;
+pub(crate) const MAX_SUBSET_FONT_INDEX: u32 = 255;
 
 /// Strip the Win32 extended-length prefix (`\\?\` / `\\?\UNC\`) that
 /// `canonicalize()` adds on Windows, so paths compare consistently
@@ -1281,8 +1281,18 @@ pub fn find_system_font(
 /// (8 family rows + 8 alias rows), not 8 + (8 × 4 style rows).
 const MAX_FAMILY_VARIANTS_PER_FACE: usize = 8;
 const MAX_FACE_NAME_VARIANTS_PER_FACE: usize = 8;
-const MAX_LEGACY_NAME_RECORD_BYTES: usize = 4096;
-const MAX_LEGACY_NAME_DECODE_ATTEMPTS_PER_FACE: usize = 256;
+/// Shared bound for both the skrifa and legacy OpenType `name` decoders.
+/// A family name accepted by this app is at most 256 Unicode scalars, so a
+/// record larger than 4 KiB cannot add a useful name. Keeping one limit for
+/// both paths prevents a crafted table from escaping through whichever
+/// decoder happens to understand its platform/encoding tuple.
+const MAX_NAME_RECORD_BYTES: usize = 4096;
+
+/// Maximum unique name records whose string payload may be decoded for one
+/// face. The OpenType record count is a u16, but payload offsets may overlap,
+/// so an attacker can otherwise make tens of thousands of records repeatedly
+/// decode the same large invalid string.
+const MAX_NAME_DECODE_ATTEMPTS_PER_FACE: usize = 256;
 const MAX_CMAP12_ENCODING_RECORDS_PER_FACE: usize = 1024;
 const MAX_CMAP12_SUBTABLES_PER_FACE: usize = 128;
 const MAX_CMAP12_GROUPS_PER_FACE: usize = 65_536;
@@ -1636,7 +1646,7 @@ fn decode_legacy_name_record(
     language: u16,
     raw: &[u8],
 ) -> Option<String> {
-    if raw.len() > MAX_LEGACY_NAME_RECORD_BYTES {
+    if raw.len() > MAX_NAME_RECORD_BYTES {
         return None;
     }
 
@@ -1710,9 +1720,13 @@ fn parse_legacy_name_table_entries(
     size_bytes: u64,
     is_collection: bool,
     max_faces: u32,
+    scan_id: u64,
 ) -> Vec<LocalFontEntry> {
     let mut entries = Vec::new();
     for (face_index, face_offset) in sfnt_face_offsets(data, is_collection, max_faces) {
+        if font_scan_cancelled(scan_id) {
+            break;
+        }
         let Some((name_offset, name_len)) = table_range(data, face_offset, b"name") else {
             continue;
         };
@@ -1745,6 +1759,9 @@ fn parse_legacy_name_table_entries(
         let mut seen_records = HashSet::new();
         let mut decode_attempts = 0usize;
         for record_index in 0..record_count {
+            if font_scan_cancelled(scan_id) {
+                break;
+            }
             let Some(record) = name_offset
                 .checked_add(6)
                 .and_then(|v| v.checked_add(record_index.checked_mul(12)?))
@@ -1780,7 +1797,7 @@ fn parse_legacy_name_table_entries(
             let Some(len) = read_be_u16(data, record + 8).map(usize::from) else {
                 continue;
             };
-            if len == 0 || len > MAX_LEGACY_NAME_RECORD_BYTES {
+            if len == 0 || len > MAX_NAME_RECORD_BYTES {
                 continue;
             }
             let Some(offset) = read_be_u16(data, record + 10).map(usize::from) else {
@@ -1798,7 +1815,7 @@ fn parse_legacy_name_table_entries(
             if !seen_records.insert((platform, encoding, language, name_id, start, end)) {
                 continue;
             }
-            if decode_attempts >= MAX_LEGACY_NAME_DECODE_ATTEMPTS_PER_FACE {
+            if decode_attempts >= MAX_NAME_DECODE_ATTEMPTS_PER_FACE {
                 break;
             }
             decode_attempts += 1;
@@ -1884,6 +1901,278 @@ fn merge_legacy_name_table_entries(entries: &mut Vec<LocalFontEntry>, legacy: Ve
     }
 }
 
+#[derive(Default)]
+struct CollectedSkrifaFaceNames {
+    family_variants: HashSet<String>,
+    face_name_variants: HashSet<String>,
+    primary_hint: Option<String>,
+}
+
+enum SkrifaNameWalkOutcome {
+    Completed(CollectedSkrifaFaceNames),
+    Cancelled,
+}
+
+fn decode_skrifa_name_bucket<'a, C>(
+    name_table: &fontcull_skrifa::raw::tables::name::Name<'a>,
+    records: &[&fontcull_skrifa::raw::tables::name::NameRecord],
+    variants: &mut HashSet<String>,
+    max_variants: usize,
+    track_primary: bool,
+    decode_attempts: &mut usize,
+    is_cancelled: &mut C,
+) -> Result<Option<String>, ()>
+where
+    C: FnMut() -> bool,
+{
+    use fontcull_skrifa::string::LocalizedString;
+
+    let mut best_primary_rank = -1i8;
+    let mut best_primary = None;
+    for (record_index, record) in records.iter().enumerate() {
+        if is_cancelled() {
+            return Err(());
+        }
+        if *decode_attempts >= MAX_NAME_DECODE_ATTEMPTS_PER_FACE {
+            break;
+        }
+        if !track_primary && variants.len() >= max_variants {
+            break;
+        }
+        *decode_attempts += 1;
+
+        let localized = LocalizedString::new(name_table, record);
+        let primary_rank = if track_primary {
+            match localized.language() {
+                Some("en-US") => 3,
+                Some("en") => 2,
+                None => 1,
+                Some(_) if record_index == 0 => 0,
+                Some(_) => -1,
+            }
+        } else {
+            -1
+        };
+        let decoded = bounded_font_family_name(localized.chars());
+
+        // Match skrifa's `english_or_first` ranking. The selected record may
+        // itself be malformed; retaining `None` in that case deliberately
+        // permits the typographic-family ID to supply the primary hint.
+        if primary_rank > best_primary_rank {
+            best_primary_rank = primary_rank;
+            best_primary = decoded.clone();
+        }
+        if let Some(value) = decoded {
+            if variants.len() < max_variants || variants.contains(&value) {
+                variants.insert(value);
+            }
+        }
+    }
+    Ok(best_primary)
+}
+
+fn retain_preferred_name(
+    variants: &mut HashSet<String>,
+    preferred: &Option<String>,
+    max_variants: usize,
+) {
+    let Some(preferred) = preferred else {
+        return;
+    };
+    if variants.contains(preferred) {
+        return;
+    }
+    if variants.len() >= max_variants {
+        // Deterministic replacement keeps the bucket bounded while preserving
+        // the preferred English name. Appending here used to produce a ninth
+        // family despite the documented eight-variant ceiling.
+        if let Some(to_remove) = variants.iter().max().cloned() {
+            variants.remove(&to_remove);
+        }
+    }
+    variants.insert(preferred.clone());
+}
+
+/// Collect the four name IDs used by the cache without calling
+/// `MetadataProvider::localized_strings`. That high-level iterator starts at
+/// the beginning of the full name-record slice for every ID and hides the
+/// scan inside `next()`, so caller-side `.take()` cannot bound or cancel it.
+///
+/// This function performs one raw-record pass, polls cancellation at every
+/// record, stores at most one decode budget per target ID, then decodes at
+/// most `MAX_NAME_DECODE_ATTEMPTS_PER_FACE` unique records in the same ID
+/// priority used by the previous implementation.
+fn collect_skrifa_face_names<C>(
+    font_ref: &fontcull_skrifa::FontRef<'_>,
+    mut is_cancelled: C,
+) -> SkrifaNameWalkOutcome
+where
+    C: FnMut() -> bool,
+{
+    use fontcull_skrifa::raw::TableProvider;
+    use fontcull_skrifa::string::StringId;
+
+    if is_cancelled() {
+        return SkrifaNameWalkOutcome::Cancelled;
+    }
+    let name_table = match font_ref.name() {
+        Ok(name_table) => name_table,
+        Err(_) => return SkrifaNameWalkOutcome::Completed(Default::default()),
+    };
+
+    let mut buckets: [Vec<&fontcull_skrifa::raw::tables::name::NameRecord>; 4] =
+        std::array::from_fn(|_| Vec::with_capacity(MAX_NAME_DECODE_ATTEMPTS_PER_FACE));
+    let mut seen_records = HashSet::new();
+    for record in name_table.name_record() {
+        if is_cancelled() {
+            return SkrifaNameWalkOutcome::Cancelled;
+        }
+        let bucket_index = match record.name_id() {
+            StringId::FAMILY_NAME => 0,
+            StringId::TYPOGRAPHIC_FAMILY_NAME => 1,
+            StringId::FULL_NAME => 2,
+            StringId::POSTSCRIPT_NAME => 3,
+            _ => continue,
+        };
+        let length = usize::from(record.length());
+        if length == 0 || length > MAX_NAME_RECORD_BYTES {
+            continue;
+        }
+        let dedup_key = (
+            record.platform_id(),
+            record.encoding_id(),
+            record.language_id(),
+            record.name_id(),
+            record.length(),
+            record.string_offset().to_u32(),
+        );
+        if !seen_records.insert(dedup_key) {
+            continue;
+        }
+        if buckets[bucket_index].len() < MAX_NAME_DECODE_ATTEMPTS_PER_FACE {
+            buckets[bucket_index].push(record);
+        }
+        if buckets
+            .iter()
+            .all(|bucket| bucket.len() >= MAX_NAME_DECODE_ATTEMPTS_PER_FACE)
+        {
+            break;
+        }
+    }
+
+    let mut collected = CollectedSkrifaFaceNames::default();
+    let mut decode_attempts = 0usize;
+    let primary_family = match decode_skrifa_name_bucket(
+        &name_table,
+        &buckets[0],
+        &mut collected.family_variants,
+        MAX_FAMILY_VARIANTS_PER_FACE,
+        true,
+        &mut decode_attempts,
+        &mut is_cancelled,
+    ) {
+        Ok(primary) => primary,
+        Err(()) => return SkrifaNameWalkOutcome::Cancelled,
+    };
+    collected.primary_hint = primary_family;
+
+    if collected.family_variants.len() < MAX_FAMILY_VARIANTS_PER_FACE {
+        let track_primary = collected.primary_hint.is_none();
+        let typographic_primary = match decode_skrifa_name_bucket(
+            &name_table,
+            &buckets[1],
+            &mut collected.family_variants,
+            MAX_FAMILY_VARIANTS_PER_FACE,
+            track_primary,
+            &mut decode_attempts,
+            &mut is_cancelled,
+        ) {
+            Ok(primary) => primary,
+            Err(()) => return SkrifaNameWalkOutcome::Cancelled,
+        };
+        if collected.primary_hint.is_none() {
+            collected.primary_hint = typographic_primary;
+        }
+    }
+
+    for bucket in [&buckets[2], &buckets[3]] {
+        if decode_skrifa_name_bucket(
+            &name_table,
+            bucket,
+            &mut collected.face_name_variants,
+            MAX_FACE_NAME_VARIANTS_PER_FACE,
+            false,
+            &mut decode_attempts,
+            &mut is_cancelled,
+        )
+        .is_err()
+        {
+            return SkrifaNameWalkOutcome::Cancelled;
+        }
+        if collected.face_name_variants.len() >= MAX_FACE_NAME_VARIANTS_PER_FACE {
+            break;
+        }
+    }
+
+    retain_preferred_name(
+        &mut collected.family_variants,
+        &collected.primary_hint,
+        MAX_FAMILY_VARIANTS_PER_FACE,
+    );
+    SkrifaNameWalkOutcome::Completed(collected)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FontFileSkipReason {
+    MetadataUnreadable,
+    TooLargeBeforeRead,
+    OpenFailed,
+    ReadFailed,
+    GrewPastReadLimit,
+    NoUsableFaces,
+}
+
+impl std::fmt::Display for FontFileSkipReason {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let message = match self {
+            Self::MetadataUnreadable => "metadata could not be read",
+            Self::TooLargeBeforeRead => "file exceeds the 64 MiB font-scan limit",
+            Self::OpenFailed => "file could not be opened",
+            Self::ReadFailed => "file could not be read",
+            Self::GrewPastReadLimit => "file grew beyond the 64 MiB font-scan limit while reading",
+            Self::NoUsableFaces => "no usable OpenType faces or family names were found",
+        };
+        formatter.write_str(message)
+    }
+}
+
+fn safe_font_file_log_label(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| validate_ipc_path(name, "Font filename").is_ok())
+        .map(str::to_owned)
+        .unwrap_or_else(|| "<unsafe font filename>".to_string())
+}
+
+fn format_font_file_skip_warning(path: &Path, reason: FontFileSkipReason) -> String {
+    format!(
+        "Skipping font file '{}': {reason}",
+        safe_font_file_log_label(path)
+    )
+}
+
+fn parse_local_font_file(canonical: &Path, scan_id: u64) -> Vec<LocalFontEntry> {
+    match try_parse_local_font_file(canonical, scan_id) {
+        Ok(entries) => entries,
+        Err(reason) => {
+            // One warning per wholly skipped candidate. Use only the validated
+            // basename so local library layout never leaks into a shared log.
+            log::warn!("{}", format_font_file_skip_warning(canonical, reason));
+            Vec::new()
+        }
+    }
+}
+
 /// Parse one font file (TTF/OTF/TTC/OTC) and return a `LocalFontEntry` per
 /// face **and per distinct localized family name** in the face's name table.
 ///
@@ -1898,20 +2187,20 @@ fn merge_legacy_name_table_entries(entries: &mut Vec<LocalFontEntry>, legacy: Ve
 /// is registered later when the emitted batch is committed to the session
 /// SQLite index.
 ///
-/// `scan_id` lets the per-face inner loop poll cancellation BETWEEN faces.
-/// Without this, a single TTC with up to `MAX_TTC_FACES` slow-to-parse
-/// faces could stall the cancel-acknowledge loop for several seconds (the
-/// outer scan only polls between FILES). Also bounds the work a crafted
-/// TTC can demand by giving cancellation a chance to land between face
-/// parses.
+/// `scan_id` lets the parser poll cancellation between faces and during both
+/// raw name-record walks. Without the in-table poll, a crafted face with the
+/// u16 maximum record count could hide a long scan inside skrifa before the
+/// outer file loop observed Cancel.
 ///
 /// `NO_SCAN_ID` is the no-cancellation sentinel. `scan_directory_collecting`
 /// passes it on the cache-populate path (CLI `refresh-fonts` + GUI
 /// post-commit cache populate, neither of which participates in the
 /// scan-cancel system). Interactive scan workers pass a positive id
 /// minted by `begin_font_scan`.
-fn parse_local_font_file(canonical: &Path, scan_id: u64) -> Vec<LocalFontEntry> {
-    use fontcull_skrifa::string::StringId;
+fn try_parse_local_font_file(
+    canonical: &Path,
+    scan_id: u64,
+) -> Result<Vec<LocalFontEntry>, FontFileSkipReason> {
     use fontcull_skrifa::{FontRef, MetadataProvider};
 
     // Extension check is intentionally case-insensitive (.TTF vs .ttf are the
@@ -1927,7 +2216,10 @@ fn parse_local_font_file(canonical: &Path, scan_id: u64) -> Vec<LocalFontEntry> 
         .map(|e| e.to_ascii_lowercase())
         .unwrap_or_default();
     if !ALLOWED_FONT_EXTENSIONS.contains(&ext.as_str()) {
-        return Vec::new();
+        return Ok(Vec::new());
+    }
+    if font_scan_cancelled(scan_id) {
+        return Ok(Vec::new());
     }
 
     // Stat + size-cap guard before fs::read — a malicious user-picked
@@ -1937,11 +2229,11 @@ fn parse_local_font_file(canonical: &Path, scan_id: u64) -> Vec<LocalFontEntry> 
     let size_bytes = match fs::metadata(canonical) {
         Ok(m) => {
             if m.len() > MAX_FONT_DATA_SIZE {
-                return Vec::new();
+                return Err(FontFileSkipReason::TooLargeBeforeRead);
             }
             m.len()
         }
-        Err(_) => return Vec::new(),
+        Err(_) => return Err(FontFileSkipReason::MetadataUnreadable),
     };
     let is_collection = ext == "ttc" || ext == "otc";
     let max_faces = if is_collection { MAX_TTC_FACES } else { 1 };
@@ -1969,11 +2261,11 @@ fn parse_local_font_file(canonical: &Path, scan_id: u64) -> Vec<LocalFontEntry> 
     {
         let file = match std::fs::File::open(canonical) {
             Ok(f) => f,
-            Err(_) => return Vec::new(),
+            Err(_) => return Err(FontFileSkipReason::OpenFailed),
         };
         let mut limited = file.take(MAX_FONT_DATA_SIZE + 1);
         if limited.read_to_end(&mut data).is_err() {
-            return Vec::new();
+            return Err(FontFileSkipReason::ReadFailed);
         }
     }
 
@@ -1986,7 +2278,7 @@ fn parse_local_font_file(canonical: &Path, scan_id: u64) -> Vec<LocalFontEntry> 
     // Err); per-face errors here are all consumed by the scan loop
     // the same way.
     if data.len() as u64 > MAX_FONT_DATA_SIZE {
-        return Vec::new();
+        return Err(FontFileSkipReason::GrewPastReadLimit);
     }
 
     let mut entries = Vec::new();
@@ -2003,11 +2295,10 @@ fn parse_local_font_file(canonical: &Path, scan_id: u64) -> Vec<LocalFontEntry> 
     const MAX_CONSECUTIVE_FAILURES: u32 = 1;
     let mut consecutive_failures: u32 = 0;
     for i in 0..max_faces {
-        // Per-face cancel poll. The outer scan_*_inner loops only check
-        // between files; a 16-face TTC where each face triggers expensive
-        // skrifa name-table walks can otherwise eat several seconds of
-        // unresponsive Cancel button. NO_SCAN_ID is the "no active scan"
-        // sentinel and must never trigger cancellation.
+        // Per-face cancel poll. The raw name-table collectors also poll within
+        // each face; this outer check keeps the common small-table path cheap
+        // and avoids opening the next TTC face after cancellation. NO_SCAN_ID
+        // is the "no active scan" sentinel and must never trigger cancellation.
         //
         // Returning early with the already-parsed faces is safe — the
         // outer scan's cancel branch flushes the buffer (which now
@@ -2048,44 +2339,14 @@ fn parse_local_font_file(canonical: &Path, scan_id: u64) -> Vec<LocalFontEntry> 
             let attrs = font_ref.attributes();
             let bold = attrs.weight.value() >= 600.0;
             let italic = !matches!(attrs.style, fontcull_skrifa::attribute::Style::Normal);
-
-            let mut family_variants: HashSet<String> = HashSet::new();
-            let mut face_name_variants: HashSet<String> = HashSet::new();
-            let mut primary_hint: Option<String> = None;
-            for id in [StringId::FAMILY_NAME, StringId::TYPOGRAPHIC_FAMILY_NAME] {
-                if primary_hint.is_none() {
-                    primary_hint = font_ref
-                        .localized_strings(id)
-                        .english_or_first()
-                        .and_then(|localized| bounded_font_family_name(localized.chars()));
-                }
-
-                for localized in font_ref.localized_strings(id) {
-                    if let Some(name) = bounded_font_family_name(localized.chars()) {
-                        family_variants.insert(name);
-                        if family_variants.len() >= MAX_FAMILY_VARIANTS_PER_FACE {
-                            break;
-                        }
-                    }
-                }
-                if family_variants.len() >= MAX_FAMILY_VARIANTS_PER_FACE {
-                    break;
-                }
-            }
-
-            for id in [StringId::FULL_NAME, StringId::POSTSCRIPT_NAME] {
-                for localized in font_ref.localized_strings(id) {
-                    if let Some(name) = bounded_font_family_name(localized.chars()) {
-                        face_name_variants.insert(name);
-                        if face_name_variants.len() >= MAX_FACE_NAME_VARIANTS_PER_FACE {
-                            break;
-                        }
-                    }
-                }
-                if face_name_variants.len() >= MAX_FACE_NAME_VARIANTS_PER_FACE {
-                    break;
-                }
-            }
+            let CollectedSkrifaFaceNames {
+                mut family_variants,
+                face_name_variants,
+                mut primary_hint,
+            } = match collect_skrifa_face_names(&font_ref, || font_scan_cancelled(scan_id)) {
+                SkrifaNameWalkOutcome::Completed(collected) => collected,
+                SkrifaNameWalkOutcome::Cancelled => return None,
+            };
 
             // Last-resort fallback: malformed fonts may have no family IDs but
             // still have a full name. Indexing that is better than silently
@@ -2097,23 +2358,18 @@ fn parse_local_font_file(canonical: &Path, scan_id: u64) -> Vec<LocalFontEntry> 
                 }
             }
 
-            (
+            Some((
                 family_variants,
                 face_name_variants,
                 primary_hint,
                 bold,
                 italic,
-            )
+            ))
         }));
         let (family_variants, face_name_variants, primary_hint, bold, italic) = match face_result {
-            Ok(t) => t,
-            Err(_) => {
-                log::warn!(
-                    "skrifa panicked while parsing face {i} in '{}' — skipping face",
-                    canonical.display()
-                );
-                continue;
-            }
+            Ok(Some(values)) => values,
+            Ok(None) => break,
+            Err(_) => continue,
         };
 
         if family_variants.is_empty() {
@@ -2137,33 +2393,17 @@ fn parse_local_font_file(canonical: &Path, scan_id: u64) -> Vec<LocalFontEntry> 
         let mut families: Vec<String> = family_variants.into_iter().collect();
         families.sort();
         if let Some(ref primary) = primary_hint {
-            match families.iter().position(|v| v == primary) {
-                Some(pos) => {
-                    // rotate_right(1) moves families[pos] to index 0 while keeping
-                    // the elements before it in alphabetical order — swap(0, pos)
-                    // would displace the element at 0 to pos, breaking sort order.
-                    families[..=pos].rotate_right(1);
-                }
-                None => {
-                    // structural fallback when
-                    // `primary_hint` is Some but doesn't appear in
-                    // family_variants. The current
-                    // bounded_font_family_name + localized_strings
-                    // path guarantees primary_hint round-trips through
-                    // the variant set (deterministic on today's
-                    // skrifa builds), but a future skrifa upgrade with
-                    // caller-time normalization could break that
-                    // implicit alignment. Without the explicit push,
-                    // the UI primary name silently reverts to
-                    // sorted-first; pushing primary at index 0 keeps
-                    // the contract structural (not security-relevant,
-                    // but matches the "type-system over doc discipline"
-                    // posture used elsewhere, e.g. current_unix_seconds).
-                    log::debug!(
-                        "primary_hint '{primary}' not in family_variants; prepending explicitly"
-                    );
-                    families.insert(0, primary.clone());
-                }
+            if let Some(pos) = families.iter().position(|value| value == primary) {
+                // rotate_right(1) moves families[pos] to index 0 while keeping
+                // the elements before it in alphabetical order — swap(0, pos)
+                // would displace the element at 0 to pos, breaking sort order.
+                families[..=pos].rotate_right(1);
+            } else {
+                // `collect_skrifa_face_names` structurally retains a preferred
+                // name inside the eight-entry bucket. Keep this loud tripwire
+                // local to materialization in case a future collector changes
+                // that contract.
+                debug_assert!(false, "primary font name missing from bounded variants");
             }
         }
 
@@ -2179,17 +2419,25 @@ fn parse_local_font_file(canonical: &Path, scan_id: u64) -> Vec<LocalFontEntry> 
             size_bytes,
         });
     }
+    if font_scan_cancelled(scan_id) {
+        return Ok(entries);
+    }
     let legacy_entries = parse_legacy_name_table_entries(
         &data,
         &canonical_string,
         size_bytes,
         is_collection,
         max_faces,
+        scan_id,
     );
     if !legacy_entries.is_empty() {
         merge_legacy_name_table_entries(&mut entries, legacy_entries);
     }
-    entries
+    if entries.is_empty() && !font_scan_cancelled(scan_id) {
+        Err(FontFileSkipReason::NoUsableFaces)
+    } else {
+        Ok(entries)
+    }
 }
 
 #[derive(serde::Serialize)]
@@ -2855,19 +3103,22 @@ where
     // rejects.
     //
     // Batch-send failures stay swallowed (UX progress is informational —
-    // missing a few batches is harmless), but the Done send is load-
-    // bearing: `runStreamingScan` on the JS side awaits a donePromise
-    // that only resolves when this event arrives. A dropped receiver
-    // (Channel.onmessage cleared, page unloaded) would otherwise leave
-    // that promise hanging silently. Log WARN so the asymmetric failure
-    // mode is visible in diagnostics.
+    // missing a few batches is harmless), but the Done send remains
+    // diagnostic because `runStreamingScan` awaits it. Tauri owns the JS
+    // callback registration until the Rust Channel is dropped; React renders,
+    // modal hides, and `onmessage` replacement do not unregister it. In the
+    // installed Wry runtime, this send can therefore fail only after the app
+    // event loop/webview is tearing down (or serialization fails), at which
+    // point the old JS realm and its promise are no longer user-visible.
+    // Returning Err here would be worse: the SQLite transaction has already
+    // committed, so an IPC rejection would falsely report a rolled-back scan.
     if let Err(e) = progress.send(ScanProgress::Done {
         reason: outcome.reason,
         added: import.added,
         duplicated: import.duplicated,
     }) {
         log::warn!(
-            "scan {scan_id}: Done sentinel send failed — frontend may be hanging on donePromise ({e})"
+            "scan {scan_id}: Done sentinel send failed after scan commit during app teardown ({e})"
         );
     }
 
@@ -2951,6 +3202,27 @@ pub fn scan_directory_collecting_with_scope(
     dir: &Path,
     scope: FontDirectoryScope,
 ) -> Result<Vec<LocalFontEntry>, String> {
+    scan_directory_collecting_impl(dir, scope, None)
+}
+
+pub(crate) fn scan_directory_collecting_with_snapshot(
+    dir: &Path,
+    scope: FontDirectoryScope,
+) -> Result<(Vec<LocalFontEntry>, crate::font_cache::CacheSourceSnapshot), String> {
+    let mut snapshot = None;
+    let entries = scan_directory_collecting_impl(dir, scope, Some(&mut snapshot))?;
+    let snapshot = snapshot.ok_or_else(|| {
+        "Font source scan completed without a cache snapshot; persistent cache was not changed"
+            .to_string()
+    })?;
+    Ok((entries, snapshot))
+}
+
+fn scan_directory_collecting_impl(
+    dir: &Path,
+    scope: FontDirectoryScope,
+    captured_snapshot: Option<&mut Option<crate::font_cache::CacheSourceSnapshot>>,
+) -> Result<Vec<LocalFontEntry>, String> {
     // (considered, rejected): GUI's
     // scan_font_directory validates inside because it's an IPC entry
     // point (untrusted JS string). The CLI's scan_directory_collecting
@@ -2978,24 +3250,30 @@ pub fn scan_directory_collecting_with_scope(
         return Err(format!("Not a directory: {}", canonical.display()));
     }
     let mut entries: Vec<LocalFontEntry> = Vec::new();
-    let outcome = scan_directory_with_scope_inner(&canonical, scope, NO_SCAN_ID, None, |batch| {
-        // Defense-in-depth against refresh-fonts OOM on crafted font
-        // folders: fail fast if a single source would
-        // push us past the cache-populate cap. The CLI caller in
-        // run_refresh_fonts catches this and continues with the next
-        // dir; without the cap, a malicious pack could hold hundreds
-        // of MB to multi-GB of font metadata in memory before the
-        // `cache.replace_folder` write would even start.
-        if entries.len() + batch.len() > MAX_CACHE_POPULATE_FACES {
-            return Err(format!(
-                "Source has more font faces than the persistent cache safely accepts \
-                 ({}+ faces, cap {MAX_CACHE_POPULATE_FACES}). Skipping this source.",
-                entries.len() + batch.len()
-            ));
-        }
-        entries.extend(batch);
-        Ok(())
-    })?;
+    let outcome = scan_directory_with_scope_inner(
+        &canonical,
+        scope,
+        NO_SCAN_ID,
+        captured_snapshot,
+        |batch| {
+            // Defense-in-depth against refresh-fonts OOM on crafted font
+            // folders: fail fast if a single source would
+            // push us past the cache-populate cap. The CLI caller in
+            // run_refresh_fonts catches this and continues with the next
+            // dir; without the cap, a malicious pack could hold hundreds
+            // of MB to multi-GB of font metadata in memory before the
+            // `cache.replace_folder` write would even start.
+            if entries.len() + batch.len() > MAX_CACHE_POPULATE_FACES {
+                return Err(format!(
+                    "Source has more font faces than the persistent cache safely accepts \
+                     ({}+ faces, cap {MAX_CACHE_POPULATE_FACES}). Skipping this source.",
+                    entries.len() + batch.len()
+                ));
+            }
+            entries.extend(batch);
+            Ok(())
+        },
+    )?;
     if outcome.reason != ScanStopReason::Natural {
         return Err(format!(
             "Font source scan was incomplete ({:?}); persistent cache was not changed",
@@ -4657,6 +4935,60 @@ mod tests {
     }
 
     #[test]
+    fn skrifa_name_decode_cap_accepts_valid_record_at_limit() {
+        let mut records: Vec<(u16, u16, Vec<u8>)> =
+            (0..255).map(|_| (1, 0x0409, vec![0])).collect();
+        records.push((16, 0x0409, utf16be_test_bytes("Boundary Family")));
+        let font = font_with_name_records(&records);
+
+        let collected = collected_skrifa_names(&font);
+        assert!(collected.family_variants.contains("Boundary Family"));
+    }
+
+    #[test]
+    fn skrifa_name_decode_cap_rejects_valid_record_over_limit() {
+        let mut records: Vec<(u16, u16, Vec<u8>)> =
+            (0..256).map(|_| (1, 0x0409, vec![0])).collect();
+        records.push((16, 0x0409, utf16be_test_bytes("Over Budget Family")));
+        let font = font_with_name_records(&records);
+
+        let collected = collected_skrifa_names(&font);
+        assert!(!collected.family_variants.contains("Over Budget Family"));
+        assert!(collected.family_variants.is_empty());
+    }
+
+    #[test]
+    fn skrifa_name_collection_keeps_preferred_name_inside_eight_variant_cap() {
+        let mut records: Vec<(u16, u16, Vec<u8>)> = (0..8)
+            .map(|index| (1, 0x0411, utf16be_test_bytes(&format!("Variant {index}"))))
+            .collect();
+        records.push((1, 0x0409, utf16be_test_bytes("English Preferred")));
+        let font = font_with_name_records(&records);
+
+        let collected = collected_skrifa_names(&font);
+        assert_eq!(collected.family_variants.len(), 8);
+        assert!(collected.family_variants.contains("English Preferred"));
+        assert_eq!(collected.primary_hint.as_deref(), Some("English Preferred"));
+    }
+
+    #[test]
+    fn skrifa_name_collection_polls_cancel_during_raw_record_walk() {
+        let mut records: Vec<(u16, u16, Vec<u8>)> =
+            (0..100).map(|_| (2, 0x0409, vec![0])).collect();
+        records.push((1, 0x0409, utf16be_test_bytes("Too Late")));
+        let font = font_with_name_records(&records);
+        let font_ref = fontcull_skrifa::FontRef::from_index(&font, 0).unwrap();
+        let mut polls = 0usize;
+
+        let outcome = collect_skrifa_face_names(&font_ref, || {
+            polls += 1;
+            polls > 10
+        });
+        assert!(matches!(outcome, SkrifaNameWalkOutcome::Cancelled));
+        assert!(polls <= 11, "raw record walk ignored cancellation: {polls}");
+    }
+
+    #[test]
     fn is_ttc_data_recognizes_ttcf_magic() {
         // Minimal valid TTC header: `ttcf` magic + version + numFonts.
         let data = b"ttcf\x00\x01\x00\x00\x00\x00\x00\x02";
@@ -4697,6 +5029,54 @@ mod tests {
         font.extend_from_slice(&table_len.to_be_bytes());
         font.extend_from_slice(table_data);
         font
+    }
+
+    fn font_with_name_records(records: &[(u16, u16, Vec<u8>)]) -> Vec<u8> {
+        let record_bytes = records
+            .len()
+            .checked_mul(12)
+            .and_then(|bytes| bytes.checked_add(6))
+            .expect("test name table size fits usize");
+        let storage_offset = u16::try_from(record_bytes).expect("test records fit name offset");
+        let mut string_offset = 0usize;
+        let mut table = Vec::new();
+        table.extend_from_slice(&0u16.to_be_bytes());
+        table.extend_from_slice(
+            &u16::try_from(records.len())
+                .expect("test record count fits u16")
+                .to_be_bytes(),
+        );
+        table.extend_from_slice(&storage_offset.to_be_bytes());
+        for (name_id, language_id, bytes) in records {
+            table.extend_from_slice(&3u16.to_be_bytes());
+            table.extend_from_slice(&1u16.to_be_bytes());
+            table.extend_from_slice(&language_id.to_be_bytes());
+            table.extend_from_slice(&name_id.to_be_bytes());
+            table.extend_from_slice(
+                &u16::try_from(bytes.len())
+                    .expect("test name length fits u16")
+                    .to_be_bytes(),
+            );
+            table.extend_from_slice(
+                &u16::try_from(string_offset)
+                    .expect("test string offset fits u16")
+                    .to_be_bytes(),
+            );
+            string_offset += bytes.len();
+        }
+        for (_, _, bytes) in records {
+            table.extend_from_slice(bytes);
+        }
+        font_with_single_table(b"name", &table)
+    }
+
+    fn collected_skrifa_names(font: &[u8]) -> CollectedSkrifaFaceNames {
+        let font_ref = fontcull_skrifa::FontRef::from_index(font, 0)
+            .expect("synthetic name-table font should parse");
+        match collect_skrifa_face_names(&font_ref, || false) {
+            SkrifaNameWalkOutcome::Completed(collected) => collected,
+            SkrifaNameWalkOutcome::Cancelled => panic!("unexpected cancellation"),
+        }
     }
 
     fn cmap12_subtable_with_group_count(group_count: usize) -> Vec<u8> {
@@ -5107,6 +5487,7 @@ mod tests {
             font.len() as u64,
             false,
             1,
+            NO_SCAN_ID,
         );
         assert!(
             entries.is_empty(),
@@ -5116,12 +5497,84 @@ mod tests {
 
     #[test]
     fn decode_legacy_name_record_rejects_oversized_raw_records() {
-        let mut raw = Vec::with_capacity(MAX_LEGACY_NAME_RECORD_BYTES + 2);
-        while raw.len() <= MAX_LEGACY_NAME_RECORD_BYTES {
+        let mut raw = Vec::with_capacity(MAX_NAME_RECORD_BYTES + 2);
+        while raw.len() <= MAX_NAME_RECORD_BYTES {
             raw.extend_from_slice(&[0, b'A']);
         }
 
         assert!(decode_legacy_name_record(3, 1, 0x0409, &raw).is_none());
+    }
+
+    #[test]
+    fn font_file_skip_reason_distinguishes_missing_over_limit_and_malformed_files() {
+        let root = std::env::temp_dir().join(format!(
+            "ssahdrify-font-skip-reasons-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+
+        let missing = root.join("missing.ttf");
+        assert_eq!(
+            try_parse_local_font_file(&missing, NO_SCAN_ID)
+                .err()
+                .expect("missing file should be skipped"),
+            FontFileSkipReason::MetadataUnreadable
+        );
+
+        let oversized = root.join("oversized.ttf");
+        fs::File::create(&oversized)
+            .unwrap()
+            .set_len(MAX_FONT_DATA_SIZE + 1)
+            .unwrap();
+        assert_eq!(
+            try_parse_local_font_file(&oversized, NO_SCAN_ID)
+                .err()
+                .expect("oversized file should be skipped"),
+            FontFileSkipReason::TooLargeBeforeRead
+        );
+
+        let malformed = root.join("malformed.ttf");
+        fs::write(&malformed, b"not an OpenType font").unwrap();
+        assert_eq!(
+            try_parse_local_font_file(&malformed, NO_SCAN_ID)
+                .err()
+                .expect("malformed file should be skipped"),
+            FontFileSkipReason::NoUsableFaces
+        );
+
+        let unreadable = root.join("directory.ttf");
+        fs::create_dir_all(&unreadable).unwrap();
+        assert!(matches!(
+            try_parse_local_font_file(&unreadable, NO_SCAN_ID),
+            Err(FontFileSkipReason::OpenFailed | FontFileSkipReason::ReadFailed)
+        ));
+
+        let unsupported = root.join("not-a-candidate.txt");
+        assert!(
+            try_parse_local_font_file(&unsupported, NO_SCAN_ID)
+                .unwrap()
+                .is_empty(),
+            "unsupported extensions should remain a quiet non-candidate"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn font_file_skip_warning_uses_only_a_validated_basename() {
+        let safe = Path::new("/private/library/Broken Font.ttf");
+        let warning = format_font_file_skip_warning(safe, FontFileSkipReason::NoUsableFaces);
+        assert!(warning.contains("Broken Font.ttf"));
+        assert!(!warning.contains("private"));
+        assert!(!warning.contains("library"));
+
+        let unsafe_name = Path::new("/private/library/evil\u{202e}.ttf");
+        let redacted =
+            format_font_file_skip_warning(unsafe_name, FontFileSkipReason::NoUsableFaces);
+        assert!(redacted.contains("<unsafe font filename>"));
+        assert!(!redacted.contains("evil"));
+        assert!(!redacted.contains("private"));
     }
 
     /// Boundary tests for the TTC numFonts peek inside
@@ -6155,6 +6608,28 @@ mod tests {
             })
             .collect();
         assert_eq!(ordered, vec!["first.otf", "last.ttc", "top.ttf"]);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn collecting_scan_returns_its_full_recursive_snapshot_when_no_face_parses() {
+        let root = std::env::temp_dir().join(format!(
+            "ssahdrify-collecting-snapshot-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let nested = root.join("nested");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("broken.ttf"), b"not a font").unwrap();
+
+        let (entries, snapshot) =
+            scan_directory_collecting_with_snapshot(&root, FontDirectoryScope::Recursive)
+                .expect("complete scan should return its discovery snapshot");
+        assert!(entries.is_empty(), "malformed font must not produce faces");
+        assert_eq!(snapshot.directories.len(), 2);
+        assert_eq!(snapshot.files.len(), 1);
+        assert!(snapshot.files[0].file_path.ends_with("broken.ttf"));
 
         let _ = fs::remove_dir_all(&root);
     }

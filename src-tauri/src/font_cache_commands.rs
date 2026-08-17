@@ -738,21 +738,8 @@ pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
     let mut skipped: Vec<SkippedFolder> = Vec::new();
     for source in &report.modified {
         let folder_path = Path::new(&source.source_root);
-        let snapshot = match snapshot_source_directories(folder_path, source.scope) {
-            Ok(snapshot) => snapshot,
-            Err(err) => {
-                log::warn!("rescan: skipping {} — {err}", source.source_root);
-                skipped.push(SkippedFolder {
-                    folder: source.source_root.clone(),
-                    scope: source.scope,
-                    reason: err,
-                    kind: SkipKind::ScanFailed,
-                });
-                continue;
-            }
-        };
-        match crate::fonts::scan_directory_collecting_with_scope(folder_path, source.scope) {
-            Ok(entries) => {
+        match crate::fonts::scan_directory_collecting_with_snapshot(folder_path, source.scope) {
+            Ok((entries, snapshot)) => {
                 let metadata = match entries_to_cache_metadata(&entries) {
                     Ok(metadata) => metadata,
                     Err(err) => {
@@ -765,15 +752,7 @@ pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
                         continue;
                     }
                 };
-                match validate_cache_source_stability(&snapshot, &metadata) {
-                    Ok(()) => scanned.push((snapshot, metadata)),
-                    Err(err) => skipped.push(SkippedFolder {
-                        folder: source.source_root.clone(),
-                        scope: source.scope,
-                        reason: err.to_string(),
-                        kind: SkipKind::ScanFailed,
-                    }),
-                }
+                scanned.push((snapshot, metadata));
             }
             Err(err) => {
                 log::warn!("rescan: skipping {} — {err}", source.source_root);
@@ -787,10 +766,17 @@ pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
         }
     }
 
-    // Phase 2b — still outside the cache slot, immediately revalidate every
-    // completed scan and re-probe every allegedly removed root. The mutation
-    // guard freezes in-process cache writers throughout this phase; keeping
-    // the filesystem walks out here lets lookups remain responsive.
+    // Phase 2b — still outside the cache slot, revalidate every completed scan
+    // at the final pre-apply point and re-probe every allegedly removed root.
+    // The scan already returned the exact snapshot produced by its discovery
+    // walk, so a separate pre-scan snapshot and an immediate post-scan rewalk
+    // would add two full enumerations without strengthening the final
+    // applied-state invariant. This full final rewalk remains necessary:
+    // parsed faces are only a subset of the snapshot and cannot reveal added,
+    // removed, unreadable, or unparseable candidates or directory changes.
+    // The mutation guard freezes in-process cache writers throughout this
+    // phase; keeping the filesystem walks out here lets lookups remain
+    // responsive.
     let scanned = validate_scanned_sources_before_apply(scanned, &mut skipped);
     let removed = confirm_removed_sources_before_apply(&report.removed);
 
