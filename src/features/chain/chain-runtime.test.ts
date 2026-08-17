@@ -125,7 +125,7 @@ describe("runChain — single shift step", () => {
   it("reports skippedCount = 0 on a clean shift (no oversized captions)", () => {
     // Pin the structured skippedCount field that replaced the
     // previous note-suffix shape. The Rust shell
-    // routes this through emit_oversized_skipped_warning when > 0;
+    // routes this through its oversized-caption warning when > 0;
     // the zero case must NOT trigger any warning, which the Rust
     // side guarantees only if the field is structurally a number
     // (not a string-parsed suffix).
@@ -137,14 +137,14 @@ describe("runChain — single shift step", () => {
     expect(result.skippedCount).toBe(0);
   });
 
-  it("aggregates skippedCount > 0 when shift parses oversized captions", () => {
+  it("reports skippedCount without recounting preserved cues across shifts", () => {
     // Companion to the standalone-side oversized SRT test in
     // cli-engine-roundtrip.test.ts. The chain runs against ASS, so
     // the fixture stuffs one Dialogue line with text exceeding
     // MAX_CAPTION_TEXT_LEN (64,000 chars). parseAss emits a skipped
     // placeholder for that line, shiftTransform forwards the count
-    // to TransformResult.skippedCount, runChain aggregates into
-    // ChainResult.skippedCount. The note must NOT carry the count
+    // to TransformResult.skippedCount, and runChain promotes it into
+    // ChainResult.skippedCount without recounting it. The note must NOT carry the count
     // as a string suffix (the earlier shape this replaced) —
     // it's structurally separate now.
     const huge = "A".repeat(65_000);
@@ -171,6 +171,20 @@ describe("runChain — single shift step", () => {
     // Note stays clean — no string-embedded skipped count.
     expect(result.notes[0]).not.toMatch(/oversized/i);
     expect(result.notes[0]).not.toMatch(/skipped/i);
+
+    const repeatedShiftPlan: ChainPlan = {
+      steps: [
+        { kind: "shift", params: { offsetMs: 1000 } },
+        { kind: "shift", params: { offsetMs: 2000 } },
+      ],
+      outputTemplate: "{name}.shifted-twice.ass",
+    };
+    const repeated = runChain({
+      plan: repeatedShiftPlan,
+      inputPath: INPUT_PATH,
+      content: oversizedAss,
+    });
+    expect(repeated.skippedCount).toBe(1);
   });
 });
 

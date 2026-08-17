@@ -63,11 +63,10 @@ interface TransformResult {
   /**
    * Optional count of captions whose text exceeded
    * MAX_CAPTION_TEXT_LEN (64 KB) and were emitted as skipped
-   * placeholders during this step's processing. Aggregated by
-   * `runChain` into `ChainResult.skippedCount` for the Rust shell
-   * to surface via `emit_oversized_skipped_warning` (stderr +
-   * FileReport.warnings). Previously a note suffix only, which the
-   * Rust shell didn't parse.
+   * placeholders during this step's processing. `runChain` retains
+   * the largest per-step count for the Rust shell's warning path
+   * (stderr + FileReport.warnings). Previously this was only a note
+   * suffix, which the Rust shell did not parse.
    */
   skippedCount?: number;
 }
@@ -138,10 +137,11 @@ function shiftTransform(ctx: TransformContext, params: ShiftStepParams): Transfo
   });
   const shiftedCount = result.shiftedCount;
   // surface skippedCount as a structured field on
-  // TransformResult (not a note suffix). runChain aggregates it
-  // into ChainResult.skippedCount; the Rust shell reads that field
+  // TransformResult (not a note suffix). runChain promotes it
+  // into ChainResult.skippedCount without recounting preserved cues;
+  // the Rust shell reads that field
   // and routes a stderr warning + FileReport.warnings entry via
-  // emit_oversized_skipped_warning, matching the standalone HDR /
+  // its oversized-caption warning path, matching the standalone HDR /
   // Shift CLI paths. The earlier note-suffix approach was opaque to
   // the Rust shell (notes are unparsed strings) and only printed
   // under --verbose, on stdout — neither surface matched the
@@ -258,12 +258,12 @@ function decodeBase64(b64: string, name: string): Uint8Array {
 export function runChain(request: ChainRunRequest): ChainResult {
   const { plan, inputPath, content } = request;
   const notes: string[] = [];
-  // aggregate skipped-caption counts across every step
-  // so the Rust shell sees a single number it can pass to
-  // `emit_oversized_skipped_warning`. Today only shiftTransform
-  // populates `result.skippedCount`; an embed or HDR step that grew
-  // similar semantics would feed in the same way.
-  let totalSkippedCount = 0;
+  // Keep the largest per-step count rather than summing. A preserved
+  // oversized ASS/WebVTT cue is encountered again by every later shift;
+  // summing would report one source cue as several captions. Current
+  // transforms may preserve or remove these cues, but do not create new
+  // oversized cues, so the maximum is the chain-level source count.
+  let skippedCaptionCount = 0;
   let current = content;
 
   // chain-level preflight for the strictest
@@ -376,12 +376,12 @@ export function runChain(request: ChainRunRequest): ChainResult {
       notes.push(result.note);
     }
     if (result.skippedCount !== undefined && result.skippedCount > 0) {
-      totalSkippedCount += result.skippedCount;
+      skippedCaptionCount = Math.max(skippedCaptionCount, result.skippedCount);
     }
   }
 
   const outputPath = resolveChainOutputPath(inputPath, plan.outputTemplate);
-  return { content: current, outputPath, notes, skippedCount: totalSkippedCount };
+  return { content: current, outputPath, notes, skippedCount: skippedCaptionCount };
 }
 
 /**

@@ -399,6 +399,8 @@ export interface FileAnalysis {
   content: string;
   infos: FontInfo[];
   usages: FontUsage[];
+  /** Encoding inferred without a BOM; retained so every later write warns. */
+  inferredEncodingId?: string;
 }
 
 /**

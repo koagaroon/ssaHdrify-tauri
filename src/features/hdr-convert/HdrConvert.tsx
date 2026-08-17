@@ -1,5 +1,11 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
-import { pickSubtitleFiles, readText, writeText, fileNameFromPath } from "../../lib/tauri-api";
+import {
+  fileNameFromPath,
+  isInferredUtf16,
+  pickSubtitleFiles,
+  readText,
+  writeText,
+} from "../../lib/tauri-api";
 import { processAssContent, parseAssColor, formatAssColor } from "./ass-processor";
 import {
   processSrtUserText,
@@ -433,7 +439,11 @@ export default function HdrConvert() {
             // Read input file
             let content: string;
             try {
-              content = await readText(filePath);
+              content = await readText(filePath, (read) => {
+                if (isInferredUtf16(read)) {
+                  addLog(t("msg_inferred_utf16", fileName, read.encodingId), "warn");
+                }
+              });
             } catch (e) {
               addLog(t("msg_read_error", fileName, sanitizeError(e)), "error");
               continue;

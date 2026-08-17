@@ -131,7 +131,7 @@ export interface ShiftResult {
   /**
    * Count of captions whose text exceeded MAX_CAPTION_TEXT_LEN (64 KB)
    * and were emitted as skipped placeholders by the parser. TimingShift
-   * surfaces this via msg_oversized_skipped to close the
+   * surfaces this with a format-appropriate warning to close the
    * no-silent-action gap.
    */
   skippedCount: number;

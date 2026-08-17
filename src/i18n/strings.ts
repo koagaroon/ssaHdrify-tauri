@@ -216,16 +216,22 @@ export const strings: Record<string, StringEntry> = {
     zh: "已跳过 {0}：输出路径重复",
   },
   msg_read_error: { en: "Error reading {0}: {1}", zh: "读取 {0} 出错：{1}" },
+  msg_inferred_utf16: {
+    en: "{0}: detected BOM-less {1} from its byte pattern. This is a best-effort guess; verify the preview or output.",
+    zh: "已根据字节模式将 {0} 推测为无 BOM 的 {1} 编码。此结果并非完全确定，请核对预览或输出。",
+  },
   msg_unsupported: { en: "Skipped {0}: unsupported format", zh: "已跳过 {0}：不支持的格式" },
   // HDR Convert and Time Shift both surface a per-file count of
-  // oversized captions dropped by the subtitle parser
-  // (MAX_CAPTION_TEXT_LEN = 64 KB). Previously the placeholder Captions
-  // silently emitted empty Dialogue lines (HDR path) or were silently
-  // dropped (SRT/VTT); users had no signal that their input had been
-  // partially dropped.
+  // Rebuilding writers cannot safely transform captions above the
+  // MAX_CAPTION_TEXT_LEN (64 KB) cap. Structure-preserving writers use the
+  // sibling unchanged warning instead of claiming the source cue was dropped.
   msg_oversized_skipped: {
     en: "Dropped {0} oversized caption(s) from {1}: text exceeded 64 KB per-caption cap",
     zh: "{1} 中有 {0} 条超大字幕（单条 64 KB 上限）已丢弃",
+  },
+  msg_oversized_unchanged: {
+    en: "Left {0} oversized caption(s) in {1} unchanged: text exceeded the 64 KB per-caption processing cap",
+    zh: "{1} 中有 {0} 条超大字幕超过单条 64 KB 的处理上限，已保留原内容且未调整时间",
   },
   msg_done: { en: "Done: {0}", zh: "完成：{0}" },
   msg_convert_error: { en: "Error converting {0}: {1}", zh: "转换 {0} 出错：{1}" },

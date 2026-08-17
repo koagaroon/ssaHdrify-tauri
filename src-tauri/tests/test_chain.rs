@@ -417,7 +417,7 @@ fn chain_post_v8_failed_surfaces_oversized_warning() {
     // a skippedCount. Shift's `shiftSubtitles` parses captions
     // line-by-line and emits `skipped: true` placeholders, which
     // shiftTransform forwards to TransformResult.skippedCount —
-    // exactly the surface format_oversized_skipped_warning consumes.
+    // exactly the surface format_oversized_caption_warning consumes.
     let predicted_output = dir.join("oversized.shifted.ass");
     fs::create_dir(&predicted_output).expect("failed to pre-create directory at output path");
 

@@ -21,6 +21,13 @@ describe("assertSafeOutputFilename", () => {
     expect(() => assertSafeOutputFilename("   ")).toThrow(/empty/);
   });
 
+  it("rejects dot-only filenames without rejecting ordinary hidden names", () => {
+    for (const name of [".", "..", "...", " . . "]) {
+      expect(() => assertSafeOutputFilename(name)).toThrow(/dots-only/);
+    }
+    expect(() => assertSafeOutputFilename(".hidden.ass")).not.toThrow();
+  });
+
   it("rejects path separators in the filename", () => {
     expect(() => assertSafeOutputFilename("dir/file.ass")).toThrow(/illegal/);
     expect(() => assertSafeOutputFilename("dir\\file.ass")).toThrow(/illegal/);

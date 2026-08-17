@@ -29,9 +29,9 @@ export interface Caption {
    * The placeholder counts
    * toward MAX_PARSED_ENTRIES on every parser. buildAss returns the
    * original Dialogue line untouched (so its positional alignment with
-   * the regex-walk over original content holds); buildSrt / buildVtt /
-   * buildSub filter placeholders out before serialization so disk
-   * output is unchanged.
+   * the regex-walk over original content holds); buildVtt likewise keeps
+   * the original cue in place. buildSrt / buildSub filter placeholders
+   * before serialization and the feature layer surfaces the skipped count.
    */
   skipped?: boolean;
 }
@@ -221,12 +221,12 @@ function parseSrtTime(ts: string): number {
   // structurally impossible.
   const m = ts.match(/(\d{1,12}):(\d{2}):(\d{2})[,.](\d{3})/);
   if (!m) return 0;
-  return (
-    parseInt(m[1]!, 10) * 3600000 +
-    parseInt(m[2]!, 10) * 60000 +
-    parseInt(m[3]!, 10) * 1000 +
-    parseInt(m[4]!, 10)
-  );
+  const minutes = parseInt(m[2]!, 10);
+  const seconds = parseInt(m[3]!, 10);
+  if (minutes >= 60 || seconds >= 60) {
+    throw new Error(`Invalid SRT timestamp (minutes and seconds must be below 60): ${ts}`);
+  }
+  return parseInt(m[1]!, 10) * 3600000 + minutes * 60000 + seconds * 1000 + parseInt(m[4]!, 10);
 }
 
 /** Parse VTT timestamps — supports both "HH:MM:SS.mmm" and "MM:SS.mmm" (no hours) */
@@ -240,19 +240,24 @@ function parseVttTime(ts: string): number {
   // same shape.
   const full = ts.match(/^(\d{2,12}):(\d{2}):(\d{2})\.(\d{3})$/);
   if (full) {
+    const minutes = parseInt(full[2]!, 10);
+    const seconds = parseInt(full[3]!, 10);
+    if (minutes >= 60 || seconds >= 60) {
+      throw new Error(`Invalid WebVTT timestamp (minutes and seconds must be below 60): ${ts}`);
+    }
     return (
-      parseInt(full[1]!, 10) * 3600000 +
-      parseInt(full[2]!, 10) * 60000 +
-      parseInt(full[3]!, 10) * 1000 +
-      parseInt(full[4]!, 10)
+      parseInt(full[1]!, 10) * 3600000 + minutes * 60000 + seconds * 1000 + parseInt(full[4]!, 10)
     );
   }
   // MM:SS.mmm (no hours — valid per WebVTT spec)
   const short = ts.match(/^(\d{2}):(\d{2})\.(\d{3})$/);
   if (short) {
-    return (
-      parseInt(short[1]!, 10) * 60000 + parseInt(short[2]!, 10) * 1000 + parseInt(short[3]!, 10)
-    );
+    const minutes = parseInt(short[1]!, 10);
+    const seconds = parseInt(short[2]!, 10);
+    if (minutes >= 60 || seconds >= 60) {
+      throw new Error(`Invalid WebVTT timestamp (minutes and seconds must be below 60): ${ts}`);
+    }
+    return minutes * 60000 + seconds * 1000 + parseInt(short[3]!, 10);
   }
   return 0;
 }
@@ -261,11 +266,13 @@ function parseVttTime(ts: string): number {
 function parseAssTime(ts: string): number {
   const m = ts.match(/(\d{1,12}):(\d{2}):(\d{2})\.(\d{2})/);
   if (!m) return 0;
+  const minutes = parseInt(m[2]!, 10);
+  const seconds = parseInt(m[3]!, 10);
+  if (minutes >= 60 || seconds >= 60) {
+    throw new Error(`Invalid ASS/SSA timestamp (minutes and seconds must be below 60): ${ts}`);
+  }
   return (
-    parseInt(m[1]!, 10) * 3600000 +
-    parseInt(m[2]!, 10) * 60000 +
-    parseInt(m[3]!, 10) * 1000 +
-    parseInt(m[4]!, 10) * 10
+    parseInt(m[1]!, 10) * 3600000 + minutes * 60000 + seconds * 1000 + parseInt(m[4]!, 10) * 10
   );
 }
 
@@ -320,10 +327,13 @@ export function formatDisplayTime(ms: number): string {
 export function parseDisplayTime(ts: string): number | null {
   const m = ts.match(/^(\d{1,12}):(\d{2}):(\d{2})\.(\d{1,3})$/);
   if (!m) return null;
+  const minutes = parseInt(m[2]!, 10);
+  const seconds = parseInt(m[3]!, 10);
+  if (minutes >= 60 || seconds >= 60) return null;
   return (
     parseInt(m[1]!, 10) * 3600000 +
-    parseInt(m[2]!, 10) * 60000 +
-    parseInt(m[3]!, 10) * 1000 +
+    minutes * 60000 +
+    seconds * 1000 +
     parseInt(m[4]!.padEnd(3, "0"), 10)
   );
 }
@@ -455,6 +465,53 @@ function buildSrt(captions: Caption[]): string {
 
 // ── VTT Parser ────────────────────────────────────────────
 
+const VTT_TIMESTAMP_SHAPE = String.raw`(?:\d{2,12}:\d{2}:\d{2}\.\d{3}|\d{2}:\d{2}\.\d{3})`;
+const VTT_TIMING_LINE = new RegExp(
+  String.raw`^(${VTT_TIMESTAMP_SHAPE})([\t ]*-->[\t ]*)(${VTT_TIMESTAMP_SHAPE})(.*)$`
+);
+
+type VttCueTiming = {
+  timingIdx: number;
+  match: RegExpMatchArray;
+};
+
+type LineSpan = {
+  text: string;
+  start: number;
+  end: number;
+};
+
+function lineSpans(content: string): LineSpan[] {
+  const spans: LineSpan[] = [];
+  let start = 0;
+  while (start < content.length) {
+    let end = start;
+    while (end < content.length && content[end] !== "\r" && content[end] !== "\n") {
+      end += 1;
+    }
+    spans.push({ text: content.slice(start, end), start, end });
+    if (end >= content.length) break;
+    start = content[end] === "\r" && content[end + 1] === "\n" ? end + 2 : end + 1;
+  }
+  return spans;
+}
+
+/**
+ * WebVTT recognizes a cue timing line only as the first or second line
+ * of a block. Checking the second line before classifying NOTE / STYLE /
+ * REGION preserves the standards-valid case where one of those words is
+ * the cue identifier; real metadata blocks have no timing line there.
+ */
+function findVttCueTiming(lines: string[]): VttCueTiming | undefined {
+  const first = lines[0]?.match(VTT_TIMING_LINE);
+  if (first) return { timingIdx: 0, match: first };
+
+  const second = lines[1]?.match(VTT_TIMING_LINE);
+  if (second) return { timingIdx: 1, match: second };
+
+  return undefined;
+}
+
 function parseVtt(content: string): Caption[] {
   const captions: Caption[] = [];
   const body = normalizeLineEndings(content).replace(/^WEBVTT[^\n]*\n/, "");
@@ -467,38 +524,13 @@ function parseVtt(content: string): Caption[] {
         `Per-caption parse cap is ${MAX_PARSED_ENTRIES}; raw-block ceiling guards iteration cost.`
     );
   }
-  // VTT timing: supports both HH:MM:SS.mmm and MM:SS.mmm.
-  // Hour group bounded `\d{2,12}` for parity with parseSrt + parseAss
-  // — an unbounded `\d{2,}` form let a crafted single-line input scan
-  // O(N) before silent-fallback to zero, and diverged from the rest
-  // of the parser family. 12 digits caps the
-  // hours at ~1e12, well past any plausible timecode and aligned with
-  // ASS DIALOGUE_PATTERN's `\d{1,12}` bound.
-  const timingRe =
-    /^(\d{2,12}:\d{2}:\d{2}\.\d{3}|\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{2,12}:\d{2}:\d{2}\.\d{3}|\d{2}:\d{2}\.\d{3})/;
-
   // Per-entry cap — see parseSrt for the
   // block-vs-entry rationale.
   for (const block of blocks) {
     const lines = block.replace(/^\n/, "").split("\n");
-    const firstLine = lines[0]?.trimStart() ?? "";
-    // WebVTT NOTE / STYLE / REGION blocks are metadata, not cues. A
-    // timing-looking line inside them must not become ASS dialogue.
-    if (/^(?:NOTE|STYLE|REGION)(?:\s|$)/.test(firstLine)) {
-      continue;
-    }
-    // Find the timing line — a cue ID is any line that does NOT contain "-->"
-    let timingIdx = -1;
-    for (let i = 0; i < lines.length; i++) {
-      if (timingRe.test(lines[i]!)) {
-        timingIdx = i;
-        break;
-      }
-    }
-    if (timingIdx === -1) continue;
-
-    const timingMatch = lines[timingIdx]!.match(timingRe);
-    if (!timingMatch) continue;
+    const timing = findVttCueTiming(lines);
+    if (!timing) continue;
+    const { timingIdx, match: timingMatch } = timing;
 
     if (captions.length >= MAX_PARSED_ENTRIES) {
       throw new Error(`Too many subtitle entries: ${captions.length}+ (max ${MAX_PARSED_ENTRIES})`);
@@ -511,13 +543,13 @@ function parseVtt(content: string): Caption[] {
       .trim();
     // oversized text → skipped placeholder
     // (same rationale as parseSrt; see WHY block there). The
-    // placeholder retains cueId because buildVtt's filter respects the
-    // skipped flag, not the cueId presence.
+    // The placeholder retains cueId for preview/accounting; buildVtt uses
+    // source spans and deliberately leaves this entire cue unchanged.
     if (text.length > MAX_CAPTION_TEXT_LEN) {
       captions.push({
         raw: block.trim(),
         start: parseVttTime(timingMatch[1]!),
-        end: parseVttTime(timingMatch[2]!),
+        end: parseVttTime(timingMatch[3]!),
         text: "",
         ...(cueId !== undefined && { cueId }),
         skipped: true,
@@ -527,7 +559,7 @@ function parseVtt(content: string): Caption[] {
     captions.push({
       raw: block.trim(),
       start: parseVttTime(timingMatch[1]!),
-      end: parseVttTime(timingMatch[2]!),
+      end: parseVttTime(timingMatch[3]!),
       text,
       ...(cueId !== undefined && { cueId }),
     });
@@ -535,21 +567,38 @@ function parseVtt(content: string): Caption[] {
   return captions;
 }
 
-function buildVtt(captions: Caption[], header: string = "WEBVTT"): string {
-  const lines = [header, ""];
-  for (const c of captions) {
-    // skip placeholders left by parseVtt
-    // for oversized text. The feature layer surfaces the drop via
-    // msg_oversized_skipped; disk output stays clean.
-    if (c.skipped) continue;
-    if (c.cueId) {
-      lines.push(c.cueId);
+function buildVtt(content: string, captions: Caption[]): string {
+  const parts = content.split(/((?:\r\n|\r|\n)(?:[ \t]*(?:\r\n|\r|\n))+)/);
+  let captionIndex = 0;
+
+  // parts[0] is the WEBVTT header block, including header metadata such
+  // as X-TIMESTAMP-MAP. Every even part after it is a cue or metadata
+  // block; odd parts are the original blank-line separators.
+  for (let partIndex = 2; partIndex < parts.length; partIndex += 2) {
+    const block = parts[partIndex]!;
+    const spans = lineSpans(block);
+    const timing = findVttCueTiming(spans.map((span) => span.text));
+    if (!timing) continue;
+
+    const caption = captions[captionIndex++];
+    if (!caption) {
+      throw new Error("WebVTT parse/rebuild drift: output contains an unparsed cue");
     }
-    lines.push(`${formatVttTime(c.start)} --> ${formatVttTime(c.end)}`);
-    lines.push(c.text);
-    lines.push("");
+    // Oversized placeholders remain byte-for-byte structurally present.
+    // Their text was intentionally not retained in Caption, so rewriting
+    // only other cues avoids turning a partial warning into data loss.
+    if (caption.skipped) continue;
+
+    const { timingIdx, match } = timing;
+    const timingSpan = spans[timingIdx]!;
+    const replacement = `${formatVttTime(caption.start)}${match[2]}${formatVttTime(caption.end)}${match[4]}`;
+    parts[partIndex] = block.slice(0, timingSpan.start) + replacement + block.slice(timingSpan.end);
   }
-  return lines.join("\n");
+
+  if (captionIndex !== captions.length) {
+    throw new Error("WebVTT parse/rebuild drift: not every parsed cue was rebuilt");
+  }
+  return parts.join("");
 }
 
 // ── ASS/SSA Parser (timing only) ─────────────────────────
@@ -572,7 +621,7 @@ function buildVtt(captions: Caption[], header: string = "WEBVTT"): string {
 // `999…9:00:00.00` (100+ hour digits) saturate parseInt to Infinity
 // before the time-math even runs. 12 digits is identical to the SRT /
 // VTT / display-time bound used elsewhere in this file.
-const DIALOGUE_PATTERN = String.raw`^([\t ]*Dialogue:[\t ]*\d+,)(\d{1,12}:\d{2}:\d{2}\.\d{2}),( *)(\d{1,12}:\d{2}:\d{2}\.\d{2}),(.*)$`;
+const DIALOGUE_PATTERN = String.raw`^([\t ]*Dialogue:[\t ]*(?:\d{1,12}|Marked[\t ]*=[\t ]*-?\d{1,12}),)(\d{1,12}:\d{2}:\d{2}\.\d{2}),( *)(\d{1,12}:\d{2}:\d{2}\.\d{2}),(.*)$`;
 const DIALOGUE_FLAGS = "gim";
 
 function createDialogueRe(): RegExp {
@@ -852,13 +901,8 @@ function rebuildSubtitle(
   switch (format) {
     case "srt":
       return buildSrt(captions);
-    case "vtt": {
-      // Preserve the original VTT header (may contain X-TIMESTAMP-MAP for HLS).
-      // Extracted here and passed to buildVtt as a local — no module-level state.
-      const headerMatch = content.match(/^(WEBVTT[^\r\n]*)\r?\n/);
-      const vttHeader = headerMatch?.[1] ?? "WEBVTT";
-      return buildVtt(captions, vttHeader);
-    }
+    case "vtt":
+      return buildVtt(content, captions);
     case "ass":
       return buildAss(content, captions);
     case "sub":
@@ -880,12 +924,14 @@ export function transformSubtitleTimings(
   fps?: number
 ): { output: string; format: SubtitleFormat; captions: Caption[]; shifted: Caption[] } {
   const { format, captions } = parseSubtitle(content, fps);
+  if (!captions.some((caption) => !caption.skipped)) {
+    throw new Error("No shiftable subtitle cues were found");
+  }
 
   const shifted = captions.map((c, index) => {
-    // Skipped placeholders (all four parsers emit them for oversized
-    // text) pass through unchanged — buildAss returns the original
-    // line, buildSrt / buildVtt / buildSub filter them out. Shifting
-    // their timestamps would be wasted work.
+    // Skipped placeholders pass through unchanged. In-place builders
+    // preserve their original entries; reconstruction-based builders
+    // deliberately omit them and the feature layer surfaces that count.
     if (c.skipped) return c;
     const next = transform(c, index);
     if (!Number.isFinite(next.start) || !Number.isFinite(next.end)) {

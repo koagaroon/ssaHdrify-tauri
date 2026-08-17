@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { parseSubtitle, shiftSubtitle, transformSubtitleTimings } from "./subtitle-parser";
+import {
+  parseDisplayTime,
+  parseSubtitle,
+  shiftSubtitle,
+  transformSubtitleTimings,
+} from "./subtitle-parser";
 
 describe("parseSubtitle", () => {
   it("splits SRT cue blocks with mixed CRLF and LF endings", () => {
@@ -29,6 +34,7 @@ describe("parseSubtitle", () => {
       "WEBVTT",
       "",
       "NOTE exported by a tool",
+      "comment text before an invalid timing-shaped line",
       "00:00:01.000 --> 00:00:02.000",
       "comment text must not become a cue",
       "",
@@ -53,6 +59,23 @@ describe("parseSubtitle", () => {
     expect(result.captions[0]!.text).toBe("real cue");
   });
 
+  it("accepts NOTE as a standards-valid WebVTT cue identifier", () => {
+    const content = [
+      "WEBVTT",
+      "",
+      "NOTE",
+      "00:00:01.000 --> 00:00:02.000 align:start",
+      "this is a cue, not a comment block",
+      "",
+    ].join("\n");
+
+    const result = parseSubtitle(content);
+
+    expect(result.captions).toHaveLength(1);
+    expect(result.captions[0]!.cueId).toBe("NOTE");
+    expect(result.captions[0]!.text).toBe("this is a cue, not a comment block");
+  });
+
   it("parses ASS Dialogue lines and reports format=ass", () => {
     const content =
       "[Script Info]\nScriptType: v4.00+\n\n" +
@@ -71,6 +94,49 @@ describe("parseSubtitle", () => {
     expect(result.captions[0]!.end).toBe(2500);
     expect(result.captions[1]!.start).toBe(3000);
     expect(result.captions[1]!.end).toBe(4500);
+  });
+
+  it("parses and shifts classic SSA Marked dialogue prefixes", () => {
+    const content =
+      "[Script Info]\nScriptType: v4.00\n\n" +
+      "[Events]\nFormat: Marked, Start, End, Style, Text\n" +
+      "Dialogue: Marked=0,0:00:01.00,0:00:02.50,Default,Hello\n" +
+      "Dialogue: Marked = 1,0:00:03.00,0:00:04.50,Default,World\n";
+
+    const parsed = parseSubtitle(content);
+    expect(parsed.captions).toHaveLength(2);
+
+    const { output } = shiftSubtitle(content, 1000);
+    expect(output).toContain("Dialogue: Marked=0,0:00:02.00,0:00:03.50,Default,Hello");
+    expect(output).toContain("Dialogue: Marked = 1,0:00:04.00,0:00:05.50,Default,World");
+  });
+
+  it.each([
+    ["SRT minutes", "1\n00:60:00,000 --> 00:60:01,000\nline\n"],
+    ["SRT seconds", "1\n00:00:60,000 --> 00:01:01,000\nline\n"],
+    ["full WebVTT minutes", "WEBVTT\n\n00:60:00.000 --> 00:60:01.000\nline\n"],
+    ["full WebVTT seconds", "WEBVTT\n\n00:00:60.000 --> 00:01:01.000\nline\n"],
+    ["short WebVTT minutes", "WEBVTT\n\n60:00.000 --> 60:01.000\nline\n"],
+    ["short WebVTT seconds", "WEBVTT\n\n00:60.000 --> 01:01.000\nline\n"],
+    ["ASS minutes", "[Script Info]\n\n[Events]\nDialogue: 0,0:60:00.00,0:60:01.00,Default,line\n"],
+    ["ASS seconds", "[Script Info]\n\n[Events]\nDialogue: 0,0:00:60.00,0:01:01.00,Default,line\n"],
+  ])("rejects %s fields at 60", (_label, content) => {
+    expect(() => parseSubtitle(content)).toThrow(/below 60/);
+  });
+
+  it.each([
+    "1\n00:59:59,000 --> 01:00:00,000\nline\n",
+    "WEBVTT\n\n00:59:59.000 --> 01:00:00.000\nline\n",
+    "WEBVTT\n\n59:59.000 --> 01:00:00.000\nline\n",
+    "[Script Info]\n\n[Events]\nDialogue: 0,0:59:59.00,1:00:00.00,Default,line\n",
+  ])("accepts minute and second fields at 59: %s", (content) => {
+    expect(parseSubtitle(content).captions).toHaveLength(1);
+  });
+
+  it("keeps display-time validation aligned with subtitle timestamp bounds", () => {
+    expect(parseDisplayTime("00:59:59.999")).toBe(3_599_999);
+    expect(parseDisplayTime("00:60:00.000")).toBeNull();
+    expect(parseDisplayTime("00:00:60.000")).toBeNull();
   });
 
   it("parses MicroDVD SUB frame ranges and reports format=sub", () => {
@@ -252,6 +318,72 @@ describe("transformSubtitleTimings", () => {
         start: NaN,
       }))
     ).toThrow(/non-finite timestamp/);
+  });
+
+  it("rewrites only WebVTT cue timestamps and preserves the exact surrounding structure", () => {
+    const input =
+      "WEBVTT - exported\r\n" +
+      "X-TIMESTAMP-MAP=LOCAL:00:00:00.000,MPEGTS:900000\r\n" +
+      "\r\n" +
+      "STYLE\r\n" +
+      "::cue { color: white }\r\n" +
+      "\r\n" +
+      "NOTE export comment\r\n" +
+      "leave this block alone\r\n" +
+      "\r\n" +
+      "REGION\r\n" +
+      "id:bottom\r\n" +
+      "width:40%\r\n" +
+      "\r\n" +
+      "cue-a\r\n" +
+      "00:00:01.000  -->\t00:00:02.500 line:20% position:30% align:start\r\n" +
+      "Hello\r\n";
+
+    const expected = input.replace(
+      "00:00:01.000  -->\t00:00:02.500",
+      "00:00:02.000  -->\t00:00:03.500"
+    );
+
+    expect(shiftSubtitle(input, 1000).output).toBe(expected);
+  });
+
+  it("preserves multiple blank separator lines before an identified WebVTT cue", () => {
+    const input = "WEBVTT\n\n\ncue-a\n00:00:01.000 --> 00:00:02.000 align:start\nHello\n";
+    const expected = input.replace(
+      "00:00:01.000 --> 00:00:02.000",
+      "00:00:02.000 --> 00:00:03.000"
+    );
+
+    expect(shiftSubtitle(input, 1000).output).toBe(expected);
+  });
+
+  it("rejects a comment-only WebVTT file instead of rebuilding it as an empty header", () => {
+    const input = "WEBVTT\n\nNOTE no shiftable cues\ncomment body\n";
+
+    expect(() => shiftSubtitle(input, 1000)).toThrow(/No shiftable subtitle cues/);
+  });
+
+  it("rejects WebVTT whose only timing line is malformed", () => {
+    const input = "WEBVTT\n\n00:00:01,000 --> 00:00:02,000\nwrong separator\n";
+
+    expect(() => shiftSubtitle(input, 1000)).toThrow(/No shiftable subtitle cues/);
+  });
+
+  it("rejects files whose only parsed cue is an oversized placeholder", () => {
+    const input = `WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n${"X".repeat(65_000)}\n`;
+
+    expect(() => shiftSubtitle(input, 1000)).toThrow(/No shiftable subtitle cues/);
+  });
+
+  it("preserves an oversized WebVTT cue while shifting later normal cues", () => {
+    const oversized = "X".repeat(65_000);
+    const input =
+      `WEBVTT\n\n00:00:01.000 --> 00:00:02.000 align:start\n${oversized}\n\n` +
+      "00:00:03.000 --> 00:00:04.000\nnormal\n";
+
+    const { output } = shiftSubtitle(input, 1000);
+    expect(output).toContain(`00:00:01.000 --> 00:00:02.000 align:start\n${oversized}`);
+    expect(output).toContain("00:00:04.000 --> 00:00:05.000\nnormal");
   });
 });
 

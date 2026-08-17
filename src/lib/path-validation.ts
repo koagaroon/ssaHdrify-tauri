@@ -528,6 +528,9 @@ export function assertSafeOutputFilename(
   if (!filename.trim()) {
     throw new Error("Template resolves to empty filename");
   }
+  if (!filename.replace(/\./g, "").trim()) {
+    throw new Error("Template resolves to a dots-only filename");
+  }
   const illegalRe = options?.allowBraces
     ? ILLEGAL_FILENAME_CHARS_BRACES_OK
     : ILLEGAL_FILENAME_CHARS;

@@ -1,6 +1,12 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { List, type RowComponentProps } from "react-window";
-import { pickSubtitleFiles, readText, writeText, fileNameFromPath } from "../../lib/tauri-api";
+import {
+  fileNameFromPath,
+  isInferredUtf16,
+  pickSubtitleFiles,
+  readText,
+  writeText,
+} from "../../lib/tauri-api";
 import { ask } from "@tauri-apps/plugin-dialog";
 import {
   shiftSubtitles,
@@ -268,7 +274,12 @@ export default function TimingShift() {
         setCaptionCount(result.captionCount);
         setDetectedFormat(result.format.toUpperCase());
       } catch {
-        // Preview update failed — don't crash, just skip
+        // Keep all derived preview state aligned with the current file.
+        // Otherwise a malformed or zero-cue replacement would leave the
+        // previous file's timeline, count, and format visible.
+        setPreview([]);
+        setCaptionCount(0);
+        setDetectedFormat("");
       }
     }, 200);
     return () => {
@@ -510,7 +521,11 @@ export default function TimingShift() {
 
             let content: string;
             try {
-              content = await readText(filePath);
+              content = await readText(filePath, (read) => {
+                if (isInferredUtf16(read)) {
+                  addLog(t("msg_inferred_utf16", fileName, read.encodingId), "warn");
+                }
+              });
             } catch (e) {
               addLog(t("msg_read_error", fileName, sanitizeError(e)), "error");
               continue;
@@ -523,15 +538,15 @@ export default function TimingShift() {
               thresholdMs: thresholdMs ?? undefined,
             });
 
-            // surface oversized-text drop
-            // count to close the no-silent-action gap (parity with
-            // HdrConvert). All four parsers push
-            // skipped placeholders for entries exceeding
-            // MAX_CAPTION_TEXT_LEN; builders filter them out so disk
-            // output stays clean, but without this log the user has no
-            // signal that input was partially dropped.
+            // Surface oversized captions explicitly. Structure-preserving
+            // ASS/WebVTT writers leave them unchanged; SRT/MicroDVD writers
+            // omit them because those formats are rebuilt from parsed cues.
             if (result.skippedCount > 0) {
-              addLog(t("msg_oversized_skipped", result.skippedCount, fileName), "warn");
+              const warningKey =
+                result.format === "ass" || result.format === "vtt"
+                  ? "msg_oversized_unchanged"
+                  : "msg_oversized_skipped";
+              addLog(t(warningKey, result.skippedCount, fileName), "warn");
             }
 
             if (abortRef.current?.signal.aborted) break;

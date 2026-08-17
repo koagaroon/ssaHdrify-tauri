@@ -15,6 +15,7 @@ import { PreviewTable, type PreviewTableColumn } from "../../lib/PreviewTable";
 import type { Status } from "../../lib/StatusContext";
 import {
   fileNameFromPath,
+  isInferredUtf16,
   outputPathExists,
   pickAssFiles,
   readTextDetectEncoding,
@@ -50,6 +51,7 @@ interface LoadedStyleFile {
   path: string;
   name: string;
   sourceRevision: string;
+  inferredEncodingId?: string;
   planner: ReturnType<typeof createStyleDocumentPlanner>;
 }
 
@@ -259,6 +261,9 @@ export default function StyleEdit() {
           if (read.lossy) {
             throw new Error(t("msg_style_lossy_encoding", name));
           }
+          if (isInferredUtf16(read)) {
+            addLog(t("msg_inferred_utf16", name, read.encodingId), "warn");
+          }
           aggregateSourceBytes += read.sourceByteLength;
           if (aggregateSourceBytes > STYLE_EDIT_MAX_SOURCE_BYTES) {
             const reachedMb = Math.ceil(aggregateSourceBytes / (1024 * 1024));
@@ -276,7 +281,13 @@ export default function StyleEdit() {
           if (aggregateRows > STYLE_EDIT_MAX_ROWS) {
             throw new Error(t("msg_style_too_many_rows", STYLE_EDIT_MAX_ROWS));
           }
-          nextFiles.push({ path, name, sourceRevision: read.sourceRevision, planner });
+          nextFiles.push({
+            path,
+            name,
+            sourceRevision: read.sourceRevision,
+            ...(isInferredUtf16(read) && { inferredEncodingId: read.encodingId }),
+            planner,
+          });
         }
 
         if (generation !== pickGenerationRef.current) return;
@@ -438,6 +449,12 @@ export default function StyleEdit() {
         const target = writableTargets[index]!;
         try {
           const result = target.file.planner.apply(operations, target.selectedRowIds);
+          if (target.file.inferredEncodingId) {
+            addLog(
+              t("msg_inferred_utf16", target.file.name, target.file.inferredEncodingId),
+              "warn"
+            );
+          }
           await writeStyleEditOutput({
             sourcePath: target.file.path,
             expectedRevision: target.file.sourceRevision,

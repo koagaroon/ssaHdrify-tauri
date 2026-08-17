@@ -226,11 +226,11 @@ pub struct FontEmbedApplyResult {
 /// `output_path` is where, `notes` is the per-step diagnostic
 /// summary surfaced in the Rust shell's per-file report.
 ///
-/// `skipped_count` is the aggregate count of captions whose text
-/// exceeded MAX_CAPTION_TEXT_LEN (64 KB) across every step that
-/// parses subtitle content. The shell routes this through
-/// `emit_oversized_skipped_warning` (stderr + FileReport.warnings)
-/// to mirror the standalone HDR / Shift CLI paths. Previously the
+/// `skipped_count` is the largest per-step count of source captions whose
+/// text exceeded MAX_CAPTION_TEXT_LEN (64 KB). The maximum avoids counting
+/// a preserved cue again in each later shift step. The shell routes it through
+/// the oversized-caption warning path (stderr + FileReport.warnings) to mirror
+/// the standalone HDR / Shift CLI paths. Previously the
 /// chain side relied on a string-suffix-in-note shape the Rust
 /// shell never parsed; the typed field closes that gap.
 #[derive(Debug, Deserialize)]

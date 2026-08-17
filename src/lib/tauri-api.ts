@@ -173,6 +173,8 @@ export interface ReadTextResult {
   hadBom: boolean;
   /** True when malformed source bytes had to be replaced during decoding. */
   lossy: boolean;
+  /** True only when UTF-16LE/BE was inferred conservatively without a BOM. */
+  inferredWithoutBom: boolean;
   /** SHA-256 of the exact source bytes used for this read. */
   sourceRevision: string;
   /** Exact source byte length for bounded batch planning. */
@@ -186,8 +188,16 @@ export interface ReadTextResult {
  * and other encodings via the Rust backend (chardetng + encoding_rs).
  * Returns clean UTF-8 text regardless of original encoding.
  */
-export async function readText(path: string): Promise<string> {
+export function isInferredUtf16(result: Pick<ReadTextResult, "inferredWithoutBom">): boolean {
+  return result.inferredWithoutBom;
+}
+
+export async function readText(
+  path: string,
+  onRead?: (result: ReadTextResult) => void
+): Promise<string> {
   const result = await readTextDetectEncoding(path);
+  onRead?.(result);
   return result.text;
 }
 

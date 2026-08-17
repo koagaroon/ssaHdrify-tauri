@@ -2,10 +2,11 @@ import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import {
   clearFontSources,
   fileNameFromPath,
+  isInferredUtf16,
   openFontCache,
   pickAssFiles,
   pickOutputDirectory,
-  readText,
+  readTextDetectEncoding,
   removeFontSource,
   writeText,
 } from "../../lib/tauri-api";
@@ -301,8 +302,15 @@ export default function FontEmbed() {
         for (const path of paths) {
           if (gen !== pickGenRef.current) return;
           let content: string;
+          let inferredEncodingId: string | undefined;
           try {
-            content = await readText(path);
+            const read = await readTextDetectEncoding(path);
+            if (gen !== pickGenRef.current) return;
+            content = read.text;
+            if (isInferredUtf16(read)) {
+              inferredEncodingId = read.encodingId;
+              addLog(t("msg_inferred_utf16", safeDisplayFileName(path), read.encodingId), "warn");
+            }
           } catch (e) {
             // BiDi parity: read errors carry the file path
             // (often the user-picked path including filename), and
@@ -332,7 +340,12 @@ export default function FontEmbed() {
             cacheLookupCache
           );
           if (gen !== pickGenRef.current) return;
-          cache.set(path, { content, infos: analyzed.infos, usages: analyzed.usages });
+          cache.set(path, {
+            content,
+            infos: analyzed.infos,
+            usages: analyzed.usages,
+            ...(inferredEncodingId !== undefined && { inferredEncodingId }),
+          });
         }
 
         if (cache.size === 0) {
@@ -466,7 +479,7 @@ export default function FontEmbed() {
         const analyzed = await analyzeFonts(prev.content, null, sysCache, true, cacheLookupCache);
         if (gen !== pickGenRef.current) return;
         newCache.set(path, {
-          content: prev.content,
+          ...prev,
           infos: analyzed.infos,
           usages: analyzed.usages,
         });
@@ -813,6 +826,9 @@ export default function FontEmbed() {
                 fileWarnings.length > 0 ? "warn" : "info"
               );
               continue;
+            }
+            if (cached.inferredEncodingId) {
+              addLog(t("msg_inferred_utf16", safeFileName, cached.inferredEncodingId), "warn");
             }
             await writeText(outputPath, result.content);
             const fileWarnings = [...missingWarnings, ...result.warnings];
