@@ -144,6 +144,16 @@ export interface FontUsage {
   codepoints: Set<number>;
 }
 
+export interface FontStyleLabels {
+  bold: string;
+  italic: string;
+}
+
+const DEFAULT_FONT_STYLE_LABELS: Readonly<FontStyleLabels> = {
+  bold: "Bold",
+  italic: "Italic",
+};
+
 /**
  * Serialize a FontKey to a stable string for Map keys.
  */
@@ -152,10 +162,13 @@ function fontKeyToString(key: FontKey): string {
 }
 
 /** Format a FontKey as a human-readable label (e.g., "Arial Bold Italic"). */
-export function fontKeyLabel(key: FontKey): string {
+export function fontKeyLabel(
+  key: FontKey,
+  styleLabels: Readonly<FontStyleLabels> = DEFAULT_FONT_STYLE_LABELS
+): string {
   let label = key.family;
-  if (key.bold) label += " Bold";
-  if (key.italic) label += " Italic";
+  if (key.bold) label += ` ${styleLabels.bold}`;
+  if (key.italic) label += ` ${styleLabels.italic}`;
   return label;
 }
 

@@ -12,11 +12,21 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.show();
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+        }
+    }));
+
+    builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
-            // Install the log plugin FIRST so any `log::warn!` / `log::info!`
+            // Install the log plugin before init helpers so any `log::warn!` / `log::info!`
             // calls from `init_system_dirs`, `init_user_font_db`,
             // `init_gui_font_cache`, or any helper they call have a
             // subscriber to receive them. Without this ordering, early-init

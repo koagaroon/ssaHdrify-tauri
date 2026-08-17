@@ -1186,10 +1186,19 @@ fn run() -> Result<ExitCode, String> {
     normalize_global_paths(&mut globals)?;
 
     match command {
-        Command::Hdr(args) => run_hdr(&globals, args.args, args.diagnose.mode()),
-        Command::Shift(args) => run_shift(&globals, args.args, args.diagnose.mode()),
+        Command::Hdr(args) => {
+            emit_inert_cache_flags_notice(&globals, "hdr");
+            run_hdr(&globals, args.args, args.diagnose.mode())
+        }
+        Command::Shift(args) => {
+            emit_inert_cache_flags_notice(&globals, "shift");
+            run_shift(&globals, args.args, args.diagnose.mode())
+        }
         Command::Embed(args) => run_embed(&globals, args.args, args.diagnose.mode()),
-        Command::Rename(args) => run_rename(&globals, args.args, args.diagnose.mode()),
+        Command::Rename(args) => {
+            emit_inert_cache_flags_notice(&globals, "rename");
+            run_rename(&globals, args.args, args.diagnose.mode())
+        }
         Command::DiagnoseFonts(args) => run_diagnose_fonts(&globals, args),
         Command::Chain(args) => run_chain(&globals, args),
         Command::RefreshFonts(args) => run_refresh_fonts(&globals, args),
@@ -1208,6 +1217,35 @@ fn normalize_global_paths(globals: &mut GlobalOptions) -> Result<(), String> {
         .map(absolute_path)
         .transpose()?;
     Ok(())
+}
+
+fn emit_inert_cache_flags_notice(globals: &GlobalOptions, command: &str) {
+    if globals.quiet {
+        return;
+    }
+
+    let mut inert = Vec::new();
+    if globals.no_cache {
+        inert.push("--no-cache");
+    }
+    if globals.cache_file.is_some() {
+        inert.push("--cache-file");
+    }
+    if inert.is_empty() {
+        return;
+    }
+
+    let flags = inert.join(", ");
+    eprintln!(
+        "{}",
+        localize(
+            globals,
+            format!(
+                "ℹ {command} does not use the persistent font cache; these flags have no effect here: {flags}"
+            ),
+            format!("ℹ {command} 不使用持久字体缓存；以下参数在此无效：{flags}"),
+        )
+    );
 }
 
 fn validate_cache_file_arg(globals: &GlobalOptions) -> Result<(), String> {
@@ -2568,23 +2606,19 @@ fn process_one_chain_input(
                  or split the subtitle before embedding"
             ));
         }
-        // Encode subset bytes as base64 strings. The previous form
-        // (`{ "data": [byte, byte, ...] }`) expanded ~4-5× per byte
-        // when serde_json wrote bytes as decimal+comma JSON-in-JS-source,
-        // which compounded against the per-font MAX_FONT_DATA_SIZE
-        // budget (64 MB, defined in fonts.rs) into heavy V8 heap
-        // pressure on the worst-case path. Base64 is ~1.33× and
-        // decoded in TS via the local base64 byte decoder because bare
-        // deno_core has no Web API globals like atob().
-        let subsets_json: Vec<serde_json::Value> = subsets
-            .into_iter()
-            .map(|s| {
-                use base64::Engine as _;
-                let data_b64 = base64::engine::general_purpose::STANDARD.encode(&s.data);
-                serde_json::json!({ "fontName": s.font_name, "dataB64": data_b64 })
-            })
-            .collect();
-        payload["plan"]["steps"][idx]["params"]["subsets"] = serde_json::Value::Array(subsets_json);
+        // Serialize the canonical FontSubsetPayload wire type only after
+        // enforcing the raw-byte cap above. Its custom serializer owns the
+        // dataB64 representation, keeping standalone embed and chain from
+        // drifting into two hand-written payload shapes.
+        let subsets_json = match serde_json::to_value(&subsets) {
+            Ok(value) => value,
+            Err(error) => {
+                evict_predicted(seen_outputs);
+                return builder
+                    .into_failed(format!("failed to serialize chain embed subsets: {error}"));
+            }
+        };
+        payload["plan"]["steps"][idx]["params"]["subsets"] = subsets_json;
     }
 
     let request = engine::ChainRunRequest { payload };
@@ -7009,7 +7043,8 @@ fn emit_verbose(globals: &GlobalOptions, en: String, zh: String) {
 
 fn emit_verbose_err(globals: &GlobalOptions, en: String, zh: String) {
     if globals.verbose && !globals.json && !globals.quiet {
-        eprintln!("{}", localize(globals, en, zh));
+        let message = localize(globals, en, zh);
+        eprintln!("{}", sanitize_for_display(&message));
     }
 }
 

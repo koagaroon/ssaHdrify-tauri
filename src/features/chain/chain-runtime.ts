@@ -103,18 +103,11 @@ function hdrTransform(ctx: TransformContext, params: HdrStepParams): TransformRe
   // no `[V4+ Styles]` / `[Events]` sections, producing garbage output
   // that's neither ASS nor SRT. Violates no-silent-action: chain
   // either succeeds with the documented contract or surfaces the
-  // mismatch. The probe is shape-only — any line starting with
-  // `[Script Info]` or `[V4+ Styles]` qualifies; both real ASS files
-  // open with at least one of those headers (allowing leading BOM /
-  // whitespace / comments).
-  // bound the whitespace runs explicitly.
-  // Real ASS headers carry no leading whitespace, and renderers
-  // tolerate at most a tab or two before / inside the bracket. {0,16}
-  // is generous past anything legitimate and keeps the regex out of
-  // catastrophic-backtracking territory for crafted inputs (the
-  // chain `.replace(timingRe)` ReDoS regression class). Same shape applies
-  // to the embed preflight regex above; both share this bound.
-  if (!/^\s{0,16}\[\s{0,16}(Script Info|V4\+? Styles)\s{0,16}\]/im.test(ctx.content)) {
+  // mismatch. Keep the section syntax strict and column-zero, matching
+  // the embed preflight's `assertAssShape` contract: an otherwise
+  // header-looking line with leading or inner whitespace is malformed,
+  // not sufficient evidence that this is ASS / SSA content.
+  if (!/^\[(Script Info|V4\+? Styles)\][ \t]*$/im.test(ctx.content)) {
     throw new Error(
       "hdr step requires ASS / SSA content (no [Script Info] or " +
         "[V4+ Styles] header found). Run `hdr` standalone first to " +

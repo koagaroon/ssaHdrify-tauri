@@ -182,6 +182,10 @@ export const strings: Record<string, StringEntry> = {
   },
   template_label: { en: "Output Template", zh: "输出模板" },
   template_custom: { en: "Custom…", zh: "自定义…" },
+  template_required: {
+    en: "Enter a custom output template.",
+    zh: "请输入自定义输出模板。",
+  },
   style_settings: { en: "Style Settings", zh: "样式设置" },
   style_hint: { en: "(SRT/SUB/VTT input only)", zh: "（仅 SRT/SUB/VTT 输入）" },
   style_font: { en: "Font", zh: "字体" },
@@ -420,6 +424,8 @@ export const strings: Record<string, StringEntry> = {
     zh: "提示：可将 .ass / .ssa 文件或文件夹拖到上方文件栏（文件夹内其他类型文件会自动忽略）",
   },
   btn_embedding: { en: "Embedding…", zh: "嵌入中…" },
+  font_style_bold: { en: "Bold", zh: "粗体" },
+  font_style_italic: { en: "Italic", zh: "斜体" },
   msg_subsetting: { en: "Subsetting {0}…", zh: "子集化 {0}…" },
   msg_font_skipped: { en: "Skipped {0}: {1}", zh: "跳过 {0}：{1}" },
   msg_no_fonts_for_file: {

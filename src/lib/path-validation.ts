@@ -21,13 +21,14 @@ import { ASCII_CONTROL_CHARS, hasUnicodeControls, stripUnicodeControls } from ".
  */
 
 // ── Windows reserved names ─────────────────────────────────
-// Forbidden on Windows regardless of extension (NT object-namespace
-// reservations: legacy device names that the kernel routes specially).
+// Names this project rejects for Windows-safe output. The documented
+// device names are forbidden regardless of extension (NT object-namespace
+// reservations that the kernel routes specially).
 //
 // Source: https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file
-// Includes COM0–COM9, LPT0–LPT9, plus the ISO 8859-1 superscript-digit
-// variants (COM¹/²/³ and LPT¹/²/³) that current Windows recognizes as
-// device aliases.
+// Microsoft documents COM1–COM9, LPT1–LPT9, plus the ISO 8859-1
+// superscript-digit variants (COM¹/²/³ and LPT¹/²/³). This project also
+// rejects COM0 / LPT0 defensively as device-like names for portable output.
 //
 // CONIN$ / CONOUT$ are runtime Win32 console aliases (Global?? namespace)
 // rather than always-reserved device names; included defensively because

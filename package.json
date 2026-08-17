@@ -2,13 +2,15 @@
   "name": "ssahdrify-tauri",
   "private": true,
   "version": "1.7.0-preview.1",
+  "license": "GPL-3.0-or-later",
   "packageManager": "npm@11.19.0",
   "type": "module",
   "engines": {
     "node": "^22.13.0 || ^24.0.0 || ^26.0.0"
   },
   "allowScripts": {
-    "esbuild@0.28.2": true
+    "esbuild@0.28.2": true,
+    "fsevents@2.3.3": true
   },
   "//": "Build script taxonomy: `build` = GUI frontend release prerequisite (native TypeScript 7 release typecheck + vite build, invoked by `tauri build` through beforeBuildCommand); TypeScript 6 remains the API-compatibility toolchain for ESLint/typescript-eslint and a transition check in `typecheck:all`. Use the explicit npm scripts instead of bare `tsc` / `npx tsc`. `build:gui` = vite build only (skip typecheck, faster local rebuild); `build:engine` = esbuild → dist-engine/engine.js (the CLI binary's V8 bundle, embedded via include_str!); `build:cli` = TypeScript 7 release typecheck + build:engine + cargo --release --bin ssahdrify-cli; `build:all` = native Tauri GUI build (which invokes `build`) + build:cli (CLI). Lint umbrella (`lint`) runs JS+CSS+Rust; `lint:fix` autofixes what it can.",
   "scripts": {

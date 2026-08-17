@@ -40,6 +40,13 @@ describe("i18n strings", () => {
     expect(strings["font_sources_loaded_summary"]!.zh).toContain("字体条目");
     expect(strings["font_sources_loaded_summary"]!.zh).toContain("分别计数");
   });
+
+  it("provides localized font-style suffixes", () => {
+    expect(translate("en", "font_style_bold")).toBe("Bold");
+    expect(translate("en", "font_style_italic")).toBe("Italic");
+    expect(translate("zh", "font_style_bold")).toBe("粗体");
+    expect(translate("zh", "font_style_italic")).toBe("斜体");
+  });
 });
 
 describe("translate runtime substitution", () => {

@@ -504,4 +504,27 @@ describe("resolveChainOutputPath", () => {
       /requires ASS.*SSA content[\s\S]*?Run `hdr` standalone first/
     );
   });
+
+  it.each([" [Script Info]", "\t[V4+ Styles]", "[ Script Info]", "[Script Info ]"])(
+    "hdr step rejects malformed whitespace in an ASS-like header: %j",
+    (header) => {
+      const plan: ChainPlan = {
+        steps: [{ kind: "hdr", params: { eotf: "PQ", brightness: 1000 } }],
+        outputTemplate: "{name}.hdr.ass",
+      };
+      const malformed = [
+        header,
+        "ScriptType: v4.00+",
+        "",
+        "[Events]",
+        "Format: Layer, Start, End, Style, Text",
+        "Dialogue: 0,0:00:01.00,0:00:02.00,Default,Hello",
+        "",
+      ].join("\n");
+
+      expect(() => runChain({ plan, inputPath: INPUT_PATH, content: malformed })).toThrow(
+        /requires ASS.*SSA content/
+      );
+    }
+  );
 });

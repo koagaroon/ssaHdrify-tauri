@@ -52,6 +52,41 @@ fn run_shift(cwd: &Path, global_args: &[&str], inputs: &[&Path]) -> Output {
     command.output().expect("failed to run shift command")
 }
 
+#[test]
+fn standalone_shift_reports_inert_cache_flags_without_corrupting_json_stdout() {
+    let root = temp_dir("inert-cache-flags");
+    let input = write_file(&root, "episode.srt", VALID_SRT);
+    let cache = root.join("unused.sqlite3");
+
+    let output = run_shift(
+        &root,
+        &[
+            "--json",
+            "--dry-run",
+            "--no-cache",
+            "--cache-file",
+            cache.to_str().unwrap(),
+        ],
+        &[&input],
+    );
+
+    assert!(output.status.success(), "{}", combined_output(&output));
+    serde_json::from_slice::<serde_json::Value>(&output.stdout)
+        .expect("cache-flag notice must not corrupt JSON stdout");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("shift does not use the persistent font cache"));
+    assert!(stderr.contains("--no-cache"));
+    assert!(stderr.contains("--cache-file"));
+    assert_eq!(
+        stderr.matches("have no effect here").count(),
+        1,
+        "both inert flags should share one notice: {stderr}"
+    );
+    assert!(!cache.exists(), "inert cache path must not be created");
+    assert!(!root.join("episode.shifted.srt").exists());
+    let _ = fs::remove_dir_all(root);
+}
+
 fn combined_output(output: &Output) -> String {
     format!(
         "{}\n{}",

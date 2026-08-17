@@ -665,6 +665,9 @@ export async function embedFonts(
 ): Promise<EmbedFontsResult | null> {
   const fontEntries: string[] = [];
   const warnings: string[] = [];
+  const fontStyleLabels = t
+    ? { bold: t("font_style_bold"), italic: t("font_style_italic") }
+    : undefined;
 
   // Index fontUsages by lookup key once (O(N)) instead of linear-scanning
   // for each selected font (O(N²)). For a 40-font subtitle the scan cost
@@ -730,7 +733,7 @@ export async function embedFonts(
     const info = selectedFonts[preIdx]!;
     if (!info.filePath) continue;
 
-    const label = fontKeyLabel(info.key);
+    const label = fontKeyLabel(info.key, fontStyleLabels);
     const usage = usageByKey.get(userFontKey(info.key.family, info.key.bold, info.key.italic));
     if (!usage) {
       // Selected FontInfo has no matching FontUsage — means analyzeFonts and
@@ -860,7 +863,7 @@ export async function embedFonts(
         if (isCancelled?.()) return null;
         if (!alias.info.filePath) continue;
         const aliasFontName = buildFontFileName(alias.info.key);
-        const aliasLabel = fontKeyLabel(alias.info.key);
+        const aliasLabel = fontKeyLabel(alias.info.key, fontStyleLabels);
         onProgress?.({
           stage: t?.("msg_subsetting", aliasLabel) ?? `Subsetting ${aliasLabel}…`,
           current: i + 1,
@@ -897,7 +900,7 @@ export async function embedFonts(
     }
 
     const fontName = buildFontFileName(template.key);
-    const label = fontKeyLabel(template.key);
+    const label = fontKeyLabel(template.key, fontStyleLabels);
     onProgress?.({
       stage: t?.("msg_subsetting", label) ?? `Subsetting ${label}…`,
       current: i + 1,

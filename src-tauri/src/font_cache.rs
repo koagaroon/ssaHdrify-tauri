@@ -1321,6 +1321,17 @@ impl FontCache {
     /// A missing or unparseable row counts as mismatch (cache predates
     /// version tracking, or corrupt).
     fn verify_schema_version(&self) -> Result<(), CacheError> {
+        let has_cache_meta = self
+            .conn
+            .table_exists(None::<&str>, "cache_meta")
+            .map_err(|e| CacheError::Io(format!("checking cache_meta table: {e}")))?;
+        if !has_cache_meta {
+            return Err(CacheError::SchemaVersionMismatch {
+                found: -1,
+                expected: SCHEMA_VERSION,
+            });
+        }
+
         let row: Result<String, _> = self.conn.query_row(
             "SELECT value FROM cache_meta WHERE key = 'schema_version'",
             [],
@@ -1346,20 +1357,6 @@ impl FontCache {
                 found: -1,
                 expected: SCHEMA_VERSION,
             }),
-            // A pre-versioned file or a partial-init crash that left
-            // the database file without a `cache_meta` table surfaces
-            // as a "no such table" SqliteFailure. Route to the same
-            // drift-equivalent path as missing-row (-1) so the user
-            // sees the rebuild prompt instead of a raw SQL error
-            // string. Other SQL errors (locked, permission denied,
-            // disk corruption) still flow to Io for the
-            // "couldn't open cache" branch upstream.
-            Err(e) if format!("{e}").contains("no such table") => {
-                Err(CacheError::SchemaVersionMismatch {
-                    found: -1,
-                    expected: SCHEMA_VERSION,
-                })
-            }
             Err(e) => Err(CacheError::Io(format!("reading schema_version: {e}"))),
         }
     }
@@ -2463,6 +2460,31 @@ mod tests {
             }
             other => panic!("expected SchemaVersionMismatch, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn missing_cache_meta_table_treated_as_mismatch_for_both_open_modes() {
+        let (_guard, path) = temp_cache_path();
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute("CREATE TABLE unrelated(value TEXT)", [])
+                .unwrap();
+        }
+
+        let assert_mismatch = |mode: &str, result: Result<FontCache, CacheError>| {
+            match result {
+                Err(CacheError::SchemaVersionMismatch { found, expected }) => {
+                    assert_eq!(found, -1, "missing-table sentinel in {mode} mode");
+                    assert_eq!(expected, SCHEMA_VERSION);
+                }
+                other => panic!(
+                    "expected SchemaVersionMismatch for missing cache_meta in {mode} mode, got {other:?}"
+                ),
+            }
+        };
+
+        assert_mismatch("read-write", FontCache::open_or_create(&path));
+        assert_mismatch("read-only", FontCache::open_existing_read_only(&path));
     }
 
     #[test]

@@ -101,6 +101,17 @@ describe("parseSubtitle", () => {
     expect(result.captions[1]!.end).toBe(4500);
   });
 
+  it("does not retain a CRLF terminator in ASS caption text", () => {
+    const content =
+      "[Script Info]\r\nScriptType: v4.00+\r\n\r\n" +
+      "[Events]\r\nFormat: Layer, Start, End, Style, Text\r\n" +
+      "Dialogue: 0,0:00:01.00,0:00:02.00,Default,Hello\r\n";
+
+    const result = parseSubtitle(content);
+    expect(result.captions[0]!.text).toBe("Default,Hello");
+    expect(result.captions[0]!.text).not.toContain("\r");
+  });
+
   it("parses and shifts classic SSA Marked dialogue prefixes", () => {
     const content =
       "[Script Info]\nScriptType: v4.00\n\n" +
@@ -164,6 +175,13 @@ describe("parseSubtitle", () => {
     expect(result.captions[0]!.end).toBe(2002);
     expect(result.captions[1]!.start).toBe(3003);
     expect(result.captions[1]!.end).toBe(4004);
+  });
+
+  it("does not retain a CRLF terminator in MicroDVD SUB caption text", () => {
+    const result = parseSubtitle("{24}{48}Hello\r\n");
+
+    expect(result.captions[0]!.text).toBe("Hello");
+    expect(result.captions[0]!.text).not.toContain("\r");
   });
 
   it("throws when the content has no recognized header or timing", () => {

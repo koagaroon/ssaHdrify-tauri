@@ -15,7 +15,7 @@ import { ask } from "@tauri-apps/plugin-dialog";
 import { sanitizeError, sanitizeForDialog } from "../../lib/dedup-helpers";
 import { isWindowsRuntime } from "../../lib/platform";
 import { useI18n } from "../../i18n/useI18n";
-import type { FontUsage } from "./font-collector";
+import type { FontStyleLabels, FontUsage } from "./font-collector";
 import { fontKeyLabel } from "./font-collector";
 import { userFontKey } from "./font-embedder";
 import { formatFontScanBytes, shouldWarnLargeFontScan } from "./font-source-warning";
@@ -132,7 +132,8 @@ function newScanId(): number {
 function computeCoverage(
   usages: FontUsage[],
   localCoveredKeys: Set<string>,
-  hasSubtitle: boolean
+  hasSubtitle: boolean,
+  styleLabels: Readonly<FontStyleLabels>
 ): { covered: number; total: number; missing: string[] } {
   if (!hasSubtitle || usages.length === 0) {
     return { covered: 0, total: 0, missing: [] };
@@ -144,7 +145,7 @@ function computeCoverage(
     if (localCoveredKeys.has(k)) {
       covered += 1;
     } else {
-      missing.push(fontKeyLabel(u.key));
+      missing.push(fontKeyLabel(u.key, styleLabels));
     }
   }
   return { covered, total: usages.length, missing };
@@ -164,6 +165,10 @@ export default function FontSourceModal(props: Props) {
     onScanStateChange,
   } = props;
   const { t } = useI18n();
+  const fontStyleLabels = useMemo(
+    () => ({ bold: t("font_style_bold"), italic: t("font_style_italic") }),
+    [t]
+  );
 
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
@@ -676,8 +681,8 @@ export default function FontSourceModal(props: Props) {
   // walk. Only the inputs to computeCoverage actually invalidate the
   // result.
   const { covered, total, missing } = useMemo(
-    () => computeCoverage(usages, localCoveredKeys, hasSubtitle),
-    [usages, localCoveredKeys, hasSubtitle]
+    () => computeCoverage(usages, localCoveredKeys, hasSubtitle, fontStyleLabels),
+    [usages, localCoveredKeys, hasSubtitle, fontStyleLabels]
   );
 
   if (!open) return null;

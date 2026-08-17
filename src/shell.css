@@ -8,6 +8,63 @@
    Tauri window (the stage now fills the OS window — no inset gutter).
    ======================================================================== */
 
+/* Last-resort render fallback. This deliberately does not depend on any
+   provider state: the error boundary also covers Theme/I18n/File providers,
+   so their context may be unavailable when this surface renders. */
+.app-error-boundary {
+  width: 100vw;
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--bg-app);
+  color: var(--text-primary);
+}
+
+.app-error-panel {
+  width: min(520px, 100%);
+  padding: 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-popover);
+}
+
+.app-error-panel h1 {
+  margin: 0 0 12px;
+  font-size: 20px;
+  font-weight: 650;
+}
+
+.app-error-panel p {
+  margin: 8px 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.app-error-panel button {
+  margin-top: 16px;
+  padding: 9px 14px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--bg-app);
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.app-error-panel button:hover {
+  background: var(--accent-hover);
+}
+
+.app-error-panel button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
 /* ── Stage — full-window backdrop for the frosted glass ───
    The stage fills the OS window (no inset frame) and hosts the
    animated bloom layer behind the frosted pane. Prior versions

@@ -109,6 +109,10 @@ const MAX_BATCH_AGGREGATE_BYTES = 200 * 1024 * 1024;
 
 export default function FontEmbed() {
   const { t } = useI18n();
+  const fontStyleLabels = useMemo(
+    () => ({ bold: t("font_style_bold"), italic: t("font_style_italic") }),
+    [t]
+  );
   const { fontsFiles, setFontsFiles, clearFile, isFileInUse } = useFileContext();
 
   // Aggregated font state for the unified detection grid and checkbox
@@ -984,7 +988,7 @@ export default function FontEmbed() {
   ]);
   useTabStatus("fonts", tabStatus);
 
-  const formatFontLabel = (info: FontInfo) => fontKeyLabel(info.key);
+  const formatFontLabel = (info: FontInfo) => fontKeyLabel(info.key, fontStyleLabels);
 
   const handleClearFiles = useCallback(() => {
     pickGenRef.current = pickGenRef.current + 1;

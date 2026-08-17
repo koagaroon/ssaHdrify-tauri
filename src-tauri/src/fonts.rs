@@ -4743,8 +4743,16 @@ fn is_ttc_data(font_data: &[u8]) -> bool {
 ///   original font, which in turn lets the TS embed layer dedup
 ///   aliases that resolve to the same face — without dedup, the
 ///   same face would be subset and embedded once per family alias.
+fn is_gpos_subset_error(error: &fontcull_klippa::SubsetError) -> bool {
+    matches!(
+        error,
+        fontcull_klippa::SubsetError::SubsetTableError(tag)
+            if *tag == fontcull_skrifa::Tag::new(b"GPOS")
+    )
+}
+
 fn subset_with_index(font_data: &[u8], index: u32, codepoints: &[u32]) -> Result<Vec<u8>, String> {
-    use fontcull_klippa::{subset_font, Plan, SubsetFlags};
+    use fontcull_klippa::{subset_font, Plan, SubsetError, SubsetFlags};
     use fontcull_read_fonts::collections::IntSet;
     use fontcull_skrifa::{FontRef, GlyphId, Tag};
     use fontcull_write_fonts::types::NameId;
@@ -4835,21 +4843,27 @@ fn subset_with_index(font_data: &[u8], index: u32, codepoints: &[u32]) -> Result
             &langs,
         );
 
-        // Display, not Debug — same reasoning as above.
-        subset_font(&font, &plan).map_err(|e| format!("Subset failed for face {index}: {e}"))
+        subset_font(&font, &plan)
     };
+
+    let format_subset_error =
+        |error: &SubsetError| format!("Subset failed for face {index}: {error}");
 
     match subset_once(false) {
         Ok(subsetted) => Ok(subsetted),
-        Err(error) if error.contains("table 'GPOS'") => {
+        Err(error) if is_gpos_subset_error(&error) => {
+            let initial_error = format_subset_error(&error);
             log::warn!(
                 "Subsetting face {index} failed on GPOS; retrying with the GPOS table dropped"
             );
             subset_once(true).map_err(|fallback_error| {
-                format!("{error}; retry without GPOS also failed: {fallback_error}")
+                format!(
+                    "{initial_error}; retry without GPOS also failed: {}",
+                    format_subset_error(&fallback_error)
+                )
             })
         }
-        Err(error) => Err(error),
+        Err(error) => Err(format_subset_error(&error)),
     }
 }
 
@@ -5744,6 +5758,22 @@ mod tests {
             "Expected ratio < 30% with tuned Plan, got {:.1}%",
             ratio
         );
+    }
+
+    #[test]
+    fn gpos_retry_classification_uses_the_structured_table_tag() {
+        use fontcull_klippa::SubsetError;
+        use fontcull_skrifa::Tag;
+
+        assert!(is_gpos_subset_error(&SubsetError::SubsetTableError(
+            Tag::new(b"GPOS")
+        )));
+        assert!(!is_gpos_subset_error(&SubsetError::SubsetTableError(
+            Tag::new(b"GSUB")
+        )));
+        assert!(!is_gpos_subset_error(&SubsetError::InvalidTag(
+            "message happens to mention table 'GPOS'".to_string()
+        )));
     }
 
     #[test]

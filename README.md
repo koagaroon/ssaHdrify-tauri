@@ -233,9 +233,16 @@ ssahdrify-cli chain hdr --eotf pq + shift --offset +500ms input.ass
 # 批量重命名：默认复制到视频所在目录 / Batch rename (default: copy sub next to video)
 ssahdrify-cli rename "<series-folder>"
 
+# 批量重命名：复制到自定义目录 / Batch rename: copy to a chosen directory
+ssahdrify-cli rename --mode copy-to-chosen --output-dir "<output-folder>" "<series-folder>"
+
 # 多个外挂字幕文件：保留语言后缀，避免 sc/tc 同扩展字幕互相覆盖 / Multiple sidecar subtitles: keep language suffixes
 ssahdrify-cli rename "<series-folder>" --langs all --dry-run
 ```
+
+`rename --mode` 控制文件操作。默认的 `copy-to-video` 会把字幕复制到匹配视频所在的目录；`rename` 会在字幕原目录中直接重命名源文件；`copy-to-chosen` 会把字幕复制到 `--output-dir` 指定的目录。`copy-to-chosen` 必须同时传入 `--output-dir`，另外两种模式则不接受该参数。
+
+`rename --mode` controls the file operation. The default `copy-to-video` copies each subtitle beside its matched video; `rename` renames the source subtitle in its existing directory; and `copy-to-chosen` copies it to the directory supplied through `--output-dir`. `--output-dir` is required with `copy-to-chosen` and is rejected with the other two modes.
 
 `rename --langs auto` 保持和 GUI 一致的默认行为：每个视频只选一个字幕，输出文件名精确匹配视频 stem（如 `Video.ass`）。`rename --langs all` 或显式列表（如 `--langs sc,jp`）可以为同一个视频规划多个字幕，并写成带语言后缀的文件名（如 `Video.sc.ass`、`Video.jp.srt`）；没有语言标记的字幕仍使用精确视频名（如 `Video.ass`）。如果多行会写入同一个目标路径，CLI 会在写入前拦截这些存在冲突的条目。
 
@@ -303,9 +310,9 @@ ssahdrify-cli chain          --help
 
 `hdr` / `shift` / `embed` / `rename` support `--diagnose[=summary|full]`. `--diagnose` and `--diagnose=summary` are equivalent and attach compact diagnostics after the command finishes; `--diagnose=full` lists per-file details, and `embed` also lists font-resolution tiers (font sources passed for this run, persistent cache, system fonts) plus cache status. `chain` and `refresh-fonts` do not support `--diagnose`; passing it returns an error instead of being silently ignored.
 
-`diagnose-fonts` 是独立的详细诊断命令，默认输出 verbose 报告，而且只读：不写输出字幕、不刷新或修改字体缓存。它接受字幕输入和字体解析选项：`--font-dir`、`--font-file`、`--no-system-fonts`、`--no-cache`、`--cache-file`、`--lang`、`--json`。需要确认字体文件是否真的能被子集化时，可显式加入 `--subset-check`；该检查只在内存中运行，不写出字幕。
+`diagnose-fonts` 是独立的详细诊断命令，默认输出 verbose 报告，而且只读：不写输出字幕、不刷新或修改字体缓存。它接受字幕输入和字体解析选项：`--font-dir`、`--recursive-font-dir`、`--font-file`、`--no-system-fonts`、`--no-cache`、`--cache-file`、`--lang`、`--json`。需要确认字体文件是否真的能被子集化时，可显式加入 `--subset-check`；该检查只在内存中运行，不写出字幕。
 
-`diagnose-fonts` is the standalone detailed diagnostic command. It is verbose by default and read-only: it does not write output subtitles and does not refresh or modify the font cache. It accepts subtitle inputs plus font-resolution options: `--font-dir`, `--font-file`, `--no-system-fonts`, `--no-cache`, `--cache-file`, `--lang`, and `--json`. Add `--subset-check` explicitly when you need to confirm whether resolved font files can actually be subset; the check runs in memory and does not write subtitles.
+`diagnose-fonts` is the standalone detailed diagnostic command. It is verbose by default and read-only: it does not write output subtitles and does not refresh or modify the font cache. It accepts subtitle inputs plus font-resolution options: `--font-dir`, `--recursive-font-dir`, `--font-file`, `--no-system-fonts`, `--no-cache`, `--cache-file`, `--lang`, and `--json`. Add `--subset-check` explicitly when you need to confirm whether resolved font files can actually be subset; the check runs in memory and does not write subtitles.
 
 `diagnose-fonts` 和带 `--diagnose` 的 `embed` 还会输出 package-level Font QA 状态：`complete`、`incomplete` 或 `blocked`。`complete` 表示已检查文件里的字体引用全部解析成功；`incomplete` 表示有缺失字体、警告或被跳过的可选子集化检查；`blocked` 表示文件诊断失败、字体解析错误，或 `--subset-check` 明确失败。
 
@@ -463,7 +470,7 @@ Due to the complexity of subtitle blending pipelines and HDR display environment
 
 - [Node.js](https://nodejs.org/) (v22.13 minimum, v24 LTS recommended, or v26 Current)
 - npm 11.19.0（由 `packageManager` 声明并由 CI 强制 / declared by `packageManager` and enforced in CI）
-- [Rust 工具链 / Rust toolchain](https://rustup.rs/) (1.91 minimum; latest stable recommended)
+- [Rust 工具链 / Rust toolchain](https://rustup.rs/)（最低 1.91；rustup 会自动安装仓库锁定且经过测试的稳定工具链 / 1.91 minimum; rustup automatically installs the repository-pinned tested stable toolchain）
 - Windows: WebView2 (Windows 10/11 已预装 / pre-installed on Windows 10/11)
 - macOS / Linux: 参考 / see [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)
 
@@ -620,7 +627,7 @@ The tables below list the main direct dependencies and bundled assets. For the f
 | 组件 / Component                                                             | 许可证 / License                               | 用途 / Usage                                                                                                   |
 | ---------------------------------------------------------------------------- | ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
 | [Tauri](https://tauri.app/)                                                  | Apache-2.0 OR MIT                              | 桌面应用框架 / Desktop app framework                                                                           |
-| [Tauri plugins](https://v2.tauri.app/plugin/)                                | Apache-2.0 OR MIT                              | 对话框、文件访问和日志插件 / Dialog, filesystem, and logging plugins                                           |
+| [Tauri plugins](https://v2.tauri.app/plugin/)                                | Apache-2.0 OR MIT                              | 对话框、文件访问、日志和单实例启动保护 / Dialog, filesystem, logging, and single-instance startup protection   |
 | [React](https://react.dev/) / React DOM                                      | MIT                                            | UI 框架 / UI framework                                                                                         |
 | [React Window](https://github.com/bvaughn/react-window)                      | MIT                                            | 大列表虚拟滚动 / Virtualized large lists                                                                       |
 | [Color.js](https://colorjs.io/)                                              | MIT                                            | HDR 色彩空间转换 (PQ/HLG) / HDR color space conversion                                                         |

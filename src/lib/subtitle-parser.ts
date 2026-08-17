@@ -389,6 +389,14 @@ export const MAX_PARSED_ENTRIES = 500_000;
 // separate payloads of 1.5M blocks each are both accepted.
 const MAX_RAW_BLOCKS = 2_000_000;
 
+// Per-caption text cap shared by SRT, VTT, ASS, and MicroDVD SUB.
+// Real-world caption text is normally well under 1 KB; 64 KB remains
+// generous while bounding a crafted multi-megabyte text body. Each parser
+// emits a skipped placeholder for an oversized caption so feature layers can
+// report the omission. ASS additionally relies on the placeholder to keep
+// buildAss's positional walk aligned with the original Dialogue line order.
+const MAX_CAPTION_TEXT_LEN = 64_000;
+
 function parseSrt(content: string): Caption[] {
   const captions: Caption[] = [];
   // Normalize first so mixed CRLF/LF files still split into cue blocks.
@@ -644,19 +652,6 @@ const DIALOGUE_FLAGS = "gim";
 function createDialogueRe(): RegExp {
   return new RegExp(DIALOGUE_PATTERN, DIALOGUE_FLAGS);
 }
-
-// per-caption text cap. Real-world ASS
-// dialogue lines are < 1 KB even for elaborate styled karaoke. 64 KB
-// is generous — guards against a crafted file with a single dialogue
-// containing a multi-MB attacker-influenced text body.
-// Captions exceeding the cap are skipped (text dropped), but for ASS
-// parseAss still emits a placeholder Caption with `skipped: true` so
-// that buildAss's positional consumption stays aligned with the
-// original Dialogue line order (see parseAss / buildAss WHY below).
-// Matches parseSub's per-text guard added alongside (parseSub doesn't
-// need the placeholder dance because buildSub rebuilds from the
-// captions array, not by walking original content).
-const MAX_CAPTION_TEXT_LEN = 64_000;
 
 function parseAss(content: string): Caption[] {
   const captions: Caption[] = [];

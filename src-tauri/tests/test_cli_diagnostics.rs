@@ -86,6 +86,52 @@ fn engine_bundle_missing() -> Option<String> {
 }
 
 #[test]
+fn verbose_missing_font_diagnostic_strips_control_and_bidi_characters() {
+    if let Some(reason) = engine_bundle_missing() {
+        panic!("engine bundle missing — run `npm run build:engine` first ({reason})");
+    }
+
+    let work = temp_dir("verbose-sanitization");
+    let input = work.join("hostile-font-name.ass");
+    let content = MISSING_FONT_ASS.replace(
+        "DefinitelyMissingSsaHdrifyFont",
+        "Missing\u{202e}Font\u{001b}[2J",
+    );
+    fs::write(&input, content).expect("failed to write hostile font-name fixture");
+
+    let output = run_cli(&[
+        "--lang",
+        "en",
+        "--verbose",
+        "--no-cache",
+        "embed",
+        "--no-system-fonts",
+        input.to_str().unwrap(),
+    ]);
+
+    assert!(
+        output.status.success(),
+        "embed should retain warn-mode success: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("MissingFont[2J"),
+        "sanitized font label should remain readable: {stderr}"
+    );
+    assert!(
+        !stderr.contains('\u{202e}'),
+        "BiDi control leaked: {stderr:?}"
+    );
+    assert!(
+        !stderr.contains('\u{001b}'),
+        "ESC control leaked: {stderr:?}"
+    );
+
+    let _ = fs::remove_dir_all(work);
+}
+
+#[test]
 fn embed_diagnose_reports_written_with_warnings() {
     if let Some(reason) = engine_bundle_missing() {
         // Hard-fail instead of skip-and-return: a skip records PASS in Cargo,

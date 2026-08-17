@@ -52,6 +52,10 @@ export default function FontCacheDriftModal({
   // Single mutex across both async actions. Either both buttons are
   // enabled or both are disabled; never one-but-not-the-other.
   const [working, setWorking] = useState<null | "rescanning" | "clearing">(null);
+  // React state updates become visible on the next render. This ref is the
+  // synchronous gate that closes the same-tick double-click window before
+  // either button has re-rendered as disabled.
+  const busyRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   // Surface the post-op success message inline rather than auto-closing
   // silently — the i18n strings font_cache_rescan_done /
@@ -68,23 +72,8 @@ export default function FontCacheDriftModal({
   // the in-flight Tauri command. The close button's disabled state
   // matches.
   //
-  // `working` is read via a ref inside the handler instead of being a
-  // dep on the effect : the prior `[open, working,
-  // onClose]` dep array tore down and re-attached the keydown listener
-  // on every working-state flip, matching `useFolderDrop`'s explicit
-  // anti-pattern note. Stable handler now mounts once per `open=true`
-  // cycle and reads the latest `working` via the ref each press.
-  const workingRef = useRef(working);
-  useEffect(() => {
-    workingRef.current = working;
-  }, [working]);
-  // Order matters: the workingRef-update effect above MUST stay declared
-  // before this keydown-handler effect. React runs effects in declaration
-  // order within a single component, so the handler always reads the
-  // freshly-synced `workingRef.current`. Reordering or extracting the
-  // two effects across files would break the invariant silently (no
-  // build error, just a stale-closure race when the user presses Esc
-  // mid-rescan).
+  // Read the synchronous gate inside the stable handler so working-state
+  // flips do not tear down and re-attach the global keydown listener.
   useEffect(() => {
     if (!open) return;
     const handler = (e: KeyboardEvent) => {
@@ -96,7 +85,7 @@ export default function FontCacheDriftModal({
       // disabled close button at the top mirrors this — no path
       // closes mid-op.
       e.stopPropagation();
-      if (workingRef.current === null) {
+      if (!busyRef.current) {
         onClose();
       }
     };
@@ -111,23 +100,25 @@ export default function FontCacheDriftModal({
     if (open) closeButtonRef.current?.focus();
   }, [open]);
 
-  // INVARIANT : `requestClose` MUST NOT call onClose
-  // while `working !== null`. The component's open=false→true effect
+  // INVARIANT: `requestClose` MUST NOT call onClose while an operation is
+  // in flight. The component's open=false→true effect
   // (further down) resets transient state on mount/unmount, but
   // App.tsx currently mounts/unmounts the modal — so a future
   // refactor that keeps it mounted would expose stale state on next
   // open ONLY IF `requestClose` permits mid-op close. This single
-  // gate is the contract; the rest of the modal (Esc handler, close
-  // button disabled state) all funnels through here. Test coverage
+  // gate is the contract; the Esc handler and disabled close button
+  // mirror the same gate. Test coverage
   // for this invariant is deferred until the repo adds React Testing
   // Library + happy-dom — no existing infrastructure to render the
   // modal in vitest.
   const requestClose = useCallback(() => {
-    if (working !== null) return;
+    if (busyRef.current) return;
     onClose();
-  }, [working, onClose]);
+  }, [onClose]);
 
   const handleRescan = useCallback(async () => {
+    if (busyRef.current) return;
+    busyRef.current = true;
     // Reset transient states at entry — a prior op's doneMessage or
     // skipped list would otherwise persist next to the in-progress
     // "Rescanning…" banner until rescan finishes.
@@ -137,7 +128,6 @@ export default function FontCacheDriftModal({
     setWorking("rescanning");
     try {
       const result = await rescanFontCacheDrift();
-      setWorking(null);
       setDoneMessage(t("font_cache_rescan_done", result.modifiedRescanned, result.removedEvicted));
       setSkippedFolders(result.skipped);
       onRescanComplete();
@@ -148,23 +138,28 @@ export default function FontCacheDriftModal({
       // U+202E in a drifted folder path can't reverse the surrounding
       // error banner text.
       setError(sanitizeError(e));
+    } finally {
+      busyRef.current = false;
       setWorking(null);
     }
   }, [onRescanComplete, t]);
 
   const handleClear = useCallback(async () => {
+    if (busyRef.current) return;
+    busyRef.current = true;
     setError(null);
     setDoneMessage(null);
     setSkippedFolders([]);
     setWorking("clearing");
     try {
       await clearFontCache();
-      setWorking(null);
       setDoneMessage(t("font_cache_cleared"));
       onClearComplete();
     } catch (e) {
       // Same BiDi reason as handleRescan above.
       setError(sanitizeError(e));
+    } finally {
+      busyRef.current = false;
       setWorking(null);
     }
   }, [onClearComplete, t]);
@@ -174,7 +169,10 @@ export default function FontCacheDriftModal({
   // refactor that keeps it mounted — without this, a stale doneMessage
   // from a prior open would leak into the next drift report.
   useEffect(() => {
-    if (open) {
+    // Do not let a delayed open-transition effect erase the visual working
+    // state after an unusually fast first click; busyRef is already the
+    // synchronous source of truth for that operation.
+    if (open && !busyRef.current) {
       setError(null);
       setDoneMessage(null);
       setSkippedFolders([]);

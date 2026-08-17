@@ -4,6 +4,9 @@ fn main() {
 }
 
 fn copy_cli_engine_bundle() {
+    const ENGINE_BUNDLE_GLOBAL_TOKEN: &str = "ssaHdrifyCliEngine";
+    const ENGINE_BUNDLE_COMPLETION_MARKER: &str = "/* ssahdrify-engine-bundle-complete */";
+
     let manifest_dir = std::path::PathBuf::from(
         std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set by Cargo"),
     );
@@ -21,17 +24,28 @@ fn copy_cli_engine_bundle() {
     // build still succeeds, but a non-NotFound error gets a
     // cargo:warning so the developer notices the underlying cause.
     let source = match std::fs::read_to_string(&source_path) {
-        Ok(content) if content.is_empty() => {
-            // A 0-byte engine.js is the
-            // signature of a partial-write from a still-running
-            // `npm run build:engine`, or a manually-truncated bundle
-            // from a botched edit. Previously we'd embed the empty
-            // string and let V8 fail at runtime with an inscrutable
+        Ok(content) if content.trim().is_empty() => {
+            // An empty or whitespace-only engine.js indicates a partial
+            // write from a still-running `npm run build:engine`, or other
+            // unexpected build output. Previously we'd embed that content
+            // and let V8 fail at runtime with an inscrutable
             // "ssaHdrifyCliEngine is undefined" — the cargo:warning
             // surfaces the underlying cause at build time. Fall
             // through to the stub so the build still succeeds.
             println!(
-                "cargo:warning=CLI engine bundle at {} is 0 bytes (partial write or truncation?); falling back to stub",
+                "cargo:warning=CLI engine bundle at {} is empty or whitespace-only (partial or unexpected build output?); falling back to stub",
+                source_path.display()
+            );
+            missing_engine_stub()
+        }
+        Ok(content)
+            if !content.contains(ENGINE_BUNDLE_GLOBAL_TOKEN)
+                || !content
+                    .trim_end()
+                    .ends_with(ENGINE_BUNDLE_COMPLETION_MARKER) =>
+        {
+            println!(
+                "cargo:warning=CLI engine bundle at {} failed its global-token/completion-marker sanity check (partial or unexpected build output?); falling back to stub",
                 source_path.display()
             );
             missing_engine_stub()
