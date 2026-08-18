@@ -234,7 +234,11 @@ pub(crate) struct HdrArgs {
     eotf: EotfArg,
 
     /// Target subtitle brightness in nits. 字幕目标亮度（nits）。
-    #[arg(long, default_value_t = 203)]
+    #[arg(
+        long,
+        default_value_t = 203,
+        value_parser = clap::value_parser!(u16).range(1..=10_000)
+    )]
     nits: u16,
 
     /// Output filename template. 输出文件名模板。
@@ -1260,6 +1264,41 @@ fn validate_cache_file_arg(globals: &GlobalOptions) -> Result<(), String> {
     Ok(())
 }
 
+fn format_refresh_cache_schema_error(cache_path: &Path, found: i32, expected: i32) -> String {
+    let cache_path_disp = sanitize_for_display(&cache_path.to_string_lossy());
+    let schema_detail = match found {
+        -1 => "has no readable schema-version record".to_string(),
+        -2 => "has an unparseable schema-version record".to_string(),
+        version => format!("has schema version {version}"),
+    };
+    format!(
+        "Cache at {} {schema_detail}, but this CLI requires schema version {expected}.\n\
+         The cache is incompatible with this release and must be rebuilt.\n\
+         Delete the cache file at {}, then rerun the same `refresh-fonts` command.",
+        cache_path_disp, cache_path_disp,
+    )
+}
+
+fn format_refresh_cache_access_error(
+    cache_path: &Path,
+    action: &str,
+    error: app_lib::font_cache::CacheError,
+) -> String {
+    let cache_path_disp = sanitize_for_display(&cache_path.to_string_lossy());
+    match error {
+        app_lib::font_cache::CacheError::InvalidDatabase(detail) => format!(
+            "The font cache at {} is invalid or corrupt: {detail}.\n\
+             Delete the cache file at {}, then rerun the same `refresh-fonts` command to rebuild it.",
+            cache_path_disp,
+            cache_path_disp,
+        ),
+        other => format!(
+            "{action} the font cache at {} failed: {other}. Check the cache path and file permissions; the cache was not deleted.",
+            cache_path_disp,
+        ),
+    }
+}
+
 fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<ExitCode, String> {
     // refresh-fonts's whole purpose is to write to the cache. Running
     // with --no-cache is contradictory; surface as a clear error
@@ -1271,7 +1310,18 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
             .to_string());
     }
 
-    // --output-dir / --overwrite / --fail-fast affect OUTPUT-file writing;
+    // This subcommand has no JSON report contract. Hard-fail even under
+    // --quiet so a machine consumer never receives an exit-0 empty/plain-text
+    // response after explicitly asking for JSON.
+    if globals.json {
+        return Err(
+            "refresh-fonts does not implement --json output; remove --json and use its stderr status report"
+                .to_string(),
+        );
+    }
+
+    // --output-dir / --overwrite / --fail-fast affect output-file writing,
+    // while --verbose has no additional refresh detail to enable;
     // refresh-fonts writes only to the cache, so they're inert here. Surface
     // a notice rather than ignoring them silently (no-silent-action). Unlike
     // --no-cache (contradictory → hard error) these are harmless, so a
@@ -1287,6 +1337,9 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
         }
         if globals.fail_fast {
             inert.push("--fail-fast");
+        }
+        if globals.verbose {
+            inert.push("--verbose");
         }
         if !inert.is_empty() {
             let flags = inert.join(", ");
@@ -1387,24 +1440,26 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
         if cache_path.exists() {
             match app_lib::font_cache::FontCache::open_existing_read_only(&cache_path) {
                 Ok(existing) => {
-                    for source in existing
-                        .list_sources()
-                        .map_err(|e| format!("reading existing cache sources: {e}"))?
-                    {
+                    for source in existing.list_sources().map_err(|error| {
+                        format_refresh_cache_access_error(&cache_path, "Reading", error)
+                    })? {
                         final_source_keys.insert(source.key());
                     }
                 }
                 Err(app_lib::font_cache::CacheError::SchemaVersionMismatch { found, expected }) => {
-                    return Err(format!(
-                        "Cache at {} has schema version {found} but this CLI uses version {expected}.\n\
-                         The cache is from a different release and must be rebuilt.\n\
-                         Delete the file manually and re-run refresh-fonts:\n  \
-                         (file: {})",
-                        cache_path.display(),
-                        cache_path.display(),
+                    return Err(format_refresh_cache_schema_error(
+                        &cache_path,
+                        found,
+                        expected,
                     ));
                 }
-                Err(e) => return Err(format!("opening cache: {e}")),
+                Err(error) => {
+                    return Err(format_refresh_cache_access_error(
+                        &cache_path,
+                        "Opening",
+                        error,
+                    ));
+                }
             }
         }
         if final_source_keys.len() > app_lib::font_cache::MAX_CACHED_SOURCES {
@@ -1478,21 +1533,24 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
     let mut cache = match app_lib::font_cache::FontCache::open_or_create(&cache_path) {
         Ok(c) => c,
         Err(app_lib::font_cache::CacheError::SchemaVersionMismatch { found, expected }) => {
-            return Err(format!(
-                "Cache at {} has schema version {found} but this CLI uses version {expected}.\n\
-                 The cache is from a different release and must be rebuilt.\n\
-                 Delete the file manually and re-run refresh-fonts:\n  \
-                 (file: {})",
-                cache_path.display(),
-                cache_path.display(),
+            return Err(format_refresh_cache_schema_error(
+                &cache_path,
+                found,
+                expected,
             ));
         }
-        Err(e) => return Err(format!("opening cache: {e}")),
+        Err(error) => {
+            return Err(format_refresh_cache_access_error(
+                &cache_path,
+                "Opening",
+                error,
+            ));
+        }
     };
 
     for source in cache
         .list_sources()
-        .map_err(|e| format!("reading existing cache sources: {e}"))?
+        .map_err(|error| format_refresh_cache_access_error(&cache_path, "Reading", error))?
     {
         final_source_keys.insert(source.key());
     }
@@ -1921,6 +1979,8 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
     let mut written = 0usize;
     let mut failed = 0usize;
     let mut skipped = 0usize;
+    let mut written_with_warnings = 0usize;
+    let mut written_warning_count = 0usize;
     // First-input-wins dedup, mirroring run_hdr / run_shift / run_embed
     // . Without this, `chain hdr ... cat.ass cat.ass`
     // runs the chain twice and `--overwrite=true` silently clobbers
@@ -1954,6 +2014,10 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
             &mut seen_outputs,
         ) {
             ChainFileOutcome::Written(out, warnings) => {
+                if !warnings.is_empty() {
+                    written_with_warnings += 1;
+                }
+                written_warning_count += warnings.len();
                 if !globals.quiet {
                     // `input` / `out` are raw PathBufs from clap
                     // argv + Rust shell output resolution. Sanitize
@@ -2000,21 +2064,39 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
         // chain Summary line + fail-fast suffix go through `localize`,
         // for sibling-parity with the refresh-fonts sweep and the
         // standalone subcommands' `emit_report_summary`.
+        let warning_suffix_en = if written_with_warnings > 0 {
+            format!(
+                ", {written_with_warnings} written with warnings / incomplete ({written_warning_count} warning(s))"
+            )
+        } else {
+            String::new()
+        };
+        let warning_suffix_zh = if written_with_warnings > 0 {
+            format!(
+                "，{written_with_warnings} 个已写入但带警告/不完整（{written_warning_count} 条警告）"
+            )
+        } else {
+            String::new()
+        };
         let summary = if chain_aborted {
             localize(
                 globals,
                 format!(
-                    "Summary: {written} written, {skipped} skipped, {failed} failed (aborted by --fail-fast)"
+                    "Summary: {written} written, {skipped} skipped, {failed} failed{warning_suffix_en} (aborted by --fail-fast)"
                 ),
                 format!(
-                    "汇总：{written} 个已写入，{skipped} 个已跳过，{failed} 个失败（已被 --fail-fast 中止）"
+                    "汇总：{written} 个已写入，{skipped} 个已跳过，{failed} 个失败{warning_suffix_zh}（已被 --fail-fast 中止）"
                 ),
             )
         } else {
             localize(
                 globals,
-                format!("Summary: {written} written, {skipped} skipped, {failed} failed"),
-                format!("汇总：{written} 个已写入，{skipped} 个已跳过，{failed} 个失败"),
+                format!(
+                    "Summary: {written} written, {skipped} skipped, {failed} failed{warning_suffix_en}"
+                ),
+                format!(
+                    "汇总：{written} 个已写入，{skipped} 个已跳过，{failed} 个失败{warning_suffix_zh}"
+                ),
             )
         };
         println!("{summary}");
@@ -2478,6 +2560,13 @@ fn process_one_chain_input(
         globals.output_dir.as_deref(),
     ) {
         let key = normalize_output_key(&predicted);
+        let input_key = normalize_output_key(&input_abs);
+        if key == input_key {
+            return builder.into_failed(format!(
+                "refusing self-overwrite: predicted output path {} is the input file; choose a different --output-template or --output-dir",
+                predicted.display()
+            ));
+        }
         if !seen_outputs.insert(key.clone()) {
             // `predicted.display()` is interpolated
             // raw here; sanitization happens at the chain print boundary
@@ -2760,6 +2849,9 @@ fn process_one_chain_input(
 }
 
 fn emit_chain_dry_run(plan: &chain::ChainPlan, globals: &GlobalOptions) {
+    if globals.quiet {
+        return;
+    }
     println!("Plan (no files written):");
     println!();
     // Every emit_chain_dry_run print site sanitizes interpolated
@@ -3245,7 +3337,7 @@ fn reserve_output<'a>(
         key,
         keep: false,
     };
-    if output_path_exists(globals, output_path) && !globals.overwrite {
+    if !globals.overwrite && output_path_exists(globals, output_path) {
         return Err(Box::new(skipped_report(
             input_path,
             Some(output.to_string()),
@@ -4269,6 +4361,41 @@ fn prepare_embed_cache(
                 diagnostic,
             };
         }
+        Err(app_lib::font_cache::CacheError::InvalidDatabase(detail)) => {
+            if !globals.quiet {
+                let detail_disp = sanitize_for_display(&detail);
+                eprintln!(
+                    "{}",
+                    localize(
+                        globals,
+                        format!(
+                            "⚠ Font cache at {cache_path_disp} is invalid or corrupt: {detail_disp}"
+                        ),
+                        format!("⚠ 位于 {cache_path_disp} 的字体缓存无效或已损坏：{detail_disp}"),
+                    )
+                );
+                eprintln!(
+                    "{}",
+                    localize(
+                        globals,
+                        format!(
+                            "  Delete {cache_path_disp}, then run `refresh-fonts` to rebuild it. Skipping cache for this run."
+                        ),
+                        format!(
+                            "  删除 {cache_path_disp}，然后运行 `refresh-fonts` 以重建缓存。本次运行将跳过缓存。"
+                        ),
+                    )
+                );
+            }
+            return PreparedFontCache {
+                cache: None,
+                diagnostic: CacheDiagnostic::new(
+                    Some(cache_path_json),
+                    CacheDiagnosticStatus::OpenError,
+                    Some(format!("font cache is invalid or corrupt: {detail}")),
+                ),
+            };
+        }
         Err(e) => {
             if !globals.quiet {
                 let e_disp = sanitize_for_display(&e.to_string());
@@ -4276,8 +4403,8 @@ fn prepare_embed_cache(
                     "{}",
                     localize(
                         globals,
-                        format!("⚠ Cannot open font cache: {e_disp}"),
-                        format!("⚠ 无法打开字体缓存：{e_disp}"),
+                        format!("⚠ Cannot open font cache at {cache_path_disp}: {e_disp}"),
+                        format!("⚠ 无法打开位于 {cache_path_disp} 的字体缓存：{e_disp}"),
                     )
                 );
                 eprintln!(
@@ -4294,7 +4421,7 @@ fn prepare_embed_cache(
                 diagnostic: CacheDiagnostic::new(
                     Some(cache_path_json),
                     CacheDiagnosticStatus::OpenError,
-                    Some(format!("cannot open font cache: {e}")),
+                    Some(format!("cannot open font cache at {cache_path_disp}: {e}")),
                 ),
             };
         }
@@ -5899,7 +6026,7 @@ fn process_rename_pair(
         );
     }
 
-    if output_path_exists(globals, &output_path) && !globals.overwrite {
+    if !globals.overwrite && output_path_exists(globals, &output_path) {
         return attach_rename_pairing_warning(
             globals,
             row,
@@ -6062,7 +6189,7 @@ fn build_command_diagnostics(
         );
     }
     let qa = if report.command == "diagnose-fonts" || !fonts.is_empty() {
-        Some(build_font_qa_summary(report, &fonts, warning_count))
+        Some(build_font_qa_summary(report, &fonts))
     } else {
         None
     };
@@ -6090,11 +6217,7 @@ fn build_command_diagnostics(
     }
 }
 
-fn build_font_qa_summary(
-    report: &CommandReport,
-    fonts: &[FontDiagnostic],
-    warning_count: usize,
-) -> FontQaSummary {
+fn build_font_qa_summary(report: &CommandReport, fonts: &[FontDiagnostic]) -> FontQaSummary {
     let failed_file_count = report
         .results
         .iter()
@@ -6126,7 +6249,7 @@ fn build_font_qa_summary(
 
     let status = if failed_file_count > 0 || error_count > 0 || subset_failed_count > 0 {
         FontQaStatus::Blocked
-    } else if missing_count > 0 || warning_count > 0 || subset_skipped_count > 0 {
+    } else if missing_count > 0 || subset_skipped_count > 0 {
         FontQaStatus::Incomplete
     } else {
         FontQaStatus::Complete
@@ -7316,7 +7439,8 @@ mod tests {
         absolute_path, apply_effective_embedded_font_names, apply_subset_checks_to_diagnostics,
         build_font_qa_summary, check_cache_drift, classify_locale, copy_file_output,
         create_cli_font_db_dir, diagnostic_next_actions, display_path,
-        duplicate_rename_output_keys, engine, group_resolved_fonts_by_face, normalize_output_key,
+        duplicate_rename_output_keys, engine, format_refresh_cache_access_error,
+        format_refresh_cache_schema_error, group_resolved_fonts_by_face, normalize_output_key,
         parse_duration_ms, parse_timestamp_ms, predict_chain_output_path,
         refresh_font_directory_sources, relocate_output_path, require_complete_cli_font_source,
         resolve_embed_fonts, sanitize_for_display, substitute_template, write_output,
@@ -7506,6 +7630,43 @@ mod tests {
     }
 
     #[test]
+    fn hdr_nits_accepts_documented_boundaries_and_rejects_values_outside_them() {
+        for value in ["1", "10000"] {
+            let cli = Cli::try_parse_from([
+                "ssahdrify-cli",
+                "hdr",
+                "--eotf",
+                "pq",
+                "--nits",
+                value,
+                "input.ass",
+            ])
+            .unwrap_or_else(|error| panic!("--nits {value} should parse: {error}"));
+            let Command::Hdr(args) = cli.command else {
+                panic!("expected hdr command");
+            };
+            assert_eq!(args.args.nits.to_string(), value);
+        }
+
+        for value in ["0", "10001"] {
+            let error = Cli::try_parse_from([
+                "ssahdrify-cli",
+                "hdr",
+                "--eotf",
+                "pq",
+                "--nits",
+                value,
+                "input.ass",
+            ])
+            .expect_err("out-of-range --nits must fail at parse time");
+            assert!(
+                error.to_string().contains("1..=10000"),
+                "range error should name the accepted boundary: {error}"
+            );
+        }
+    }
+
+    #[test]
     fn refresh_fonts_rejects_diagnose_option() {
         let err = Cli::try_parse_from([
             "ssahdrify-cli",
@@ -7651,6 +7812,35 @@ mod tests {
             .expect_err("refresh-fonts requires one directory-source flag");
 
         assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
+    fn refresh_cache_errors_sanitize_paths_and_limit_delete_guidance() {
+        let hostile = Path::new("cache\u{202e}\u{001b}[2J.sqlite3");
+
+        let schema = format_refresh_cache_schema_error(hostile, 4, 6);
+        assert!(!schema.contains('\u{202e}') && !schema.contains('\u{001b}'));
+        assert!(schema.contains("cache[2J.sqlite3"));
+        assert!(schema.contains("rerun the same `refresh-fonts` command"));
+
+        let invalid = format_refresh_cache_access_error(
+            hostile,
+            "Opening",
+            app_lib::font_cache::CacheError::InvalidDatabase("file is not a database".to_string()),
+        );
+        assert!(!invalid.contains('\u{202e}') && !invalid.contains('\u{001b}'));
+        assert!(invalid.contains("Delete the cache file"));
+        assert!(invalid.contains("rerun the same `refresh-fonts` command"));
+
+        let ordinary = format_refresh_cache_access_error(
+            hostile,
+            "Opening",
+            app_lib::font_cache::CacheError::Io("permission denied".to_string()),
+        );
+        assert!(!ordinary.contains('\u{202e}') && !ordinary.contains('\u{001b}'));
+        assert!(ordinary.contains("Check the cache path and file permissions"));
+        assert!(!ordinary.contains("Delete the cache file"));
+        assert!(!ordinary.contains("rerun the same `refresh-fonts` command"));
     }
 
     /// Construct a default GlobalOptions for tests that need to call
@@ -7878,7 +8068,7 @@ mod tests {
         let mut resolved = FontDiagnostic::new(&qa_usage("Resolved"));
         resolved.mark_resolved("/fonts/resolved.ttf".to_string(), 0);
 
-        let qa = build_font_qa_summary(&qa_report(FileStatus::Diagnosed), &[resolved], 0);
+        let qa = build_font_qa_summary(&qa_report(FileStatus::Diagnosed), &[resolved]);
 
         assert_eq!(qa.status, FontQaStatus::Complete);
         assert_eq!(qa.resolved_count, 1);
@@ -7889,7 +8079,7 @@ mod tests {
     fn font_qa_summary_marks_incomplete_for_missing_fonts() {
         let missing = FontDiagnostic::new(&qa_usage("Missing"));
 
-        let qa = build_font_qa_summary(&qa_report(FileStatus::Diagnosed), &[missing], 0);
+        let qa = build_font_qa_summary(&qa_report(FileStatus::Diagnosed), &[missing]);
 
         assert_eq!(qa.status, FontQaStatus::Incomplete);
         assert_eq!(qa.missing_count, 1);
@@ -7905,10 +8095,28 @@ mod tests {
             error: Some("subset failed".to_string()),
         });
 
-        let qa = build_font_qa_summary(&qa_report(FileStatus::Diagnosed), &[resolved], 0);
+        let qa = build_font_qa_summary(&qa_report(FileStatus::Diagnosed), &[resolved]);
 
         assert_eq!(qa.status, FontQaStatus::Blocked);
         assert_eq!(qa.subset_failed_count, 1);
+    }
+
+    #[test]
+    fn font_qa_summary_ignores_non_font_warnings() {
+        let mut resolved = FontDiagnostic::new(&qa_usage("Resolved"));
+        resolved.mark_resolved("/fonts/resolved.ttf".to_string(), 0);
+        let mut report = qa_report(FileStatus::Diagnosed);
+        report.results[0].warnings = Some(vec![
+            "BOM-less UTF-16 encoding was inferred; verify the output".to_string(),
+        ]);
+
+        let qa = build_font_qa_summary(&report, &[resolved]);
+
+        assert_eq!(
+            qa.status,
+            FontQaStatus::Complete,
+            "encoding and other file warnings must not downgrade font QA"
+        );
     }
 
     #[test]

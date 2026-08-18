@@ -26,6 +26,16 @@ const MISSING_FONT_ASS: &str = concat!(
     "Dialogue: 0,0:00:01.00,0:00:03.00,Default,,0,0,0,,Hello world\n",
 );
 const MISSING_FONT_EMBEDDED_NAME: &str = "definitelymissingssahdrifyfont.ttf";
+const NO_FONT_ASS: &str = concat!(
+    "[Script Info]\n",
+    "ScriptType: v4.00+\n",
+    "\n",
+    "[V4+ Styles]\n",
+    "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n",
+    "\n",
+    "[Events]\n",
+    "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n",
+);
 
 fn cli_path() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_ssahdrify-cli"))
@@ -45,6 +55,13 @@ fn temp_dir(label: &str) -> PathBuf {
 fn write_missing_font_ass(dir: &Path) -> PathBuf {
     let path = dir.join("missing-font.ass");
     fs::write(&path, MISSING_FONT_ASS).expect("failed to write fixture ASS");
+    path
+}
+
+fn write_bomless_utf16le(dir: &Path, name: &str, content: &str) -> PathBuf {
+    let path = dir.join(name);
+    let bytes: Vec<u8> = content.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    fs::write(&path, bytes).expect("failed to write BOM-less UTF-16LE fixture");
     path
 }
 
@@ -306,6 +323,46 @@ fn diagnose_fonts_json_reports_successful_files_as_diagnosed() {
     assert!(
         !String::from_utf8_lossy(&output.stdout).contains("next actions"),
         "human next-action prose must not be mixed into JSON stdout"
+    );
+
+    let _ = fs::remove_dir_all(work);
+}
+
+#[test]
+fn diagnose_fonts_encoding_warning_does_not_downgrade_font_qa() {
+    if let Some(reason) = engine_bundle_missing() {
+        panic!("engine bundle missing — run `npm run build:engine` first ({reason})");
+    }
+
+    let work = temp_dir("encoding-warning-qa");
+    let input = write_bomless_utf16le(&work, "no-fonts.ass", NO_FONT_ASS);
+    let output = run_cli(&[
+        "--lang",
+        "en",
+        "--json",
+        "--no-cache",
+        "diagnose-fonts",
+        "--no-system-fonts",
+        input.to_str().unwrap(),
+    ]);
+
+    assert!(
+        output.status.success(),
+        "font-free BOM-less ASS should diagnose successfully: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout should be JSON diagnostics");
+    assert!(
+        value["warningCount"]
+            .as_u64()
+            .is_some_and(|count| count > 0),
+        "fixture should carry an encoding-inference warning: {value}"
+    );
+    assert_eq!(value["qa"]["fontReferenceCount"], 0);
+    assert_eq!(
+        value["qa"]["status"], "complete",
+        "general encoding warnings must not change the font-only QA verdict"
     );
 
     let _ = fs::remove_dir_all(work);

@@ -63,6 +63,17 @@ fn write_fixture(dir: &Path, name: &str) -> PathBuf {
     path
 }
 
+fn write_oversized_fixture(dir: &Path, name: &str) -> PathBuf {
+    let path = dir.join(name);
+    let oversized = "X".repeat(70_000);
+    let mut content = FIXTURE_ASS.to_string();
+    content.push_str(&format!(
+        "Dialogue: 0,0:00:07.00,0:00:08.00,Default,,0,0,0,,{oversized}\n"
+    ));
+    fs::write(&path, content).expect("failed to write oversized fixture");
+    path
+}
+
 /// Returns Some(reason) if the engine bundle is the missing-bundle
 /// stub from build.rs (which throws "Run `npm run build:engine`").
 /// Returns None when the real bundle is loaded and tests can proceed.
@@ -222,6 +233,124 @@ fn chain_dry_run_prints_plan_without_writing() {
     assert!(
         !dir.join("cat.hdr.shifted.ass").exists(),
         "dry-run must not write files"
+    );
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn chain_quiet_dry_run_emits_no_plan_output() {
+    let dir = temp_dir("quiet_dryrun");
+    let input = write_fixture(&dir, "cat.ass");
+
+    let output = Command::new(cli_path())
+        .args([
+            "--lang",
+            "en",
+            "--quiet",
+            "--dry-run",
+            "chain",
+            "shift",
+            "--offset",
+            "+2s",
+        ])
+        .arg(&input)
+        .output()
+        .expect("failed to run quiet chain dry-run");
+
+    assert!(
+        output.status.success(),
+        "quiet dry-run should succeed: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "--quiet must suppress the dry-run plan: stdout={}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "--quiet dry-run should not emit informational stderr: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!dir.join("cat.shifted.ass").exists());
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn chain_summary_counts_written_files_with_warnings() {
+    if let Some(reason) = engine_bundle_missing() {
+        panic!("engine bundle missing — run `npm run build:engine` first ({reason})");
+    }
+
+    let dir = temp_dir("warning_summary");
+    let input = write_oversized_fixture(&dir, "oversized.ass");
+    let output = Command::new(cli_path())
+        .args(["--lang", "en", "chain", "shift", "--offset", "+2s"])
+        .arg(&input)
+        .output()
+        .expect("failed to run warning-summary chain");
+
+    assert!(
+        output.status.success(),
+        "warning-carrying write should succeed: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("1 written with warnings / incomplete (1 warning(s))"),
+        "summary must aggregate successful writes with warnings: {stdout}"
+    );
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn chain_self_overwrite_fails_before_the_exists_check() {
+    if let Some(reason) = engine_bundle_missing() {
+        panic!("engine bundle missing — run `npm run build:engine` first ({reason})");
+    }
+
+    let dir = temp_dir("self_overwrite");
+    let input = write_fixture(&dir, "cat.ass");
+    let before = fs::read(&input).expect("read input before self-overwrite probe");
+
+    let output = Command::new(cli_path())
+        .args([
+            "--lang",
+            "en",
+            "chain",
+            "--output-template",
+            "{name}{ext}",
+            "shift",
+            "--offset",
+            "+2s",
+        ])
+        .arg(&input)
+        .output()
+        .expect("failed to run self-overwrite probe");
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "single-input self-overwrite must be a complete failure"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("refusing self-overwrite")
+            && stderr.contains("choose a different --output-template or --output-dir"),
+        "failure should precisely explain the input/output collision: {stderr}"
+    );
+    assert!(
+        !stdout.contains("already exists"),
+        "the exists check must not mask self-overwrite as a skip: {stdout}"
+    );
+    assert_eq!(
+        fs::read(&input).expect("read input after self-overwrite probe"),
+        before,
+        "self-overwrite refusal must leave the input byte-identical"
     );
 
     let _ = fs::remove_dir_all(dir);

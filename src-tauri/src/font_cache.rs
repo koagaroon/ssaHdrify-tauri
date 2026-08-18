@@ -1167,14 +1167,23 @@ impl std::fmt::Debug for FontCache {
 /// to react: CLI falls back to no-cache and warns; GUI prompts the user.
 ///
 /// Unified across open/read/write to keep the public API simple — the
-/// caller mostly cares about "did it work" + a message; specific
-/// variant only matters for `SchemaVersionMismatch` which has its own
-/// recovery path.
+/// caller mostly cares about "did it work" + a message. The two
+/// structured variants are deliberately narrow: callers may recommend
+/// deleting/rebuilding a schema-mismatched or invalid SQLite cache, but
+/// must not give that destructive advice for an ordinary permission,
+/// lock, or path error.
 #[derive(Debug)]
 pub enum CacheError {
     /// Filesystem or SQLite-level failure. Includes a human-readable
-    /// message embedding the underlying error.
+    /// message embedding the underlying error. During connection setup
+    /// and schema verification, SQLite corruption and not-a-database
+    /// errors use `InvalidDatabase` instead.
     Io(String),
+    /// While opening or verifying the cache, SQLite positively identified
+    /// it as corrupt or not a database. This is narrower than `Io`, allowing
+    /// callers to offer rebuild guidance without misdiagnosing
+    /// permission/open failures.
+    InvalidDatabase(String),
     /// Existing cache file was opened, but its schema_version row
     /// either doesn't match `SCHEMA_VERSION` (different release) or is
     /// missing entirely (corrupt or pre-versioned cache). Both cases
@@ -1189,6 +1198,9 @@ impl std::fmt::Display for CacheError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io(msg) => write!(f, "cache I/O error: {msg}"),
+            Self::InvalidDatabase(msg) => {
+                write!(f, "cache database is corrupt or not SQLite: {msg}")
+            }
             Self::SchemaVersionMismatch { found, expected } if *found == -1 => write!(
                 f,
                 "cache schema_version row missing (cache predates version tracking \
@@ -1205,6 +1217,23 @@ impl std::fmt::Display for CacheError {
                  cache is from a different release and must be rebuilt"
             ),
         }
+    }
+}
+
+/// Preserve the only SQLite error-code distinction during open/schema
+/// validation that changes safe recovery advice at the caller boundary.
+/// All other SQLite failures — including permission denied, cannot-open,
+/// read-only, busy, and locked — remain ordinary `Io` errors and must not
+/// prompt automatic deletion.
+fn cache_sqlite_error(context: impl Into<String>, error: rusqlite::Error) -> CacheError {
+    let message = format!("{}: {error}", context.into());
+    if matches!(
+        error.sqlite_error_code(),
+        Some(rusqlite::ErrorCode::DatabaseCorrupt | rusqlite::ErrorCode::NotADatabase)
+    ) {
+        CacheError::InvalidDatabase(message)
+    } else {
+        CacheError::Io(message)
     }
 }
 
@@ -1250,7 +1279,7 @@ impl FontCache {
         // rusqlite doesn't expose.
         let already_existed = cache_path.exists();
         let conn = Connection::open(cache_path)
-            .map_err(|e| CacheError::Io(format!("opening {}: {e}", cache_path.display())))?;
+            .map_err(|e| cache_sqlite_error(format!("opening {}", cache_path.display()), e))?;
 
         // Keep the cross-run persistent cache in rollback-journal mode.
         // `diagnose-fonts` has a read-only contract, and a read-only WAL
@@ -1260,15 +1289,15 @@ impl FontCache {
         // cache correctness. The session DB in fonts.rs still uses WAL
         // because it is temp/run-local and write-heavy.
         conn.pragma_update(None, "journal_mode", "DELETE")
-            .map_err(|e| CacheError::Io(format!("setting DELETE journal mode: {e}")))?;
+            .map_err(|e| cache_sqlite_error("setting DELETE journal mode", e))?;
         conn.busy_timeout(std::time::Duration::from_secs(5))
-            .map_err(|e| CacheError::Io(format!("setting busy_timeout: {e}")))?;
+            .map_err(|e| cache_sqlite_error("setting busy_timeout", e))?;
         // Per-connection: SQLite ships with foreign_keys=OFF by default,
         // so the FOREIGN KEY clauses in SCHEMA_SQL would be decorative
         // unless turned on here. The session DB `open_user_font_db`
         // mirrors this PRAGMA for the same reason.
         conn.pragma_update(None, "foreign_keys", "ON")
-            .map_err(|e| CacheError::Io(format!("enabling foreign_keys: {e}")))?;
+            .map_err(|e| cache_sqlite_error("enabling foreign_keys", e))?;
 
         let cache = Self { conn };
         if already_existed {
@@ -1288,12 +1317,12 @@ impl FontCache {
         reject_cache_reparse_paths(cache_path)?;
         let conn = Connection::open_with_flags(cache_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
             .map_err(|e| {
-                CacheError::Io(format!("opening {} read-only: {e}", cache_path.display()))
+                cache_sqlite_error(format!("opening {} read-only", cache_path.display()), e)
             })?;
         conn.busy_timeout(std::time::Duration::from_secs(5))
-            .map_err(|e| CacheError::Io(format!("setting busy_timeout: {e}")))?;
+            .map_err(|e| cache_sqlite_error("setting busy_timeout", e))?;
         conn.pragma_update(None, "foreign_keys", "ON")
-            .map_err(|e| CacheError::Io(format!("enabling foreign_keys: {e}")))?;
+            .map_err(|e| cache_sqlite_error("enabling foreign_keys", e))?;
 
         let cache = Self { conn };
         cache.verify_schema_version()?;
@@ -1307,13 +1336,13 @@ impl FontCache {
     fn init_schema(&self) -> Result<(), CacheError> {
         self.conn
             .execute_batch(SCHEMA_SQL)
-            .map_err(|e| CacheError::Io(format!("initializing schema: {e}")))?;
+            .map_err(|e| cache_sqlite_error("initializing schema", e))?;
         self.conn
             .execute(
                 "INSERT INTO cache_meta(key, value) VALUES('schema_version', ?1)",
                 params![SCHEMA_VERSION.to_string()],
             )
-            .map_err(|e| CacheError::Io(format!("writing schema_version: {e}")))?;
+            .map_err(|e| cache_sqlite_error("writing schema_version", e))?;
         Ok(())
     }
 
@@ -1324,7 +1353,7 @@ impl FontCache {
         let has_cache_meta = self
             .conn
             .table_exists(None::<&str>, "cache_meta")
-            .map_err(|e| CacheError::Io(format!("checking cache_meta table: {e}")))?;
+            .map_err(|e| cache_sqlite_error("checking cache_meta table", e))?;
         if !has_cache_meta {
             return Err(CacheError::SchemaVersionMismatch {
                 found: -1,
@@ -1357,7 +1386,7 @@ impl FontCache {
                 found: -1,
                 expected: SCHEMA_VERSION,
             }),
-            Err(e) => Err(CacheError::Io(format!("reading schema_version: {e}"))),
+            Err(e) => Err(cache_sqlite_error("reading schema_version", e)),
         }
     }
 
@@ -2221,6 +2250,52 @@ mod tests {
         let mut sidecar = path.as_os_str().to_os_string();
         sidecar.push(suffix);
         std::path::PathBuf::from(sidecar)
+    }
+
+    fn sqlite_failure(code: i32) -> rusqlite::Error {
+        rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(code), None)
+    }
+
+    #[test]
+    fn sqlite_error_classifier_only_marks_invalid_database_codes_for_rebuild() {
+        for code in [rusqlite::ffi::SQLITE_CORRUPT, rusqlite::ffi::SQLITE_NOTADB] {
+            let error = cache_sqlite_error("opening cache", sqlite_failure(code));
+            assert!(
+                matches!(&error, CacheError::InvalidDatabase(_)),
+                "SQLite code {code} must permit invalid-database recovery advice, got {error}"
+            );
+        }
+
+        for code in [rusqlite::ffi::SQLITE_PERM, rusqlite::ffi::SQLITE_CANTOPEN] {
+            let error = cache_sqlite_error("opening cache", sqlite_failure(code));
+            assert!(
+                matches!(&error, CacheError::Io(_)),
+                "SQLite code {code} must remain an ordinary I/O error, got {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn non_sqlite_cache_is_invalid_database_in_both_open_modes() {
+        let guard = TempCacheDir::new();
+        let read_write_path = guard.0.join("invalid-read-write.sqlite3");
+        let read_only_path = guard.0.join("invalid-read-only.sqlite3");
+        let invalid_bytes = b"this is deliberately not a SQLite database";
+        fs::write(&read_write_path, invalid_bytes).expect("write read-write fixture");
+        fs::write(&read_only_path, invalid_bytes).expect("write read-only fixture");
+
+        for (mode, result) in [
+            ("read-write", FontCache::open_or_create(&read_write_path)),
+            (
+                "read-only",
+                FontCache::open_existing_read_only(&read_only_path),
+            ),
+        ] {
+            assert!(
+                matches!(&result, Err(CacheError::InvalidDatabase(_))),
+                "non-SQLite cache must be classified as InvalidDatabase in {mode} mode, got {result:?}"
+            );
+        }
     }
 
     #[test]
