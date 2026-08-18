@@ -39,33 +39,19 @@ describe("fontKeyLabel", () => {
 });
 
 describe("font-collector \\p drawing-tag whitespace handling", () => {
-  it("rejects `\\p 1` (space before digit) and continues collecting glyphs", async () => {
-    // libass requires `\p` followed immediately by a digit — `\p 1`
-    // with a space is malformed and does NOT enter drawing mode. The
-    // collector regex `\\p(\\d+)` enforces this by requiring `\d`
-    // directly after `\p`. If a future "be lenient about whitespace"
-    // refactor accepted `\p 1` as a valid drawing-on tag, isDrawing
-    // would flip to true and the text after the block would be
-    // skipped from glyph collection — the rendered subtitle would
-    // then miss those glyphs (renderer + collector disagree).
-    //
-    // Test: send text starting with `{\p 1}` followed by a sentinel
-    // codepoint (Z = U+005A). If the regex correctly rejects, Z is
-    // collected; if it falsely accepts, Z is treated as a drawing
-    // command and dropped.
+  it("accepts `\\p 1` with leading argument whitespace", async () => {
     await ensureLoaded();
-    const usage = collectFonts(makeASS(String.raw`{\p 1}ZZZZ`));
+    const usage = collectFonts(makeASS(String.raw`{\p 1}ZZZZ{\p0}Y`));
     const defaultStyle = usage.find((u) => u.key.family === "Arial");
     expect(defaultStyle, "Default style FontUsage should exist").toBeDefined();
-    expect(defaultStyle!.codepoints.has(0x5a), "Z (U+005A) must be in collected codepoints").toBe(
-      true
-    );
+    expect(defaultStyle!.codepoints.has(0x5a), "Z must be skipped in drawing mode").toBe(false);
+    expect(defaultStyle!.codepoints.has(0x59), "Y after \\p0 must be collected").toBe(true);
   });
 
   it("accepts `\\p1` (no whitespace) and skips subsequent text as drawing commands", async () => {
     // Counter-test pinning the other direction of the contract:
     // `\p1` (well-formed, scale 1, no whitespace) IS drawing-on per
-    // libass, and the collector must skip glyphs until `\p0` or `\r`.
+    // libass, and the collector must skip glyphs until `\p0`.
     await ensureLoaded();
     const usage = collectFonts(makeASS(String.raw`{\p1}XXXX{\p0}YYYY`));
     const defaultStyle = usage.find((u) => u.key.family === "Arial");
@@ -248,23 +234,9 @@ Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\rStyleA\rStyleB}DDDD`}
   });
 });
 
-// ── Boundary-pin for \r and \fn capture caps. An earlier change
-// added {0,127}/{0,128} caps, but without a
-// trailing boundary the bounded regex silently TRUNCATED overlong
-// names to the prefix, then performed styleMap.has(prefix). An
-// attacker-crafted ASS defining both a 128-char prefix style and a
-// longer same-prefix style would mis-attribute glyphs to PrefixFont
-// while libass renders LongFont — embedded subsets diverge from
-// what's drawn. The fix adds a negative-lookahead boundary so
-// overlong names fail to match outright and fall through to the
-// dialogue's initial style (libass parity for an unknown name).
-// Tests below pin both sides of the boundary: at-cap match works,
-// over-cap match does NOT mis-attribute. \fn sibling parity is
-// tested though it has no demonstrated real-world exploit.
-describe("font-collector \\r / \\fn overlong-name boundary", () => {
-  it("\\r at 128-char cap matches and selects the named style", async () => {
+describe("font-collector exact \\r names and \\fn length boundary", () => {
+  it("selects a 128-character style exactly after trimming a trailing tab", async () => {
     await ensureLoaded();
-    // {0,127} = leading letter + up to 127 continuation chars = 128 total.
     const styleName = "A".repeat(128);
     const ass = `[Script Info]
 ScriptType: v4.00+
@@ -276,22 +248,18 @@ Style: ${styleName},Times New Roman,40,0,0
 
 [Events]
 Format: Layer, Start, End, Style, Text
-Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\r` + styleName + `}E`}
+Dialogue: 0,0:00:00.00,0:00:05.00,Default,${`{\\r${styleName}\t}E`}
 `;
     const usage = collectFonts(ass);
     const times = usage.find((u) => u.key.family === "Times New Roman");
-    expect(times, "128-char style must match \\r at the cap").toBeDefined();
+    expect(times, "128-character style must match exactly").toBeDefined();
     expect(times!.codepoints.has(0x45), "E must be collected under the 128-char style").toBe(true);
   });
 
-  it("\\r overlong name with prefix-sharing sibling falls through to default", async () => {
-    // Regression PoC: pre-fix the 128-char prefix style would absorb F.
-    // Post-fix the overlong \r fails to match, so F stays under the
-    // dialogue's initial style (Arial). The 128-char prefix style
-    // FontUsage may exist (registered in styleMap) but must NOT carry F.
+  it("does not alias an overlong style name to its shared prefix", async () => {
     await ensureLoaded();
     const prefix = "A".repeat(128);
-    const longer = prefix + "B"; // 129 chars sharing the 128-char prefix
+    const longer = prefix + "B";
     const ass = `[Script Info]
 ScriptType: v4.00+
 
@@ -303,50 +271,36 @@ Style: ${longer},Courier New,40,0,0
 
 [Events]
 Format: Layer, Start, End, Style, Text
-Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\r` + longer + `}F`}
+Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\r` + longer + `   }F`}
 `;
     const usage = collectFonts(ass);
-    // F (0x46) MUST land in Arial (initial style), NOT Times New Roman.
     const times = usage.find((u) => u.key.family === "Times New Roman");
     if (times) {
-      expect(times.codepoints.has(0x46), "F must NOT mis-attribute to PrefixFont (Times)").toBe(
-        false
-      );
+      expect(times.codepoints.has(0x46), "F must not use the prefix style").toBe(false);
     }
+    const courier = usage.find((u) => u.key.family === "Courier New");
+    expect(courier, "an overlong style must not be selected").toBeUndefined();
     const arial = usage.find((u) => u.key.family === "Arial");
-    expect(arial, "Arial (Default) FontUsage must exist").toBeDefined();
-    expect(
-      arial!.codepoints.has(0x46),
-      "F must land in Arial — overlong \\r falls through to initial style"
-    ).toBe(true);
+    expect(arial).toBeDefined();
+    expect(arial!.codepoints.has(0x46)).toBe(true);
   });
 
-  it("\\fn at 128-char cap matches the family", async () => {
-    // Sibling at-cap test. \fn's cap is {0,128} flat (no separate
-    // leading-letter requirement), so 128 chars match exactly.
+  it("accepts a 128-character inline family after trimming leading space and trailing tab", async () => {
     await ensureLoaded();
     const family = "A".repeat(128);
-    const usage = collectFonts(makeASS(`{\\fn${family}}G`));
+    const usage = collectFonts(makeASS(`{\\fn ${family}\t}G`));
     const match = usage.find((u) => u.key.family === family);
     expect(match, "128-char family must be captured by \\fn at the cap").toBeDefined();
     expect(match!.codepoints.has(0x47), "G must be collected under the 128-char family").toBe(true);
   });
 
-  it("\\fn overlong name does NOT capture the prefix (sibling parity with \\r)", async () => {
-    // Real-world exploit for \fn is much harder than \r (would need
-    // two installed fonts with a 128-char shared family-name prefix)
-    // but the structural defect is identical. 129-char input must
-    // NOT yield a 128-char-prefix capture; the dialogue's initial
-    // style stays in force.
+  it("does not alias an overlong inline family to its 128-character prefix", async () => {
     await ensureLoaded();
     const overlong = "A".repeat(129);
-    const usage = collectFonts(makeASS(`{\\fn${overlong}}H`));
+    const usage = collectFonts(makeASS(`{\\fn${overlong}   }H`));
     const overlongPrefix = "A".repeat(128);
     const prefixHit = usage.find((u) => u.key.family === overlongPrefix);
-    expect(
-      prefixHit,
-      "128-char prefix MUST NOT be captured when input is 129-char (overlong fails to match)"
-    ).toBeUndefined();
+    expect(prefixHit, "an overlong family must not alias its sanitized prefix").toBeUndefined();
     const arial = usage.find((u) => u.key.family === "Arial");
     expect(arial, "Arial (Default) FontUsage must exist").toBeDefined();
     expect(arial!.codepoints.has(0x48), "H must land in Arial — overlong \\fn falls through").toBe(
@@ -355,17 +309,6 @@ Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\r` + longer + `}F`}
   });
 });
 
-// ── State-retention pair for the boundary fix above. A boundary
-// lookahead alone made overlong \r / \fn silently disappear from
-// matchAll. The if-block at the caller doesn't execute when matchAll
-// returns no token, so a PRIOR valid \r / \fn in the same override
-// block leaves its state in `result` — X / Y get attributed to the
-// prior style / family instead of being reset to the dialogue initial
-// (libass semantics). The fix uses a second alternation that matches
-// overlong runs with undefined capture, so the if-block runs and
-// falls through to the initialFont path. These tests pin the
-// state-retention contract specifically, complementing the boundary
-// tests above which only cover the no-prior-override case.
 describe("font-collector \\r / \\fn overlong state-retention", () => {
   it("\\r overlong after a valid prior \\r resets to initial style", async () => {
     // PoC: `{\rStyleA\r<overlong>}X` — the FIRST tag sets state to
@@ -401,6 +344,13 @@ Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\rStyleA\r` + overlong +
       arial!.codepoints.has(0x58),
       "X must land in Arial after overlong \\r resets to initial style"
     ).toBe(true);
+  });
+
+  it("resets only exact \\fn0 before leading whitespace is removed", async () => {
+    await ensureLoaded();
+    const usage = collectFonts(makeASS(String.raw`{\fn 0}J{\fn0}K`));
+    expect(usage.find((entry) => entry.key.family === "0")?.codepoints.has(0x4a)).toBe(true);
+    expect(usage.find((entry) => entry.key.family === "Arial")?.codepoints.has(0x4b)).toBe(true);
   });
 
   it("\\fn overlong after a valid prior \\fn resets to initial family", async () => {
@@ -468,18 +418,6 @@ Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\rStyleA\r` + overlong +
   });
 });
 
-// ── Digit-led style name pair for the state-retention fix. The
-// earlier alternation closed the overlong-run shape but kept the
-// original `[\p{L}_]` leading-char class on BOTH branches, so a
-// digit-led style name (`1MainTitle`) still failed both alternation
-// branches — same state-retention divergence in a different input
-// shape. ass-compiler accepts digit-led names and stores them in
-// styleMap unchanged; the parser-vs-override-tag asymmetry was an
-// internal inconsistency regardless of libass behavior. Fix extends
-// both leading classes to `[\p{L}\p{N}_]`. Tests below cover both
-// directions: digit-led name DEFINED in V4+ Styles (must switch to
-// that style) and digit-led name UNDEFINED (must reset to initial,
-// matching the overlong path).
 describe("font-collector \\r digit-led style name", () => {
   it("\\r1MainTitle resolves to the digit-led style when defined", async () => {
     // ass-compiler accepts `Style: 1MainTitle,...`; our \r regex
@@ -519,13 +457,7 @@ Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\rStyleA\r1MainTitle}X`}
   });
 
   it("\\r9NonexistentStyle (digit-led, undefined) falls through to initial style", async () => {
-    // Sibling counter-test for the undefined case: `\r<digit-led-name>`
-    // where the name is NOT in styleMap. Before the digit-led fix,
-    // both alternation branches rejected the digit-led leading char,
-    // so matchAll missed the token and prior state stayed in force.
-    // Post-fix, the first branch matches with capture =
-    // "9NonexistentStyle", styleMap.has returns false, the else-arm
-    // resets to initialFont.
+    // Strict lookup of an unknown named reset returns to the event style.
     await ensureLoaded();
     const ass = `[Script Info]
 ScriptType: v4.00+
@@ -556,48 +488,29 @@ Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\rStyleA\r9NonexistentSt
   });
 });
 
-// ── Drawing-reset parity for digit-led \r. Widening the \r
-// alternation regex inside applyOverrideTags to accept digit-led
-// style names was incomplete because the SIBLING regex R_RESET_RE at
-// module top (which the walkText loop used to decide whether \r was
-// present → reset isDrawing) still used the old [\p{L}_] leading
-// class. When an attacker-controlled ASS pairs \p1 with
-// \r<digit-led>, the two regexes disagree: applyOverrideTags
-// switches style correctly but R_RESET_RE.test() returns false, so
-// isDrawing stays true from the prior \p1. Plain text after the
-// block becomes drawing-mode commands → glyphs missing from the
-// embedded subset. libass renders normally (\r resets drawing-off).
-// Same regex-pair coherence failure mode predicted by the WHY
-// comment for the alternation widening; the hiding spot was 458
-// lines above in the same file.
-//
-// Tests below pair the two halves of the contract:
-//   1. Drawing-mode reset fires for digit-led \r (so subsequent text
-//      is collected, not skipped).
-//   2. Style-undefined fallback to initialFont still works in
-//      combination with the drawing reset.
-describe("font-collector \\r digit-led drawing-mode reset", () => {
-  it("\\p1 in one block, \\r1MainTitle in the next: digit-led \\r resets drawing AND switches style", async () => {
-    // Two-block sequence: {\p1}{\r1MainTitle}X. isDrawing is a sticky
-    // state that persists across blocks until reset. Block 1's \p1
-    // sets isDrawing=true; block 2's \r1MainTitle must reset
-    // isDrawing=false (via R_RESET_RE.test) AND switch to 1MainTitle
-    // (via applyOverrideTags's matchAll). Then X is collected under
-    // Courier New.
-    //
-    // Before the fix: R_RESET_RE used [\p{L}_] which rejected the
-    // digit leading char; .test returned false; isDrawing stayed
-    // true from block 1; X was treated as drawing-mode commands and
-    // DROPPED. applyOverrideTags still switched style correctly
-    // (alternation regex was widened separately), but Courier New's
-    // bucket would be empty because no glyphs reached recordChars.
-    //
-    // Single-block {\p1\r1MainTitle}X is NOT used here — the
-    // earlier walkText drawing-mode pass ran pTags AFTER
-    // R_RESET_RE, so the \p1 in the same block always wins
-    // regardless of R_RESET_RE's result. That positional-order
-    // defect was a separate refactor target; this test isolates the
-    // R_RESET_RE contract via cross-block state propagation.
+describe("font-collector libass style baselines", () => {
+  it("resets bare and invalid bold/italic tags to the event style", async () => {
+    await ensureLoaded();
+    const ass = `[Script Info]
+ScriptType: v4.00+
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, Bold, Italic
+Style: Default,Arial,40,-1,-1
+
+[Events]
+Format: Layer, Start, End, Style, Text
+Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\fnTimes New Roman\fn0\b0\b2\i0\i-1}X`}
+`;
+    const usage = collectFonts(ass);
+    const restored = usage.find(
+      (entry) => entry.key.family === "Arial" && entry.key.bold && entry.key.italic
+    );
+    expect(restored).toBeDefined();
+    expect(restored!.codepoints.has(0x58)).toBe(true);
+  });
+
+  it("uses the latest named style for \\fn0 and invalid bold/italic resets", async () => {
     await ensureLoaded();
     const ass = `[Script Info]
 ScriptType: v4.00+
@@ -605,36 +518,141 @@ ScriptType: v4.00+
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, Bold, Italic
 Style: Default,Arial,40,0,0
-Style: 1MainTitle,Courier New,40,0,0
+Style: Named,Courier New,40,-1,-1
 
 [Events]
 Format: Layer, Start, End, Style, Text
-Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\p1}{\r1MainTitle}X`}
+Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\rNamed\fnTimes New Roman\fn0\b0\b99\i0\i2}Y`}
 `;
     const usage = collectFonts(ass);
-    const courier = usage.find((u) => u.key.family === "Courier New");
+    const restored = usage.find(
+      (entry) => entry.key.family === "Courier New" && entry.key.bold && entry.key.italic
+    );
+    expect(restored, "all resets must use Named rather than Default").toBeDefined();
+    expect(restored!.codepoints.has(0x59)).toBe(true);
+  });
+
+  it("returns style-relative resets to the event baseline after bare \\r", async () => {
+    await ensureLoaded();
+    const ass = `[Script Info]
+ScriptType: v4.00+
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, Bold, Italic
+Style: Default,Arial,40,0,0
+Style: Named,Courier New,40,-1,-1
+
+[Events]
+Format: Layer, Start, End, Style, Text
+Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\rNamed\r\fnTimes\fn0\b1\b2\i1\i2}S`}
+`;
+    const usage = collectFonts(ass);
+    const event = usage.find(
+      (entry) => entry.key.family === "Arial" && !entry.key.bold && !entry.key.italic
+    );
+    expect(event?.codepoints.has(0x53)).toBe(true);
+  });
+
+  it("resets literal bare and tab-only bold/italic tags to the named style", async () => {
+    await ensureLoaded();
+    const bare = String.raw`{\rNamed\b0\i0\b\i}V`;
+    const tabOnly = "{\\b0\\i0\\b\t\\i\t}W";
+    const ass = `[Script Info]
+ScriptType: v4.00+
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, Bold, Italic
+Style: Default,Arial,40,0,0
+Style: Named,Courier New,40,-1,-1
+
+[Events]
+Format: Layer, Start, End, Style, Text
+Dialogue: 0,0:00:00.00,0:00:05.00,Default,${bare}${tabOnly}
+Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\b1\i1\b\i}R`}
+`;
+    const usage = collectFonts(ass);
+    const named = usage.find(
+      (entry) => entry.key.family === "Courier New" && entry.key.bold && entry.key.italic
+    );
+    expect(named?.codepoints.has(0x56)).toBe(true);
+    expect(named?.codepoints.has(0x57)).toBe(true);
+    const regular = usage.find(
+      (entry) => entry.key.family === "Arial" && !entry.key.bold && !entry.key.italic
+    );
+    expect(regular?.codepoints.has(0x52), "bare tags must also restore a regular style").toBe(true);
+  });
+
+  it("treats present nonnumeric bold/italic arguments as zero", async () => {
+    await ensureLoaded();
+    const ass = `[Script Info]
+ScriptType: v4.00+
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, Bold, Italic
+Style: Default,Arial,40,-1,-1
+
+[Events]
+Format: Layer, Start, End, Style, Text
+Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\bbanana\iabc}Z`}
+`;
+    const usage = collectFonts(ass);
+    const regular = usage.find(
+      (entry) => entry.key.family === "Arial" && !entry.key.bold && !entry.key.italic
+    );
+    expect(regular).toBeDefined();
+    expect(regular!.codepoints.has(0x5a)).toBe(true);
+  });
+
+  it("accepts leading argument whitespace for bold and italic", async () => {
+    await ensureLoaded();
+    const usage = collectFonts(makeASS(String.raw`{\b 1\i 1}W`));
+    const styled = usage.find(
+      (entry) => entry.key.family === "Arial" && entry.key.bold && entry.key.italic
+    );
+    expect(styled).toBeDefined();
+    expect(styled!.codepoints.has(0x57)).toBe(true);
+  });
+
+  it("looks up Default and lowercase default exactly", async () => {
+    await ensureLoaded();
+    const ass = `[Script Info]
+ScriptType: v4.00+
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, Bold, Italic
+Style: Default,Arial,40,0,0
+Style: default,Courier New,40,0,0
+Style: EventStyle,Times New Roman,40,0,0
+
+[Events]
+Format: Layer, Start, End, Style, Text
+Dialogue: 0,0:00:00.00,0:00:05.00,EventStyle,${String.raw`{\rDefault}A{\rdefault}B{\rDEFAULT}C{\r}D`}
+Dialogue: 0,0:00:00.00,0:00:05.00,default,E
+Dialogue: 0,0:00:00.00,0:00:05.00,***EventStyle,F
+Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\r***EventStyle}G`}
+`;
+    const usage = collectFonts(ass);
+    expect(usage.find((entry) => entry.key.family === "Arial")?.codepoints.has(0x41)).toBe(true);
+    expect(usage.find((entry) => entry.key.family === "Courier New")?.codepoints.has(0x42)).toBe(
+      true
+    );
+    const event = usage.find((entry) => entry.key.family === "Times New Roman");
+    expect(event?.codepoints.has(0x43), "unknown uppercase name must use the event style").toBe(
+      true
+    );
+    expect(event?.codepoints.has(0x44), "bare reset must use the event style").toBe(true);
     expect(
-      courier,
-      "Courier New FontUsage must exist — block-2 R_RESET_RE must reset isDrawing for digit-led \\r"
-    ).toBeDefined();
+      usage.find((entry) => entry.key.family === "Arial")?.codepoints.has(0x45),
+      "event-style default is normalized to exact Default"
+    ).toBe(true);
+    expect(event?.codepoints.has(0x46), "all leading event-style stars are ignored").toBe(true);
     expect(
-      courier!.codepoints.has(0x58),
-      "X must land in 1MainTitle's bucket (Courier New) — proves block-2 \\r1MainTitle both switched style AND reset isDrawing"
+      usage.find((entry) => entry.key.family === "Arial")?.codepoints.has(0x47),
+      "\\r lookup remains strict and does not strip stars"
     ).toBe(true);
   });
 
-  it("\\p1 in one block, \\r9Nonexistent in the next: digit-led undefined \\r resets drawing AND falls through to initial", async () => {
-    // Sibling counter-test: {\p1}{\r9Nonexistent}Y. Block 1 sets
-    // isDrawing=true. Block 2's \r9Nonexistent must reset isDrawing
-    // (via R_RESET_RE.test) AND fall through to initialFont (style
-    // name not in styleMap). Y is collected under Arial.
-    //
-    // Before any digit-led fix: applyOverrideTags's alternation
-    // rejected digit-led → state retained block 1's style. After
-    // only the alternation fix: R_RESET_RE still rejected digit-led
-    // → isDrawing stayed true → Y dropped. After both fixes: both
-    // regexes accept digit-led; style resets to initial AND
-    // isDrawing resets; Y collected under Arial.
+  it("accepts spaces and punctuation and trims trailing tag spaces", async () => {
     await ensureLoaded();
     const ass = `[Script Info]
 ScriptType: v4.00+
@@ -642,41 +660,92 @@ ScriptType: v4.00+
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, Bold, Italic
 Style: Default,Arial,40,0,0
-Style: StyleA,Times New Roman,40,0,0
+Style: Signs - Top! #1,Courier New,40,0,0
 
 [Events]
 Format: Layer, Start, End, Style, Text
-Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\p1}{\r9NonexistentStyle}Y`}
+Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\rSigns - Top! #1   \b1}Q`}
 `;
     const usage = collectFonts(ass);
-    const arial = usage.find((u) => u.key.family === "Arial");
-    expect(arial, "Arial (Default/initial) FontUsage must exist").toBeDefined();
+    const signs = usage.find((entry) => entry.key.family === "Courier New" && entry.key.bold);
+    expect(signs).toBeDefined();
+    expect(signs!.codepoints.has(0x51)).toBe(true);
+  });
+
+  it("falls back from an undefined event style to Default, then Arial", async () => {
+    await ensureLoaded();
+    const withDefault = `[Script Info]
+ScriptType: v4.00+
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, Bold, Italic
+Style: Default,Courier New,40,0,0
+
+[Events]
+Format: Layer, Start, End, Style, Text
+Dialogue: 0,0:00:00.00,0:00:05.00,Missing,X
+`;
     expect(
-      arial!.codepoints.has(0x59),
-      "Y must land in Arial — proves block-2 R_RESET_RE reset isDrawing for digit-led \\r AND undefined-style fall-through fired"
+      collectFonts(withDefault)
+        .find((entry) => entry.key.family === "Courier New")
+        ?.codepoints.has(0x58)
+    ).toBe(true);
+
+    const withoutDefault = `[Script Info]
+ScriptType: v4.00+
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, Bold, Italic
+Style: Other,Times New Roman,40,0,0
+
+[Events]
+Format: Layer, Start, End, Style, Text
+Dialogue: 0,0:00:00.00,0:00:05.00,Missing,Y
+`;
+    expect(
+      collectFonts(withoutDefault)
+        .find((entry) => entry.key.family === "Arial")
+        ?.codepoints.has(0x59)
     ).toBe(true);
   });
 });
 
-// ── Position-sorted single-pass override handling. An earlier
-// applyOverrideTags ran four independent matchAll().at(-1) passes
-// (one per tag family) and walkText ran two more (R_RESET_RE +
-// pTags). Family-independent last-wins ignored relative position
-// between families: e.g. `{\fnArial\r}` would set family=Arial AND
-// style=initial because the \fn pass ran after \r and overwrote
-// `result.family`; libass / xy-VSFilter process tags left-to-right,
-// so \r should reset family back to initialFont. Same shape applied
-// to `{\b1\r}`, `{\i1\r}`, `{\p1\r}`. The current code consolidates
-// into one position-sorted walk; these tests pin libass-parity for
-// each divergent shape.
-describe("font-collector \\r resets siblings within the same block", () => {
+describe("font-collector \\r and drawing-mode state", () => {
+  it("switches style without ending drawing mode", async () => {
+    await ensureLoaded();
+    const ass = `[Script Info]
+ScriptType: v4.00+
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, Bold, Italic
+Style: Default,Arial,40,0,0
+Style: StyleA,Courier New,40,0,0
+
+[Events]
+Format: Layer, Start, End, Style, Text
+Dialogue: 0,0:00:00.00,0:00:05.00,Default,${String.raw`{\p1}{\rStyleA}m 0 0 l 1 1{\p0}X`}
+`;
+    const usage = collectFonts(ass);
+    const courier = usage.find((u) => u.key.family === "Courier New");
+    expect(courier).toBeDefined();
+    expect(courier!.codepoints.has(0x6d), "drawing command m must remain skipped").toBe(false);
+    expect(courier!.codepoints.has(0x58), "X after \\p0 must use StyleA").toBe(true);
+  });
+
+  it("unknown \\r falls back to the event style while preserving drawing mode", async () => {
+    await ensureLoaded();
+    const usage = collectFonts(makeASS(String.raw`{\p1}{\r9NonexistentStyle}m 0 0 l 1 1{\p0}Y`));
+    const arial = usage.find((u) => u.key.family === "Arial");
+    expect(arial).toBeDefined();
+    expect(arial!.codepoints.has(0x6d)).toBe(false);
+    expect(arial!.codepoints.has(0x59)).toBe(true);
+  });
+});
+
+describe("font-collector left-to-right override order", () => {
   it("{\\fnTimes\\r}X resets family to initial — \\fn-then-\\r positional order", async () => {
-    // libass: \fn sets family=Times, then \r resets EVERYTHING
-    // including family to dialogue initial (Arial). X collected
-    // under Arial, NOT Times. Before the position-sorted fix: \fn
-    // matchAll.at(-1) ran AFTER \r matchAll.at(-1), so family=Times
-    // overrode \r's style reset → embed attributed X to Times while
-    // libass rendered it under Arial.
+    // \r resets font styling to the event baseline, but drawing mode is
+    // intentionally tested separately because libass preserves it.
     await ensureLoaded();
     const usage = collectFonts(makeASS(String.raw`{\fnTimes New Roman\r}X`));
     const times = usage.find((u) => u.key.family === "Times New Roman");
@@ -730,22 +799,15 @@ describe("font-collector \\r resets siblings within the same block", () => {
     expect(arialPlain!.codepoints.has(0x58), "X must land in Arial non-italic").toBe(true);
   });
 
-  it("{\\p1\\r}X resets drawing-mode to OFF — \\p-then-\\r positional order", async () => {
-    // libass: \p1 enables drawing, then \r resets drawing-off
-    // (libass treats \r as a full state reset including drawing
-    // mode). X collected under Arial. Before the position-sorted
-    // fix: walkText ran R_RESET_RE first (drawing=false from \r),
-    // THEN pTags matchAll.at(-1) (drawing=true from \p1) — the \p
-    // pass clobbered the \r reset, so X was treated as
-    // drawing-mode commands and dropped from glyph collection.
+  it("{\\p1\\r} preserves drawing mode until \\p0", async () => {
     await ensureLoaded();
-    const usage = collectFonts(makeASS(String.raw`{\p1\r}X`));
+    const usage = collectFonts(makeASS(String.raw`{\p1\r}m 0 0 l 1 1{\p0}X`));
     const arial = usage.find((u) => u.key.family === "Arial");
-    expect(arial, "Arial (Default/initial) FontUsage must exist").toBeDefined();
-    expect(
-      arial!.codepoints.has(0x58),
-      "X must land in Arial — \\r after \\p1 must reset drawing-mode OFF"
-    ).toBe(true);
+    expect(arial).toBeDefined();
+    expect(arial!.codepoints.has(0x6d), "drawing command m must stay skipped after \\r").toBe(
+      false
+    );
+    expect(arial!.codepoints.has(0x58), "X after \\p0 must be collected").toBe(true);
   });
 
   it("{\\r\\fnTimes}X — \\r-then-\\fn keeps the later \\fn family (libass parity, sanity check)", async () => {
@@ -769,53 +831,19 @@ describe("font-collector \\r resets siblings within the same block", () => {
   });
 });
 
-// ── Overlong second-alternation cap (1 leading + {128,199999}
-// continuation = 200000 total). The earlier 129-char test pins the
-// LOWER bound of the overlong branch; these two pin the UPPER bound
-// from both sides. Both alternations now carry the trailing boundary
-// lookahead; the 200001-char case relies on the lookahead to refuse
-// rather than silently prefix-matching. ──
-describe("font-collector R_TAG overlong-cap boundary (200000 / 200001)", () => {
-  it("\\r at 200000-char overlong cap matches and resets to initial style", async () => {
-    // At-limit: 1 leading + 199999 continuation = 200000 total, the
-    // exact ceiling of the overlong second alt. m[1] is undefined
-    // (second alt has no capture group), applyOverrideTags treats
-    // the match as "\r with no name" — reset-to-initial-style per
-    // libass parity. F lands under Arial (the dialogue's initial
-    // style), NOT under the prior `\fn Times` family.
+describe("font-collector long \\r arguments", () => {
+  it("consumes a 200000-character name as an event-style fallback", async () => {
     await ensureLoaded();
     const longName = "A".repeat(200000);
     const usage = collectFonts(makeASS(String.raw`{\fnTimes\r` + longName + String.raw`}F`));
-    const arial = usage.find((u) => u.key.family === "Arial");
-    expect(arial, "Arial (Default initial) FontUsage must exist").toBeDefined();
-    expect(
-      arial!.codepoints.has(0x46),
-      "F must land in Arial — 200000-char overlong \\r resets to initial"
-    ).toBe(true);
+    expect(usage.find((entry) => entry.key.family === "Arial")?.codepoints.has(0x46)).toBe(true);
   });
 
-  it("\\r over 200000-char cap: \\r fails to match, prior \\fn family persists", async () => {
-    // Over-limit: 200001 chars can't satisfy either alternation
-    // under the new boundary lookahead — alt 1 caps at 128, alt 2
-    // can't terminate with a non-identifier inside the run of 'A's.
-    // The `\r` is unmatched, the override block is parsed without a
-    // reset, and the prior `\fn Times` family persists through to
-    // the trailing text. Pinned even though MAX_DIALOGUE_TEXT_LEN +
-    // MAX_CAPTION_TEXT_LEN make the over-cap case mostly unreachable
-    // for legitimate input — the contract is what we're locking, not
-    // a likely runtime path.
+  it("also consumes longer names instead of retaining a prior override", async () => {
     await ensureLoaded();
     const tooLong = "A".repeat(200001);
     const usage = collectFonts(makeASS(String.raw`{\fnTimes\r` + tooLong + String.raw`}F`));
-    const times = usage.find((u) => u.key.family === "Times");
-    expect(
-      times,
-      "Times FontUsage must exist — \\fn applied before the unmatched \\r"
-    ).toBeDefined();
-    expect(
-      times!.codepoints.has(0x46),
-      "F must land in Times — over-cap \\r is unrecognized, prior \\fn persists"
-    ).toBe(true);
+    expect(usage.find((entry) => entry.key.family === "Arial")?.codepoints.has(0x46)).toBe(true);
   });
 });
 

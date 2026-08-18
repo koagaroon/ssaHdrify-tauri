@@ -40,21 +40,34 @@ const FONT_NAME_SANITIZER = new RegExp(
   "gu"
 );
 
-// module-scope to match project convention
-// (FONT_NAME_SANITIZER above, plus every other named regex in
-// subtitle-parser.ts / ass-processor.ts). String.prototype.replace
-// doesn't share `lastIndex` across calls, so inline definitions
-// inside `preprocessSrtColors` were semantically equivalent — this
-// is purely a convention sweep so a future grep `^const \w+_RE` finds
-// every regex in the file in one place.
-//
-// Matches: <font color="#RRGGBB"> or <font color=#RRGGBB> with up
-// to 512 chars of other attributes before/after color (ReDoS guard).
-// The hex alternation requires a non-hex char immediately after the
-// 6- or 3-digit run so `#abcdef` is never parsed as 3-digit `abc`.
+// Matches a complete <font color="#RRGGBB"> or
+// <font color=#RRGGBB> opener with up to 512 chars of other attributes
+// before/after color. Anchoring lets the stateful scanner below identify
+// every <font> frame while this regex alone decides whether the opener may
+// inject a color override. The hex alternation requires a non-hex char
+// immediately after the 6- or 3-digit run so `#abcdef` is never parsed as
+// 3-digit `abc`.
 const SRT_COLOR_OPEN_RE =
-  /<font\b[^>]{0,512}\bcolor="?#([0-9a-fA-F]{6}(?![0-9a-fA-F])|[0-9a-fA-F]{3}(?![0-9a-fA-F]))"?[^>]{0,512}>/gi;
-const SRT_COLOR_CLOSE_RE = /<\/font>/gi;
+  /^<font\b[^>]{0,512}\bcolor="?#([0-9a-fA-F]{6}(?![0-9a-fA-F])|[0-9a-fA-F]{3}(?![0-9a-fA-F]))"?[^>]{0,512}>$/i;
+
+// The longest opener accepted by SRT_COLOR_OPEN_RE is 1,045 characters:
+// `<font` + two 512-character attribute windows + `color="#RRGGBB"` + `>`.
+// Longer tags remain ordinary HTML-like text and are stripped later by the
+// document builder; they never inject an ASS override.
+const MAX_SRT_FONT_TAG_LENGTH = 1_045;
+
+// Production cue text is already capped at 64,000 characters, but keep the
+// exported preprocessing helper safe when it is called directly. Overflow
+// nesting is counted separately so an ignored closer cannot pop a tracked
+// outer color frame early.
+const MAX_TRACKED_SRT_FONT_DEPTH = 256;
+
+type InlinePrimaryColor = string | null;
+
+interface SrtFontFrame {
+  previousColor: InlinePrimaryColor;
+  setsColor: boolean;
+}
 
 // ── Text Cue Color Preprocessing ─────────────────────────
 
@@ -81,6 +94,14 @@ export function escapeSrtUserText(text: string): string {
  * Convert HTML-style font color tags to ASS inline color overrides.
  * <font color="#RRGGBB">text</font>  →  {\1c&HBBGGRR&}text{\1c}
  *
+ * Every bounded <font> opener gets a stack frame, including openers without
+ * a supported color attribute. This preserves nesting: closing a non-color
+ * frame cannot reset or pop an outer color. A nested color close restores the
+ * previous inline color, while an outer color close uses bare `\1c` to restore
+ * only the current ASS style's primary color. It deliberately does not emit
+ * `\r`, because that would also erase bold, italic, underline, font, and other
+ * active styling.
+ *
  * CONTRACT: the `text` argument MUST have been passed through
  * `escapeSrtUserText` first. That's the only way to guarantee the `{…}`
  * sequences this function injects for color conversion are distinguishable
@@ -95,26 +116,96 @@ export function escapeSrtUserText(text: string): string {
  * @internal — production callers must use `processSrtUserText`.
  */
 export function preprocessSrtColors(text: string): string {
-  // Convert opening tags with color. SRT_COLOR_OPEN_RE /
-  // SRT_COLOR_CLOSE_RE are module-scope — see
-  // comment above the constants for the convention rationale.
-  let result = text.replace(SRT_COLOR_OPEN_RE, (_match, raw: string) => {
+  const output: string[] = [];
+  const frames: SrtFontFrame[] = [];
+  let currentColor: InlinePrimaryColor = null;
+  let overflowDepth = 0;
+  let cursor = 0;
+
+  while (cursor < text.length) {
+    const tagStart = text.indexOf("<", cursor);
+    if (tagStart < 0) {
+      output.push(text.slice(cursor));
+      break;
+    }
+
+    output.push(text.slice(cursor, tagStart));
+
+    if (text.slice(tagStart, tagStart + 7).toLowerCase() === "</font>") {
+      const closeTag = text.slice(tagStart, tagStart + 7);
+      cursor = tagStart + 7;
+
+      if (overflowDepth > 0) {
+        overflowDepth -= 1;
+        output.push(closeTag);
+        continue;
+      }
+
+      const frame = frames.pop();
+      if (!frame) {
+        output.push(closeTag);
+        continue;
+      }
+
+      if (!frame.setsColor) {
+        output.push(closeTag);
+        continue;
+      }
+
+      currentColor = frame.previousColor;
+      output.push(currentColor === null ? "{\\1c}" : `{\\1c&H${currentColor}&}`);
+      continue;
+    }
+
+    const openingPrefix = text.slice(tagStart, tagStart + 5).toLowerCase();
+    const boundary = text[tagStart + 5];
+    const isFontOpener =
+      openingPrefix === "<font" && (boundary === undefined || !/[a-zA-Z0-9_]/.test(boundary));
+    if (!isFontOpener) {
+      output.push("<");
+      cursor = tagStart + 1;
+      continue;
+    }
+
+    const tagEnd = text.indexOf(">", tagStart + 5);
+    if (tagEnd < 0) {
+      output.push(text.slice(tagStart));
+      break;
+    }
+
+    const openTag = text.slice(tagStart, tagEnd + 1);
+    cursor = tagEnd + 1;
+
+    if (openTag.length > MAX_SRT_FONT_TAG_LENGTH || overflowDepth > 0) {
+      overflowDepth += 1;
+      output.push(openTag);
+      continue;
+    }
+
+    if (frames.length >= MAX_TRACKED_SRT_FONT_DEPTH) {
+      overflowDepth = 1;
+      output.push(openTag);
+      continue;
+    }
+
+    const colorMatch = SRT_COLOR_OPEN_RE.exec(openTag);
+    frames.push({ previousColor: currentColor, setsColor: colorMatch !== null });
+    if (!colorMatch) {
+      output.push(openTag);
+      continue;
+    }
+
+    const raw = colorMatch[1]!;
     const hexRgb =
       raw.length === 3 ? raw[0]!.repeat(2) + raw[1]!.repeat(2) + raw[2]!.repeat(2) : raw;
     const r = hexRgb.slice(0, 2);
     const g = hexRgb.slice(2, 4);
     const b = hexRgb.slice(4, 6);
-    // Reverse to BGR for ASS format
-    return `{\\1c&H${b}${g}${r}&}`;
-  });
+    currentColor = `${b}${g}${r}`;
+    output.push(`{\\1c&H${currentColor}&}`);
+  }
 
-  // Convert ALL </font> to style resets — both color and non-color.
-  // Non-color <font> tags are stripped later by HTML tag removal in buildAssDocument,
-  // so their {\r} is harmless (resets to default which is the current state).
-  // This avoids positional mismatch when non-color </font> precedes color </font>.
-  result = result.replace(SRT_COLOR_CLOSE_RE, () => "{\\r}");
-
-  return result;
+  return output.join("");
 }
 
 /**
