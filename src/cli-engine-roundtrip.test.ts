@@ -28,10 +28,9 @@ import { DEFAULT_BRIGHTNESS, type Eotf } from "./features/hdr-convert/color-engi
 import { processAssContent } from "./features/hdr-convert/ass-processor";
 import {
   DEFAULT_STYLE,
-  buildAssDocumentFromCaptions,
+  convertTextCueSubtitleToAss,
   isConvertible,
   isNativeAss,
-  processSrtUserText,
 } from "./features/hdr-convert/srt-converter";
 import { DEFAULT_TEMPLATE, resolveOutputPath } from "./features/hdr-convert/output-naming";
 import { deriveShiftedPath, shiftSubtitles } from "./features/timing-shift/timing-engine";
@@ -41,7 +40,6 @@ import {
   deriveRenameOutputPath,
   parseFilename,
 } from "./features/batch-rename/pairing-engine";
-import { parseSubtitle } from "./lib/subtitle-parser";
 
 // ── Fixtures ─────────────────────────────────────────────
 
@@ -101,9 +99,7 @@ function guiHdrFlow(
   }
 
   if (isConvertible(fileName)) {
-    const preprocessed = processSrtUserText(content);
-    const { captions } = parseSubtitle(preprocessed, DEFAULT_STYLE.fps);
-    const { content: rawAss } = buildAssDocumentFromCaptions(captions, DEFAULT_STYLE);
+    const { content: rawAss } = convertTextCueSubtitleToAss(content, DEFAULT_STYLE);
     return { outputPath, content: processAssContent(rawAss, brightness, eotf) };
   }
 
@@ -114,6 +110,7 @@ describe("HDR convert — GUI ↔ CLI byte equivalence", () => {
   const inputAss = "C:\\subs\\episode01.ass";
   const inputSrt = "C:\\subs\\episode02.srt";
   const inputVtt = "C:\\subs\\episode03.vtt";
+  const inputSub = "C:\\subs\\episode04.sub";
 
   it("ASS path produces byte-identical output for shared (content, brightness, eotf)", () => {
     const cli = convertHdr({
@@ -158,6 +155,23 @@ describe("HDR convert — GUI ↔ CLI byte equivalence", () => {
     expect(cli.content).toBe(gui.content);
     expect(cli.content).toContain("Web");
     expect(cli.content).not.toContain("line:90%");
+  });
+
+  it("MicroDVD Auto FPS produces byte-identical GUI and CLI output", () => {
+    const content = "{1}{1}25.000\r\n{25}{50}Declared timing\r\n";
+    const cli = convertHdr({
+      inputPath: inputSub,
+      content,
+      eotf: "PQ",
+      brightness: 1000,
+      outputTemplate: DEFAULT_TEMPLATE,
+    });
+    const gui = guiHdrFlow(inputSub, content, "PQ", 1000, DEFAULT_TEMPLATE);
+
+    expect(cli.outputPath).toBe(gui.outputPath);
+    expect(cli.content).toBe(gui.content);
+    expect(cli.content).toContain("0:00:01.00,0:00:02.00");
+    expect(cli.content.match(/^Dialogue:/gm)).toHaveLength(1);
   });
 
   it("CLI applies DEFAULT_BRIGHTNESS when brightness is omitted, matching GUI default state", () => {
@@ -303,6 +317,17 @@ describe("Time shift — GUI ↔ CLI byte equivalence", () => {
 
     expect(cli.outputPath).toBe(deriveShiftedPath(input));
     expect(cli.content).toBe(guiResult.content);
+  });
+
+  it("MicroDVD declaration drives both GUI and CLI shift timing", () => {
+    const inputPath = "C:\\subs\\episode02.sub";
+    const content = "{1}{1}25.000\r\n{25}{50}Hello\r\n";
+    const cli = convertShift({ inputPath, content, offsetMs: 1000 });
+    const gui = shiftSubtitles(content, { offsetMs: 1000 });
+
+    expect(cli.content).toBe(gui.content);
+    expect(cli.content).toBe("{1}{1}25.000\r\n{50}{75}Hello\r\n");
+    expect(cli.captionCount).toBe(1);
   });
 });
 

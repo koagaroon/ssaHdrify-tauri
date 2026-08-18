@@ -10,7 +10,7 @@
  */
 
 import { ASCII_CONTROL_CHARS, BIDI_AND_ZERO_WIDTH_CHARS } from "../../lib/unicode-controls";
-import { safeMs } from "../../lib/subtitle-parser";
+import { parseSubtitle, safeMs } from "../../lib/subtitle-parser";
 
 // hoisted to module scope so the regex
 // compiles once instead of per buildAssFromSrtBlocks invocation.
@@ -138,7 +138,6 @@ export interface StyleConfig {
   outlineColor: string; // ASS format: &H00000000
   outlineWidth: number;
   shadowDepth: number;
-  fps: number; // only used for SUB (MicroDVD) format
 }
 
 export const DEFAULT_STYLE: StyleConfig = {
@@ -148,7 +147,6 @@ export const DEFAULT_STYLE: StyleConfig = {
   outlineColor: "&H00000000",
   outlineWidth: 2.0,
   shadowDepth: 1.0,
-  fps: 23.976,
 };
 
 // ── ASS Document Builder ─────────────────────────────────
@@ -157,9 +155,9 @@ export const DEFAULT_STYLE: StyleConfig = {
  * Build a minimal ASS document from parsed subtitle entries.
  * This creates a properly formatted ASS file with styles and events.
  *
- * CONTRACT: each `entries[i].text` MUST have flowed through
- * `escapeSrtUserText` → `preprocessSrtColors` → `parseSubtitle` on the way
- * in. This function does NOT re-escape `{`/`}`/`\` — doing so would silently
+ * CONTRACT: raw subtitle structure MUST be parsed first; each resulting cue
+ * body must then flow through `escapeSrtUserText` → `preprocessSrtColors` on
+ * the way in. This function does NOT re-escape `{`/`}`/`\` — doing so would silently
  * defeat our own injected color/bold/italic overrides and was the root of
  * a past regression. The integration tests in `srt-converter.test.ts`
  * guard against future callers dropping the escape step.
@@ -211,9 +209,9 @@ export function buildAssDocument(
     const startTime = msToAssTime(entry.start);
     const endTime = msToAssTime(entry.end);
     // IMPORTANT: we do NOT escape `{` / `}` / `\` here. Callers are
-    // expected to have already run `escapeSrtUserText` on the ORIGINAL
-    // SRT content before `preprocessSrtColors` injected our trusted color
-    // override tags. Re-escaping at this stage would turn those injected
+    // expected to have already run `processSrtUserText` on this parsed cue
+    // body. Whole-document escaping is forbidden because it corrupts
+    // MicroDVD timing syntax. Re-escaping at this stage would turn injected
     // `{\1c&H…}` tags into literal text, silently defeating SRT→HDR color
     // conversion. See escapeSrtUserText's docstring for the required
     // pipeline ordering.
@@ -260,10 +258,37 @@ export function buildAssDocumentFromCaptions(
       text: c.text,
     }));
 
+  if (entries.length === 0) {
+    throw new Error(
+      `No usable subtitle cues detected: all ${skippedCount} cue(s) exceeded the 64000-character limit`
+    );
+  }
+
   return {
     content: buildAssDocument(entries, style),
     skippedCount,
   };
+}
+
+/**
+ * Convert a raw SRT, WebVTT, or MicroDVD document into ASS.
+ *
+ * Parse structure before touching user text: whole-document escaping would
+ * corrupt MicroDVD `{start}{end}` fields. Only parsed cue bodies flow through
+ * the composed escape/color pipeline, keeping hostile ASS overrides inert
+ * without changing subtitle syntax. An explicit FPS is a manual MicroDVD
+ * override; absence means Auto (file declaration, then 23.976 fallback).
+ */
+export function convertTextCueSubtitleToAss(
+  rawContent: string,
+  style: StyleConfig = DEFAULT_STYLE,
+  fpsOverride?: number
+): { content: string; skippedCount: number } {
+  const { captions } = parseSubtitle(rawContent, fpsOverride);
+  const processedCaptions = captions.map((caption) =>
+    caption.skipped ? caption : { ...caption, text: processSrtUserText(caption.text) }
+  );
+  return buildAssDocumentFromCaptions(processedCaptions, style);
 }
 
 /**

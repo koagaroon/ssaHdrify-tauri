@@ -11,6 +11,7 @@ import {
   processSrtUserText,
   buildAssDocument,
   buildAssDocumentFromCaptions,
+  convertTextCueSubtitleToAss,
   isNativeAss,
   isConvertible,
   DEFAULT_STYLE,
@@ -147,6 +148,53 @@ describe("processSrtUserText", () => {
   it("is idempotent on text with no user braces and no color tags", () => {
     const plain = "Hello world, no markup at all.";
     expect(processSrtUserText(plain)).toBe(plain);
+  });
+});
+
+describe("shared text-cue to ASS conversion", () => {
+  it("parses MicroDVD structure before escaping cue text and excludes FPS metadata", () => {
+    const sub = '{1}{1}25.000\n{25}{50}{\\an8}<font color="#FF0000">Red</font>\n';
+    const result = convertTextCueSubtitleToAss(sub);
+    const dialogues = result.content.split("\n").filter((line) => line.startsWith("Dialogue:"));
+
+    expect(dialogues).toHaveLength(1);
+    expect(dialogues[0]).toContain("0:00:01.00,0:00:02.00");
+    expect(dialogues[0]).toContain("\\{\\\\an8\\}");
+    expect(dialogues[0]).toContain("{\\1c&H0000FF&}Red");
+    expect(result.content).not.toContain("25.000");
+  });
+
+  it("uses an explicit manual FPS override instead of the declaration", () => {
+    const result = convertTextCueSubtitleToAss("{1}{1}25\n{25}{50}Hello\n", DEFAULT_STYLE, 50);
+    const dialogue = result.content.split("\n").find((line) => line.startsWith("Dialogue:"));
+
+    expect(dialogue).toContain("0:00:00.50,0:00:01.00");
+  });
+
+  it.each([
+    ["SRT", (text: string) => `1\n00:00:01,000 --> 00:00:02,000\n${text}\n`],
+    ["WebVTT", (text: string) => `WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n${text}\n`],
+    ["MicroDVD", (text: string) => `{1}{1}25\n{25}{50}${text}\n`],
+  ])(
+    "rejects all-oversized %s input with the skipped count before returning empty ASS",
+    (_format, makeInput) => {
+      expect(() => convertTextCueSubtitleToAss(makeInput("X".repeat(65_000)))).toThrow(
+        /all 1 cue.*64000/i
+      );
+    }
+  );
+
+  it("keeps valid cues when an oversized sibling is skipped without emitting a blank Dialogue", () => {
+    const oversized = "X".repeat(65_000);
+    const srt =
+      `1\n00:00:01,000 --> 00:00:02,000\n${oversized}\n\n` +
+      "2\n00:00:03,000 --> 00:00:04,000\nNormal\n";
+    const result = convertTextCueSubtitleToAss(srt);
+    const dialogues = result.content.split("\n").filter((line) => line.startsWith("Dialogue:"));
+
+    expect(result.skippedCount).toBe(1);
+    expect(dialogues).toHaveLength(1);
+    expect(dialogues[0]).toContain("Normal");
   });
 });
 

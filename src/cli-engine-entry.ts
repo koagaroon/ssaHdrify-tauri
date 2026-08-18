@@ -2,10 +2,9 @@ import { parse as parseAss } from "ass-compiler";
 import { processAssContent } from "./features/hdr-convert/ass-processor";
 import {
   DEFAULT_STYLE,
-  buildAssDocumentFromCaptions,
+  convertTextCueSubtitleToAss,
   isConvertible,
   isNativeAss,
-  processSrtUserText,
 } from "./features/hdr-convert/srt-converter";
 import { DEFAULT_BRIGHTNESS, type Eotf } from "./features/hdr-convert/color-engine";
 import { DEFAULT_TEMPLATE, resolveOutputPath } from "./features/hdr-convert/output-naming";
@@ -41,7 +40,6 @@ import {
   substituteTemplate,
 } from "./lib/path-validation";
 import { categorizeForRename, type RenameCategory } from "./lib/rename-extensions";
-import { parseSubtitle } from "./lib/subtitle-parser";
 import { sanitizeError } from "./lib/dedup-helpers";
 import { stripUnicodeControls } from "./lib/unicode-controls";
 import { decodeBase64Bytes } from "./lib/base64-bytes";
@@ -239,15 +237,10 @@ export function convertHdr(request: HdrConversionRequest): HdrConversionResult {
   }
 
   if (isConvertible(fileName)) {
-    const preprocessed = processSrtUserText(request.content);
-    const { captions } = parseSubtitle(preprocessed, DEFAULT_STYLE.fps);
-    // Drop oversized-text placeholders before building ASS. parseSrt /
-    // parseSub / parseVtt emit `{ text: "", skipped: true }` for captions over
-    // MAX_CAPTION_TEXT_LEN; without this filter the
-    // CLI HDR path serializes each as a blank Dialogue line. Mirrors
-    // HdrConvert.tsx GUI-side filter. (parseAss placeholders don't
-    // reach here — `.ass` goes through the isNativeAss branch above.)
-    const { content: rawAss, skippedCount } = buildAssDocumentFromCaptions(captions, DEFAULT_STYLE);
+    const { content: rawAss, skippedCount } = convertTextCueSubtitleToAss(
+      request.content,
+      DEFAULT_STYLE
+    );
     return {
       outputPath,
       content: processAssContent(rawAss, brightness, request.eotf),

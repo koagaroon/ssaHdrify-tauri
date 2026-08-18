@@ -96,6 +96,22 @@ describe("runChain — single shift step", () => {
     expect(result.content).toBe(expected.content);
   });
 
+  it("inherits and preserves a MicroDVD FPS declaration", () => {
+    const content = "{1}{1}25.000\r\n{25}{50}Hello\r\n";
+    const plan: ChainPlan = {
+      steps: [{ kind: "shift", params: { offsetMs: 1000 } }],
+      outputTemplate: "{name}.shifted.sub",
+    };
+    const result = runChain({
+      plan,
+      inputPath: "C:\\subs\\episode01.sub",
+      content,
+    });
+
+    expect(result.content).toBe("{1}{1}25.000\r\n{50}{75}Hello\r\n");
+    expect(result.notes[0]).toMatch(/format: sub/i);
+  });
+
   it("rejects a non-finite shift offset in a chain step (no misleading zero-shift)", () => {
     // Same CLI-boundary guard as the standalone convertShift: a NaN offset
     // would be silently clamped to a zero-shift success. The chain shift
@@ -501,6 +517,18 @@ describe("resolveChainOutputPath", () => {
     // no idea what to do. `[\s\S]*?` (lazy) crosses the newline between
     // sentence one and the guidance.
     expect(() => runChain({ plan, inputPath: INPUT_PATH, content: srt })).toThrow(
+      /requires ASS.*SSA content[\s\S]*?Run `hdr` standalone first/
+    );
+  });
+
+  it("keeps standalone conversion guidance for MicroDVD input to a chain HDR step", () => {
+    const plan: ChainPlan = {
+      steps: [{ kind: "hdr", params: { eotf: "PQ", brightness: 1000 } }],
+      outputTemplate: "{name}.hdr.ass",
+    };
+    const sub = "{1}{1}25.000\n{25}{50}Hello\n";
+
+    expect(() => runChain({ plan, inputPath: "C:\\subs\\episode01.sub", content: sub })).toThrow(
       /requires ASS.*SSA content[\s\S]*?Run `hdr` standalone first/
     );
   });

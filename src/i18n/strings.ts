@@ -196,6 +196,17 @@ export const strings: Record<string, StringEntry> = {
   style_outline_width: { en: "Outline Width", zh: "描边宽度" },
   style_shadow_depth: { en: "Shadow Depth", zh: "阴影深度" },
   style_fps: { en: "FPS (SUB only)", zh: "帧率（仅 SUB）" },
+  style_fps_auto: {
+    en: "Auto (file declaration or 23.976)",
+    zh: "自动（文件声明或 23.976）",
+  },
+  style_fps_manual: { en: "Manual override", zh: "手动指定" },
+  style_fps_value: { en: "Manual FPS", zh: "手动帧率" },
+  style_fps_invalid: {
+    en: "Enter an FPS greater than 3 and no more than 120.",
+    zh: "请输入大于 3 且不超过 120 的帧率。",
+  },
+  style_fps_invalid_summary: { en: "Invalid SUB FPS", zh: "SUB 帧率无效" },
   style_font_custom: { en: "Custom…", zh: "自定义…" },
   btn_select_files: { en: "Select Subtitle File(s)", zh: "选择字幕文件（可多选）" },
   btn_convert: { en: "Convert", zh: "转换" },

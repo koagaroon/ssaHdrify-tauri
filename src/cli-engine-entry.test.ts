@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   applyFontEmbed,
+  convertHdr,
   convertShift,
   parseTimingMap,
   planFontEmbed,
@@ -231,6 +232,33 @@ describe("planRename", () => {
   });
 });
 
+describe("HDR text-cue engine helpers", () => {
+  it("converts declared-FPS MicroDVD through the CLI surface without a metadata Dialogue", () => {
+    const result = convertHdr({
+      inputPath: "C:\\subs\\sample.sub",
+      content: "{1}{1}25.000\n{25}{50}{\\an8}Hello\n",
+      eotf: "PQ",
+    });
+    const dialogues = result.content.split("\n").filter((line) => line.startsWith("Dialogue:"));
+
+    expect(result.skippedCount).toBe(0);
+    expect(dialogues).toHaveLength(1);
+    expect(dialogues[0]).toContain("0:00:01.00,0:00:02.00");
+    expect(dialogues[0]).toContain("\\{\\\\an8\\}Hello");
+    expect(result.content).not.toContain("25.000");
+  });
+
+  it("throws when every parsed text cue is oversized", () => {
+    expect(() =>
+      convertHdr({
+        inputPath: "C:\\subs\\sample.sub",
+        content: `{1}{1}25\n{25}{50}${"X".repeat(65_000)}\n`,
+        eotf: "PQ",
+      })
+    ).toThrow(/all 1 cue.*64000/i);
+  });
+});
+
 describe("time shift timing-map engine helpers", () => {
   it("parses timing maps and converts through the CLI engine surface", () => {
     const map = parseTimingMap({
@@ -274,6 +302,18 @@ describe("time shift timing-map engine helpers", () => {
         "",
       ].join("\n")
     );
+  });
+
+  it("uses and preserves a MicroDVD FPS declaration for standalone shift", () => {
+    const result = convertShift({
+      inputPath: "C:\\subs\\sample.sub",
+      content: "{1}{1}25.000\r\n{25}{50}Hello\r\n",
+      offsetMs: 1000,
+    });
+
+    expect(result.captionCount).toBe(1);
+    expect(result.shiftedCount).toBe(1);
+    expect(result.content).toBe("{1}{1}25.000\r\n{50}{75}Hello\r\n");
   });
 
   it("treats a runtime-null threshold as absent for a timing-map shift", () => {
