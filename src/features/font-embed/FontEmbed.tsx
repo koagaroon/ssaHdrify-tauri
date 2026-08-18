@@ -3,12 +3,12 @@ import {
   clearFontSources,
   fileNameFromPath,
   isInferredUtf16,
-  openFontCache,
   pickAssFiles,
   pickOutputDirectory,
   readTextDetectEncoding,
   removeFontSource,
   writeText,
+  type FontCacheStatus,
 } from "../../lib/tauri-api";
 import { ask } from "@tauri-apps/plugin-dialog";
 import {
@@ -35,6 +35,7 @@ import { useLogPanel } from "../../lib/useLogPanel";
 import { LogPanel } from "../../lib/LogPanel";
 import { DropErrorBanner } from "../../lib/DropErrorBanner";
 import { buildConflictMessage, sanitizeError, sanitizeForDialog } from "../../lib/dedup-helpers";
+import { isFontCacheUnavailable } from "../../lib/font-cache-ui-state";
 
 type FontEmbedOutputMode = "beside_input" | "chosen_dir";
 
@@ -107,7 +108,12 @@ const MAX_BATCH_FILES = 500;
 // so the lower cap is invisible to legitimate workflows.
 const MAX_BATCH_AGGREGATE_BYTES = 200 * 1024 * 1024;
 
-export default function FontEmbed() {
+interface FontEmbedProps {
+  cacheStatus: FontCacheStatus | null;
+  cacheProbeFailed: boolean;
+}
+
+export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedProps) {
   const { t } = useI18n();
   const fontStyleLabels = useMemo(
     () => ({ bold: t("font_style_bold"), italic: t("font_style_italic") }),
@@ -132,7 +138,7 @@ export default function FontEmbed() {
     null
   );
   const [lastActionResult, setLastActionResult] = useState<
-    "success" | "noop" | "partial" | "error" | "cancelled" | null
+    "success" | "partial" | "error" | "cancelled" | null
   >(null);
   // Synchronous "Cancelling…" feedback for the embed Cancel button. The abort
   // only lands at the next per-file iteration boundary, so without this the
@@ -170,36 +176,10 @@ export default function FontEmbed() {
   const dropZoneRef = useRef<HTMLDivElement>(null);
   const fileContainerRef = useRef<HTMLDivElement>(null);
 
-  // Persistent cache availability — when init failed for a non-schema
-  // reason (disk full, permissions denied), the App-level launch hook
-  // logs WARN to stderr but a GUI app has no visible stderr. Surface
-  // the state inline here so users see why embed is silently using
-  // system fonts only. Schema-mismatch is handled by the launch-time
-  // modal and is NOT shown as a banner (avoids double-surfacing).
-  //
-  // Per-component probe is intentional (vs lifting cacheStatus into a
-  // Context shared with App.tsx): the banner needs to stay accurate
-  // across the user's session — if they hit "Clear cache" in the drift
-  // modal mid-session and clear succeeds-then-fails, this probe re-runs
-  // when they next mount Font Embed. App.tsx's launch-time probe is
-  // load-bearing for the modal; this one is load-bearing for the
-  // banner. Two cheap SQL queries per launch is below the perf bar.
-  const [cacheUnavailable, setCacheUnavailable] = useState(false);
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const status = await openFontCache();
-        if (cancelled) return;
-        setCacheUnavailable(!status.available && !status.schemaMismatch);
-      } catch {
-        if (!cancelled) setCacheUnavailable(true);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  // App owns the authoritative launch/re-probe lifecycle and refreshes these
+  // props after modal actions. Schema mismatch has its own modal, so only a
+  // non-schema init failure or a rejected probe shows this fallback banner.
+  const cacheUnavailable = isFontCacheUnavailable(cacheStatus, cacheProbeFailed);
 
   // ── Local font sources (persist for the tab session) ─────
   const [fontSources, setFontSources] = useState<FontSource[]>([]);
@@ -665,7 +645,12 @@ export default function FontEmbed() {
         const safePath = safeDisplayFileName(skipped.inputPath);
         if (skipped.reason === "duplicate") {
           addLog(t("msg_skipped_duplicate", safePath), "error");
+        } else if (skipped.reason === "input_conflict") {
+          addLog(t("msg_fonts_input_conflict", safePath), "error");
         } else {
+          // Validation messages carry path-specific details from the planner;
+          // keep them verbatim (after its sanitization) instead of pretending
+          // an arbitrary runtime error is an i18n key.
           addLog(t("msg_fonts_error", safePath, skipped.message), "error");
         }
       }
@@ -713,11 +698,6 @@ export default function FontEmbed() {
 
         let successCount = 0;
         let issueCount = planned.skipped.length;
-        // Files that processed cleanly but needed no embedding (every
-        // referenced font already present). Tracked apart from successCount /
-        // issueCount so an all-no-change batch isn't misframed as total
-        // failure in the final summary.
-        let noChangeCount = 0;
         let processedCount = planned.skipped.length;
 
         for (const target of planned.targets) {
@@ -826,27 +806,15 @@ export default function FontEmbed() {
             const safeOutName = sanitizeForDialog(fileNameFromPath(outputPath));
             if (result.embeddedCount === 0) {
               const fileWarnings = [...missingWarnings, ...result.warnings];
-              if (fileWarnings.length > 0) {
-                issueCount += fileWarnings.length;
-                for (const warning of fileWarnings) {
-                  addLog(t("msg_fonts_file_warning", safeFileName, warning), "warn");
-                }
-              } else {
-                // Benign no-change: every referenced font is already present,
-                // so there was nothing to embed. Not a failure — tracked
-                // separately so an all-no-change batch isn't routed to
-                // msg_fonts_all_failed below.
-                noChangeCount++;
+              // selectedFonts is non-empty and each selected font either
+              // produces an entry or a warning inside embedFonts. Therefore a
+              // zero-entry result is a failed/skipped embed, never an
+              // "already present" no-op.
+              issueCount += fileWarnings.length;
+              for (const warning of fileWarnings) {
+                addLog(t("msg_fonts_file_warning", safeFileName, warning), "warn");
               }
-              // Nothing was actually embedded — skip the write so we
-              // don't produce a `.embedded.ass` that's identical to the
-              // input and log "saved" for a no-op. Surface as a warning
-              // so the user knows the file was processed but the output
-              // would have been a copy of the source.
-              addLog(
-                t("msg_embed_no_change", safeOutName),
-                fileWarnings.length > 0 ? "warn" : "info"
-              );
+              addLog(t("msg_embed_no_change", safeOutName), "warn");
               continue;
             }
             if (cached.inferredEncodingId) {
@@ -891,38 +859,15 @@ export default function FontEmbed() {
         const aborted = !!abortRef.current?.signal.aborted;
         if (aborted) {
           setLastActionResult("cancelled");
-        } else if (successCount > 0 && issueCount > 0 && noChangeCount > 0) {
-          addLog(
-            t("msg_fonts_complete_partial_mixed", successCount, noChangeCount, issueCount),
-            "warn"
-          );
-          setLastActionResult("partial");
         } else if (successCount > 0 && issueCount > 0) {
           addLog(
             t("msg_fonts_complete_partial", successCount, filePaths.length, issueCount),
             "warn"
           );
           setLastActionResult("partial");
-        } else if (successCount > 0 && noChangeCount > 0) {
-          addLog(t("msg_fonts_complete_mixed", successCount, noChangeCount), "success");
-          setLastActionResult("success");
         } else if (successCount > 0) {
           addLog(t("msg_fonts_complete", successCount, filePaths.length), "success");
           setLastActionResult("success");
-        } else if (issueCount === 0 && noChangeCount > 0) {
-          // Every processed file already had all its referenced fonts —
-          // nothing to embed. A benign outcome, not a failure: don't route it
-          // to msg_fonts_all_failed.
-          addLog(t("msg_fonts_all_no_change", noChangeCount), "info");
-          setLastActionResult("noop");
-        } else if (noChangeCount > 0 && issueCount > 0) {
-          // Some files were benign no-ops while others failed preflight
-          // or processing. That is incomplete, not "all failed".
-          addLog(
-            t("msg_fonts_complete_partial_mixed", successCount, noChangeCount, issueCount),
-            "warn"
-          );
-          setLastActionResult("partial");
         } else {
           addLog(t("msg_fonts_all_failed", filePaths.length), "error");
           setLastActionResult("error");
@@ -954,7 +899,6 @@ export default function FontEmbed() {
     }
     if (analyzing) return { kind: "busy", message: t("status_fonts_analyzing") };
     if (lastActionResult === "success") return { kind: "done", message: t("status_fonts_done") };
-    if (lastActionResult === "noop") return { kind: "done", message: t("status_fonts_noop") };
     if (lastActionResult === "partial") {
       return { kind: "pending", message: t("status_fonts_partial") };
     }

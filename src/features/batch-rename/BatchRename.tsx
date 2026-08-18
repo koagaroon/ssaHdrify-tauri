@@ -51,6 +51,11 @@ import {
   deriveRenameOutputPath,
   findDuplicateRenameOutputKeys,
   findRenameInputConflictIndexes,
+  findRenameOutputOwnershipConflictIndexes,
+  countUnpairedSubtitlePaths,
+  refreshRenameFilesAfterSuccessfulInPlaceRenames,
+  refreshPairingRowsAfterSuccessfulInPlaceRenames,
+  summarizeRenameRun,
   isNoOpRename,
   assignSubtitleToRow,
   type PairingRow,
@@ -148,7 +153,7 @@ export default function BatchRename() {
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<{ processed: number; total: number } | null>(null);
   const [lastActionResult, setLastActionResult] = useState<
-    "success" | "error" | "cancelled" | "noop" | null
+    "success" | "partial" | "error" | "cancelled" | "noop" | null
   >(null);
   const [dropActive, setDropActive] = useState(false);
   const [dropError, setDropError] = useState<string | null>(null);
@@ -178,6 +183,14 @@ export default function BatchRename() {
   // a newer directory dialog must invalidate an older unresolved dialog.
   const chosenDirPickGenRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
+  // A successful in-place run rewrites shared file identities. Skip exactly
+  // that resulting baseRows reset because the live row state is reconciled
+  // directly, preserving manual assignments and unchecked/failed-row intent.
+  const skipNextInternalBaseRowsResetRef = useRef(false);
+  // Keep the exact internally-skipped seed too. Development StrictMode can
+  // replay an effect; the replay must keep skipping that same seed without
+  // suppressing a later mode toggle or external picker selection.
+  const internallySkippedBaseRowsRef = useRef<PairingRow[] | null>(null);
   // Synchronous double-click guard — `busy` state lags setBusy(true) by
   // one render. busyRef is written synchronously at handler entry and
   // released in the outer finally so every exit path clears it.
@@ -219,10 +232,17 @@ export default function BatchRename() {
       : buildPairings(parsedVideos, parsedSubs);
   }, [videoPaths, videoNames, subtitlePaths, subtitleNames, multiSubtitleMode]);
 
-  // Reset edits when the input file lists change. baseRows only
-  // recomputes when the user re-picks / clears, so this isn't a
-  // surprise — it's an explicit "start fresh" point.
+  // Reset edits when an external selection re-picks / clears the file lists.
+  // A successful in-place operation also changes those lists, but reconciles
+  // live rows directly and arms the one-shot skip above so user intent stays.
   useEffect(() => {
+    if (skipNextInternalBaseRowsResetRef.current) {
+      skipNextInternalBaseRowsResetRef.current = false;
+      internallySkippedBaseRowsRef.current = baseRows;
+      return;
+    }
+    if (internallySkippedBaseRowsRef.current === baseRows) return;
+    internallySkippedBaseRowsRef.current = null;
     setEditedRows(baseRows);
   }, [baseRows]);
 
@@ -263,6 +283,10 @@ export default function BatchRename() {
   const warningCount = useMemo(
     () => pairingRows.filter((r) => r.source === "warning").length,
     [pairingRows]
+  );
+  const unpairedSubtitleCount = useMemo(
+    () => countUnpairedSubtitlePaths(subtitlePaths, pairingRows),
+    [subtitlePaths, pairingRows]
   );
 
   const pairingColumns = useMemo<PreviewTableColumn<PairingRow>[]>(
@@ -469,6 +493,7 @@ export default function BatchRename() {
     pickGenRef.current = pickGenRef.current + 1;
     chosenDirPickGenRef.current = chosenDirPickGenRef.current + 1;
     clearFile("rename");
+    setLastActionResult(null);
     setChosenDir(null);
     setUnknownCount(0);
     setDropError(null);
@@ -585,6 +610,33 @@ export default function BatchRename() {
         // Sanitize attacker-influenced filename.
         addLog(t("msg_rename_already_named", sanitizeForDialog(tgt.row.subtitle!.name)), "info");
       }
+
+      // A derived output can be a file currently loaded in HDR / Timing /
+      // Fonts / Style even though none of the Rename inputs use that path.
+      // Generic overwrite confirmation is not sufficient: replacing it would
+      // leave the owning tab with stale cached content. Reject those rows
+      // before any confirmation or filesystem operation.
+      const crossTabConflictIndexes = findRenameOutputOwnershipConflictIndexes(
+        targets,
+        (outputPath) => isFileInUse(outputPath, "rename") !== null
+      );
+      const crossTabConflictTargets = targets.filter((_, index) =>
+        crossTabConflictIndexes.has(index)
+      );
+      for (const target of crossTabConflictTargets) {
+        const reason = buildConflictMessage([target.outputPath], "rename", isFileInUse, t);
+        if (reason) {
+          addLog(
+            t("msg_rename_skipped", sanitizeForDialog(target.row.subtitle!.name), reason),
+            "error"
+          );
+        }
+      }
+      if (crossTabConflictTargets.length > 0) {
+        targets = targets.filter((_, index) => !crossTabConflictIndexes.has(index));
+        preflightFailedCount += crossTabConflictTargets.length;
+      }
+
       const duplicateOutputKeys = findDuplicateRenameOutputKeys(
         conflictFreeTargets.map((tgt) => tgt.outputPath)
       );
@@ -763,6 +815,7 @@ export default function BatchRename() {
         let successCount = 0;
         let processedCount = 0;
         const seenOutputs = new Set<string>();
+        const successfulInPlaceTargets: { inputPath: string; outputPath: string }[] = [];
 
         for (const { row, outputPath } of targets) {
           if (abortRef.current?.signal.aborted) {
@@ -800,6 +853,12 @@ export default function BatchRename() {
             }
             addLog(t("msg_rename_done", subName, outName), "success");
             successCount++;
+            if (outputMode === "rename") {
+              successfulInPlaceTargets.push({
+                inputPath: row.subtitle!.path,
+                outputPath,
+              });
+            }
           } catch (e) {
             const reason = sanitizeError(e);
             addLog(t("msg_rename_error", subName, reason), "error");
@@ -809,21 +868,46 @@ export default function BatchRename() {
           }
         }
 
-        // Avoid the success-log vs error-footer contradiction
-        // : when every row failed, the
-        // "Rename complete: 0/N" success line and the red
-        // "Rename failed" footer fired together — visually inconsistent
-        // signal. Split so success-log fires only when at least one row
-        // landed; full-batch failure gets its own error-log line.
+        // Rename mode consumes each successful source path. Refresh the
+        // shared FileContext only after the loop so partial failure/cancel
+        // keeps every untouched input stable. Cross-tab-owned outputs were
+        // rejected during preflight, so every produced path is safe to track.
+        if (successfulInPlaceTargets.length > 0) {
+          const refreshedRenameFiles = refreshRenameFilesAfterSuccessfulInPlaceRenames(
+            renameFiles,
+            successfulInPlaceTargets
+          );
+          if (refreshedRenameFiles !== renameFiles) {
+            skipNextInternalBaseRowsResetRef.current = true;
+            setEditedRows((rows) =>
+              refreshPairingRowsAfterSuccessfulInPlaceRenames(rows, successfulInPlaceTargets)
+            );
+            setRenameFiles(refreshedRenameFiles);
+          }
+        }
+
+        // Classify against executable + preflight-rejected rows. A batch with
+        // one write and one rejected/error row is partial, not a green 1/1
+        // success; a zero-write batch gets only the failure signal.
         const aborted = !!abortRef.current?.signal.aborted;
         if (aborted) {
           setLastActionResult("cancelled");
-        } else if (successCount > 0) {
-          addLog(t("msg_rename_complete", successCount, targets.length), "success");
-          setLastActionResult("success");
         } else {
-          addLog(t("msg_rename_all_failed", targets.length), "error");
-          setLastActionResult("error");
+          const summary = summarizeRenameRun(
+            successCount,
+            targets.length,
+            preflightFailedCount + duplicateTargets.length
+          );
+          if (summary.kind === "success") {
+            addLog(t("msg_rename_complete", successCount, summary.totalPlanned), "success");
+            setLastActionResult("success");
+          } else if (summary.kind === "partial") {
+            addLog(t("msg_rename_complete", successCount, summary.totalPlanned), "warn");
+            setLastActionResult("partial");
+          } else {
+            addLog(t("msg_rename_all_failed", summary.totalPlanned), "error");
+            setLastActionResult("error");
+          }
         }
       } catch (e) {
         // The default-branch throw inside the switch above (and any other
@@ -850,14 +934,12 @@ export default function BatchRename() {
     chosenDir,
     multiSubtitleMode,
     subtitlePaths,
+    renameFiles,
+    setRenameFiles,
+    isFileInUse,
     addLog,
     t,
   ]);
-
-  // Reset last-action on selection change.
-  useEffect(() => {
-    setLastActionResult(null);
-  }, [renameFiles]);
 
   const tabStatus = useMemo<Status>(() => {
     if (totalCount === 0) return { kind: "idle", message: t("status_rename_idle") };
@@ -869,6 +951,9 @@ export default function BatchRename() {
       };
     }
     if (lastActionResult === "success") return { kind: "done", message: t("status_rename_done") };
+    if (lastActionResult === "partial") {
+      return { kind: "pending", message: t("status_rename_partial") };
+    }
     if (lastActionResult === "error") return { kind: "error", message: t("status_rename_error") };
     if (lastActionResult === "cancelled") {
       return { kind: "pending", message: t("status_rename_cancelled") };
@@ -1165,6 +1250,11 @@ export default function BatchRename() {
                 <span style={{ color: "var(--warning)" }}>
                   {" · "}
                   {t("rename_grid_warning_suffix", warningCount)}
+                </span>
+              )}
+              {unpairedSubtitleCount > 0 && (
+                <span style={{ color: "var(--warning)" }}>
+                  {t("rename_grid_unpaired_subtitle_suffix", unpairedSubtitleCount)}
                 </span>
               )}
               <span className="flex-1" />

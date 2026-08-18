@@ -40,7 +40,6 @@ export const strings: Record<string, StringEntry> = {
   },
   status_fonts_busy: { en: "Embedding…", zh: "嵌入中…" },
   status_fonts_done: { en: "Fonts embedded", zh: "字体已嵌入" },
-  status_fonts_noop: { en: "Nothing to embed", zh: "无需嵌入" },
   status_fonts_partial: { en: "Fonts embedded with warnings", zh: "字体已嵌入，但有警告" },
   status_fonts_error: { en: "Embed failed", zh: "嵌入失败" },
   status_fonts_cancelled: { en: "Embed cancelled", zh: "已取消嵌入" },
@@ -395,17 +394,9 @@ export const strings: Record<string, StringEntry> = {
     en: "Embed complete: {0}/{1} file(s) processed",
     zh: "嵌入完成：已处理 {0}/{1} 个文件",
   },
-  msg_fonts_complete_mixed: {
-    en: "Embed complete: {0} file(s) written, {1} unchanged",
-    zh: "嵌入完成：已写入 {0} 个文件，{1} 个文件无需更改",
-  },
   msg_fonts_complete_partial: {
     en: "Embed incomplete: {0}/{1} file(s) written, {2} issue(s)",
     zh: "嵌入不完整：已写入 {0}/{1} 个文件，{2} 个问题",
-  },
-  msg_fonts_complete_partial_mixed: {
-    en: "Embed incomplete: {0} file(s) written, {1} unchanged, {2} issue(s)",
-    zh: "嵌入不完整：已写入 {0} 个文件，{1} 个文件无需更改，{2} 个问题",
   },
   msg_fonts_skipped_count: {
     en: "Note: {0} file(s) were skipped before this prompt (see log).",
@@ -415,12 +406,12 @@ export const strings: Record<string, StringEntry> = {
     en: "Embed failed on all {0} file(s); see errors above",
     zh: "全部 {0} 个文件嵌入失败，详见上方错误",
   },
-  msg_fonts_all_no_change: {
-    en: "Nothing to embed — all referenced fonts are already present in {0} file(s)",
-    zh: "无需嵌入 —— {0} 个文件引用的字体均已存在",
-  },
   msg_fonts_cancelled: { en: "Embed cancelled.", zh: "已取消嵌入。" },
   msg_fonts_error: { en: "Error embedding {0}: {1}", zh: "嵌入 {0} 出错：{1}" },
+  msg_fonts_input_conflict: {
+    en: "Skipped {0} — its output path matches another selected input",
+    zh: "已跳过 {0} —— 其输出路径与另一个已选输入文件相同",
+  },
   msg_fonts_analysis_unavailable: {
     en: "Analysis data is unavailable. Select the files again.",
     zh: "分析数据已不可用，请重新选择文件。",
@@ -460,8 +451,8 @@ export const strings: Record<string, StringEntry> = {
     zh: "已保存但有警告：{0}（已嵌入 {1} 个字体，{2} 条警告）",
   },
   msg_embed_no_change: {
-    en: "Skipped {0} — no fonts were embedded (output would equal input)",
-    zh: "跳过 {0} — 未嵌入任何字体（输出与输入相同，未写文件）",
+    en: "Skipped {0} — none of the selected fonts could be embedded; see warnings above",
+    zh: "已跳过 {0} —— 所选字体均无法嵌入；请查看上方警告",
   },
   fonts_full_embed_warning: {
     en: "Fonts are subset to only the glyphs used in this subtitle. Safety padding (ASCII + CJK fullwidth) is included automatically.",
@@ -628,6 +619,14 @@ export const strings: Record<string, StringEntry> = {
   font_cache_drift_btn_rescan: { en: "Rescan now", zh: "立即重新扫描" },
   font_cache_drift_btn_use_as_is: { en: "Use as-is", zh: "保持原样使用" },
   font_cache_drift_btn_clear: { en: "Clear cache", zh: "清除缓存" },
+  font_cache_close_busy_rescan: {
+    en: "Cannot close while the font cache is being rescanned",
+    zh: "字体缓存重新扫描期间无法关闭",
+  },
+  font_cache_close_busy_clear: {
+    en: "Cannot close while the font cache is being cleared",
+    zh: "字体缓存清除期间无法关闭",
+  },
   font_cache_rescanning: { en: "Rescanning font cache…", zh: "正在重新扫描字体缓存…" },
   font_cache_clearing: { en: "Clearing cache…", zh: "正在清除缓存…" },
   font_cache_rescan_done: {
@@ -681,6 +680,10 @@ export const strings: Record<string, StringEntry> = {
   },
   status_rename_busy: { en: "Renaming…", zh: "重命名中…" },
   status_rename_done: { en: "Rename complete", zh: "重命名完成" },
+  status_rename_partial: {
+    en: "Rename completed with issues",
+    zh: "重命名已完成，但有问题",
+  },
   status_rename_error: { en: "Rename failed", zh: "重命名失败" },
   status_rename_cancelled: { en: "Rename cancelled", zh: "已取消重命名" },
   status_rename_noop: {
@@ -733,6 +736,10 @@ export const strings: Record<string, StringEntry> = {
   rename_grid_title: {
     en: "Pairing preview · {0} row(s)",
     zh: "配对预览 · {0} 行",
+  },
+  rename_grid_unpaired_subtitle_suffix: {
+    en: " · Unpaired subtitles: {0}",
+    zh: " · 未配对字幕：{0}",
   },
   rename_grid_warning_suffix: {
     en: "{0} warning(s)",
@@ -957,6 +964,10 @@ export const strings: Record<string, StringEntry> = {
   msg_style_parse_error: {
     en: "Cannot analyze {0}: {1}",
     zh: "无法分析 {0}：{1}",
+  },
+  msg_style_output_path_error: {
+    en: "Cannot plan an output for {0}: {1}",
+    zh: "无法为 {0} 规划输出路径：{1}",
   },
   msg_style_outputs_exist: {
     en: "{0} output file(s) already exist. No files were written; remove or rename those outputs first.",

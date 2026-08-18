@@ -61,6 +61,11 @@ interface PreviewRow extends StyleEditRow {
   fileName: string;
 }
 
+interface PreviewError {
+  kind: "document" | "output";
+  reason: string;
+}
+
 type LastActionResult = "success" | "partial" | "error" | "cancelled" | "noop" | null;
 
 function hasAssExtension(path: string): boolean {
@@ -169,9 +174,17 @@ export default function StyleEdit() {
 
   const preview = useMemo(() => {
     const rows: PreviewRow[] = [];
-    const errors = new Map<string, string>();
-    if (!validation.valid) return { rows, errors };
+    const errors = new Map<string, PreviewError>();
+    const outputPaths = new Map<string, string>();
+    if (!validation.valid) return { rows, errors, outputPaths };
     for (const file of loadedFiles) {
+      let outputPath: string;
+      try {
+        outputPath = deriveStyledPath(file.path);
+      } catch (error) {
+        errors.set(file.path, { kind: "output", reason: sanitizeError(error) });
+        continue;
+      }
       try {
         const plan = file.planner.plan(operations);
         for (const row of plan.rows) {
@@ -182,11 +195,12 @@ export default function StyleEdit() {
             fileName: file.name,
           });
         }
+        outputPaths.set(file.path, outputPath);
       } catch (error) {
-        errors.set(file.path, sanitizeError(error));
+        errors.set(file.path, { kind: "document", reason: sanitizeError(error) });
       }
     }
-    return { rows, errors };
+    return { rows, errors, outputPaths };
   }, [loadedFiles, operations, validation.valid]);
 
   const changeableKeys = useMemo(
@@ -380,8 +394,10 @@ export default function StyleEdit() {
 
     try {
       if (preview.errors.size > 0) {
-        for (const [path, reason] of preview.errors) {
-          addLog(t("msg_style_parse_error", safeFileName(path), reason), "error");
+        for (const [path, error] of preview.errors) {
+          const key =
+            error.kind === "output" ? "msg_style_output_path_error" : "msg_style_parse_error";
+          addLog(t(key, safeFileName(path), error.reason), "error");
         }
         setLastActionResult("error");
         return;
@@ -391,8 +407,9 @@ export default function StyleEdit() {
         const selectedRowIds = preview.rows
           .filter((row) => row.filePath === file.path && selectedRows.has(row.key))
           .map((row) => row.id);
-        return selectedRowIds.length > 0
-          ? [{ file, outputPath: deriveStyledPath(file.path), selectedRowIds }]
+        const outputPath = preview.outputPaths.get(file.path);
+        return selectedRowIds.length > 0 && outputPath
+          ? [{ file, outputPath, selectedRowIds }]
           : [];
       });
 
@@ -928,9 +945,13 @@ export default function StyleEdit() {
 
       {preview.errors.size > 0 && (
         <div role="alert" className="space-y-1">
-          {Array.from(preview.errors, ([path, reason]) => (
+          {Array.from(preview.errors, ([path, error]) => (
             <p key={path} className="text-xs" style={{ color: "var(--error)" }}>
-              {t("msg_style_parse_error", safeFileName(path), reason)}
+              {t(
+                error.kind === "output" ? "msg_style_output_path_error" : "msg_style_parse_error",
+                safeFileName(path),
+                error.reason
+              )}
             </p>
           ))}
         </div>

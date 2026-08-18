@@ -23,6 +23,8 @@
  */
 
 import { normalizeOutputKey } from "../../lib/dedup-helpers";
+import type { BatchRenameFilesState } from "../../lib/FileContext";
+import { LANG_TAGS } from "../../lib/lang-detection";
 import { assertSafeOutputFilename, assertSafeOutputPath } from "../../lib/path-validation";
 import { isWindowsRuntime } from "../../lib/platform";
 
@@ -61,11 +63,28 @@ interface EpisodePattern {
   build: (m: RegExpMatchArray) => EpisodeResult;
 }
 
+function escapeRegexLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Pattern A normally ends at the media/subtitle extension, but external
+// subtitle packs commonly insert a language tag first (`Show - 01.sc.ass`).
+// Build the optional tag branch from the same source of truth used by output
+// naming so widening language support cannot silently drift between features.
+const LANGUAGE_TAG_ALTERNATION = [...LANG_TAGS]
+  .sort((a, b) => b.length - a.length)
+  .map(escapeRegexLiteral)
+  .join("|");
+const PATTERN_A_RE = new RegExp(
+  String.raw`\s-\s*0*(\d+)(?:v\d+)?\s*(?:\[|\.(?:(?:${LANGUAGE_TAG_ALTERNATION})\.)?[a-z0-9]{1,10}$)`,
+  "i"
+);
+
 const EPISODE_PATTERNS: EpisodePattern[] = [
   // Western S01E01 — both season and episode, highest confidence.
   // Matches on either raw or cleaned (no bracket dependency).
   {
-    regex: /\bS(\d+)E(\d+)\b/i,
+    regex: /\bS(\d+)E(\d+)(?:v\d+)?\b/i,
     useRaw: true,
     build: (m) => ({
       episode: parseInt(m[2]!, 10),
@@ -84,7 +103,7 @@ const EPISODE_PATTERNS: EpisodePattern[] = [
   // anyway). Reject 4+ digit forms here and let Pattern A or LCS
   // handle the long-running edge.
   {
-    regex: /\]\s*\[\s*0*(\d{1,3})\s*\]/,
+    regex: /\]\s*\[\s*0*(\d{1,3})(?:v\d+)?\s*\]/i,
     useRaw: true,
     build: (m) => ({ episode: parseInt(m[1]!, 10) }),
   },
@@ -99,14 +118,14 @@ const EPISODE_PATTERNS: EpisodePattern[] = [
     // catastrophic-backtracking territory per Principle #3. No real
     // subtitle/video extension exceeds ~5 chars; cap at 10 leaves headroom
     // for any future codec naming weirdness.
-    regex: /\s-\s*0*(\d+)\s*(?:\[|\.[a-z0-9]{1,10}$)/i,
+    regex: PATTERN_A_RE,
     useRaw: true,
     build: (m) => ({ episode: parseInt(m[1]!, 10) }),
   },
   // 第N话 / 第N集 — Chinese marker, fallback. Doesn't appear in the
   // documented corpus but worth keeping for older naming styles.
   {
-    regex: /第\s*(\d+)\s*[话集]/,
+    regex: /第\s*(\d+)(?:v\d+)?\s*[话集]/i,
     useRaw: false,
     build: (m) => ({ episode: parseInt(m[1]!, 10) }),
   },
@@ -117,7 +136,7 @@ const EPISODE_PATTERNS: EpisodePattern[] = [
   // falls through to the LCS fallback instead of feeding parseInt a
   // precision-lossy 4+ digit value.
   {
-    regex: /\bEP?(\d{1,3})\b/i,
+    regex: /\bEP?(\d{1,3})(?:v\d+)?\b/i,
     useRaw: false,
     build: (m) => ({ episode: parseInt(m[1]!, 10) }),
   },
@@ -530,6 +549,129 @@ export function findDuplicateRenameOutputKeys(outputPaths: string[]): Set<string
 export interface RenamePathTarget {
   inputPath: string;
   outputPath: string;
+}
+
+export interface RenameRunSummary {
+  kind: "success" | "partial" | "error";
+  totalPlanned: number;
+}
+
+/**
+ * Classify a finished, non-cancelled run against every planned row, including
+ * rows rejected during preflight. This keeps `1/1 processed` from presenting
+ * a green success when another selected row was skipped before the I/O loop.
+ */
+export function summarizeRenameRun(
+  successCount: number,
+  executableTargetCount: number,
+  preflightFailureCount: number
+): RenameRunSummary {
+  const totalPlanned = executableTargetCount + preflightFailureCount;
+  if (successCount === 0) return { kind: "error", totalPlanned };
+  if (successCount === totalPlanned) return { kind: "success", totalPlanned };
+  return { kind: "partial", totalPlanned };
+}
+
+/** Identify planned outputs already owned by a different feature tab. */
+export function findRenameOutputOwnershipConflictIndexes<T extends { outputPath: string }>(
+  targets: readonly T[],
+  isOwnedByAnotherTab: (outputPath: string) => boolean
+): Set<number> {
+  const conflicts = new Set<number>();
+  targets.forEach((target, index) => {
+    if (isOwnedByAnotherTab(target.outputPath)) conflicts.add(index);
+  });
+  return conflicts;
+}
+
+/**
+ * Count loaded subtitle identities that are not represented by exactly one
+ * pairing row. Normally a paired subtitle has one owner; zero rows means the
+ * grammar could not pair it, while multiple rows would violate the manual
+ * assignment ownership invariant. Count normalized, unique input identities
+ * so a duplicate picker entry cannot inflate the user-facing number.
+ */
+export function countUnpairedSubtitlePaths(subtitlePaths: string[], rows: PairingRow[]): number {
+  const rowOwnerCounts = new Map<string, number>();
+  for (const row of rows) {
+    if (!row.subtitle) continue;
+    const key = normalizeOutputKey(row.subtitle.path);
+    rowOwnerCounts.set(key, (rowOwnerCounts.get(key) ?? 0) + 1);
+  }
+
+  const loadedKeys = new Set(subtitlePaths.map(normalizeOutputKey));
+  let unpairedCount = 0;
+  for (const key of loadedKeys) {
+    if (rowOwnerCounts.get(key) !== 1) unpairedCount += 1;
+  }
+  return unpairedCount;
+}
+
+/**
+ * Refresh the shared Batch Rename file identities after successful in-place
+ * renames. Only inputs present in `successfulTargets` move to their produced
+ * paths; failed, cancelled, unchecked, and unpaired inputs stay byte-for-byte
+ * unchanged. Callers must reject outputs owned by another tab before I/O;
+ * this helper only reconciles identities after those safety gates pass.
+ *
+ * Returning the original object when no loaded path changed lets the caller
+ * avoid arming its one-shot internal-refresh marker unnecessarily.
+ */
+export function refreshRenameFilesAfterSuccessfulInPlaceRenames(
+  state: BatchRenameFilesState | null,
+  successfulTargets: RenamePathTarget[]
+): BatchRenameFilesState | null {
+  if (!state || successfulTargets.length === 0) return state;
+
+  const targetsByInput = new Map(
+    successfulTargets.map((target) => [normalizeOutputKey(target.inputPath), target])
+  );
+  const subtitlePaths: string[] = [];
+  const subtitleNames: string[] = [];
+  let changed = false;
+
+  state.subtitlePaths.forEach((path, index) => {
+    const target = targetsByInput.get(normalizeOutputKey(path));
+    if (!target) {
+      subtitlePaths.push(path);
+      subtitleNames.push(state.subtitleNames[index] ?? baseName(path));
+      return;
+    }
+
+    changed = true;
+    subtitlePaths.push(target.outputPath);
+    subtitleNames.push(baseName(target.outputPath));
+  });
+
+  if (!changed) return state;
+  return { ...state, subtitlePaths, subtitleNames };
+}
+
+/**
+ * Rewrite successful in-place subtitle identities inside the live pairing
+ * rows without rebuilding the batch. This preserves manual assignments,
+ * checkbox intent, sources, and stable React IDs for every unaffected row.
+ */
+export function refreshPairingRowsAfterSuccessfulInPlaceRenames(
+  rows: PairingRow[],
+  successfulTargets: RenamePathTarget[]
+): PairingRow[] {
+  if (successfulTargets.length === 0) return rows;
+  const targetsByInput = new Map(
+    successfulTargets.map((target) => [normalizeOutputKey(target.inputPath), target])
+  );
+  let changed = false;
+  const refreshedRows = rows.map((row) => {
+    if (!row.subtitle) return row;
+    const target = targetsByInput.get(normalizeOutputKey(row.subtitle.path));
+    if (!target) return row;
+    changed = true;
+    return {
+      ...row,
+      subtitle: { path: target.outputPath, name: baseName(target.outputPath) },
+    };
+  });
+  return changed ? refreshedRows : rows;
 }
 
 /**

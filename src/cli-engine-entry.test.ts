@@ -57,6 +57,23 @@ describe("planRename", () => {
     });
   });
 
+  it("auto mode pairs a mixed language-suffix and revision-tail batch", () => {
+    const videoOne = "C:\\media\\Show - 01v2.mkv";
+    const videoTwo = "C:\\media\\Show.S01E02v3.mkv";
+    const subtitleOne = "C:\\subs\\Show - 01.sc.ass";
+    const subtitleTwo = "C:\\subs\\Show.S01E02v1.eng.ass";
+
+    const plan = planRename({
+      paths: [videoOne, videoTwo, subtitleOne, subtitleTwo],
+      mode: "copy_to_video",
+      langs: "auto",
+    });
+
+    expect(plan.pairings.map((row) => row.inputPath)).toEqual([subtitleOne, subtitleTwo]);
+    expect(plan.pairings.map((row) => row.videoPath)).toEqual([videoOne, videoTwo]);
+    expect(plan.pairings.map((row) => row.language)).toEqual(["sc", "en"]);
+  });
+
   it("filters explicit language aliases before planning", () => {
     const plan = planRename({
       paths: [video, subSc, subTc, subJp],

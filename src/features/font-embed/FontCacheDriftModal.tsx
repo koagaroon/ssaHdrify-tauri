@@ -186,6 +186,12 @@ export default function FontCacheDriftModal({
   const modifiedCount = drift?.modified.length ?? 0;
   const removedCount = drift?.removed.length ?? 0;
   const totalChanged = modifiedCount + removedCount;
+  const closeLabel =
+    working === "rescanning"
+      ? t("font_cache_close_busy_rescan")
+      : working === "clearing"
+        ? t("font_cache_close_busy_clear")
+        : t("font_cache_drift_btn_use_as_is");
 
   return (
     <div
@@ -216,8 +222,8 @@ export default function FontCacheDriftModal({
             onClick={requestClose}
             disabled={working !== null}
             className="modal-close"
-            title={t("font_cache_drift_btn_use_as_is")}
-            aria-label={t("font_cache_drift_btn_use_as_is")}
+            title={closeLabel}
+            aria-label={closeLabel}
           >
             <svg
               width="16"
