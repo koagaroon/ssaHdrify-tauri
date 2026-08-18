@@ -5,7 +5,8 @@
  * Parametric strings use {0}, {1}, ... placeholders.
  */
 
-export type Lang = "en" | "zh";
+export const LANGS = ["en", "zh"] as const;
+export type Lang = (typeof LANGS)[number];
 
 type StringEntry = Record<Lang, string>;
 
@@ -181,6 +182,10 @@ export const strings: Record<string, StringEntry> = {
   },
   template_label: { en: "Output Template", zh: "输出模板" },
   template_custom: { en: "Custom…", zh: "自定义…" },
+  template_required: {
+    en: "Enter a custom output template.",
+    zh: "请输入自定义输出模板。",
+  },
   style_settings: { en: "Style Settings", zh: "样式设置" },
   style_hint: { en: "(SRT/SUB/VTT input only)", zh: "（仅 SRT/SUB/VTT 输入）" },
   style_font: { en: "Font", zh: "字体" },
@@ -216,16 +221,22 @@ export const strings: Record<string, StringEntry> = {
     zh: "已跳过 {0}：输出路径重复",
   },
   msg_read_error: { en: "Error reading {0}: {1}", zh: "读取 {0} 出错：{1}" },
+  msg_inferred_utf16: {
+    en: "{0}: detected BOM-less {1} from its byte pattern. This is a best-effort guess; verify the preview or output.",
+    zh: "已根据字节模式将 {0} 推测为无 BOM 的 {1} 编码。此结果并非完全确定，请核对预览或输出。",
+  },
   msg_unsupported: { en: "Skipped {0}: unsupported format", zh: "已跳过 {0}：不支持的格式" },
   // HDR Convert and Time Shift both surface a per-file count of
-  // oversized captions dropped by the subtitle parser
-  // (MAX_CAPTION_TEXT_LEN = 64 KB). Previously the placeholder Captions
-  // silently emitted empty Dialogue lines (HDR path) or were silently
-  // dropped (SRT/VTT); users had no signal that their input had been
-  // partially dropped.
+  // Rebuilding writers cannot safely transform captions above the
+  // MAX_CAPTION_TEXT_LEN (64 KB) cap. Structure-preserving writers use the
+  // sibling unchanged warning instead of claiming the source cue was dropped.
   msg_oversized_skipped: {
     en: "Dropped {0} oversized caption(s) from {1}: text exceeded 64 KB per-caption cap",
     zh: "{1} 中有 {0} 条超大字幕（单条 64 KB 上限）已丢弃",
+  },
+  msg_oversized_unchanged: {
+    en: "Left {0} oversized caption(s) in {1} unchanged: text exceeded the 64 KB per-caption processing cap",
+    zh: "{1} 中有 {0} 条超大字幕超过单条 64 KB 的处理上限，已保留原内容且未调整时间",
   },
   msg_done: { en: "Done: {0}", zh: "完成：{0}" },
   msg_convert_error: { en: "Error converting {0}: {1}", zh: "转换 {0} 出错：{1}" },
@@ -290,6 +301,10 @@ export const strings: Record<string, StringEntry> = {
   threshold_label: { en: "Apply only after:", zh: "仅在此时间后应用：" },
   threshold_invalid: { en: "Invalid format (HH:MM:SS.mmm)", zh: "格式无效（HH:MM:SS.mmm）" },
   preview_title: { en: "Preview — {0} captions", zh: "预览 — {0} 条字幕" },
+  preview_title_truncated: {
+    en: "Preview — first {0} of {1} captions",
+    zh: "预览 — 共 {1} 条字幕，显示前 {0} 条",
+  },
   col_index: { en: "#", zh: "#" },
   col_original: { en: "Original", zh: "原始" },
   col_shifted: { en: "After Shift", zh: "偏移后" },
@@ -322,6 +337,14 @@ export const strings: Record<string, StringEntry> = {
   preview_title_first: {
     en: "Preview — {0} captions ({1})",
     zh: "预览 — {1} 的 {0} 条字幕",
+  },
+  preview_title_first_truncated: {
+    en: "Preview — first {0} of {1} captions ({2})",
+    zh: "预览 — {2} 共 {1} 条字幕，显示前 {0} 条",
+  },
+  timing_preview_error: {
+    en: "Preview unavailable: {0}",
+    zh: "无法生成预览：{0}",
   },
   timing_drop_hint: {
     en: "Tip: drag subtitle files or a folder onto the file strip above (videos in the folder are skipped automatically)",
@@ -387,6 +410,10 @@ export const strings: Record<string, StringEntry> = {
   },
   msg_fonts_cancelled: { en: "Embed cancelled.", zh: "已取消嵌入。" },
   msg_fonts_error: { en: "Error embedding {0}: {1}", zh: "嵌入 {0} 出错：{1}" },
+  msg_fonts_analysis_unavailable: {
+    en: "Analysis data is unavailable. Select the files again.",
+    zh: "分析数据已不可用，请重新选择文件。",
+  },
   msg_fonts_file_warning: { en: "{0}: {1}", zh: "{0}：{1}" },
   msg_fonts_missing_warning: {
     en: "{0} referenced font(s) were missing and were not embedded",
@@ -397,6 +424,8 @@ export const strings: Record<string, StringEntry> = {
     zh: "提示：可将 .ass / .ssa 文件或文件夹拖到上方文件栏（文件夹内其他类型文件会自动忽略）",
   },
   btn_embedding: { en: "Embedding…", zh: "嵌入中…" },
+  font_style_bold: { en: "Bold", zh: "粗体" },
+  font_style_italic: { en: "Italic", zh: "斜体" },
   msg_subsetting: { en: "Subsetting {0}…", zh: "子集化 {0}…" },
   msg_font_skipped: { en: "Skipped {0}: {1}", zh: "跳过 {0}：{1}" },
   msg_no_fonts_for_file: {

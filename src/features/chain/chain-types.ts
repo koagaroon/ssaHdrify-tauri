@@ -159,11 +159,11 @@ export interface ChainResult {
    */
   notes: string[];
   /**
-   * Aggregate count of captions whose text exceeded
-   * MAX_CAPTION_TEXT_LEN (64 KB) across every step that parses
-   * subtitle content (today: only `shift`). The
+   * Largest per-step count of source captions whose text exceeded
+   * MAX_CAPTION_TEXT_LEN (64 KB). Using the maximum prevents a cue
+   * preserved by several shift steps from being counted repeatedly. The
    * Rust shell reads this directly and routes it through
-   * `emit_oversized_skipped_warning` (stderr + FileReport.warnings),
+   * oversized-caption warning path (stderr + FileReport.warnings),
    * mirroring the standalone HDR / Shift CLI paths. Previously the
    * count was embedded as a suffix in `notes[]`, which the Rust
    * shell never parsed and which printed to stdout (notes loop),

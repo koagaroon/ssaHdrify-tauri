@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   WINDOWS_RESERVED_NAMES,
@@ -8,6 +8,33 @@ import {
   decomposeInputPath,
   substituteTemplate,
 } from "./path-validation";
+
+type InjectedPlatform = {
+  isWindows: boolean;
+  isCaseInsensitiveFs: boolean;
+};
+
+async function withInjectedPlatform(
+  platform: InjectedPlatform,
+  run: (mod: typeof import("./path-validation")) => void | Promise<void>
+): Promise<void> {
+  const slot = globalThis as typeof globalThis & {
+    __ssahdrifyPlatform?: InjectedPlatform;
+  };
+  const previous = slot.__ssahdrifyPlatform;
+  slot.__ssahdrifyPlatform = platform;
+  vi.resetModules();
+  try {
+    await run(await import("./path-validation"));
+  } finally {
+    if (previous === undefined) {
+      delete slot.__ssahdrifyPlatform;
+    } else {
+      slot.__ssahdrifyPlatform = previous;
+    }
+    vi.resetModules();
+  }
+}
 
 describe("assertSafeOutputFilename", () => {
   it("accepts ordinary filenames", () => {
@@ -19,6 +46,13 @@ describe("assertSafeOutputFilename", () => {
   it("rejects empty / whitespace-only filenames", () => {
     expect(() => assertSafeOutputFilename("")).toThrow(/empty/);
     expect(() => assertSafeOutputFilename("   ")).toThrow(/empty/);
+  });
+
+  it("rejects dot-only filenames without rejecting ordinary hidden names", () => {
+    for (const name of [".", "..", "...", " . . "]) {
+      expect(() => assertSafeOutputFilename(name)).toThrow(/dots-only/);
+    }
+    expect(() => assertSafeOutputFilename(".hidden.ass")).not.toThrow();
   });
 
   it("rejects path separators in the filename", () => {
@@ -405,37 +439,55 @@ describe("assertSafeOutputPath", () => {
     expect(() => assertSafeOutputPath(overLimit, uncInput)).toThrow(/too long/);
   });
 
-  it("rejects self-overwrite when output basename only differs in case", () => {
-    // Realistic scenario: user template produces an output basename
-    // that case-folds to the input basename. The dir-escape check
-    // (which is case-sensitive) doesn't fire because the directory
-    // portion matches the input's case exactly. Self-overwrite check
-    // is case-insensitive, so the upper-case basename collides.
-    //
-    // Test portability: `pathsEqualOnFs`'s case-fold branch is gated
-    // on `isCaseInsensitiveFs()`, which
-    // returns true only on win32 and darwin. On Linux CI the test
-    // would fail because the case-fold path doesn't trigger. Force
-    // `__ssahdrifyPlatform = "win32"` via the same injection
-    // mechanism `platform.ts` documents for the CLI runtime; restore
-    // in finally so other tests aren't affected. (CLI runtime uses
-    // the same hook to declare its host platform without depending
-    // on `process.platform`.)
-    type PlatformSlot = { __ssahdrifyPlatform?: unknown };
-    const slot = globalThis as PlatformSlot;
-    const previous = slot.__ssahdrifyPlatform;
-    slot.__ssahdrifyPlatform = "win32";
-    try {
-      expect(() => assertSafeOutputPath("C:/subs/EPISODE01.ass", inputBackslash)).toThrow(
-        /same as input/
-      );
-    } finally {
-      if (previous === undefined) {
-        delete slot.__ssahdrifyPlatform;
-      } else {
-        slot.__ssahdrifyPlatform = previous;
+  it("rejects case-only self-overwrite on an injected case-insensitive Windows runtime", async () => {
+    await withInjectedPlatform(
+      { isWindows: true, isCaseInsensitiveFs: true },
+      ({ assertSafeOutputPath: assertInjectedSafeOutputPath }) => {
+        expect(() => assertInjectedSafeOutputPath("C:/subs/EPISODE01.ass", inputBackslash)).toThrow(
+          /same as input/
+        );
       }
-    }
+    );
+  });
+
+  it("keeps case-only paths distinct on an injected case-sensitive POSIX runtime", async () => {
+    await withInjectedPlatform(
+      { isWindows: false, isCaseInsensitiveFs: false },
+      ({ assertSafeOutputPath: assertInjectedSafeOutputPath }) => {
+        expect(() =>
+          assertInjectedSafeOutputPath("/subs/EPISODE01.ass", "/subs/episode01.ass")
+        ).not.toThrow();
+      }
+    );
+  });
+
+  it("preserves POSIX backslashes and applies the 4096-character path boundary", async () => {
+    await withInjectedPlatform(
+      { isWindows: false, isCaseInsensitiveFs: false },
+      ({
+        assertSafeOutputPath: assertInjectedSafeOutputPath,
+        decomposeInputPath: decomposeInjectedInputPath,
+      }) => {
+        expect(decomposeInjectedInputPath("/tmp/ep\\01.srt")).toEqual({
+          dir: "/tmp",
+          baseName: "ep\\01",
+          ext: ".srt",
+          normalized: "/tmp/ep\\01.srt",
+          usedBackslash: false,
+        });
+
+        const prefix = "/tmp/";
+        const suffix = ".ass";
+        const atLimit = `${prefix}${"a".repeat(4096 - prefix.length - suffix.length)}${suffix}`;
+        const overLimit = `${prefix}${"a".repeat(4097 - prefix.length - suffix.length)}${suffix}`;
+        expect(atLimit).toHaveLength(4096);
+        expect(overLimit).toHaveLength(4097);
+        expect(() => assertInjectedSafeOutputPath(atLimit, "/tmp/source.ass")).not.toThrow();
+        expect(() => assertInjectedSafeOutputPath(overLimit, "/tmp/source.ass")).toThrow(
+          /too long.*4096/i
+        );
+      }
+    );
   });
 });
 

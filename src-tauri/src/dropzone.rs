@@ -7,11 +7,11 @@
 //! into video vs subtitle is the consumer's job; this command's contract
 //! is only "give me the regular files behind these dropped paths".
 //!
-//! Defense: skip hidden entries, symlinks, and reparse points so a
-//! mistakenly-dropped junction can't fan out into a protected directory
-//! (`.ssh`, OneDrive, etc.). The downstream readers (encoding.rs,
-//! fonts.rs) enforce their own extension/provenance allowlists, so even
-//! a path leak here can't be turned into an arbitrary read.
+//! Defense: apply the app-owned filesystem scope before touching each
+//! dropped path and before returning discovered children. Hidden entries,
+//! symlinks, and reparse points are also skipped so a mistakenly-dropped
+//! junction can't fan out into a protected directory (`.ssh`, OneDrive,
+//! etc.).
 
 use crate::util::{is_reparse_point, MAX_INPUT_PATHS};
 use serde::Serialize;
@@ -55,9 +55,16 @@ impl Default for ExpandedPaths {
     }
 }
 
-/// Expand dropped paths into a flat list of file paths.
-#[tauri::command]
-pub fn expand_dropped_paths(paths: Vec<String>) -> Result<ExpandedPaths, String> {
+/// Expand dropped paths into a flat list of file paths under an injected
+/// filesystem-scope policy. The GUI supplies its app-owned scope; the CLI
+/// supplies an allow-all predicate because argv paths are user-authored.
+pub fn expand_dropped_paths_inner<F>(
+    paths: Vec<String>,
+    is_allowed: F,
+) -> Result<ExpandedPaths, String>
+where
+    F: Fn(&Path) -> bool,
+{
     if paths.is_empty() {
         return Ok(ExpandedPaths::default());
     }
@@ -73,28 +80,6 @@ pub fn expand_dropped_paths(paths: Vec<String>) -> Result<ExpandedPaths, String>
     let mut rejected = 0usize;
     let total_inputs = paths.len();
     for (idx, raw) in paths.iter().enumerate() {
-        // Short-circuit at the TOP of the loop body once the result
-        // cap is hit. The cap check used to sit after the
-        // per-path stat + walk_one_level call, so the worst case
-        // (1000 input folders, first ~50 already filled `result` to
-        // MAX_RESULT_FILES = 5000) still paid stat + read_dir on
-        // every remaining input. The bottom-of-loop check at line
-        // ~128 below handles the case where the LAST iteration pushed
-        // the result to the cap (it uses `idx + 1 < total_inputs`
-        // because the work for this iteration is already done);
-        // this top-of-loop check is the cheap-first sibling for
-        // every SUBSEQUENT iteration — by construction `idx <
-        // total_inputs` holds for any iteration body that runs, so
-        // entering this branch means there's at least one more input
-        // we're skipping. The redundant `if idx < total_inputs`
-        // guard that wrapped `truncated = true` was dropped — it was
-        // always true by construction. `walk_one_level`
-        // itself has the same check at its inner loop top, so this
-        // is the third layer of the same budget.
-        if result.len() >= MAX_RESULT_FILES {
-            truncated = true;
-            break;
-        }
         // Skip silently rather than fail — native drag-drop shouldn't
         // produce empty / oversize / control-char paths, but the IPC
         // boundary trusts no caller, and dropping ONE bad path should
@@ -104,6 +89,15 @@ pub fn expand_dropped_paths(paths: Vec<String>) -> Result<ExpandedPaths, String>
             continue;
         }
         let p = Path::new(raw);
+        // Scope-gate before stat/read_dir so a compromised WebView cannot
+        // use this command to probe or enumerate a deny-listed path. Keep
+        // the warning path-free: the aggregate count below is sufficient,
+        // and denied child names must never become a disclosure channel.
+        if !is_allowed(p) {
+            log::warn!("dropzone: skipping path denied by filesystem scope");
+            rejected += 1;
+            continue;
+        }
         let meta = match std::fs::symlink_metadata(p) {
             Ok(m) => m,
             Err(e) => {
@@ -125,7 +119,7 @@ pub fn expand_dropped_paths(paths: Vec<String>) -> Result<ExpandedPaths, String>
             // walk_one_level returns true only when it stopped
             // mid-folder with more entries pending — that's the
             // intra-folder truncation signal.
-            if walk_one_level(p, &mut result) {
+            if walk_one_level(p, &mut result, &is_allowed) {
                 truncated = true;
             }
         }
@@ -166,6 +160,17 @@ pub fn expand_dropped_paths(paths: Vec<String>) -> Result<ExpandedPaths, String>
     })
 }
 
+/// Blocking command implementation. The async Tauri boundary in
+/// `ipc_commands` moves scope resolution and path expansion to the blocking
+/// pool before calling this function.
+pub fn expand_dropped_paths(
+    app: tauri::AppHandle,
+    paths: Vec<String>,
+) -> Result<ExpandedPaths, String> {
+    let scope = crate::fs_policy::app_fs_scope(&app)?;
+    expand_dropped_paths_inner(paths, move |path| scope.is_allowed(path))
+}
+
 /// Read a directory one level deep, appending regular files. Hidden
 /// entries (Unix dotfiles) and reparse points are skipped.
 ///
@@ -183,7 +188,10 @@ pub fn expand_dropped_paths(paths: Vec<String>) -> Result<ExpandedPaths, String>
 /// latter case we report `false` because no remainder existed in
 /// this folder. The caller still independently checks `idx + 1 <
 /// total_inputs` for the cross-input case.
-fn walk_one_level(dir: &Path, out: &mut Vec<String>) -> bool {
+fn walk_one_level<F>(dir: &Path, out: &mut Vec<String>, is_allowed: &F) -> bool
+where
+    F: Fn(&Path) -> bool,
+{
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(e) => {
@@ -219,6 +227,13 @@ fn walk_one_level(dir: &Path, out: &mut Vec<String>) -> bool {
             if name.starts_with('.') {
                 continue;
             }
+        }
+        // A parent directory may be allowed while an exact child path is
+        // denied. Filter before metadata/type inspection and never log the
+        // child name, otherwise the expansion response or logs would leak
+        // the denied entry discovered by read_dir.
+        if !is_allowed(&entry_path) {
+            continue;
         }
         if is_reparse_point(&entry_path) {
             continue;
@@ -283,12 +298,17 @@ mod tests {
         dir
     }
 
+    fn allow_all(_: &std::path::Path) -> bool {
+        true
+    }
+
     #[test]
     fn passes_through_files_unchanged() {
         let dir = make_tempdir("passthrough");
         let p = dir.join("a.ass");
         fs::File::create(&p).unwrap().write_all(b"x").unwrap();
-        let result = expand_dropped_paths(vec![p.to_str().unwrap().to_string()]).unwrap();
+        let result =
+            expand_dropped_paths_inner(vec![p.to_str().unwrap().to_string()], allow_all).unwrap();
         assert_eq!(result.files.len(), 1);
         assert!(!result.truncated);
         // The response carries the cap so the frontend banner
@@ -314,7 +334,8 @@ mod tests {
             .write_all(b"x")
             .unwrap();
 
-        let result = expand_dropped_paths(vec![dir.to_str().unwrap().to_string()]).unwrap();
+        let result =
+            expand_dropped_paths_inner(vec![dir.to_str().unwrap().to_string()], allow_all).unwrap();
         assert_eq!(
             result.files.len(),
             3,
@@ -339,9 +360,72 @@ mod tests {
             .unwrap()
             .write_all(b"x")
             .unwrap();
-        let result = expand_dropped_paths(vec![dir.to_str().unwrap().to_string()]).unwrap();
+        let result =
+            expand_dropped_paths_inner(vec![dir.to_str().unwrap().to_string()], allow_all).unwrap();
         assert_eq!(result.files.len(), 1);
         assert!(result.files[0].ends_with("visible.ass"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn scope_denied_top_level_directory_is_not_enumerated() {
+        let dir = make_tempdir("scope_denied_directory");
+        fs::File::create(dir.join("must-not-leak.ass"))
+            .unwrap()
+            .write_all(b"x")
+            .unwrap();
+
+        // Deny only the root while allowing its child. If the root gate is
+        // ever dropped, the walk will expose must-not-leak.ass and fail.
+        let denied_root = dir.clone();
+        let result =
+            expand_dropped_paths_inner(vec![dir.to_str().unwrap().to_string()], move |path| {
+                path != denied_root.as_path()
+            })
+            .unwrap();
+
+        assert!(result.files.is_empty());
+        assert!(!result.truncated);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn scope_denied_top_level_file_is_not_returned() {
+        let dir = make_tempdir("scope_denied_file");
+        let file = dir.join("denied.ass");
+        fs::File::create(&file).unwrap().write_all(b"x").unwrap();
+
+        let denied_file = file.clone();
+        let result =
+            expand_dropped_paths_inner(vec![file.to_str().unwrap().to_string()], move |path| {
+                path != denied_file.as_path()
+            })
+            .unwrap();
+
+        assert!(result.files.is_empty());
+        assert!(!result.truncated);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn scope_denied_child_is_skipped_without_poisoning_siblings() {
+        let dir = make_tempdir("scope_denied_child");
+        let allowed = dir.join("allowed.ass");
+        let denied = dir.join("denied.ass");
+        fs::File::create(&allowed).unwrap().write_all(b"x").unwrap();
+        fs::File::create(&denied).unwrap().write_all(b"x").unwrap();
+
+        let denied_child = denied.clone();
+        let result =
+            expand_dropped_paths_inner(vec![dir.to_str().unwrap().to_string()], move |path| {
+                path != denied_child.as_path()
+            })
+            .unwrap();
+
+        assert_eq!(result.files.len(), 1);
+        assert!(result.files[0].ends_with("allowed.ass"));
+        assert!(!result.files.iter().any(|path| path.ends_with("denied.ass")));
+        assert!(!result.truncated);
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -350,7 +434,7 @@ mod tests {
         let many: Vec<String> = (0..(MAX_INPUT_PATHS + 1))
             .map(|i| format!("/tmp/x{i}.ass"))
             .collect();
-        assert!(expand_dropped_paths(many).is_err());
+        assert!(expand_dropped_paths_inner(many, allow_all).is_err());
     }
 
     /// (boundary-pair discipline): the
@@ -365,7 +449,7 @@ mod tests {
         let at_limit: Vec<String> = (0..MAX_INPUT_PATHS)
             .map(|i| format!("/tmp/x{i}.ass"))
             .collect();
-        let result = expand_dropped_paths(at_limit);
+        let result = expand_dropped_paths_inner(at_limit, allow_all);
         assert!(
             result.is_ok(),
             "exactly MAX_INPUT_PATHS entries should not trigger the cap-reject; \
@@ -375,7 +459,9 @@ mod tests {
 
     #[test]
     fn rejects_control_chars_in_path() {
-        let result = expand_dropped_paths(vec!["/tmp/foo\u{0000}bar.ass".to_string()]).unwrap();
+        let result =
+            expand_dropped_paths_inner(vec!["/tmp/foo\u{0000}bar.ass".to_string()], allow_all)
+                .unwrap();
         // Silently skipped, not errored.
         assert!(result.files.is_empty());
         assert!(!result.truncated);
@@ -383,7 +469,7 @@ mod tests {
 
     #[test]
     fn empty_input_returns_empty() {
-        let result = expand_dropped_paths(Vec::new()).unwrap();
+        let result = expand_dropped_paths_inner(Vec::new(), allow_all).unwrap();
         assert!(result.files.is_empty());
         assert!(!result.truncated);
     }
@@ -404,10 +490,13 @@ mod tests {
             .unwrap()
             .write_all(b"x")
             .unwrap();
-        let result = expand_dropped_paths(vec![
-            folder.to_str().unwrap().to_string(),
-            standalone.to_str().unwrap().to_string(),
-        ])
+        let result = expand_dropped_paths_inner(
+            vec![
+                folder.to_str().unwrap().to_string(),
+                standalone.to_str().unwrap().to_string(),
+            ],
+            allow_all,
+        )
         .unwrap();
         assert_eq!(
             result.files.len(),
@@ -431,7 +520,8 @@ mod tests {
                 .write_all(b"x")
                 .unwrap();
         }
-        let result = expand_dropped_paths(vec![dir.to_str().unwrap().to_string()]).unwrap();
+        let result =
+            expand_dropped_paths_inner(vec![dir.to_str().unwrap().to_string()], allow_all).unwrap();
         assert_eq!(
             result.files.len(),
             MAX_RESULT_FILES,
@@ -456,7 +546,8 @@ mod tests {
                 .write_all(b"x")
                 .unwrap();
         }
-        let result = expand_dropped_paths(vec![dir.to_str().unwrap().to_string()]).unwrap();
+        let result =
+            expand_dropped_paths_inner(vec![dir.to_str().unwrap().to_string()], allow_all).unwrap();
         assert_eq!(result.files.len(), MAX_RESULT_FILES);
         assert!(
             !result.truncated,

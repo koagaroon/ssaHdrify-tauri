@@ -1,10 +1,10 @@
-//! Tauri command wrappers for the persistent font cache.
+//! Blocking implementations and shared state for the persistent font cache.
 //!
 //! `font_cache.rs` itself stays Tauri-free so the CLI binary can use it
-//! without pulling in the GUI's IPC layer. This module is the GUI-only
-//! IPC surface: a static `Mutex<Option<FontCache>>` initialized once
-//! during Tauri setup, plus the five commands the React drift modal +
-//! embed-time lookup tier call into.
+//! without pulling in the GUI's IPC layer. The async Tauri wrappers live in
+//! `ipc_commands`; this module owns the static `Mutex<Option<FontCache>>`
+//! initialized during Tauri setup plus the synchronous operations used by the
+//! React drift modal and embed-time lookup tier.
 //!
 //! The GUI command surface stays deliberately small: cache status,
 //! drift detection, drift rescan, clear/rebuild, and lookup. The
@@ -505,12 +505,11 @@ fn classify_unreadable_existing_as_modified(
     report.modified.sort();
 }
 
-// ---- Tauri commands ----------------------------------------------------
+// ---- Blocking cache operations -----------------------------------------
 
 /// Report the current cache status. Useful for the launch-time check
 /// (frontend asks "is cache ready?" before calling detect_drift) and
 /// for re-checking after `clear_font_cache`.
-#[tauri::command]
 pub fn open_font_cache() -> Result<CacheStatus, String> {
     let path = GUI_FONT_CACHE_PATH
         .lock()
@@ -583,7 +582,6 @@ pub fn open_font_cache() -> Result<CacheStatus, String> {
 /// lock. A mismatch means the filesystem snapshot describes an obsolete source
 /// set, so this call returns `DriftReport::default()` and a later check starts
 /// from the current cache.
-#[tauri::command]
 pub fn detect_font_cache_drift() -> Result<DriftReport, String> {
     // Phase 1: snapshot the cached source list + capture the cache
     // generation under the lock. Capturing the generation INSIDE the
@@ -676,7 +674,6 @@ fn finalize_drift(
 /// `detect_font_cache_drift`) so this command does not scan new sources — those
 /// enter through guarded publication after a successful directory scan or the
 /// CLI's `refresh-fonts` subcommand.
-#[tauri::command]
 pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
     // Block parallel `clear_font_cache` between Phase 1 and Phase 3 so
     // Clear can't drop+recreate the cache mid-rescan and have Phase 3's
@@ -741,21 +738,8 @@ pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
     let mut skipped: Vec<SkippedFolder> = Vec::new();
     for source in &report.modified {
         let folder_path = Path::new(&source.source_root);
-        let snapshot = match snapshot_source_directories(folder_path, source.scope) {
-            Ok(snapshot) => snapshot,
-            Err(err) => {
-                log::warn!("rescan: skipping {} — {err}", source.source_root);
-                skipped.push(SkippedFolder {
-                    folder: source.source_root.clone(),
-                    scope: source.scope,
-                    reason: err,
-                    kind: SkipKind::ScanFailed,
-                });
-                continue;
-            }
-        };
-        match crate::fonts::scan_directory_collecting_with_scope(folder_path, source.scope) {
-            Ok(entries) => {
+        match crate::fonts::scan_directory_collecting_with_snapshot(folder_path, source.scope) {
+            Ok((entries, snapshot)) => {
                 let metadata = match entries_to_cache_metadata(&entries) {
                     Ok(metadata) => metadata,
                     Err(err) => {
@@ -768,15 +752,7 @@ pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
                         continue;
                     }
                 };
-                match validate_cache_source_stability(&snapshot, &metadata) {
-                    Ok(()) => scanned.push((snapshot, metadata)),
-                    Err(err) => skipped.push(SkippedFolder {
-                        folder: source.source_root.clone(),
-                        scope: source.scope,
-                        reason: err.to_string(),
-                        kind: SkipKind::ScanFailed,
-                    }),
-                }
+                scanned.push((snapshot, metadata));
             }
             Err(err) => {
                 log::warn!("rescan: skipping {} — {err}", source.source_root);
@@ -790,10 +766,17 @@ pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
         }
     }
 
-    // Phase 2b — still outside the cache slot, immediately revalidate every
-    // completed scan and re-probe every allegedly removed root. The mutation
-    // guard freezes in-process cache writers throughout this phase; keeping
-    // the filesystem walks out here lets lookups remain responsive.
+    // Phase 2b — still outside the cache slot, revalidate every completed scan
+    // at the final pre-apply point and re-probe every allegedly removed root.
+    // The scan already returned the exact snapshot produced by its discovery
+    // walk, so a separate pre-scan snapshot and an immediate post-scan rewalk
+    // would add two full enumerations without strengthening the final
+    // applied-state invariant. This full final rewalk remains necessary:
+    // parsed faces are only a subset of the snapshot and cannot reveal added,
+    // removed, unreadable, or unparseable candidates or directory changes.
+    // The mutation guard freezes in-process cache writers throughout this
+    // phase; keeping the filesystem walks out here lets lookups remain
+    // responsive.
     let scanned = validate_scanned_sources_before_apply(scanned, &mut skipped);
     let removed = confirm_removed_sources_before_apply(&report.removed);
 
@@ -1018,7 +1001,6 @@ fn apply_rescan_to_cache<C: RescanCacheWriter>(
 ///
 /// Used as the "Clear cache" button in the drift modal AND as the
 /// rebuild path when `open_font_cache` reports `schema_mismatch`.
-#[tauri::command]
 pub fn clear_font_cache() -> Result<(), String> {
     // Refuse mid-rescan AND block a concurrent rescan from starting
     // while clear is running. Acquiring the guard via CAS (not just
@@ -1202,7 +1184,6 @@ pub(crate) fn clear_all_sources_in_gui_cache_locked(
 /// (already serde-derived for IPC) instead of wrapping cache's
 /// internal `FontLookupResult` (different field names: font_path/face_index
 /// vs path/index, different int types).
-#[tauri::command]
 pub fn lookup_font_family(
     family: String,
     bold: bool,

@@ -10,7 +10,7 @@
  */
 import { describe, it, expect } from "vitest";
 
-import { collectFonts, ensureLoaded } from "./font-collector";
+import { collectFonts, ensureLoaded, fontKeyLabel } from "./font-collector";
 
 function makeASS(dialogue: string): string {
   return `[Script Info]
@@ -25,6 +25,18 @@ Format: Layer, Start, End, Style, Text
 Dialogue: 0,0:00:00.00,0:00:05.00,Default,${dialogue}
 `;
 }
+
+describe("fontKeyLabel", () => {
+  const boldItalic = { family: "Arial", bold: true, italic: true };
+
+  it("uses English style suffixes by default for non-GUI callers", () => {
+    expect(fontKeyLabel(boldItalic)).toBe("Arial Bold Italic");
+  });
+
+  it("accepts localized style suffixes for GUI callers", () => {
+    expect(fontKeyLabel(boldItalic, { bold: "粗体", italic: "斜体" })).toBe("Arial 粗体 斜体");
+  });
+});
 
 describe("font-collector \\p drawing-tag whitespace handling", () => {
   it("rejects `\\p 1` (space before digit) and continues collecting glyphs", async () => {

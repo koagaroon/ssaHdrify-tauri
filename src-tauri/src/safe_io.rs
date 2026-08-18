@@ -27,7 +27,7 @@
 //!      `.ass / .ssa / .srt / .vtt / .sub`, matching
 //!      `read_text_detect_encoding` and the TS parser-aligned
 //!      `SUBTITLE_EXTS` set. Copy/rename allows those same text
-//!      extensions plus opaque rename-only sidecars such as `.sup`, but
+//!      extensions plus opaque file-preserving sidecars such as `.sup`, but
 //!      sidecar copies/renames must preserve the sidecar extension
 //!      (`.sup -> .sup`) so a binary subtitle cannot be laundered into a
 //!      future text-readable `.ass`.
@@ -183,7 +183,12 @@ fn check_scope_allows(
     Ok(())
 }
 
-fn scope_resolved_path(path: &Path, label: &str) -> Result<PathBuf, String> {
+struct ResolvedScopePath {
+    path: PathBuf,
+    terminal_reparse_parent: Option<PathBuf>,
+}
+
+fn scope_resolved_path(path: &Path, label: &str) -> Result<ResolvedScopePath, String> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
     } else {
@@ -220,13 +225,53 @@ fn scope_resolved_path(path: &Path, label: &str) -> Result<PathBuf, String> {
         }
     }
 
-    let mut resolved = existing
-        .canonicalize()
-        .map_err(|e| format!("Failed to resolve {label} path for filesystem scope policy: {e}"))?;
+    let mut terminal_reparse_parent = None;
+    let mut resolved = match existing.canonicalize() {
+        Ok(resolved) => resolved,
+        Err(e)
+            if e.kind() == std::io::ErrorKind::NotFound
+                && missing.is_empty()
+                && is_reparse_point(existing) =>
+        {
+            // A terminal dangling symlink / reparse point occupies the output
+            // slot even though its target cannot be canonicalized. Resolve the
+            // parent instead so scope checks still see through any live alias
+            // ancestors, then append the link's own filename without following
+            // its missing target.
+            let parent = existing.parent().ok_or_else(|| {
+                format!(
+                    "Cannot resolve {label} path for filesystem scope policy: {}",
+                    path.display()
+                )
+            })?;
+            let file_name = existing.file_name().ok_or_else(|| {
+                format!(
+                    "Cannot resolve {label} path for filesystem scope policy: {}",
+                    path.display()
+                )
+            })?;
+            let mut resolved_parent = parent.canonicalize().map_err(|parent_error| {
+                format!(
+                    "Failed to resolve {label} parent for filesystem scope policy: {parent_error}"
+                )
+            })?;
+            terminal_reparse_parent = Some(resolved_parent.clone());
+            resolved_parent.push(file_name);
+            resolved_parent
+        }
+        Err(e) => {
+            return Err(format!(
+                "Failed to resolve {label} path for filesystem scope policy: {e}"
+            ));
+        }
+    };
     for component in missing.iter().rev() {
         resolved.push(component);
     }
-    Ok(resolved)
+    Ok(ResolvedScopePath {
+        path: resolved,
+        terminal_reparse_parent,
+    })
 }
 
 fn check_scope_allows_resolved(
@@ -235,7 +280,21 @@ fn check_scope_allows_resolved(
     label: &str,
 ) -> Result<(), String> {
     let resolved = scope_resolved_path(path, label)?;
-    check_scope_allows(is_allowed, &resolved, label)
+    check_resolved_scope_path(is_allowed, &resolved, label)
+}
+
+fn check_resolved_scope_path(
+    is_allowed: &impl Fn(&Path) -> bool,
+    resolved: &ResolvedScopePath,
+    label: &str,
+) -> Result<(), String> {
+    // Tauri's scope helper follows a terminal symlink before matching policy.
+    // For a dangling relative target that can discard the canonical parent, so
+    // explicitly check the parent captured by the no-follow fallback first.
+    if let Some(parent) = &resolved.terminal_reparse_parent {
+        check_scope_allows(is_allowed, parent, label)?;
+    }
+    check_scope_allows(is_allowed, &resolved.path, label)
 }
 
 fn ensure_parent_dir(path: &Path) -> Result<(), String> {
@@ -263,11 +322,9 @@ fn ensure_parent_dir(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Remove a destination that already exists, after rejecting any
-/// reparse-point destination. Symlinks/junctions never overwrite —
-/// even when `overwrite=true`, the caller is asked to clear the
-/// shortcut manually rather than let us follow it.
-fn clear_existing_destination(path: &Path, overwrite: bool) -> Result<(), String> {
+/// Inspect an existing destination without mutating it. Returns true for a
+/// replaceable ordinary file and false when the path is absent.
+fn inspect_existing_destination(path: &Path, overwrite: bool) -> Result<bool, String> {
     // `symlink_metadata` (= lstat) returns the link's own metadata
     // without following it. Path::exists() follows symlinks on Unix
     // and would return false for a dangling shortcut, which is the
@@ -315,48 +372,34 @@ fn clear_existing_destination(path: &Path, overwrite: bool) -> Result<(), String
                     path.display()
                 ));
             }
-            // re-check is_reparse_point immediately
-            // before fs::remove_file for posture parity with
-            // safe_copy_file_inner / safe_rename_file_inner's
-            // late re-checks. fs::remove_file of a symlink on
-            // Windows removes the link itself (not the target),
-            // so the security delta is small — but the
-            // codebase pattern is "stat-then-act narrowness via
-            // an immediate re-check", and this site was the lone
-            // remaining outlier. One cheap syscall.
-            //
-            // (syscall count WHY): this is the THIRD
-            // `is_reparse_point` lstat on `path` inside
-            // `clear_existing_destination`: the initial
-            // `fs::symlink_metadata`, the first reparse check, and
-            // this race-time re-check. The first two form a
-            // stat-then-act pair documented earlier; the third was
-            // added for late-race parity. All three are deliberate:
-            // the helper is a
-            // failure-path-only helper (only fires when an existing
-            // destination needs clearing) so the extra syscalls cost
-            // nothing on the happy path. A future round that's
-            // tempted to add a FOURTH lstat here should first factor
-            // `is_reparse_point_from_meta(&meta)` to consume the
-            // already-fetched `meta` instead of paying for another
-            // syscall.
-            if is_reparse_point(path) {
-                log::warn!(
-                    "Refusing to overwrite reparse point at remove-time: {}",
-                    path.display()
-                );
-                return Err(format!(
-                    "Refusing to overwrite a symlink / junction at the destination (race-time detection): {}",
-                    path.display()
-                ));
-            }
-            fs::remove_file(path)
-                .map_err(|e| format!("Failed to remove existing destination: {e}"))?;
-            Ok(())
+            Ok(true)
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(e) => Err(format!("Failed to stat destination path: {e}")),
     }
+}
+
+/// Remove a destination that already exists, after rejecting any
+/// reparse-point destination. Symlinks/junctions never overwrite — even when
+/// `overwrite=true`, the caller is asked to clear the shortcut manually.
+fn clear_existing_destination(path: &Path, overwrite: bool) -> Result<(), String> {
+    if !inspect_existing_destination(path, overwrite)? {
+        return Ok(());
+    }
+
+    // Re-check immediately before deletion to narrow the window in which an
+    // ordinary destination could be replaced by a reparse point.
+    if is_reparse_point(path) {
+        log::warn!(
+            "Refusing to overwrite reparse point at remove-time: {}",
+            path.display()
+        );
+        return Err(format!(
+            "Refusing to overwrite a symlink / junction at the destination (race-time detection): {}",
+            path.display()
+        ));
+    }
+    fs::remove_file(path).map_err(|e| format!("Failed to remove existing destination: {e}"))
 }
 
 /// Reject a source that is itself a symlink / junction. Caller's
@@ -381,10 +424,8 @@ fn reject_reparse_source(path: &Path, label: &str) -> Result<(), String> {
 /// file. That's a blind spot of process-level OS-gated heuristics like
 /// the TS-side `isCaseInsensitiveFs`, which derives from `process.platform`
 /// rather than the mount's behavior. Without this gate,
-/// `clear_existing_destination(dst, overwrite=true)` removes dst first
-/// — which IS src under FS-level case-fold — then `fs::rename` /
-/// `fs::copy` fails because src is gone, silently destroying the user's
-/// input . Both paths must canonicalize for the check
+/// removing/replacing dst would therefore operate on src itself under
+/// filesystem-level case-folding. Both paths must canonicalize for the check
 /// to fire; a not-yet-existing dst (normal rename to a new name)
 /// returns Ok here and the downstream existence checks proceed.
 ///
@@ -403,8 +444,8 @@ fn reject_reparse_source(path: &Path, label: &str) -> Result<(), String> {
 /// Mixed canonicalize-result cases : when EITHER src
 /// OR dst canonicalize-fails (e.g., dst doesn't yet exist, which is
 /// the common "rename to a new name" case), this helper returns Ok
-/// and the downstream `clear_existing_destination` + `fs::rename` /
-/// `fs::copy` chain takes over. Mixed-Ok-Err is symmetric with
+/// and the downstream destination inspection plus `fs::rename` / `fs::copy`
+/// chain takes over. Mixed-Ok-Err is symmetric with
 /// both-Err: the gate only fires when both sides resolve. The
 /// `fs::rename` /  `fs::copy` calls will surface a focused error if
 /// the side that canonicalize-failed turns out to be the problem,
@@ -433,9 +474,9 @@ fn reject_same_canonical_path(src: &Path, dst: &Path) -> Result<(), String> {
 /// while the user's prior data is already gone — they get the error
 /// but no recovery path. A tmp-file + atomic-rename pattern would
 /// close this gap, but this desktop app's current scope accepts the
-/// simpler shape: subtitle files are
-/// small (under 100 MB hard cap), local disks are reliable, the user
-/// can rerun the conversion. Don't refactor to tmp+rename without
+/// simpler shape: generated subtitle text outputs are capped at 50 MiB by
+/// `MAX_TEXT_SIZE`, local disks are reliable, and the user can rerun the
+/// conversion. Don't refactor to tmp+rename without
 /// re-checking the scope — the create_new gate ABOVE is load-bearing
 /// against symlink races; a naive `fs::write` to a tmp path would
 /// need the same gate transplanted onto the tmp file.
@@ -447,6 +488,13 @@ fn create_new_and_write_bytes(path: &Path, content: &[u8]) -> Result<(), String>
         .map_err(|e| format!("Failed to create destination: {e}"))?;
     file.write_all(content)
         .map_err(|e| format!("Failed to write destination: {e}"))
+}
+
+fn check_plain_text_size(content_len: usize) -> Result<(), String> {
+    if content_len > MAX_TEXT_SIZE as usize {
+        return Err("Subtitle content exceeds the 50 MB limit".to_string());
+    }
+    Ok(())
 }
 
 fn create_new_and_write_bytes_exclusive(path: &Path, content: &[u8]) -> Result<(), String> {
@@ -585,6 +633,7 @@ pub fn safe_write_text_file_inner(
     check_subtitle_extension(path_ref, "Output")?;
     check_scope_allows(&is_allowed, path_ref, "Output")?;
     check_scope_allows_resolved(&is_allowed, path_ref, "Output")?;
+    check_plain_text_size(content.len())?;
     ensure_parent_dir(path_ref)?;
     clear_existing_destination(path_ref, overwrite)?;
     create_new_and_write_bytes(path_ref, content.as_bytes())
@@ -684,6 +733,11 @@ pub fn safe_write_style_edit_output_inner(
     create_new_and_write_bytes_exclusive(output_ref, &bytes)
 }
 
+/// File-preserving copies intentionally have no decoded-text size cap: they
+/// stream bytes and also support opaque subtitle sidecars such as `.sup`.
+/// The source is opened and confirmed to be a regular file before an existing
+/// destination is removed. Once copying begins, a destination write failure can
+/// still leave a partial file; the source remains intact so the user can retry.
 pub fn safe_copy_file_inner(
     src: &str,
     dst: &str,
@@ -702,10 +756,9 @@ pub fn safe_copy_file_inner(
     reject_reparse_source(src_ref, "copy")?;
     reject_same_canonical_path(src_ref, dst_ref)?;
     ensure_parent_dir(dst_ref)?;
-    clear_existing_destination(dst_ref, overwrite)?;
 
-    // re-check `is_reparse_point` immediately
-    // before `File::open` to close the TOCTOU window where an
+    // Re-check `is_reparse_point` immediately before `File::open` to narrow the
+    // TOCTOU window where an
     // attacker could swap the source for a symlink between
     // `reject_reparse_source` (above) and the open below. Mirrors the
     // pattern `encoding.rs::read_text_detect_encoding` already
@@ -722,6 +775,20 @@ pub fn safe_copy_file_inner(
     }
 
     let mut source = fs::File::open(src_ref).map_err(|e| format!("Failed to open source: {e}"))?;
+    let source_metadata = source
+        .metadata()
+        .map_err(|e| format!("Failed to inspect opened source: {e}"))?;
+    if !source_metadata.is_file() {
+        return Err(format!(
+            "Source is not a regular file: {}",
+            src_ref.display()
+        ));
+    }
+
+    // Only after the source is ready do we remove an existing destination.
+    // Missing, locked, or directory-shaped sources must never destroy the old
+    // destination before the copy has even started.
+    clear_existing_destination(dst_ref, overwrite)?;
     let mut destination = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -732,11 +799,26 @@ pub fn safe_copy_file_inner(
         .map_err(|e| format!("Failed to copy file: {e}"))
 }
 
+/// File-preserving renames intentionally have no decoded-text size cap: they
+/// move filesystem entries and also support opaque subtitle sidecars such as
+/// `.sup`.
 pub fn safe_rename_file_inner(
     src: &str,
     dst: &str,
     overwrite: bool,
     is_allowed: impl Fn(&Path) -> bool,
+) -> Result<(), String> {
+    safe_rename_file_inner_with_rename(src, dst, overwrite, is_allowed, |source, destination| {
+        fs::rename(source, destination)
+    })
+}
+
+fn safe_rename_file_inner_with_rename(
+    src: &str,
+    dst: &str,
+    overwrite: bool,
+    is_allowed: impl Fn(&Path) -> bool,
+    rename_file: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
 ) -> Result<(), String> {
     validate_ipc_path(src, "Source")?;
     validate_ipc_path(dst, "Destination")?;
@@ -750,7 +832,10 @@ pub fn safe_rename_file_inner(
     reject_reparse_source(src_ref, "rename")?;
     reject_same_canonical_path(src_ref, dst_ref)?;
     ensure_parent_dir(dst_ref)?;
-    clear_existing_destination(dst_ref, overwrite)?;
+    // Keep an ordinary existing destination in place until the OS performs the
+    // rename. A cross-volume, permission, or sharing failure must not destroy
+    // the user's prior destination.
+    inspect_existing_destination(dst_ref, overwrite)?;
 
     // Re-check `is_reparse_point` immediately before `fs::rename` for
     // parity with `safe_copy_file_inner`'s open-time re-check.
@@ -768,9 +853,8 @@ pub fn safe_rename_file_inner(
     // Rename destination TOCTOU symmetry: copy's destination
     // is implicitly protected by `OpenOptions::create_new(true)` at
     // open time; rename has no equivalent atomic guard. Between
-    // `clear_existing_destination` (which removed dst after its own
-    // reparse pre-check) and the `fs::rename` below, an attacker can
-    // re-plant a symlink at dst — same window copy already closes.
+    // destination inspection and the `fs::rename` below, an attacker can
+    // replace dst with a symlink — same window copy already closes.
     // One syscall (`is_reparse_point` = lstat on POSIX, file_attributes
     // on Windows); race window is narrow but the cost is trivial.
     if is_reparse_point(dst_ref) {
@@ -784,15 +868,16 @@ pub fn safe_rename_file_inner(
         );
     }
 
-    fs::rename(src_ref, dst_ref).map_err(|e| format!("Failed to rename file: {e}"))
+    rename_file(src_ref, dst_ref).map_err(|e| format!("Failed to rename file: {e}"))
 }
 
-// ── Tauri commands (production) ────────────────────────────────
+// ── Blocking command implementations ───────────────────────────
+// Async Tauri wrappers live in `ipc_commands`; keeping all scope resolution
+// and filesystem work here lets the CLI/tests reuse the same exact behavior.
 
 /// Check whether an output path already exists before a GUI overwrite
 /// preflight. This intentionally covers subtitle text outputs and
 /// rename-only sidecars, but not arbitrary files.
-#[tauri::command]
 pub fn safe_output_path_exists(app: tauri::AppHandle, path: String) -> Result<bool, String> {
     let scope = crate::fs_policy::app_fs_scope(&app)?;
     safe_output_path_exists_inner(&path, move |p| scope.is_allowed(p))
@@ -800,7 +885,6 @@ pub fn safe_output_path_exists(app: tauri::AppHandle, path: String) -> Result<bo
 /// Write a text file safely. Layered defenses: scope deny enforcement,
 /// subtitle-extension whitelist, symlink rejection on destination,
 /// atomic `create_new(true)` open.
-#[tauri::command]
 pub fn safe_write_text_file(
     app: tauri::AppHandle,
     path: String,
@@ -813,7 +897,6 @@ pub fn safe_write_text_file(
 
 /// Write a previewed style edit to a new sibling file. Existing outputs are
 /// never replaced; the exclusive create-new open is the final collision gate.
-#[tauri::command]
 pub fn safe_write_style_edit_output(
     app: tauri::AppHandle,
     source_path: String,
@@ -836,7 +919,6 @@ pub fn safe_write_style_edit_output(
 /// reparse-point-rejected (a symlinked input would otherwise resolve
 /// to e.g. `~/.ssh/id_rsa` and copy its bytes as if they were a
 /// subtitle).
-#[tauri::command]
 pub fn safe_copy_file(
     app: tauri::AppHandle,
     src: String,
@@ -849,9 +931,9 @@ pub fn safe_copy_file(
 
 /// Rename / move `src` to `dst` safely. Same gating as `safe_copy_file`.
 /// `fs::rename` is atomic when the platform supports the requested move;
-/// unsupported moves fail through the returned error. Both endpoints are
-/// reparse-checked before the final call so planted shortcuts fail shut.
-#[tauri::command]
+/// unsupported moves fail without pre-deleting an existing destination. Both
+/// endpoints are reparse-checked before the final call so planted shortcuts
+/// fail shut.
 pub fn safe_rename_file(
     app: tauri::AppHandle,
     src: String,
@@ -924,6 +1006,22 @@ mod tests {
         let err = safe_output_path_exists_inner(&path.to_string_lossy(), deny_all).unwrap_err();
         assert!(err.contains("filesystem scope"));
     }
+
+    #[test]
+    fn resolved_scope_check_rejects_denied_terminal_reparse_parent_before_slot() {
+        let denied_parent = PathBuf::from("denied-parent");
+        let resolved = ResolvedScopePath {
+            path: denied_parent.join("out.ass"),
+            terminal_reparse_parent: Some(denied_parent.clone()),
+        };
+
+        let err =
+            check_resolved_scope_path(&|path| path != denied_parent.as_path(), &resolved, "Output")
+                .unwrap_err();
+
+        assert!(err.contains("denied by"), "got: {err}");
+    }
+
     #[test]
     fn write_creates_file_when_dest_missing() {
         let dir = temp_dir("write_missing");
@@ -953,6 +1051,25 @@ mod tests {
         assert!(err.contains("already exists"));
         let content = fs::read_to_string(&path).unwrap();
         assert_eq!(content, "old");
+    }
+
+    #[test]
+    fn plain_text_size_accepts_content_at_50_mib_limit() {
+        assert!(check_plain_text_size(MAX_TEXT_SIZE as usize).is_ok());
+    }
+
+    #[test]
+    fn write_refuses_content_one_byte_over_limit_before_overwrite() {
+        let dir = temp_dir("write_over_limit");
+        let path = dir.join("out.ass");
+        fs::write(&path, b"keep me").unwrap();
+        let oversized = "x".repeat(MAX_TEXT_SIZE as usize + 1);
+
+        let err = safe_write_text_file_inner(&path.to_string_lossy(), &oversized, true, allow_all)
+            .unwrap_err();
+
+        assert_eq!(err, "Subtitle content exceeds the 50 MB limit");
+        assert_eq!(fs::read(&path).unwrap(), b"keep me");
     }
 
     #[test]
@@ -1276,6 +1393,45 @@ mod tests {
     }
 
     #[test]
+    fn copy_missing_source_preserves_existing_destination() {
+        let dir = temp_dir("copy_missing_source");
+        let src = dir.join("missing.ass");
+        let dst = dir.join("dst.ass");
+        fs::write(&dst, b"old destination").unwrap();
+
+        let err = safe_copy_file_inner(
+            &src.to_string_lossy(),
+            &dst.to_string_lossy(),
+            true,
+            allow_all,
+        )
+        .unwrap_err();
+
+        assert!(err.to_ascii_lowercase().contains("source"), "got: {err}");
+        assert_eq!(fs::read(&dst).unwrap(), b"old destination");
+    }
+
+    #[test]
+    fn copy_directory_source_preserves_existing_destination() {
+        let dir = temp_dir("copy_directory_source");
+        let src = dir.join("folder.ass");
+        let dst = dir.join("dst.ass");
+        fs::create_dir(&src).unwrap();
+        fs::write(&dst, b"old destination").unwrap();
+
+        let err = safe_copy_file_inner(
+            &src.to_string_lossy(),
+            &dst.to_string_lossy(),
+            true,
+            allow_all,
+        )
+        .unwrap_err();
+
+        assert!(err.to_ascii_lowercase().contains("source"), "got: {err}");
+        assert_eq!(fs::read(&dst).unwrap(), b"old destination");
+    }
+
+    #[test]
     fn copy_allows_sup_sidecar_when_extension_is_preserved() {
         let dir = temp_dir("copy_sup_sidecar");
         let src = dir.join("src.sup");
@@ -1382,6 +1538,76 @@ mod tests {
     }
 
     #[test]
+    fn rename_overwrite_failure_preserves_source_and_existing_destination() {
+        let dir = temp_dir("rename_overwrite_failure");
+        let src = dir.join("src.ass");
+        let dst = dir.join("dst.ass");
+        fs::write(&src, b"new payload").unwrap();
+        fs::write(&dst, b"old destination").unwrap();
+
+        let err = safe_rename_file_inner_with_rename(
+            &src.to_string_lossy(),
+            &dst.to_string_lossy(),
+            true,
+            allow_all,
+            |source, destination| {
+                assert_eq!(fs::read(source).unwrap(), b"new payload");
+                assert_eq!(fs::read(destination).unwrap(), b"old destination");
+                Err(std::io::Error::other("simulated cross-volume failure"))
+            },
+        )
+        .unwrap_err();
+
+        assert!(err.contains("simulated cross-volume failure"), "got: {err}");
+        assert_eq!(fs::read(&src).unwrap(), b"new payload");
+        assert_eq!(fs::read(&dst).unwrap(), b"old destination");
+    }
+
+    #[test]
+    fn rename_overwrites_existing_destination_when_flag_set() {
+        let dir = temp_dir("rename_overwrite_success");
+        let src = dir.join("src.ass");
+        let dst = dir.join("dst.ass");
+        fs::write(&src, b"new payload").unwrap();
+        fs::write(&dst, b"old destination").unwrap();
+
+        safe_rename_file_inner(
+            &src.to_string_lossy(),
+            &dst.to_string_lossy(),
+            true,
+            allow_all,
+        )
+        .unwrap();
+
+        assert!(!src.exists());
+        assert_eq!(fs::read(&dst).unwrap(), b"new payload");
+    }
+
+    #[test]
+    fn rename_refuses_existing_destination_before_rename_when_overwrite_is_unset() {
+        let dir = temp_dir("rename_no_overwrite");
+        let src = dir.join("src.ass");
+        let dst = dir.join("dst.ass");
+        fs::write(&src, b"new payload").unwrap();
+        fs::write(&dst, b"old destination").unwrap();
+
+        let err = safe_rename_file_inner_with_rename(
+            &src.to_string_lossy(),
+            &dst.to_string_lossy(),
+            false,
+            allow_all,
+            |_, _| -> std::io::Result<()> {
+                panic!("rename callback must not run when overwrite is disabled")
+            },
+        )
+        .unwrap_err();
+
+        assert!(err.contains("overwrite not enabled"), "got: {err}");
+        assert_eq!(fs::read(&src).unwrap(), b"new payload");
+        assert_eq!(fs::read(&dst).unwrap(), b"old destination");
+    }
+
+    #[test]
     fn rename_allows_sup_sidecar_when_extension_is_preserved() {
         let dir = temp_dir("rename_sup_sidecar");
         let src = dir.join("src.sup");
@@ -1454,11 +1680,132 @@ mod tests {
         assert!(!dir.join("dst.ass").exists());
     }
 
-    // Symlink tests are POSIX-only because Windows symlink creation
-    // requires admin or developer mode. The reparse-point detection on
-    // Windows is exercised via `is_reparse_point` unit tests in util.rs;
-    // the safe-io behavior on top of that helper is identical to the
-    // POSIX path tested here.
+    // Symlink tests are POSIX-only because Windows symlink creation may require
+    // admin or Developer Mode. Windows still compile-checks the shared
+    // reparse-point branches; these fixtures pin the filesystem behavior on
+    // platforms where symlink creation is reliable in unprivileged tests.
+    #[cfg(unix)]
+    #[test]
+    fn output_exists_probe_treats_dangling_symlink_as_occupied() {
+        use std::os::unix::fs::symlink;
+        let dir = temp_dir("exists_probe_dangling_symlink");
+        let target = dir.join("missing.ass");
+        let link = dir.join("out.ass");
+        symlink(&target, &link).unwrap();
+
+        assert!(safe_output_path_exists_inner(&link.to_string_lossy(), allow_all).unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn output_exists_probe_resolves_parent_alias_before_scope_checking_dangling_symlink() {
+        use std::os::unix::fs::symlink;
+        let dir = temp_dir("exists_probe_dangling_scope");
+        let real_parent = dir.join("real");
+        let alias_parent = dir.join("alias");
+        fs::create_dir(&real_parent).unwrap();
+        symlink(&real_parent, &alias_parent).unwrap();
+        let target = real_parent.join("missing.ass");
+        let real_link = real_parent.join("out.ass");
+        symlink(&target, &real_link).unwrap();
+        let raw_link = alias_parent.join("out.ass");
+        let denied_slot = real_parent.canonicalize().unwrap().join("out.ass");
+
+        let err = safe_output_path_exists_inner(&raw_link.to_string_lossy(), move |path| {
+            path != denied_slot
+        })
+        .unwrap_err();
+
+        assert!(err.contains("denied by"), "got: {err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn output_exists_probe_checks_denied_parent_before_relative_dangling_target() {
+        use std::os::unix::fs::symlink;
+        let dir = temp_dir("exists_probe_relative_dangling_scope");
+        let denied_parent = dir.canonicalize().unwrap();
+        let link = dir.join("out.ass");
+        symlink("missing.ass", &link).unwrap();
+
+        // Mirror Tauri 2.11's relevant callback behavior: a terminal symlink
+        // is replaced with read_link's result before policy matching. Its
+        // relative target therefore looks allowed unless our resolver checks
+        // the canonical parent independently.
+        let err = safe_output_path_exists_inner(&link.to_string_lossy(), move |path| {
+            if path == denied_parent {
+                return false;
+            }
+            if fs::symlink_metadata(path)
+                .map(|metadata| metadata.file_type().is_symlink())
+                .unwrap_or(false)
+            {
+                return fs::read_link(path)
+                    .map(|target| target == Path::new("missing.ass"))
+                    .unwrap_or(false);
+            }
+            true
+        })
+        .unwrap_err();
+
+        assert!(err.contains("denied by"), "got: {err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_refuses_dangling_symlink_destination() {
+        use std::os::unix::fs::symlink;
+        let dir = temp_dir("write_dangling_symlink_dst");
+        let target = dir.join("missing.ass");
+        let link = dir.join("out.ass");
+        symlink(&target, &link).unwrap();
+
+        let err =
+            safe_write_text_file_inner(&link.to_string_lossy(), "replacement", true, allow_all)
+                .unwrap_err();
+
+        assert!(err.contains("symlink"), "got: {err}");
+        assert!(fs::symlink_metadata(&link).is_ok());
+        assert!(!target.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rename_refuses_live_and_dangling_symlink_destinations() {
+        use std::os::unix::fs::symlink;
+        let root = temp_dir("rename_symlink_dst");
+
+        for (case, target_exists) in [("live", true), ("dangling", false)] {
+            let dir = root.join(case);
+            fs::create_dir(&dir).unwrap();
+            let source = dir.join("src.ass");
+            let target = dir.join("target.ass");
+            let link = dir.join("dst.ass");
+            fs::write(&source, b"new payload").unwrap();
+            if target_exists {
+                fs::write(&target, b"sensitive target").unwrap();
+            }
+            symlink("target.ass", &link).unwrap();
+
+            let err = safe_rename_file_inner(
+                &source.to_string_lossy(),
+                &link.to_string_lossy(),
+                true,
+                allow_all,
+            )
+            .unwrap_err();
+
+            assert!(err.contains("symlink"), "{case}: got {err}");
+            assert_eq!(fs::read(&source).unwrap(), b"new payload", "{case}");
+            assert!(fs::symlink_metadata(&link).is_ok(), "{case}");
+            if target_exists {
+                assert_eq!(fs::read(&target).unwrap(), b"sensitive target", "{case}");
+            } else {
+                assert!(!target.exists(), "{case}");
+            }
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn write_refuses_existing_symlink_destination() {

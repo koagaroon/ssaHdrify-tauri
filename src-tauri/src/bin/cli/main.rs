@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::fs;
 use std::io::ErrorKind;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -1179,17 +1179,73 @@ fn init_logger() {
 }
 
 fn run() -> Result<ExitCode, String> {
-    let Cli { globals, command } = Cli::parse();
+    let Cli {
+        mut globals,
+        command,
+    } = Cli::parse();
+    normalize_global_paths(&mut globals)?;
 
     match command {
-        Command::Hdr(args) => run_hdr(&globals, args.args, args.diagnose.mode()),
-        Command::Shift(args) => run_shift(&globals, args.args, args.diagnose.mode()),
+        Command::Hdr(args) => {
+            emit_inert_cache_flags_notice(&globals, "hdr");
+            run_hdr(&globals, args.args, args.diagnose.mode())
+        }
+        Command::Shift(args) => {
+            emit_inert_cache_flags_notice(&globals, "shift");
+            run_shift(&globals, args.args, args.diagnose.mode())
+        }
         Command::Embed(args) => run_embed(&globals, args.args, args.diagnose.mode()),
-        Command::Rename(args) => run_rename(&globals, args.args, args.diagnose.mode()),
+        Command::Rename(args) => {
+            emit_inert_cache_flags_notice(&globals, "rename");
+            run_rename(&globals, args.args, args.diagnose.mode())
+        }
         Command::DiagnoseFonts(args) => run_diagnose_fonts(&globals, args),
         Command::Chain(args) => run_chain(&globals, args),
         Command::RefreshFonts(args) => run_refresh_fonts(&globals, args),
     }
+}
+
+fn normalize_global_paths(globals: &mut GlobalOptions) -> Result<(), String> {
+    globals.output_dir = globals
+        .output_dir
+        .as_deref()
+        .map(absolute_path)
+        .transpose()?;
+    globals.cache_file = globals
+        .cache_file
+        .as_deref()
+        .map(absolute_path)
+        .transpose()?;
+    Ok(())
+}
+
+fn emit_inert_cache_flags_notice(globals: &GlobalOptions, command: &str) {
+    if globals.quiet {
+        return;
+    }
+
+    let mut inert = Vec::new();
+    if globals.no_cache {
+        inert.push("--no-cache");
+    }
+    if globals.cache_file.is_some() {
+        inert.push("--cache-file");
+    }
+    if inert.is_empty() {
+        return;
+    }
+
+    let flags = inert.join(", ");
+    eprintln!(
+        "{}",
+        localize(
+            globals,
+            format!(
+                "ℹ {command} does not use the persistent font cache; these flags have no effect here: {flags}"
+            ),
+            format!("ℹ {command} 不使用持久字体缓存；以下参数在此无效：{flags}"),
+        )
+    );
 }
 
 fn validate_cache_file_arg(globals: &GlobalOptions) -> Result<(), String> {
@@ -1253,17 +1309,18 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
     // fail-fast before opening the cache or starting any scan. The
     // downstream scan_directory_collecting now validates too (defense
     // in depth), but the early check produces a cleaner per-arg
-    // error message at the right level. `--cache-file` (also argv untrusted-input)
-    // is already validated at the top of run() before any subcommand.
+    // error message at the right level. `--cache-file` (also argv
+    // untrusted-input) was normalized before dispatch and is validated above.
     for (dir, _scope, flag_name) in refresh_font_directory_sources(&args) {
         // Refuse non-UTF-8 paths upfront via `to_str()` rather than
         // routing `to_string_lossy()` through the validator. With
         // lossy substitution, WTF-16-surrogate / non-UTF-8 bytes
-        // become U+FFFD for the validate call while downstream scan
-        // / cache writes consume the ORIGINAL PathBuf — different
-        // bytes than what validate_ipc_path checked. Sibling pattern
-        // to the `--cache-file` refusal at the top of run().
-        let dir_str = dir.to_str().ok_or_else(|| {
+        // become U+FFFD for the validate call while downstream scan /
+        // cache writes consume the lossless normalized PathBuf — different
+        // bytes than what validate_ipc_path checked. Sibling pattern to the
+        // `--cache-file` refusal above.
+        let normalized_dir = absolute_path(dir)?;
+        let dir_str = normalized_dir.to_str().ok_or_else(|| {
             format!(
                 "{flag_name}: path contains non-UTF-8 bytes; refuse upfront so the IPC \
                  validator and the subsequent scan / cache write agree on the same \
@@ -2015,10 +2072,6 @@ impl ChainOutcomeBuilder {
         }
     }
 
-    fn replace_warnings(&mut self, new: Vec<String>) {
-        self.warnings = new;
-    }
-
     fn extend_warnings<I: IntoIterator<Item = String>>(&mut self, iter: I) {
         self.warnings.extend(iter);
     }
@@ -2402,7 +2455,7 @@ fn process_one_chain_input(
     // returns share the prediction:
     //   1. Duplicate-output-in-batch — if a prior input in this run
     //      produced the same predicted output, fail before any I/O
-    //      or V8 work. Mirrors `dedup_and_exists_check` in the
+    //      or V8 work. Mirrors `reserve_output` in the
     //      per-feature dispatchers.
     //   2. Already-exists — if --overwrite is off and the predicted
     //      path exists, skip before V8.
@@ -2495,6 +2548,9 @@ fn process_one_chain_input(
             return builder.into_failed(err);
         }
     };
+    if let Some(warning) = format_inferred_encoding_warning(globals, &read_result) {
+        builder.extend_warnings([warning]);
+    }
 
     // Build the JSON payload matching the TS-side ChainRunRequest.
     // `to_runtime_payload` is now infallible —
@@ -2528,13 +2584,11 @@ fn process_one_chain_input(
             // the whole story.
             Err((err, partial_warnings)) => {
                 evict_predicted(seen_outputs);
-                // Replace into builder so the failed-shape funnel still
-                // owns the partial warnings collected pre-Err.
-                builder.replace_warnings(partial_warnings);
+                builder.extend_warnings(partial_warnings);
                 return builder.into_failed(err);
             }
         };
-        builder.replace_warnings(embed_warnings);
+        builder.extend_warnings(embed_warnings);
         // Cumulative cap on the aggregate raw font-subset bytes
         // BEFORE the base64 +
         // serde_json marshal below. Per-font cap (MAX_FONT_DATA_SIZE,
@@ -2552,23 +2606,19 @@ fn process_one_chain_input(
                  or split the subtitle before embedding"
             ));
         }
-        // Encode subset bytes as base64 strings. The previous form
-        // (`{ "data": [byte, byte, ...] }`) expanded ~4-5× per byte
-        // when serde_json wrote bytes as decimal+comma JSON-in-JS-source,
-        // which compounded against the per-font MAX_FONT_DATA_SIZE
-        // budget (64 MB, defined in fonts.rs) into heavy V8 heap
-        // pressure on the worst-case path. Base64 is ~1.33× and
-        // decoded in TS via the local base64 byte decoder because bare
-        // deno_core has no Web API globals like atob().
-        let subsets_json: Vec<serde_json::Value> = subsets
-            .into_iter()
-            .map(|s| {
-                use base64::Engine as _;
-                let data_b64 = base64::engine::general_purpose::STANDARD.encode(&s.data);
-                serde_json::json!({ "fontName": s.font_name, "dataB64": data_b64 })
-            })
-            .collect();
-        payload["plan"]["steps"][idx]["params"]["subsets"] = serde_json::Value::Array(subsets_json);
+        // Serialize the canonical FontSubsetPayload wire type only after
+        // enforcing the raw-byte cap above. Its custom serializer owns the
+        // dataB64 representation, keeping standalone embed and chain from
+        // drifting into two hand-written payload shapes.
+        let subsets_json = match serde_json::to_value(&subsets) {
+            Ok(value) => value,
+            Err(error) => {
+                evict_predicted(seen_outputs);
+                return builder
+                    .into_failed(format!("failed to serialize chain embed subsets: {error}"));
+            }
+        };
+        payload["plan"]["steps"][idx]["params"]["subsets"] = subsets_json;
     }
 
     let request = engine::ChainRunRequest { payload };
@@ -2581,7 +2631,7 @@ fn process_one_chain_input(
         }
     };
 
-    // Surface chain's aggregated skipped-caption count through the
+    // Surface chain's deduplicated skipped-caption count through the
     // same path the standalone HDR / Shift CLIs use — stderr "⚠ ..."
     // line + append to FileReport.warnings (for --json output). An
     // older shape rode along inside an opaque chain note string that
@@ -2589,8 +2639,12 @@ fn process_one_chain_input(
     // stderr-routing and the json wire. Embed pre-resolution warnings
     // (collected above) sit in the same vec; both get surfaced via
     // the Written outcome.
-    if let Some(msgs) = format_oversized_skipped_warning(globals, result.skipped_count, &input_str)
-    {
+    if let Some(msgs) = format_oversized_caption_warning(
+        globals,
+        result.skipped_count,
+        &input_str,
+        OversizedCaptionHandling::FormatDependent,
+    ) {
         builder.extend_warnings(msgs);
     }
 
@@ -2865,7 +2919,7 @@ fn process_hdr_file(
     };
     let output = display_path(&output_path);
 
-    if let Some(early) = dedup_and_exists_check(
+    let mut reservation = match reserve_output(
         globals,
         &input_path,
         &output_path,
@@ -2873,14 +2927,16 @@ fn process_hdr_file(
         None,
         seen_outputs,
     ) {
-        return early;
-    }
+        Ok(reservation) => reservation,
+        Err(early) => return *early,
+    };
 
     if globals.dry_run {
         // Dry-run gates BEFORE the read so cheap-first lives up to its
         // name on `--dry-run` invocations: no I/O, no V8 work, just the
         // resolved path. encoding is None because we haven't read —
         // matches the cheap-first contract (Embed already does this).
+        reservation.keep();
         return planned_report(&input_path, Some(output), None);
     }
 
@@ -2888,6 +2944,11 @@ fn process_hdr_file(
         Ok(result) => result,
         Err(error) => return failed_report(&input_path, Some(output), None, error),
     };
+    let mut warnings = None;
+    append_warning(
+        &mut warnings,
+        format_inferred_encoding_warning(globals, &read_result),
+    );
 
     let request = engine::HdrConversionRequest {
         input_path: input.clone(),
@@ -2900,11 +2961,21 @@ fn process_hdr_file(
     let conversion = match engine.convert_hdr(&request) {
         Ok(result) => result,
         Err(error) => {
-            return failed_report(&input_path, Some(output), Some(read_result.encoding), error);
+            let mut report =
+                failed_report(&input_path, Some(output), Some(read_result.encoding), error);
+            report.warnings = warnings;
+            return report;
         }
     };
 
-    let warnings = format_oversized_skipped_warning(globals, conversion.skipped_count, &input);
+    if let Some(messages) = format_oversized_caption_warning(
+        globals,
+        conversion.skipped_count,
+        &input,
+        OversizedCaptionHandling::Dropped,
+    ) {
+        warnings.get_or_insert_with(Vec::new).extend(messages);
+    }
 
     // (sibling): attach warnings to the
     // failed_report on write_output failure so the oversized-caption
@@ -2922,6 +2993,8 @@ fn process_hdr_file(
         return report;
     }
 
+    reservation.keep();
+
     FileReport {
         input,
         output: Some(output),
@@ -2932,26 +3005,21 @@ fn process_hdr_file(
     }
 }
 
-/// stderr-surface the count of skipped oversized captions
-/// (>64 KB text) so CLI / chain users get the same signal the GUI shows
-/// via msg_oversized_skipped. Returns the warning string for inclusion
-/// in `FileReport.warnings` (used by --json output) so machine readers
-/// see it too. English-only per the existing convention for
-/// unconditional warnings (verbose-gated paths use `emit_verbose` /
-/// `localize` for bilingual output).
-/// Pure format helper: builds the oversized-caption warning message
-/// and returns it; does NOT `eprintln!`. Callers attach the returned
-/// `Vec<String>` to `FileReport.warnings`; the actual stderr emission
-/// happens at the existing print loops — `emit_file_report` for
-/// standalone HDR / Shift / Embed, and the `ChainFileOutcome::Written`
-/// arm for chain. A combined eprintln+return helper would cause double
-/// emission AND bypass `--quiet` at the helper's eprintln (the print
-/// loops are `!globals.quiet`-gated; a helper wouldn't be). The
-/// `format_*` name reinforces the contract.
-fn format_oversized_skipped_warning(
+#[derive(Clone, Copy)]
+enum OversizedCaptionHandling {
+    Dropped,
+    Preserved,
+    FormatDependent,
+}
+
+/// Build a bilingual oversized-caption warning for human and JSON output.
+/// The caller supplies what happened because structure-preserving ASS/VTT
+/// shifts retain the original cue while rebuilding operations omit it.
+fn format_oversized_caption_warning(
     globals: &GlobalOptions,
     skipped_count: usize,
     input: &str,
+    handling: OversizedCaptionHandling,
 ) -> Option<Vec<String>> {
     if skipped_count == 0 {
         return None;
@@ -2961,14 +3029,65 @@ fn format_oversized_skipped_warning(
     // can't be corrupted by control / BiDi chars from a crafted
     // argv.
     let input_disp = sanitize_for_display(input);
-    Some(vec![localize(
-        globals,
-        format!(
-            "Dropped {skipped_count} oversized caption(s) from {input_disp}: \
-             text exceeded 64 KB per-caption cap"
+    let message = match handling {
+        OversizedCaptionHandling::Dropped => localize(
+            globals,
+            format!(
+                "Dropped {skipped_count} oversized caption(s) from {input_disp}: \
+                 text exceeded the 64 KB per-caption processing cap"
+            ),
+            format!(
+                "已丢弃 {skipped_count} 条超大字幕（来自 {input_disp}）：单条文本超过 64 KB 的处理上限"
+            ),
         ),
-        format!("已丢弃 {skipped_count} 条超大字幕（来自 {input_disp}）：单条文本超过 64 KB 上限"),
-    )])
+        OversizedCaptionHandling::Preserved => localize(
+            globals,
+            format!(
+                "Left {skipped_count} oversized caption(s) in {input_disp} unchanged: \
+                 text exceeded the 64 KB per-caption processing cap, so timing was not adjusted"
+            ),
+            format!(
+                "{input_disp} 中有 {skipped_count} 条超大字幕超过单条 64 KB 的处理上限，已保留原内容且未调整时间"
+            ),
+        ),
+        OversizedCaptionHandling::FormatDependent => localize(
+            globals,
+            format!(
+                "Skipped processing {skipped_count} oversized caption(s) in {input_disp}: \
+                 text exceeded the 64 KB per-caption cap; depending on the chain step and format, \
+                 original content was left unchanged or omitted"
+            ),
+            format!(
+                "{input_disp} 中有 {skipped_count} 条超大字幕超过单条 64 KB 的处理上限而未处理；根据链式步骤和格式，原内容会保留不变或被省略"
+            ),
+        ),
+    };
+    Some(vec![message])
+}
+
+fn format_inferred_encoding_warning(
+    globals: &GlobalOptions,
+    result: &app_lib::encoding::ReadTextResult,
+) -> Option<String> {
+    result.inferred_without_bom.then(|| {
+        localize(
+            globals,
+            format!(
+                "Detected BOM-less {} from its byte pattern. This is a best-effort inference; verify the output.",
+                result.encoding_id
+            ),
+            format!(
+                "已根据字节模式推测该文件使用无 BOM 的 {} 编码。此结果并非完全确定，请核对输出。",
+                result.encoding_id
+            ),
+        )
+    })
+}
+
+fn append_warning(warnings: &mut Option<Vec<String>>, warning: Option<String>) {
+    if let Some(warning) = warning {
+        warnings.get_or_insert_with(Vec::new).push(warning);
+    }
 }
 
 fn load_timing_map_rules(
@@ -3079,40 +3198,62 @@ fn process_shift_file(
     }
 }
 
-// Shared post-resolve check used by HDR, Shift (cheap + heavy), and
-// Embed dispatchers. Returns `Some(FileReport)` when the file should
-// short-circuit (duplicate output in the same batch, or pre-existing
-// output without --overwrite), `None` to proceed. Encoding is taken by
-// reference so the caller can pass `Some(&read.encoding)` (heavy-first,
-// after read) or `None` (cheap-first, before read). Returns `Option`
-// rather than `Result` because FileReport is large (>128 bytes); a
-// Result variant would trip clippy::result_large_err.
-fn dedup_and_exists_check(
+struct OutputReservation<'a> {
+    seen_outputs: &'a mut HashSet<String>,
+    key: String,
+    keep: bool,
+}
+
+impl OutputReservation<'_> {
+    fn keep(&mut self) {
+        self.keep = true;
+    }
+}
+
+impl Drop for OutputReservation<'_> {
+    fn drop(&mut self) {
+        if !self.keep {
+            self.seen_outputs.remove(&self.key);
+        }
+    }
+}
+
+// Reserve a standalone output until the caller either plans or writes it.
+// Any Skip or Failed return drops the guard and releases the key, so a later
+// input can retry the same path. Boxing the large error keeps Result clippy-
+// clean without obscuring the success-path lifetime.
+fn reserve_output<'a>(
     globals: &GlobalOptions,
     input_path: &Path,
     output_path: &Path,
     output: &str,
     encoding: Option<&str>,
-    seen_outputs: &mut HashSet<String>,
-) -> Option<FileReport> {
+    seen_outputs: &'a mut HashSet<String>,
+) -> Result<OutputReservation<'a>, Box<FileReport>> {
     let cloned_encoding = || encoding.map(|s| s.to_string());
-    if !seen_outputs.insert(normalize_output_key(output_path)) {
-        return Some(failed_report(
+    let key = normalize_output_key(output_path);
+    if !seen_outputs.insert(key.clone()) {
+        return Err(Box::new(failed_report(
             input_path,
             Some(output.to_string()),
             cloned_encoding(),
             "duplicate output path in planned batch".to_string(),
-        ));
+        )));
     }
+    let reservation = OutputReservation {
+        seen_outputs,
+        key,
+        keep: false,
+    };
     if output_path_exists(globals, output_path) && !globals.overwrite {
-        return Some(skipped_report(
+        return Err(Box::new(skipped_report(
             input_path,
             Some(output.to_string()),
             cloned_encoding(),
             "output exists; pass --overwrite to replace it".to_string(),
-        ));
+        )));
     }
-    None
+    Ok(reservation)
 }
 
 fn build_shift_request(
@@ -3161,7 +3302,7 @@ fn process_shift_file_cheap_first(
     };
     let output = display_path(&output_path);
 
-    if let Some(early) = dedup_and_exists_check(
+    let mut reservation = match reserve_output(
         globals,
         &input_path,
         &output_path,
@@ -3169,13 +3310,15 @@ fn process_shift_file_cheap_first(
         None,
         seen_outputs,
     ) {
-        return early;
-    }
+        Ok(reservation) => reservation,
+        Err(early) => return *early,
+    };
 
     if globals.dry_run {
         // Dry-run gates BEFORE the read so cheap-first lives up to its
         // name on `--dry-run` invocations. encoding is None because we
         // haven't read — matches the cheap-first contract.
+        reservation.keep();
         return planned_report(&input_path, Some(output), None);
     }
 
@@ -3183,6 +3326,11 @@ fn process_shift_file_cheap_first(
         Ok(result) => result,
         Err(error) => return failed_report(&input_path, Some(output), None, error),
     };
+    let mut warnings = None;
+    append_warning(
+        &mut warnings,
+        format_inferred_encoding_warning(globals, &read_result),
+    );
 
     let request = build_shift_request(
         input.clone(),
@@ -3194,7 +3342,10 @@ fn process_shift_file_cheap_first(
     let conversion = match engine.convert_shift(&request) {
         Ok(result) => result,
         Err(error) => {
-            return failed_report(&input_path, Some(output), Some(read_result.encoding), error);
+            let mut report =
+                failed_report(&input_path, Some(output), Some(read_result.encoding), error);
+            report.warnings = warnings;
+            return report;
         }
     };
 
@@ -3211,7 +3362,18 @@ fn process_shift_file_cheap_first(
         ),
     );
 
-    let warnings = format_oversized_skipped_warning(globals, conversion.skipped_count, &input);
+    if let Some(messages) = format_oversized_caption_warning(
+        globals,
+        conversion.skipped_count,
+        &input,
+        if matches!(conversion.format.as_str(), "ass" | "vtt") {
+            OversizedCaptionHandling::Preserved
+        } else {
+            OversizedCaptionHandling::Dropped
+        },
+    ) {
+        warnings.get_or_insert_with(Vec::new).extend(messages);
+    }
 
     // (sibling): attach warnings to the
     // failed_report on write_output failure so the oversized-caption
@@ -3229,6 +3391,8 @@ fn process_shift_file_cheap_first(
         report.warnings = warnings;
         return report;
     }
+
+    reservation.keep();
 
     FileReport {
         input,
@@ -3262,6 +3426,11 @@ fn process_shift_file_heavy_first(
         Ok(result) => result,
         Err(error) => return failed_report(&input_path, None, None, error),
     };
+    let mut warnings = None;
+    append_warning(
+        &mut warnings,
+        format_inferred_encoding_warning(globals, &read_result),
+    );
 
     let request = build_shift_request(
         input.clone(),
@@ -3273,7 +3442,9 @@ fn process_shift_file_heavy_first(
     let conversion = match engine.convert_shift(&request) {
         Ok(result) => result,
         Err(error) => {
-            return failed_report(&input_path, None, Some(read_result.encoding), error);
+            let mut report = failed_report(&input_path, None, Some(read_result.encoding), error);
+            report.warnings = warnings;
+            return report;
         }
     };
 
@@ -3287,7 +3458,18 @@ fn process_shift_file_heavy_first(
     // attaching `warnings` to every FileReport returned from this
     // function (early or final), the dry-run / dedup-skip paths would
     // silently lose the warning.
-    let warnings = format_oversized_skipped_warning(globals, conversion.skipped_count, &input);
+    if let Some(messages) = format_oversized_caption_warning(
+        globals,
+        conversion.skipped_count,
+        &input,
+        if matches!(conversion.format.as_str(), "ass" | "vtt") {
+            OversizedCaptionHandling::Preserved
+        } else {
+            OversizedCaptionHandling::Dropped
+        },
+    ) {
+        warnings.get_or_insert_with(Vec::new).extend(messages);
+    }
 
     let output_path = match relocate_output_path(&conversion.output_path, context.output_dir) {
         Ok(path) => path,
@@ -3299,7 +3481,7 @@ fn process_shift_file_heavy_first(
     };
     let output = display_path(&output_path);
 
-    if let Some(mut early) = dedup_and_exists_check(
+    let mut reservation = match reserve_output(
         globals,
         &input_path,
         &output_path,
@@ -3307,15 +3489,19 @@ fn process_shift_file_heavy_first(
         Some(&read_result.encoding),
         seen_outputs,
     ) {
-        early.warnings = warnings.clone();
-        return early;
-    }
+        Ok(reservation) => reservation,
+        Err(mut early) => {
+            early.warnings = warnings.clone();
+            return *early;
+        }
+    };
 
     // Dry-run gates BEFORE the verbose progress print: a
     // `--dry-run --verbose` invocation should NOT emit the "shift: N
     // captions, M shifted" line because no shift was actually
     // committed. Matches the cheap-first path's ordering.
     if globals.dry_run {
+        reservation.keep();
         let mut planned = planned_report(&input_path, Some(output), Some(read_result.encoding));
         planned.warnings = warnings;
         return planned;
@@ -3345,6 +3531,8 @@ fn process_shift_file_heavy_first(
         report.warnings = warnings;
         return report;
     }
+
+    reservation.keep();
 
     FileReport {
         input,
@@ -3607,6 +3795,7 @@ fn diagnose_font_file(ctx: &mut DiagnoseFontContext<'_>, file: &Path) -> EmbedFi
         Ok(result) => result,
         Err(error) => return (failed_report(&input_path, None, None, error), Vec::new()),
     };
+    let inferred_warning = format_inferred_encoding_warning(ctx.globals, &read_result);
 
     let plan_request = engine::FontDiagnosticsPlanRequest {
         content: read_result.text,
@@ -3614,10 +3803,9 @@ fn diagnose_font_file(ctx: &mut DiagnoseFontContext<'_>, file: &Path) -> EmbedFi
     let plan = match ctx.engine.plan_font_diagnostics(&plan_request) {
         Ok(result) => result,
         Err(error) => {
-            return (
-                failed_report(&input_path, None, Some(read_result.encoding), error),
-                Vec::new(),
-            );
+            let mut report = failed_report(&input_path, None, Some(read_result.encoding), error);
+            append_warning(&mut report.warnings, inferred_warning);
+            return (report, Vec::new());
         }
     };
 
@@ -3631,7 +3819,8 @@ fn diagnose_font_file(ctx: &mut DiagnoseFontContext<'_>, file: &Path) -> EmbedFi
     ) {
         Ok(outcome) => {
             let mut diagnostics = outcome.diagnostics;
-            let mut warnings = outcome.warnings;
+            let mut warnings: Vec<String> = inferred_warning.into_iter().collect();
+            warnings.extend(outcome.warnings);
             if ctx.subset_check {
                 warnings.extend(apply_subset_checks_to_diagnostics(
                     &outcome.resolved,
@@ -3656,10 +3845,12 @@ fn diagnose_font_file(ctx: &mut DiagnoseFontContext<'_>, file: &Path) -> EmbedFi
                 diagnostics,
             )
         }
-        Err(error) => (
-            failed_report(&input_path, None, Some(read_result.encoding), error.error),
-            error.diagnostics,
-        ),
+        Err(error) => {
+            let mut report =
+                failed_report(&input_path, None, Some(read_result.encoding), error.error);
+            append_warning(&mut report.warnings, inferred_warning);
+            (report, error.diagnostics)
+        }
     }
 }
 
@@ -4593,7 +4784,7 @@ fn process_embed_file(
     };
     let output = display_path(&output_path);
 
-    if let Some(early) = dedup_and_exists_check(
+    let mut reservation = match reserve_output(
         globals,
         &input_path,
         &output_path,
@@ -4601,14 +4792,16 @@ fn process_embed_file(
         None,
         seen_outputs,
     ) {
-        return (early, Vec::new());
-    }
+        Ok(reservation) => reservation,
+        Err(early) => return (*early, Vec::new()),
+    };
 
     if globals.dry_run {
         // Dry-run for embed reports the planned output path without
         // doing font discovery or content parsing — matches HDR/Shift
         // dry-run behavior and avoids the surprise of "dry-run scanned
         // 17k fonts then planned no actual write."
+        reservation.keep();
         return (planned_report(&input_path, Some(output), None), Vec::new());
     }
 
@@ -4621,6 +4814,9 @@ fn process_embed_file(
             )
         }
     };
+    let mut warnings: Vec<String> = format_inferred_encoding_warning(globals, &read_result)
+        .into_iter()
+        .collect();
 
     let plan_request = engine::FontEmbedPlanRequest {
         input_path: input.clone(),
@@ -4630,14 +4826,14 @@ fn process_embed_file(
     let plan = match engine.plan_font_embed(&plan_request) {
         Ok(result) => result,
         Err(error) => {
-            return (
-                failed_report(&input_path, Some(output), Some(read_result.encoding), error),
-                Vec::new(),
-            );
+            let mut report =
+                failed_report(&input_path, Some(output), Some(read_result.encoding), error);
+            if !warnings.is_empty() {
+                report.warnings = Some(warnings);
+            }
+            return (report, Vec::new());
         }
     };
-
-    let mut warnings: Vec<String> = Vec::new();
 
     let mut font_diagnostics = Vec::new();
     let resolved_fonts = match resolve_embed_fonts(
@@ -4655,15 +4851,16 @@ fn process_embed_file(
         }
         Err(mut error) => {
             font_diagnostics.append(&mut error.diagnostics);
-            return (
-                failed_report(
-                    &input_path,
-                    Some(output),
-                    Some(read_result.encoding),
-                    error.error,
-                ),
-                font_diagnostics,
+            let mut report = failed_report(
+                &input_path,
+                Some(output),
+                Some(read_result.encoding),
+                error.error,
             );
+            if !warnings.is_empty() {
+                report.warnings = Some(warnings);
+            }
+            return (report, font_diagnostics);
         }
     };
 
@@ -4776,6 +4973,8 @@ fn process_embed_file(
             font_diagnostics,
         );
     }
+
+    reservation.keep();
 
     (
         FileReport {
@@ -5152,7 +5351,8 @@ fn group_resolved_fonts_by_face(
 ///
 /// CLI lens: `subset_font` is an in-process Rust call from this
 /// binary, not an IPC boundary. The "IPC cap" framing only applies
-/// on the GUI / Tauri path where `subset_font_b64` wraps it.
+/// on the GUI / Tauri path where `subset_font_bytes` uses raw bytes on
+/// Windows/Linux and a base64 fallback on Apple targets.
 ///
 /// Cross-language drift defense: `dedup_cap_matches_ipc_cap` in
 /// `mod tests` pins the equality with
@@ -5610,7 +5810,10 @@ fn expand_rename_inputs(globals: &GlobalOptions, paths: &[PathBuf]) -> Result<Ve
         .iter()
         .map(|path| absolute_path(path).map(|path| display_path(&path)))
         .collect();
-    let expanded = app_lib::dropzone::expand_dropped_paths(absolute_paths?)?;
+    // CLI argv paths are user-authored and have no Tauri AppHandle. Bypass
+    // only the GUI filesystem scope while retaining validation, reparse-point
+    // rejection, one-level walking, and both path-count caps.
+    let expanded = app_lib::dropzone::expand_dropped_paths_inner(absolute_paths?, |_| true)?;
 
     if expanded.files.is_empty() {
         return Err("no regular files found in rename input paths".to_string());
@@ -6479,21 +6682,62 @@ fn planned_report(
     }
 }
 
-// Trust model: --output-dir is user-controlled CLI argument. We
-// normalize it to absolute form here but DO NOT canonicalize (which
+// Trust model: CLI path arguments are user-controlled. We normalize
+// them to absolute form here but DO NOT canonicalize (which
 // would resolve symlinks). On Windows, fs::canonicalize returns the
 // `\\?\C:\...` extended-path form which surprises downstream tools;
 // on POSIX it would silently follow symlinks the user may have set
 // up intentionally. The trust boundary is "the user supplied this
 // path" — any symlinks they set up are theirs to manage.
 fn absolute_path(path: &Path) -> Result<PathBuf, String> {
-    if path.is_absolute() {
-        return Ok(path.to_path_buf());
+    if !path.is_absolute() && matches!(path.components().next(), Some(Component::Prefix(_))) {
+        return Err(format!(
+            "drive-relative paths are ambiguous; use an absolute path such as C:\\folder\\file or a normal relative path: {}",
+            sanitize_for_display(&path.display().to_string())
+        ));
     }
 
-    std::env::current_dir()
-        .map(|cwd| cwd.join(path))
-        .map_err(|err| format!("failed to resolve current directory: {err}"))
+    let joined = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|err| format!("failed to resolve current directory: {err}"))?
+            .join(path)
+    };
+
+    // CLI argv is explicitly user-controlled and may naturally contain
+    // `.` / `..`. Fold those components before the shared strict IPC path
+    // validator sees the path. This is lexical on purpose: output targets
+    // may not exist yet, and canonicalization would follow user-managed
+    // symlinks plus introduce Windows `\\?\` paths. GUI IPC remains strict
+    // and never calls this helper.
+    let mut normalized = PathBuf::new();
+    for component in joined.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if normalized.file_name().is_some() {
+                    normalized.pop();
+                } else if !normalized.has_root() {
+                    return Err(format!(
+                        "path escapes its filesystem root: {}",
+                        sanitize_for_display(&joined.display().to_string())
+                    ));
+                }
+            }
+            Component::Normal(segment) => normalized.push(segment),
+        }
+    }
+
+    if !normalized.is_absolute() {
+        return Err(format!(
+            "failed to resolve an absolute path from: {}",
+            sanitize_for_display(&joined.display().to_string())
+        ));
+    }
+    Ok(normalized)
 }
 
 // Cap on the relocated output path — Windows MAX_PATH minus one.
@@ -6618,8 +6862,9 @@ fn output_path_exists(globals: &GlobalOptions, path: &Path) -> bool {
 //   - `check_subtitle_extension` confines the destination to the
 //     subtitle-extension whitelist (defense-in-depth against argv
 //     typo redirecting to `.desktop` / `.lnk` persistence paths).
-//   - `clear_existing_destination` lstat's the destination before any
-//     remove_file (refuses reparse points there).
+//   - write / copy use `clear_existing_destination` before replacement;
+//     rename uses non-mutating destination inspection so an OS rename
+//     failure cannot erase the prior destination. Both reject reparse points.
 //   - copy / rename additionally enforce `reject_reparse_source` +
 //     `reject_same_canonical_path` (the case-only NTFS self-overwrite
 //     trap closed for the GUI) + the late re-check before
@@ -6633,10 +6878,10 @@ fn output_path_exists(globals: &GlobalOptions, path: &Path) -> bool {
 // owns all decisions internally. Higher-level callers still use
 // `output_path_exists` (preserved as a standalone CLI helper above)
 // for the cheap-first skip-when-exists check + `--quiet`-respecting
-// stderr WARN on stat failure. safe_io's `clear_existing_destination`
-// provides the second-layer fail-shut on the race between the higher-
-// level check and the write. Error wording at the safe_io boundary
-// bubbles through `failed_report` and is sanitized at the print
+// stderr WARN on stat failure. safe_io's destination inspection/removal
+// helpers provide the second-layer fail-shut on the race between the higher-
+// level check and the final filesystem operation. Error wording at the safe_io
+// boundary bubbles through `failed_report` and is sanitized at the print
 // boundary by `emit_file_report`'s `sanitize_for_display`.
 fn write_output(
     _globals: &GlobalOptions,
@@ -6691,7 +6936,7 @@ fn display_path(path: &Path) -> String {
     // make `evil\u{202e}.ass` silently resolve to a sibling
     // `evil.ass`, picking the wrong file at read / write time.
     // Display-time sanitization belongs at the print sites
-    // (`emit_file_report`, `format_oversized_skipped_warning`, etc.)
+    // (`emit_file_report`, `format_oversized_caption_warning`, etc.)
     // via `sanitize_for_display`.
     let raw = path.to_string_lossy().into_owned();
     if cfg!(windows) {
@@ -6798,7 +7043,8 @@ fn emit_verbose(globals: &GlobalOptions, en: String, zh: String) {
 
 fn emit_verbose_err(globals: &GlobalOptions, en: String, zh: String) {
     if globals.verbose && !globals.json && !globals.quiet {
-        eprintln!("{}", localize(globals, en, zh));
+        let message = localize(globals, en, zh);
+        eprintln!("{}", sanitize_for_display(&message));
     }
 }
 
@@ -7005,7 +7251,7 @@ mod tests {
     #[cfg(unix)]
     use super::run_refresh_fonts;
     use super::{
-        apply_effective_embedded_font_names, apply_subset_checks_to_diagnostics,
+        absolute_path, apply_effective_embedded_font_names, apply_subset_checks_to_diagnostics,
         build_font_qa_summary, check_cache_drift, classify_locale, copy_file_output,
         create_cli_font_db_dir, diagnostic_next_actions, display_path,
         duplicate_rename_output_keys, engine, group_resolved_fonts_by_face, normalize_output_key,
@@ -7030,6 +7276,50 @@ mod tests {
     use clap::{CommandFactory, Parser};
     use std::fs;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn absolute_path_folds_cli_dot_and_parent_components_without_touching_names() {
+        let cwd = std::env::current_dir().unwrap();
+        let normalized = absolute_path(Path::new("one/./two/../three/file..name.ass")).unwrap();
+
+        assert_eq!(
+            normalized,
+            cwd.join("one").join("three").join("file..name.ass")
+        );
+        assert!(normalized.is_absolute());
+        assert!(!normalized
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir)));
+    }
+
+    #[test]
+    fn absolute_path_clamps_parent_components_at_the_filesystem_root() {
+        let cwd = std::env::current_dir().unwrap();
+        let root = cwd.ancestors().last().unwrap();
+
+        assert_eq!(
+            absolute_path(&root.join("..").join("output.ass")).unwrap(),
+            root.join("output.ass")
+        );
+        assert_eq!(
+            absolute_path(&root.join("folder").join("..").join("..").join("output.ass")).unwrap(),
+            root.join("output.ass")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn absolute_path_handles_rooted_windows_paths_and_rejects_drive_relative_paths() {
+        let cwd = std::env::current_dir().unwrap();
+        let root = cwd.ancestors().last().unwrap();
+
+        assert_eq!(
+            absolute_path(Path::new(r"\ssahdrify-test\file.ass")).unwrap(),
+            root.join("ssahdrify-test").join("file.ass")
+        );
+        let error = absolute_path(Path::new(r"C:ssahdrify-test\file.ass")).unwrap_err();
+        assert!(error.contains("drive-relative paths are ambiguous"));
+    }
 
     /// pin the cross-module constant equality. The CLI's
     /// dedup cap MUST equal the IPC cap inside fonts.rs — the dedup
@@ -8319,7 +8609,7 @@ mod tests {
     #[test]
     fn sanitize_for_display_strips_control_and_bidi() {
         // The display-time sanitizer companion to display_path. Used
-        // at `emit_file_report` and `format_oversized_skipped_warning`
+        // at `emit_file_report` and `format_oversized_caption_warning`
         // to laundering paths before stderr/println interpolation,
         // so a crafted argv filename can't corrupt the terminal.
         assert_eq!(

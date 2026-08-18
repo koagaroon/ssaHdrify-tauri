@@ -73,6 +73,8 @@ pub struct ShiftConversionRequest {
     pub input_path: String,
     pub content: String,
     pub offset_ms: i64,
+    // Keep absent optionals absent on the JS wire. The TS boundary also
+    // normalizes nullish values defensively for direct/future callers.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub threshold_ms: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -226,11 +228,11 @@ pub struct FontEmbedApplyResult {
 /// `output_path` is where, `notes` is the per-step diagnostic
 /// summary surfaced in the Rust shell's per-file report.
 ///
-/// `skipped_count` is the aggregate count of captions whose text
-/// exceeded MAX_CAPTION_TEXT_LEN (64 KB) across every step that
-/// parses subtitle content. The shell routes this through
-/// `emit_oversized_skipped_warning` (stderr + FileReport.warnings)
-/// to mirror the standalone HDR / Shift CLI paths. Previously the
+/// `skipped_count` is the largest per-step count of source captions whose
+/// text exceeded MAX_CAPTION_TEXT_LEN (64 KB). The maximum avoids counting
+/// a preserved cue again in each later shift step. The shell routes it through
+/// the oversized-caption warning path (stderr + FileReport.warnings) to mirror
+/// the standalone HDR / Shift CLI paths. Previously the
 /// chain side relied on a string-suffix-in-note shape the Rust
 /// shell never parsed; the typed field closes that gap.
 #[derive(Debug, Deserialize)]
@@ -580,7 +582,29 @@ impl CliEngine {
 
 #[cfg(test)]
 mod tests {
-    use super::{FontEmbedApplyRequest, FontSubsetPayload};
+    use super::{FontEmbedApplyRequest, FontSubsetPayload, ShiftConversionRequest};
+
+    #[test]
+    fn shift_request_omits_both_absent_optionals_from_json_wire_shape() {
+        let request = ShiftConversionRequest {
+            input_path: r"C:\subs\episode.ass".to_string(),
+            content: "[Script Info]\n".to_string(),
+            offset_ms: 1000,
+            threshold_ms: None,
+            timing_map_rules: None,
+            output_template: "{name}.shifted{ext}".to_string(),
+        };
+
+        let json = serde_json::to_value(request).expect("request should serialize");
+        assert!(
+            json.get("thresholdMs").is_none(),
+            "None threshold must be omitted rather than serialized as null"
+        );
+        assert!(
+            json.get("timingMapRules").is_none(),
+            "None timing map must be omitted rather than serialized as null"
+        );
+    }
 
     #[test]
     fn font_subset_payload_serializes_bytes_as_base64() {

@@ -27,6 +27,18 @@ describe("HDR UI state guards", () => {
         hasFiles: true,
         processing: false,
         brightnessInvalid: true,
+        templateInvalid: false,
+      })
+    ).toBe(true);
+  });
+
+  it("disables Convert when the custom output template is empty", () => {
+    expect(
+      isHdrConvertDisabled({
+        hasFiles: true,
+        processing: false,
+        brightnessInvalid: false,
+        templateInvalid: true,
       })
     ).toBe(true);
   });
@@ -37,6 +49,7 @@ describe("HDR UI state guards", () => {
         hasFiles: true,
         processing: false,
         brightnessInvalid: false,
+        templateInvalid: false,
       })
     ).toBe(false);
   });

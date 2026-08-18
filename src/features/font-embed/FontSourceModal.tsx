@@ -15,7 +15,7 @@ import { ask } from "@tauri-apps/plugin-dialog";
 import { sanitizeError, sanitizeForDialog } from "../../lib/dedup-helpers";
 import { isWindowsRuntime } from "../../lib/platform";
 import { useI18n } from "../../i18n/useI18n";
-import type { FontUsage } from "./font-collector";
+import type { FontStyleLabels, FontUsage } from "./font-collector";
 import { fontKeyLabel } from "./font-collector";
 import { userFontKey } from "./font-embedder";
 import { formatFontScanBytes, shouldWarnLargeFontScan } from "./font-source-warning";
@@ -56,6 +56,8 @@ interface Props {
   usages: FontUsage[];
   localCoveredKeys: Set<string>;
   hasSubtitle: boolean;
+  /** Parent-owned analysis/embed work currently requires a stable source index. */
+  mutationLocked: boolean;
   onAddSource: (source: FontSource) => void;
   onRemoveSource: (id: string) => void;
   /**
@@ -130,7 +132,8 @@ function newScanId(): number {
 function computeCoverage(
   usages: FontUsage[],
   localCoveredKeys: Set<string>,
-  hasSubtitle: boolean
+  hasSubtitle: boolean,
+  styleLabels: Readonly<FontStyleLabels>
 ): { covered: number; total: number; missing: string[] } {
   if (!hasSubtitle || usages.length === 0) {
     return { covered: 0, total: 0, missing: [] };
@@ -142,7 +145,7 @@ function computeCoverage(
     if (localCoveredKeys.has(k)) {
       covered += 1;
     } else {
-      missing.push(fontKeyLabel(u.key));
+      missing.push(fontKeyLabel(u.key, styleLabels));
     }
   }
   return { covered, total: usages.length, missing };
@@ -156,14 +159,20 @@ export default function FontSourceModal(props: Props) {
     usages,
     localCoveredKeys,
     hasSubtitle,
+    mutationLocked,
     onAddSource,
     onRemoveSource,
     onScanStateChange,
   } = props;
   const { t } = useI18n();
+  const fontStyleLabels = useMemo(
+    () => ({ bold: t("font_style_bold"), italic: t("font_style_italic") }),
+    [t]
+  );
 
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
+  const controlsLocked = busy || mutationLocked;
   const [scanning, setScanning] = useState(false);
   // Wrap setScanning to also notify the parent. Single source of truth
   // for "is the modal scanning" — every setter now goes through here so
@@ -414,7 +423,7 @@ export default function FontSourceModal(props: Props) {
   }, [t]);
 
   const claimScanFlow = useCallback(() => {
-    if (busyRef.current) return false;
+    if (busyRef.current || mutationLocked) return false;
     busyRef.current = true;
     setBusy(true);
     setCancelRequested(false);
@@ -428,7 +437,7 @@ export default function FontSourceModal(props: Props) {
     // mutate . Mirrored in releaseScanFlow.
     setScanningWithParent(true);
     return true;
-  }, [setScanningWithParent]);
+  }, [mutationLocked, setScanningWithParent]);
 
   const releaseScanFlow = useCallback(() => {
     // Ordering note: clearing busyRef synchronously while setBusy(false)
@@ -672,8 +681,8 @@ export default function FontSourceModal(props: Props) {
   // walk. Only the inputs to computeCoverage actually invalidate the
   // result.
   const { covered, total, missing } = useMemo(
-    () => computeCoverage(usages, localCoveredKeys, hasSubtitle),
-    [usages, localCoveredKeys, hasSubtitle]
+    () => computeCoverage(usages, localCoveredKeys, hasSubtitle, fontStyleLabels),
+    [usages, localCoveredKeys, hasSubtitle, fontStyleLabels]
   );
 
   if (!open) return null;
@@ -774,14 +783,16 @@ export default function FontSourceModal(props: Props) {
                     </span>
                     <button
                       type="button"
-                      onClick={() => onRemoveSource(src.id)}
-                      disabled={busy}
+                      onClick={() => {
+                        if (!mutationLocked && !busyRef.current) onRemoveSource(src.id);
+                      }}
+                      disabled={controlsLocked}
                       className="px-2 py-0.5 rounded text-xs"
                       style={{
                         background: "var(--cancel-bg)",
                         color: "var(--cancel-text)",
-                        filter: busy ? "grayscale(1)" : "none",
-                        cursor: busy ? "not-allowed" : "pointer",
+                        filter: controlsLocked ? "grayscale(1)" : "none",
+                        cursor: controlsLocked ? "not-allowed" : "pointer",
                       }}
                       title={busy ? t("font_sources_scanning") : t("font_sources_remove")}
                     >
@@ -794,7 +805,12 @@ export default function FontSourceModal(props: Props) {
           )}
 
           {/* Option cards — explicit shallow folder, recursive library, or files. */}
-          <button type="button" onClick={handleAddFolder} disabled={busy} className="modal-opt">
+          <button
+            type="button"
+            onClick={handleAddFolder}
+            disabled={controlsLocked}
+            className="modal-opt"
+          >
             <span className="modal-opt-icon" aria-hidden="true">
               <svg
                 width="20"
@@ -819,7 +835,7 @@ export default function FontSourceModal(props: Props) {
           <button
             type="button"
             onClick={handleAddFontLibrary}
-            disabled={busy}
+            disabled={controlsLocked}
             className="modal-opt"
           >
             <span className="modal-opt-icon" aria-hidden="true">
@@ -844,7 +860,12 @@ export default function FontSourceModal(props: Props) {
               <div className="modal-opt-sub">{t("font_sources_add_library_sub")}</div>
             </div>
           </button>
-          <button type="button" onClick={handleAddFiles} disabled={busy} className="modal-opt">
+          <button
+            type="button"
+            onClick={handleAddFiles}
+            disabled={controlsLocked}
+            className="modal-opt"
+          >
             <span className="modal-opt-icon" aria-hidden="true">
               <svg
                 width="20"

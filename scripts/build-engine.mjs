@@ -33,6 +33,7 @@ import { resolveAppVersion } from "./lib/app-version.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(__dirname, "..");
+const ENGINE_BUNDLE_COMPLETION_MARKER = "/* ssahdrify-engine-bundle-complete */";
 
 const APP_VERSION = resolveAppVersion(projectRoot);
 
@@ -46,6 +47,9 @@ await build({
   platform: "neutral",
   mainFields: ["module", "main"],
   outfile: resolve(projectRoot, "dist-engine/engine.js"),
+  footer: {
+    js: ENGINE_BUNDLE_COMPLETION_MARKER,
+  },
   define: {
     __APP_VERSION__: JSON.stringify(APP_VERSION),
     "import.meta.env.DEV": "false",

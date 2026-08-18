@@ -172,6 +172,10 @@ export default function BatchRename() {
   const [editedRows, setEditedRows] = useState<PairingRow[]>([]);
 
   const pickGenRef = useRef(0);
+  // Output-directory picks have their own generation because the chosen
+  // directory intentionally survives ordinary input re-picks, but Clear and
+  // a newer directory dialog must invalidate an older unresolved dialog.
+  const chosenDirPickGenRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
   // Synchronous double-click guard — `busy` state lags setBusy(true) by
   // one render. busyRef is written synchronously at handler entry and
@@ -462,6 +466,7 @@ export default function BatchRename() {
 
   const handleClearFiles = useCallback(() => {
     pickGenRef.current = pickGenRef.current + 1;
+    chosenDirPickGenRef.current = chosenDirPickGenRef.current + 1;
     clearFile("rename");
     setChosenDir(null);
     setUnknownCount(0);
@@ -469,9 +474,20 @@ export default function BatchRename() {
   }, [clearFile]);
 
   const handlePickChosenDir = useCallback(async () => {
-    const dir = await pickOutputDirectory(t);
+    const gen = (chosenDirPickGenRef.current = chosenDirPickGenRef.current + 1);
+    let dir: string | null;
+    try {
+      dir = await pickOutputDirectory(t);
+    } catch (error) {
+      // A stale dialog belongs to an abandoned state and must not emit a
+      // confusing late error after Clear or a newer picker launch.
+      if (gen !== chosenDirPickGenRef.current) return;
+      addLog(t("error_prefix", sanitizeError(error)), "error");
+      return;
+    }
+    if (gen !== chosenDirPickGenRef.current) return;
     if (dir) setChosenDir(dir);
-  }, [t]);
+  }, [addLog, t]);
 
   const handleRunRename = useCallback(async () => {
     if (busy || actionableCount === 0) return;

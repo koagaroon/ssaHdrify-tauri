@@ -582,10 +582,9 @@ describe("CLI engine entry — input boundary validation", () => {
     expect(() =>
       convertShift({ inputPath: inputAss, content: ASS_FIXTURE, offsetMs: 1000, thresholdMs: NaN })
     ).toThrow(/Invalid thresholdMs/);
-    // A finite offset with NO threshold passes — covering BOTH the omitted
-    // (`undefined`) shape AND the CLI wire `null` shape. The null case
-    // regressed once because the guard only special-cased `undefined`, which
-    // broke the common `shift --offset N` (no --threshold) command.
+    // A finite offset with no threshold passes in both the typed omitted
+    // (`undefined`) shape and a defensive direct/future JSON `null` shape.
+    // The current Rust wire omits `None` optionals rather than sending null.
     expect(() =>
       convertShift({ inputPath: inputAss, content: ASS_FIXTURE, offsetMs: 1000 })
     ).not.toThrow();

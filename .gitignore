@@ -24,5 +24,6 @@ dist-ssr
 *.sln
 *.sw?
 
-# Built release artifacts (renamed portable exe staged for gh release create)
-SSA HDRify_v*_x64.exe
+# Built release artifacts (renamed portable exes staged for gh release create)
+/ssahdrify_v*_x64.exe
+/ssahdrify-cli_v*_x64.exe

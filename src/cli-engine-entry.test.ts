@@ -217,6 +217,67 @@ describe("time shift timing-map engine helpers", () => {
     expect(result.content).toContain("00:00:04,500 --> 00:00:05,500");
   });
 
+  it("treats a runtime-null timing map as an absent global-shift option", () => {
+    const result = convertShift({
+      inputPath: "C:\\subs\\sample.srt",
+      content: SIMPLE_SRT,
+      offsetMs: 1000,
+      timingMapRules: null as never,
+    });
+
+    expect(result.content).toBe(
+      [
+        "1",
+        "00:00:02,000 --> 00:00:03,000",
+        "one",
+        "",
+        "2",
+        "00:00:06,000 --> 00:00:07,000",
+        "two",
+        "",
+      ].join("\n")
+    );
+  });
+
+  it("treats a runtime-null threshold as absent for a timing-map shift", () => {
+    const result = convertShift({
+      inputPath: "C:\\subs\\sample.srt",
+      content: SIMPLE_SRT,
+      offsetMs: 0,
+      thresholdMs: null as never,
+      timingMapRules: [{ startMs: 0, offsetMs: 500 }],
+    });
+
+    expect(result.shiftedCount).toBe(2);
+    expect(result.content).toContain("00:00:01,500 --> 00:00:02,500");
+    expect(result.content).toContain("00:00:05,500 --> 00:00:06,500");
+  });
+
+  it.each([
+    [
+      "SRT",
+      "C:\\subs\\sample.srt",
+      "1\n00:00:01,000 --> 00:00:02,000\n" +
+        "Z".repeat(65_000) +
+        "\n\n2\n00:00:03,000 --> 00:00:04,000\nNORMAL\n",
+      "1\n00:00:04,000 --> 00:00:05,000\nNORMAL\n",
+    ],
+    [
+      "SUB",
+      "C:\\subs\\sample.sub",
+      `{0}{24}${"Z".repeat(65_000)}\n{48}{72}NORMAL\n`,
+      "{72}{96}NORMAL\n",
+    ],
+  ])(
+    "omits oversized %s captions from exact rebuilt output and reports the skip",
+    (_label, inputPath, content, expected) => {
+      const result = convertShift({ inputPath, content, offsetMs: 1000 });
+
+      expect(result.skippedCount).toBe(1);
+      expect(result.content).toBe(expected);
+    }
+  );
+
   it("rejects accidental mixing of timing map and global shift controls", () => {
     expect(() =>
       convertShift({

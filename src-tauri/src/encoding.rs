@@ -1,6 +1,7 @@
 //! Encoding detection and decoding for subtitle files.
 //!
-//! Strategy: BOM detection first (deterministic), then chardetng (heuristic).
+//! Strategy: BOM detection first, then conservative BOM-less UTF-16
+//! inference, then chardetng for the remaining encodings.
 //! Returns UTF-8 text + detected encoding name so the frontend always gets
 //! clean Unicode regardless of the original file encoding.
 
@@ -41,6 +42,7 @@ fn decoded_result(
     encoding_id: &str,
     had_bom: bool,
     lossy: bool,
+    inferred_without_bom: bool,
     source_bytes: &[u8],
 ) -> ReadTextResult {
     ReadTextResult {
@@ -49,6 +51,7 @@ fn decoded_result(
         encoding_id: encoding_id.to_string(),
         had_bom,
         lossy,
+        inferred_without_bom,
         source_revision: source_revision(source_bytes),
         source_byte_length: source_bytes.len() as u64,
     }
@@ -92,13 +95,22 @@ fn sanitize_io_error(e: &std::io::Error, action: &str) -> String {
 
 /// Detect encoding and decode bytes to UTF-8. Shared logic for both the
 /// Tauri command and unit tests (which can't call Tauri commands directly).
-pub(crate) fn decode_bytes(bytes: &[u8]) -> ReadTextResult {
+pub(crate) fn decode_bytes(bytes: &[u8]) -> Result<ReadTextResult, String> {
     // 1. BOM detection
     if let Some(result) = detect_bom(bytes) {
-        return result;
+        return Ok(result);
     }
 
-    // 2. chardetng heuristic
+    // 2. Conservative BOM-less UTF-16 inference. chardetng intentionally
+    // does not consider UTF-16, and NUL bytes are valid UTF-8, so an
+    // ASCII-heavy UTF-16 subtitle would otherwise be returned as NUL-filled
+    // mojibake. Only accept a strong byte-lane pattern plus recognizable
+    // subtitle structure; ambiguous data fails instead of being rewritten.
+    if let Some(result) = detect_bomless_utf16(bytes)? {
+        return Ok(result);
+    }
+
+    // 3. chardetng heuristic
     //
     // chardetng 1.0 broke two API points compared with 0.1:
     //   - `EncodingDetector::new()` now takes an `Iso2022JpDetection`
@@ -131,24 +143,26 @@ pub(crate) fn decode_bytes(bytes: &[u8]) -> ReadTextResult {
         // return UTF-8-lossy mojibake of GBK bytes — content and label
         // disagree, and the content is much worse than `cow` already
         // contained.
-        return decoded_result(
+        return Ok(decoded_result(
             cow.into_owned(),
             format!("{} (lossy)", encoding.name()),
             encoding.name(),
             false,
             true,
+            false,
             bytes,
-        );
+        ));
     }
 
-    decoded_result(
+    Ok(decoded_result(
         cow.into_owned(),
         encoding.name().to_string(),
         encoding.name(),
         false,
         false,
+        false,
         bytes,
-    )
+    ))
 }
 
 /// Result of reading a text file with encoding detection.
@@ -165,6 +179,8 @@ pub struct ReadTextResult {
     pub had_bom: bool,
     /// Whether decoding replaced malformed source bytes.
     pub lossy: bool,
+    /// True only when UTF-16LE/BE was inferred conservatively without a BOM.
+    pub inferred_without_bom: bool,
     /// SHA-256 of the exact source bytes used for this decoded result.
     pub source_revision: String,
     /// Exact byte length used for bounded batch planning in the GUI.
@@ -176,8 +192,8 @@ pub struct ReadTextResult {
 ///
 /// Detection order:
 /// 1. BOM (UTF-8, UTF-16 LE/BE) — deterministic, highest priority
-/// 2. chardetng heuristic — handles GBK, Big5, Shift_JIS, EUC-KR, etc.
-/// 3. Lossy UTF-8 fallback — if all else fails
+/// 2. Conservative BOM-less UTF-16 inference from byte-lane structure
+/// 3. chardetng heuristic — handles GBK, Big5, Shift_JIS, EUC-KR, etc.
 ///
 /// The Tauri command (`read_text_detect_encoding`) wraps this with the
 /// app-owned fs scope; the CLI binary (which has no Tauri app
@@ -385,18 +401,218 @@ pub fn read_text_detect_encoding_inner(
         return Err("UTF-32 subtitle encoding is not supported".to_string());
     }
 
-    Ok(decode_bytes(&bytes))
+    decode_bytes(&bytes)
 }
 
-/// Tauri command wrapper. Resolves the app-owned fs scope then
-/// delegates to `read_text_detect_encoding_inner`.
-#[tauri::command]
+/// Blocking command implementation. The async Tauri boundary in
+/// `ipc_commands` moves scope resolution, file reading, and decoding to the
+/// blocking pool before calling this function.
 pub fn read_text_detect_encoding(
     app: tauri::AppHandle,
     path: String,
 ) -> Result<ReadTextResult, String> {
     let scope = crate::fs_policy::app_fs_scope(&app)?;
     read_text_detect_encoding_inner(&path, move |p| scope.is_allowed(p))
+}
+
+fn looks_like_subtitle_text(text: &str) -> bool {
+    if text
+        .chars()
+        .any(|ch| ch.is_control() && !matches!(ch, '\t' | '\r' | '\n'))
+        || text
+            .chars()
+            .filter(|ch| !ch.is_whitespace())
+            .take(4)
+            .count()
+            < 4
+    {
+        return false;
+    }
+
+    text.lines().any(|line| {
+        let trimmed = line.trim_start_matches('\u{feff}').trim();
+        trimmed.starts_with("WEBVTT")
+            || trimmed.eq_ignore_ascii_case("[Script Info]")
+            || trimmed.eq_ignore_ascii_case("[Events]")
+            || trimmed.eq_ignore_ascii_case("[V4+ Styles]")
+            || trimmed.eq_ignore_ascii_case("[V4 Styles]")
+            || trimmed
+                .get(..9)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("Dialogue:"))
+            || (trimmed.contains("-->")
+                && trimmed.contains(':')
+                && (trimmed.contains('.') || trimmed.contains(',')))
+            || (trimmed.starts_with('{') && trimmed.contains("}{"))
+    })
+}
+
+fn looks_like_bomless_utf32(bytes: &[u8]) -> bool {
+    if bytes.len() < 16 || !bytes.len().is_multiple_of(4) {
+        return false;
+    }
+
+    const STRUCTURE_PROBE_BYTES: usize = 64 * 1024;
+    let probe_len = bytes.len().min(STRUCTURE_PROBE_BYTES) & !3;
+    let probe = &bytes[..probe_len];
+    if decode_utf32_probe(probe, true)
+        .as_deref()
+        .is_some_and(looks_like_subtitle_text)
+        || decode_utf32_probe(probe, false)
+            .as_deref()
+            .is_some_and(looks_like_subtitle_text)
+    {
+        return true;
+    }
+
+    let units = probe.len() / 4;
+    let high_nul_lanes = (0..4)
+        .filter(|lane| {
+            probe
+                .iter()
+                .skip(*lane)
+                .step_by(4)
+                .filter(|byte| **byte == 0)
+                .count()
+                * 10
+                >= units * 8
+        })
+        .count();
+    // ASCII-heavy UTF-32 has at least three nearly-empty byte lanes. UTF-16
+    // has two, so requiring three avoids classifying ordinary UTF-16 text as
+    // UTF-32 while the structural probe above still catches CJK-heavy UTF-32.
+    high_nul_lanes >= 3
+}
+
+fn decode_utf32_probe(bytes: &[u8], little_endian: bool) -> Option<String> {
+    bytes
+        .chunks_exact(4)
+        .map(|unit| {
+            let value = if little_endian {
+                u32::from_le_bytes([unit[0], unit[1], unit[2], unit[3]])
+            } else {
+                u32::from_be_bytes([unit[0], unit[1], unit[2], unit[3]])
+            };
+            char::from_u32(value)
+        })
+        .collect()
+}
+
+fn detect_bomless_utf16(bytes: &[u8]) -> Result<Option<ReadTextResult>, String> {
+    if bytes.len() < 8 {
+        return Ok(None);
+    }
+
+    if looks_like_bomless_utf32(bytes) {
+        return Err("UTF-32 subtitle encoding is not supported".to_string());
+    }
+
+    let even_len = bytes.len() & !1;
+    let even_bytes = &bytes[..even_len];
+
+    const SAMPLE_BYTES: usize = 8 * 1024;
+    let sample_len = even_bytes.len().min(SAMPLE_BYTES);
+    let sample = &even_bytes[..sample_len];
+    let even_nuls = sample.iter().step_by(2).filter(|byte| **byte == 0).count();
+    let odd_nuls = sample
+        .iter()
+        .skip(1)
+        .step_by(2)
+        .filter(|byte| **byte == 0)
+        .count();
+
+    // NUL-lane evidence catches ordinary ASCII-heavy UTF-16. A fixed density
+    // threshold is insufficient for Chinese-heavy captions, so candidate
+    // selection also decodes a bounded prefix in both byte orders and looks
+    // for actual subtitle structure. The wrong byte order turns ASCII syntax
+    // into unrelated code points and therefore cannot satisfy that check.
+    let likely_le = odd_nuls >= 4 && odd_nuls >= even_nuls.saturating_mul(4);
+    let likely_be = even_nuls >= 4 && even_nuls >= odd_nuls.saturating_mul(4);
+
+    const STRUCTURE_PROBE_BYTES: usize = 64 * 1024;
+    let probe_len = even_bytes.len().min(STRUCTURE_PROBE_BYTES);
+    let probe = &even_bytes[..probe_len];
+    let le_structure = decode_utf16_probe(probe, true)
+        .as_deref()
+        .is_some_and(looks_like_subtitle_text);
+    let be_structure = decode_utf16_probe(probe, false)
+        .as_deref()
+        .is_some_and(looks_like_subtitle_text);
+
+    let little_endian = match (le_structure, be_structure, likely_le, likely_be) {
+        (true, false, _, _) => Some(true),
+        (false, true, _, _) => Some(false),
+        (true, true, _, _) => {
+            return Err("BOM-less UTF-16 byte order is ambiguous; add a BOM and retry".to_string());
+        }
+        (false, false, true, false) => Some(true),
+        (false, false, false, true) => Some(false),
+        _ => None,
+    };
+
+    let Some(little_endian) = little_endian else {
+        return Ok(None);
+    };
+    let encoding_id = if little_endian {
+        "UTF-16LE"
+    } else {
+        "UTF-16BE"
+    };
+    if !bytes.len().is_multiple_of(2) {
+        return Err(format!(
+            "File resembles BOM-less {encoding_id} but has an odd byte length (truncated UTF-16 data)"
+        ));
+    }
+
+    let (cow, had_errors) = if little_endian {
+        let (cow, had_errors) = encoding_rs::UTF_16LE.decode_without_bom_handling(bytes);
+        (cow, had_errors)
+    } else {
+        let (cow, had_errors) = encoding_rs::UTF_16BE.decode_without_bom_handling(bytes);
+        (cow, had_errors)
+    };
+    if had_errors {
+        return Err(format!(
+            "File resembles BOM-less {encoding_id} but contains invalid UTF-16 data"
+        ));
+    }
+
+    let text = cow.into_owned();
+    if !looks_like_subtitle_text(&text) {
+        return Err(format!(
+            "File resembles BOM-less {encoding_id}, but its subtitle structure could not be verified"
+        ));
+    }
+
+    Ok(Some(decoded_result(
+        text,
+        format!("{encoding_id} (inferred, no BOM)"),
+        encoding_id,
+        false,
+        false,
+        true,
+        bytes,
+    )))
+}
+
+fn decode_utf16_probe(bytes: &[u8], little_endian: bool) -> Option<String> {
+    let mut probe = bytes;
+    if probe.len() >= 2 {
+        let last = if little_endian {
+            u16::from_le_bytes([probe[probe.len() - 2], probe[probe.len() - 1]])
+        } else {
+            u16::from_be_bytes([probe[probe.len() - 2], probe[probe.len() - 1]])
+        };
+        if (0xD800..=0xDBFF).contains(&last) {
+            probe = &probe[..probe.len() - 2];
+        }
+    }
+
+    let (decoded, had_errors) = if little_endian {
+        encoding_rs::UTF_16LE.decode_without_bom_handling(probe)
+    } else {
+        encoding_rs::UTF_16BE.decode_without_bom_handling(probe)
+    };
+    (!had_errors).then(|| decoded.into_owned())
 }
 
 /// Check for Byte Order Mark and decode accordingly. When the decoded text
@@ -425,6 +641,7 @@ fn detect_bom(bytes: &[u8]) -> Option<ReadTextResult> {
             "UTF-8",
             true,
             lossy,
+            false,
             bytes,
         ));
     }
@@ -447,6 +664,7 @@ fn detect_bom(bytes: &[u8]) -> Option<ReadTextResult> {
             "UTF-16LE",
             true,
             had_errors,
+            false,
             bytes,
         ));
     }
@@ -464,6 +682,7 @@ fn detect_bom(bytes: &[u8]) -> Option<ReadTextResult> {
             "UTF-16BE",
             true,
             had_errors,
+            false,
             bytes,
         ));
     }
@@ -482,7 +701,7 @@ mod tests {
         let path = format!("{}/tests/fixtures/{}", env!("CARGO_MANIFEST_DIR"), name);
         let bytes =
             std::fs::read(&path).unwrap_or_else(|e| panic!("Cannot read fixture {name}: {e}"));
-        decode_bytes(&bytes)
+        decode_bytes(&bytes).unwrap_or_else(|e| panic!("Cannot decode fixture {name}: {e}"))
     }
 
     fn temp_file_path(name: &str, ext: &str) -> std::path::PathBuf {
@@ -498,6 +717,18 @@ mod tests {
             ext
         ));
         path
+    }
+
+    fn encode_utf16_without_bom(text: &str, little_endian: bool) -> Vec<u8> {
+        text.encode_utf16()
+            .flat_map(|unit| {
+                if little_endian {
+                    unit.to_le_bytes()
+                } else {
+                    unit.to_be_bytes()
+                }
+            })
+            .collect()
     }
 
     #[test]
@@ -516,7 +747,7 @@ mod tests {
 
     #[test]
     fn read_result_exposes_exact_source_revision_and_camel_case_wire_fields() {
-        let result = decode_bytes(b"abc");
+        let result = decode_bytes(b"abc").unwrap();
         assert_eq!(result.source_byte_length, 3);
         assert_eq!(
             result.source_revision,
@@ -527,6 +758,7 @@ mod tests {
         assert_eq!(json["encodingId"], "UTF-8");
         assert_eq!(json["hadBom"], false);
         assert_eq!(json["lossy"], false);
+        assert_eq!(json["inferredWithoutBom"], false);
         assert_eq!(json["sourceByteLength"], 3);
         assert_eq!(json["sourceRevision"], result.source_revision);
         assert!(json.get("source_revision").is_none());
@@ -537,7 +769,7 @@ mod tests {
         // A file containing ONLY a UTF-8 BOM and nothing else should
         // decode cleanly to an empty string with the BOM-stripped
         // label — not panic, not mis-detect as another encoding.
-        let result = decode_bytes(&[0xEF, 0xBB, 0xBF]);
+        let result = decode_bytes(&[0xEF, 0xBB, 0xBF]).unwrap();
         assert_eq!(result.encoding, "UTF-8 (BOM)");
         assert_eq!(result.text, "");
     }
@@ -550,20 +782,141 @@ mod tests {
         let mut bytes = vec![0xFE, 0xFF];
         // "AB" in UTF-16BE: 0x00 0x41, 0x00 0x42
         bytes.extend_from_slice(&[0x00, 0x41, 0x00, 0x42]);
-        let result = decode_bytes(&bytes);
+        let result = decode_bytes(&bytes).unwrap();
         assert_eq!(result.encoding, "UTF-16BE");
         assert_eq!(result.text, "AB");
     }
 
     #[test]
     fn utf16_payload_leading_bom_character_is_preserved() {
-        let le = decode_bytes(&[0xFF, 0xFE, 0xFF, 0xFE, 0x41, 0x00]);
+        let le = decode_bytes(&[0xFF, 0xFE, 0xFF, 0xFE, 0x41, 0x00]).unwrap();
         assert_eq!(le.encoding, "UTF-16LE");
         assert_eq!(le.text, "\u{feff}A");
 
-        let be = decode_bytes(&[0xFE, 0xFF, 0xFE, 0xFF, 0x00, 0x41]);
+        let be = decode_bytes(&[0xFE, 0xFF, 0xFE, 0xFF, 0x00, 0x41]).unwrap();
         assert_eq!(be.encoding, "UTF-16BE");
         assert_eq!(be.text, "\u{feff}A");
+    }
+
+    #[test]
+    fn infers_bomless_utf16le_only_after_subtitle_structure_check() {
+        let source =
+            "[Script Info]\r\n\r\n[Events]\r\nDialogue: 0,0:00:01.00,0:00:02.00,Default,Hello\r\n";
+        let bytes = encode_utf16_without_bom(source, true);
+
+        let result = decode_bytes(&bytes).unwrap();
+
+        assert_eq!(result.text, source);
+        assert_eq!(result.encoding, "UTF-16LE (inferred, no BOM)");
+        assert_eq!(result.encoding_id, "UTF-16LE");
+        assert!(!result.had_bom);
+        assert!(!result.lossy);
+        assert!(result.inferred_without_bom);
+    }
+
+    #[test]
+    fn infers_bomless_utf16be_only_after_subtitle_structure_check() {
+        let source = "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHello\n";
+        let bytes = encode_utf16_without_bom(source, false);
+
+        let result = decode_bytes(&bytes).unwrap();
+
+        assert_eq!(result.text, source);
+        assert_eq!(result.encoding, "UTF-16BE (inferred, no BOM)");
+        assert_eq!(result.encoding_id, "UTF-16BE");
+        assert!(!result.had_bom);
+        assert!(!result.lossy);
+        assert!(result.inferred_without_bom);
+    }
+
+    #[test]
+    fn infers_cjk_heavy_bomless_utf16_srt_and_microdvd() {
+        let cjk = "中".repeat(100);
+        let sources = [
+            format!("1\n00:00:01,000 --> 00:00:02,000\n{cjk}\n"),
+            format!("{{24}}{{48}}{cjk}\n"),
+        ];
+
+        for source in sources {
+            for little_endian in [true, false] {
+                let bytes = encode_utf16_without_bom(&source, little_endian);
+                let result = decode_bytes(&bytes).unwrap();
+                let expected_id = if little_endian {
+                    "UTF-16LE"
+                } else {
+                    "UTF-16BE"
+                };
+
+                assert_eq!(result.text, source);
+                assert_eq!(result.encoding_id, expected_id);
+                assert!(result.inferred_without_bom);
+            }
+        }
+    }
+
+    #[test]
+    fn infers_bomless_utf16_style_only_ass_and_ssa_documents() {
+        let sources = [
+            "[V4+ Styles]\nFormat: Name, Fontname\nStyle: Default,Arial\n",
+            "[V4 Styles]\nFormat: Name, Fontname\nStyle: Default,Arial\n",
+        ];
+
+        for source in sources {
+            for little_endian in [true, false] {
+                let bytes = encode_utf16_without_bom(source, little_endian);
+                let result = decode_bytes(&bytes).unwrap();
+
+                assert_eq!(result.text, source);
+                assert!(result.inferred_without_bom);
+            }
+        }
+    }
+
+    #[test]
+    fn truncated_bomless_utf16_returns_a_targeted_error() {
+        let source = "1\n00:00:01,000 --> 00:00:02,000\nHello\n";
+
+        for little_endian in [true, false] {
+            let mut bytes = encode_utf16_without_bom(source, little_endian);
+            bytes.pop();
+            let error = decode_bytes(&bytes).unwrap_err();
+
+            assert!(error.contains("odd byte length"), "got: {error}");
+            assert!(error.contains("truncated UTF-16"), "got: {error}");
+        }
+    }
+
+    #[test]
+    fn bomless_utf32_is_not_misclassified_as_utf16() {
+        let source = "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHello\n";
+        for little_endian in [true, false] {
+            let bytes: Vec<u8> = source
+                .chars()
+                .flat_map(|ch| {
+                    if little_endian {
+                        (ch as u32).to_le_bytes()
+                    } else {
+                        (ch as u32).to_be_bytes()
+                    }
+                })
+                .collect();
+            let decoded = decode_bytes(&bytes);
+            assert!(
+                decoded
+                    .as_ref()
+                    .is_err_and(|error| error.contains("UTF-32")),
+                "unexpected UTF-32 result: {decoded:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn alternating_zero_binary_is_not_accepted_as_utf16_subtitle_text() {
+        let bytes = [b'A', 0, 1, 0, b'B', 0, 2, 0, b'C', 0, 3, 0];
+
+        let error = decode_bytes(&bytes).unwrap_err();
+
+        assert!(error.contains("subtitle structure"), "got: {error}");
     }
 
     #[test]

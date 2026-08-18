@@ -4,6 +4,7 @@ pub mod font_cache;
 pub mod font_cache_commands;
 pub mod fonts;
 pub mod fs_policy;
+mod ipc_commands;
 pub mod safe_io;
 pub mod util;
 
@@ -11,11 +12,21 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.show();
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+        }
+    }));
+
+    builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
-            // Install the log plugin FIRST so any `log::warn!` / `log::info!`
+            // Install the log plugin before init helpers so any `log::warn!` / `log::info!`
             // calls from `init_system_dirs`, `init_user_font_db`,
             // `init_gui_font_cache`, or any helper they call have a
             // subscriber to receive them. Without this ordering, early-init
@@ -120,28 +131,30 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            dropzone::expand_dropped_paths,
-            encoding::read_text_detect_encoding,
-            fonts::find_system_font,
-            fonts::subset_font_b64,
+            ipc_commands::expand_dropped_paths,
+            ipc_commands::read_text_detect_encoding,
+            ipc_commands::find_system_font,
+            ipc_commands::subset_font_bytes,
             fonts::preflight_font_directory,
             fonts::preflight_font_files,
             fonts::scan_font_directory,
             fonts::scan_font_files,
+            // Atomic-only control path: keep cancellation immediately available
+            // even when Tauri's blocking pool is busy with font or file work.
             fonts::cancel_font_scan,
-            fonts::resolve_user_font,
-            fonts::remove_font_source,
-            fonts::clear_font_sources,
-            font_cache_commands::open_font_cache,
-            font_cache_commands::detect_font_cache_drift,
-            font_cache_commands::rescan_font_cache_drift,
-            font_cache_commands::clear_font_cache,
-            font_cache_commands::lookup_font_family,
-            safe_io::safe_output_path_exists,
-            safe_io::safe_write_text_file,
-            safe_io::safe_write_style_edit_output,
-            safe_io::safe_copy_file,
-            safe_io::safe_rename_file,
+            ipc_commands::resolve_user_font,
+            ipc_commands::remove_font_source,
+            ipc_commands::clear_font_sources,
+            ipc_commands::open_font_cache,
+            ipc_commands::detect_font_cache_drift,
+            ipc_commands::rescan_font_cache_drift,
+            ipc_commands::clear_font_cache,
+            ipc_commands::lookup_font_family,
+            ipc_commands::safe_output_path_exists,
+            ipc_commands::safe_write_text_file,
+            ipc_commands::safe_write_style_edit_output,
+            ipc_commands::safe_copy_file,
+            ipc_commands::safe_rename_file,
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {

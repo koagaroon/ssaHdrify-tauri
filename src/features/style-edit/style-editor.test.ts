@@ -281,6 +281,9 @@ describe("strict structure and operation errors", () => {
   });
 
   it("bounds and scrubs Format column names without echoing them", () => {
+    const atLimit = `[V4+ Styles]\nFormat: Name, ${"x".repeat(128)}`;
+    expect(() => inspectStyleDocument(atLimit)).not.toThrow();
+
     const longColumn = `[V4+ Styles]\nFormat: Name, ${"x".repeat(129)}`;
     expect(() =>
       planStyleEdit(longColumn, { fontSize: { enabled: true, targetSize: 48 } })
@@ -378,6 +381,9 @@ describe("strict structure and operation errors", () => {
   });
 
   it("bounds and scrubs existing Fontsize before preview or numeric conversion", () => {
+    const atLimit = assDocument([`Style: Default,Arial,${"9".repeat(128)},0,0`]);
+    expect(() => planStyleEdit(atLimit, EDIT_BOTH)).not.toThrow();
+
     const longSize = assDocument([`Style: Default,Arial,${"9".repeat(129)},0,0`]);
     expect(() => planStyleEdit(longSize, EDIT_BOTH)).toThrow(/font size exceeds 128/);
 
@@ -412,14 +418,30 @@ describe("strict structure and operation errors", () => {
 });
 
 describe("resource ceilings", () => {
+  it("accepts a physical line exactly at the 1000000-character ceiling", () => {
+    const input = `[V4+ Styles]\nFormat: Name\n${"x".repeat(1_000_000)}`;
+    expect(inspectStyleDocument(input)).toEqual({ styleCount: 0 });
+  });
+
   it("rejects an overlong physical line before style parsing", () => {
     const input = `[Script Info]\n${"x".repeat(1_000_001)}\n[V4+ Styles]`;
     expect(() => planStyleEdit(input, EDIT_BOTH)).toThrow(/Line 2: Line has 1000001 characters/);
   });
 
+  it("accepts exactly 501024 physical lines", () => {
+    const input = "[V4+ Styles]\nFormat: Name" + "\n".repeat(501_022);
+    expect(inspectStyleDocument(input)).toEqual({ styleCount: 0 });
+  });
+
   it("rejects too many physical lines without materializing the whole split", () => {
     const input = "\n".repeat(501_024);
     expect(() => planStyleEdit(input, EDIT_BOTH)).toThrow(/more than 501024 lines/);
+  });
+
+  it("accepts exactly 1024 Format fields", () => {
+    const fields = ["Name", ...Array.from({ length: 1_023 }, (_, i) => `F${i}`)];
+    const input = `[V4+ Styles]\nFormat: ${fields.join(",")}`;
+    expect(inspectStyleDocument(input)).toEqual({ styleCount: 0 });
   });
 
   it("rejects an excessive Format field vector", () => {
@@ -429,6 +451,12 @@ describe("resource ceilings", () => {
     expect(() => planStyleEdit(input, { fontSize: { enabled: true, targetSize: 48 } })).toThrow(
       /1025 fields \(max 1024\)/
     );
+  });
+
+  it("accepts exactly 50000 style rows", () => {
+    const rows = Array.from({ length: 50_000 }, (_, i) => `Style: S${i}`).join("\n");
+    const input = `[V4+ Styles]\nFormat: Name\n${rows}`;
+    expect(inspectStyleDocument(input)).toEqual({ styleCount: 50_000 });
   });
 
   it("rejects more than 50000 style rows", () => {

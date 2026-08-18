@@ -12,8 +12,10 @@
 import {
   shiftSubtitle,
   transformSubtitleTimings,
+  parseSubtitle,
   formatDisplayTime,
   parseDisplayTime,
+  safeMs,
   type Caption,
   type SubtitleFormat,
 } from "../../lib/subtitle-parser";
@@ -27,6 +29,10 @@ export type { Caption, SubtitleFormat };
 export { formatDisplayTime, parseDisplayTime };
 
 export const MAX_TIMING_OFFSET_MS = 365 * 24 * 3600 * 1000;
+/** Maximum number of caption rows retained by any preview result. */
+export const MAX_TIMING_PREVIEW_ENTRIES = 5_000;
+/** Maximum Unicode code points retained for one preview tooltip. */
+export const MAX_TIMING_PREVIEW_TOOLTIP_CODEPOINTS = 512;
 
 export interface ShiftOptions {
   /** Offset in milliseconds (positive = later/slower, negative = earlier/faster) */
@@ -50,9 +56,9 @@ export function assertFiniteShiftMs(offsetMs: number, thresholdMs?: number | nul
   if (!Number.isFinite(offsetMs)) {
     throw new Error(`Invalid offsetMs: expected a finite number, got ${String(offsetMs)}`);
   }
-  // thresholdMs is OPTIONAL. The CLI wire form (deno_core op JSON) sends
-  // `null` — not `undefined` — when no threshold is set, so both must count
-  // as "not provided"; only a present-but-non-finite value is an error.
+  // thresholdMs is OPTIONAL. Public/runtime callers may still supply either
+  // null or undefined for absence, so both count as "not provided"; only a
+  // present-but-non-finite value is an error.
   if (thresholdMs !== null && thresholdMs !== undefined && !Number.isFinite(thresholdMs)) {
     throw new Error(`Invalid thresholdMs: expected a finite number, got ${String(thresholdMs)}`);
   }
@@ -66,8 +72,8 @@ export interface PreviewEntry {
   shiftedEnd: number;
   /** Truncated text for DOM efficiency (max ~60 codepoints). Keep this for display. */
   text: string;
-  /** Full un-truncated text — used for hover tooltips so long lines remain readable. */
-  fullText: string;
+  /** Bounded text used for hover tooltips (max 512 Unicode code points). */
+  tooltipText: string;
   wasShifted: boolean;
 }
 
@@ -126,12 +132,14 @@ export interface ShiftResult {
   format: SubtitleFormat;
   /** Preview entries: original and shifted timings */
   preview: PreviewEntry[];
+  /** True when preview contains only the first MAX_TIMING_PREVIEW_ENTRIES rows. */
+  previewTruncated: boolean;
   /** Total number of captions (includes skipped placeholders) */
   captionCount: number;
   /**
    * Count of captions whose text exceeded MAX_CAPTION_TEXT_LEN (64 KB)
    * and were emitted as skipped placeholders by the parser. TimingShift
-   * surfaces this via msg_oversized_skipped to close the
+   * surfaces this with a format-appropriate warning to close the
    * no-silent-action gap.
    */
   skippedCount: number;
@@ -143,12 +151,26 @@ export interface TimingMapResult extends Omit<ShiftResult, "preview"> {
   activeRuleCount: number;
 }
 
-export interface CompactShiftResult extends Omit<ShiftResult, "preview"> {
+export interface CompactShiftResult extends Omit<ShiftResult, "preview" | "previewTruncated"> {
   shiftedCount: number;
 }
 
 export interface CompactTimingMapResult extends CompactShiftResult {
   activeRuleCount: number;
+}
+
+/** Parse-only result used by the live GUI preview. It deliberately has no content field. */
+export interface ShiftPreviewResult {
+  format: SubtitleFormat;
+  preview: PreviewEntry[];
+  /** Full parsed caption count, even when the retained preview is capped. */
+  captionCount: number;
+  /** Parsed captions that can be shifted (excludes oversized placeholders). */
+  shiftableCount: number;
+  skippedCount: number;
+  /** Maximum start time across every shiftable caption, including capped rows. */
+  maxCaptionStart: number;
+  previewTruncated: boolean;
 }
 
 function truncateCodepoints(text: string, max: number): string {
@@ -160,6 +182,24 @@ function truncateCodepoints(text: string, max: number): string {
     cp++;
   }
   return out;
+}
+
+/**
+ * Retain at most `max` Unicode code points and reserve the last slot for an
+ * ellipsis when truncation occurs. The bounded array avoids splitting UTF-16
+ * surrogate pairs while never materializing the full caption as `Array.from`.
+ */
+function truncateCodepointsWithEllipsis(text: string, max: number): string {
+  if (max <= 0) return "";
+  const codepoints: string[] = [];
+  for (const ch of text) {
+    if (codepoints.length >= max) {
+      codepoints[max - 1] = "…";
+      return codepoints.join("");
+    }
+    codepoints.push(ch);
+  }
+  return codepoints.join("");
 }
 
 function assertFiniteTimingMapMs(value: number, label: string): void {
@@ -609,27 +649,39 @@ function countShiftedCaptions(captions: Caption[], shifted: Caption[]): number {
   return count;
 }
 
+function makePreviewEntry(caption: Caption, shifted: Caption, index: number): PreviewEntry {
+  return {
+    index: index + 1,
+    originalStart: caption.start,
+    originalEnd: caption.end,
+    shiftedStart: shifted.start,
+    shiftedEnd: shifted.end,
+    text: truncateCodepoints(caption.text, 60),
+    tooltipText: truncateCodepointsWithEllipsis(
+      caption.text,
+      MAX_TIMING_PREVIEW_TOOLTIP_CODEPOINTS
+    ),
+    wasShifted: caption.start !== shifted.start || caption.end !== shifted.end,
+  };
+}
+
 function buildPreview(
   captions: Caption[],
   shifted: Caption[],
   matches?: TimingMapMatch[]
-): PreviewEntry[] | TimingMapPreviewEntry[] {
+): {
+  preview: (PreviewEntry | TimingMapPreviewEntry)[];
+  truncated: boolean;
+} {
   const preview: (PreviewEntry | TimingMapPreviewEntry)[] = [];
   for (let i = 0; i < captions.length; i++) {
     const c = captions[i]!;
     if (c.skipped) continue;
+    if (preview.length >= MAX_TIMING_PREVIEW_ENTRIES) {
+      return { preview, truncated: true };
+    }
     const s = shifted[i]!;
-    const wasShifted = c.start !== s.start || c.end !== s.end;
-    const base: PreviewEntry = {
-      index: i + 1,
-      originalStart: c.start,
-      originalEnd: c.end,
-      shiftedStart: s.start,
-      shiftedEnd: s.end,
-      text: truncateCodepoints(c.text, 60),
-      fullText: c.text,
-      wasShifted,
-    };
+    const base = makePreviewEntry(c, s, i);
     const match = matches?.[i];
     if (match) {
       preview.push({
@@ -642,7 +694,60 @@ function buildPreview(
       preview.push(base);
     }
   }
-  return preview;
+  return { preview, truncated: false };
+}
+
+/**
+ * Parse and calculate a bounded timing preview without rebuilding subtitle
+ * text. Save/export paths use the compact serializers below; live input
+ * changes should never allocate a discarded 50 MiB output string.
+ */
+export function previewShiftSubtitles(content: string, options: ShiftOptions): ShiftPreviewResult {
+  const { offsetMs, thresholdMs, fps } = options;
+  const { format, captions } = parseSubtitle(content, fps);
+  const preview: PreviewEntry[] = [];
+  let foundShiftableCaption = false;
+  let previewTruncated = false;
+  let maxCaptionStart = 0;
+  let skippedCount = 0;
+
+  for (let i = 0; i < captions.length; i++) {
+    const caption = captions[i]!;
+    if (caption.skipped) {
+      skippedCount += 1;
+      continue;
+    }
+    foundShiftableCaption = true;
+    maxCaptionStart = Math.max(maxCaptionStart, caption.start);
+    if (preview.length >= MAX_TIMING_PREVIEW_ENTRIES) {
+      previewTruncated = true;
+      continue;
+    }
+
+    const shouldShift = thresholdMs === undefined || caption.start >= thresholdMs;
+    const shifted = shouldShift
+      ? {
+          ...caption,
+          start: safeMs(caption.start + offsetMs),
+          end: safeMs(caption.end + offsetMs),
+        }
+      : caption;
+    preview.push(makePreviewEntry(caption, shifted, i));
+  }
+
+  if (!foundShiftableCaption) {
+    throw new Error("No shiftable subtitle cues were found");
+  }
+
+  return {
+    format,
+    preview,
+    captionCount: captions.length,
+    shiftableCount: captions.length - skippedCount,
+    skippedCount,
+    maxCaptionStart,
+    previewTruncated,
+  };
 }
 
 /**
@@ -652,15 +757,16 @@ export function shiftSubtitles(content: string, options: ShiftOptions): ShiftRes
   const { offsetMs, thresholdMs, fps } = options;
 
   const { output, format, captions, shifted } = shiftSubtitle(content, offsetMs, thresholdMs, fps);
-  // Build preview for every caption — the UI scroll container decides
-  // how many are visible at a time. `buildPreview` excludes oversized
-  // skipped placeholders and preserves original caption indexes.
-  const preview = buildPreview(captions, shifted) as PreviewEntry[];
+  // Keep preview retention bounded independently of the serializer output.
+  // `buildPreview` excludes oversized skipped placeholders, preserves
+  // original caption indexes, and reports when additional rows were omitted.
+  const builtPreview = buildPreview(captions, shifted);
 
   return {
     content: output,
     format,
-    preview,
+    preview: builtPreview.preview as PreviewEntry[],
+    previewTruncated: builtPreview.truncated,
     captionCount: captions.length,
     skippedCount: captions.filter((c) => c.skipped).length,
   };
@@ -704,12 +810,13 @@ export function shiftSubtitlesWithTimingMap(
     }
   }
 
-  const preview = buildPreview(captions, shifted, matches) as TimingMapPreviewEntry[];
+  const builtPreview = buildPreview(captions, shifted, matches);
 
   return {
     content: output,
     format,
-    preview,
+    preview: builtPreview.preview as TimingMapPreviewEntry[],
+    previewTruncated: builtPreview.truncated,
     captionCount: captions.length,
     skippedCount: countSkippedCaptions(captions),
     shiftedCount: countShiftedCaptions(captions, shifted),

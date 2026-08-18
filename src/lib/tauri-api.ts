@@ -173,6 +173,8 @@ export interface ReadTextResult {
   hadBom: boolean;
   /** True when malformed source bytes had to be replaced during decoding. */
   lossy: boolean;
+  /** True only when UTF-16LE/BE was inferred conservatively without a BOM. */
+  inferredWithoutBom: boolean;
   /** SHA-256 of the exact source bytes used for this read. */
   sourceRevision: string;
   /** Exact source byte length for bounded batch planning. */
@@ -186,8 +188,16 @@ export interface ReadTextResult {
  * and other encodings via the Rust backend (chardetng + encoding_rs).
  * Returns clean UTF-8 text regardless of original encoding.
  */
-export async function readText(path: string): Promise<string> {
+export function isInferredUtf16(result: Pick<ReadTextResult, "inferredWithoutBom">): boolean {
+  return result.inferredWithoutBom;
+}
+
+export async function readText(
+  path: string,
+  onRead?: (result: ReadTextResult) => void
+): Promise<string> {
   const result = await readTextDetectEncoding(path);
+  onRead?.(result);
   return result.text;
 }
 
@@ -304,17 +314,20 @@ export async function findSystemFont(
 
 /** Subset a font file to only include the specified codepoints.
  *
- *  Wire format: Rust returns the bytes base64-encoded (`subset_font_b64`)
- *  to dodge the JSON `[byte, byte, ...]` form's ~4–5× expansion. The
- *  worst-case 10 MB subset would otherwise produce a ~50 MB IPC payload
- *  + main-thread JSON parse pass; base64 is ~1.33×. */
+ *  Wire format: `subset_font_bytes` returns raw bytes on Windows/Linux. Tauri
+ *  2.11 serializes raw responses as numeric JSON arrays on Apple WebViews, so
+ *  those targets retain the smaller base64 form. */
 export async function subsetFont(
   fontPath: string,
   fontIndex: number,
   codepoints: number[]
 ): Promise<Uint8Array> {
-  const b64: string = await invoke("subset_font_b64", { fontPath, fontIndex, codepoints });
-  return decodeBase64Bytes(b64);
+  const payload = await invoke<ArrayBuffer | string>("subset_font_bytes", {
+    fontPath,
+    fontIndex,
+    codepoints,
+  });
+  return typeof payload === "string" ? decodeBase64Bytes(payload) : new Uint8Array(payload);
 }
 
 /** One font face discovered in a user-picked directory or file list.
@@ -594,9 +607,12 @@ export async function lookupFontFamily(
  *  has the inline Cancel button (cancelFontScan) to abort. Adding a
  *  timeout here would race legitimate slow scans (XL font collection
  *  on a slow disk can take 30+ seconds) and produce false-cancel
- *  signals the Rust side never sent. If a future stuck-IPC failure
- *  mode emerges, a watchdog should live in the Tauri command layer
- *  (Rust-side timeout on spawn_blocking), not here. */
+ *  signals the Rust side never sent. Tauri, not React, owns the Channel
+ *  callback registration until Rust drops the sender; hiding/remounting
+ *  this modal does not unregister it, and a full reload destroys the old
+ *  promise realm. If a future stuck-IPC failure mode emerges, a watchdog
+ *  should live in the Tauri command layer (Rust-side timeout on
+ *  spawn_blocking), not here. */
 async function runStreamingScan(
   command: "scan_font_directory" | "scan_font_files",
   args: Record<string, unknown>,
@@ -733,9 +749,9 @@ export interface ExpandedPaths {
 /**
  * Expand a list of paths from a drag-drop event into a flat list of file
  * paths. Folders are walked one level deep; files pass through unchanged.
- * Hidden entries, symlinks, and reparse points are skipped on the Rust
- * side. Returns `{ files: [], truncated: false }` when nothing usable
- * was dropped.
+ * Filesystem-scope-denied paths, hidden entries, symlinks, and reparse
+ * points are skipped on the Rust side. Returns
+ * `{ files: [], truncated: false }` when nothing usable was dropped.
  */
 export async function expandDroppedPaths(paths: string[]): Promise<ExpandedPaths> {
   return invoke<ExpandedPaths>("expand_dropped_paths", { paths });

@@ -4,6 +4,7 @@ export interface HdrConvertDisabledState {
   hasFiles: boolean;
   processing: boolean;
   brightnessInvalid: boolean;
+  templateInvalid: boolean;
 }
 
 export function isHdrBrightnessInvalid(
@@ -16,5 +17,5 @@ export function isHdrBrightnessInvalid(
 }
 
 export function isHdrConvertDisabled(state: HdrConvertDisabledState): boolean {
-  return !state.hasFiles || state.processing || state.brightnessInvalid;
+  return !state.hasFiles || state.processing || state.brightnessInvalid || state.templateInvalid;
 }

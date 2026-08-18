@@ -84,25 +84,33 @@ describe("preprocessSrtColors", () => {
     expect(result).toContain("{\\r}");
   });
 
-  it("processes a 100KB pathological near-match payload in linear time", () => {
+  it("does not match color openers beyond the bounded windows in a 100KB payload", () => {
     // ReDoS regression. SRT_COLOR_OPEN_RE has two `[^>]{0,512}` windows
-    // anchored on `>`. JS regex engines are linear on `>`-anchored
-    // character-class repetitions, so the worst case should be O(N).
-    // Build a 100KB payload with crafted near-matches that would
-    // exercise the worst alt-path: many "<font" prefixes that almost
-    // satisfy the color-attribute branch but fail at the closing
-    // delimiter, forcing backtrack-style behavior in a vulnerable
-    // engine. If this hangs the test runner (default 5s vitest
-    // timeout), we have a real ReDoS.
+    // anchored on `>`. Build a 100KB payload with crafted near-matches
+    // that almost satisfy the color-attribute branch but exceed those
+    // windows. Vitest's default timeout remains the hang guard; the
+    // assertion stays deterministic across fast and slow runners.
     const chunk = '<font face="Arial" data-extra="x"'.repeat(40); // ~1300 bytes
     const payload = chunk.repeat(80) + ">Styled</font>"; // ~100KB
-    const start = Date.now();
     const result = preprocessSrtColors(payload);
-    const elapsed = Date.now() - start;
-    // Generous budget — a working linear-time regex finishes in <100ms;
-    // a quadratic backtracker would blow past 5s on this payload.
-    expect(elapsed).toBeLessThan(2000);
-    expect(typeof result).toBe("string");
+    expect(result).toBe(payload.replace("</font>", "{\\r}"));
+  });
+
+  it.each([
+    [
+      "before color=",
+      (padding: number) => `<font${" ".repeat(padding)}color="#FF0000">Styled</font>`,
+    ],
+    [
+      "after color=",
+      (padding: number) => `<font color="#FF0000"${" ".repeat(padding)}>Styled</font>`,
+    ],
+  ])("enforces the exact 512-character window %s", (_label, makeInput) => {
+    const atLimit = makeInput(512);
+    const overLimit = makeInput(513);
+
+    expect(preprocessSrtColors(atLimit)).toBe("{\\1c&H0000FF&}Styled{\\r}");
+    expect(preprocessSrtColors(overLimit)).toBe(overLimit.replace("</font>", "{\\r}"));
   });
 });
 

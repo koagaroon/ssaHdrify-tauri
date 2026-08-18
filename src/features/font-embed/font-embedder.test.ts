@@ -626,6 +626,44 @@ describe("analyzeFonts — useRustUserFonts production path", () => {
     expect(resolveUserFontMock).toHaveBeenCalledWith("Arial", true, false);
   });
 
+  it("contains a rejected local lookup to that font and continues analyzing later fonts", async () => {
+    resolveUserFontMock.mockImplementation(async (family: string) => {
+      if (family === "FZLanTingHei") {
+        throw new Error("session index busy\u202E");
+      }
+      return null;
+    });
+    lookupFontFamilyMock.mockResolvedValue({ path: "C:/cache/should-not-win.ttf", index: 0 });
+    findSystemFontMock.mockImplementation(async (family: string, bold: boolean) => {
+      if (family === "Arial" && bold) return { path: "C:/Windows/Fonts/arialbd.ttf", index: 0 };
+      throw new Error("Font not found");
+    });
+
+    const { infos } = await analyzeFonts(MINIMAL_ASS, null, undefined, true);
+    const fz = infos.find((i) => i.key.family === "FZLanTingHei");
+    const arial = infos.find((i) => i.key.family === "Arial" && i.key.bold);
+
+    expect(infos).toHaveLength(2);
+    expect(fz).toMatchObject({
+      filePath: null,
+      fontIndex: 0,
+      source: null,
+      error: "session index busy",
+    });
+    // Local-tier errors fail closed: neither lower tier may silently
+    // substitute a different FZ face after an explicit local source failed.
+    expect(
+      lookupFontFamilyMock.mock.calls.filter((call) => call[0] === "FZLanTingHei")
+    ).toHaveLength(0);
+    expect(findSystemFontMock.mock.calls.filter((call) => call[0] === "FZLanTingHei")).toHaveLength(
+      0
+    );
+    // The next family still completes normally, proving the rejection is
+    // per-font rather than an analyzeFonts/batch abort.
+    expect(arial?.source).toBe("cache");
+    expect(arial?.filePath).toBe("C:/cache/should-not-win.ttf");
+  });
+
   it("userFontMap wins over useRustUserFonts when both are provided", async () => {
     // Production currently never calls analyzeFonts with both arguments
     // truthy; this test pins the priority order anyway so a future
@@ -1137,12 +1175,40 @@ describe("aggregateFonts — cross-file union + cap", () => {
     // each file but NOT their cross-file union; a crafted batch could
     // otherwise grow the in-memory detection-grid Set unbounded. Over-cap
     // input must clamp to exactly the cap.
-    function* overCap(): Generator<number> {
-      for (let i = 0; i <= MAX_AGGREGATE_CODEPOINTS_PER_KEY; i++) yield i;
-    }
-    const perFile = new Map<string, FileAnalysis>([["big.ass", makeAnalysis("Arial", overCap())]]);
-    expect(aggregateFonts(perFile).usages[0]!.codepoints.size).toBe(
-      MAX_AGGREGATE_CODEPOINTS_PER_KEY
-    );
+    expect(MAX_AGGREGATE_CODEPOINTS_PER_KEY).toBe(1_000_000);
+
+    // aggregateFonts only iterates FontUsage.codepoints. A lazy Set-shaped
+    // iterable avoids allocating a second million-entry input Set alongside
+    // the one aggregateFonts necessarily builds for its result.
+    const key: FontKey = { family: "Arial", bold: false, italic: false };
+    const lazyCodepoints = {
+      *[Symbol.iterator](): Generator<number> {
+        for (let i = 0; i <= MAX_AGGREGATE_CODEPOINTS_PER_KEY; i++) yield i;
+      },
+    } as unknown as Set<number>;
+    const perFile = new Map<string, FileAnalysis>([
+      [
+        "big.ass",
+        {
+          content: "",
+          infos: [
+            {
+              key,
+              glyphCount: MAX_AGGREGATE_CODEPOINTS_PER_KEY + 1,
+              filePath: "/fonts/x.ttf",
+              fontIndex: 0,
+              error: null,
+              source: "local",
+            },
+          ],
+          usages: [{ key, codepoints: lazyCodepoints }],
+        },
+      ],
+    ]);
+    const aggregate = aggregateFonts(perFile).usages[0]!.codepoints;
+
+    expect(aggregate.size).toBe(MAX_AGGREGATE_CODEPOINTS_PER_KEY);
+    expect(aggregate.has(MAX_AGGREGATE_CODEPOINTS_PER_KEY - 1)).toBe(true);
+    expect(aggregate.has(MAX_AGGREGATE_CODEPOINTS_PER_KEY)).toBe(false);
   });
 });

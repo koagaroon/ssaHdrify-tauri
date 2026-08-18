@@ -131,8 +131,8 @@ jobs:
       - name: Build the embedded TypeScript engine
         run: npm run build:engine
 
-      - name: Install the current stable Rust toolchain
-        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy --no-self-update
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install --profile minimal --component rustfmt --component clippy --no-self-update
 
       - name: Check Rust formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
@@ -142,6 +142,9 @@ jobs:
 
       - name: Run the locked Rust test suite
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+
+      - name: Smoke-test the Tauri build entry point
+        run: npm run tauri build -- --debug --no-bundle --ci
 
   rust-msrv:
     name: Rust 1.91 compatibility (Windows)

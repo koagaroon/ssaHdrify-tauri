@@ -1,5 +1,11 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
-import { pickSubtitleFiles, readText, writeText, fileNameFromPath } from "../../lib/tauri-api";
+import {
+  fileNameFromPath,
+  isInferredUtf16,
+  pickSubtitleFiles,
+  readText,
+  writeText,
+} from "../../lib/tauri-api";
 import { processAssContent, parseAssColor, formatAssColor } from "./ass-processor";
 import {
   processSrtUserText,
@@ -189,13 +195,15 @@ export default function HdrConvert() {
   }, []);
 
   const activeTemplate = template === "custom" ? customTemplate : template;
+  const templateInvalid = template === "custom" && customTemplate.trim().length === 0;
   // Gate Convert on the same visible-input validity shown by the
-  // NumberInput border, so keyboard activation cannot commit a stale
-  // prior brightness value.
+  // controls, so keyboard activation cannot commit a stale prior
+  // brightness value or start a batch with a universally invalid template.
   const convertDisabled = isHdrConvertDisabled({
     hasFiles: !!hdrFiles,
     processing,
     brightnessInvalid,
+    templateInvalid,
   });
 
   // ── File selection (separate from conversion) ──────────
@@ -286,6 +294,7 @@ export default function HdrConvert() {
         hasFiles: !!hdrFiles,
         processing,
         brightnessInvalid,
+        templateInvalid,
       })
     ) {
       return;
@@ -433,7 +442,11 @@ export default function HdrConvert() {
             // Read input file
             let content: string;
             try {
-              content = await readText(filePath);
+              content = await readText(filePath, (read) => {
+                if (isInferredUtf16(read)) {
+                  addLog(t("msg_inferred_utf16", fileName, read.encodingId), "warn");
+                }
+              });
             } catch (e) {
               addLog(t("msg_read_error", fileName, sanitizeError(e)), "error");
               continue;
@@ -533,7 +546,18 @@ export default function HdrConvert() {
     } finally {
       busyRef.current = false;
     }
-  }, [hdrFiles, processing, brightnessInvalid, brightness, eotf, activeTemplate, style, addLog, t]);
+  }, [
+    hdrFiles,
+    processing,
+    brightnessInvalid,
+    templateInvalid,
+    brightness,
+    eotf,
+    activeTemplate,
+    style,
+    addLog,
+    t,
+  ]);
 
   const handleClearFiles = useCallback(() => {
     clearFile("hdr");
@@ -776,6 +800,7 @@ export default function HdrConvert() {
       {/* Output Template */}
       <div className="space-y-2">
         <label
+          id="hdr-template-label"
           htmlFor="hdr-template-select"
           className="block text-sm font-medium"
           style={{ color: "var(--text-secondary)" }}
@@ -804,20 +829,35 @@ export default function HdrConvert() {
             <option value="custom">{t("template_custom")}</option>
           </select>
           {template === "custom" && (
-            <input
-              type="text"
-              value={customTemplate}
-              onChange={(e) => setCustomTemplate(e.target.value)}
-              placeholder="{name}.hdr.{eotf}.ass"
-              maxLength={200}
-              disabled={processing}
-              className="w-64 px-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              style={{
-                background: "var(--bg-input)",
-                border: "1px solid var(--border)",
-                color: "var(--text-primary)",
-              }}
-            />
+            <>
+              <input
+                id="hdr-custom-template-input"
+                type="text"
+                value={customTemplate}
+                onChange={(e) => setCustomTemplate(e.target.value)}
+                placeholder="{name}.hdr.{eotf}.ass"
+                maxLength={200}
+                disabled={processing}
+                aria-labelledby="hdr-template-label"
+                aria-invalid={templateInvalid}
+                aria-describedby={templateInvalid ? "hdr-custom-template-error" : undefined}
+                className="w-64 px-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                style={{
+                  background: "var(--bg-input)",
+                  border: templateInvalid ? "1px solid var(--error)" : "1px solid var(--border)",
+                  color: "var(--text-primary)",
+                }}
+              />
+              {templateInvalid && (
+                <span
+                  id="hdr-custom-template-error"
+                  className="text-xs"
+                  style={{ color: "var(--error)" }}
+                >
+                  {t("template_required")}
+                </span>
+              )}
+            </>
           )}
         </div>
         <p className="text-xs" style={{ color: "var(--text-muted)" }}>
