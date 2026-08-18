@@ -275,6 +275,18 @@ static ALLOWED_FONT_PATHS: Lazy<Mutex<HashSet<(String, u32)>>> =
 static ALLOWED_CACHE_FONT_PATHS: Lazy<Mutex<HashSet<(String, u32)>>> =
     Lazy::new(|| Mutex::new(HashSet::new()));
 
+/// Serializes unit tests that mutate scan/session/provenance globals across
+/// both this module and the GUI font-cache command module.
+#[cfg(test)]
+static SCAN_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
+pub(crate) fn lock_font_state_for_test() -> std::sync::MutexGuard<'static, ()> {
+    SCAN_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// Session SQLite path for user-picked font sources. Commands open short-lived
 /// connections to this path instead of sharing a global Connection, which keeps
 /// the static state simple and avoids holding SQLite page caches for longer
@@ -3286,7 +3298,7 @@ fn scan_directory_collecting_impl(
             // run_refresh_fonts catches this and continues with the next
             // dir; without the cap, a malicious pack could hold hundreds
             // of MB to multi-GB of font metadata in memory before the
-            // `cache.replace_folder` write would even start.
+            // `cache.replace_source` write would even start.
             if entries.len() + batch.len() > MAX_CACHE_POPULATE_FACES {
                 return Err(format!(
                     "Source has more font faces than the persistent cache safely accepts \
@@ -3967,7 +3979,7 @@ fn register_font_path(path: &Path, font_index: u32) -> Result<FontLookupResult, 
     crate::util::validate_ipc_path(&canonical_string, "System font")?;
     insert_with_cap(
         &ALLOWED_FONT_PATHS,
-        "system",
+        ProvenanceSetKind::System,
         canonical_string.clone(),
         font_index,
     )?;
@@ -3979,15 +3991,36 @@ fn register_font_path(path: &Path, font_index: u32) -> Result<FontLookupResult, 
 
 /// Shared (path, face_index) insertion helper used by both provenance
 /// sets. `cache` is the target set; `canonical_string` and `face_index`
-/// are the entry. `label` distinguishes the set in error messages so
-/// a future "Too many registered font paths" report can be attributed
-/// to system fonts vs cache hits — without the label, both would
-/// report the same text and triage would have to dig into the caller.
+/// are the entry. The typed set kind keeps the recovery advice aligned
+/// with the operation that can actually clear that set.
 /// Enforces
 /// `MAX_PROVENANCE_CACHE_SIZE` per-set as a rollback-on-overflow contract.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProvenanceSetKind {
+    System,
+    Cache,
+}
+
+fn provenance_overflow_message(kind: ProvenanceSetKind) -> String {
+    let (label, recovery) = match kind {
+        ProvenanceSetKind::System => (
+            "system",
+            "Restart the app to clear the system-font registration set, then retry.",
+        ),
+        ProvenanceSetKind::Cache => (
+            "cache",
+            "Clear font sources or clear the font cache, then retry.",
+        ),
+    };
+    format!(
+        "Too many registered font paths in {label} set (> {MAX_PROVENANCE_CACHE_SIZE}). \
+         {recovery}"
+    )
+}
+
 fn insert_with_cap(
     cache: &Lazy<Mutex<HashSet<(String, u32)>>>,
-    label: &str,
+    kind: ProvenanceSetKind,
     canonical_string: String,
     face_index: u32,
 ) -> Result<(), String> {
@@ -4004,10 +4037,7 @@ fn insert_with_cap(
     if newly_added && set.len() > MAX_PROVENANCE_CACHE_SIZE {
         // Roll back the speculative insert so the cap is firm.
         set.remove(&entry);
-        return Err(format!(
-            "Too many registered font paths in {label} set (> {MAX_PROVENANCE_CACHE_SIZE}). \
-             Restart the app to clear the cache."
-        ));
+        return Err(provenance_overflow_message(kind));
     }
     Ok(())
 }
@@ -4068,7 +4098,7 @@ pub(crate) fn cache_provenance_contains(path: &str, face_index: u32) -> bool {
 /// type layer rather than by manual convention — narrative comments
 /// decay across refactors; types don't.
 ///
-/// Cache row paths are canonicalized upstream by `replace_folder`;
+/// Cache row paths are canonicalized upstream by `replace_source`;
 /// this function re-validates via `validate_ipc_path` anyway so a
 /// hostile `--cache-file` swap can't smuggle crafted bytes past the
 /// trust set.
@@ -4090,7 +4120,7 @@ pub fn register_cache_provenance(hit: &crate::font_cache::FontLookupResult) -> R
     })?;
     insert_with_cap(
         &ALLOWED_CACHE_FONT_PATHS,
-        "cache",
+        ProvenanceSetKind::Cache,
         hit.font_path().to_string(),
         face_index,
     )
@@ -4889,14 +4919,6 @@ fn subset_with_index(font_data: &[u8], index: u32, codepoints: &[u32]) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Serializes any unit test that reads or mutates DB state, the
-    /// `ACTIVE_SCAN_ID` / `CANCEL_SCAN_ID` atomics, or both. cargo test
-    /// runs in parallel by default — without serialization, two tests
-    /// can race on `compare_exchange` / `fetch_max` and silently flake.
-    /// Renamed from `DB_TEST_LOCK` once the cancel tests revealed it
-    /// wasn't DB-only.
-    static SCAN_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn explicit_font_path_revalidates_a_canonical_target_with_bidi_control() {
@@ -6438,6 +6460,24 @@ mod tests {
     // the suite stays parallel-safe.
 
     #[test]
+    fn provenance_overflow_messages_match_each_set_recovery_path() {
+        assert_eq!(
+            provenance_overflow_message(ProvenanceSetKind::Cache),
+            format!(
+                "Too many registered font paths in cache set (> {MAX_PROVENANCE_CACHE_SIZE}). \
+                 Clear font sources or clear the font cache, then retry."
+            )
+        );
+        assert_eq!(
+            provenance_overflow_message(ProvenanceSetKind::System),
+            format!(
+                "Too many registered font paths in system set (> {MAX_PROVENANCE_CACHE_SIZE}). \
+                 Restart the app to clear the system-font registration set, then retry."
+            )
+        );
+    }
+
+    #[test]
     fn cache_provenance_gate_rejects_unregistered_path() {
         let _guard = SCAN_TEST_LOCK.lock().unwrap();
         // Snapshot the set so we restore it post-test (other tests
@@ -6544,8 +6584,8 @@ mod tests {
         );
         let err_msg = overflow.unwrap_err();
         assert!(
-            err_msg.contains("cache"),
-            "error message must name the cache set, got: {err_msg}"
+            err_msg.contains("Clear font sources or clear the font cache, then retry."),
+            "cache-set overflow must name a reachable recovery action, got: {err_msg}"
         );
         // The speculative insert must have been rolled back — set
         // size unchanged.

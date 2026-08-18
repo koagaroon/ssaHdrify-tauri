@@ -505,7 +505,9 @@ fn diagnose_fonts_does_not_mutate_cache_file() {
     let before_shm = sqlite_sidecar_path(&cache, "-shm");
     let before_wal_modified = optional_modified(&before_wal);
     let before_shm_modified = optional_modified(&before_shm);
-    thread::sleep(Duration::from_millis(20));
+    // Some supported filesystems expose only 1-2 second mtime resolution.
+    // Match the cache integration suite's stable cross-filesystem interval.
+    thread::sleep(Duration::from_millis(2100));
 
     let diagnose = run_cli(&[
         "--lang",

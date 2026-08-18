@@ -267,9 +267,28 @@ describe("parseTimingMapText", () => {
 
   it("rejects malformed timing-map imports before conversion", () => {
     expect(() => parseTimingMapText("")).toThrow(/empty/);
+    expect(() => parseTimingMapText("[]")).toThrow(/no rules/);
     expect(() => parseTimingMapText("[{}]")).toThrow(/start/);
     expect(() => parseTimingMapText("00:60:00.000,,+1s")).toThrow(/below 60/);
     expect(() => parseTimingMapText("00:00:00.000,,1s")).toThrow(/include \+ or -/);
+  });
+
+  it("accepts 10000 enabled rules and rejects 10001 in JSON and CSV", () => {
+    const makeJsonRules = (count: number) =>
+      Array.from({ length: count }, (_, index) => ({
+        startMs: index,
+        offsetMs: 0,
+        enabled: true,
+      }));
+    const makeCsvRules = (count: number) =>
+      Array.from({ length: count }, (_, index) => `${index},,+0ms,,true`).join("\n");
+
+    expect(parseTimingMapText(JSON.stringify(makeJsonRules(10_000))).rules).toHaveLength(10_000);
+    expect(parseTimingMapText(makeCsvRules(10_000)).rules).toHaveLength(10_000);
+    expect(() => parseTimingMapText(JSON.stringify(makeJsonRules(10_001)))).toThrow(
+      /too many rules; max 10000/
+    );
+    expect(() => parseTimingMapText(makeCsvRules(10_001))).toThrow(/too many rules; max 10000/);
   });
 });
 

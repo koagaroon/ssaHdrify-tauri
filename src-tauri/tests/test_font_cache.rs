@@ -142,13 +142,13 @@ fn refresh_fonts_creates_cache_with_one_folder_row() {
 
     // Open via library API and inspect.
     let inspect = FontCache::open_or_create(&cache).expect("open cache for inspection");
-    let folders = inspect.list_folders().expect("list_folders");
+    let sources = inspect.list_sources().expect("list_sources");
     assert_eq!(
-        folders.len(),
+        sources.len(),
         1,
-        "expected exactly 1 cached folder, got {folders:?}"
+        "expected exactly 1 cached source, got {sources:?}"
     );
-    let stored = &folders[0].folder_path;
+    let stored = &sources[0].source_root;
     let canonical_str = cache_source_key(&font_dir, FontDirectoryScope::Shallow)
         .expect("derive normalized cache source key")
         .source_root;
@@ -182,11 +182,11 @@ fn refresh_fonts_idempotent_no_duplicate_folder_rows() {
     }
 
     let inspect = FontCache::open_or_create(&cache).expect("open cache");
-    let folders = inspect.list_folders().expect("list_folders");
+    let sources = inspect.list_sources().expect("list_sources");
     assert_eq!(
-        folders.len(),
+        sources.len(),
         1,
-        "two consecutive refreshes must yield exactly 1 row, got {folders:?}"
+        "two consecutive refreshes must yield exactly 1 row, got {sources:?}"
     );
 
     let _ = fs::remove_dir_all(work);

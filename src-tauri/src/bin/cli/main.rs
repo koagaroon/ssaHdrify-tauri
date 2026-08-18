@@ -3182,10 +3182,7 @@ fn append_warning(warnings: &mut Option<Vec<String>>, warning: Option<String>) {
     }
 }
 
-fn load_timing_map_rules(
-    engine: &mut engine::CliEngine,
-    map_path: &Path,
-) -> Result<Vec<engine::TimingMapRule>, String> {
+fn read_timing_map_text(map_path: &Path) -> Result<String, String> {
     let absolute = absolute_path(map_path)?;
     let display = display_path(&absolute);
     let metadata = fs::metadata(&absolute)
@@ -3199,16 +3196,29 @@ fn load_timing_map_rules(
             metadata.len()
         ));
     }
-    let content = fs::read_to_string(&absolute)
-        .map_err(|err| format!("failed to read timing map as UTF-8 text from {display}: {err}"))?;
-    let parsed = engine.parse_timing_map(&engine::TimingMapParseRequest { content })?;
-    if parsed.rules.is_empty() {
+    fs::read_to_string(&absolute)
+        .map_err(|err| format!("failed to read timing map as UTF-8 text from {display}: {err}"))
+}
+
+fn require_enabled_timing_map_rules(
+    rules: Vec<engine::TimingMapRule>,
+) -> Result<Vec<engine::TimingMapRule>, String> {
+    if rules.is_empty() {
         return Err("timing map contains no rules".to_string());
     }
-    if !parsed.rules.iter().any(|rule| rule.enabled.unwrap_or(true)) {
+    if !rules.iter().any(|rule| rule.enabled.unwrap_or(true)) {
         return Err("timing map contains no enabled rules".to_string());
     }
-    Ok(parsed.rules)
+    Ok(rules)
+}
+
+fn load_timing_map_rules(
+    engine: &mut engine::CliEngine,
+    map_path: &Path,
+) -> Result<Vec<engine::TimingMapRule>, String> {
+    let content = read_timing_map_text(map_path)?;
+    let parsed = engine.parse_timing_map(&engine::TimingMapParseRequest { content })?;
+    require_enabled_timing_map_rules(parsed.rules)
 }
 
 fn run_shift(
@@ -7441,15 +7451,17 @@ mod tests {
         create_cli_font_db_dir, diagnostic_next_actions, display_path,
         duplicate_rename_output_keys, engine, format_refresh_cache_access_error,
         format_refresh_cache_schema_error, group_resolved_fonts_by_face, normalize_output_key,
-        parse_duration_ms, parse_timestamp_ms, predict_chain_output_path,
+        parse_duration_ms, parse_timestamp_ms, predict_chain_output_path, read_timing_map_text,
         refresh_font_directory_sources, relocate_output_path, require_complete_cli_font_source,
-        resolve_embed_fonts, sanitize_for_display, substitute_template, write_output,
-        CacheDiagnostic, CacheDiagnosticStatus, Cli, Command, CommandDiagnostics, CommandReport,
-        DiagnoseMode, DiagnosticSubsetBudget, EmbedArgs, FileDiagnostic, FileReport, FileStatus,
-        FontDiagnostic, FontQaStatus, FontSubsetCheckDiagnostic, FontSubsetCheckStatus,
-        GlobalOptions, MissingFontAction, OutputLang, RefreshFontsArgs, ResolvedEmbedFont,
-        TempFontDbDir, MAX_DIAGNOSTIC_SUBSET_CALLS, MAX_DIAGNOSTIC_SUBSET_TOTAL_BYTES,
+        require_enabled_timing_map_rules, resolve_embed_fonts, sanitize_for_display,
+        substitute_template, write_output, CacheDiagnostic, CacheDiagnosticStatus, Cli, Command,
+        CommandDiagnostics, CommandReport, DiagnoseMode, DiagnosticSubsetBudget, EmbedArgs,
+        FileDiagnostic, FileReport, FileStatus, FontDiagnostic, FontQaStatus,
+        FontSubsetCheckDiagnostic, FontSubsetCheckStatus, GlobalOptions, MissingFontAction,
+        OutputLang, RefreshFontsArgs, ResolvedEmbedFont, TempFontDbDir,
+        MAX_DIAGNOSTIC_SUBSET_CALLS, MAX_DIAGNOSTIC_SUBSET_TOTAL_BYTES,
         MAX_RESOLVED_FONT_CODEPOINTS, MAX_SHIFT_OFFSET_MS, MAX_SUBSET_CODEPOINTS_FOR_DEDUP,
+        MAX_TIMING_MAP_BYTES,
     };
     // Import the canonical filename literal directly from app_lib so the
     // test pins the same name `TempFontDbDir::drop`'s remove_dir_all
@@ -7462,6 +7474,63 @@ mod tests {
     use clap::{CommandFactory, Parser};
     use std::fs;
     use std::path::{Path, PathBuf};
+
+    fn timing_map_rule(enabled: Option<bool>) -> engine::TimingMapRule {
+        engine::TimingMapRule {
+            start_ms: 0,
+            end_ms: None,
+            offset_ms: 1,
+            enabled,
+            label: None,
+        }
+    }
+
+    #[test]
+    fn timing_map_file_accepts_one_mib_and_rejects_one_byte_over() {
+        let root = create_cli_font_db_dir().expect("temporary test directory");
+        let map_path = root.join("boundary-map.csv");
+
+        fs::write(&map_path, vec![b' '; MAX_TIMING_MAP_BYTES as usize])
+            .expect("write at-limit timing map");
+        let at_limit = read_timing_map_text(&map_path).expect("one MiB should be accepted");
+        assert_eq!(at_limit.len(), MAX_TIMING_MAP_BYTES as usize);
+
+        fs::write(&map_path, vec![b' '; MAX_TIMING_MAP_BYTES as usize + 1])
+            .expect("write over-limit timing map");
+        let error = read_timing_map_text(&map_path).expect_err("one MiB plus one must be refused");
+        assert!(
+            error.contains("timing map file is too large")
+                && error.contains(&(MAX_TIMING_MAP_BYTES + 1).to_string())
+                && error.contains(&format!("max {MAX_TIMING_MAP_BYTES}")),
+            "size refusal should report the actual and accepted byte counts: {error}"
+        );
+
+        fs::remove_dir_all(root).expect("remove timing-map test directory");
+    }
+
+    #[test]
+    fn timing_map_rules_require_at_least_one_rule() {
+        let error = require_enabled_timing_map_rules(Vec::new())
+            .expect_err("an empty parsed map must be refused");
+
+        assert_eq!(error, "timing map contains no rules");
+    }
+
+    #[test]
+    fn timing_map_rules_require_at_least_one_enabled_rule() {
+        let error = require_enabled_timing_map_rules(vec![
+            timing_map_rule(Some(false)),
+            timing_map_rule(Some(false)),
+        ])
+        .expect_err("an all-disabled parsed map must be refused");
+        assert_eq!(error, "timing map contains no enabled rules");
+
+        for enabled in [None, Some(true)] {
+            let rules = require_enabled_timing_map_rules(vec![timing_map_rule(enabled)])
+                .expect("omitted and explicit true both mean enabled");
+            assert_eq!(rules.len(), 1);
+        }
+    }
 
     #[test]
     fn absolute_path_folds_cli_dot_and_parent_components_without_touching_names() {

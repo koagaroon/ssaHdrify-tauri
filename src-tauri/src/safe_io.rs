@@ -487,7 +487,11 @@ fn create_new_and_write_bytes(path: &Path, content: &[u8]) -> Result<(), String>
         .open(path)
         .map_err(|e| format!("Failed to create destination: {e}"))?;
     file.write_all(content)
-        .map_err(|e| format!("Failed to write destination: {e}"))
+        .map_err(|error| partial_output_error("write destination", &error))
+}
+
+fn partial_output_error(action: &str, error: &std::io::Error) -> String {
+    format!("Failed to {action}; a partial output may remain: {error}")
 }
 
 fn check_plain_text_size(content_len: usize) -> Result<(), String> {
@@ -507,12 +511,10 @@ fn create_new_and_write_bytes_exclusive(path: &Path, content: &[u8]) -> Result<(
     // Keep a partial create-new file if write_all fails. Deleting by pathname
     // after closing would race with another process replacing that pathname,
     // which could make error cleanup delete a file we did not create.
-    file.write_all(content).map_err(|error| {
-        format!("Failed to write destination; a partial output may remain: {error}")
-    })?;
-    file.sync_all().map_err(|error| {
-        format!("Failed to flush destination; a partial output may remain: {error}")
-    })
+    file.write_all(content)
+        .map_err(|error| partial_output_error("write destination", &error))?;
+    file.sync_all()
+        .map_err(|error| partial_output_error("flush destination", &error))
 }
 
 fn encode_text_preserving_source(
@@ -796,7 +798,7 @@ pub fn safe_copy_file_inner(
         .map_err(|e| format!("Failed to create destination: {e}"))?;
     std::io::copy(&mut source, &mut destination)
         .map(|_| ())
-        .map_err(|e| format!("Failed to copy file: {e}"))
+        .map_err(|error| partial_output_error("copy file", &error))
 }
 
 /// File-preserving renames intentionally have no decoded-text size cap: they
@@ -998,6 +1000,19 @@ mod tests {
         );
 
         (real_dir, raw, resolved)
+    }
+
+    #[test]
+    fn partial_output_errors_are_explicit_without_claiming_residue_exists() {
+        let error = std::io::Error::other("injected write failure");
+        assert_eq!(
+            partial_output_error("write destination", &error),
+            "Failed to write destination; a partial output may remain: injected write failure"
+        );
+        assert_eq!(
+            partial_output_error("copy file", &error),
+            "Failed to copy file; a partial output may remain: injected write failure"
+        );
     }
 
     #[test]

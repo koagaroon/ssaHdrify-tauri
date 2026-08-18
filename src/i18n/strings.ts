@@ -985,10 +985,6 @@ export const strings: Record<string, StringEntry> = {
     en: "Written: {0} ({1} Style row(s) changed)",
     zh: "已写入：{0}（更改了 {1} 个 Style 行）",
   },
-  msg_style_file_noop: {
-    en: "Skipped {0}: no selected Style rows would change",
-    zh: "已跳过 {0}：所选 Style 行无需更改",
-  },
   msg_style_write_error: {
     en: "Error writing {0}: {1}",
     zh: "写入 {0} 出错：{1}",
@@ -996,10 +992,6 @@ export const strings: Record<string, StringEntry> = {
   msg_style_complete: {
     en: "Style edit complete: {0} written, {1} unchanged, {2} failed",
     zh: "样式编辑完成：写入 {0} 个，未更改 {1} 个，失败 {2} 个",
-  },
-  msg_style_all_failed: {
-    en: "Style edit failed on all {0} writable file(s)",
-    zh: "全部 {0} 个可写文件均编辑失败",
   },
   msg_style_all_noop: {
     en: "Nothing to write — no selected Style rows would change.",

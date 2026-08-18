@@ -234,8 +234,8 @@ const FAMILY_LOOKUP_SQL: &str =
 /// (untrusted-input via `--cache-file`) populated with hundreds of fabricated
 /// source rows — especially UNC paths to dead servers — would otherwise
 /// spin every detect call through a per-row stat loop, bounded only by
-/// per-stat OS timeout. The cap fires inside `list_folders` and refuses
-/// to return the result; downstream `diff_against` /
+/// per-stat OS timeout. The cap fires inside `list_sources` and refuses
+/// to return the result; downstream `diff_sources` /
 /// `detect_font_cache_drift` surface the error and the user is pointed
 /// at rebuilding the cache. Realistic working caches hold a handful to
 /// dozens of folders, so 256 stays generous without being a practical
@@ -624,8 +624,9 @@ pub struct CacheSourceRecord {
     pub files: Vec<FileSnapshot>,
 }
 
-/// Transitional root-only view used by older shallow-only callers. New code
-/// should use [`CacheSourceRecord`] so scope and nested snapshots are retained.
+/// Test-only root view for legacy shallow fixtures. Production code must use
+/// [`CacheSourceRecord`] so source scope and nested snapshots cannot be lost.
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FolderRecord {
     pub folder_path: String,
@@ -1618,8 +1619,10 @@ impl FontCache {
         Ok(removed)
     }
 
-    /// Compatibility wrapper for shallow-only call sites while the CLI moves
-    /// to source snapshots. New code should call [`Self::replace_source`].
+    /// Test-only adapter for legacy shallow fixtures. It deliberately cannot
+    /// represent recursive sources; production code must call
+    /// [`Self::replace_source`] with a complete snapshot.
+    #[cfg(test)]
     pub fn replace_folder(
         &mut self,
         folder_path: &str,
@@ -1650,14 +1653,16 @@ impl FontCache {
         )
     }
 
-    /// Compatibility wrapper for legacy shallow-only callers.
+    /// Test-only adapter for legacy shallow fixtures. Production code must use
+    /// [`Self::remove_source`] and preserve the source scope.
+    #[cfg(test)]
     pub fn remove_folder(&mut self, folder_path: &str) -> Result<(), CacheError> {
         self.remove_source(folder_path, FontDirectoryScope::Shallow)
     }
 
-    /// Compatibility comparison for legacy shallow-only callers. New code uses
-    /// [`FontCache::diff_sources`] with complete directory and candidate-file
-    /// snapshots.
+    /// Test-only comparison for legacy shallow fixtures. It intentionally drops
+    /// recursive scope and nested snapshots; production code must use
+    /// [`FontCache::diff_sources`].
     ///
     /// The drift categories follow the locked design:
     /// - **added**: in the filesystem snapshot but not in the cache.
@@ -1670,6 +1675,7 @@ impl FontCache {
     ///
     /// Folders unchanged (in both with matching mtime) are silently
     /// OK and don't appear in any report list.
+    #[cfg(test)]
     pub fn diff_against(
         &self,
         current_folders: &[(String, i64)],
@@ -1735,7 +1741,7 @@ impl FontCache {
     ///
     /// Match semantics: NFC-normalize + full Unicode lowercase via
     /// `family_lookup_key` on BOTH the query (here) and the storage
-    /// path (`replace_folder`). Exact family-name rows must match
+    /// path (`replace_source`). Exact family-name rows must match
     /// bold/italic exactly; full-face/PostScript alias rows are
     /// style-insensitive because the alias already names a concrete
     /// face. Exact family rows sort before alias rows so an alias can
@@ -2037,7 +2043,9 @@ impl FontCache {
         Ok(report)
     }
 
-    /// Transitional shallow-root view. New code should call `list_sources`.
+    /// Test-only shallow-root view for legacy fixtures. Production code must
+    /// call [`Self::list_sources`] so scope and nested snapshots are retained.
+    #[cfg(test)]
     pub fn list_folders(&self) -> Result<Vec<FolderRecord>, CacheError> {
         self.list_sources()?
             .into_iter()
