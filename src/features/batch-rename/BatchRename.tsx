@@ -50,6 +50,7 @@ import {
   parseFilename,
   deriveRenameOutputPath,
   findDuplicateRenameOutputKeys,
+  findRenameInputConflictIndexes,
   isNoOpRename,
   assignSubtitleToRow,
   type PairingRow,
@@ -508,7 +509,7 @@ export default function BatchRename() {
       // count, hiding the skips during the moment the user can't see
       // the log).
       const derivedTargets: { row: PairingRow; outputPath: string }[] = [];
-      let skippedDeriveCount = 0;
+      let preflightFailedCount = 0;
       for (const row of actionableRows) {
         try {
           const outputPath = deriveRenameOutputPath(
@@ -530,13 +531,39 @@ export default function BatchRename() {
           // HDR / Timing / Embed already sanitize at every
           // addLog site, BatchRename was the outlier.
           addLog(t("msg_rename_skipped", sanitizeForDialog(row.subtitle!.name), reason), "error");
-          skippedDeriveCount += 1;
+          preflightFailedCount += 1;
         }
       }
       if (derivedTargets.length === 0) {
         addLog(t("msg_rename_nothing_to_do"), "error");
         return;
       }
+
+      // Input-conflict pre-flight. Detect executable edges against every
+      // loaded subtitle input, including no-op, unchecked, and unpaired rows:
+      // a planned output can otherwise overwrite user data or bytes a later
+      // row still needs. Mark both executable sides of every edge so swaps and
+      // longer chains fail as a unit before confirmation or filesystem access.
+      const inputConflictIndexes = findRenameInputConflictIndexes(
+        derivedTargets.map((target) => ({
+          inputPath: target.row.subtitle!.path,
+          outputPath: target.outputPath,
+        })),
+        subtitlePaths
+      );
+      const inputConflictTargets = derivedTargets.filter((_, index) =>
+        inputConflictIndexes.has(index)
+      );
+      for (const target of inputConflictTargets) {
+        addLog(
+          t("msg_rename_input_conflict", sanitizeForDialog(target.row.subtitle!.name)),
+          "error"
+        );
+      }
+      preflightFailedCount += inputConflictTargets.length;
+      const conflictFreeTargets = derivedTargets.filter(
+        (_, index) => !inputConflictIndexes.has(index)
+      );
 
       // No-op pre-flight. When a sub is already correctly named for its
       // paired video (e.g. raw-pack external-sub releases that ship subs
@@ -547,7 +574,7 @@ export default function BatchRename() {
       // through the regular flow.
       const noopTargets: { row: PairingRow; outputPath: string }[] = [];
       let targets: { row: PairingRow; outputPath: string }[] = [];
-      for (const tgt of derivedTargets) {
+      for (const tgt of conflictFreeTargets) {
         if (isNoOpRename(tgt.row.subtitle!.path, tgt.outputPath)) {
           noopTargets.push(tgt);
         } else {
@@ -559,7 +586,7 @@ export default function BatchRename() {
         addLog(t("msg_rename_already_named", sanitizeForDialog(tgt.row.subtitle!.name)), "info");
       }
       const duplicateOutputKeys = findDuplicateRenameOutputKeys(
-        derivedTargets.map((tgt) => tgt.outputPath)
+        conflictFreeTargets.map((tgt) => tgt.outputPath)
       );
       const duplicateTargets = targets.filter((tgt) =>
         duplicateOutputKeys.has(normalizeOutputKey(tgt.outputPath))
@@ -573,8 +600,11 @@ export default function BatchRename() {
         );
       }
       if (targets.length === 0) {
-        if (duplicateTargets.length > 0) {
-          addLog(t("msg_rename_all_failed", duplicateTargets.length), "error");
+        if (preflightFailedCount > 0 || duplicateTargets.length > 0) {
+          addLog(
+            t("msg_rename_all_failed", preflightFailedCount + duplicateTargets.length),
+            "error"
+          );
           setLastActionResult("error");
           return;
         }
@@ -611,7 +641,9 @@ export default function BatchRename() {
       // overwrite-branch callsite since the only consumer computes the
       // answer locally).
       const skippedSuffix =
-        skippedDeriveCount > 0 ? "\n\n" + t("msg_rename_skipped_count", skippedDeriveCount) : "";
+        preflightFailedCount > 0
+          ? "\n\n" + t("msg_rename_skipped_count", preflightFailedCount)
+          : "";
 
       if (outputMode === "rename") {
         // Strip BiDi overrides from filenames before rendering them in the
@@ -810,7 +842,17 @@ export default function BatchRename() {
     } finally {
       busyRef.current = false;
     }
-  }, [busy, actionableCount, actionableRows, outputMode, chosenDir, multiSubtitleMode, addLog, t]);
+  }, [
+    busy,
+    actionableCount,
+    actionableRows,
+    outputMode,
+    chosenDir,
+    multiSubtitleMode,
+    subtitlePaths,
+    addLog,
+    t,
+  ]);
 
   // Reset last-action on selection change.
   useEffect(() => {

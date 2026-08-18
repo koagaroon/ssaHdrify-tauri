@@ -786,13 +786,16 @@ export const strings: Record<string, StringEntry> = {
     en: "Skipped {0}: {1}",
     zh: "已跳过 {0}：{1}",
   },
+  msg_rename_input_conflict: {
+    en: "Blocked {0}: it is part of a planned conflict where an output targets a loaded subtitle input. No files in that conflicting chain were changed.",
+    zh: "已阻止 {0}：该字幕涉及计划批次中的冲突，其中一个输出指向已加载的字幕输入。该冲突链中的文件均未更改。",
+  },
   msg_rename_skipped_count: {
-    // Pinpointed to derive-time pairing failures specifically — not
-    // covering noopTargets (already-correctly-named subs), within-batch
-    // dedup skips, or loop-time copy/rename errors. Those happen before
-    // or after this dialog is shown.
-    en: "Note: {0} pairing(s) failed earlier and won't run (see log).",
-    zh: "注意：另有 {0} 对配对早前失败、不会执行（见日志）。",
+    // Covers path-derivation failures and output-to-loaded-input
+    // conflicts found before confirmation. No-op targets, duplicate outputs,
+    // and loop-time copy/rename errors have their own reporting paths.
+    en: "Note: {0} pairing(s) failed preflight and won't run (see log).",
+    zh: "注意：另有 {0} 对配对未通过预检、不会执行（见日志）。",
   },
   msg_rename_nothing_to_do: {
     en: "Nothing to do — all selected rows produced invalid output paths.",

@@ -527,6 +527,57 @@ export function findDuplicateRenameOutputKeys(outputPaths: string[]): Set<string
   return duplicates;
 }
 
+export interface RenamePathTarget {
+  inputPath: string;
+  outputPath: string;
+}
+
+/**
+ * Return every executable row that participates in an
+ * output-to-loaded-input conflict.
+ *
+ * Batch rename/copy is executed sequentially. If row A writes to row B's
+ * loaded input, A can destroy the bytes B has not read yet. Refusing only A
+ * is also misleading for a longer A -> B -> C chain: B is both threatened by
+ * A and a threat to C. Mark both endpoints of every cross-row edge so the
+ * complete connected chain is rejected before any filesystem operation.
+ * `protectedInputPaths` is deliberately wider than `targets`: an unchecked,
+ * language-filtered, or currently unpaired subtitle is still user data and
+ * must not be overwritten merely because it has no executable row.
+ *
+ * A row whose output is its own input is an ordinary no-op, not a conflict.
+ * `normalizeOutputKey` keeps the comparison aligned with duplicate-output
+ * checks, including slash/case aliases on case-insensitive filesystems.
+ */
+export function findRenameInputConflictIndexes(
+  targets: RenamePathTarget[],
+  protectedInputPaths: string[] = targets.map((target) => target.inputPath)
+): Set<number> {
+  const inputOwners = new Map<string, number[]>();
+  targets.forEach((target, index) => {
+    const key = normalizeOutputKey(target.inputPath);
+    const owners = inputOwners.get(key) ?? [];
+    owners.push(index);
+    inputOwners.set(key, owners);
+  });
+  const protectedInputKeys = new Set(protectedInputPaths.map(normalizeOutputKey));
+
+  const conflicts = new Set<number>();
+  targets.forEach((target, writerIndex) => {
+    const inputKey = normalizeOutputKey(target.inputPath);
+    const outputKey = normalizeOutputKey(target.outputPath);
+    if (outputKey === inputKey || !protectedInputKeys.has(outputKey)) return;
+
+    conflicts.add(writerIndex);
+    const owners = inputOwners.get(outputKey) ?? [];
+    for (const ownerIndex of owners) {
+      if (ownerIndex === writerIndex) continue;
+      conflicts.add(ownerIndex);
+    }
+  });
+  return conflicts;
+}
+
 export function compareKeys(a: string, b: string): number {
   // Called only on matched-video keys (`${season}|${episode}` shape).
   // Unmatched videos take a separate branch above

@@ -13,6 +13,7 @@ import {
   buildPairings,
   compareKeys,
   deriveRenameOutputPath,
+  findRenameInputConflictIndexes,
   isNoOpRename,
   parseFilename,
   type OutputMode,
@@ -137,6 +138,9 @@ export interface RenamePlanRow {
   key: string;
   language: string;
   noOp: boolean;
+  /** True when this executable row is connected to a planned output that
+   * targets any loaded subtitle input. The native shell fails it before I/O. */
+  inputConflict: boolean;
 }
 
 export interface FontEmbedPlanRequest {
@@ -320,33 +324,42 @@ export function planRename(request: RenamePlanRequest): RenamePlanResult {
       : buildMultiLanguageRenameCandidates(videos, filteredSubtitles);
   const preserveLanguageSuffix = selection.kind !== "auto";
 
+  const pairingsWithoutConflicts = candidates.map((candidate) => {
+    const outputPath = deriveRenameOutputPath(
+      candidate.video.path,
+      candidate.subtitle.path,
+      request.mode,
+      request.outputDir ?? null,
+      {
+        languageSuffix: preserveLanguageSuffix
+          ? subtitleLanguage(candidate.subtitle.name) || undefined
+          : undefined,
+      }
+    );
+    return {
+      inputPath: candidate.subtitle.path,
+      outputPath,
+      videoPath: candidate.video.path,
+      source: candidate.source,
+      key: candidate.key,
+      language: subtitleLanguage(candidate.subtitle.name),
+      noOp: isNoOpRename(candidate.subtitle.path, outputPath),
+    };
+  });
+  const inputConflictIndexes = findRenameInputConflictIndexes(
+    pairingsWithoutConflicts,
+    categorized.subtitles
+  );
+
   return {
     videoCount: videos.length,
     subtitleCount: subtitles.length,
     unknownCount: categorized.unknown.length,
     ignoredCount: categorized.ignored.length,
-    pairings: candidates.map((candidate) => {
-      const outputPath = deriveRenameOutputPath(
-        candidate.video.path,
-        candidate.subtitle.path,
-        request.mode,
-        request.outputDir ?? null,
-        {
-          languageSuffix: preserveLanguageSuffix
-            ? subtitleLanguage(candidate.subtitle.name) || undefined
-            : undefined,
-        }
-      );
-      return {
-        inputPath: candidate.subtitle.path,
-        outputPath,
-        videoPath: candidate.video.path,
-        source: candidate.source,
-        key: candidate.key,
-        language: subtitleLanguage(candidate.subtitle.name),
-        noOp: isNoOpRename(candidate.subtitle.path, outputPath),
-      };
-    }),
+    pairings: pairingsWithoutConflicts.map((pairing, index) => ({
+      ...pairing,
+      inputConflict: inputConflictIndexes.has(index),
+    })),
   };
 }
 

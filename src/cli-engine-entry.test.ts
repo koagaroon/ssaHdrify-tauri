@@ -192,6 +192,43 @@ describe("planRename", () => {
       noOp: true,
     });
   });
+
+  it("marks both endpoints of an ambiguous two-file rename swap", () => {
+    const video1080 = "C:\\media\\[Raw][Show][01][1080p].mkv";
+    const video720 = "C:\\media\\[Raw][Show][01][720p].mkv";
+    const sub720 = "C:\\media\\[Raw][Show][01][720p].ass";
+    const sub1080 = "C:\\media\\[Raw][Show][01][1080p].ass";
+
+    const plan = planRename({
+      paths: [video1080, video720, sub720, sub1080],
+      mode: "rename",
+      langs: "auto",
+    });
+
+    expect(plan.pairings.map((row) => row.inputPath)).toEqual([sub720, sub1080]);
+    expect(plan.pairings.map((row) => row.outputPath)).toEqual([sub1080, sub720]);
+    expect(plan.pairings.map((row) => row.source)).toEqual(["warning", "warning"]);
+    expect(plan.pairings.map((row) => row.inputConflict)).toEqual([true, true]);
+  });
+
+  it("protects a loaded subtitle that auto pairing leaves without a row", () => {
+    const video = "C:\\media\\[Raw][Show][01][1080p].mkv";
+    const chosenSub = "C:\\media\\[Subs][Show][01][source].ass";
+    const unpairedProtectedSub = "C:\\media\\[Raw][Show][01][1080p].ass";
+
+    const plan = planRename({
+      paths: [video, chosenSub, unpairedProtectedSub],
+      mode: "copy_to_video",
+      langs: "auto",
+    });
+
+    expect(plan.pairings).toHaveLength(1);
+    expect(plan.pairings[0]).toMatchObject({
+      inputPath: chosenSub,
+      outputPath: unpairedProtectedSub,
+      inputConflict: true,
+    });
+  });
 });
 
 describe("time shift timing-map engine helpers", () => {

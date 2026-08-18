@@ -146,7 +146,9 @@ pub struct RenamePlanRow {
     pub input_path: String,
     pub output_path: String,
     pub video_path: String,
+    pub source: String,
     pub no_op: bool,
+    pub input_conflict: bool,
 }
 
 #[derive(Debug, Serialize)]

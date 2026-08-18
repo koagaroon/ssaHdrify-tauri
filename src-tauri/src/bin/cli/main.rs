@@ -5854,31 +5854,61 @@ fn process_rename_pair(
     let input = display_path(&input_path);
     let output = display_path(&output_path);
 
+    // planRename computes this flag against every loaded subtitle path (not
+    // only executable rows) before the Rust shell enters this loop. Keep this
+    // guard before no-op, duplicate, exists, dry-run, and overwrite handling:
+    // every participant in a swap/chain must fail without touching the disk.
+    if row.input_conflict {
+        return attach_rename_pairing_warning(
+            globals,
+            row,
+            failed_report(
+                &input_path,
+                Some(output),
+                None,
+                "subtitle is part of a planned conflict where an output targets a loaded subtitle input; no files in that conflicting chain were changed"
+                    .to_string(),
+            ),
+        );
+    }
+
     if row.no_op {
-        return skipped_report(
-            &input_path,
-            Some(output),
-            None,
-            "subtitle already matches the target path".to_string(),
+        return attach_rename_pairing_warning(
+            globals,
+            row,
+            skipped_report(
+                &input_path,
+                Some(output),
+                None,
+                "subtitle already matches the target path".to_string(),
+            ),
         );
     }
 
     let output_key = normalize_output_key(&output_path);
     if duplicate_outputs.contains(&output_key) {
-        return failed_report(
-            &input_path,
-            Some(output),
-            None,
-            "duplicate output path in planned batch".to_string(),
+        return attach_rename_pairing_warning(
+            globals,
+            row,
+            failed_report(
+                &input_path,
+                Some(output),
+                None,
+                "duplicate output path in planned batch".to_string(),
+            ),
         );
     }
 
     if output_path_exists(globals, &output_path) && !globals.overwrite {
-        return skipped_report(
-            &input_path,
-            Some(output),
-            None,
-            "output exists; pass --overwrite to replace it".to_string(),
+        return attach_rename_pairing_warning(
+            globals,
+            row,
+            skipped_report(
+                &input_path,
+                Some(output),
+                None,
+                "output exists; pass --overwrite to replace it".to_string(),
+            ),
         );
     }
 
@@ -5895,7 +5925,11 @@ fn process_rename_pair(
     );
 
     if globals.dry_run {
-        return planned_report(&input_path, Some(output), None);
+        return attach_rename_pairing_warning(
+            globals,
+            row,
+            planned_report(&input_path, Some(output), None),
+        );
     }
 
     let operation_result = if args.mode.is_copy() {
@@ -5905,17 +5939,41 @@ fn process_rename_pair(
     };
 
     if let Err(error) = operation_result {
-        return failed_report(&input_path, Some(output), None, error);
+        return attach_rename_pairing_warning(
+            globals,
+            row,
+            failed_report(&input_path, Some(output), None, error),
+        );
     }
 
-    FileReport {
-        input,
-        output: Some(output),
-        encoding: None,
-        status: FileStatus::Written,
-        error: None,
-        warnings: None,
+    attach_rename_pairing_warning(
+        globals,
+        row,
+        FileReport {
+            input,
+            output: Some(output),
+            encoding: None,
+            status: FileStatus::Written,
+            error: None,
+            warnings: None,
+        },
+    )
+}
+
+fn attach_rename_pairing_warning(
+    globals: &GlobalOptions,
+    row: &engine::RenamePlanRow,
+    mut report: FileReport,
+) -> FileReport {
+    if row.source == "warning" {
+        report.warnings = Some(vec![localize(
+            globals,
+            "pairing is ambiguous because multiple videos share the same season and episode; verify the selected subtitle"
+                .to_string(),
+            "多个视频具有相同的季与集编号，配对存在歧义；请核对所选字幕".to_string(),
+        )]);
     }
+    report
 }
 
 fn duplicate_rename_output_keys(rows: &[engine::RenamePlanRow]) -> HashSet<String> {
@@ -5923,6 +5981,10 @@ fn duplicate_rename_output_keys(rows: &[engine::RenamePlanRow]) -> HashSet<Strin
     // so picking a "winner" among duplicates risks moving the wrong
     // file into a stable name. Every participant in a duplicate set is
     // flagged here and refuses to act in process_rename_pair.
+    //
+    // Rows already blocked by the stronger input-conflict preflight do not
+    // claim outputs: they cannot write, and excluding them keeps GUI/CLI
+    // behavior aligned when an otherwise-safe row shares their target.
     //
     // No-op rows DO claim their output key — a no-op row's output is a
     // real file already on disk, so a non-no-op row targeting the same
@@ -5933,7 +5995,7 @@ fn duplicate_rename_output_keys(rows: &[engine::RenamePlanRow]) -> HashSet<Strin
     let mut seen = HashSet::new();
     let mut duplicates = HashSet::new();
 
-    for row in rows {
+    for row in rows.iter().filter(|row| !row.input_conflict) {
         let key = normalize_output_key(Path::new(&row.output_path));
         if !seen.insert(key.clone()) {
             duplicates.insert(key);
@@ -8054,13 +8116,17 @@ mod tests {
                 input_path: "C:\\Subs\\Episode.ass".to_string(),
                 output_path: "C:\\Subs\\Episode.ass".to_string(),
                 video_path: "C:\\Subs\\Episode.mkv".to_string(),
+                source: "regex".to_string(),
                 no_op: true,
+                input_conflict: false,
             },
             engine::RenamePlanRow {
                 input_path: "C:\\Subs\\episode.tc.ass".to_string(),
                 output_path: "C:\\Subs\\Episode.ass".to_string(),
                 video_path: "C:\\Subs\\Episode.mkv".to_string(),
+                source: "regex".to_string(),
                 no_op: false,
+                input_conflict: false,
             },
         ];
 
@@ -8086,13 +8152,17 @@ mod tests {
                 input_path: "C:\\Subs\\episode.sc.ass".to_string(),
                 output_path: "C:\\Subs\\Episode.sc.ass".to_string(),
                 video_path: "C:\\Subs\\Episode.mkv".to_string(),
+                source: "regex".to_string(),
                 no_op: false,
+                input_conflict: false,
             },
             engine::RenamePlanRow {
                 input_path: "C:\\Subs\\episode.tc.ass".to_string(),
                 output_path: "C:\\Subs\\Episode.tc.ass".to_string(),
                 video_path: "C:\\Subs\\Episode.mkv".to_string(),
+                source: "regex".to_string(),
                 no_op: false,
+                input_conflict: false,
             },
         ];
 
@@ -8110,13 +8180,17 @@ mod tests {
                 input_path: "C:\\Subs\\episode.sc.ass".to_string(),
                 output_path: "C:\\Subs\\Episode.sc.ass".to_string(),
                 video_path: "C:\\Subs\\Episode.mkv".to_string(),
+                source: "regex".to_string(),
                 no_op: false,
+                input_conflict: false,
             },
             engine::RenamePlanRow {
                 input_path: "C:\\Subs\\episode.zh-CN.ass".to_string(),
                 output_path: "C:\\Subs\\Episode.sc.ass".to_string(),
                 video_path: "C:\\Subs\\Episode.mkv".to_string(),
+                source: "regex".to_string(),
                 no_op: false,
+                input_conflict: false,
             },
         ];
 
@@ -8139,19 +8213,25 @@ mod tests {
                 input_path: "C:\\Subs\\episode.sc.ass".to_string(),
                 output_path: "C:\\Subs\\Episode.ass".to_string(),
                 video_path: "C:\\Subs\\Episode.mkv".to_string(),
+                source: "regex".to_string(),
                 no_op: false,
+                input_conflict: false,
             },
             engine::RenamePlanRow {
                 input_path: "C:\\Subs\\episode.tc.ass".to_string(),
                 output_path: "C:\\Subs\\Episode.ass".to_string(),
                 video_path: "C:\\Subs\\Episode.mkv".to_string(),
+                source: "regex".to_string(),
                 no_op: false,
+                input_conflict: false,
             },
             engine::RenamePlanRow {
                 input_path: "C:\\Subs\\already.ass".to_string(),
                 output_path: "C:\\Subs\\Episode.ass".to_string(),
                 video_path: "C:\\Subs\\Episode.mkv".to_string(),
+                source: "regex".to_string(),
                 no_op: true,
+                input_conflict: false,
             },
         ];
 
@@ -8163,6 +8243,30 @@ mod tests {
             "C:/Subs/Episode.ass"
         };
         assert!(duplicates.contains(expected_key));
+    }
+
+    #[test]
+    fn rename_dedup_excludes_rows_already_blocked_by_input_conflicts() {
+        let rows = vec![
+            engine::RenamePlanRow {
+                input_path: "C:\\Subs\\unsafe.ass".to_string(),
+                output_path: "C:\\Subs\\shared.ass".to_string(),
+                video_path: "C:\\Subs\\Unsafe.mkv".to_string(),
+                source: "regex".to_string(),
+                no_op: false,
+                input_conflict: true,
+            },
+            engine::RenamePlanRow {
+                input_path: "C:\\Subs\\safe.ass".to_string(),
+                output_path: "C:\\Subs\\shared.ass".to_string(),
+                video_path: "C:\\Subs\\Safe.mkv".to_string(),
+                source: "regex".to_string(),
+                no_op: false,
+                input_conflict: false,
+            },
+        ];
+
+        assert!(duplicate_rename_output_keys(&rows).is_empty());
     }
 
     #[test]

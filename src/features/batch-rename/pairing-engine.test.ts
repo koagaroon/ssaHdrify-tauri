@@ -13,6 +13,7 @@
  * "simplification" can't quietly regress the fan-sub paths.
  */
 import { describe, it, expect } from "vitest";
+import { isWindowsRuntime } from "../../lib/platform";
 import {
   parseFilename,
   bracketCleanup,
@@ -22,6 +23,7 @@ import {
   buildMultiSubtitlePairings,
   deriveRenameOutputPath,
   findDuplicateRenameOutputKeys,
+  findRenameInputConflictIndexes,
   isNoOpRename,
   assignSubtitleToRow,
   type PairingRow,
@@ -450,6 +452,65 @@ describe("findDuplicateRenameOutputKeys", () => {
       "C:/Subs/Episode.sc.ass",
     ]);
     expect(duplicates.size).toBe(1);
+  });
+});
+
+describe("findRenameInputConflictIndexes", () => {
+  it("marks both rows in a two-file swap", () => {
+    const conflicts = findRenameInputConflictIndexes([
+      { inputPath: "C:\\subs\\720.ass", outputPath: "C:\\subs\\1080.ass" },
+      { inputPath: "C:\\subs\\1080.ass", outputPath: "C:\\subs\\720.ass" },
+    ]);
+
+    expect(Array.from(conflicts).sort()).toEqual([0, 1]);
+  });
+
+  it("marks every participant in a longer output-to-input chain", () => {
+    const conflicts = findRenameInputConflictIndexes([
+      { inputPath: "C:\\subs\\a.ass", outputPath: "C:\\subs\\b.ass" },
+      { inputPath: "C:\\subs\\b.ass", outputPath: "C:\\subs\\c.ass" },
+      { inputPath: "C:\\subs\\c.ass", outputPath: "C:\\subs\\final.ass" },
+      { inputPath: "C:\\subs\\safe.ass", outputPath: "C:\\subs\\safe-out.ass" },
+    ]);
+
+    expect(Array.from(conflicts).sort()).toEqual([0, 1, 2]);
+  });
+
+  it("uses canonical slash and case aliases on Windows", () => {
+    if (!isWindowsRuntime) return;
+    const conflicts = findRenameInputConflictIndexes([
+      { inputPath: "C:\\Subs\\A.ass", outputPath: "c:/subs/B.ass" },
+      { inputPath: "C:\\SUBS\\b.ass", outputPath: "C:\\Subs\\final.ass" },
+    ]);
+
+    expect(Array.from(conflicts).sort()).toEqual([0, 1]);
+  });
+
+  it("uses canonical Unicode aliases on every platform", () => {
+    const conflicts = findRenameInputConflictIndexes([
+      { inputPath: "/subs/Cafe\u0301.ass", outputPath: "/subs/target.ass" },
+      { inputPath: "/subs/other.ass", outputPath: "/subs/Caf\u00e9.ass" },
+    ]);
+
+    expect(Array.from(conflicts).sort()).toEqual([0, 1]);
+  });
+
+  it("does not treat an ordinary self no-op as a conflict", () => {
+    const conflicts = findRenameInputConflictIndexes([
+      { inputPath: "/subs/ready.ass", outputPath: "/subs/ready.ass" },
+      { inputPath: "C:\\subs\\other.ass", outputPath: "C:\\subs\\other-out.ass" },
+    ]);
+
+    expect(conflicts.size).toBe(0);
+  });
+
+  it("blocks a target aimed at a loaded subtitle without an executable row", () => {
+    const conflicts = findRenameInputConflictIndexes(
+      [{ inputPath: "C:\\subs\\paired.ass", outputPath: "C:\\subs\\unpaired.ass" }],
+      ["C:\\subs\\paired.ass", "C:\\subs\\unpaired.ass"]
+    );
+
+    expect(Array.from(conflicts)).toEqual([0]);
   });
 });
 
