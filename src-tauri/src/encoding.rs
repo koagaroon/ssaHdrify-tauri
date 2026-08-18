@@ -446,36 +446,147 @@ fn looks_like_subtitle_text(text: &str) -> bool {
     })
 }
 
+const UTF32_PROBE_BUDGET_BYTES: usize = 64 * 1024;
+const UTF32_PROBE_WINDOW_COUNT: usize = 3;
+
+fn utf32_probe_windows(bytes: &[u8]) -> Vec<&[u8]> {
+    if bytes.len() <= UTF32_PROBE_BUDGET_BYTES {
+        return vec![bytes];
+    }
+
+    // Spread the existing 64 KiB probe budget across the beginning, middle,
+    // and end. Subtitle files can have a long CJK preamble before the first
+    // timing/header marker; probing only the prefix misses UTF-32 in that
+    // case because BMP CJK text naturally has just two NUL-heavy byte lanes.
+    // Every boundary remains four-byte aligned so decoding never starts in
+    // the middle of a UTF-32 scalar.
+    let window_len = (UTF32_PROBE_BUDGET_BYTES / UTF32_PROBE_WINDOW_COUNT) & !3;
+    let middle_start = ((bytes.len() - window_len) / 2) & !3;
+    let suffix_start = bytes.len() - window_len;
+
+    vec![
+        &bytes[..window_len],
+        &bytes[middle_start..middle_start + window_len],
+        &bytes[suffix_start..],
+    ]
+}
+
+fn utf32_lane_meets_nul_ratio(
+    probes: &[&[u8]],
+    lane: usize,
+    units: usize,
+    minimum_tenths: usize,
+) -> bool {
+    probes
+        .iter()
+        .map(|probe| {
+            probe
+                .iter()
+                .skip(lane)
+                .step_by(4)
+                .filter(|byte| **byte == 0)
+                .count()
+        })
+        .sum::<usize>()
+        * 10
+        >= units * minimum_tenths
+}
+
+fn is_cjk_scalar(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x1100..=0x11FF
+            | 0x2E80..=0x2FFF
+            | 0x3040..=0x30FF
+            | 0x31F0..=0x31FF
+            | 0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF
+            | 0xAC00..=0xD7AF
+            | 0xF900..=0xFAFF
+    )
+}
+
+fn is_plausible_text_scalar(ch: char) -> bool {
+    ch.is_alphanumeric()
+        || ch.is_whitespace()
+        || ch.is_ascii_graphic()
+        || matches!(
+            ch as u32,
+            0x0300..=0x036F | 0x2000..=0x206F | 0x3000..=0x303F | 0xFF01..=0xFF65
+        )
+}
+
+fn looks_like_cjk_utf32_scalar_text(probes: &[&[u8]], little_endian: bool) -> bool {
+    let units = probes.iter().map(|probe| probe.len() / 4).sum::<usize>();
+    if units < 32 {
+        return false;
+    }
+
+    // Normal UTF-16 has alternating NUL lanes for ASCII and no NUL-heavy
+    // lanes for CJK. It can satisfy this adjacent high-lane pair only when
+    // almost every other UTF-16 code unit is NUL; that byte stream is also
+    // the exact BMP UTF-32 representation, while its UTF-16 interpretation
+    // contains control characters and is not acceptable subtitle text.
+    let high_lanes = if little_endian { [2, 3] } else { [0, 1] };
+    if !high_lanes
+        .into_iter()
+        .all(|lane| utf32_lane_meets_nul_ratio(probes, lane, units, 9))
+    {
+        return false;
+    }
+
+    let mut plausible = 0usize;
+    let mut visible = 0usize;
+    let mut cjk = 0usize;
+    let mut line_breaks = 0usize;
+
+    for unit in probes.iter().flat_map(|probe| probe.chunks_exact(4)) {
+        let value = if little_endian {
+            u32::from_le_bytes([unit[0], unit[1], unit[2], unit[3]])
+        } else {
+            u32::from_be_bytes([unit[0], unit[1], unit[2], unit[3]])
+        };
+        let Some(ch) = char::from_u32(value) else {
+            return false;
+        };
+        if ch.is_control() && !matches!(ch, '\t' | '\r' | '\n') {
+            return false;
+        }
+
+        plausible += usize::from(is_plausible_text_scalar(ch));
+        if !ch.is_whitespace() {
+            visible += 1;
+            cjk += usize::from(is_cjk_scalar(ch));
+        }
+        line_breaks += usize::from(matches!(ch, '\r' | '\n'));
+    }
+
+    // This fallback is intentionally narrower than generic Unicode-text
+    // detection. It covers the reported two-NUL-lane, CJK-heavy UTF-32 case
+    // while leaving arbitrary four-byte binary and ordinary UTF-16 to their
+    // existing paths. ASCII-heavy UTF-32 is handled by the three-lane check.
+    line_breaks > 0 && visible >= 16 && plausible * 100 >= units * 95 && cjk * 4 >= visible
+}
+
 fn looks_like_bomless_utf32(bytes: &[u8]) -> bool {
     if bytes.len() < 16 || !bytes.len().is_multiple_of(4) {
         return false;
     }
 
-    const STRUCTURE_PROBE_BYTES: usize = 64 * 1024;
-    let probe_len = bytes.len().min(STRUCTURE_PROBE_BYTES) & !3;
-    let probe = &bytes[..probe_len];
-    if decode_utf32_probe(probe, true)
-        .as_deref()
-        .is_some_and(looks_like_subtitle_text)
-        || decode_utf32_probe(probe, false)
-            .as_deref()
-            .is_some_and(looks_like_subtitle_text)
-    {
+    let probes = utf32_probe_windows(bytes);
+    if [true, false].into_iter().any(|little_endian| {
+        probes.iter().any(|probe| {
+            decode_utf32_probe(probe, little_endian)
+                .as_deref()
+                .is_some_and(looks_like_subtitle_text)
+        }) || looks_like_cjk_utf32_scalar_text(&probes, little_endian)
+    }) {
         return true;
     }
 
-    let units = probe.len() / 4;
+    let units = probes.iter().map(|probe| probe.len() / 4).sum::<usize>();
     let high_nul_lanes = (0..4)
-        .filter(|lane| {
-            probe
-                .iter()
-                .skip(*lane)
-                .step_by(4)
-                .filter(|byte| **byte == 0)
-                .count()
-                * 10
-                >= units * 8
-        })
+        .filter(|lane| utf32_lane_meets_nul_ratio(&probes, *lane, units, 8))
         .count();
     // ASCII-heavy UTF-32 has at least three nearly-empty byte lanes. UTF-16
     // has two, so requiring three avoids classifying ordinary UTF-16 text as
@@ -731,6 +842,18 @@ mod tests {
             .collect()
     }
 
+    fn encode_utf32_without_bom(text: &str, little_endian: bool) -> Vec<u8> {
+        text.chars()
+            .flat_map(|ch| {
+                if little_endian {
+                    (ch as u32).to_le_bytes()
+                } else {
+                    (ch as u32).to_be_bytes()
+                }
+            })
+            .collect()
+    }
+
     #[test]
     fn utf8_no_bom() {
         let result = decode_fixture("utf8.ass");
@@ -890,16 +1013,7 @@ mod tests {
     fn bomless_utf32_is_not_misclassified_as_utf16() {
         let source = "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHello\n";
         for little_endian in [true, false] {
-            let bytes: Vec<u8> = source
-                .chars()
-                .flat_map(|ch| {
-                    if little_endian {
-                        (ch as u32).to_le_bytes()
-                    } else {
-                        (ch as u32).to_be_bytes()
-                    }
-                })
-                .collect();
+            let bytes = encode_utf32_without_bom(source, little_endian);
             let decoded = decode_bytes(&bytes);
             assert!(
                 decoded
@@ -908,6 +1022,123 @@ mod tests {
                 "unexpected UTF-32 result: {decoded:?}"
             );
         }
+    }
+
+    #[test]
+    fn rejects_bomless_utf32_when_structure_starts_after_prefix_probe_budget() {
+        // The first subtitle marker starts immediately after the old 64 KiB
+        // prefix-only probe. BMP CJK scalars have only two NUL-heavy lanes,
+        // so the legacy three-NUL-lane fallback cannot identify it by itself.
+        let source = format!(
+            "{}\nWEBVTT\n\n00:00:01.000 --> 00:00:02.000\n正文\n",
+            "中".repeat(UTF32_PROBE_BUDGET_BYTES / 4)
+        );
+
+        for little_endian in [true, false] {
+            let bytes = encode_utf32_without_bom(&source, little_endian);
+            assert!(looks_like_bomless_utf32(&bytes));
+
+            let error = decode_bytes(&bytes).unwrap_err();
+            assert!(error.contains("UTF-32"), "got: {error}");
+        }
+    }
+
+    #[test]
+    fn rejects_cjk_utf32_when_the_only_structure_is_between_probe_windows() {
+        // About 1 MiB after UTF-32 encoding, with WEBVTT around byte 256 KiB.
+        // None of the bounded head/middle/tail windows contains the marker;
+        // the conservative scalar/lane check must identify the surrounding
+        // CJK text without expanding the probe budget.
+        let source = format!(
+            "{}WEBVTT\n{}",
+            "中\n".repeat(32 * 1024),
+            "文\n".repeat(96 * 1024)
+        );
+
+        for little_endian in [true, false] {
+            let bytes = encode_utf32_without_bom(&source, little_endian);
+            let probes = utf32_probe_windows(&bytes);
+            assert!(probes.iter().all(|probe| {
+                !decode_utf32_probe(probe, little_endian)
+                    .as_deref()
+                    .is_some_and(looks_like_subtitle_text)
+            }));
+            assert!(looks_like_bomless_utf32(&bytes));
+
+            let error = decode_bytes(&bytes).unwrap_err();
+            assert!(error.contains("UTF-32"), "got: {error}");
+        }
+    }
+
+    #[test]
+    fn utf32_probe_windows_are_aligned_and_stay_within_the_existing_budget() {
+        for len in [
+            UTF32_PROBE_BUDGET_BYTES,
+            UTF32_PROBE_BUDGET_BYTES + 4,
+            UTF32_PROBE_BUDGET_BYTES * 4,
+        ] {
+            let bytes = vec![0; len];
+            let probes = utf32_probe_windows(&bytes);
+
+            assert!(probes.len() <= UTF32_PROBE_WINDOW_COUNT);
+            assert!(
+                probes.iter().map(|probe| probe.len()).sum::<usize>() <= UTF32_PROBE_BUDGET_BYTES
+            );
+            assert!(probe_alignment_is_valid(&bytes, &probes));
+        }
+    }
+
+    fn probe_alignment_is_valid(source: &[u8], probes: &[&[u8]]) -> bool {
+        probes.iter().all(|probe| {
+            let offset = probe.as_ptr() as usize - source.as_ptr() as usize;
+            offset.is_multiple_of(4) && probe.len().is_multiple_of(4)
+        })
+    }
+
+    #[test]
+    fn utf32_probe_rejects_utf8_utf16_binary_and_truncated_counterexamples() {
+        let mut utf8_source = "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nText".to_string();
+        while !utf8_source.len().is_multiple_of(4) {
+            utf8_source.push(' ');
+        }
+        assert!(utf8_source.len().is_multiple_of(4));
+        assert!(!looks_like_bomless_utf32(utf8_source.as_bytes()));
+        assert_eq!(
+            decode_bytes(utf8_source.as_bytes()).unwrap().encoding_id,
+            "UTF-8"
+        );
+
+        let utf16_source = format!(
+            "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n{}",
+            "正文\n".repeat(12 * 1024)
+        );
+        for little_endian in [true, false] {
+            let bytes = encode_utf16_without_bom(&utf16_source, little_endian);
+            let probes = utf32_probe_windows(&bytes);
+            assert!(!looks_like_cjk_utf32_scalar_text(&probes, true));
+            assert!(!looks_like_cjk_utf32_scalar_text(&probes, false));
+            assert!(!looks_like_bomless_utf32(&bytes));
+            let result = decode_bytes(&bytes).unwrap();
+            assert_eq!(result.text, utf16_source);
+            assert!(result.inferred_without_bom);
+        }
+
+        // Four-byte records with two adjacent zero lanes can resemble BMP
+        // UTF-32 at the byte level. Without subtitle structure, they remain
+        // an ordinary binary counterexample and must not be rejected as
+        // unsupported UTF-32.
+        let binary: Vec<u8> = [[0xB1, 0x03, 0, 0], [0xB2, 0x03, 0, 0], [b'\n', 0, 0, 0]]
+            .into_iter()
+            .cycle()
+            .take(1024)
+            .flatten()
+            .collect();
+        assert!(!looks_like_bomless_utf32(&binary));
+
+        let mut truncated =
+            encode_utf32_without_bom("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nText\n", true);
+        truncated.pop();
+        assert!(!looks_like_bomless_utf32(&truncated));
     }
 
     #[test]

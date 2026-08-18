@@ -2715,6 +2715,35 @@ fn add_preflight_file(path: &Path, out: &mut FontScanPreflight) {
     out.total_bytes = out.total_bytes.saturating_add(metadata.len());
 }
 
+/// Resolve one explicitly selected font file and validate both sides of the
+/// resolution boundary. The second validation is required even when the raw
+/// picker path passed: a symlink / junction / filesystem alias may resolve to
+/// a canonical Windows ADS path or another representation the IPC validator
+/// rejects. Return the normalized canonical string alongside the `PathBuf` so
+/// callers cannot accidentally deduplicate or publish the path before that
+/// post-canonicalization check.
+fn canonicalize_and_validate_explicit_font_path_with<F>(
+    path: &str,
+    canonicalize: F,
+) -> Result<(PathBuf, String), String>
+where
+    F: FnOnce(&Path) -> std::io::Result<PathBuf>,
+{
+    validate_ipc_path(path, "File")?;
+    let canonical = canonicalize(Path::new(path))
+        .map_err(|_| "A selected font file became unreadable".to_string())?;
+    let canonical_text = canonical
+        .to_str()
+        .ok_or_else(|| "A selected font path is not valid UTF-8".to_string())?;
+    let normalized = normalize_canonical_path(canonical_text);
+    validate_ipc_path(&normalized, "Resolved font")?;
+    Ok((canonical, normalized))
+}
+
+fn canonicalize_and_validate_explicit_font_path(path: &str) -> Result<(PathBuf, String), String> {
+    canonicalize_and_validate_explicit_font_path_with(path, Path::canonicalize)
+}
+
 fn preflight_files_inner(paths: Vec<String>) -> FontScanPreflight {
     // The public command enforces MAX_INPUT_PATHS, but the inner
     // helper has no caller-side check. Debug-mode assertion catches
@@ -2749,17 +2778,12 @@ fn preflight_files_inner(paths: Vec<String>) -> FontScanPreflight {
     let total_inputs = paths.len();
     let mut rejected = 0usize;
     for p in paths {
-        if validate_ipc_path(&p, "File").is_err() {
-            rejected += 1;
-            continue;
-        }
-        let Ok(canonical) = Path::new(&p).canonicalize() else {
+        let Ok((canonical, canonical_key)) = canonicalize_and_validate_explicit_font_path(&p)
+        else {
             rejected += 1;
             continue;
         };
-        if !canonical.is_file()
-            || !seen.insert(normalize_canonical_path(&canonical.to_string_lossy()))
-        {
+        if !canonical.is_file() || !seen.insert(canonical_key) {
             continue;
         }
         add_preflight_file(&canonical, &mut out);
@@ -3539,11 +3563,6 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
             });
         }
 
-        if validate_ipc_path(&p, "File").is_err() {
-            rejected += 1;
-            continue;
-        }
-
         // No `is_reparse_point` pre-check here, unlike
         // `scan_directory_inner`. The asymmetry is intentional:
         // this function processes paths the user
@@ -3558,8 +3577,8 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
         // count gate. `canonicalize` below + `has_allowed_font_extension`
         // (in `parse_local_font_file`) still bound the exfil surface
         // to font-extension targets.
-        let canonical = match Path::new(&p).canonicalize() {
-            Ok(c) => c,
+        let (canonical, canonical_key) = match canonicalize_and_validate_explicit_font_path(&p) {
+            Ok(resolved) => resolved,
             Err(_) => {
                 rejected += 1;
                 continue;
@@ -3568,7 +3587,7 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
         if !canonical.is_file() {
             continue;
         }
-        if !seen.insert(normalize_canonical_path(&canonical.to_string_lossy())) {
+        if !seen.insert(canonical_key) {
             continue;
         }
 
@@ -4878,6 +4897,71 @@ mod tests {
     /// Renamed from `DB_TEST_LOCK` once the cancel tests revealed it
     /// wasn't DB-only.
     static SCAN_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn explicit_font_path_revalidates_a_canonical_target_with_bidi_control() {
+        let selected = if cfg!(windows) {
+            r"C:\selected\font.ttf"
+        } else {
+            "/selected/font.ttf"
+        };
+        // A filesystem alias can legitimately resolve a visually safe picker
+        // path to an existing filename containing U+202E. Unlike a literal
+        // `.` component, canonicalization does not normalize this issue shape
+        // away, so the injected target models a reachable post-resolution
+        // rejection without requiring symlink privileges in CI.
+        let resolved_with_bidi = if cfg!(windows) {
+            PathBuf::from("C:\\resolved\\font\u{202e}ttf.ttf")
+        } else {
+            PathBuf::from("/resolved/font\u{202e}ttf.ttf")
+        };
+        let mut canonicalizer_called = false;
+
+        let error = canonicalize_and_validate_explicit_font_path_with(selected, |received| {
+            canonicalizer_called = true;
+            assert_eq!(received, Path::new(selected));
+            Ok(resolved_with_bidi)
+        })
+        .expect_err("an unsafe canonical target must be rejected");
+
+        assert!(canonicalizer_called);
+        assert!(error.to_lowercase().contains("invalid"));
+    }
+
+    #[test]
+    fn explicit_font_path_returns_only_a_validated_normalized_target() {
+        let selected = if cfg!(windows) {
+            r"C:\selected\font.ttf"
+        } else {
+            "/selected/font.ttf"
+        };
+        #[cfg(windows)]
+        let canonical = PathBuf::from(r"\\?\C:\resolved\font.ttf");
+        #[cfg(not(windows))]
+        let canonical = PathBuf::from("/resolved/font.ttf");
+
+        let (resolved, normalized) =
+            canonicalize_and_validate_explicit_font_path_with(selected, |_| Ok(canonical.clone()))
+                .expect("a safe canonical target should validate");
+
+        assert_eq!(resolved, canonical);
+        #[cfg(windows)]
+        assert_eq!(normalized, r"C:\resolved\font.ttf");
+        #[cfg(not(windows))]
+        assert_eq!(normalized, "/resolved/font.ttf");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn explicit_font_path_rejects_ads_introduced_by_resolution() {
+        let error =
+            canonicalize_and_validate_explicit_font_path_with(r"C:\selected\font.ttf", |_| {
+                Ok(PathBuf::from(r"C:\resolved\font.ttf:payload"))
+            })
+            .expect_err("an ADS canonical target must be rejected");
+
+        assert!(error.to_lowercase().contains("colon"));
+    }
 
     fn cache_candidate(
         reason: ScanStopReason,

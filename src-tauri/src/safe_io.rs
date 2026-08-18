@@ -971,6 +971,35 @@ mod tests {
         dir
     }
 
+    fn scope_alias_paths(name: &str, file_name: &str) -> (PathBuf, PathBuf, PathBuf) {
+        let real_dir = temp_dir(name);
+        let resolved = real_dir.canonicalize().unwrap().join(file_name);
+
+        #[cfg(unix)]
+        let raw = {
+            use std::os::unix::fs::symlink;
+
+            let alias_root = temp_dir(&format!("{name}_alias"));
+            let alias = alias_root.join("selected");
+            symlink(&real_dir, &alias).unwrap();
+            alias.join(file_name)
+        };
+
+        #[cfg(windows)]
+        let raw = real_dir.join(file_name);
+
+        #[cfg(not(any(unix, windows)))]
+        let raw = real_dir.join(file_name);
+
+        #[cfg(any(unix, windows))]
+        assert_ne!(
+            raw, resolved,
+            "scope-alias fixture must change after resolution"
+        );
+
+        (real_dir, raw, resolved)
+    }
+
     #[test]
     fn output_exists_probe_reports_existing_and_missing_outputs() {
         let dir = temp_dir("exists_probe_basic");
@@ -1109,9 +1138,8 @@ mod tests {
 
     #[test]
     fn write_rechecks_scope_after_canonicalizing_existing_parent() {
-        let dir = temp_dir("write_scope_canonical_parent");
-        let raw_path = dir.join(".").join("out.ass");
-        let resolved_path = dir.canonicalize().unwrap().join("out.ass");
+        let (dir, raw_path, resolved_path) =
+            scope_alias_paths("write_scope_canonical_parent", "out.ass");
 
         let err = safe_write_text_file_inner(&raw_path.to_string_lossy(), "x", false, move |p| {
             p != resolved_path
@@ -1503,10 +1531,9 @@ mod tests {
 
     #[test]
     fn copy_rechecks_destination_scope_after_canonicalizing_existing_parent() {
-        let dir = temp_dir("copy_scope_canonical_parent");
+        let (dir, raw_dst, resolved_dst) =
+            scope_alias_paths("copy_scope_canonical_parent", "dst.ass");
         let src = dir.join("src.ass");
-        let raw_dst = dir.join(".").join("dst.ass");
-        let resolved_dst = dir.canonicalize().unwrap().join("dst.ass");
         fs::write(&src, b"payload").unwrap();
 
         let err = safe_copy_file_inner(
@@ -1662,10 +1689,9 @@ mod tests {
 
     #[test]
     fn rename_rechecks_destination_scope_after_canonicalizing_existing_parent() {
-        let dir = temp_dir("rename_scope_canonical_parent");
+        let (dir, raw_dst, resolved_dst) =
+            scope_alias_paths("rename_scope_canonical_parent", "dst.ass");
         let src = dir.join("src.ass");
-        let raw_dst = dir.join(".").join("dst.ass");
-        let resolved_dst = dir.canonicalize().unwrap().join("dst.ass");
         fs::write(&src, b"payload").unwrap();
 
         let err = safe_rename_file_inner(

@@ -48,6 +48,8 @@ pub const MAX_IPC_PATH_LEN: usize = 4096;
 ///    paths on disk and bypass `normalizeOutputKey`'s within-batch
 ///    dedup (it does NFC + slash + lowercase but not zero-width strip).
 ///    Reject at this boundary so they never reach IPC consumers.
+/// 5. Reserved Windows namespaces / device names, exact `.` / `..`
+///    components, and (on Windows) colons outside a leading drive prefix.
 ///
 /// Unicode noncharacters (U+FFFE, U+FFFF, U+FDD0..=U+FDEF) are
 /// intentionally not rejected — Windows file APIs already error with
@@ -135,7 +137,42 @@ pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
     if is_dos_device || is_verbatim_drive {
         return Err(format!("{label} path uses a reserved device namespace"));
     }
-    // Reject `..` path components . A raw IPC
+    // On Windows, a colon is only valid as the separator in the first
+    // drive-prefix component (`C:`). Any other colon can select an NTFS
+    // alternate data stream (ADS), for example
+    // `C:\fonts\safe.ttf:payload`, while ordinary drive-rooted and UNC
+    // paths contain no such component. Keep this Windows-only: `:` is a
+    // legitimate filename character on POSIX filesystems.
+    #[cfg(windows)]
+    {
+        let has_non_drive_colon = path.split(['/', '\\']).enumerate().any(|(index, segment)| {
+            if !segment.contains(':') {
+                return false;
+            }
+            let bytes = segment.as_bytes();
+            let is_drive_prefix = index == 0
+                && bytes.len() == 2
+                && bytes[0].is_ascii_alphabetic()
+                && bytes[1] == b':';
+            !is_drive_prefix
+        });
+        if has_non_drive_colon {
+            return Err(format!(
+                "{label} path contains a colon outside the drive prefix"
+            ));
+        }
+    }
+
+    // Reject exact `.` path components. Besides matching the TypeScript
+    // boundary, this prevents two textual paths for the same target from
+    // reaching policy / dedup checks in different forms. A dot inside a
+    // filename (`font..backup.ttf`) remains valid.
+    let has_dot_component = path.split(['/', '\\']).any(|segment| segment == ".");
+    if has_dot_component {
+        return Err(format!("{label} path contains current-directory segments"));
+    }
+
+    // Reject `..` path components. A raw IPC
     // path like `C:\Allowed\..\Denied\file.ass` matches an
     // `allow=**` fs:scope rule literally (the deny patterns like
     // `$HOME/.ssh/**` don't string-match a `..`-bearing path), so the
@@ -447,6 +484,15 @@ mod tests {
     }
 
     #[test]
+    fn validate_rejects_dot_segment_in_path() {
+        let windows = validate_ipc_path(r"C:\Allowed\.\file.ass", "Test").unwrap_err();
+        assert!(windows.to_lowercase().contains("current-directory"));
+
+        let posix = validate_ipc_path("/home/u/./file.ass", "Test").unwrap_err();
+        assert!(posix.to_lowercase().contains("current-directory"));
+    }
+
+    #[test]
     fn validate_rejects_dotdot_segment_in_path() {
         // Closes a fs:scope bypass: a raw `C:\Allowed\..\Denied\file.ass`
         // could pass an `allow=**` literal match and let the OS resolve the
@@ -539,6 +585,57 @@ mod tests {
             .expect("dotdot inside a name segment should pass");
         validate_ipc_path("/home/u/file..name.ass", "Test")
             .expect("dotdot inside a name segment should pass on POSIX shape too");
+    }
+
+    #[test]
+    fn validate_accepts_dot_inside_filename() {
+        validate_ipc_path(r"C:\fonts\font.backup.ttf", "Test")
+            .expect("a dot inside a filename should pass");
+        validate_ipc_path("/home/u/.../font.ttf", "Test")
+            .expect("a non-exact dotted component should pass");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn validate_rejects_ntfs_alternate_data_stream_components() {
+        for path in [
+            r"C:\fonts\sample.ttf:payload",
+            r"C:/fonts:payload/sample.ttf",
+            r"\\server\share\sample.ttf:payload",
+        ] {
+            let err = validate_ipc_path(path, "Test").unwrap_err();
+            assert!(
+                err.to_lowercase().contains("colon"),
+                "{path} should reject as an alternate-data-stream shape"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn validate_accepts_windows_drive_and_unc_prefixes() {
+        for path in [
+            r"C:\fonts\sample.ttf",
+            r"z:/fonts/sample.ttf",
+            r"\\server\share\sample.ttf",
+        ] {
+            validate_ipc_path(path, "Test")
+                .unwrap_or_else(|error| panic!("{path} should validate: {error}"));
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn validate_rejects_drive_relative_path_as_non_prefix_colon() {
+        let error = validate_ipc_path(r"C:font.ttf", "Test").unwrap_err();
+        assert!(error.to_lowercase().contains("colon"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn validate_accepts_colon_in_posix_filename() {
+        validate_ipc_path("/fonts/sample:variant.ttf", "Test")
+            .expect("a colon is a legitimate POSIX filename character");
     }
 
     // ── validate_ipc_path: byte-prefix DOS-device check ──
