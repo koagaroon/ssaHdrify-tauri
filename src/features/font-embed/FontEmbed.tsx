@@ -383,6 +383,9 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
 
   const handlePickFiles = useCallback(async () => {
     const gen = (pickGenRef.current = pickGenRef.current + 1);
+    // Match drag-and-drop: a new selection attempt must not leave the
+    // previous embed outcome visible beside a fresh picker error or batch.
+    setLastActionResult(null);
     // catch dialog IPC failures so a click
     // that can't open the picker doesn't read as a silent no-op. See
     // TimingShift.handlePickFiles for the full rationale.
@@ -397,7 +400,7 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
     if (gen !== pickGenRef.current) return;
     if (!paths || paths.length === 0) return;
     await ingestPaths(paths, gen);
-  }, [ingestPaths, addLog, t]);
+  }, [ingestPaths, addLog, setLastActionResult, t]);
 
   const handleDroppedPaths = useCallback(
     async (paths: string[]) => {
