@@ -487,7 +487,11 @@ fn create_new_and_write_bytes(path: &Path, content: &[u8]) -> Result<(), String>
         .open(path)
         .map_err(|e| format!("Failed to create destination: {e}"))?;
     file.write_all(content)
-        .map_err(|e| format!("Failed to write destination: {e}"))
+        .map_err(|error| partial_output_error("write destination", &error))
+}
+
+fn partial_output_error(action: &str, error: &std::io::Error) -> String {
+    format!("Failed to {action}; a partial output may remain: {error}")
 }
 
 fn check_plain_text_size(content_len: usize) -> Result<(), String> {
@@ -507,12 +511,10 @@ fn create_new_and_write_bytes_exclusive(path: &Path, content: &[u8]) -> Result<(
     // Keep a partial create-new file if write_all fails. Deleting by pathname
     // after closing would race with another process replacing that pathname,
     // which could make error cleanup delete a file we did not create.
-    file.write_all(content).map_err(|error| {
-        format!("Failed to write destination; a partial output may remain: {error}")
-    })?;
-    file.sync_all().map_err(|error| {
-        format!("Failed to flush destination; a partial output may remain: {error}")
-    })
+    file.write_all(content)
+        .map_err(|error| partial_output_error("write destination", &error))?;
+    file.sync_all()
+        .map_err(|error| partial_output_error("flush destination", &error))
 }
 
 fn encode_text_preserving_source(
@@ -796,7 +798,7 @@ pub fn safe_copy_file_inner(
         .map_err(|e| format!("Failed to create destination: {e}"))?;
     std::io::copy(&mut source, &mut destination)
         .map(|_| ())
-        .map_err(|e| format!("Failed to copy file: {e}"))
+        .map_err(|error| partial_output_error("copy file", &error))
 }
 
 /// File-preserving renames intentionally have no decoded-text size cap: they
@@ -971,6 +973,48 @@ mod tests {
         dir
     }
 
+    fn scope_alias_paths(name: &str, file_name: &str) -> (PathBuf, PathBuf, PathBuf) {
+        let real_dir = temp_dir(name);
+        let resolved = real_dir.canonicalize().unwrap().join(file_name);
+
+        #[cfg(unix)]
+        let raw = {
+            use std::os::unix::fs::symlink;
+
+            let alias_root = temp_dir(&format!("{name}_alias"));
+            let alias = alias_root.join("selected");
+            symlink(&real_dir, &alias).unwrap();
+            alias.join(file_name)
+        };
+
+        #[cfg(windows)]
+        let raw = real_dir.join(file_name);
+
+        #[cfg(not(any(unix, windows)))]
+        let raw = real_dir.join(file_name);
+
+        #[cfg(any(unix, windows))]
+        assert_ne!(
+            raw, resolved,
+            "scope-alias fixture must change after resolution"
+        );
+
+        (real_dir, raw, resolved)
+    }
+
+    #[test]
+    fn partial_output_errors_are_explicit_without_claiming_residue_exists() {
+        let error = std::io::Error::other("injected write failure");
+        assert_eq!(
+            partial_output_error("write destination", &error),
+            "Failed to write destination; a partial output may remain: injected write failure"
+        );
+        assert_eq!(
+            partial_output_error("copy file", &error),
+            "Failed to copy file; a partial output may remain: injected write failure"
+        );
+    }
+
     #[test]
     fn output_exists_probe_reports_existing_and_missing_outputs() {
         let dir = temp_dir("exists_probe_basic");
@@ -1109,9 +1153,8 @@ mod tests {
 
     #[test]
     fn write_rechecks_scope_after_canonicalizing_existing_parent() {
-        let dir = temp_dir("write_scope_canonical_parent");
-        let raw_path = dir.join(".").join("out.ass");
-        let resolved_path = dir.canonicalize().unwrap().join("out.ass");
+        let (dir, raw_path, resolved_path) =
+            scope_alias_paths("write_scope_canonical_parent", "out.ass");
 
         let err = safe_write_text_file_inner(&raw_path.to_string_lossy(), "x", false, move |p| {
             p != resolved_path
@@ -1503,10 +1546,9 @@ mod tests {
 
     #[test]
     fn copy_rechecks_destination_scope_after_canonicalizing_existing_parent() {
-        let dir = temp_dir("copy_scope_canonical_parent");
+        let (dir, raw_dst, resolved_dst) =
+            scope_alias_paths("copy_scope_canonical_parent", "dst.ass");
         let src = dir.join("src.ass");
-        let raw_dst = dir.join(".").join("dst.ass");
-        let resolved_dst = dir.canonicalize().unwrap().join("dst.ass");
         fs::write(&src, b"payload").unwrap();
 
         let err = safe_copy_file_inner(
@@ -1662,10 +1704,9 @@ mod tests {
 
     #[test]
     fn rename_rechecks_destination_scope_after_canonicalizing_existing_parent() {
-        let dir = temp_dir("rename_scope_canonical_parent");
+        let (dir, raw_dst, resolved_dst) =
+            scope_alias_paths("rename_scope_canonical_parent", "dst.ass");
         let src = dir.join("src.ass");
-        let raw_dst = dir.join(".").join("dst.ass");
-        let resolved_dst = dir.canonicalize().unwrap().join("dst.ass");
         fs::write(&src, b"payload").unwrap();
 
         let err = safe_rename_file_inner(

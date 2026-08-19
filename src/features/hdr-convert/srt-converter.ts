@@ -10,7 +10,7 @@
  */
 
 import { ASCII_CONTROL_CHARS, BIDI_AND_ZERO_WIDTH_CHARS } from "../../lib/unicode-controls";
-import { safeMs } from "../../lib/subtitle-parser";
+import { parseSubtitle, safeMs } from "../../lib/subtitle-parser";
 
 // hoisted to module scope so the regex
 // compiles once instead of per buildAssFromSrtBlocks invocation.
@@ -40,21 +40,34 @@ const FONT_NAME_SANITIZER = new RegExp(
   "gu"
 );
 
-// module-scope to match project convention
-// (FONT_NAME_SANITIZER above, plus every other named regex in
-// subtitle-parser.ts / ass-processor.ts). String.prototype.replace
-// doesn't share `lastIndex` across calls, so inline definitions
-// inside `preprocessSrtColors` were semantically equivalent — this
-// is purely a convention sweep so a future grep `^const \w+_RE` finds
-// every regex in the file in one place.
-//
-// Matches: <font color="#RRGGBB"> or <font color=#RRGGBB> with up
-// to 512 chars of other attributes before/after color (ReDoS guard).
-// The hex alternation requires a non-hex char immediately after the
-// 6- or 3-digit run so `#abcdef` is never parsed as 3-digit `abc`.
+// Matches a complete <font color="#RRGGBB"> or
+// <font color=#RRGGBB> opener with up to 512 chars of other attributes
+// before/after color. Anchoring lets the stateful scanner below identify
+// every <font> frame while this regex alone decides whether the opener may
+// inject a color override. The hex alternation requires a non-hex char
+// immediately after the 6- or 3-digit run so `#abcdef` is never parsed as
+// 3-digit `abc`.
 const SRT_COLOR_OPEN_RE =
-  /<font\b[^>]{0,512}\bcolor="?#([0-9a-fA-F]{6}(?![0-9a-fA-F])|[0-9a-fA-F]{3}(?![0-9a-fA-F]))"?[^>]{0,512}>/gi;
-const SRT_COLOR_CLOSE_RE = /<\/font>/gi;
+  /^<font\b[^>]{0,512}\bcolor="?#([0-9a-fA-F]{6}(?![0-9a-fA-F])|[0-9a-fA-F]{3}(?![0-9a-fA-F]))"?[^>]{0,512}>$/i;
+
+// The longest opener accepted by SRT_COLOR_OPEN_RE is 1,045 characters:
+// `<font` + two 512-character attribute windows + `color="#RRGGBB"` + `>`.
+// Longer tags remain ordinary HTML-like text and are stripped later by the
+// document builder; they never inject an ASS override.
+const MAX_SRT_FONT_TAG_LENGTH = 1_045;
+
+// Production cue text is already capped at 64,000 characters, but keep the
+// exported preprocessing helper safe when it is called directly. Overflow
+// nesting is counted separately so an ignored closer cannot pop a tracked
+// outer color frame early.
+const MAX_TRACKED_SRT_FONT_DEPTH = 256;
+
+type InlinePrimaryColor = string | null;
+
+interface SrtFontFrame {
+  previousColor: InlinePrimaryColor;
+  setsColor: boolean;
+}
 
 // ── Text Cue Color Preprocessing ─────────────────────────
 
@@ -81,6 +94,14 @@ export function escapeSrtUserText(text: string): string {
  * Convert HTML-style font color tags to ASS inline color overrides.
  * <font color="#RRGGBB">text</font>  →  {\1c&HBBGGRR&}text{\1c}
  *
+ * Every bounded <font> opener gets a stack frame, including openers without
+ * a supported color attribute. This preserves nesting: closing a non-color
+ * frame cannot reset or pop an outer color. A nested color close restores the
+ * previous inline color, while an outer color close uses bare `\1c` to restore
+ * only the current ASS style's primary color. It deliberately does not emit
+ * `\r`, because that would also erase bold, italic, underline, font, and other
+ * active styling.
+ *
  * CONTRACT: the `text` argument MUST have been passed through
  * `escapeSrtUserText` first. That's the only way to guarantee the `{…}`
  * sequences this function injects for color conversion are distinguishable
@@ -95,26 +116,96 @@ export function escapeSrtUserText(text: string): string {
  * @internal — production callers must use `processSrtUserText`.
  */
 export function preprocessSrtColors(text: string): string {
-  // Convert opening tags with color. SRT_COLOR_OPEN_RE /
-  // SRT_COLOR_CLOSE_RE are module-scope — see
-  // comment above the constants for the convention rationale.
-  let result = text.replace(SRT_COLOR_OPEN_RE, (_match, raw: string) => {
+  const output: string[] = [];
+  const frames: SrtFontFrame[] = [];
+  let currentColor: InlinePrimaryColor = null;
+  let overflowDepth = 0;
+  let cursor = 0;
+
+  while (cursor < text.length) {
+    const tagStart = text.indexOf("<", cursor);
+    if (tagStart < 0) {
+      output.push(text.slice(cursor));
+      break;
+    }
+
+    output.push(text.slice(cursor, tagStart));
+
+    if (text.slice(tagStart, tagStart + 7).toLowerCase() === "</font>") {
+      const closeTag = text.slice(tagStart, tagStart + 7);
+      cursor = tagStart + 7;
+
+      if (overflowDepth > 0) {
+        overflowDepth -= 1;
+        output.push(closeTag);
+        continue;
+      }
+
+      const frame = frames.pop();
+      if (!frame) {
+        output.push(closeTag);
+        continue;
+      }
+
+      if (!frame.setsColor) {
+        output.push(closeTag);
+        continue;
+      }
+
+      currentColor = frame.previousColor;
+      output.push(currentColor === null ? "{\\1c}" : `{\\1c&H${currentColor}&}`);
+      continue;
+    }
+
+    const openingPrefix = text.slice(tagStart, tagStart + 5).toLowerCase();
+    const boundary = text[tagStart + 5];
+    const isFontOpener =
+      openingPrefix === "<font" && (boundary === undefined || !/[a-zA-Z0-9_]/.test(boundary));
+    if (!isFontOpener) {
+      output.push("<");
+      cursor = tagStart + 1;
+      continue;
+    }
+
+    const tagEnd = text.indexOf(">", tagStart + 5);
+    if (tagEnd < 0) {
+      output.push(text.slice(tagStart));
+      break;
+    }
+
+    const openTag = text.slice(tagStart, tagEnd + 1);
+    cursor = tagEnd + 1;
+
+    if (openTag.length > MAX_SRT_FONT_TAG_LENGTH || overflowDepth > 0) {
+      overflowDepth += 1;
+      output.push(openTag);
+      continue;
+    }
+
+    if (frames.length >= MAX_TRACKED_SRT_FONT_DEPTH) {
+      overflowDepth = 1;
+      output.push(openTag);
+      continue;
+    }
+
+    const colorMatch = SRT_COLOR_OPEN_RE.exec(openTag);
+    frames.push({ previousColor: currentColor, setsColor: colorMatch !== null });
+    if (!colorMatch) {
+      output.push(openTag);
+      continue;
+    }
+
+    const raw = colorMatch[1]!;
     const hexRgb =
       raw.length === 3 ? raw[0]!.repeat(2) + raw[1]!.repeat(2) + raw[2]!.repeat(2) : raw;
     const r = hexRgb.slice(0, 2);
     const g = hexRgb.slice(2, 4);
     const b = hexRgb.slice(4, 6);
-    // Reverse to BGR for ASS format
-    return `{\\1c&H${b}${g}${r}&}`;
-  });
+    currentColor = `${b}${g}${r}`;
+    output.push(`{\\1c&H${currentColor}&}`);
+  }
 
-  // Convert ALL </font> to style resets — both color and non-color.
-  // Non-color <font> tags are stripped later by HTML tag removal in buildAssDocument,
-  // so their {\r} is harmless (resets to default which is the current state).
-  // This avoids positional mismatch when non-color </font> precedes color </font>.
-  result = result.replace(SRT_COLOR_CLOSE_RE, () => "{\\r}");
-
-  return result;
+  return output.join("");
 }
 
 /**
@@ -138,7 +229,6 @@ export interface StyleConfig {
   outlineColor: string; // ASS format: &H00000000
   outlineWidth: number;
   shadowDepth: number;
-  fps: number; // only used for SUB (MicroDVD) format
 }
 
 export const DEFAULT_STYLE: StyleConfig = {
@@ -148,7 +238,6 @@ export const DEFAULT_STYLE: StyleConfig = {
   outlineColor: "&H00000000",
   outlineWidth: 2.0,
   shadowDepth: 1.0,
-  fps: 23.976,
 };
 
 // ── ASS Document Builder ─────────────────────────────────
@@ -157,9 +246,9 @@ export const DEFAULT_STYLE: StyleConfig = {
  * Build a minimal ASS document from parsed subtitle entries.
  * This creates a properly formatted ASS file with styles and events.
  *
- * CONTRACT: each `entries[i].text` MUST have flowed through
- * `escapeSrtUserText` → `preprocessSrtColors` → `parseSubtitle` on the way
- * in. This function does NOT re-escape `{`/`}`/`\` — doing so would silently
+ * CONTRACT: raw subtitle structure MUST be parsed first; each resulting cue
+ * body must then flow through `escapeSrtUserText` → `preprocessSrtColors` on
+ * the way in. This function does NOT re-escape `{`/`}`/`\` — doing so would silently
  * defeat our own injected color/bold/italic overrides and was the root of
  * a past regression. The integration tests in `srt-converter.test.ts`
  * guard against future callers dropping the escape step.
@@ -211,9 +300,9 @@ export function buildAssDocument(
     const startTime = msToAssTime(entry.start);
     const endTime = msToAssTime(entry.end);
     // IMPORTANT: we do NOT escape `{` / `}` / `\` here. Callers are
-    // expected to have already run `escapeSrtUserText` on the ORIGINAL
-    // SRT content before `preprocessSrtColors` injected our trusted color
-    // override tags. Re-escaping at this stage would turn those injected
+    // expected to have already run `processSrtUserText` on this parsed cue
+    // body. Whole-document escaping is forbidden because it corrupts
+    // MicroDVD timing syntax. Re-escaping at this stage would turn injected
     // `{\1c&H…}` tags into literal text, silently defeating SRT→HDR color
     // conversion. See escapeSrtUserText's docstring for the required
     // pipeline ordering.
@@ -260,10 +349,37 @@ export function buildAssDocumentFromCaptions(
       text: c.text,
     }));
 
+  if (entries.length === 0) {
+    throw new Error(
+      `No usable subtitle cues detected: all ${skippedCount} cue(s) exceeded the 64000-character limit`
+    );
+  }
+
   return {
     content: buildAssDocument(entries, style),
     skippedCount,
   };
+}
+
+/**
+ * Convert a raw SRT, WebVTT, or MicroDVD document into ASS.
+ *
+ * Parse structure before touching user text: whole-document escaping would
+ * corrupt MicroDVD `{start}{end}` fields. Only parsed cue bodies flow through
+ * the composed escape/color pipeline, keeping hostile ASS overrides inert
+ * without changing subtitle syntax. An explicit FPS is a manual MicroDVD
+ * override; absence means Auto (file declaration, then 23.976 fallback).
+ */
+export function convertTextCueSubtitleToAss(
+  rawContent: string,
+  style: StyleConfig = DEFAULT_STYLE,
+  fpsOverride?: number
+): { content: string; skippedCount: number } {
+  const { captions } = parseSubtitle(rawContent, fpsOverride);
+  const processedCaptions = captions.map((caption) =>
+    caption.skipped ? caption : { ...caption, text: processSrtUserText(caption.text) }
+  );
+  return buildAssDocumentFromCaptions(processedCaptions, style);
 }
 
 /**

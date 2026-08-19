@@ -169,9 +169,14 @@ function firstSrtCueCandidate(content: string): CueCandidate | undefined {
   );
 }
 
-function firstSubCueCandidate(content: string): CueCandidate | undefined {
+function firstSubCueCandidate(
+  content: string,
+  declarationStarts: ReadonlySet<number>
+): CueCandidate | undefined {
   return findFirstCueCandidate(content, (line, _lineIndex, _firstLine, lineStart) => {
-    const match = line.match(SUB_LINE_SINGLE);
+    if (declarationStarts.has(lineStart)) return undefined;
+    const candidateLine = lineStart === 0 && line.startsWith("\uFEFF") ? line.slice(1) : line;
+    const match = candidateLine.match(SUB_LINE_SINGLE);
     if (!match) return undefined;
     return { index: lineStart, hasText: match[1]!.trim().length > 0 };
   });
@@ -188,7 +193,11 @@ export function detectFormat(content: string): SubtitleFormat {
   );
   const hasHeaderCandidate = headerCandidates.length > 0;
   const srtCue = firstSrtCueCandidate(normalized);
-  const subCue = firstSubCueCandidate(normalized);
+  const subInspection = inspectMicroDvdFpsDeclarations(normalized);
+  const subCue = firstSubCueCandidate(
+    normalized,
+    new Set(subInspection.declarations.map((entry) => entry.lineStart))
+  );
 
   // Keep the full-content scan so a long benign preamble does not hide a real
   // header, but cue-based formats must prove a cue-shaped block before they can
@@ -762,40 +771,150 @@ function buildAss(content: string, captions: Caption[]): string {
 
 // ── SUB (MicroDVD) Parser ─────────────────────────────────
 
-const DEFAULT_FPS = 23.976;
+export const MICRODVD_DEFAULT_FPS = 23.976;
+export const MICRODVD_MIN_FPS_EXCLUSIVE = 3;
+export const MICRODVD_MAX_FPS = 120;
 
-/**
- * Clamp MicroDVD fps to a real-world range.
- *
- * Real-world fps is 23.976 / 24 / 25 / 29.97 / 30 / 50 / 60, occasionally
- * up to 120 for variable-frame content. Anything outside [1, 1000] is
- * either parser noise (a crafted MicroDVD `{1}{1}<fps>` line) or
- * hostile input — fall back to DEFAULT_FPS.
- *
- * Shared helper consumed by both parseSub and buildSub. An earlier
- * version had parseSub clamp to [1, 1000] while buildSub only
- * rejected `<= 0`; a round-trip with parser-supplied fps=50 +
- * caller-passed fps=2000 to buildSub silently drifted timestamps.
- * Single source of validation keeps both halves of the round-trip
- * aligned.
- */
-function clampFps(fps: number | undefined): number {
-  if (fps === undefined) return DEFAULT_FPS;
-  if (!Number.isFinite(fps) || fps < 1 || fps > 1000) return DEFAULT_FPS;
-  return fps;
+interface SourceLine {
+  start: number;
+  end: number;
+  body: string;
+  ending: string;
 }
 
-function parseSub(content: string, fps: number = DEFAULT_FPS): Caption[] {
-  fps = clampFps(fps);
+export interface MicroDvdFpsDeclaration {
+  /** Offset of the physical line in the original source string. */
+  lineStart: number;
+  /** Offset immediately after the physical line, including its terminator. */
+  lineEnd: number;
+  fps: number;
+}
+
+export interface MicroDvdFpsInspection {
+  declarations: MicroDvdFpsDeclaration[];
+  /** Last valid declaration among the first three nonempty lines. */
+  declaredFps?: number;
+}
+
+function* iterateSourceLines(content: string): Generator<SourceLine> {
+  let start = 0;
+  while (start < content.length) {
+    let bodyEnd = start;
+    while (bodyEnd < content.length && content[bodyEnd] !== "\r" && content[bodyEnd] !== "\n") {
+      bodyEnd += 1;
+    }
+
+    let end = bodyEnd;
+    if (content[end] === "\r") {
+      end += 1;
+      if (content[end] === "\n") end += 1;
+    } else if (content[end] === "\n") {
+      end += 1;
+    }
+
+    yield {
+      start,
+      end,
+      body: content.slice(start, bodyEnd),
+      ending: content.slice(bodyEnd, end),
+    };
+    start = end;
+  }
+}
+
+// A MicroDVD declaration is syntax, not a caption. Keep this expression
+// deliberately narrower than the ordinary cue expression: only start frame
+// 0/1, an empty or bounded numeric end field, and a complete decimal FPS
+// payload are metadata. Near-misses remain ordinary cue text.
+const MICRODVD_FPS_DECLARATION_RE = /^(\{[01]\}\{(?:\d{1,12})?\})(\d{1,12}(?:\.\d{1,12})?)$/;
+const MICRODVD_CUE_LINE_RE = /^\{(\d{1,12})\}\{(\d{1,12})\}(.*)$/;
+
+function formatMicroDvdFps(fps: number): string {
+  return fps.toFixed(12).replace(/\.?0+$/, "");
+}
+
+export function isValidMicroDvdFps(fps: number): boolean {
+  if (!Number.isFinite(fps) || fps <= MICRODVD_MIN_FPS_EXCLUSIVE || fps > MICRODVD_MAX_FPS) {
+    return false;
+  }
+  // An override must survive serialization back into the bounded declaration
+  // grammar. Values closer to 3 than its 12-decimal precision are rejected
+  // rather than being rewritten as the invalid declaration `3`.
+  return Number(formatMicroDvdFps(fps)) > MICRODVD_MIN_FPS_EXCLUSIVE;
+}
+
+/**
+ * Inspect the first three nonempty physical lines for MicroDVD FPS metadata.
+ *
+ * FFmpeg-compatible files commonly use `{1}{1}25.000`, while other writers
+ * use start frame 0 or an empty second field. All valid declarations in the
+ * bounded window are metadata (never captions); the last one wins. The line
+ * offsets let the source-preserving SUB rebuilder keep Auto-mode bytes and
+ * line endings intact.
+ */
+export function inspectMicroDvdFpsDeclarations(content: string): MicroDvdFpsInspection {
+  const declarations: MicroDvdFpsDeclaration[] = [];
+  let nonemptyCount = 0;
+
+  for (const line of iterateSourceLines(content)) {
+    const body =
+      line.start === 0 && line.body.startsWith("\uFEFF") ? line.body.slice(1) : line.body;
+    if (body.trim().length === 0) continue;
+    nonemptyCount += 1;
+    if (nonemptyCount > 3) break;
+
+    const match = body.match(MICRODVD_FPS_DECLARATION_RE);
+    if (!match) continue;
+    const fps = Number(match[2]);
+    if (!isValidMicroDvdFps(fps)) continue;
+    declarations.push({ lineStart: line.start, lineEnd: line.end, fps });
+  }
+
+  const declaredFps = declarations.at(-1)?.fps;
+  return {
+    declarations,
+    ...(declaredFps !== undefined && { declaredFps }),
+  };
+}
+
+function validFpsOverride(fps: number | undefined): number | undefined {
+  return fps !== undefined && isValidMicroDvdFps(fps) ? fps : undefined;
+}
+
+function resolveMicroDvdFps(content: string, fpsOverride: number | undefined): number {
+  return (
+    validFpsOverride(fpsOverride) ??
+    inspectMicroDvdFpsDeclarations(content).declaredFps ??
+    MICRODVD_DEFAULT_FPS
+  );
+}
+
+/**
+ * Resolve MicroDVD fps to a real-world range.
+ *
+ * Real-world fps is 23.976 / 24 / 25 / 29.97 / 30 / 50 / 60, occasionally
+ * up to 120 for high-frame-rate content. A valid explicit override wins,
+ * followed by an in-file declaration, followed by 23.976.
+ *
+ * Shared resolution is consumed by both parseSub and buildSub so an Auto
+ * round-trip cannot parse at the declared rate and serialize at a fallback.
+ */
+function parseSub(content: string, fpsOverride?: number): Caption[] {
+  const inspection = inspectMicroDvdFpsDeclarations(content);
+  const declarationStarts = new Set(inspection.declarations.map((entry) => entry.lineStart));
+  const fps = validFpsOverride(fpsOverride) ?? inspection.declaredFps ?? MICRODVD_DEFAULT_FPS;
   const captions: Caption[] = [];
   // Frame numbers are bounded to 12 digits — 12 ASCII chars fits ~31000
   // years of milliseconds at 60 fps, far past anything legitimate, and
   // rejects pathological `{99...9}` inputs that would otherwise saturate
   // parseInt to Infinity. Matches the time-regex bound below.
-  const subLineRe = /^\{(\d{1,12})\}\{(\d{1,12})\}(.*)$/gm;
-  let match;
   let count = 0;
-  while ((match = subLineRe.exec(content)) !== null) {
+  for (const line of iterateSourceLines(content)) {
+    if (declarationStarts.has(line.start)) continue;
+    const body =
+      line.start === 0 && line.body.startsWith("\uFEFF") ? line.body.slice(1) : line.body;
+    const match = body.match(MICRODVD_CUE_LINE_RE);
+    if (!match) continue;
     // Per-caption count cap moved BEFORE the push so the throw fires
     // WHEN refusing the entry, matching the SRT/VTT/ASS pattern. An
     // earlier version had the cap as `count += 1; if (count > MAX)
@@ -819,7 +938,7 @@ function parseSub(content: string, fps: number = DEFAULT_FPS): Caption[] {
     if (text.length > MAX_CAPTION_TEXT_LEN) {
       count += 1;
       captions.push({
-        raw: match[0],
+        raw: body,
         start: Math.round((parseInt(match[1]!, 10) / fps) * 1000),
         end: Math.round((parseInt(match[2]!, 10) / fps) * 1000),
         text: "",
@@ -829,7 +948,7 @@ function parseSub(content: string, fps: number = DEFAULT_FPS): Caption[] {
     }
     count += 1;
     captions.push({
-      raw: match[0],
+      raw: body,
       start: Math.round((parseInt(match[1]!, 10) / fps) * 1000),
       end: Math.round((parseInt(match[2]!, 10) / fps) * 1000),
       text: text.replace(/\|/g, "\n"),
@@ -838,34 +957,64 @@ function parseSub(content: string, fps: number = DEFAULT_FPS): Caption[] {
   return captions;
 }
 
-function buildSub(captions: Caption[], fps: number = DEFAULT_FPS): string {
-  // Shared clampFps — see helper docblock for the parse/build
-  // round-trip asymmetry rationale.
-  fps = clampFps(fps);
-  return (
-    captions
-      // parseSub pushes a skipped placeholder for oversized text to
-      // bound iteration cost via MAX_PARSED_ENTRIES.
-      // Filter those out here so the disk output mirrors the legitimate
-      // captions only (placeholders carry empty text and would otherwise
-      // emit `{f}{f}` lines with no body, polluting the file).
-      .filter((c) => !c.skipped)
-      .map((c) => {
-        // Clamp non-finite / negative timestamps to 0 for parity with
-        // formatSrtTime / formatAssTime / msToAssTime.
-        // After a Time Shift with `--offset` large enough to push captions
-        // before t=0, c.start / c.end can land negative; without clamping
-        // they produce negative frame counts (`{-23}{15}`) that downstream
-        // SUB consumers reject. Same defensive shape the SRT / ASS / VTT
-        // builders already use; buildSub was the lone outlier.
-        const start = Number.isFinite(c.start) ? Math.max(0, c.start) : 0;
-        const end = Number.isFinite(c.end) ? Math.max(0, c.end) : 0;
-        const startFrame = Math.round((start / 1000) * fps);
-        const endFrame = Math.round((end / 1000) * fps);
-        return `{${startFrame}}{${endFrame}}${c.text.replace(/\n/g, "|")}`;
-      })
-      .join("\n") + "\n"
+function buildSub(content: string, captions: Caption[], fpsOverride?: number): string {
+  const inspection = inspectMicroDvdFpsDeclarations(content);
+  const declarationsByStart = new Map(
+    inspection.declarations.map((declaration) => [declaration.lineStart, declaration])
   );
+  const explicitFps = validFpsOverride(fpsOverride);
+  const fps = resolveMicroDvdFps(content, fpsOverride);
+  let captionIndex = 0;
+  let output = "";
+
+  for (const line of iterateSourceLines(content)) {
+    const hasBom = line.start === 0 && line.body.startsWith("\uFEFF");
+    const bom = hasBom ? "\uFEFF" : "";
+    const body = hasBom ? line.body.slice(1) : line.body;
+    const declaration = declarationsByStart.get(line.start);
+    if (declaration) {
+      if (explicitFps === undefined) {
+        output += content.slice(line.start, line.end);
+      } else {
+        const match = body.match(MICRODVD_FPS_DECLARATION_RE);
+        if (!match) {
+          throw new Error("buildSub/MicroDVD declaration drift");
+        }
+        output += `${bom}${match[1]}${formatMicroDvdFps(explicitFps)}${line.ending}`;
+      }
+      continue;
+    }
+
+    const cueMatch = body.match(MICRODVD_CUE_LINE_RE);
+    if (!cueMatch) {
+      output += content.slice(line.start, line.end);
+      continue;
+    }
+
+    const caption = captions[captionIndex];
+    if (!caption) {
+      throw new Error(
+        `buildSub/parseSub drift: found more source cues than parsed captions at index ${captionIndex}`
+      );
+    }
+    captionIndex += 1;
+    if (caption.skipped) continue;
+
+    // Preserve the source line terminator rather than normalizing the whole
+    // file, so Auto mode changes only cue timing fields.
+    const start = Number.isFinite(caption.start) ? Math.max(0, caption.start) : 0;
+    const end = Number.isFinite(caption.end) ? Math.max(0, caption.end) : 0;
+    const startFrame = Math.round((start / 1000) * fps);
+    const endFrame = Math.round((end / 1000) * fps);
+    output += `${bom}{${startFrame}}{${endFrame}}${caption.text.replace(/\n/g, "|")}${line.ending}`;
+  }
+
+  if (captionIndex !== captions.length) {
+    throw new Error(
+      `buildSub/parseSub drift: consumed ${captionIndex}/${captions.length} parsed captions`
+    );
+  }
+  return output;
 }
 
 // ── Public API ────────────────────────────────────────────
@@ -918,7 +1067,7 @@ function rebuildSubtitle(
     case "ass":
       return buildAss(content, captions);
     case "sub":
-      return buildSub(captions, fps);
+      return buildSub(content, captions, fps);
     default:
       throw new Error(`Cannot rebuild format: ${format}`);
   }

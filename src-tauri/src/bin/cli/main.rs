@@ -234,7 +234,11 @@ pub(crate) struct HdrArgs {
     eotf: EotfArg,
 
     /// Target subtitle brightness in nits. 字幕目标亮度（nits）。
-    #[arg(long, default_value_t = 203)]
+    #[arg(
+        long,
+        default_value_t = 203,
+        value_parser = clap::value_parser!(u16).range(1..=10_000)
+    )]
     nits: u16,
 
     /// Output filename template. 输出文件名模板。
@@ -1260,6 +1264,41 @@ fn validate_cache_file_arg(globals: &GlobalOptions) -> Result<(), String> {
     Ok(())
 }
 
+fn format_refresh_cache_schema_error(cache_path: &Path, found: i32, expected: i32) -> String {
+    let cache_path_disp = sanitize_for_display(&cache_path.to_string_lossy());
+    let schema_detail = match found {
+        -1 => "has no readable schema-version record".to_string(),
+        -2 => "has an unparseable schema-version record".to_string(),
+        version => format!("has schema version {version}"),
+    };
+    format!(
+        "Cache at {} {schema_detail}, but this CLI requires schema version {expected}.\n\
+         The cache is incompatible with this release and must be rebuilt.\n\
+         Delete the cache file at {}, then rerun the same `refresh-fonts` command.",
+        cache_path_disp, cache_path_disp,
+    )
+}
+
+fn format_refresh_cache_access_error(
+    cache_path: &Path,
+    action: &str,
+    error: app_lib::font_cache::CacheError,
+) -> String {
+    let cache_path_disp = sanitize_for_display(&cache_path.to_string_lossy());
+    match error {
+        app_lib::font_cache::CacheError::InvalidDatabase(detail) => format!(
+            "The font cache at {} is invalid or corrupt: {detail}.\n\
+             Delete the cache file at {}, then rerun the same `refresh-fonts` command to rebuild it.",
+            cache_path_disp,
+            cache_path_disp,
+        ),
+        other => format!(
+            "{action} the font cache at {} failed: {other}. Check the cache path and file permissions; the cache was not deleted.",
+            cache_path_disp,
+        ),
+    }
+}
+
 fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<ExitCode, String> {
     // refresh-fonts's whole purpose is to write to the cache. Running
     // with --no-cache is contradictory; surface as a clear error
@@ -1271,7 +1310,18 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
             .to_string());
     }
 
-    // --output-dir / --overwrite / --fail-fast affect OUTPUT-file writing;
+    // This subcommand has no JSON report contract. Hard-fail even under
+    // --quiet so a machine consumer never receives an exit-0 empty/plain-text
+    // response after explicitly asking for JSON.
+    if globals.json {
+        return Err(
+            "refresh-fonts does not implement --json output; remove --json and use its stderr status report"
+                .to_string(),
+        );
+    }
+
+    // --output-dir / --overwrite / --fail-fast affect output-file writing,
+    // while --verbose has no additional refresh detail to enable;
     // refresh-fonts writes only to the cache, so they're inert here. Surface
     // a notice rather than ignoring them silently (no-silent-action). Unlike
     // --no-cache (contradictory → hard error) these are harmless, so a
@@ -1287,6 +1337,9 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
         }
         if globals.fail_fast {
             inert.push("--fail-fast");
+        }
+        if globals.verbose {
+            inert.push("--verbose");
         }
         if !inert.is_empty() {
             let flags = inert.join(", ");
@@ -1387,24 +1440,26 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
         if cache_path.exists() {
             match app_lib::font_cache::FontCache::open_existing_read_only(&cache_path) {
                 Ok(existing) => {
-                    for source in existing
-                        .list_sources()
-                        .map_err(|e| format!("reading existing cache sources: {e}"))?
-                    {
+                    for source in existing.list_sources().map_err(|error| {
+                        format_refresh_cache_access_error(&cache_path, "Reading", error)
+                    })? {
                         final_source_keys.insert(source.key());
                     }
                 }
                 Err(app_lib::font_cache::CacheError::SchemaVersionMismatch { found, expected }) => {
-                    return Err(format!(
-                        "Cache at {} has schema version {found} but this CLI uses version {expected}.\n\
-                         The cache is from a different release and must be rebuilt.\n\
-                         Delete the file manually and re-run refresh-fonts:\n  \
-                         (file: {})",
-                        cache_path.display(),
-                        cache_path.display(),
+                    return Err(format_refresh_cache_schema_error(
+                        &cache_path,
+                        found,
+                        expected,
                     ));
                 }
-                Err(e) => return Err(format!("opening cache: {e}")),
+                Err(error) => {
+                    return Err(format_refresh_cache_access_error(
+                        &cache_path,
+                        "Opening",
+                        error,
+                    ));
+                }
             }
         }
         if final_source_keys.len() > app_lib::font_cache::MAX_CACHED_SOURCES {
@@ -1478,21 +1533,24 @@ fn run_refresh_fonts(globals: &GlobalOptions, args: RefreshFontsArgs) -> Result<
     let mut cache = match app_lib::font_cache::FontCache::open_or_create(&cache_path) {
         Ok(c) => c,
         Err(app_lib::font_cache::CacheError::SchemaVersionMismatch { found, expected }) => {
-            return Err(format!(
-                "Cache at {} has schema version {found} but this CLI uses version {expected}.\n\
-                 The cache is from a different release and must be rebuilt.\n\
-                 Delete the file manually and re-run refresh-fonts:\n  \
-                 (file: {})",
-                cache_path.display(),
-                cache_path.display(),
+            return Err(format_refresh_cache_schema_error(
+                &cache_path,
+                found,
+                expected,
             ));
         }
-        Err(e) => return Err(format!("opening cache: {e}")),
+        Err(error) => {
+            return Err(format_refresh_cache_access_error(
+                &cache_path,
+                "Opening",
+                error,
+            ));
+        }
     };
 
     for source in cache
         .list_sources()
-        .map_err(|e| format!("reading existing cache sources: {e}"))?
+        .map_err(|error| format_refresh_cache_access_error(&cache_path, "Reading", error))?
     {
         final_source_keys.insert(source.key());
     }
@@ -1921,6 +1979,8 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
     let mut written = 0usize;
     let mut failed = 0usize;
     let mut skipped = 0usize;
+    let mut written_with_warnings = 0usize;
+    let mut written_warning_count = 0usize;
     // First-input-wins dedup, mirroring run_hdr / run_shift / run_embed
     // . Without this, `chain hdr ... cat.ass cat.ass`
     // runs the chain twice and `--overwrite=true` silently clobbers
@@ -1954,6 +2014,10 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
             &mut seen_outputs,
         ) {
             ChainFileOutcome::Written(out, warnings) => {
+                if !warnings.is_empty() {
+                    written_with_warnings += 1;
+                }
+                written_warning_count += warnings.len();
                 if !globals.quiet {
                     // `input` / `out` are raw PathBufs from clap
                     // argv + Rust shell output resolution. Sanitize
@@ -2000,21 +2064,39 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
         // chain Summary line + fail-fast suffix go through `localize`,
         // for sibling-parity with the refresh-fonts sweep and the
         // standalone subcommands' `emit_report_summary`.
+        let warning_suffix_en = if written_with_warnings > 0 {
+            format!(
+                ", {written_with_warnings} written with warnings / incomplete ({written_warning_count} warning(s))"
+            )
+        } else {
+            String::new()
+        };
+        let warning_suffix_zh = if written_with_warnings > 0 {
+            format!(
+                "，{written_with_warnings} 个已写入但带警告/不完整（{written_warning_count} 条警告）"
+            )
+        } else {
+            String::new()
+        };
         let summary = if chain_aborted {
             localize(
                 globals,
                 format!(
-                    "Summary: {written} written, {skipped} skipped, {failed} failed (aborted by --fail-fast)"
+                    "Summary: {written} written, {skipped} skipped, {failed} failed{warning_suffix_en} (aborted by --fail-fast)"
                 ),
                 format!(
-                    "汇总：{written} 个已写入，{skipped} 个已跳过，{failed} 个失败（已被 --fail-fast 中止）"
+                    "汇总：{written} 个已写入，{skipped} 个已跳过，{failed} 个失败{warning_suffix_zh}（已被 --fail-fast 中止）"
                 ),
             )
         } else {
             localize(
                 globals,
-                format!("Summary: {written} written, {skipped} skipped, {failed} failed"),
-                format!("汇总：{written} 个已写入，{skipped} 个已跳过，{failed} 个失败"),
+                format!(
+                    "Summary: {written} written, {skipped} skipped, {failed} failed{warning_suffix_en}"
+                ),
+                format!(
+                    "汇总：{written} 个已写入，{skipped} 个已跳过，{failed} 个失败{warning_suffix_zh}"
+                ),
             )
         };
         println!("{summary}");
@@ -2478,6 +2560,13 @@ fn process_one_chain_input(
         globals.output_dir.as_deref(),
     ) {
         let key = normalize_output_key(&predicted);
+        let input_key = normalize_output_key(&input_abs);
+        if key == input_key {
+            return builder.into_failed(format!(
+                "refusing self-overwrite: predicted output path {} is the input file; choose a different --output-template or --output-dir",
+                predicted.display()
+            ));
+        }
         if !seen_outputs.insert(key.clone()) {
             // `predicted.display()` is interpolated
             // raw here; sanitization happens at the chain print boundary
@@ -2760,6 +2849,9 @@ fn process_one_chain_input(
 }
 
 fn emit_chain_dry_run(plan: &chain::ChainPlan, globals: &GlobalOptions) {
+    if globals.quiet {
+        return;
+    }
     println!("Plan (no files written):");
     println!();
     // Every emit_chain_dry_run print site sanitizes interpolated
@@ -3090,10 +3182,7 @@ fn append_warning(warnings: &mut Option<Vec<String>>, warning: Option<String>) {
     }
 }
 
-fn load_timing_map_rules(
-    engine: &mut engine::CliEngine,
-    map_path: &Path,
-) -> Result<Vec<engine::TimingMapRule>, String> {
+fn read_timing_map_text(map_path: &Path) -> Result<String, String> {
     let absolute = absolute_path(map_path)?;
     let display = display_path(&absolute);
     let metadata = fs::metadata(&absolute)
@@ -3107,16 +3196,29 @@ fn load_timing_map_rules(
             metadata.len()
         ));
     }
-    let content = fs::read_to_string(&absolute)
-        .map_err(|err| format!("failed to read timing map as UTF-8 text from {display}: {err}"))?;
-    let parsed = engine.parse_timing_map(&engine::TimingMapParseRequest { content })?;
-    if parsed.rules.is_empty() {
+    fs::read_to_string(&absolute)
+        .map_err(|err| format!("failed to read timing map as UTF-8 text from {display}: {err}"))
+}
+
+fn require_enabled_timing_map_rules(
+    rules: Vec<engine::TimingMapRule>,
+) -> Result<Vec<engine::TimingMapRule>, String> {
+    if rules.is_empty() {
         return Err("timing map contains no rules".to_string());
     }
-    if !parsed.rules.iter().any(|rule| rule.enabled.unwrap_or(true)) {
+    if !rules.iter().any(|rule| rule.enabled.unwrap_or(true)) {
         return Err("timing map contains no enabled rules".to_string());
     }
-    Ok(parsed.rules)
+    Ok(rules)
+}
+
+fn load_timing_map_rules(
+    engine: &mut engine::CliEngine,
+    map_path: &Path,
+) -> Result<Vec<engine::TimingMapRule>, String> {
+    let content = read_timing_map_text(map_path)?;
+    let parsed = engine.parse_timing_map(&engine::TimingMapParseRequest { content })?;
+    require_enabled_timing_map_rules(parsed.rules)
 }
 
 fn run_shift(
@@ -3245,7 +3347,7 @@ fn reserve_output<'a>(
         key,
         keep: false,
     };
-    if output_path_exists(globals, output_path) && !globals.overwrite {
+    if !globals.overwrite && output_path_exists(globals, output_path) {
         return Err(Box::new(skipped_report(
             input_path,
             Some(output.to_string()),
@@ -4269,6 +4371,41 @@ fn prepare_embed_cache(
                 diagnostic,
             };
         }
+        Err(app_lib::font_cache::CacheError::InvalidDatabase(detail)) => {
+            if !globals.quiet {
+                let detail_disp = sanitize_for_display(&detail);
+                eprintln!(
+                    "{}",
+                    localize(
+                        globals,
+                        format!(
+                            "⚠ Font cache at {cache_path_disp} is invalid or corrupt: {detail_disp}"
+                        ),
+                        format!("⚠ 位于 {cache_path_disp} 的字体缓存无效或已损坏：{detail_disp}"),
+                    )
+                );
+                eprintln!(
+                    "{}",
+                    localize(
+                        globals,
+                        format!(
+                            "  Delete {cache_path_disp}, then run `refresh-fonts` to rebuild it. Skipping cache for this run."
+                        ),
+                        format!(
+                            "  删除 {cache_path_disp}，然后运行 `refresh-fonts` 以重建缓存。本次运行将跳过缓存。"
+                        ),
+                    )
+                );
+            }
+            return PreparedFontCache {
+                cache: None,
+                diagnostic: CacheDiagnostic::new(
+                    Some(cache_path_json),
+                    CacheDiagnosticStatus::OpenError,
+                    Some(format!("font cache is invalid or corrupt: {detail}")),
+                ),
+            };
+        }
         Err(e) => {
             if !globals.quiet {
                 let e_disp = sanitize_for_display(&e.to_string());
@@ -4276,8 +4413,8 @@ fn prepare_embed_cache(
                     "{}",
                     localize(
                         globals,
-                        format!("⚠ Cannot open font cache: {e_disp}"),
-                        format!("⚠ 无法打开字体缓存：{e_disp}"),
+                        format!("⚠ Cannot open font cache at {cache_path_disp}: {e_disp}"),
+                        format!("⚠ 无法打开位于 {cache_path_disp} 的字体缓存：{e_disp}"),
                     )
                 );
                 eprintln!(
@@ -4294,7 +4431,7 @@ fn prepare_embed_cache(
                 diagnostic: CacheDiagnostic::new(
                     Some(cache_path_json),
                     CacheDiagnosticStatus::OpenError,
-                    Some(format!("cannot open font cache: {e}")),
+                    Some(format!("cannot open font cache at {cache_path_disp}: {e}")),
                 ),
             };
         }
@@ -5854,31 +5991,61 @@ fn process_rename_pair(
     let input = display_path(&input_path);
     let output = display_path(&output_path);
 
+    // planRename computes this flag against every loaded subtitle path (not
+    // only executable rows) before the Rust shell enters this loop. Keep this
+    // guard before no-op, duplicate, exists, dry-run, and overwrite handling:
+    // every participant in a swap/chain must fail without touching the disk.
+    if row.input_conflict {
+        return attach_rename_pairing_warning(
+            globals,
+            row,
+            failed_report(
+                &input_path,
+                Some(output),
+                None,
+                "subtitle is part of a planned conflict where an output targets a loaded subtitle input; no files in that conflicting chain were changed"
+                    .to_string(),
+            ),
+        );
+    }
+
     if row.no_op {
-        return skipped_report(
-            &input_path,
-            Some(output),
-            None,
-            "subtitle already matches the target path".to_string(),
+        return attach_rename_pairing_warning(
+            globals,
+            row,
+            skipped_report(
+                &input_path,
+                Some(output),
+                None,
+                "subtitle already matches the target path".to_string(),
+            ),
         );
     }
 
     let output_key = normalize_output_key(&output_path);
     if duplicate_outputs.contains(&output_key) {
-        return failed_report(
-            &input_path,
-            Some(output),
-            None,
-            "duplicate output path in planned batch".to_string(),
+        return attach_rename_pairing_warning(
+            globals,
+            row,
+            failed_report(
+                &input_path,
+                Some(output),
+                None,
+                "duplicate output path in planned batch".to_string(),
+            ),
         );
     }
 
-    if output_path_exists(globals, &output_path) && !globals.overwrite {
-        return skipped_report(
-            &input_path,
-            Some(output),
-            None,
-            "output exists; pass --overwrite to replace it".to_string(),
+    if !globals.overwrite && output_path_exists(globals, &output_path) {
+        return attach_rename_pairing_warning(
+            globals,
+            row,
+            skipped_report(
+                &input_path,
+                Some(output),
+                None,
+                "output exists; pass --overwrite to replace it".to_string(),
+            ),
         );
     }
 
@@ -5895,7 +6062,11 @@ fn process_rename_pair(
     );
 
     if globals.dry_run {
-        return planned_report(&input_path, Some(output), None);
+        return attach_rename_pairing_warning(
+            globals,
+            row,
+            planned_report(&input_path, Some(output), None),
+        );
     }
 
     let operation_result = if args.mode.is_copy() {
@@ -5905,17 +6076,41 @@ fn process_rename_pair(
     };
 
     if let Err(error) = operation_result {
-        return failed_report(&input_path, Some(output), None, error);
+        return attach_rename_pairing_warning(
+            globals,
+            row,
+            failed_report(&input_path, Some(output), None, error),
+        );
     }
 
-    FileReport {
-        input,
-        output: Some(output),
-        encoding: None,
-        status: FileStatus::Written,
-        error: None,
-        warnings: None,
+    attach_rename_pairing_warning(
+        globals,
+        row,
+        FileReport {
+            input,
+            output: Some(output),
+            encoding: None,
+            status: FileStatus::Written,
+            error: None,
+            warnings: None,
+        },
+    )
+}
+
+fn attach_rename_pairing_warning(
+    globals: &GlobalOptions,
+    row: &engine::RenamePlanRow,
+    mut report: FileReport,
+) -> FileReport {
+    if row.source == "warning" {
+        report.warnings = Some(vec![localize(
+            globals,
+            "pairing is ambiguous because multiple videos share the same season and episode; verify the selected subtitle"
+                .to_string(),
+            "多个视频具有相同的季与集编号，配对存在歧义；请核对所选字幕".to_string(),
+        )]);
     }
+    report
 }
 
 fn duplicate_rename_output_keys(rows: &[engine::RenamePlanRow]) -> HashSet<String> {
@@ -5923,6 +6118,10 @@ fn duplicate_rename_output_keys(rows: &[engine::RenamePlanRow]) -> HashSet<Strin
     // so picking a "winner" among duplicates risks moving the wrong
     // file into a stable name. Every participant in a duplicate set is
     // flagged here and refuses to act in process_rename_pair.
+    //
+    // Rows already blocked by the stronger input-conflict preflight do not
+    // claim outputs: they cannot write, and excluding them keeps GUI/CLI
+    // behavior aligned when an otherwise-safe row shares their target.
     //
     // No-op rows DO claim their output key — a no-op row's output is a
     // real file already on disk, so a non-no-op row targeting the same
@@ -5933,7 +6132,7 @@ fn duplicate_rename_output_keys(rows: &[engine::RenamePlanRow]) -> HashSet<Strin
     let mut seen = HashSet::new();
     let mut duplicates = HashSet::new();
 
-    for row in rows {
+    for row in rows.iter().filter(|row| !row.input_conflict) {
         let key = normalize_output_key(Path::new(&row.output_path));
         if !seen.insert(key.clone()) {
             duplicates.insert(key);
@@ -6000,7 +6199,7 @@ fn build_command_diagnostics(
         );
     }
     let qa = if report.command == "diagnose-fonts" || !fonts.is_empty() {
-        Some(build_font_qa_summary(report, &fonts, warning_count))
+        Some(build_font_qa_summary(report, &fonts))
     } else {
         None
     };
@@ -6028,11 +6227,7 @@ fn build_command_diagnostics(
     }
 }
 
-fn build_font_qa_summary(
-    report: &CommandReport,
-    fonts: &[FontDiagnostic],
-    warning_count: usize,
-) -> FontQaSummary {
+fn build_font_qa_summary(report: &CommandReport, fonts: &[FontDiagnostic]) -> FontQaSummary {
     let failed_file_count = report
         .results
         .iter()
@@ -6064,7 +6259,7 @@ fn build_font_qa_summary(
 
     let status = if failed_file_count > 0 || error_count > 0 || subset_failed_count > 0 {
         FontQaStatus::Blocked
-    } else if missing_count > 0 || warning_count > 0 || subset_skipped_count > 0 {
+    } else if missing_count > 0 || subset_skipped_count > 0 {
         FontQaStatus::Incomplete
     } else {
         FontQaStatus::Complete
@@ -7254,16 +7449,19 @@ mod tests {
         absolute_path, apply_effective_embedded_font_names, apply_subset_checks_to_diagnostics,
         build_font_qa_summary, check_cache_drift, classify_locale, copy_file_output,
         create_cli_font_db_dir, diagnostic_next_actions, display_path,
-        duplicate_rename_output_keys, engine, group_resolved_fonts_by_face, normalize_output_key,
-        parse_duration_ms, parse_timestamp_ms, predict_chain_output_path,
+        duplicate_rename_output_keys, engine, format_refresh_cache_access_error,
+        format_refresh_cache_schema_error, group_resolved_fonts_by_face, normalize_output_key,
+        parse_duration_ms, parse_timestamp_ms, predict_chain_output_path, read_timing_map_text,
         refresh_font_directory_sources, relocate_output_path, require_complete_cli_font_source,
-        resolve_embed_fonts, sanitize_for_display, substitute_template, write_output,
-        CacheDiagnostic, CacheDiagnosticStatus, Cli, Command, CommandDiagnostics, CommandReport,
-        DiagnoseMode, DiagnosticSubsetBudget, EmbedArgs, FileDiagnostic, FileReport, FileStatus,
-        FontDiagnostic, FontQaStatus, FontSubsetCheckDiagnostic, FontSubsetCheckStatus,
-        GlobalOptions, MissingFontAction, OutputLang, RefreshFontsArgs, ResolvedEmbedFont,
-        TempFontDbDir, MAX_DIAGNOSTIC_SUBSET_CALLS, MAX_DIAGNOSTIC_SUBSET_TOTAL_BYTES,
+        require_enabled_timing_map_rules, resolve_embed_fonts, sanitize_for_display,
+        substitute_template, write_output, CacheDiagnostic, CacheDiagnosticStatus, Cli, Command,
+        CommandDiagnostics, CommandReport, DiagnoseMode, DiagnosticSubsetBudget, EmbedArgs,
+        FileDiagnostic, FileReport, FileStatus, FontDiagnostic, FontQaStatus,
+        FontSubsetCheckDiagnostic, FontSubsetCheckStatus, GlobalOptions, MissingFontAction,
+        OutputLang, RefreshFontsArgs, ResolvedEmbedFont, TempFontDbDir,
+        MAX_DIAGNOSTIC_SUBSET_CALLS, MAX_DIAGNOSTIC_SUBSET_TOTAL_BYTES,
         MAX_RESOLVED_FONT_CODEPOINTS, MAX_SHIFT_OFFSET_MS, MAX_SUBSET_CODEPOINTS_FOR_DEDUP,
+        MAX_TIMING_MAP_BYTES,
     };
     // Import the canonical filename literal directly from app_lib so the
     // test pins the same name `TempFontDbDir::drop`'s remove_dir_all
@@ -7276,6 +7474,63 @@ mod tests {
     use clap::{CommandFactory, Parser};
     use std::fs;
     use std::path::{Path, PathBuf};
+
+    fn timing_map_rule(enabled: Option<bool>) -> engine::TimingMapRule {
+        engine::TimingMapRule {
+            start_ms: 0,
+            end_ms: None,
+            offset_ms: 1,
+            enabled,
+            label: None,
+        }
+    }
+
+    #[test]
+    fn timing_map_file_accepts_one_mib_and_rejects_one_byte_over() {
+        let root = create_cli_font_db_dir().expect("temporary test directory");
+        let map_path = root.join("boundary-map.csv");
+
+        fs::write(&map_path, vec![b' '; MAX_TIMING_MAP_BYTES as usize])
+            .expect("write at-limit timing map");
+        let at_limit = read_timing_map_text(&map_path).expect("one MiB should be accepted");
+        assert_eq!(at_limit.len(), MAX_TIMING_MAP_BYTES as usize);
+
+        fs::write(&map_path, vec![b' '; MAX_TIMING_MAP_BYTES as usize + 1])
+            .expect("write over-limit timing map");
+        let error = read_timing_map_text(&map_path).expect_err("one MiB plus one must be refused");
+        assert!(
+            error.contains("timing map file is too large")
+                && error.contains(&(MAX_TIMING_MAP_BYTES + 1).to_string())
+                && error.contains(&format!("max {MAX_TIMING_MAP_BYTES}")),
+            "size refusal should report the actual and accepted byte counts: {error}"
+        );
+
+        fs::remove_dir_all(root).expect("remove timing-map test directory");
+    }
+
+    #[test]
+    fn timing_map_rules_require_at_least_one_rule() {
+        let error = require_enabled_timing_map_rules(Vec::new())
+            .expect_err("an empty parsed map must be refused");
+
+        assert_eq!(error, "timing map contains no rules");
+    }
+
+    #[test]
+    fn timing_map_rules_require_at_least_one_enabled_rule() {
+        let error = require_enabled_timing_map_rules(vec![
+            timing_map_rule(Some(false)),
+            timing_map_rule(Some(false)),
+        ])
+        .expect_err("an all-disabled parsed map must be refused");
+        assert_eq!(error, "timing map contains no enabled rules");
+
+        for enabled in [None, Some(true)] {
+            let rules = require_enabled_timing_map_rules(vec![timing_map_rule(enabled)])
+                .expect("omitted and explicit true both mean enabled");
+            assert_eq!(rules.len(), 1);
+        }
+    }
 
     #[test]
     fn absolute_path_folds_cli_dot_and_parent_components_without_touching_names() {
@@ -7444,6 +7699,43 @@ mod tests {
     }
 
     #[test]
+    fn hdr_nits_accepts_documented_boundaries_and_rejects_values_outside_them() {
+        for value in ["1", "10000"] {
+            let cli = Cli::try_parse_from([
+                "ssahdrify-cli",
+                "hdr",
+                "--eotf",
+                "pq",
+                "--nits",
+                value,
+                "input.ass",
+            ])
+            .unwrap_or_else(|error| panic!("--nits {value} should parse: {error}"));
+            let Command::Hdr(args) = cli.command else {
+                panic!("expected hdr command");
+            };
+            assert_eq!(args.args.nits.to_string(), value);
+        }
+
+        for value in ["0", "10001"] {
+            let error = Cli::try_parse_from([
+                "ssahdrify-cli",
+                "hdr",
+                "--eotf",
+                "pq",
+                "--nits",
+                value,
+                "input.ass",
+            ])
+            .expect_err("out-of-range --nits must fail at parse time");
+            assert!(
+                error.to_string().contains("1..=10000"),
+                "range error should name the accepted boundary: {error}"
+            );
+        }
+    }
+
+    #[test]
     fn refresh_fonts_rejects_diagnose_option() {
         let err = Cli::try_parse_from([
             "ssahdrify-cli",
@@ -7589,6 +7881,35 @@ mod tests {
             .expect_err("refresh-fonts requires one directory-source flag");
 
         assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
+    fn refresh_cache_errors_sanitize_paths_and_limit_delete_guidance() {
+        let hostile = Path::new("cache\u{202e}\u{001b}[2J.sqlite3");
+
+        let schema = format_refresh_cache_schema_error(hostile, 4, 6);
+        assert!(!schema.contains('\u{202e}') && !schema.contains('\u{001b}'));
+        assert!(schema.contains("cache[2J.sqlite3"));
+        assert!(schema.contains("rerun the same `refresh-fonts` command"));
+
+        let invalid = format_refresh_cache_access_error(
+            hostile,
+            "Opening",
+            app_lib::font_cache::CacheError::InvalidDatabase("file is not a database".to_string()),
+        );
+        assert!(!invalid.contains('\u{202e}') && !invalid.contains('\u{001b}'));
+        assert!(invalid.contains("Delete the cache file"));
+        assert!(invalid.contains("rerun the same `refresh-fonts` command"));
+
+        let ordinary = format_refresh_cache_access_error(
+            hostile,
+            "Opening",
+            app_lib::font_cache::CacheError::Io("permission denied".to_string()),
+        );
+        assert!(!ordinary.contains('\u{202e}') && !ordinary.contains('\u{001b}'));
+        assert!(ordinary.contains("Check the cache path and file permissions"));
+        assert!(!ordinary.contains("Delete the cache file"));
+        assert!(!ordinary.contains("rerun the same `refresh-fonts` command"));
     }
 
     /// Construct a default GlobalOptions for tests that need to call
@@ -7816,7 +8137,7 @@ mod tests {
         let mut resolved = FontDiagnostic::new(&qa_usage("Resolved"));
         resolved.mark_resolved("/fonts/resolved.ttf".to_string(), 0);
 
-        let qa = build_font_qa_summary(&qa_report(FileStatus::Diagnosed), &[resolved], 0);
+        let qa = build_font_qa_summary(&qa_report(FileStatus::Diagnosed), &[resolved]);
 
         assert_eq!(qa.status, FontQaStatus::Complete);
         assert_eq!(qa.resolved_count, 1);
@@ -7827,7 +8148,7 @@ mod tests {
     fn font_qa_summary_marks_incomplete_for_missing_fonts() {
         let missing = FontDiagnostic::new(&qa_usage("Missing"));
 
-        let qa = build_font_qa_summary(&qa_report(FileStatus::Diagnosed), &[missing], 0);
+        let qa = build_font_qa_summary(&qa_report(FileStatus::Diagnosed), &[missing]);
 
         assert_eq!(qa.status, FontQaStatus::Incomplete);
         assert_eq!(qa.missing_count, 1);
@@ -7843,10 +8164,28 @@ mod tests {
             error: Some("subset failed".to_string()),
         });
 
-        let qa = build_font_qa_summary(&qa_report(FileStatus::Diagnosed), &[resolved], 0);
+        let qa = build_font_qa_summary(&qa_report(FileStatus::Diagnosed), &[resolved]);
 
         assert_eq!(qa.status, FontQaStatus::Blocked);
         assert_eq!(qa.subset_failed_count, 1);
+    }
+
+    #[test]
+    fn font_qa_summary_ignores_non_font_warnings() {
+        let mut resolved = FontDiagnostic::new(&qa_usage("Resolved"));
+        resolved.mark_resolved("/fonts/resolved.ttf".to_string(), 0);
+        let mut report = qa_report(FileStatus::Diagnosed);
+        report.results[0].warnings = Some(vec![
+            "BOM-less UTF-16 encoding was inferred; verify the output".to_string(),
+        ]);
+
+        let qa = build_font_qa_summary(&report, &[resolved]);
+
+        assert_eq!(
+            qa.status,
+            FontQaStatus::Complete,
+            "encoding and other file warnings must not downgrade font QA"
+        );
     }
 
     #[test]
@@ -8054,13 +8393,17 @@ mod tests {
                 input_path: "C:\\Subs\\Episode.ass".to_string(),
                 output_path: "C:\\Subs\\Episode.ass".to_string(),
                 video_path: "C:\\Subs\\Episode.mkv".to_string(),
+                source: "regex".to_string(),
                 no_op: true,
+                input_conflict: false,
             },
             engine::RenamePlanRow {
                 input_path: "C:\\Subs\\episode.tc.ass".to_string(),
                 output_path: "C:\\Subs\\Episode.ass".to_string(),
                 video_path: "C:\\Subs\\Episode.mkv".to_string(),
+                source: "regex".to_string(),
                 no_op: false,
+                input_conflict: false,
             },
         ];
 
@@ -8086,13 +8429,17 @@ mod tests {
                 input_path: "C:\\Subs\\episode.sc.ass".to_string(),
                 output_path: "C:\\Subs\\Episode.sc.ass".to_string(),
                 video_path: "C:\\Subs\\Episode.mkv".to_string(),
+                source: "regex".to_string(),
                 no_op: false,
+                input_conflict: false,
             },
             engine::RenamePlanRow {
                 input_path: "C:\\Subs\\episode.tc.ass".to_string(),
                 output_path: "C:\\Subs\\Episode.tc.ass".to_string(),
                 video_path: "C:\\Subs\\Episode.mkv".to_string(),
+                source: "regex".to_string(),
                 no_op: false,
+                input_conflict: false,
             },
         ];
 
@@ -8110,13 +8457,17 @@ mod tests {
                 input_path: "C:\\Subs\\episode.sc.ass".to_string(),
                 output_path: "C:\\Subs\\Episode.sc.ass".to_string(),
                 video_path: "C:\\Subs\\Episode.mkv".to_string(),
+                source: "regex".to_string(),
                 no_op: false,
+                input_conflict: false,
             },
             engine::RenamePlanRow {
                 input_path: "C:\\Subs\\episode.zh-CN.ass".to_string(),
                 output_path: "C:\\Subs\\Episode.sc.ass".to_string(),
                 video_path: "C:\\Subs\\Episode.mkv".to_string(),
+                source: "regex".to_string(),
                 no_op: false,
+                input_conflict: false,
             },
         ];
 
@@ -8139,19 +8490,25 @@ mod tests {
                 input_path: "C:\\Subs\\episode.sc.ass".to_string(),
                 output_path: "C:\\Subs\\Episode.ass".to_string(),
                 video_path: "C:\\Subs\\Episode.mkv".to_string(),
+                source: "regex".to_string(),
                 no_op: false,
+                input_conflict: false,
             },
             engine::RenamePlanRow {
                 input_path: "C:\\Subs\\episode.tc.ass".to_string(),
                 output_path: "C:\\Subs\\Episode.ass".to_string(),
                 video_path: "C:\\Subs\\Episode.mkv".to_string(),
+                source: "regex".to_string(),
                 no_op: false,
+                input_conflict: false,
             },
             engine::RenamePlanRow {
                 input_path: "C:\\Subs\\already.ass".to_string(),
                 output_path: "C:\\Subs\\Episode.ass".to_string(),
                 video_path: "C:\\Subs\\Episode.mkv".to_string(),
+                source: "regex".to_string(),
                 no_op: true,
+                input_conflict: false,
             },
         ];
 
@@ -8163,6 +8520,30 @@ mod tests {
             "C:/Subs/Episode.ass"
         };
         assert!(duplicates.contains(expected_key));
+    }
+
+    #[test]
+    fn rename_dedup_excludes_rows_already_blocked_by_input_conflicts() {
+        let rows = vec![
+            engine::RenamePlanRow {
+                input_path: "C:\\Subs\\unsafe.ass".to_string(),
+                output_path: "C:\\Subs\\shared.ass".to_string(),
+                video_path: "C:\\Subs\\Unsafe.mkv".to_string(),
+                source: "regex".to_string(),
+                no_op: false,
+                input_conflict: true,
+            },
+            engine::RenamePlanRow {
+                input_path: "C:\\Subs\\safe.ass".to_string(),
+                output_path: "C:\\Subs\\shared.ass".to_string(),
+                video_path: "C:\\Subs\\Safe.mkv".to_string(),
+                source: "regex".to_string(),
+                no_op: false,
+                input_conflict: false,
+            },
+        ];
+
+        assert!(duplicate_rename_output_keys(&rows).is_empty());
     }
 
     #[test]

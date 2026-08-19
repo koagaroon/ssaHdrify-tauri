@@ -8,8 +8,7 @@ import {
 } from "../../lib/tauri-api";
 import { processAssContent, parseAssColor, formatAssColor } from "./ass-processor";
 import {
-  processSrtUserText,
-  buildAssDocumentFromCaptions,
+  convertTextCueSubtitleToAss,
   isNativeAss,
   isConvertible,
   DEFAULT_STYLE,
@@ -19,12 +18,17 @@ import { resolveOutputPath, OUTPUT_PRESETS, DEFAULT_TEMPLATE } from "./output-na
 import { DEFAULT_BRIGHTNESS, MIN_BRIGHTNESS, MAX_BRIGHTNESS, type Eotf } from "./color-engine";
 import { ask } from "@tauri-apps/plugin-dialog";
 
-import { parseSubtitle } from "../../lib/subtitle-parser";
 import NumberInput from "../../lib/NumberInput";
 import { parseFiniteNumberText } from "../../lib/strict-number";
 import NitViz from "./NitViz";
 import { isHdrBrightnessInvalid, isHdrConvertDisabled } from "./hdr-ui-state";
-import { parseHdrStyleNumberInput } from "./hdr-style-ui-state";
+import {
+  hasMicroDvdInput,
+  isHdrFpsInvalid,
+  parseHdrFpsOverrideForInput,
+  parseHdrStyleNumberInput,
+  type HdrFpsMode,
+} from "./hdr-style-ui-state";
 import { useI18n } from "../../i18n/useI18n";
 import { useFileContext } from "../../lib/FileContext";
 import type { Status } from "../../lib/StatusContext";
@@ -97,6 +101,8 @@ export default function HdrConvert() {
   const [customTemplate, setCustomTemplate] = useState("");
   const [showStylePanel, setShowStylePanel] = useState(false);
   const [style, setStyle] = useState<StyleConfig>({ ...DEFAULT_STYLE });
+  const [fpsMode, setFpsMode] = useState<HdrFpsMode>("auto");
+  const [fpsText, setFpsText] = useState("23.976");
   const [processing, setProcessing] = useState(false);
   const { logs, addLog, clearLogs, logScrollRef } = useLogPanel();
   const [showFileList, setShowFileList] = useState(false);
@@ -196,6 +202,9 @@ export default function HdrConvert() {
 
   const activeTemplate = template === "custom" ? customTemplate : template;
   const templateInvalid = template === "custom" && customTemplate.trim().length === 0;
+  const batchHasSub = hasMicroDvdInput(hdrFiles?.fileNames ?? []);
+  const fpsInputInvalid = isHdrFpsInvalid(fpsMode, fpsText);
+  const fpsInvalid = batchHasSub && fpsInputInvalid;
   // Gate Convert on the same visible-input validity shown by the
   // controls, so keyboard activation cannot commit a stale prior
   // brightness value or start a batch with a universally invalid template.
@@ -204,6 +213,7 @@ export default function HdrConvert() {
     processing,
     brightnessInvalid,
     templateInvalid,
+    fpsInvalid,
   });
 
   // ── File selection (separate from conversion) ──────────
@@ -295,6 +305,7 @@ export default function HdrConvert() {
         processing,
         brightnessInvalid,
         templateInvalid,
+        fpsInvalid,
       })
     ) {
       return;
@@ -461,16 +472,10 @@ export default function HdrConvert() {
               // Direct ASS processing
               assContent = processAssContent(content, brightness, eotf);
             } else if (isConvertible(fileName)) {
-              // Text-cue → ASS conversion path. processSrtUserText composes
-              // the two-step user-text pipeline (escape user braces, then
-              // inject our trusted color tags) so the order can't be swapped
-              // or one step skipped by a future caller.
-              const preprocessed = processSrtUserText(content);
+              const fpsOverride = parseHdrFpsOverrideForInput(fileName, fpsMode, fpsText);
+              if (fpsOverride === null) throw new Error(t("style_fps_invalid"));
 
-              // Parse with our browser-compatible parser
-              const { captions } = parseSubtitle(preprocessed, style.fps);
-
-              // Surface skipped-placeholder count. All four parsers
+              // Surface skipped-placeholder count. All text-cue parsers
               // push `skipped: true` Captions for entries whose text
               // exceeded MAX_CAPTION_TEXT_LEN (64 KB). Without
               // surfacing the count, the data loss is invisible to
@@ -478,9 +483,10 @@ export default function HdrConvert() {
               // dropped from the captions array on the SRT/VTT side).
               // Log via addLog so the user sees it rather than
               // discovering it after the fact.
-              const { content: rawAss, skippedCount } = buildAssDocumentFromCaptions(
-                captions,
-                style
+              const { content: rawAss, skippedCount } = convertTextCueSubtitleToAss(
+                content,
+                style,
+                fpsOverride
               );
               if (skippedCount > 0) {
                 addLog(t("msg_oversized_skipped", skippedCount, fileName), "warn");
@@ -551,10 +557,13 @@ export default function HdrConvert() {
     processing,
     brightnessInvalid,
     templateInvalid,
+    fpsInvalid,
     brightness,
     eotf,
     activeTemplate,
     style,
+    fpsMode,
+    fpsText,
     addLog,
     t,
   ]);
@@ -868,7 +877,9 @@ export default function HdrConvert() {
       {/* Collapsible Style Settings */}
       <div className="rounded-lg" style={{ border: "1px solid var(--border)" }}>
         <button
+          type="button"
           onClick={() => setShowStylePanel(!showStylePanel)}
+          aria-expanded={showStylePanel}
           className="w-full flex items-center gap-2 px-4 py-3 text-sm font-medium rounded-lg transition-colors"
           style={{ color: "var(--text-secondary)" }}
         >
@@ -877,6 +888,11 @@ export default function HdrConvert() {
           <span className="text-xs ml-2" style={{ color: "var(--text-muted)" }}>
             {t("style_hint")}
           </span>
+          {fpsInvalid && !showStylePanel && (
+            <span className="text-xs ml-auto" style={{ color: "var(--error)" }}>
+              {t("style_fps_invalid_summary")}
+            </span>
+          )}
         </button>
         {showStylePanel && (
           <div className="px-4 pb-4 grid grid-cols-2 gap-3">
@@ -1014,20 +1030,57 @@ export default function HdrConvert() {
               />
             </div>
             <div>
-              <label className="block text-xs mb-1" style={{ color: "var(--text-muted)" }}>
+              <label
+                htmlFor="hdr-fps-mode"
+                className="block text-xs mb-1"
+                style={{ color: "var(--text-muted)" }}
+              >
                 {t("style_fps")}
               </label>
-              <NumberInput
-                value={style.fps}
-                onChange={(v) => {
-                  const n = parseHdrStyleNumberInput(v, 1, 120);
-                  if (n !== null) setStyle({ ...style, fps: n });
-                }}
-                min={1}
-                max={120}
-                step="0.001"
+              <select
+                id="hdr-fps-mode"
+                value={fpsMode}
+                onChange={(event) => setFpsMode(event.target.value as HdrFpsMode)}
                 disabled={processing}
+                className="w-full px-2 py-1.5 rounded text-sm"
+                style={{
+                  background: "var(--bg-input)",
+                  border: "1px solid var(--border)",
+                  color: "var(--text-primary)",
+                }}
+              >
+                <option value="auto">{t("style_fps_auto")}</option>
+                <option value="manual">{t("style_fps_manual")}</option>
+              </select>
+            </div>
+            <div>
+              <label
+                htmlFor="hdr-fps-value"
+                className="block text-xs mb-1"
+                style={{ color: "var(--text-muted)" }}
+              >
+                {t("style_fps_value")}
+              </label>
+              <NumberInput
+                id="hdr-fps-value"
+                value={fpsText}
+                onChange={setFpsText}
+                min={3}
+                max={120}
+                step="any"
+                disabled={processing || fpsMode === "auto"}
+                invalid={fpsInputInvalid}
+                ariaDescribedBy={fpsInputInvalid ? "hdr-fps-error" : undefined}
               />
+              {fpsInputInvalid && (
+                <span
+                  id="hdr-fps-error"
+                  className="block text-xs mt-1"
+                  style={{ color: "var(--error)" }}
+                >
+                  {t("style_fps_invalid")}
+                </span>
+              )}
             </div>
           </div>
         )}

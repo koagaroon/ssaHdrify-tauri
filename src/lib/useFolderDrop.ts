@@ -44,6 +44,25 @@ export interface UseFolderDropOptions {
   t?: (key: string, ...args: (string | number)[]) => string;
 }
 
+type DropRect = Pick<DOMRect, "left" | "right" | "top" | "bottom" | "width" | "height">;
+
+/** Match a physical-pixel Tauri cursor position against a CSS-pixel drop zone.
+ * Hidden tab panels report a zero-area rect at the origin; reject those before
+ * the inclusive edge comparison so a drop at (0, 0) cannot activate them. */
+export function isDropPositionInsideRect(
+  position: { x: number; y: number },
+  rect: DropRect,
+  devicePixelRatio: number
+): boolean {
+  if (rect.width <= 0 || rect.height <= 0 || rect.right <= rect.left || rect.bottom <= rect.top) {
+    return false;
+  }
+  const scale = Number.isFinite(devicePixelRatio) && devicePixelRatio > 0 ? devicePixelRatio : 1;
+  const x = position.x / scale;
+  const y = position.y / scale;
+  return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+}
+
 /** Subscribe to drag-drop events scoped to a ref'd drop zone element. */
 export function useFolderDrop({
   ref,
@@ -132,11 +151,8 @@ export function useFolderDrop({
           // Tauri reports the cursor position in physical pixels relative
           // to the webview's top-left. getBoundingClientRect is in CSS
           // (logical) pixels, so divide by DPR before comparing.
-          const inRect = (pos: { x: number; y: number }): boolean => {
-            const x = pos.x / dpr;
-            const y = pos.y / dpr;
-            return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
-          };
+          const inRect = (pos: { x: number; y: number }): boolean =>
+            isDropPositionInsideRect(pos, rect, dpr);
 
           switch (event.payload.type) {
             case "enter":

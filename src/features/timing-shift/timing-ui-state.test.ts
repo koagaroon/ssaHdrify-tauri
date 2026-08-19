@@ -1,24 +1,36 @@
 import { describe, expect, it } from "vitest";
 
-import { isTimingOffsetInvalid, isTimingSaveDisabled } from "./timing-ui-state";
+import {
+  formatTimingOffsetMagnitude,
+  isTimingOffsetInvalid,
+  isTimingSaveDisabled,
+  parseTimingOffsetMagnitudeMs,
+} from "./timing-ui-state";
 
 describe("timing UI state guards", () => {
-  it("marks blank, non-finite, and out-of-range offsets invalid", () => {
-    expect(isTimingOffsetInvalid("", 1000)).toBe(true);
-    expect(isTimingOffsetInvalid("not a number", 1000)).toBe(true);
-    expect(isTimingOffsetInvalid("12abc", 1000)).toBe(true);
-    expect(isTimingOffsetInvalid("1e", 1000)).toBe(true);
-    expect(isTimingOffsetInvalid("1e+", 1000)).toBe(true);
-    expect(isTimingOffsetInvalid("1e-", 1000)).toBe(true);
-    expect(isTimingOffsetInvalid("1001", 1000)).toBe(true);
-    expect(isTimingOffsetInvalid("-1001", 1000)).toBe(true);
+  it("requires a nonnegative integer literal in millisecond mode", () => {
+    for (const text of ["", "not a number", "12abc", "1e2", "1.0", "0.5", "-1", "+1"]) {
+      expect(isTimingOffsetInvalid(text, "ms", 1000), text).toBe(true);
+    }
+    expect(parseTimingOffsetMagnitudeMs("0", "ms", 1000)).toBe(0);
+    expect(parseTimingOffsetMagnitudeMs("1000", "ms", 1000)).toBe(1000);
+    expect(isTimingOffsetInvalid("1001", "ms", 1000)).toBe(true);
   });
 
-  it("accepts finite offsets at the exact visible boundary", () => {
-    expect(isTimingOffsetInvalid("1000", 1000)).toBe(false);
-    expect(isTimingOffsetInvalid("-1000", 1000)).toBe(false);
-    expect(isTimingOffsetInvalid("2.5", 10)).toBe(false);
-    expect(isTimingOffsetInvalid("1e2", 1000)).toBe(false);
+  it("accepts seconds only when they resolve exactly to integer milliseconds", () => {
+    expect(parseTimingOffsetMagnitudeMs("2.5", "s", 10)).toBe(2500);
+    expect(parseTimingOffsetMagnitudeMs(".001", "s", 10)).toBe(1);
+    expect(parseTimingOffsetMagnitudeMs("10.000", "s", 10)).toBe(10000);
+    for (const text of ["-0.5", "0.0001", "1.2345", "1e2", "10.001"]) {
+      expect(isTimingOffsetInvalid(text, "s", 10), text).toBe(true);
+    }
+  });
+
+  it("formats unit switches without changing the effective magnitude", () => {
+    expect(formatTimingOffsetMagnitude(2500, "s")).toBe("2.5");
+    expect(formatTimingOffsetMagnitude(2500, "ms")).toBe("2500");
+    expect(formatTimingOffsetMagnitude(1, "s")).toBe("0.001");
+    expect(formatTimingOffsetMagnitude(0, "s")).toBe("0");
   });
 
   it("disables Save when the visible offset is invalid", () => {

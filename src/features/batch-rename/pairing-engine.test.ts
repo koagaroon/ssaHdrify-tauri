@@ -13,6 +13,7 @@
  * "simplification" can't quietly regress the fan-sub paths.
  */
 import { describe, it, expect } from "vitest";
+import { isWindowsRuntime } from "../../lib/platform";
 import {
   parseFilename,
   bracketCleanup,
@@ -22,6 +23,12 @@ import {
   buildMultiSubtitlePairings,
   deriveRenameOutputPath,
   findDuplicateRenameOutputKeys,
+  findRenameInputConflictIndexes,
+  findRenameOutputOwnershipConflictIndexes,
+  countUnpairedSubtitlePaths,
+  refreshRenameFilesAfterSuccessfulInPlaceRenames,
+  refreshPairingRowsAfterSuccessfulInPlaceRenames,
+  summarizeRenameRun,
   isNoOpRename,
   assignSubtitleToRow,
   type PairingRow,
@@ -87,6 +94,17 @@ describe("extractEpisode — documented fan-sub samples", () => {
     expect(ep?.episode).toBe(3);
   });
 
+  it("Pattern A — accepts a known language suffix before the subtitle extension", () => {
+    const name = "Show - 01.sc.ass";
+    const ep = extractEpisode(name, bracketCleanup(name));
+    expect(ep?.episode).toBe(1);
+  });
+
+  it("Pattern A — rejects an unknown dotted suffix instead of treating it as a language tag", () => {
+    const name = "Show - 01.commentary.ass";
+    expect(extractEpisode(name, bracketCleanup(name))).toBeNull();
+  });
+
   it("Pattern B — SubD Sample Show [03]", () => {
     const name = "[SubD][Sample Show Title][03][1080p AVC AAC][CHT].mp4";
     const ep = extractEpisode(name, bracketCleanup(name));
@@ -101,6 +119,12 @@ describe("extractEpisode — documented fan-sub samples", () => {
 
   it("Pattern B — RawsX Show Title [01]", () => {
     const name = "[RawsX][Show Title][01][1080P][BDRip][HEVC-10bit][FLAC].sc.ass";
+    const ep = extractEpisode(name, bracketCleanup(name));
+    expect(ep?.episode).toBe(1);
+  });
+
+  it("Pattern B — skips a four-digit year and accepts the later revised episode", () => {
+    const name = "[Group][2024v2][Show Title][01v2][1080p].mkv";
     const ep = extractEpisode(name, bracketCleanup(name));
     expect(ep?.episode).toBe(1);
   });
@@ -130,6 +154,21 @@ describe("extractEpisode — Western fallbacks", () => {
 
   it("第N话 catches Chinese marker", () => {
     expect(extractEpisode("Show 第04话.ass", bracketCleanup("Show 第04话.ass"))?.episode).toBe(4);
+  });
+
+  it("accepts revision tails across every episode grammar", () => {
+    const cases: [string, number][] = [
+      ["Show.S01E05v2.1080p.mkv", 5],
+      ["[Group][Show][06v3][1080p].mkv", 6],
+      ["[Group] Show - 07V4 [1080p].mkv", 7],
+      ["Show - 08v5.ass", 8],
+      ["Show 第09v6话.ass", 9],
+      ["Show.EP10v7.mkv", 10],
+    ];
+
+    for (const [name, episode] of cases) {
+      expect(extractEpisode(name, bracketCleanup(name))?.episode, name).toBe(episode);
+    }
   });
 });
 
@@ -281,6 +320,16 @@ describe("parseFilename — end-to-end (season, episode)", () => {
 });
 
 describe("buildPairings — common shapes", () => {
+  it("pairs a mixed batch of language-suffixed and revision-tailed names", () => {
+    const videos = [parse("Show - 01v2 [1080p].mkv"), parse("Show.S01E02v3.1080p.mkv")];
+    const subtitles = [parse("Show - 01.sc.ass"), parse("Show.S01E02v1.eng.ass")];
+    const rows = buildPairings(videos, subtitles);
+
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => row.subtitle?.path)).toEqual([subtitles[0]!.path, subtitles[1]!.path]);
+    expect(rows.map((row) => row.source)).toEqual(["regex", "regex"]);
+  });
+
   it("1 video + 2 subs (multi-language) → 1 row, first sub selected", () => {
     const v = parse("[Group][Show][01][1080p].mkv");
     const s1 = parse("[Group][Show][01][1080p].sc.ass");
@@ -450,6 +499,192 @@ describe("findDuplicateRenameOutputKeys", () => {
       "C:/Subs/Episode.sc.ass",
     ]);
     expect(duplicates.size).toBe(1);
+  });
+});
+
+describe("findRenameInputConflictIndexes", () => {
+  it("marks both rows in a two-file swap", () => {
+    const conflicts = findRenameInputConflictIndexes([
+      { inputPath: "C:\\subs\\720.ass", outputPath: "C:\\subs\\1080.ass" },
+      { inputPath: "C:\\subs\\1080.ass", outputPath: "C:\\subs\\720.ass" },
+    ]);
+
+    expect(Array.from(conflicts).sort()).toEqual([0, 1]);
+  });
+
+  it("marks every participant in a longer output-to-input chain", () => {
+    const conflicts = findRenameInputConflictIndexes([
+      { inputPath: "C:\\subs\\a.ass", outputPath: "C:\\subs\\b.ass" },
+      { inputPath: "C:\\subs\\b.ass", outputPath: "C:\\subs\\c.ass" },
+      { inputPath: "C:\\subs\\c.ass", outputPath: "C:\\subs\\final.ass" },
+      { inputPath: "C:\\subs\\safe.ass", outputPath: "C:\\subs\\safe-out.ass" },
+    ]);
+
+    expect(Array.from(conflicts).sort()).toEqual([0, 1, 2]);
+  });
+
+  it("uses canonical slash and case aliases on Windows", () => {
+    if (!isWindowsRuntime) return;
+    const conflicts = findRenameInputConflictIndexes([
+      { inputPath: "C:\\Subs\\A.ass", outputPath: "c:/subs/B.ass" },
+      { inputPath: "C:\\SUBS\\b.ass", outputPath: "C:\\Subs\\final.ass" },
+    ]);
+
+    expect(Array.from(conflicts).sort()).toEqual([0, 1]);
+  });
+
+  it("uses canonical Unicode aliases on every platform", () => {
+    const conflicts = findRenameInputConflictIndexes([
+      { inputPath: "/subs/Cafe\u0301.ass", outputPath: "/subs/target.ass" },
+      { inputPath: "/subs/other.ass", outputPath: "/subs/Caf\u00e9.ass" },
+    ]);
+
+    expect(Array.from(conflicts).sort()).toEqual([0, 1]);
+  });
+
+  it("does not treat an ordinary self no-op as a conflict", () => {
+    const conflicts = findRenameInputConflictIndexes([
+      { inputPath: "/subs/ready.ass", outputPath: "/subs/ready.ass" },
+      { inputPath: "C:\\subs\\other.ass", outputPath: "C:\\subs\\other-out.ass" },
+    ]);
+
+    expect(conflicts.size).toBe(0);
+  });
+
+  it("blocks a target aimed at a loaded subtitle without an executable row", () => {
+    const conflicts = findRenameInputConflictIndexes(
+      [{ inputPath: "C:\\subs\\paired.ass", outputPath: "C:\\subs\\unpaired.ass" }],
+      ["C:\\subs\\paired.ass", "C:\\subs\\unpaired.ass"]
+    );
+
+    expect(Array.from(conflicts)).toEqual([0]);
+  });
+});
+
+describe("findRenameOutputOwnershipConflictIndexes", () => {
+  it("blocks only outputs owned by another tab before the filesystem loop", () => {
+    const targets = [
+      { inputPath: "C:/subs/one.ass", outputPath: "C:/out/free.ass" },
+      { inputPath: "C:/subs/two.ass", outputPath: "C:/out/loaded.ass" },
+      { inputPath: "C:/subs/three.ass", outputPath: "C:/out/also-free.ass" },
+    ];
+
+    const conflicts = findRenameOutputOwnershipConflictIndexes(
+      targets,
+      (outputPath) => outputPath === "C:/out/loaded.ass"
+    );
+
+    expect(Array.from(conflicts)).toEqual([1]);
+  });
+});
+
+describe("summarizeRenameRun", () => {
+  it("reports complete only when every planned row succeeds", () => {
+    expect(summarizeRenameRun(2, 2, 0)).toEqual({ kind: "success", totalPlanned: 2 });
+  });
+
+  it("includes preflight and runtime failures in partial-run arithmetic", () => {
+    expect(summarizeRenameRun(1, 1, 1)).toEqual({ kind: "partial", totalPlanned: 2 });
+    expect(summarizeRenameRun(1, 2, 0)).toEqual({ kind: "partial", totalPlanned: 2 });
+  });
+
+  it("reports an all-failed batch against the full planned denominator", () => {
+    expect(summarizeRenameRun(0, 2, 1)).toEqual({ kind: "error", totalPlanned: 3 });
+  });
+});
+
+describe("countUnpairedSubtitlePaths", () => {
+  it("counts unique loaded subtitles that have no pairing row", () => {
+    const video = parse("Show - 01.mkv");
+    const paired = parse("Show - 01.sc.ass");
+    const hidden = parse("Bonus commentary.ass");
+    const rows = buildPairings([video], [paired, hidden]);
+
+    expect(countUnpairedSubtitlePaths([paired.path, hidden.path, hidden.path], rows)).toBe(1);
+  });
+
+  it("reports a duplicated row owner as not uniquely paired", () => {
+    const video = parse("Show - 01.mkv");
+    const subtitle = parse("Show - 01.sc.ass");
+    const row = buildPairings([video], [subtitle])[0]!;
+
+    expect(countUnpairedSubtitlePaths([subtitle.path], [row, { ...row, id: "duplicate" }])).toBe(1);
+  });
+});
+
+describe("refreshRenameFilesAfterSuccessfulInPlaceRenames", () => {
+  it("updates only successful inputs and makes the next run an honest no-op", () => {
+    const state = {
+      videoPaths: ["C:/video/Show - 01.mkv", "C:/video/Show - 02.mkv"],
+      videoNames: ["Show - 01.mkv", "Show - 02.mkv"],
+      subtitlePaths: ["C:/subs/old - 01.ass", "C:/subs/old - 02.ass", "C:/subs/unselected.ass"],
+      subtitleNames: ["old - 01.ass", "old - 02.ass", "unselected.ass"],
+    };
+    const outputPath = "C:/subs/Show - 01.ass";
+
+    const refreshed = refreshRenameFilesAfterSuccessfulInPlaceRenames(state, [
+      { inputPath: state.subtitlePaths[0]!, outputPath },
+    ])!;
+
+    expect(refreshed.subtitlePaths).toEqual([
+      outputPath,
+      state.subtitlePaths[1],
+      state.subtitlePaths[2],
+    ]);
+    expect(refreshed.subtitleNames).toEqual(["Show - 01.ass", "old - 02.ass", "unselected.ass"]);
+    expect(state.subtitlePaths[0]).toBe("C:/subs/old - 01.ass");
+
+    const secondRunRows = buildPairings(
+      [parseFilename(refreshed.videoPaths[0]!, refreshed.videoNames[0]!)],
+      [parseFilename(refreshed.subtitlePaths[0]!, refreshed.subtitleNames[0]!)]
+    );
+    const secondOutput = deriveRenameOutputPath(
+      secondRunRows[0]!.video!.path,
+      secondRunRows[0]!.subtitle!.path,
+      "rename",
+      null
+    );
+    expect(isNoOpRename(secondRunRows[0]!.subtitle!.path, secondOutput)).toBe(true);
+  });
+
+  it("returns the original state when no successful input is currently loaded", () => {
+    const state = {
+      videoPaths: ["C:/video/Show - 01.mkv", "C:/video/Show - 02.mkv"],
+      videoNames: ["Show - 01.mkv", "Show - 02.mkv"],
+      subtitlePaths: ["C:/subs/old - 01.ass", "C:/subs/old - 02.ass"],
+      subtitleNames: ["old - 01.ass", "old - 02.ass"],
+    };
+
+    const refreshed = refreshRenameFilesAfterSuccessfulInPlaceRenames(state, [
+      { inputPath: "C:/subs/already-removed.ass", outputPath: "C:/subs/new.ass" },
+    ]);
+
+    expect(refreshed).toBe(state);
+  });
+});
+
+describe("refreshPairingRowsAfterSuccessfulInPlaceRenames", () => {
+  it("rewrites only successful subtitles while preserving manual and checkbox intent", () => {
+    const videos = [parse("Show - 01.mkv"), parse("Show - 02.mkv")];
+    const subtitles = [parse("old - 01.ass"), parse("old - 02.ass")];
+    const seed = buildPairings(videos, subtitles);
+    const rows: PairingRow[] = [
+      { ...seed[0]!, source: "manual", selected: true },
+      { ...seed[1]!, source: "manual", selected: false },
+    ];
+
+    const refreshed = refreshPairingRowsAfterSuccessfulInPlaceRenames(rows, [
+      { inputPath: subtitles[0]!.path, outputPath: "/dummy/Show - 01.ass" },
+    ]);
+
+    expect(refreshed[0]).toMatchObject({
+      id: rows[0]!.id,
+      source: "manual",
+      selected: true,
+      subtitle: { path: "/dummy/Show - 01.ass", name: "Show - 01.ass" },
+    });
+    expect(refreshed[1]).toBe(rows[1]);
+    expect(refreshed[1]).toMatchObject({ source: "manual", selected: false });
   });
 });
 

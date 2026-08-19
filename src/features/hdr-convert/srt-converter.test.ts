@@ -11,6 +11,7 @@ import {
   processSrtUserText,
   buildAssDocument,
   buildAssDocumentFromCaptions,
+  convertTextCueSubtitleToAss,
   isNativeAss,
   isConvertible,
   DEFAULT_STYLE,
@@ -31,14 +32,19 @@ describe("preprocessSrtColors", () => {
     expect(result).not.toContain("<font");
   });
 
-  it("inserts color reset after </font>", () => {
+  it("restores the current style primary color after the outer </font>", () => {
     const result = preprocessSrtColors('<font color="#FF0000">Red</font> normal');
-    // Pin the reset shape — the loose alternation `\{\\1c&H[0-9A-F]{6}\}`
-    // would still pass for an emitted `&HDEADBE` (any 6 hex). The reset
-    // contract is "either ASS reset tag {\r}, OR explicit BGR black
-    // (000000)." Anchor on those two specific shapes so a regression
-    // emitting a stray non-zero color still fails.
-    expect(result).toMatch(/Red(?:\{\\r\}|\{\\1c&H0+&?\}) normal/);
+    expect(result).toBe("{\\1c&H0000FF&}Red{\\1c} normal");
+    expect(result).not.toContain("{\\r}");
+  });
+
+  it("restores the previous inline color when colored font tags nest", () => {
+    const result = preprocessSrtColors(
+      '<font color="#FF0000">red <font color="#00FF00">green</font> red</font> default'
+    );
+
+    expect(result).toBe("{\\1c&H0000FF&}red {\\1c&H00FF00&}green{\\1c&H0000FF&} red{\\1c} default");
+    expect(result).not.toContain("{\\r}");
   });
 
   it("handles multiple attributes on <font> tag", () => {
@@ -72,16 +78,28 @@ describe("preprocessSrtColors", () => {
   it("handles text with no color attribute on font tag", () => {
     const input = '<font face="Arial">Styled</font>';
     const result = preprocessSrtColors(input);
-    // Layer-of-responsibility note: preprocessSrtColors only handles
-    // color-bearing <font> tags here. The opener without color is
-    // intentionally left in — it's stripped downstream by
-    // buildAssDocument's HTML-tag removal pass (see srt-converter.ts
-    // line 64 comment). The </font> closer DOES become {\\r} regardless,
-    // because that path is a uniform style-reset emitter.
-    expect(result).toContain("Styled");
-    // Closer always becomes {\r}, including when the opener carried no color.
-    expect(result).not.toContain("</font>");
-    expect(result).toContain("{\\r}");
+    // This stage owns color only. The document builder strips the untouched
+    // non-color HTML tags later, so neither side may inject a style reset.
+    expect(result).toBe(input);
+    expect(result).not.toContain("{\\r}");
+    expect(result).not.toContain("{\\1c}");
+  });
+
+  it("tracks mixed color and non-color font frames without popping color early", () => {
+    const result = preprocessSrtColors(
+      '<font color="#FF0000">outer <font face="Arial">inner</font> outer</font> default'
+    );
+
+    expect(result).toBe('{\\1c&H0000FF&}outer <font face="Arial">inner</font> outer{\\1c} default');
+  });
+
+  it("lets a colored inner frame reset without changing its non-color outer frame", () => {
+    const result = preprocessSrtColors(
+      '<font face="Arial">outer <font color="#00FF00">green</font> outer</font> default'
+    );
+
+    expect(result).toBe('<font face="Arial">outer {\\1c&H00FF00&}green{\\1c} outer</font> default');
+    expect(result).not.toContain("{\\r}");
   });
 
   it("does not match color openers beyond the bounded windows in a 100KB payload", () => {
@@ -93,7 +111,8 @@ describe("preprocessSrtColors", () => {
     const chunk = '<font face="Arial" data-extra="x"'.repeat(40); // ~1300 bytes
     const payload = chunk.repeat(80) + ">Styled</font>"; // ~100KB
     const result = preprocessSrtColors(payload);
-    expect(result).toBe(payload.replace("</font>", "{\\r}"));
+    expect(result).toBe(payload);
+    expect(result).not.toContain("{\\1c");
   });
 
   it.each([
@@ -109,8 +128,51 @@ describe("preprocessSrtColors", () => {
     const atLimit = makeInput(512);
     const overLimit = makeInput(513);
 
-    expect(preprocessSrtColors(atLimit)).toBe("{\\1c&H0000FF&}Styled{\\r}");
-    expect(preprocessSrtColors(overLimit)).toBe(overLimit.replace("</font>", "{\\r}"));
+    expect(preprocessSrtColors(atLimit)).toBe("{\\1c&H0000FF&}Styled{\\1c}");
+    expect(preprocessSrtColors(overLimit)).toBe(overLimit);
+  });
+
+  it("leaves malformed and unmatched font markup non-resetting", () => {
+    expect(preprocessSrtColors("before</font>after")).toBe("before</font>after");
+    expect(preprocessSrtColors('<font color="#FF0000">unclosed')).toBe("{\\1c&H0000FF&}unclosed");
+    expect(preprocessSrtColors("<font color='#FF0000'>unsupported quote</font>")).toBe(
+      "<font color='#FF0000'>unsupported quote</font>"
+    );
+  });
+
+  it("keeps overflow closers from popping the last tracked color frame", () => {
+    const trackedNonColorOpeners = '<font face="Arial">'.repeat(255);
+    const trackedNonColorClosers = "</font>".repeat(255);
+    const input =
+      '<font color="#FF0000">outer ' +
+      trackedNonColorOpeners +
+      '<font color="#00FF00">overflow</font> sentinel ' +
+      trackedNonColorClosers +
+      " outer-tail</font> default";
+
+    const processed = processSrtUserText(input);
+    const document = buildAssDocument([{ start: 0, end: 1_000, text: processed }]);
+    const dialogue = document.split("\n").find((line) => line.startsWith("Dialogue:"));
+
+    expect(dialogue).toContain("{\\1c&H0000FF&}outer overflow sentinel  outer-tail{\\1c} default");
+    expect(dialogue).not.toContain("{\\1c&H00FF00&}");
+    expect(dialogue).not.toContain("{\\r}");
+  });
+
+  it("keeps an overlength opener from closing its tracked outer color early", () => {
+    const overlengthColorOpener = `<font ${"x".repeat(1_040)} color="#00FF00">`;
+    const input =
+      '<font color="#FF0000">outer ' +
+      overlengthColorOpener +
+      "overflow</font> sentinel</font> default";
+
+    const processed = processSrtUserText(input);
+    const document = buildAssDocument([{ start: 0, end: 1_000, text: processed }]);
+    const dialogue = document.split("\n").find((line) => line.startsWith("Dialogue:"));
+
+    expect(dialogue).toContain("{\\1c&H0000FF&}outer overflow sentinel{\\1c} default");
+    expect(dialogue).not.toContain("{\\1c&H00FF00&}");
+    expect(dialogue).not.toContain("{\\r}");
   });
 });
 
@@ -130,6 +192,15 @@ describe("processSrtUserText", () => {
     expect(out).toMatch(/\{\\1c&H/);
   });
 
+  it("does not expose a raw user override through color-tag attributes or text", () => {
+    const input = '<font color="#FF0000" title="{\\an8}">Red</font>{\\pos(10,20)} after color';
+    const out = processSrtUserText(input);
+
+    expect(out).toBe("{\\1c&H0000FF&}Red{\\1c}\\{\\\\pos(10,20)\\} after color");
+    expect(out).not.toContain("{\\an8}");
+    expect(out).not.toContain("{\\pos(10,20)}");
+  });
+
   it("equals preprocessSrtColors(escapeSrtUserText(text)) by composition", () => {
     // Pin the composition contract — if a future refactor reorders or
     // skips a step inside processSrtUserText, this test fails.
@@ -147,6 +218,53 @@ describe("processSrtUserText", () => {
   it("is idempotent on text with no user braces and no color tags", () => {
     const plain = "Hello world, no markup at all.";
     expect(processSrtUserText(plain)).toBe(plain);
+  });
+});
+
+describe("shared text-cue to ASS conversion", () => {
+  it("parses MicroDVD structure before escaping cue text and excludes FPS metadata", () => {
+    const sub = '{1}{1}25.000\n{25}{50}{\\an8}<font color="#FF0000">Red</font>\n';
+    const result = convertTextCueSubtitleToAss(sub);
+    const dialogues = result.content.split("\n").filter((line) => line.startsWith("Dialogue:"));
+
+    expect(dialogues).toHaveLength(1);
+    expect(dialogues[0]).toContain("0:00:01.00,0:00:02.00");
+    expect(dialogues[0]).toContain("\\{\\\\an8\\}");
+    expect(dialogues[0]).toContain("{\\1c&H0000FF&}Red");
+    expect(result.content).not.toContain("25.000");
+  });
+
+  it("uses an explicit manual FPS override instead of the declaration", () => {
+    const result = convertTextCueSubtitleToAss("{1}{1}25\n{25}{50}Hello\n", DEFAULT_STYLE, 50);
+    const dialogue = result.content.split("\n").find((line) => line.startsWith("Dialogue:"));
+
+    expect(dialogue).toContain("0:00:00.50,0:00:01.00");
+  });
+
+  it.each([
+    ["SRT", (text: string) => `1\n00:00:01,000 --> 00:00:02,000\n${text}\n`],
+    ["WebVTT", (text: string) => `WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n${text}\n`],
+    ["MicroDVD", (text: string) => `{1}{1}25\n{25}{50}${text}\n`],
+  ])(
+    "rejects all-oversized %s input with the skipped count before returning empty ASS",
+    (_format, makeInput) => {
+      expect(() => convertTextCueSubtitleToAss(makeInput("X".repeat(65_000)))).toThrow(
+        /all 1 cue.*64000/i
+      );
+    }
+  );
+
+  it("keeps valid cues when an oversized sibling is skipped without emitting a blank Dialogue", () => {
+    const oversized = "X".repeat(65_000);
+    const srt =
+      `1\n00:00:01,000 --> 00:00:02,000\n${oversized}\n\n` +
+      "2\n00:00:03,000 --> 00:00:04,000\nNormal\n";
+    const result = convertTextCueSubtitleToAss(srt);
+    const dialogues = result.content.split("\n").filter((line) => line.startsWith("Dialogue:"));
+
+    expect(result.skippedCount).toBe(1);
+    expect(dialogues).toHaveLength(1);
+    expect(dialogues[0]).toContain("Normal");
   });
 });
 
@@ -326,6 +444,19 @@ describe("SRT pipeline integration — color-tag preservation regression", () =>
     expect(doc).toContain("Red text");
     // `{` must NOT appear escaped in the Dialogue line emitted for our tag
     expect(doc).not.toMatch(/\\\{\\\\1c/);
+  });
+
+  it("restores only color while surrounding bold, italic, and underline stay active", () => {
+    const processed = processSrtUserText(
+      '<b><i><u><font color="#FF0000">colored</font> styled tail</u></i></b>'
+    );
+    const doc = buildAssDocument([{ start: 0, end: 1_000, text: processed }]);
+    const dialogue = doc.split("\n").find((line) => line.startsWith("Dialogue:"));
+
+    expect(dialogue).toContain(
+      "{\\b1}{\\i1}{\\u1}{\\1c&H0000FF&}colored{\\1c} styled tail{\\u0}{\\i0}{\\b0}"
+    );
+    expect(dialogue).not.toContain("{\\r}");
   });
 });
 

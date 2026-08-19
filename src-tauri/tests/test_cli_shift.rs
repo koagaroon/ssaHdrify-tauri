@@ -289,6 +289,66 @@ fn comment_only_vtt_fails_without_creating_an_output() {
 }
 
 #[test]
+fn declared_microdvd_fps_drives_shift_and_is_preserved_verbatim() {
+    let root = temp_dir("microdvd-declared-shift");
+    let input = write_file(&root, "episode.sub", "{1}{1}25.000\r\n{25}{50}Hello\r\n");
+
+    let output = run_shift(&root, &[], &[&input]);
+
+    assert!(output.status.success(), "{}", combined_output(&output));
+    let shifted = fs::read_to_string(root.join("episode.shifted.sub"))
+        .expect("declared-FPS shifted output missing");
+    assert_eq!(shifted, "{1}{1}25.000\r\n{50}{75}Hello\r\n");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn declared_microdvd_hdr_converts_one_cue_without_metadata_dialogue() {
+    let root = temp_dir("microdvd-declared-hdr");
+    let input = write_file(&root, "episode.sub", "{1}{1}25.000\n{25}{50}{\\an8}Hello\n");
+
+    let output = Command::new(cli_path())
+        .current_dir(&root)
+        .args(["--lang", "en", "hdr", "--eotf", "pq"])
+        .arg(&input)
+        .output()
+        .expect("failed to run HDR command");
+
+    assert!(output.status.success(), "{}", combined_output(&output));
+    let converted =
+        fs::read_to_string(root.join("episode.hdr.ass")).expect("declared-FPS HDR output missing");
+    assert_eq!(converted.matches("Dialogue:").count(), 1);
+    assert!(converted.contains("0:00:01.00,0:00:02.00"));
+    assert!(converted.contains("\\{\\\\an8\\}Hello"));
+    assert!(!converted.contains("25.000"));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn all_oversized_hdr_fails_without_creating_predicted_output() {
+    let root = temp_dir("all-oversized-hdr");
+    let oversized = "X".repeat(65_000);
+    let input = write_file(
+        &root,
+        "oversized.sub",
+        &format!("{{1}}{{1}}25\n{{25}}{{50}}{oversized}\n"),
+    );
+
+    let output = Command::new(cli_path())
+        .current_dir(&root)
+        .args(["--lang", "en", "hdr", "--eotf", "pq"])
+        .arg(&input)
+        .output()
+        .expect("failed to run HDR command");
+    let combined = combined_output(&output);
+
+    assert!(!output.status.success(), "{combined}");
+    assert!(combined.contains("all 1 cue(s) exceeded the 64000-character limit"));
+    assert!(!root.join("oversized.hdr.ass").exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn bomless_utf16_inference_is_reported_and_converted_safely() {
     let root = temp_dir("bomless-utf16");
     let input = write_bomless_utf16le(&root, "episode.srt", VALID_SRT);

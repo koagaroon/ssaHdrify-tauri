@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   applyFontEmbed,
+  convertHdr,
   convertShift,
   parseTimingMap,
   planFontEmbed,
@@ -54,6 +55,23 @@ describe("planRename", () => {
       language: "sc",
       noOp: false,
     });
+  });
+
+  it("auto mode pairs a mixed language-suffix and revision-tail batch", () => {
+    const videoOne = "C:\\media\\Show - 01v2.mkv";
+    const videoTwo = "C:\\media\\Show.S01E02v3.mkv";
+    const subtitleOne = "C:\\subs\\Show - 01.sc.ass";
+    const subtitleTwo = "C:\\subs\\Show.S01E02v1.eng.ass";
+
+    const plan = planRename({
+      paths: [videoOne, videoTwo, subtitleOne, subtitleTwo],
+      mode: "copy_to_video",
+      langs: "auto",
+    });
+
+    expect(plan.pairings.map((row) => row.inputPath)).toEqual([subtitleOne, subtitleTwo]);
+    expect(plan.pairings.map((row) => row.videoPath)).toEqual([videoOne, videoTwo]);
+    expect(plan.pairings.map((row) => row.language)).toEqual(["sc", "en"]);
   });
 
   it("filters explicit language aliases before planning", () => {
@@ -192,6 +210,70 @@ describe("planRename", () => {
       noOp: true,
     });
   });
+
+  it("marks both endpoints of an ambiguous two-file rename swap", () => {
+    const video1080 = "C:\\media\\[Raw][Show][01][1080p].mkv";
+    const video720 = "C:\\media\\[Raw][Show][01][720p].mkv";
+    const sub720 = "C:\\media\\[Raw][Show][01][720p].ass";
+    const sub1080 = "C:\\media\\[Raw][Show][01][1080p].ass";
+
+    const plan = planRename({
+      paths: [video1080, video720, sub720, sub1080],
+      mode: "rename",
+      langs: "auto",
+    });
+
+    expect(plan.pairings.map((row) => row.inputPath)).toEqual([sub720, sub1080]);
+    expect(plan.pairings.map((row) => row.outputPath)).toEqual([sub1080, sub720]);
+    expect(plan.pairings.map((row) => row.source)).toEqual(["warning", "warning"]);
+    expect(plan.pairings.map((row) => row.inputConflict)).toEqual([true, true]);
+  });
+
+  it("protects a loaded subtitle that auto pairing leaves without a row", () => {
+    const video = "C:\\media\\[Raw][Show][01][1080p].mkv";
+    const chosenSub = "C:\\media\\[Subs][Show][01][source].ass";
+    const unpairedProtectedSub = "C:\\media\\[Raw][Show][01][1080p].ass";
+
+    const plan = planRename({
+      paths: [video, chosenSub, unpairedProtectedSub],
+      mode: "copy_to_video",
+      langs: "auto",
+    });
+
+    expect(plan.pairings).toHaveLength(1);
+    expect(plan.pairings[0]).toMatchObject({
+      inputPath: chosenSub,
+      outputPath: unpairedProtectedSub,
+      inputConflict: true,
+    });
+  });
+});
+
+describe("HDR text-cue engine helpers", () => {
+  it("converts declared-FPS MicroDVD through the CLI surface without a metadata Dialogue", () => {
+    const result = convertHdr({
+      inputPath: "C:\\subs\\sample.sub",
+      content: "{1}{1}25.000\n{25}{50}{\\an8}Hello\n",
+      eotf: "PQ",
+    });
+    const dialogues = result.content.split("\n").filter((line) => line.startsWith("Dialogue:"));
+
+    expect(result.skippedCount).toBe(0);
+    expect(dialogues).toHaveLength(1);
+    expect(dialogues[0]).toContain("0:00:01.00,0:00:02.00");
+    expect(dialogues[0]).toContain("\\{\\\\an8\\}Hello");
+    expect(result.content).not.toContain("25.000");
+  });
+
+  it("throws when every parsed text cue is oversized", () => {
+    expect(() =>
+      convertHdr({
+        inputPath: "C:\\subs\\sample.sub",
+        content: `{1}{1}25\n{25}{50}${"X".repeat(65_000)}\n`,
+        eotf: "PQ",
+      })
+    ).toThrow(/all 1 cue.*64000/i);
+  });
 });
 
 describe("time shift timing-map engine helpers", () => {
@@ -237,6 +319,18 @@ describe("time shift timing-map engine helpers", () => {
         "",
       ].join("\n")
     );
+  });
+
+  it("uses and preserves a MicroDVD FPS declaration for standalone shift", () => {
+    const result = convertShift({
+      inputPath: "C:\\subs\\sample.sub",
+      content: "{1}{1}25.000\r\n{25}{50}Hello\r\n",
+      offsetMs: 1000,
+    });
+
+    expect(result.captionCount).toBe(1);
+    expect(result.shiftedCount).toBe(1);
+    expect(result.content).toBe("{1}{1}25.000\r\n{50}{75}Hello\r\n");
   });
 
   it("treats a runtime-null threshold as absent for a timing-map shift", () => {

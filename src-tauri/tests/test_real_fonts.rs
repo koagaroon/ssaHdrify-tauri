@@ -588,19 +588,19 @@ fn real_font_package_refreshes_cache_and_diagnoses_cjk_fonts() {
     assert!(cache_path.exists(), "refresh-fonts did not create cache");
 
     let cache = FontCache::open_existing_read_only(&cache_path).expect("open cache read-only");
-    let cached_folders = cache.list_folders().expect("list cached folders");
+    let cached_sources = cache.list_sources().expect("list cached sources");
     assert_eq!(
-        cached_folders.len(),
+        cached_sources.len(),
         font_dirs.len(),
-        "refresh-fonts should write one row per representative font dir"
+        "refresh-fonts should write one source per representative font dir"
     );
     for dir in &font_dirs {
         let canonical = dir.canonicalize().expect("canonicalize font dir");
         let canonical = canonical.display().to_string();
         assert!(
-            cached_folders
+            cached_sources
                 .iter()
-                .any(|folder| folder.folder_path == canonical),
+                .any(|source| source.source_root == canonical),
             "cache did not include expected font dir: {canonical}"
         );
     }

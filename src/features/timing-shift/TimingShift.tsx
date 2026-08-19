@@ -27,8 +27,12 @@ import { useLogPanel } from "../../lib/useLogPanel";
 import { LogPanel } from "../../lib/LogPanel";
 import { DropErrorBanner } from "../../lib/DropErrorBanner";
 import NumberInput from "../../lib/NumberInput";
-import { parseFiniteNumberText } from "../../lib/strict-number";
-import { isTimingOffsetInvalid, isTimingSaveDisabled } from "./timing-ui-state";
+import {
+  formatTimingOffsetMagnitude,
+  isTimingOffsetInvalid,
+  isTimingSaveDisabled,
+  parseTimingOffsetMagnitudeMs,
+} from "./timing-ui-state";
 import {
   buildConflictMessage,
   normalizeOutputKey,
@@ -137,13 +141,11 @@ export default function TimingShift() {
     previewTruncated,
     error: previewError,
   } = previewState;
-  // Two-slot shadow mirroring HdrConvert's `brightness` /
-  // `brightnessText`: `offsetValue` is the validated integer used by
-  // `effectiveOffsetMs` math; `offsetText` is the raw input string the
-  // user is typing. The pair lets NumberInput own clear-then-retype
-  // semantics (mid-type NaN states don't snap the visible field back to
-  // a stale number) while keeping the math path typed.
-  const [offsetValue, setOffsetValue] = useState(200);
+  // Keep the validated value in integer milliseconds regardless of the
+  // visible unit. offsetText remains the user's exact in-progress text, while
+  // invalid text disables preview/save instead of silently using an older
+  // magnitude. The separate direction control is the only source of sign.
+  const [offsetMagnitudeMs, setOffsetMagnitudeMs] = useState(200);
   const [offsetText, setOffsetText] = useState("200");
   const [unit, setUnit] = useState<Unit>("ms");
   const [direction, setDirection] = useState<Direction>("slower");
@@ -176,17 +178,9 @@ export default function TimingShift() {
   const fileContainerRef = useRef<HTMLDivElement>(null);
 
   const effectiveOffsetMs = useMemo(() => {
-    const base = unit === "s" ? offsetValue * 1000 : offsetValue;
-    // Math.round at the math boundary so
-    // fractional s-unit inputs (e.g. "2.5s" → 2500 ms) accepted by
-    // parseFloat below don't propagate sub-ms fractions into
-    // formatSrtTime, whose `ms % 1000` produces non-integer
-    // milliseconds that padStart can't format cleanly. Integer-ms is
-    // the downstream contract.
-    const rounded = Math.round(base);
-    const clamped = Math.max(-MAX_OFFSET_MS, Math.min(MAX_OFFSET_MS, rounded));
-    return direction === "faster" ? -clamped : clamped;
-  }, [unit, offsetValue, direction]);
+    if (direction === "faster" && offsetMagnitudeMs > 0) return -offsetMagnitudeMs;
+    return offsetMagnitudeMs;
+  }, [offsetMagnitudeMs, direction]);
 
   // Per-unit absolute bound used by NumberInput's min/max attributes and
   // the out-of-range derived signal below. In ms-unit the cap is the full
@@ -194,38 +188,22 @@ export default function TimingShift() {
   // visible value range stays user-friendly.
   const offsetMax = unit === "s" ? MAX_OFFSET_MS / 1000 : MAX_OFFSET_MS;
 
-  // Unit toggle preserves the intended shift duration: ms→s scales the
-  // value down by 1000 (1500 ms → 1.5 s), s→ms scales up (2.5 s →
-  // 2500 ms). Without this rescale, the displayed number stays the
-  // same while its semantic meaning shifts by 1000× — a no-silent-action
-  // violation the user only notices when subtitles end up minutes off.
-  // s-side text uses toFixed(3) + trailing-zero strip so floating-point
-  // noise like 0.7000000000000001 doesn't surface; ms-side rounds to
-  // integer because downstream math is integer ms anyway.
+  // Unit changes reformat the exact stored millisecond magnitude, so the
+  // number shown after the switch always describes the value the engine uses.
   const handleUnitChange = (newUnit: Unit) => {
     if (newUnit === unit) return;
-    if (newUnit === "s") {
-      const sVal = offsetValue / 1000;
-      setOffsetValue(sVal);
-      setOffsetText(sVal.toFixed(3).replace(/\.?0+$/, "") || "0");
-    } else {
-      const msVal = Math.round(offsetValue * 1000);
-      setOffsetValue(msVal);
-      setOffsetText(msVal.toString());
-    }
+    setOffsetText(formatTimingOffsetMagnitude(offsetMagnitudeMs, newUnit));
     setUnit(newUnit);
   };
   const handleOffsetChange = (value: string) => {
     setOffsetText(value);
-    const n = parseFiniteNumberText(value);
-    if (n !== null && Math.abs(n) <= offsetMax) {
-      setOffsetValue(n);
-    }
+    const magnitudeMs = parseTimingOffsetMagnitudeMs(value, unit, offsetMax);
+    if (magnitudeMs !== null) setOffsetMagnitudeMs(magnitudeMs);
   };
   // Derived: the visible input is not currently a finite in-range
   // number. Without this, Save can proceed against the prior valid
-  // `offsetValue` while the user sees a different value in the field.
-  const offsetInvalid = isTimingOffsetInvalid(offsetText, offsetMax);
+  // `offsetMagnitudeMs` while the user sees a different value in the field.
+  const offsetInvalid = isTimingOffsetInvalid(offsetText, unit, offsetMax);
 
   const thresholdMs = useMemo(
     () => (useThreshold ? parseDisplayTime(thresholdText) : null),
@@ -849,8 +827,9 @@ export default function TimingShift() {
             id="timing-offset-input"
             value={offsetText}
             onChange={handleOffsetChange}
-            min={-offsetMax}
+            min={0}
             max={offsetMax}
+            step={unit === "ms" ? 1 : "0.001"}
             disabled={busy}
             invalid={offsetInvalid}
             className="w-28"

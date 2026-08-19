@@ -72,16 +72,24 @@ impl Drop for CacheMutationGuard {
 const GUI_CACHE_FILE_NAME: &str = "gui_font_cache.sqlite3";
 
 /// Live cache handle, populated by `init_gui_font_cache` during Tauri
-/// setup and consumed by the five commands. `None` when init hit a
-/// schema mismatch or other recoverable error — in that state the
-/// frontend's drift modal renders the "rebuild required" path so the
-/// user can clear and re-init explicitly.
+/// setup and consumed by the five commands. `None` after a schema mismatch or
+/// another non-fatal initialization error. Only schema mismatch is represented
+/// as rebuild-required status; ordinary failures are returned from
+/// `open_font_cache` through the separate stored-error slot below.
 static GUI_FONT_CACHE: Lazy<Mutex<Option<FontCache>>> = Lazy::new(|| Mutex::new(None));
 
 /// Cache file path published separately from the live handle so
 /// `clear_font_cache` can drop the connection AND wipe the file even
 /// when `GUI_FONT_CACHE` is `None` (schema-mismatch recovery path).
 static GUI_FONT_CACHE_PATH: Lazy<Mutex<Option<PathBuf>>> = Lazy::new(|| Mutex::new(None));
+
+/// User-safe reason for the most recent non-schema initialization failure.
+/// The path slot deliberately remains empty for those failures so an ordinary
+/// permission or open error cannot be mistaken for a rebuildable schema
+/// mismatch. `open_font_cache` reads this slot before inferring status.
+static GUI_FONT_CACHE_INIT_FAILURE: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(None));
+
+const MAX_GUI_CACHE_INIT_FAILURE_CHARS: usize = 1_024;
 
 /// Monotonic revision counter bumped after every successful cache content or
 /// topology mutation. The counter is
@@ -104,6 +112,98 @@ static GUI_FONT_CACHE_GENERATION: AtomicU64 = AtomicU64::new(0);
 fn finish_gui_cache_mutation() {
     crate::fonts::clear_cache_provenance();
     GUI_FONT_CACHE_GENERATION.fetch_add(1, Ordering::Release);
+}
+
+fn sanitize_gui_cache_init_failure(message: &str) -> String {
+    let mut sanitized = String::with_capacity(message.len().min(MAX_GUI_CACHE_INIT_FAILURE_CHARS));
+    let mut chars = message.chars();
+    for _ in 0..MAX_GUI_CACHE_INIT_FAILURE_CHARS {
+        let Some(ch) = chars.next() else {
+            return sanitized;
+        };
+        if ch.is_control()
+            || matches!(
+                ch,
+                '\u{2028}' | '\u{2029}'
+                    | '\u{200B}'..='\u{200D}'
+                    | '\u{2060}'
+                    | '\u{180E}'
+                    | '\u{FEFF}'
+                    | '\u{061C}'
+                    | '\u{200E}'
+                    | '\u{200F}'
+                    | '\u{202A}'..='\u{202E}'
+                    | '\u{2066}'..='\u{2069}'
+            )
+        {
+            sanitized.push(' ');
+        } else {
+            sanitized.push(ch);
+        }
+    }
+    if chars.next().is_some() {
+        sanitized.push('…');
+    }
+    sanitized
+}
+
+fn store_gui_cache_init_failure(message: String) -> Result<(), String> {
+    let mut failure_slot = GUI_FONT_CACHE_INIT_FAILURE
+        .lock()
+        .map_err(|_| "GUI cache initialization-error mutex poisoned".to_string())?;
+    *failure_slot = Some(sanitize_gui_cache_init_failure(&message));
+    Ok(())
+}
+
+fn clear_gui_cache_init_failure() -> Result<(), String> {
+    let mut failure_slot = GUI_FONT_CACHE_INIT_FAILURE
+        .lock()
+        .map_err(|_| "GUI cache initialization-error mutex poisoned".to_string())?;
+    *failure_slot = None;
+    Ok(())
+}
+
+fn gui_cache_init_failure() -> Result<Option<String>, String> {
+    GUI_FONT_CACHE_INIT_FAILURE
+        .lock()
+        .map_err(|_| "GUI cache initialization-error mutex poisoned".to_string())
+        .map(|failure| failure.clone())
+}
+
+fn reset_gui_cache_state_for_init() -> Result<(), String> {
+    {
+        let mut cache_slot = GUI_FONT_CACHE
+            .lock()
+            .map_err(|_| "GUI cache mutex poisoned".to_string())?;
+        *cache_slot = None;
+        finish_gui_cache_mutation();
+    }
+    {
+        let mut path_slot = GUI_FONT_CACHE_PATH
+            .lock()
+            .map_err(|_| "GUI cache path mutex poisoned".to_string())?;
+        *path_slot = None;
+    }
+    clear_gui_cache_init_failure()
+}
+
+fn gui_cache_directory_failure_for_ipc(error: &std::io::Error) -> String {
+    let kind = match error.kind() {
+        std::io::ErrorKind::NotFound => "path not found",
+        std::io::ErrorKind::PermissionDenied => "permission denied",
+        std::io::ErrorKind::AlreadyExists | std::io::ErrorKind::NotADirectory => {
+            "a non-directory entry already exists there"
+        }
+        std::io::ErrorKind::InvalidInput => "invalid path",
+        _ => "filesystem error",
+    };
+    format!("GUI font cache initialization failed while creating its data directory: {kind}")
+}
+
+fn gui_cache_open_failure_for_ipc(cache_path: &Path, error: &CacheError) -> String {
+    let path = cache_path.display().to_string();
+    let redacted_detail = error.to_string().replace(&path, "<font-cache path>");
+    format!("GUI font cache initialization failed: {redacted_detail}")
 }
 
 /// One-shot migration of the legacy GUI font cache file from a prior
@@ -298,6 +398,9 @@ pub fn migrate_legacy_gui_cache(legacy_dir: &Path, new_dir: &Path) {
 ///   matches the locked "no auto-migrate" decision: never silently
 ///   delete a cache file the user might want to inspect.
 pub fn init_gui_font_cache(app_data_dir: &Path) -> Result<(), String> {
+    // Setup normally calls this exactly once. Reset all three slots anyway so a
+    // future explicit retry cannot retain a stale live handle, path, or error.
+    reset_gui_cache_state_for_init()?;
     // `app_data_dir` here is resolved via the caller in `lib.rs`
     // which passes `font_cache::unified_app_data_dir()` — chain is
     // `std::env::var("APPDATA")` (Windows) / `$XDG_DATA_HOME` (POSIX)
@@ -313,12 +416,14 @@ pub fn init_gui_font_cache(app_data_dir: &Path) -> Result<(), String> {
     // check — and contradicting the locked single-user-desktop threat
     // model. Revisit if the project ships in a multi-user /
     // MDM-managed deployment.
-    std::fs::create_dir_all(app_data_dir).map_err(|e| {
-        format!(
-            "Cannot create app data dir '{}': {e}",
+    if let Err(error) = std::fs::create_dir_all(app_data_dir) {
+        let detailed = format!(
+            "Cannot create app data dir '{}': {error}",
             app_data_dir.display()
-        )
-    })?;
+        );
+        store_gui_cache_init_failure(gui_cache_directory_failure_for_ipc(&error))?;
+        return Err(detailed);
+    }
     let cache_path = app_data_dir.join(GUI_CACHE_FILE_NAME);
 
     // Publish the path before attempting open so `clear_font_cache`
@@ -333,6 +438,7 @@ pub fn init_gui_font_cache(app_data_dir: &Path) -> Result<(), String> {
 
     match FontCache::open_or_create(&cache_path) {
         Ok(cache) => {
+            clear_gui_cache_init_failure()?;
             let mut slot = GUI_FONT_CACHE
                 .lock()
                 .map_err(|_| "GUI cache mutex poisoned".to_string())?;
@@ -340,6 +446,9 @@ pub fn init_gui_font_cache(app_data_dir: &Path) -> Result<(), String> {
             Ok(())
         }
         Err(CacheError::SchemaVersionMismatch { found, expected }) => {
+            // Schema mismatch has its own structured status and recovery path;
+            // never let a stale ordinary-init error take precedence over it.
+            clear_gui_cache_init_failure()?;
             log::warn!(
                 "GUI font cache at {} has schema version {found}; expected {expected}. \
                  Cache unavailable until user clears via drift modal.",
@@ -356,6 +465,7 @@ pub fn init_gui_font_cache(app_data_dir: &Path) -> Result<(), String> {
             if let Ok(mut path_slot) = GUI_FONT_CACHE_PATH.lock() {
                 *path_slot = None;
             }
+            store_gui_cache_init_failure(gui_cache_open_failure_for_ipc(&cache_path, &e))?;
             Err(format!(
                 "Cannot open GUI font cache at {}: {e}",
                 cache_path.display()
@@ -428,9 +538,9 @@ pub struct SkippedFolder {
     /// Cached source root that triggered the skip. Field name
     /// `folder` (not `folder_path`) is intentional and paired with
     /// TS `FontCacheSkippedFolder.folder` in `tauri-api.ts`; the
-    /// shorter form jars against `FolderRecord.folder_path` in
-    /// `font_cache.rs` but the trade is "shorter UI-facing field
-    /// name vs internal-storage descriptor" — keep the TS pairing.
+    /// shorter form differs from the internal source-record field, but
+    /// the trade is "shorter UI-facing field name vs internal-storage
+    /// descriptor" — keep the TS pairing.
     pub folder: String,
     pub scope: FontDirectoryScope,
     /// User-facing reason — the error message from the failing op
@@ -511,11 +621,22 @@ fn classify_unreadable_existing_as_modified(
 /// (frontend asks "is cache ready?" before calling detect_drift) and
 /// for re-checking after `clear_font_cache`.
 pub fn open_font_cache() -> Result<CacheStatus, String> {
+    // A stored non-schema failure is more precise than the absence-derived
+    // "setup did not run" fallback and must win over schema-mismatch inference.
+    if let Some(failure) = gui_cache_init_failure()? {
+        return Err(failure);
+    }
     let path = GUI_FONT_CACHE_PATH
         .lock()
         .map_err(|_| "GUI cache path mutex poisoned".to_string())?
-        .clone()
-        .ok_or_else(|| "Cache path not initialized; setup did not run".to_string())?;
+        .clone();
+    let path = match path {
+        Some(path) => path,
+        None => {
+            return Err(gui_cache_init_failure()?
+                .unwrap_or_else(|| "Cache path not initialized; setup did not run".to_string()));
+        }
+    };
     let available = GUI_FONT_CACHE
         .lock()
         .map_err(|_| "GUI cache mutex poisoned".to_string())?
@@ -1013,8 +1134,14 @@ pub fn clear_font_cache() -> Result<(), String> {
     let path = GUI_FONT_CACHE_PATH
         .lock()
         .map_err(|_| "GUI cache path mutex poisoned".to_string())?
-        .clone()
-        .ok_or_else(|| "Cache path not initialized; setup did not run".to_string())?;
+        .clone();
+    let path = match path {
+        Some(path) => path,
+        None => {
+            return Err(gui_cache_init_failure()?
+                .unwrap_or_else(|| "Cache path not initialized; setup did not run".to_string()));
+        }
+    };
 
     // Build the main-file + sidecar set and reject reparse points
     // BEFORE dropping the live cache handle. If a planted sidecar is
@@ -1051,7 +1178,7 @@ pub fn clear_font_cache() -> Result<(), String> {
     // A current, live database does not need file deletion. Clear its source
     // rows in one SQLite transaction so success cannot be reported while an
     // undeletable main file quietly preserves old data.
-    {
+    let cleared_live_cache = {
         let mut slot = GUI_FONT_CACHE
             .lock()
             .map_err(|_| "GUI cache mutex poisoned".to_string())?;
@@ -1060,8 +1187,14 @@ pub fn clear_font_cache() -> Result<(), String> {
                 .clear_sources()
                 .map_err(|e| format!("clear cached font sources: {e}"))?;
             finish_gui_cache_mutation();
-            return Ok(());
+            true
+        } else {
+            false
         }
+    };
+    if cleared_live_cache {
+        clear_gui_cache_init_failure()?;
+        return Ok(());
     }
 
     // No live handle means initialization rejected the file (normally a
@@ -1070,8 +1203,15 @@ pub fn clear_font_cache() -> Result<(), String> {
     // best-effort because a fresh SQLite open can safely decide whether any
     // surviving journal is usable.
     remove_cache_files_for_rebuild(&paths)?;
-    let fresh = FontCache::open_or_create(&path)
-        .map_err(|e| format!("re-create cache at {}: {e}", path.display()))?;
+    let fresh = match FontCache::open_or_create(&path) {
+        Ok(cache) => cache,
+        Err(error) => {
+            let detailed = format!("re-create cache at {}: {error}", path.display());
+            store_gui_cache_init_failure(gui_cache_open_failure_for_ipc(&path, &error))?;
+            return Err(detailed);
+        }
+    };
+    clear_gui_cache_init_failure()?;
     let mut slot = GUI_FONT_CACHE
         .lock()
         .map_err(|_| "GUI cache mutex poisoned".to_string())?;
@@ -1267,6 +1407,47 @@ mod tests {
     use crate::font_cache::try_modified_at;
     use std::fs;
 
+    static GUI_CACHE_STATE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn clear_gui_cache_state_for_test() {
+        *GUI_FONT_CACHE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        *GUI_FONT_CACHE_PATH
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        *GUI_FONT_CACHE_INIT_FAILURE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        CACHE_MUTATION_IN_PROGRESS.store(false, Ordering::Release);
+        crate::fonts::clear_cache_provenance();
+    }
+
+    struct GuiCacheStateTestGuard {
+        _font_state: std::sync::MutexGuard<'static, ()>,
+        _serial: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl GuiCacheStateTestGuard {
+        fn acquire() -> Self {
+            let font_state = crate::fonts::lock_font_state_for_test();
+            let serial = GUI_CACHE_STATE_TEST_LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            clear_gui_cache_state_for_test();
+            Self {
+                _font_state: font_state,
+                _serial: serial,
+            }
+        }
+    }
+
+    impl Drop for GuiCacheStateTestGuard {
+        fn drop(&mut self) {
+            clear_gui_cache_state_for_test();
+        }
+    }
+
     /// RAII guard mirroring `font_cache.rs::tests::TempCacheDir` —
     /// the canonical-shape comment on that sibling enumerates every
     /// other temp-dir construction in the workspace (dropzone.rs /
@@ -1318,6 +1499,75 @@ mod tests {
         let cache_path = guard.0.join("cache.sqlite3");
         let cache = FontCache::open_or_create(&cache_path).expect("open cache");
         (guard, cache)
+    }
+
+    #[test]
+    fn init_failure_is_reported_until_a_later_success_clears_it() {
+        let guard = TempCacheDir::new("init_failure_lifecycle");
+        let _state_guard = GuiCacheStateTestGuard::acquire();
+        let blocked_dir = guard.0.join("not-a-directory");
+        fs::write(&blocked_dir, b"file blocks create_dir_all").unwrap();
+
+        let init_error = init_gui_font_cache(&blocked_dir).unwrap_err();
+        assert!(init_error.contains("Cannot create app data dir"));
+        let reported = open_font_cache().unwrap_err();
+        assert!(
+            reported.contains("a non-directory entry already exists there"),
+            "stored error should retain the real failure class: {reported}"
+        );
+        assert!(!reported.contains("setup did not run"));
+        assert!(
+            !reported.contains(&blocked_dir.display().to_string()),
+            "IPC-safe failure must not disclose the operational path: {reported}"
+        );
+
+        let working_dir = guard.0.join("working");
+        init_gui_font_cache(&working_dir).expect("later initialization should succeed");
+        let status = open_font_cache().expect("stale failure should be cleared");
+        assert!(status.available);
+        assert!(!status.schema_mismatch);
+    }
+
+    #[test]
+    fn schema_mismatch_clears_stale_init_failure_and_keeps_structured_status() {
+        let guard = TempCacheDir::new("schema_mismatch_state");
+        let _state_guard = GuiCacheStateTestGuard::acquire();
+        let cache_path = guard.0.join(GUI_CACHE_FILE_NAME);
+        let conn = rusqlite::Connection::open(&cache_path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE cache_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);\
+             INSERT INTO cache_meta(key, value) VALUES('schema_version', '0');",
+        )
+        .unwrap();
+        drop(conn);
+        *GUI_FONT_CACHE_INIT_FAILURE.lock().unwrap() = Some("stale failure".to_string());
+
+        init_gui_font_cache(&guard.0).expect("schema mismatch is recoverable at startup");
+        let status =
+            open_font_cache().expect("schema mismatch should be a status, not stale error");
+        assert!(!status.available);
+        assert!(status.schema_mismatch);
+        assert!(GUI_FONT_CACHE_INIT_FAILURE.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn init_failure_sanitizer_strips_all_display_controls_and_caps_length() {
+        let unsafe_message = format!(
+            "prefix\u{061C}\u{202E}\u{2067}\u{200B}\n{}tail",
+            "x".repeat(MAX_GUI_CACHE_INIT_FAILURE_CHARS + 20)
+        );
+        let sanitized = sanitize_gui_cache_init_failure(&unsafe_message);
+        assert!(!sanitized.contains('\u{061C}'));
+        assert!(!sanitized.contains('\u{202E}'));
+        assert!(!sanitized.contains('\u{2067}'));
+        assert!(!sanitized.contains('\u{200B}'));
+        assert!(!sanitized.contains('\n'));
+        assert_eq!(
+            sanitized.chars().count(),
+            MAX_GUI_CACHE_INIT_FAILURE_CHARS + 1,
+            "capped messages include one trailing ellipsis"
+        );
+        assert!(sanitized.ends_with('…'));
     }
 
     #[derive(Default)]
@@ -1832,6 +2082,7 @@ mod tests {
         use std::os::unix::fs::symlink;
 
         let dir = TempCacheDir::new("clear_reparse_preserve");
+        let _state_guard = GuiCacheStateTestGuard::acquire();
         let cache_path = dir.0.join(GUI_CACHE_FILE_NAME);
         let cache = FontCache::open_or_create(&cache_path).expect("open cache");
         let target = dir.0.join("wal-target");
@@ -1856,10 +2107,6 @@ mod tests {
             GUI_FONT_CACHE.lock().unwrap().is_some(),
             "failed clear must leave the old cache handle available"
         );
-
-        *GUI_FONT_CACHE.lock().unwrap() = None;
-        *GUI_FONT_CACHE_PATH.lock().unwrap() = None;
-        crate::fonts::clear_cache_provenance();
     }
 
     // ── finalize_drift generation check ──

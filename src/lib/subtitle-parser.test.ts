@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   formatDisplayTime,
+  inspectMicroDvdFpsDeclarations,
   parseDisplayTime,
   parseSubtitle,
   safeMs,
@@ -192,11 +193,9 @@ describe("parseSubtitle", () => {
     );
   });
 
-  it("clamps an out-of-range MicroDVD fps to the default", () => {
-    // clampFps guards parse/build against a crafted `{1}{1}<fps>` header or a
-    // bad caller-supplied fps drifting every timestamp. It is reachable via
-    // the public parseSubtitle(content, fps); each invalid value
-    // (0 / negative / NaN / Infinity / >1000) must fall back to DEFAULT_FPS.
+  it("falls back from an invalid MicroDVD FPS override", () => {
+    // Invalid explicit values must not drift timestamps. With no recognized
+    // declaration, parseSubtitle(content, fps) falls back to 23.976.
     const sub = "{0}{25}Hello\n{26}{50}World";
     const baseline = parseSubtitle(sub).captions; // default fps
     for (const badFps of [0, -5, NaN, Infinity, 2000]) {
@@ -328,6 +327,102 @@ describe("parseSubtitle", () => {
     const result = parseSubtitle(ass);
     expect(result.format).toBe("ass");
     expect(result.captions).toHaveLength(1);
+  });
+});
+
+describe("MicroDVD FPS declarations", () => {
+  it.each([
+    ["{0}{}3.0001\n{25}{50}Hello\n", 3.0001],
+    ["{1}{1}25.000\n{25}{50}Hello\n", 25],
+    ["{0}{999999999999}120\n{120}{240}Hello\n", 120],
+  ])("recognizes bounded declaration grammar and excludes it from captions", (content, fps) => {
+    const inspection = inspectMicroDvdFpsDeclarations(content);
+    const parsed = parseSubtitle(content);
+
+    expect(inspection.declaredFps).toBe(fps);
+    expect(inspection.declarations).toHaveLength(1);
+    expect(parsed.format).toBe("sub");
+    expect(parsed.captions).toHaveLength(1);
+    expect(parsed.captions[0]!.text).toBe("Hello");
+  });
+
+  it("scans exactly the first three nonempty lines after a BOM and lets the last valid declaration win", () => {
+    const content = "\uFEFF\r\n{1}{1}24\r\n\r\n{0}{}25.000\r\n{25}{50}Hello\r\n{1}{1}30\r\n";
+    const inspection = inspectMicroDvdFpsDeclarations(content);
+    const parsed = parseSubtitle(content);
+
+    expect(inspection.declarations.map((entry) => entry.fps)).toEqual([24, 25]);
+    expect(inspection.declaredFps).toBe(25);
+    expect(parsed.captions.map((caption) => caption.text)).toEqual(["Hello", "30"]);
+    expect(parsed.captions[0]).toMatchObject({ start: 1000, end: 2000 });
+  });
+
+  it.each([
+    "{1}{1}3",
+    "{1}{1}120.001",
+    "{1}{1}25fps",
+    "{1}{1}25.0junk",
+    "{1}{1}1e2",
+    "{1}{1}Infinity",
+    "{1}{1}NaN",
+    "{2}{2}25",
+  ])("keeps declaration near-miss as an ordinary cue: %s", (line) => {
+    expect(inspectMicroDvdFpsDeclarations(`${line}\n{24}{48}Hello\n`).declarations).toHaveLength(0);
+    const parsed = parseSubtitle(`${line}\n{24}{48}Hello\n`);
+    expect(parsed.captions[0]!.text).toBe(line.slice(line.lastIndexOf("}") + 1));
+  });
+
+  it.each(["{1}{1234567890123}25", "{1}{broken}25", "{1}{1 25"])(
+    "does not accept malformed declaration syntax: %s",
+    (line) => {
+      expect(inspectMicroDvdFpsDeclarations(`${line}\n{24}{48}Hello\n`).declarations).toHaveLength(
+        0
+      );
+      expect(
+        parseSubtitle(`${line}\n{24}{48}Hello\n`).captions.map((caption) => caption.text)
+      ).toEqual(["Hello"]);
+    }
+  );
+
+  it("does not let metadata alone outrank a later ASS header", () => {
+    const parsed = parseSubtitle("{0}{}25\n[Script Info]\n[Events]\n");
+    expect(parsed.format).toBe("ass");
+    expect(parsed.captions).toHaveLength(0);
+  });
+
+  it("rejects a declaration-only document because metadata is not a cue", () => {
+    expect(() => parseSubtitle("{1}{1}25.000\n")).toThrow(/Could not detect subtitle format/);
+  });
+
+  it("preserves BOM, declarations, non-cue lines, blank lines, and CRLF in Auto shift", () => {
+    const input = "\uFEFF{1}{1}24.000\r\n\r\n{0}{}25.000\r\ncomment\r\n{25}{50}Hello|world\r\n";
+    const output = shiftSubtitle(input, 1000).output;
+
+    expect(output).toBe(
+      "\uFEFF{1}{1}24.000\r\n\r\n{0}{}25.000\r\ncomment\r\n{50}{75}Hello|world\r\n"
+    );
+  });
+
+  it("rewrites recognized declarations and cue frames only for an explicit valid override", () => {
+    const input = "{1}{1}24.000\n{0}{}25.000\n{25}{50}Hello\n";
+    expect(shiftSubtitle(input, 1000, undefined, 30).output).toBe(
+      // Manual 30 FPS wins during parse: frames 25..50 are 833..1667 ms;
+      // after +1000 ms they serialize to frames 55..80 at the same rate.
+      "{1}{1}30\n{0}{}30\n{55}{80}Hello\n"
+    );
+  });
+
+  it("serializes a long valid override into declaration grammar that re-inspects cleanly", () => {
+    const input = "{1}{1}25\n{25}{50}Hello\n";
+    const output = shiftSubtitle(input, 0, undefined, Number("23.976000000000004")).output;
+
+    expect(output).toContain("{1}{1}23.976\n");
+    expect(inspectMicroDvdFpsDeclarations(output).declaredFps).toBe(23.976);
+  });
+
+  it("parses and rebuilds a BOM-prefixed first cue without source drift", () => {
+    const input = "\uFEFF{24}{48}Hello\r\n";
+    expect(shiftSubtitle(input, 1000).output).toBe("\uFEFF{48}{72}Hello\r\n");
   });
 });
 

@@ -275,6 +275,18 @@ static ALLOWED_FONT_PATHS: Lazy<Mutex<HashSet<(String, u32)>>> =
 static ALLOWED_CACHE_FONT_PATHS: Lazy<Mutex<HashSet<(String, u32)>>> =
     Lazy::new(|| Mutex::new(HashSet::new()));
 
+/// Serializes unit tests that mutate scan/session/provenance globals across
+/// both this module and the GUI font-cache command module.
+#[cfg(test)]
+static SCAN_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
+pub(crate) fn lock_font_state_for_test() -> std::sync::MutexGuard<'static, ()> {
+    SCAN_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// Session SQLite path for user-picked font sources. Commands open short-lived
 /// connections to this path instead of sharing a global Connection, which keeps
 /// the static state simple and avoids holding SQLite page caches for longer
@@ -2715,6 +2727,35 @@ fn add_preflight_file(path: &Path, out: &mut FontScanPreflight) {
     out.total_bytes = out.total_bytes.saturating_add(metadata.len());
 }
 
+/// Resolve one explicitly selected font file and validate both sides of the
+/// resolution boundary. The second validation is required even when the raw
+/// picker path passed: a symlink / junction / filesystem alias may resolve to
+/// a canonical Windows ADS path or another representation the IPC validator
+/// rejects. Return the normalized canonical string alongside the `PathBuf` so
+/// callers cannot accidentally deduplicate or publish the path before that
+/// post-canonicalization check.
+fn canonicalize_and_validate_explicit_font_path_with<F>(
+    path: &str,
+    canonicalize: F,
+) -> Result<(PathBuf, String), String>
+where
+    F: FnOnce(&Path) -> std::io::Result<PathBuf>,
+{
+    validate_ipc_path(path, "File")?;
+    let canonical = canonicalize(Path::new(path))
+        .map_err(|_| "A selected font file became unreadable".to_string())?;
+    let canonical_text = canonical
+        .to_str()
+        .ok_or_else(|| "A selected font path is not valid UTF-8".to_string())?;
+    let normalized = normalize_canonical_path(canonical_text);
+    validate_ipc_path(&normalized, "Resolved font")?;
+    Ok((canonical, normalized))
+}
+
+fn canonicalize_and_validate_explicit_font_path(path: &str) -> Result<(PathBuf, String), String> {
+    canonicalize_and_validate_explicit_font_path_with(path, Path::canonicalize)
+}
+
 fn preflight_files_inner(paths: Vec<String>) -> FontScanPreflight {
     // The public command enforces MAX_INPUT_PATHS, but the inner
     // helper has no caller-side check. Debug-mode assertion catches
@@ -2749,17 +2790,12 @@ fn preflight_files_inner(paths: Vec<String>) -> FontScanPreflight {
     let total_inputs = paths.len();
     let mut rejected = 0usize;
     for p in paths {
-        if validate_ipc_path(&p, "File").is_err() {
-            rejected += 1;
-            continue;
-        }
-        let Ok(canonical) = Path::new(&p).canonicalize() else {
+        let Ok((canonical, canonical_key)) = canonicalize_and_validate_explicit_font_path(&p)
+        else {
             rejected += 1;
             continue;
         };
-        if !canonical.is_file()
-            || !seen.insert(normalize_canonical_path(&canonical.to_string_lossy()))
-        {
+        if !canonical.is_file() || !seen.insert(canonical_key) {
             continue;
         }
         add_preflight_file(&canonical, &mut out);
@@ -3262,7 +3298,7 @@ fn scan_directory_collecting_impl(
             // run_refresh_fonts catches this and continues with the next
             // dir; without the cap, a malicious pack could hold hundreds
             // of MB to multi-GB of font metadata in memory before the
-            // `cache.replace_folder` write would even start.
+            // `cache.replace_source` write would even start.
             if entries.len() + batch.len() > MAX_CACHE_POPULATE_FACES {
                 return Err(format!(
                     "Source has more font faces than the persistent cache safely accepts \
@@ -3539,11 +3575,6 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
             });
         }
 
-        if validate_ipc_path(&p, "File").is_err() {
-            rejected += 1;
-            continue;
-        }
-
         // No `is_reparse_point` pre-check here, unlike
         // `scan_directory_inner`. The asymmetry is intentional:
         // this function processes paths the user
@@ -3558,8 +3589,8 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
         // count gate. `canonicalize` below + `has_allowed_font_extension`
         // (in `parse_local_font_file`) still bound the exfil surface
         // to font-extension targets.
-        let canonical = match Path::new(&p).canonicalize() {
-            Ok(c) => c,
+        let (canonical, canonical_key) = match canonicalize_and_validate_explicit_font_path(&p) {
+            Ok(resolved) => resolved,
             Err(_) => {
                 rejected += 1;
                 continue;
@@ -3568,7 +3599,7 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
         if !canonical.is_file() {
             continue;
         }
-        if !seen.insert(normalize_canonical_path(&canonical.to_string_lossy())) {
+        if !seen.insert(canonical_key) {
             continue;
         }
 
@@ -3948,7 +3979,7 @@ fn register_font_path(path: &Path, font_index: u32) -> Result<FontLookupResult, 
     crate::util::validate_ipc_path(&canonical_string, "System font")?;
     insert_with_cap(
         &ALLOWED_FONT_PATHS,
-        "system",
+        ProvenanceSetKind::System,
         canonical_string.clone(),
         font_index,
     )?;
@@ -3960,15 +3991,36 @@ fn register_font_path(path: &Path, font_index: u32) -> Result<FontLookupResult, 
 
 /// Shared (path, face_index) insertion helper used by both provenance
 /// sets. `cache` is the target set; `canonical_string` and `face_index`
-/// are the entry. `label` distinguishes the set in error messages so
-/// a future "Too many registered font paths" report can be attributed
-/// to system fonts vs cache hits — without the label, both would
-/// report the same text and triage would have to dig into the caller.
+/// are the entry. The typed set kind keeps the recovery advice aligned
+/// with the operation that can actually clear that set.
 /// Enforces
 /// `MAX_PROVENANCE_CACHE_SIZE` per-set as a rollback-on-overflow contract.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProvenanceSetKind {
+    System,
+    Cache,
+}
+
+fn provenance_overflow_message(kind: ProvenanceSetKind) -> String {
+    let (label, recovery) = match kind {
+        ProvenanceSetKind::System => (
+            "system",
+            "Restart the app to clear the system-font registration set, then retry.",
+        ),
+        ProvenanceSetKind::Cache => (
+            "cache",
+            "Clear font sources or clear the font cache, then retry.",
+        ),
+    };
+    format!(
+        "Too many registered font paths in {label} set (> {MAX_PROVENANCE_CACHE_SIZE}). \
+         {recovery}"
+    )
+}
+
 fn insert_with_cap(
     cache: &Lazy<Mutex<HashSet<(String, u32)>>>,
-    label: &str,
+    kind: ProvenanceSetKind,
     canonical_string: String,
     face_index: u32,
 ) -> Result<(), String> {
@@ -3985,10 +4037,7 @@ fn insert_with_cap(
     if newly_added && set.len() > MAX_PROVENANCE_CACHE_SIZE {
         // Roll back the speculative insert so the cap is firm.
         set.remove(&entry);
-        return Err(format!(
-            "Too many registered font paths in {label} set (> {MAX_PROVENANCE_CACHE_SIZE}). \
-             Restart the app to clear the cache."
-        ));
+        return Err(provenance_overflow_message(kind));
     }
     Ok(())
 }
@@ -4049,7 +4098,7 @@ pub(crate) fn cache_provenance_contains(path: &str, face_index: u32) -> bool {
 /// type layer rather than by manual convention — narrative comments
 /// decay across refactors; types don't.
 ///
-/// Cache row paths are canonicalized upstream by `replace_folder`;
+/// Cache row paths are canonicalized upstream by `replace_source`;
 /// this function re-validates via `validate_ipc_path` anyway so a
 /// hostile `--cache-file` swap can't smuggle crafted bytes past the
 /// trust set.
@@ -4071,7 +4120,7 @@ pub fn register_cache_provenance(hit: &crate::font_cache::FontLookupResult) -> R
     })?;
     insert_with_cap(
         &ALLOWED_CACHE_FONT_PATHS,
-        "cache",
+        ProvenanceSetKind::Cache,
         hit.font_path().to_string(),
         face_index,
     )
@@ -4871,13 +4920,70 @@ fn subset_with_index(font_data: &[u8], index: u32, codepoints: &[u32]) -> Result
 mod tests {
     use super::*;
 
-    /// Serializes any unit test that reads or mutates DB state, the
-    /// `ACTIVE_SCAN_ID` / `CANCEL_SCAN_ID` atomics, or both. cargo test
-    /// runs in parallel by default — without serialization, two tests
-    /// can race on `compare_exchange` / `fetch_max` and silently flake.
-    /// Renamed from `DB_TEST_LOCK` once the cancel tests revealed it
-    /// wasn't DB-only.
-    static SCAN_TEST_LOCK: Mutex<()> = Mutex::new(());
+    #[test]
+    fn explicit_font_path_revalidates_a_canonical_target_with_bidi_control() {
+        let selected = if cfg!(windows) {
+            r"C:\selected\font.ttf"
+        } else {
+            "/selected/font.ttf"
+        };
+        // A filesystem alias can legitimately resolve a visually safe picker
+        // path to an existing filename containing U+202E. Unlike a literal
+        // `.` component, canonicalization does not normalize this issue shape
+        // away, so the injected target models a reachable post-resolution
+        // rejection without requiring symlink privileges in CI.
+        let resolved_with_bidi = if cfg!(windows) {
+            PathBuf::from("C:\\resolved\\font\u{202e}ttf.ttf")
+        } else {
+            PathBuf::from("/resolved/font\u{202e}ttf.ttf")
+        };
+        let mut canonicalizer_called = false;
+
+        let error = canonicalize_and_validate_explicit_font_path_with(selected, |received| {
+            canonicalizer_called = true;
+            assert_eq!(received, Path::new(selected));
+            Ok(resolved_with_bidi)
+        })
+        .expect_err("an unsafe canonical target must be rejected");
+
+        assert!(canonicalizer_called);
+        assert!(error.to_lowercase().contains("invalid"));
+    }
+
+    #[test]
+    fn explicit_font_path_returns_only_a_validated_normalized_target() {
+        let selected = if cfg!(windows) {
+            r"C:\selected\font.ttf"
+        } else {
+            "/selected/font.ttf"
+        };
+        #[cfg(windows)]
+        let canonical = PathBuf::from(r"\\?\C:\resolved\font.ttf");
+        #[cfg(not(windows))]
+        let canonical = PathBuf::from("/resolved/font.ttf");
+
+        let (resolved, normalized) =
+            canonicalize_and_validate_explicit_font_path_with(selected, |_| Ok(canonical.clone()))
+                .expect("a safe canonical target should validate");
+
+        assert_eq!(resolved, canonical);
+        #[cfg(windows)]
+        assert_eq!(normalized, r"C:\resolved\font.ttf");
+        #[cfg(not(windows))]
+        assert_eq!(normalized, "/resolved/font.ttf");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn explicit_font_path_rejects_ads_introduced_by_resolution() {
+        let error =
+            canonicalize_and_validate_explicit_font_path_with(r"C:\selected\font.ttf", |_| {
+                Ok(PathBuf::from(r"C:\resolved\font.ttf:payload"))
+            })
+            .expect_err("an ADS canonical target must be rejected");
+
+        assert!(error.to_lowercase().contains("colon"));
+    }
 
     fn cache_candidate(
         reason: ScanStopReason,
@@ -6354,6 +6460,24 @@ mod tests {
     // the suite stays parallel-safe.
 
     #[test]
+    fn provenance_overflow_messages_match_each_set_recovery_path() {
+        assert_eq!(
+            provenance_overflow_message(ProvenanceSetKind::Cache),
+            format!(
+                "Too many registered font paths in cache set (> {MAX_PROVENANCE_CACHE_SIZE}). \
+                 Clear font sources or clear the font cache, then retry."
+            )
+        );
+        assert_eq!(
+            provenance_overflow_message(ProvenanceSetKind::System),
+            format!(
+                "Too many registered font paths in system set (> {MAX_PROVENANCE_CACHE_SIZE}). \
+                 Restart the app to clear the system-font registration set, then retry."
+            )
+        );
+    }
+
+    #[test]
     fn cache_provenance_gate_rejects_unregistered_path() {
         let _guard = SCAN_TEST_LOCK.lock().unwrap();
         // Snapshot the set so we restore it post-test (other tests
@@ -6460,8 +6584,8 @@ mod tests {
         );
         let err_msg = overflow.unwrap_err();
         assert!(
-            err_msg.contains("cache"),
-            "error message must name the cache set, got: {err_msg}"
+            err_msg.contains("Clear font sources or clear the font cache, then retry."),
+            "cache-set overflow must name a reachable recovery action, got: {err_msg}"
         );
         // The speculative insert must have been rolled back — set
         // size unchanged.

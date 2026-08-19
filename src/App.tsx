@@ -14,6 +14,7 @@ import { useStatus, type StatusTab } from "./lib/StatusContext";
 import { useClickOutside } from "./lib/useClickOutside";
 import { resolveAppModalVisibility } from "./lib/modal-coordination";
 import { TAB_LABEL_KEYS } from "./lib/tab-labels";
+import { completeFontCacheProbe } from "./lib/font-cache-ui-state";
 import {
   openFontCache,
   detectFontCacheDrift,
@@ -84,32 +85,24 @@ function App() {
   // Persistent font cache (#5): launch-time drift check. Probe the
   // cache, and if it exists with drift OR with a schema mismatch,
   // surface the FontCacheDriftModal so the user picks rescan / use
-  // as-is / clear. The cacheChecked ref guards against StrictMode's
-  // intentional double-mount in dev — drift queries are read-only
-  // but rescan_drifted writes; no need to double-do that.
-  //
-  // (comment accuracy): `useRef` is per-component-
-  // instance, not module-scoped — multi-instance App rendering would
-  // give each instance its own `cacheChecked` ref and each would run
-  // the launch check independently (redundant cache I/O), NOT skip
-  // the check for all but the first. Prior comment had the semantics
-  // inverted. The real concern (if a future routing refactor ever
-  // mounts App in multiple places) is redundant per-instance launch
-  // checks, not the suppression of subsequent ones.
+  // as-is / clear. cacheChecked is latched only by a live completed
+  // effect instance: React StrictMode cancels its first development
+  // setup, and that cancelled setup must not suppress the second one.
   const [cacheStatus, setCacheStatus] = useState<FontCacheStatus | null>(null);
+  const [cacheProbeFailed, setCacheProbeFailed] = useState(false);
   const [cacheDrift, setCacheDrift] = useState<FontCacheDriftReport | null>(null);
   const [showCacheModal, setShowCacheModal] = useState(false);
   const cacheChecked = useRef(false);
 
   useEffect(() => {
     if (cacheChecked.current) return;
-    cacheChecked.current = true;
     let cancelled = false;
-    (async () => {
+    void (async () => {
       try {
         const status = await openFontCache();
         if (cancelled) return;
         setCacheStatus(status);
+        setCacheProbeFailed(false);
         if (status.schemaMismatch) {
           // Empty drift: cache file is unreadable, modal renders the
           // rebuild-required path (Clear cache button only).
@@ -127,27 +120,26 @@ function App() {
           // Nothing actionable to surface; fall back to system fonts.
           return;
         }
-        const drift = await detectFontCacheDrift();
-        if (cancelled) return;
-        setCacheDrift(drift);
-        if (drift.modified.length > 0 || drift.removed.length > 0) {
-          // dropped a redundant `if (cancelled)
-          // return` here for the same reason as the schemaMismatch
-          // branch above — no await fires between the post-
-          // `detectFontCacheDrift` cancel check (`if (cancelled)
-          // return` a few lines above) and this synchronous setter
-          // pair. The previous comment misstated React's flush
-          // semantics (setState does not yield mid-call).
-          setShowCacheModal(true);
+        try {
+          const drift = await detectFontCacheDrift();
+          if (cancelled) return;
+          setCacheDrift(drift);
+          if (drift.modified.length > 0 || drift.removed.length > 0) {
+            setShowCacheModal(true);
+          }
+        } catch (e) {
+          if (!cancelled) {
+            console.warn("Font cache drift check failed; cached fonts remain available:", e);
+          }
         }
       } catch (e) {
-        // Don't block app launch on cache probe failures — the user
-        // can still use the app, embed just falls through to system
-        // fonts. Log so devs see it during tauri dev.
-        // WARN names the user-visible consequence (embed falls back
-        // to system fonts) instead of leaking only the internal
-        // function name.
-        console.warn("Font cache unavailable at launch; embed will use system fonts only:", e);
+        if (!cancelled) {
+          setCacheStatus(null);
+          setCacheProbeFailed(true);
+          console.warn("Font cache unavailable at launch; embed will use system fonts only:", e);
+        }
+      } finally {
+        completeFontCacheProbe(cacheChecked, cancelled);
       }
     })();
     return () => {
@@ -168,13 +160,11 @@ function App() {
     try {
       const status = await openFontCache();
       setCacheStatus(status);
+      setCacheProbeFailed(false);
     } catch (e) {
-      // WARN names the user-visible consequence.
-      // A failed re-probe means the launch-time `cacheStatus` is now
-      // stale relative to the user's just-performed action (Rescan /
-      // Clear); the drift modal won't auto-re-pop and embed continues
-      // to use whatever the prior probe captured.
-      console.warn("Font cache status re-probe failed; UI may show stale cache state:", e);
+      setCacheStatus(null);
+      setCacheProbeFailed(true);
+      console.warn("Font cache status re-probe failed; embed will use system fonts only:", e);
     }
   }, []);
 
@@ -452,7 +442,7 @@ function App() {
             aria-hidden={activeTab !== "fonts"}
             style={{ display: activeTab === "fonts" ? "block" : "none" }}
           >
-            <FontEmbed />
+            <FontEmbed cacheStatus={cacheStatus} cacheProbeFailed={cacheProbeFailed} />
           </div>
           <div
             id="panel-rename"

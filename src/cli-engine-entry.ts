@@ -2,10 +2,9 @@ import { parse as parseAss } from "ass-compiler";
 import { processAssContent } from "./features/hdr-convert/ass-processor";
 import {
   DEFAULT_STYLE,
-  buildAssDocumentFromCaptions,
+  convertTextCueSubtitleToAss,
   isConvertible,
   isNativeAss,
-  processSrtUserText,
 } from "./features/hdr-convert/srt-converter";
 import { DEFAULT_BRIGHTNESS, type Eotf } from "./features/hdr-convert/color-engine";
 import { DEFAULT_TEMPLATE, resolveOutputPath } from "./features/hdr-convert/output-naming";
@@ -13,6 +12,7 @@ import {
   buildPairings,
   compareKeys,
   deriveRenameOutputPath,
+  findRenameInputConflictIndexes,
   isNoOpRename,
   parseFilename,
   type OutputMode,
@@ -40,7 +40,6 @@ import {
   substituteTemplate,
 } from "./lib/path-validation";
 import { categorizeForRename, type RenameCategory } from "./lib/rename-extensions";
-import { parseSubtitle } from "./lib/subtitle-parser";
 import { sanitizeError } from "./lib/dedup-helpers";
 import { stripUnicodeControls } from "./lib/unicode-controls";
 import { decodeBase64Bytes } from "./lib/base64-bytes";
@@ -137,6 +136,9 @@ export interface RenamePlanRow {
   key: string;
   language: string;
   noOp: boolean;
+  /** True when this executable row is connected to a planned output that
+   * targets any loaded subtitle input. The native shell fails it before I/O. */
+  inputConflict: boolean;
 }
 
 export interface FontEmbedPlanRequest {
@@ -235,15 +237,10 @@ export function convertHdr(request: HdrConversionRequest): HdrConversionResult {
   }
 
   if (isConvertible(fileName)) {
-    const preprocessed = processSrtUserText(request.content);
-    const { captions } = parseSubtitle(preprocessed, DEFAULT_STYLE.fps);
-    // Drop oversized-text placeholders before building ASS. parseSrt /
-    // parseSub / parseVtt emit `{ text: "", skipped: true }` for captions over
-    // MAX_CAPTION_TEXT_LEN; without this filter the
-    // CLI HDR path serializes each as a blank Dialogue line. Mirrors
-    // HdrConvert.tsx GUI-side filter. (parseAss placeholders don't
-    // reach here — `.ass` goes through the isNativeAss branch above.)
-    const { content: rawAss, skippedCount } = buildAssDocumentFromCaptions(captions, DEFAULT_STYLE);
+    const { content: rawAss, skippedCount } = convertTextCueSubtitleToAss(
+      request.content,
+      DEFAULT_STYLE
+    );
     return {
       outputPath,
       content: processAssContent(rawAss, brightness, request.eotf),
@@ -320,33 +317,42 @@ export function planRename(request: RenamePlanRequest): RenamePlanResult {
       : buildMultiLanguageRenameCandidates(videos, filteredSubtitles);
   const preserveLanguageSuffix = selection.kind !== "auto";
 
+  const pairingsWithoutConflicts = candidates.map((candidate) => {
+    const outputPath = deriveRenameOutputPath(
+      candidate.video.path,
+      candidate.subtitle.path,
+      request.mode,
+      request.outputDir ?? null,
+      {
+        languageSuffix: preserveLanguageSuffix
+          ? subtitleLanguage(candidate.subtitle.name) || undefined
+          : undefined,
+      }
+    );
+    return {
+      inputPath: candidate.subtitle.path,
+      outputPath,
+      videoPath: candidate.video.path,
+      source: candidate.source,
+      key: candidate.key,
+      language: subtitleLanguage(candidate.subtitle.name),
+      noOp: isNoOpRename(candidate.subtitle.path, outputPath),
+    };
+  });
+  const inputConflictIndexes = findRenameInputConflictIndexes(
+    pairingsWithoutConflicts,
+    categorized.subtitles
+  );
+
   return {
     videoCount: videos.length,
     subtitleCount: subtitles.length,
     unknownCount: categorized.unknown.length,
     ignoredCount: categorized.ignored.length,
-    pairings: candidates.map((candidate) => {
-      const outputPath = deriveRenameOutputPath(
-        candidate.video.path,
-        candidate.subtitle.path,
-        request.mode,
-        request.outputDir ?? null,
-        {
-          languageSuffix: preserveLanguageSuffix
-            ? subtitleLanguage(candidate.subtitle.name) || undefined
-            : undefined,
-        }
-      );
-      return {
-        inputPath: candidate.subtitle.path,
-        outputPath,
-        videoPath: candidate.video.path,
-        source: candidate.source,
-        key: candidate.key,
-        language: subtitleLanguage(candidate.subtitle.name),
-        noOp: isNoOpRename(candidate.subtitle.path, outputPath),
-      };
-    }),
+    pairings: pairingsWithoutConflicts.map((pairing, index) => ({
+      ...pairing,
+      inputConflict: inputConflictIndexes.has(index),
+    })),
   };
 }
 

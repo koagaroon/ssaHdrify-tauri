@@ -142,13 +142,13 @@ fn refresh_fonts_creates_cache_with_one_folder_row() {
 
     // Open via library API and inspect.
     let inspect = FontCache::open_or_create(&cache).expect("open cache for inspection");
-    let folders = inspect.list_folders().expect("list_folders");
+    let sources = inspect.list_sources().expect("list_sources");
     assert_eq!(
-        folders.len(),
+        sources.len(),
         1,
-        "expected exactly 1 cached folder, got {folders:?}"
+        "expected exactly 1 cached source, got {sources:?}"
     );
-    let stored = &folders[0].folder_path;
+    let stored = &sources[0].source_root;
     let canonical_str = cache_source_key(&font_dir, FontDirectoryScope::Shallow)
         .expect("derive normalized cache source key")
         .source_root;
@@ -182,11 +182,11 @@ fn refresh_fonts_idempotent_no_duplicate_folder_rows() {
     }
 
     let inspect = FontCache::open_or_create(&cache).expect("open cache");
-    let folders = inspect.list_folders().expect("list_folders");
+    let sources = inspect.list_sources().expect("list_sources");
     assert_eq!(
-        folders.len(),
+        sources.len(),
         1,
-        "two consecutive refreshes must yield exactly 1 row, got {folders:?}"
+        "two consecutive refreshes must yield exactly 1 row, got {sources:?}"
     );
 
     let _ = fs::remove_dir_all(work);
@@ -245,6 +245,208 @@ fn refresh_fonts_with_no_cache_errors() {
         stderr.contains("--no-cache"),
         "stderr should mention --no-cache: {stderr}"
     );
+
+    let _ = fs::remove_dir_all(work);
+}
+
+#[test]
+fn refresh_fonts_rejects_json_even_when_quiet() {
+    let work = temp_dir("json_quiet_rejected");
+    let font_dir = make_font_dir(&work);
+    let cache = cache_path(&work);
+
+    let output = run_cli(&[
+        "--quiet",
+        "--json",
+        "--cache-file",
+        cache.to_str().unwrap(),
+        "refresh-fonts",
+        "--font-dir",
+        font_dir.to_str().unwrap(),
+    ]);
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        output.stdout.is_empty(),
+        "unsupported --json must never produce non-JSON stdout"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("refresh-fonts does not implement --json output"),
+        "hard error must survive --quiet: {stderr}"
+    );
+    assert!(
+        !cache.exists(),
+        "flag rejection must happen before cache I/O"
+    );
+
+    let _ = fs::remove_dir_all(work);
+}
+
+#[test]
+fn refresh_fonts_reports_verbose_as_inert() {
+    let work = temp_dir("verbose_inert");
+    let font_dir = make_font_dir(&work);
+    let cache = cache_path(&work);
+
+    let output = run_cli(&[
+        "--lang",
+        "en",
+        "--verbose",
+        "--cache-file",
+        cache.to_str().unwrap(),
+        "refresh-fonts",
+        "--font-dir",
+        font_dir.to_str().unwrap(),
+    ]);
+
+    assert!(
+        output.status.success(),
+        "--verbose should be a disclosed no-op, not a failure: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--verbose") && stderr.contains("no effect here"),
+        "refresh-fonts must not silently ignore --verbose: {stderr}"
+    );
+
+    let _ = fs::remove_dir_all(work);
+}
+
+#[test]
+fn refresh_fonts_corrupt_cache_names_path_and_offers_targeted_rebuild_in_both_open_modes() {
+    let work = temp_dir("corrupt_guidance");
+    let font_dir = make_font_dir(&work);
+    let cache = cache_path(&work);
+    let original = b"this is not a sqlite database";
+    fs::write(&cache, original).expect("write invalid cache fixture");
+
+    let dry_run = run_cli(&[
+        "--lang",
+        "en",
+        "--dry-run",
+        "--cache-file",
+        cache.to_str().unwrap(),
+        "refresh-fonts",
+        "--font-dir",
+        font_dir.to_str().unwrap(),
+    ]);
+    let normal = run_cli(&[
+        "--lang",
+        "en",
+        "--cache-file",
+        cache.to_str().unwrap(),
+        "refresh-fonts",
+        "--font-dir",
+        font_dir.to_str().unwrap(),
+    ]);
+
+    for (mode, output) in [("read-only dry-run", dry_run), ("read-write", normal)] {
+        assert_eq!(output.status.code(), Some(2), "mode={mode}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(cache.to_str().unwrap()),
+            "error must name the selected cache path in {mode}: {stderr}"
+        );
+        assert!(
+            stderr.contains("invalid or corrupt")
+                && stderr.contains("Delete the cache file")
+                && stderr.contains("rerun the same `refresh-fonts` command"),
+            "confirmed invalid SQLite should get precise rebuild guidance in {mode}: {stderr}"
+        );
+    }
+    assert_eq!(
+        fs::read(&cache).expect("read invalid cache after refusal"),
+        original,
+        "the CLI must not delete a corrupt cache automatically"
+    );
+
+    let _ = fs::remove_dir_all(work);
+}
+
+#[test]
+fn refresh_fonts_ordinary_open_error_does_not_recommend_deletion() {
+    let work = temp_dir("ordinary_open_error");
+    let font_dir = make_font_dir(&work);
+    let cache = cache_path(&work);
+    fs::create_dir(&cache).expect("create directory at cache-file path");
+
+    let output = run_cli(&[
+        "--lang",
+        "en",
+        "--cache-file",
+        cache.to_str().unwrap(),
+        "refresh-fonts",
+        "--font-dir",
+        font_dir.to_str().unwrap(),
+    ]);
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(cache.to_str().unwrap())
+            && stderr.contains("Check the cache path and file permissions"),
+        "ordinary I/O error should name its path and recovery boundary: {stderr}"
+    );
+    assert!(
+        !stderr.contains("Delete the cache file")
+            && !stderr.contains("rerun the same `refresh-fonts` command"),
+        "permission/open failures must not receive destructive corruption guidance: {stderr}"
+    );
+
+    let _ = fs::remove_dir_all(work);
+}
+
+#[test]
+fn refresh_fonts_schema_mismatch_names_path_and_rerun_action() {
+    let work = temp_dir("schema_guidance");
+    let font_dir = make_font_dir(&work);
+    let cache = cache_path(&work);
+    drop(FontCache::open_or_create(&cache).expect("create current-schema cache"));
+    let connection = rusqlite::Connection::open(&cache).expect("open cache for schema mutation");
+    connection
+        .execute(
+            "UPDATE cache_meta SET value = '999' WHERE key = 'schema_version'",
+            [],
+        )
+        .expect("mutate schema version");
+    drop(connection);
+
+    let dry_run = run_cli(&[
+        "--lang",
+        "en",
+        "--dry-run",
+        "--cache-file",
+        cache.to_str().unwrap(),
+        "refresh-fonts",
+        "--font-dir",
+        font_dir.to_str().unwrap(),
+    ]);
+    let normal = run_cli(&[
+        "--lang",
+        "en",
+        "--cache-file",
+        cache.to_str().unwrap(),
+        "refresh-fonts",
+        "--font-dir",
+        font_dir.to_str().unwrap(),
+    ]);
+
+    for (mode, output) in [("read-only dry-run", dry_run), ("read-write", normal)] {
+        assert_eq!(output.status.code(), Some(2), "mode={mode}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(cache.to_str().unwrap())
+                && stderr.contains("requires schema version")
+                && stderr.contains("rerun the same `refresh-fonts` command"),
+            "schema mismatch should give a complete same-command recovery action in {mode}: {stderr}"
+        );
+        assert!(
+            !stderr.contains("(file:"),
+            "schema guidance must not end in the old dangling half-command in {mode}: {stderr}"
+        );
+    }
 
     let _ = fs::remove_dir_all(work);
 }

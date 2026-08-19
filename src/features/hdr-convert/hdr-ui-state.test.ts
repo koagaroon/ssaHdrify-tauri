@@ -28,6 +28,7 @@ describe("HDR UI state guards", () => {
         processing: false,
         brightnessInvalid: true,
         templateInvalid: false,
+        fpsInvalid: false,
       })
     ).toBe(true);
   });
@@ -39,6 +40,7 @@ describe("HDR UI state guards", () => {
         processing: false,
         brightnessInvalid: false,
         templateInvalid: true,
+        fpsInvalid: false,
       })
     ).toBe(true);
   });
@@ -50,7 +52,20 @@ describe("HDR UI state guards", () => {
         processing: false,
         brightnessInvalid: false,
         templateInvalid: false,
+        fpsInvalid: false,
       })
     ).toBe(false);
+  });
+
+  it("disables Convert when the visible manual FPS is invalid", () => {
+    expect(
+      isHdrConvertDisabled({
+        hasFiles: true,
+        processing: false,
+        brightnessInvalid: false,
+        templateInvalid: false,
+        fpsInvalid: true,
+      })
+    ).toBe(true);
   });
 });

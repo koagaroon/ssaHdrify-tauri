@@ -40,7 +40,6 @@ export const strings: Record<string, StringEntry> = {
   },
   status_fonts_busy: { en: "Embedding…", zh: "嵌入中…" },
   status_fonts_done: { en: "Fonts embedded", zh: "字体已嵌入" },
-  status_fonts_noop: { en: "Nothing to embed", zh: "无需嵌入" },
   status_fonts_partial: { en: "Fonts embedded with warnings", zh: "字体已嵌入，但有警告" },
   status_fonts_error: { en: "Embed failed", zh: "嵌入失败" },
   status_fonts_cancelled: { en: "Embed cancelled", zh: "已取消嵌入" },
@@ -196,6 +195,17 @@ export const strings: Record<string, StringEntry> = {
   style_outline_width: { en: "Outline Width", zh: "描边宽度" },
   style_shadow_depth: { en: "Shadow Depth", zh: "阴影深度" },
   style_fps: { en: "FPS (SUB only)", zh: "帧率（仅 SUB）" },
+  style_fps_auto: {
+    en: "Auto (file declaration or 23.976)",
+    zh: "自动（文件声明或 23.976）",
+  },
+  style_fps_manual: { en: "Manual override", zh: "手动指定" },
+  style_fps_value: { en: "Manual FPS", zh: "手动帧率" },
+  style_fps_invalid: {
+    en: "Enter an FPS greater than 3 and no more than 120.",
+    zh: "请输入大于 3 且不超过 120 的帧率。",
+  },
+  style_fps_invalid_summary: { en: "Invalid SUB FPS", zh: "SUB 帧率无效" },
   style_font_custom: { en: "Custom…", zh: "自定义…" },
   btn_select_files: { en: "Select Subtitle File(s)", zh: "选择字幕文件（可多选）" },
   btn_convert: { en: "Convert", zh: "转换" },
@@ -384,17 +394,9 @@ export const strings: Record<string, StringEntry> = {
     en: "Embed complete: {0}/{1} file(s) processed",
     zh: "嵌入完成：已处理 {0}/{1} 个文件",
   },
-  msg_fonts_complete_mixed: {
-    en: "Embed complete: {0} file(s) written, {1} unchanged",
-    zh: "嵌入完成：已写入 {0} 个文件，{1} 个文件无需更改",
-  },
   msg_fonts_complete_partial: {
     en: "Embed incomplete: {0}/{1} file(s) written, {2} issue(s)",
     zh: "嵌入不完整：已写入 {0}/{1} 个文件，{2} 个问题",
-  },
-  msg_fonts_complete_partial_mixed: {
-    en: "Embed incomplete: {0} file(s) written, {1} unchanged, {2} issue(s)",
-    zh: "嵌入不完整：已写入 {0} 个文件，{1} 个文件无需更改，{2} 个问题",
   },
   msg_fonts_skipped_count: {
     en: "Note: {0} file(s) were skipped before this prompt (see log).",
@@ -404,12 +406,12 @@ export const strings: Record<string, StringEntry> = {
     en: "Embed failed on all {0} file(s); see errors above",
     zh: "全部 {0} 个文件嵌入失败，详见上方错误",
   },
-  msg_fonts_all_no_change: {
-    en: "Nothing to embed — all referenced fonts are already present in {0} file(s)",
-    zh: "无需嵌入 —— {0} 个文件引用的字体均已存在",
-  },
   msg_fonts_cancelled: { en: "Embed cancelled.", zh: "已取消嵌入。" },
   msg_fonts_error: { en: "Error embedding {0}: {1}", zh: "嵌入 {0} 出错：{1}" },
+  msg_fonts_input_conflict: {
+    en: "Skipped {0} — its output path matches another selected input",
+    zh: "已跳过 {0} —— 其输出路径与另一个已选输入文件相同",
+  },
   msg_fonts_analysis_unavailable: {
     en: "Analysis data is unavailable. Select the files again.",
     zh: "分析数据已不可用，请重新选择文件。",
@@ -449,8 +451,8 @@ export const strings: Record<string, StringEntry> = {
     zh: "已保存但有警告：{0}（已嵌入 {1} 个字体，{2} 条警告）",
   },
   msg_embed_no_change: {
-    en: "Skipped {0} — no fonts were embedded (output would equal input)",
-    zh: "跳过 {0} — 未嵌入任何字体（输出与输入相同，未写文件）",
+    en: "Skipped {0} — none of the selected fonts could be embedded; see warnings above",
+    zh: "已跳过 {0} —— 所选字体均无法嵌入；请查看上方警告",
   },
   fonts_full_embed_warning: {
     en: "Fonts are subset to only the glyphs used in this subtitle. Safety padding (ASCII + CJK fullwidth) is included automatically.",
@@ -617,6 +619,14 @@ export const strings: Record<string, StringEntry> = {
   font_cache_drift_btn_rescan: { en: "Rescan now", zh: "立即重新扫描" },
   font_cache_drift_btn_use_as_is: { en: "Use as-is", zh: "保持原样使用" },
   font_cache_drift_btn_clear: { en: "Clear cache", zh: "清除缓存" },
+  font_cache_close_busy_rescan: {
+    en: "Cannot close while the font cache is being rescanned",
+    zh: "字体缓存重新扫描期间无法关闭",
+  },
+  font_cache_close_busy_clear: {
+    en: "Cannot close while the font cache is being cleared",
+    zh: "字体缓存清除期间无法关闭",
+  },
   font_cache_rescanning: { en: "Rescanning font cache…", zh: "正在重新扫描字体缓存…" },
   font_cache_clearing: { en: "Clearing cache…", zh: "正在清除缓存…" },
   font_cache_rescan_done: {
@@ -670,6 +680,10 @@ export const strings: Record<string, StringEntry> = {
   },
   status_rename_busy: { en: "Renaming…", zh: "重命名中…" },
   status_rename_done: { en: "Rename complete", zh: "重命名完成" },
+  status_rename_partial: {
+    en: "Rename completed with issues",
+    zh: "重命名已完成，但有问题",
+  },
   status_rename_error: { en: "Rename failed", zh: "重命名失败" },
   status_rename_cancelled: { en: "Rename cancelled", zh: "已取消重命名" },
   status_rename_noop: {
@@ -722,6 +736,10 @@ export const strings: Record<string, StringEntry> = {
   rename_grid_title: {
     en: "Pairing preview · {0} row(s)",
     zh: "配对预览 · {0} 行",
+  },
+  rename_grid_unpaired_subtitle_suffix: {
+    en: " · Unpaired subtitles: {0}",
+    zh: " · 未配对字幕：{0}",
   },
   rename_grid_warning_suffix: {
     en: "{0} warning(s)",
@@ -786,13 +804,16 @@ export const strings: Record<string, StringEntry> = {
     en: "Skipped {0}: {1}",
     zh: "已跳过 {0}：{1}",
   },
+  msg_rename_input_conflict: {
+    en: "Blocked {0}: it is part of a planned conflict where an output targets a loaded subtitle input. No files in that conflicting chain were changed.",
+    zh: "已阻止 {0}：该字幕涉及计划批次中的冲突，其中一个输出指向已加载的字幕输入。该冲突链中的文件均未更改。",
+  },
   msg_rename_skipped_count: {
-    // Pinpointed to derive-time pairing failures specifically — not
-    // covering noopTargets (already-correctly-named subs), within-batch
-    // dedup skips, or loop-time copy/rename errors. Those happen before
-    // or after this dialog is shown.
-    en: "Note: {0} pairing(s) failed earlier and won't run (see log).",
-    zh: "注意：另有 {0} 对配对早前失败、不会执行（见日志）。",
+    // Covers path-derivation failures and output-to-loaded-input
+    // conflicts found before confirmation. No-op targets, duplicate outputs,
+    // and loop-time copy/rename errors have their own reporting paths.
+    en: "Note: {0} pairing(s) failed preflight and won't run (see log).",
+    zh: "注意：另有 {0} 对配对未通过预检、不会执行（见日志）。",
   },
   msg_rename_nothing_to_do: {
     en: "Nothing to do — all selected rows produced invalid output paths.",
@@ -944,6 +965,10 @@ export const strings: Record<string, StringEntry> = {
     en: "Cannot analyze {0}: {1}",
     zh: "无法分析 {0}：{1}",
   },
+  msg_style_output_path_error: {
+    en: "Cannot plan an output for {0}: {1}",
+    zh: "无法为 {0} 规划输出路径：{1}",
+  },
   msg_style_outputs_exist: {
     en: "{0} output file(s) already exist. No files were written; remove or rename those outputs first.",
     zh: "已有 {0} 个输出文件。未写入任何文件；请先移除或重命名这些输出。",
@@ -960,10 +985,6 @@ export const strings: Record<string, StringEntry> = {
     en: "Written: {0} ({1} Style row(s) changed)",
     zh: "已写入：{0}（更改了 {1} 个 Style 行）",
   },
-  msg_style_file_noop: {
-    en: "Skipped {0}: no selected Style rows would change",
-    zh: "已跳过 {0}：所选 Style 行无需更改",
-  },
   msg_style_write_error: {
     en: "Error writing {0}: {1}",
     zh: "写入 {0} 出错：{1}",
@@ -971,10 +992,6 @@ export const strings: Record<string, StringEntry> = {
   msg_style_complete: {
     en: "Style edit complete: {0} written, {1} unchanged, {2} failed",
     zh: "样式编辑完成：写入 {0} 个，未更改 {1} 个，失败 {2} 个",
-  },
-  msg_style_all_failed: {
-    en: "Style edit failed on all {0} writable file(s)",
-    zh: "全部 {0} 个可写文件均编辑失败",
   },
   msg_style_all_noop: {
     en: "Nothing to write — no selected Style rows would change.",

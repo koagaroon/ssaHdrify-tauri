@@ -83,6 +83,7 @@ fn missing_engine_stub() -> String {
         "resolveHdrOutputPath",
         "convertShift",
         "resolveShiftOutputPath",
+        "parseTimingMap",
         "planRename",
         "planFontEmbed",
         "planFontDiagnostics",
