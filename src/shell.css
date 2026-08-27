@@ -242,7 +242,7 @@
 }
 
 .app-title {
-  font-family: var(--font-display);
+  font-family: var(--font-brand);
   font-size: 26px;
   font-weight: 600;
   letter-spacing: -0.03em;
@@ -252,18 +252,19 @@
   color: transparent;
 }
 
-/* Oblique only in Chinese mode where Smiley Sans is designed for it;
-   English mode stays upright Inter since we bundle only roman. */
-:lang(zh) .app-title {
-  font-style: oblique;
-}
-
 .app-tagline {
+  font-family: var(--font-display);
   font-size: 10px;
   color: var(--text-muted);
   letter-spacing: 0.04em;
   text-transform: uppercase;
   white-space: nowrap;
+}
+
+/* Smiley Sans is an oblique-only localized display face. Keep that
+   treatment on genuine Chinese copy, not the Latin product wordmark. */
+:lang(zh) .app-tagline {
+  font-style: oblique;
 }
 
 .header-controls {
