@@ -2,6 +2,7 @@
 
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
+import { strings } from "../i18n/strings";
 
 async function readCss(relativePath: string): Promise<string> {
   return readFile(new URL(relativePath, import.meta.url), "utf8");
@@ -15,6 +16,13 @@ function ruleBody(css: string, selector: string): string {
 }
 
 describe("brand typography contract", () => {
+  it("keeps the product title identical across locales", () => {
+    const appTitle = strings["app_title"]!;
+
+    expect(appTitle.en).toBe("SSA HDRify");
+    expect(appTitle.zh).toBe(appTitle.en);
+  });
+
   it("keeps the Latin wordmark stable while localizing genuine Chinese copy", async () => {
     const [tokens, shell] = await Promise.all([readCss("../index.css"), readCss("../shell.css")]);
 
