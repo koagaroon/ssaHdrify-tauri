@@ -83,7 +83,7 @@ const cargoPolicies = {
     mode: /** @type {const} */ ("manual"),
     reason:
       "Every deno_core release requires a manual V8, API, and runtime audit before updating the exact pin.",
-    reviewedThrough: "0.410.0",
+    reviewedThrough: "0.411.0",
   },
   rusqlite: {
     mode: /** @type {const} */ ("hold-line"),

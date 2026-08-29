@@ -1,6 +1,6 @@
 # SSA HDRify
 
-[![License: GPL v3](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](LICENSE) [![GitHub release](https://img.shields.io/github/v/release/koagaroon/ssaHdrify-tauri)](https://github.com/koagaroon/ssaHdrify-tauri/releases) ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)
+[![License: GPL v3](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](LICENSE) [![GitHub release](https://img.shields.io/github/v/release/koagaroon/ssaHdrify-tauri)](https://github.com/koagaroon/ssaHdrify-tauri/releases) ![Platform](https://img.shields.io/badge/release%20platform-Windows-blue)
 
 > **SSA HDRify 是一款桌面工具，能将 SSA/ASS 字幕的颜色转换为适合 HDR 播放的值，同时提供时间轴偏移、字体嵌入和批量重命名等辅助功能。** 它是 [gky99/ssaHdrify](https://github.com/gky99/ssaHdrify)（Python 原版）的 Tauri 桌面重写版。
 >
@@ -54,7 +54,7 @@ Windows 用户可从 [Releases](https://github.com/koagaroon/ssaHdrify-tauri/rel
 - **`ssahdrify*.exe`** — 图形界面（GUI），适合手动操作
 - **`ssahdrify-cli*.exe`** — 命令行（CLI），适合自动化流水线、批处理和脚本化场景
 
-macOS / Linux 用户请参考下方「从源码构建」。
+macOS / Linux 仅可尝试下方的源码构建流程；项目尚未在这些平台上验证文件对话框、文件系统行为、完整构建或发布产物，因此不属于官方支持的发布平台。
 
 Windows users can download portable, no-install exe files from [Releases](https://github.com/koagaroon/ssaHdrify-tauri/releases). Use the latest stable build by default; preview builds remain listed on the same page for testing features that have not entered a stable release yet.
 
@@ -64,7 +64,7 @@ Windows users can download portable, no-install exe files from [Releases](https:
 - **`ssahdrify*.exe`** — graphical interface (GUI), for manual use
 - **`ssahdrify-cli*.exe`** — command line (CLI), for automation pipelines, batch jobs, and scripts
 
-macOS / Linux users, see "Build from Source" below.
+macOS / Linux users may attempt the source-build workflow below. File dialogs, filesystem behavior, complete builds, and release artifacts have not been validated on those platforms, so they are not officially supported release targets.
 
 ---
 
@@ -465,6 +465,11 @@ Due to the complexity of subtitle blending pipelines and HDR display environment
 ---
 
 ## 从源码构建 | Build from Source
+
+> [!IMPORTANT]
+> 官方发布和发布前验证目前仅覆盖 Windows。macOS / Linux 的源码构建仅作为尚未验证的自行构建路径；项目不提供这些平台的预构建二进制文件。
+>
+> Official releases and release validation currently cover Windows only. macOS and Linux source builds are unvalidated self-build paths; the project does not provide prebuilt binaries for those platforms.
 
 ### 前置条件 | Prerequisites
 
