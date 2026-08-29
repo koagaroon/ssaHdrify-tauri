@@ -60,6 +60,14 @@ pub const MAX_IPC_PATH_LEN: usize = 4096;
 /// which input was bad ("Directory path must be 1-4096 bytes", etc.).
 /// Keep this the SINGLE definition; each module previously had its own
 /// copy and they drifted.
+fn uses_reserved_path_namespace(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    let starts_ci = |needle: &[u8]| {
+        bytes.len() >= needle.len() && bytes[..needle.len()].eq_ignore_ascii_case(needle)
+    };
+    starts_ci(br"\\.\") || starts_ci(b"//./") || starts_ci(br"\\?\") || starts_ci(b"//?/")
+}
+
 pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
     if path.is_empty() || path.len() > MAX_IPC_PATH_LEN {
         return Err(format!("{label} path must be 1-{MAX_IPC_PATH_LEN} bytes"));
@@ -128,13 +136,7 @@ pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
     // ASCII case folding in place. Lossless: every prefix listed below
     // is pure ASCII, so byte-level case folding is byte-equivalent to
     // the prior char-level fold.
-    let bytes = path.as_bytes();
-    let starts_ci = |needle: &[u8]| {
-        bytes.len() >= needle.len() && bytes[..needle.len()].eq_ignore_ascii_case(needle)
-    };
-    let is_dos_device = starts_ci(br"\\.\") || starts_ci(b"//./");
-    let is_verbatim_drive = starts_ci(br"\\?\") || starts_ci(b"//?/");
-    if is_dos_device || is_verbatim_drive {
+    if uses_reserved_path_namespace(path) {
         return Err(format!("{label} path uses a reserved device namespace"));
     }
     // On Windows, a colon is only valid as the separator in the first
@@ -253,6 +255,110 @@ pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+#[cfg(windows)]
+fn output_directory_component_has_unsupported_trailing_dot(component: &std::ffi::OsStr) -> bool {
+    let bytes = component.as_encoded_bytes();
+    bytes.len() >= 2 && bytes[bytes.len() - 1] == b'.' && bytes[bytes.len() - 2] != b'.'
+}
+
+/// Validate only the filesystem shape of a destination path. On Windows,
+/// reject intermediate Normal components ending in the product's unsupported
+/// single-ASCII-dot shape. Prefix components automatically keep drive anchors
+/// and UNC server/share roots outside this rule; the final Normal component is
+/// the output leaf and remains governed by its own filename and extension
+/// contracts.
+///
+/// This intentionally does not call [`validate_ipc_path`]. CLI relocation may
+/// preserve an already-classified extended-length path for its separate length
+/// contract, while safe-I/O entrypoints call [`validate_output_path`] and retain
+/// the full untrusted-string validation boundary.
+pub fn validate_output_path_shape(path: &Path, label: &str) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let raw = path.to_string_lossy();
+        if uses_reserved_path_namespace(raw.as_ref()) {
+            return Ok(());
+        }
+
+        let normalized = raw.replace('\\', "/");
+        if normalized.starts_with("//") {
+            let components: Vec<&str> = normalized.split('/').collect();
+            let mut root_components = 0;
+            let mut first_directory_index = components.len();
+            for (index, component) in components.iter().enumerate().skip(2) {
+                if component.is_empty() {
+                    continue;
+                }
+                root_components += 1;
+                if root_components == 2 {
+                    first_directory_index = index + 1;
+                    break;
+                }
+            }
+            if root_components < 2 {
+                return Ok(());
+            }
+            let end_exclusive = components.len().saturating_sub(1);
+            for component in &components[first_directory_index..end_exclusive] {
+                if component.is_empty() || matches!(*component, "." | "..") {
+                    continue;
+                }
+                if output_directory_component_has_unsupported_trailing_dot(std::ffi::OsStr::new(
+                    component,
+                )) {
+                    return Err(format!(
+                        "{label} path contains a directory component ending in an unsupported ASCII dot: {component}"
+                    ));
+                }
+            }
+            return Ok(());
+        }
+
+        if let Some(std::path::Component::Prefix(prefix)) = path.components().next() {
+            if matches!(
+                prefix.kind(),
+                std::path::Prefix::Verbatim(_)
+                    | std::path::Prefix::VerbatimDisk(_)
+                    | std::path::Prefix::VerbatimUNC(_, _)
+                    | std::path::Prefix::DeviceNS(_)
+            ) {
+                return Ok(());
+            }
+        }
+        let mut normal_components = path
+            .components()
+            .filter_map(|component| match component {
+                std::path::Component::Normal(value) => Some(value),
+                _ => None,
+            })
+            .peekable();
+
+        while let Some(component) = normal_components.next() {
+            if normal_components.peek().is_none() {
+                break;
+            }
+            if output_directory_component_has_unsupported_trailing_dot(component) {
+                return Err(format!(
+                    "{label} path contains a directory component ending in an unsupported ASCII dot: {}",
+                    component.to_string_lossy()
+                ));
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    let _ = (path, label);
+
+    Ok(())
+}
+
+/// Validate an untrusted destination path, then apply output-specific shape
+/// checks before any scope, existence, or filesystem operation.
+pub fn validate_output_path(path: &str, label: &str) -> Result<(), String> {
+    validate_ipc_path(path, label)?;
+    validate_output_path_shape(Path::new(path), label)
 }
 
 /// Validate a font family name received from the IPC boundary or
@@ -691,6 +797,58 @@ mod tests {
         // serializations) must also reject.
         let err = validate_ipc_path("//?/C:/Users/u/.ssh/id_rsa", "Test").unwrap_err();
         assert!(err.contains("reserved device namespace"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn output_directory_component_predicate_has_the_exact_ascii_boundary() {
+        for component in ["dir.", ".hidden.", "dir .", "dir. ."] {
+            assert!(output_directory_component_has_unsupported_trailing_dot(
+                std::ffi::OsStr::new(component)
+            ));
+        }
+        for component in ["dir..", "dir...", "dir ", "dir. ", "dir．", ".", ".."] {
+            assert!(!output_directory_component_has_unsupported_trailing_dot(
+                std::ffi::OsStr::new(component)
+            ));
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn validate_output_path_rejects_only_intermediate_normal_components() {
+        let err = validate_output_path(r"C:\base\dir.\episode.ass", "Output").unwrap_err();
+        assert!(err.contains("directory component ending in an unsupported ASCII dot"));
+
+        for path in [
+            r"C:\base\dir..\episode.ass",
+            r"C:\base\dir...\episode.ass",
+            r"C:\base\dir \episode.ass",
+            r"C:\base\dir. \episode.ass",
+            r"\\server.\share.\base\episode.ass",
+            r"//server.//share./base/episode.ass",
+            r"C:\base\episode.ass.",
+        ] {
+            validate_output_path(path, "Output")
+                .unwrap_or_else(|error| panic!("{path} should validate here: {error}"));
+        }
+
+        let err =
+            validate_output_path(r"//server.//share./dir./episode.ass", "Output").unwrap_err();
+        assert!(err.contains("directory component ending in an unsupported ASCII dot"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn validate_output_path_keeps_reserved_namespace_error_priority() {
+        validate_output_path_shape(Path::new(r"\\?\C:\dir.\episode.ass"), "Output")
+            .expect("shape-only validation must preserve verbatim paths");
+        validate_output_path_shape(Path::new(r"//?/C:/dir./episode.ass"), "Output")
+            .expect("shape-only validation must preserve slash-form verbatim paths");
+        let err = validate_output_path(r"\\?\C:\dir.\episode.ass", "Output").unwrap_err();
+        assert!(err.contains("reserved device namespace"), "got: {err}");
+        let err = validate_output_path(r"//?/C:/dir./episode.ass", "Output").unwrap_err();
+        assert!(err.contains("reserved device namespace"), "got: {err}");
     }
 
     // ── strip_visual_line_breaks ──

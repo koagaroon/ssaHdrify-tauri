@@ -416,6 +416,14 @@ describe("Cheap resolver ↔ heavy converter byte equivalence", () => {
     expect(cheap).toBe(heavy.outputPath);
   });
 
+  it("resolveShiftOutputPath rejects output names ending in an ASCII dot or space", () => {
+    for (const outputTemplate of ["{name}{ext}.", "{name}{ext} "]) {
+      expect(() => resolveShiftOutputPath({ inputPath: inputAss, outputTemplate })).toThrow(
+        /cannot end with an ASCII space or dot/
+      );
+    }
+  });
+
   it("resolveEmbedOutputPath matches planFontEmbed.outputPath for the default template", () => {
     const embedAss = [
       "[Script Info]",
