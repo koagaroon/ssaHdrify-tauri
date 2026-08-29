@@ -540,7 +540,7 @@ fn looks_like_cjk_utf32_scalar_text(probes: &[&[u8]], little_endian: bool) -> bo
     let mut cjk = 0usize;
     let mut line_breaks = 0usize;
 
-    for unit in probes.iter().flat_map(|probe| probe.chunks_exact(4)) {
+    for unit in probes.iter().flat_map(|probe| probe.as_chunks::<4>().0) {
         let value = if little_endian {
             u32::from_le_bytes([unit[0], unit[1], unit[2], unit[3]])
         } else {
@@ -596,7 +596,9 @@ fn looks_like_bomless_utf32(bytes: &[u8]) -> bool {
 
 fn decode_utf32_probe(bytes: &[u8], little_endian: bool) -> Option<String> {
     bytes
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|unit| {
             let value = if little_endian {
                 u32::from_le_bytes([unit[0], unit[1], unit[2], unit[3]])
