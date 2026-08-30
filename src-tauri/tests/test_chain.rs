@@ -357,6 +357,131 @@ fn chain_self_overwrite_fails_before_the_exists_check() {
 }
 
 #[test]
+fn chain_rejects_trailing_dot_output_template_before_write() {
+    if let Some(reason) = engine_bundle_missing() {
+        panic!("engine bundle missing — run `npm run build:engine` first ({reason})");
+    }
+
+    let dir = temp_dir("windows_trailing_dot_template");
+    let input = write_fixture(&dir, "cat.ass");
+    let before = fs::read(&input).expect("read input before trailing-dot template probe");
+
+    let output = Command::new(cli_path())
+        .args([
+            "--overwrite",
+            "--lang",
+            "en",
+            "chain",
+            "--output-template",
+            "{name}{ext}.",
+            "shift",
+            "--offset",
+            "+2s",
+        ])
+        .arg(&input)
+        .output()
+        .expect("failed to run trailing-dot output-template probe");
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "trailing-dot output filename should be a complete failure: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("cannot end with an ASCII space or dot"),
+        "failure should come from early output-filename validation: {stderr}"
+    );
+    assert_eq!(
+        fs::read(&input).expect("read input after trailing-dot template probe"),
+        before,
+        "filename rejection must leave the input byte-identical"
+    );
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[cfg(windows)]
+#[test]
+fn chain_rejects_intermediate_trailing_dot_output_directory_without_mutation() {
+    if let Some(reason) = engine_bundle_missing() {
+        panic!("engine bundle missing — run `npm run build:engine` first ({reason})");
+    }
+
+    let dir = temp_dir("windows_intermediate_trailing_dot_output_dir");
+    let input = write_fixture(&dir, "cat.ass");
+    let input_before = fs::read(&input).expect("read source before output-dir probe");
+    let real_output_dir = dir.join("real-output");
+    fs::create_dir_all(&real_output_dir).unwrap();
+    let destination = real_output_dir.join("cat.shifted.ass");
+    let destination_before = b"known destination bytes";
+    fs::write(&destination, destination_before).unwrap();
+    let alias_output_dir = PathBuf::from(format!("{}.", real_output_dir.to_string_lossy()));
+
+    let output = Command::new(cli_path())
+        .args(["--overwrite", "--dry-run", "--lang", "en", "--output-dir"])
+        .arg(&alias_output_dir)
+        .args(["chain", "shift", "--offset", "+2s"])
+        .arg(&input)
+        .output()
+        .expect("failed to run intermediate trailing-dot output-dir probe");
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "unsupported output directory should be a complete failure: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("directory component ending in an unsupported ASCII dot"),
+        "failure should identify the output-directory component rule: {stderr}"
+    );
+    assert_eq!(fs::read(&input).unwrap(), input_before);
+    assert_eq!(fs::read(&destination).unwrap(), destination_before);
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[cfg(windows)]
+#[test]
+fn chain_rejects_win32_output_directory_alias_before_real_overwrite() {
+    if let Some(reason) = engine_bundle_missing() {
+        panic!("engine bundle missing — run `npm run build:engine` first ({reason})");
+    }
+
+    let dir = temp_dir("windows_real_intermediate_trailing_dot_output_dir");
+    let input = write_fixture(&dir, "cat.ass");
+    let input_before = fs::read(&input).expect("read source before real output-dir probe");
+    let real_output_dir = dir.join("real-output");
+    fs::create_dir_all(&real_output_dir).unwrap();
+    let destination = real_output_dir.join("cat.shifted.ass");
+    let destination_before = b"known destination bytes before real overwrite";
+    fs::write(&destination, destination_before).unwrap();
+    let alias_output_dir = PathBuf::from(format!("{}.", real_output_dir.to_string_lossy()));
+
+    let output = Command::new(cli_path())
+        .args(["--overwrite", "--lang", "en", "--output-dir"])
+        .arg(&alias_output_dir)
+        .args(["chain", "shift", "--offset", "+2s"])
+        .arg(&input)
+        .output()
+        .expect("failed to run real intermediate trailing-dot output-dir probe");
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("directory component ending in an unsupported ASCII dot"),
+        "failure should identify Win32 output-directory alias rejection: {stderr}"
+    );
+    assert_eq!(fs::read(&input).unwrap(), input_before);
+    assert_eq!(fs::read(&destination).unwrap(), destination_before);
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
 fn chain_multi_file_batch_processes_all_inputs() {
     if let Some(reason) = engine_bundle_missing() {
         // Hard-fail instead of skip-and-return : a

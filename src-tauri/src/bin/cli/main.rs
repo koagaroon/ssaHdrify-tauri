@@ -1942,7 +1942,7 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
     }
 
     if globals.dry_run {
-        emit_chain_dry_run(&plan, globals);
+        emit_chain_dry_run(&plan, globals)?;
         return Ok(ExitCode::SUCCESS);
     }
 
@@ -2381,15 +2381,10 @@ fn predict_chain_output_path(
     // LPT0-LPT9, AND Unicode superscript variants COM¹/²/³ + LPT¹/²/³
     // — parity with TS `assertSafeOutputFilename` +
     // `util.rs::validate_ipc_path`. The
-    // remaining asymmetry vs TS is the trailing-whitespace / dot strip
-    // before the reserved-name check (`CON ` and `CON.` resolve to the
-    // device on Windows). The Rust pre-check intentionally omits the
-    // strip — Windows refuses to create files with those names, so
-    // the predicted path can never exist on disk →
-    // `predicted.exists()` returns false → prediction returns Some →
-    // V8 runs → TS rejects authoritatively. The harmless-slip set is
-    // closed-form because the Win32 device-namespace gate at the OS
-    // layer is the final arbiter.
+    // Trailing ASCII space/dot output names are rejected below under the
+    // shared product contract, mirroring TS filename validation on every OS.
+    // Returning None preserves predictor abstention: V8 + TS supplies the
+    // authoritative user-facing rejection instead of using a guessed path.
     //
     // Cross-platform asymmetry note : on Linux/macOS
     // the TS-side reserved-name check still rejects `COM¹.ass` etc.,
@@ -2443,6 +2438,9 @@ fn predict_chain_output_path(
     // message. TS-side `assertSafeOutputFilename` rejects them via the
     // empty-stem and traversal gates; mirror at the prediction layer.
     if output_name == "." || output_name == ".." {
+        return None;
+    }
+    if output_name.ends_with(' ') || output_name.ends_with('.') {
         return None;
     }
     let illegal_in_filename = output_name.chars().any(|c| {
@@ -2848,9 +2846,23 @@ fn process_one_chain_input(
     builder.into_written(output_path)
 }
 
-fn emit_chain_dry_run(plan: &chain::ChainPlan, globals: &GlobalOptions) {
+fn emit_chain_dry_run(plan: &chain::ChainPlan, globals: &GlobalOptions) -> Result<(), String> {
+    // Dry-run normally treats predictor abstention as non-fatal, but a concrete
+    // predicted filename plus an invalid relocation is not abstention. Validate
+    // that final relocated path before printing a plan so output-directory
+    // errors cannot be collapsed to None by predict_chain_output_path's `.ok()`.
+    for input in &plan.input_files {
+        if let Ok(absolute) = absolute_path(input) {
+            if let Some(predicted) =
+                predict_chain_output_path(&absolute, &plan.output_template, None)
+            {
+                relocate_output_path(&predicted.to_string_lossy(), globals.output_dir.as_deref())?;
+            }
+        }
+    }
+
     if globals.quiet {
-        return;
+        return Ok(());
     }
     println!("Plan (no files written):");
     println!();
@@ -2927,6 +2939,7 @@ fn emit_chain_dry_run(plan: &chain::ChainPlan, globals: &GlobalOptions) {
             println!("    {}. {}", i + 1, step.kind_name());
         }
     }
+    Ok(())
 }
 
 fn run_hdr(
@@ -6938,7 +6951,7 @@ fn absolute_path(path: &Path) -> Result<PathBuf, String> {
 // Cap on the relocated output path — Windows MAX_PATH minus one.
 // Windows-only: POSIX has PATH_MAX 4096 (Linux) / 1024 (macOS), so
 // applying 259 there over-restricts legitimate long paths
-// . Long-local paths (`\\?\C:\...`) get the extended
+// . Long-local paths (`\\\\?\\C:\\...`) get the extended
 // cap on Windows. UNC long paths keep the standard cap because the
 // server side may not honor the extended namespace.
 #[cfg(target_os = "windows")]
@@ -6955,23 +6968,23 @@ const RELOCATED_LONG_PATH_MAX_LEN: usize = 4096;
 
 fn relocate_output_path(path: &str, output_dir: Option<&Path>) -> Result<PathBuf, String> {
     let path = PathBuf::from(path);
-    let Some(output_dir) = output_dir else {
-        return Ok(path);
+    let relocated = if let Some(output_dir) = output_dir {
+        // `path.file_name()` strips ALL path components from the
+        // engine-returned output path, keeping only the final segment.
+        // Contract : the engine's TS-side
+        // `assertSafeOutputFilename` guarantees the returned `path` is a
+        // flat filename — no path separators, no `..`, no drive letters.
+        // If a future engine change relaxes that invariant, the
+        // file_name() flattening here would silently mask the violation
+        // (we'd just drop the directory prefix instead of erroring). Keep
+        // assertSafeOutputFilename strict.
+        let file_name = path
+            .file_name()
+            .ok_or_else(|| "engine returned an output path without a filename".to_string())?;
+        output_dir.join(file_name)
+    } else {
+        path
     };
-
-    // `path.file_name()` strips ALL path components from the
-    // engine-returned output path, keeping only the final segment.
-    // Contract : the engine's TS-side
-    // `assertSafeOutputFilename` guarantees the returned `path` is a
-    // flat filename — no path separators, no `..`, no drive letters.
-    // If a future engine change relaxes that invariant, the
-    // file_name() flattening here would silently mask the violation
-    // (we'd just drop the directory prefix instead of erroring). Keep
-    // assertSafeOutputFilename strict.
-    let file_name = path
-        .file_name()
-        .ok_or_else(|| "engine returned an output path without a filename".to_string())?;
-    let relocated = output_dir.join(file_name);
 
     // Re-validate length on the relocated path. The JS validators saw
     // the pre-relocation path and signed off; relocation can grow it
@@ -6982,6 +6995,7 @@ fn relocate_output_path(path: &str, output_dir: Option<&Path>) -> Result<PathBuf
     // typically 1 UTF-16 code unit, so a `display.len()` (byte count)
     // would over-restrict CJK paths the OS would happily accept.
     let display = relocated.to_string_lossy();
+    app_lib::util::validate_output_path_shape(&relocated, "Output")?;
     let lower = display.to_lowercase();
     let is_long_local = (lower.starts_with("\\\\?\\") && !lower.starts_with("\\\\?\\unc\\"))
         || (lower.starts_with("//?/") && !lower.starts_with("//?/unc/"));
@@ -8607,6 +8621,29 @@ mod tests {
         assert_eq!(result, out_dir.join("episode.shifted.ass"));
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn relocate_output_path_rejects_intermediate_trailing_ascii_dot() {
+        let out_dir = PathBuf::from(r"D:\real-output.");
+        let err = relocate_output_path(r"C:\subs\episode.shifted.ass", Some(&out_dir)).unwrap_err();
+        assert!(
+            err.contains("directory component ending in an unsupported ASCII dot"),
+            "got: {err}"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn relocate_output_path_preserves_verbatim_intermediate_trailing_dot() {
+        let out_dir = PathBuf::from(r"\\?\C:\real-output.");
+        let result = relocate_output_path(r"C:\subs\episode.shifted.ass", Some(&out_dir));
+        assert_eq!(result.unwrap(), out_dir.join("episode.shifted.ass"));
+
+        let slash_out_dir = PathBuf::from(r"//?/C:/real-output.");
+        let result = relocate_output_path(r"C:\subs\episode.shifted.ass", Some(&slash_out_dir));
+        assert_eq!(result.unwrap(), slash_out_dir.join("episode.shifted.ass"));
+    }
+
     #[test]
     fn relocate_output_path_accepts_ramdisk_shaped_output_dirs() {
         let drive_root = PathBuf::from("R:\\");
@@ -8937,6 +8974,19 @@ mod tests {
             predicted.is_none(),
             "bare `..` template should reject; got {predicted:?}"
         );
+    }
+
+    #[test]
+    fn predict_chain_output_path_abstains_on_trailing_ascii_dot_or_space() {
+        let input = PathBuf::from("/subs/Show.ass");
+        for output_template in ["{name}{ext}.", "{name}{ext} "] {
+            let predicted = predict_chain_output_path(&input, output_template, None);
+            assert!(
+                predicted.is_none(),
+                "Trailing ASCII dot/space template should defer to V8/TS; \
+                 template={output_template:?}, got {predicted:?}"
+            );
+        }
     }
 
     #[test]

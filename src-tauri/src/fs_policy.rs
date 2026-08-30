@@ -223,4 +223,30 @@ mod tests {
             );
         }
     }
+
+    #[cfg(windows)]
+    #[test]
+    fn locked_tauri_glob_matcher_contract_is_case_insensitive_on_windows() {
+        // Dependency contract audit, not an end-to-end application Scope test:
+        // Tauri 2.11.5 constructs its filesystem scope with these explicit
+        // fields plus `MatchOptions::default()`, and locked glob 0.3.4 derives
+        // that default with `case_sensitive == false`.
+        let match_options = glob::MatchOptions {
+            require_literal_separator: true,
+            require_literal_leading_dot: false,
+            ..Default::default()
+        };
+        assert!(!match_options.case_sensitive);
+
+        let denied_pattern = tauri::fs::Pattern::new(r"C:\scope-root\.ssh\**").unwrap();
+        let case_variant: PathBuf = std::path::Path::new(r"C:\scope-root\.SSH\payload.ass")
+            .components()
+            .collect();
+        let near_miss: PathBuf = std::path::Path::new(r"C:\scope-root\.ssh-safe\payload.ass")
+            .components()
+            .collect();
+
+        assert!(denied_pattern.matches_path_with(&case_variant, match_options));
+        assert!(!denied_pattern.matches_path_with(&near_miss, match_options));
+    }
 }

@@ -297,7 +297,57 @@ function trimTrailingPathSeparators(path: string): string {
   return path.replace(/\/+$/, "");
 }
 
-function assertOutputPathShape(normalizedOutput: string): void {
+function hasUnsupportedTrailingAsciiDot(component: string): boolean {
+  return component.endsWith(".") && !component.endsWith("..");
+}
+
+function assertNoUnsupportedWindowsOutputDirectoryComponents(
+  normalizedOutput: string,
+  terminalComponentIsDirectory: boolean
+): void {
+  if (!isWindowsRuntime) return;
+
+  const lower = normalizedOutput.toLowerCase();
+  if (lower.startsWith("//?/") || lower.startsWith("//./")) return;
+
+  const components = normalizedOutput.split("/");
+  let firstDirectoryIndex: number;
+  if (/^[A-Za-z]:\/$/.test(normalizedOutput.slice(0, 3))) {
+    firstDirectoryIndex = 1;
+  } else if (normalizedOutput.startsWith("//")) {
+    let rootComponents = 0;
+    firstDirectoryIndex = components.length;
+    for (let index = 2; index < components.length; index += 1) {
+      if (!components[index]) continue;
+      rootComponents += 1;
+      if (rootComponents === 2) {
+        firstDirectoryIndex = index + 1;
+        break;
+      }
+    }
+  } else if (normalizedOutput.startsWith("/")) {
+    firstDirectoryIndex = 1;
+  } else {
+    // Preserve the existing absolute-path error priority for relative shapes.
+    return;
+  }
+
+  const endExclusive = terminalComponentIsDirectory ? components.length : components.length - 1;
+  for (let index = firstDirectoryIndex; index < endExclusive; index += 1) {
+    const component = components[index];
+    if (!component || component === "." || component === "..") continue;
+    if (hasUnsupportedTrailingAsciiDot(component)) {
+      throw new Error(
+        `Output path contains a directory component ending in an unsupported ASCII dot: ${component}`
+      );
+    }
+  }
+}
+
+function assertOutputPathShape(
+  normalizedOutput: string,
+  terminalComponentIsDirectory = false
+): void {
   if (new RegExp(`[${ASCII_CONTROL_CHARS}]`).test(normalizedOutput)) {
     throw new Error(`Output path contains control characters: ${normalizedOutput}`);
   }
@@ -311,6 +361,11 @@ function assertOutputPathShape(normalizedOutput: string): void {
   if (/(^|\/)\.\.($|\/)/.test(normalizedOutput)) {
     throw new Error(`Output path contains directory traversal: ${normalizedOutput}`);
   }
+
+  assertNoUnsupportedWindowsOutputDirectoryComponents(
+    normalizedOutput,
+    terminalComponentIsDirectory
+  );
 }
 
 function assertNoCurrentDirectorySegments(normalizedPath: string, label: string): void {
@@ -370,7 +425,7 @@ export function decomposeOutputDirectoryPath(outputDir: string): OutputDirectory
 
   const usedBackslash = isWindowsRuntime && outputDir.includes("\\");
   const normalized = usedBackslash ? outputDir.replace(/\\/g, "/") : outputDir;
-  assertOutputPathShape(normalized);
+  assertOutputPathShape(normalized, true);
 
   const isAbsolute = normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized);
   if (!isAbsolute) {
@@ -511,6 +566,7 @@ export function substituteTemplate(template: string, vars: Record<string, string
  *
  * Throws on:
  *   - empty / whitespace-only filename
+ *   - trailing ASCII space or dot under the product output contract
  *   - illegal characters (control / NTFS-reserved / separators)
  *   - Windows reserved name (CON, PRN, etc., case-insensitive,
  *     applied to the stem with trailing whitespace + dots stripped)
@@ -531,6 +587,9 @@ export function assertSafeOutputFilename(
   }
   if (!filename.replace(/\./g, "").trim()) {
     throw new Error("Template resolves to a dots-only filename");
+  }
+  if (filename.endsWith(" ") || filename.endsWith(".")) {
+    throw new Error("Output filename cannot end with an ASCII space or dot");
   }
   const illegalRe = options?.allowBraces
     ? ILLEGAL_FILENAME_CHARS_BRACES_OK

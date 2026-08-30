@@ -55,7 +55,7 @@
 //! instead of needing parallel fixes in each.
 
 use crate::encoding::{read_text_detect_encoding_inner, ALLOWED_TEXT_EXTENSIONS, MAX_TEXT_SIZE};
-use crate::util::{is_reparse_point, validate_ipc_path};
+use crate::util::{is_reparse_point, validate_ipc_path, validate_output_path};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -609,7 +609,7 @@ pub fn safe_output_path_exists_inner(
     path: &str,
     is_allowed: impl Fn(&Path) -> bool,
 ) -> Result<bool, String> {
-    validate_ipc_path(path, "Output")?;
+    validate_output_path(path, "Output")?;
     let path_ref = Path::new(path);
     check_output_probe_extension(path_ref, "Output")?;
     check_scope_allows(&is_allowed, path_ref, "Output")?;
@@ -630,7 +630,7 @@ pub fn safe_write_text_file_inner(
     overwrite: bool,
     is_allowed: impl Fn(&Path) -> bool,
 ) -> Result<(), String> {
-    validate_ipc_path(path, "Output")?;
+    validate_output_path(path, "Output")?;
     let path_ref = Path::new(path);
     check_subtitle_extension(path_ref, "Output")?;
     check_scope_allows(&is_allowed, path_ref, "Output")?;
@@ -660,7 +660,7 @@ pub fn safe_write_style_edit_output_inner(
     }
 
     validate_ipc_path(source_path, "Source")?;
-    validate_ipc_path(output_path, "Output")?;
+    validate_output_path(output_path, "Output")?;
     let source_ref = Path::new(source_path);
     let output_ref = Path::new(output_path);
     let source_ext = check_ass_style_extension(source_ref, "Source")?;
@@ -747,7 +747,7 @@ pub fn safe_copy_file_inner(
     is_allowed: impl Fn(&Path) -> bool,
 ) -> Result<(), String> {
     validate_ipc_path(src, "Source")?;
-    validate_ipc_path(dst, "Destination")?;
+    validate_output_path(dst, "Destination")?;
     let src_ref = Path::new(src);
     let dst_ref = Path::new(dst);
     check_copy_rename_extensions(src_ref, dst_ref)?;
@@ -823,7 +823,7 @@ fn safe_rename_file_inner_with_rename(
     rename_file: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
 ) -> Result<(), String> {
     validate_ipc_path(src, "Source")?;
-    validate_ipc_path(dst, "Destination")?;
+    validate_output_path(dst, "Destination")?;
     let src_ref = Path::new(src);
     let dst_ref = Path::new(dst);
     check_copy_rename_extensions(src_ref, dst_ref)?;
@@ -1129,6 +1129,65 @@ mod tests {
         .unwrap_err();
         assert!(err.contains("subtitle extension"));
         assert!(!path.exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn write_rejects_windows_trailing_ascii_dot_space_aliases_before_overwrite() {
+        let dir = temp_dir("write_windows_trailing_alias");
+        let canonical_dir = dir.canonicalize().expect("canonicalize test temp root");
+        let original = dir.join("episode.ass");
+        const ORIGINAL_BYTES: &[u8] = b"known original subtitle bytes";
+        fs::write(&original, ORIGINAL_BYTES).unwrap();
+
+        for alias_name in ["episode.ass.", "episode.ass "] {
+            let alias = dir.join(alias_name);
+            let raw_root = dir.clone();
+            let resolved_root = canonical_dir.clone();
+            let err = safe_write_text_file_inner(
+                &alias.to_string_lossy(),
+                "replacement",
+                true,
+                move |path| path.starts_with(&raw_root) || path.starts_with(&resolved_root),
+            )
+            .unwrap_err();
+
+            assert!(err.contains("subtitle extension"), "got: {err}");
+            assert_eq!(
+                fs::read(&original).unwrap(),
+                ORIGINAL_BYTES,
+                "rejected alias {alias_name:?} must not change the original"
+            );
+        }
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn write_rejects_windows_intermediate_trailing_dot_alias_before_overwrite() {
+        let dir = temp_dir("write_windows_intermediate_trailing_dot");
+        let canonical_dir = dir.canonicalize().expect("canonicalize test temp root");
+        let real_output_dir = dir.join("real-output");
+        fs::create_dir_all(&real_output_dir).unwrap();
+        let sentinel = real_output_dir.join("episode.ass");
+        const ORIGINAL_BYTES: &[u8] = b"known destination bytes";
+        fs::write(&sentinel, ORIGINAL_BYTES).unwrap();
+
+        let alias_output = dir.join("real-output.").join("episode.ass");
+        let raw_root = dir.clone();
+        let resolved_root = canonical_dir;
+        let err = safe_write_text_file_inner(
+            &alias_output.to_string_lossy(),
+            "replacement",
+            true,
+            move |path| path.starts_with(&raw_root) || path.starts_with(&resolved_root),
+        )
+        .unwrap_err();
+
+        assert!(err.contains("unsupported ASCII dot"), "got: {err}");
+        assert_eq!(fs::read(&sentinel).unwrap(), ORIGINAL_BYTES);
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
