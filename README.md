@@ -2,7 +2,7 @@
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](LICENSE) [![GitHub release](https://img.shields.io/github/v/release/koagaroon/ssaHdrify-tauri)](https://github.com/koagaroon/ssaHdrify-tauri/releases) ![Platform](https://img.shields.io/badge/release%20platform-Windows-blue)
 
-> **SSA HDRify 是一款桌面工具，能将 SSA/ASS 字幕的颜色转换为适合 HDR 播放的值，同时提供时间轴偏移、字体嵌入和批量重命名等辅助功能。** 它是 [gky99/ssaHdrify](https://github.com/gky99/ssaHdrify)（Python 原版）的 Tauri 桌面重写版。
+> **SSA HDRify 是一款桌面工具，能将 SSA/ASS 字幕的颜色转换为适合 HDR 播放的值，并附带时间轴偏移、字体嵌入和批量重命名等配套工具。** 它是 [gky99/ssaHdrify](https://github.com/gky99/ssaHdrify)（Python 原版）的 Tauri 桌面重写版。
 >
 > _SSA HDRify is a desktop tool that converts SSA/ASS subtitle colors into values suitable for HDR playback, with companion tools for timing shift, font embedding, and batch renaming._ It is a Tauri desktop rewrite of [gky99/ssaHdrify](https://github.com/gky99/ssaHdrify) (the original Python version).
 
@@ -79,7 +79,7 @@ macOS / Linux users may attempt the source-build workflow below. File dialogs, f
 | **样式编辑 / Style Edit**               | 批量预览并修改 ASS/SSA `Style:` 行的字体族和字号。两项操作可独立启用，也可以只替换指定的原字体；行内 `\fn` / `\fs` 标签保持不变。 / Preview and batch-edit font family and size in ASS/SSA `Style:` rows. Enable either operation independently, optionally filter one source family, and leave inline `\fn` / `\fs` tags untouched.                                                                                                        |
 
 > [!TIP]
-> **完整支持中文路径** — 包含中文、日文或其他非 ASCII 字符的文件路径都可以正常处理。Tauri 和 Rust 底层使用 Unicode API，不受传统 ANSI 编码限制。
+> **完整支持非 ASCII 路径** — 包含中文、日文或其他非 ASCII 字符的文件路径都可以正常处理。Tauri 和 Rust 底层使用 Unicode API，不受传统 ANSI 编码限制。
 >
 > **Non-ASCII paths are fully supported** — File paths containing Chinese, Japanese, or other non-ASCII characters are handled correctly. Tauri and Rust use native Unicode APIs under the hood.
 
@@ -123,7 +123,7 @@ Format support is not identical across workflows. The table below describes curr
 > | 参数 / Parameter  | 默认值 / Default | 说明 / Description                                                                                                                                                       |
 > | ----------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 > | EOTF curve        | PQ               | PQ (ST 2084) 用于 HDR10/杜比视界；HLG 用于广播 HDR / PQ for HDR10/Dolby Vision; HLG for broadcast HDR                                                                    |
-> | Target brightness | 203 nits         | SDR 字幕峰值亮度（BT.2408 标准值）。如果字幕太亮就调低，太暗就调高 / Peak SDR subtitle brightness (BT.2408 reference value). Lower it if too bright; raise it if too dim |
+> | Target brightness | 203 nits         | SDR 字幕峰值亮度（BT.2408 参考值）。如果字幕太亮就调低，太暗就调高 / Peak SDR subtitle brightness (BT.2408 reference value). Lower it if too bright; raise it if too dim |
 
 ### 时间轴偏移 / Timing Shift
 
@@ -151,11 +151,11 @@ Large font folders and nested libraries are supported; discovery and parsing sho
 
 > **字体名称匹配 / Font Name Matching**
 >
-> 工具会读取字体文件的 OpenType `name` 表，并索引受支持的本地化 family、typographic family、full-face 和 PostScript 名称变体（英文、中文等），同时内置了异常字体防护上限。ASS 脚本无论引用哪个受支持名称，都能匹配到同一个字体文件；`@家族名` 这类竖排前缀也会按同一字体处理。
+> 工具会读取字体文件的 OpenType `name` 表，并索引受支持的本地化 family、typographic family、full-face 和 PostScript 名称变体（英文、中文等），同时内置了针对异常字体的安全上限。ASS 脚本无论引用哪个受支持名称，都能匹配到同一个字体文件；`@家族名` 这类竖排前缀也会按同一字体处理。
 >
 > The tool reads each font's OpenType `name` table and indexes supported localized family, typographic-family, full-face, and PostScript name variants (English, Chinese, etc.), with built-in safety caps against abnormal fonts. An ASS script referencing any supported name resolves to the same font file; the ASS `@FamilyName` vertical-writing prefix is treated as the same font.
 >
-> 对 `.ttc` / `.otc` 字体集合，工具会按匹配到的 face index 抽出对应字形并嵌入为单 face 子集。ASS `[Fonts]` 里的 `fontname:` 是生成的嵌入项标签，例如 `dream_han_serif_sc_w22.ttf`，不代表源文件必须是 `.ttf`；实际匹配依赖子集字体内部保留的 `name` 表。
+> 对 `.ttc` / `.otc` 字体集合，工具会按匹配到的 face index 提取对应的 face，并嵌入为单 face 子集。ASS `[Fonts]` 里的 `fontname:` 是生成的嵌入项标签，例如 `dream_han_serif_sc_w22.ttf`，不代表源文件必须是 `.ttf`；实际匹配依赖子集字体内部保留的 `name` 表。
 >
 > For `.ttc` / `.otc` collections, the matched face index is extracted and embedded as a single-face subset. The ASS `[Fonts]` `fontname:` line is a generated attachment label, such as `dream_han_serif_sc_w22.ttf`; it does not mean the source file had to be `.ttf`. Matching relies on the preserved internal `name` table in the subset font.
 
@@ -236,7 +236,7 @@ ssahdrify-cli rename "<series-folder>"
 # 批量重命名：复制到自定义目录 / Batch rename: copy to a chosen directory
 ssahdrify-cli rename --mode copy-to-chosen --output-dir "<output-folder>" "<series-folder>"
 
-# 多个外挂字幕文件：保留语言后缀，避免 sc/tc 同扩展字幕互相覆盖 / Multiple sidecar subtitles: keep language suffixes
+# 多个外挂字幕文件：保留语言后缀 / Multiple sidecar subtitles: keep language suffixes
 ssahdrify-cli rename "<series-folder>" --langs all --dry-run
 ```
 
@@ -244,7 +244,7 @@ ssahdrify-cli rename "<series-folder>" --langs all --dry-run
 
 `rename --mode` controls the file operation. The default `copy-to-video` copies each subtitle beside its matched video; `rename` renames the source subtitle in its existing directory; and `copy-to-chosen` copies it to the directory supplied through `--output-dir`. `--output-dir` is required with `copy-to-chosen` and is rejected with the other two modes.
 
-`rename --langs auto` 保持和 GUI 一致的默认行为：每个视频只选一个字幕，输出文件名精确匹配视频 stem（如 `Video.ass`）。`rename --langs all` 或显式列表（如 `--langs sc,jp`）可以为同一个视频规划多个字幕，并写成带语言后缀的文件名（如 `Video.sc.ass`、`Video.jp.srt`）；没有语言标记的字幕仍使用精确视频名（如 `Video.ass`）。如果多行会写入同一个目标路径，CLI 会在写入前拦截这些存在冲突的条目。
+`rename --langs auto` 保持和 GUI 一致的默认行为：每个视频只选一个字幕，输出文件名与视频主名（stem）完全一致（如 `Video.ass`）。`rename --langs all` 或显式列表（如 `--langs sc,jp`）可以为同一个视频规划多个字幕，并写成带语言后缀的文件名（如 `Video.sc.ass`、`Video.jp.srt`）；没有语言标记的字幕仍使用与视频同名的文件名（如 `Video.ass`）。如果多行会写入同一个目标路径，CLI 会在写入前拦截这些存在冲突的条目。
 
 `rename --langs auto` keeps the same default behavior as the GUI: one subtitle per video, with the output filename matching the video stem exactly (`Video.ass`). `rename --langs all` or an explicit list such as `--langs sc,jp` can plan multiple subtitles for the same video and write them with language suffixes such as `Video.sc.ass` and `Video.jp.srt`; untagged subtitles still use the exact video name (`Video.ass`). If multiple rows would write to the same target path, the CLI blocks those conflicting rows before writing.
 
@@ -294,7 +294,7 @@ ssahdrify-cli chain          --help
 >
 > `--json` currently applies to `hdr` / `shift` / `embed` / `rename` and `diagnose-fonts`. Normal subcommands emit a fixed-schema report listing per-file status (`written` / `planned` / `skipped` / `failed`), output path, encoding, warnings, and related fields; stderr can still print human-readable diagnostics. `diagnose-fonts --json` emits the diagnostic report directly. `chain` v1 explicitly reports that JSON output is not supported and uses a plain-text report instead; `refresh-fonts` reports status on stderr.
 >
-> 启用 `--diagnose` 时，JSON 会额外包含完整 `diagnostics` 对象，即使人类输出模式是默认的 summary。未启用 `--diagnose` 时，常规 JSON schema 保持不变。
+> 启用 `--diagnose` 时，即使供人阅读的输出采用默认的 summary 模式，JSON 也会额外包含完整的 `diagnostics` 对象。未启用 `--diagnose` 时，常规 JSON schema 保持不变。
 >
 > When `--diagnose` is enabled, JSON additionally includes the full `diagnostics` object even when human output uses the default summary mode. Without `--diagnose`, the normal JSON schema is unchanged.
 >
@@ -306,7 +306,7 @@ ssahdrify-cli chain          --help
 
 ### 诊断输出 | Diagnostics
 
-`hdr` / `shift` / `embed` / `rename` 支持 `--diagnose[=summary|full]`。`--diagnose` 与 `--diagnose=summary` 等价，会在命令完成后附加紧凑诊断；`--diagnose=full` 会列出逐文件细节，`embed` 还会列出字体解析层级（本次传入的字体源、持久化缓存、系统字体）和缓存状态。`chain` 与 `refresh-fonts` 不支持 `--diagnose`，传入会报错而不是静默忽略。
+`hdr` / `shift` / `embed` / `rename` 支持 `--diagnose[=summary|full]`。`--diagnose` 与 `--diagnose=summary` 等价，会在命令完成后附加简要诊断；`--diagnose=full` 会列出逐文件细节，`embed` 还会列出字体解析层级（本次传入的字体源、持久化缓存、系统字体）和缓存状态。`chain` 与 `refresh-fonts` 不支持 `--diagnose`，传入会报错而不是静默忽略。
 
 `hdr` / `shift` / `embed` / `rename` support `--diagnose[=summary|full]`. `--diagnose` and `--diagnose=summary` are equivalent and attach compact diagnostics after the command finishes; `--diagnose=full` lists per-file details, and `embed` also lists font-resolution tiers (font sources passed for this run, persistent cache, system fonts) plus cache status. `chain` and `refresh-fonts` do not support `--diagnose`; passing it returns an error instead of being silently ignored.
 
@@ -323,7 +323,7 @@ ssahdrify-cli chain          --help
 To prevent diagnostics from running too long on unusual subtitle/font combinations, `--subset-check` uses one command-level budget: up to 128 subset calls and about 100 MiB of cumulative subset output. After that, remaining checks are marked skipped and one budget-exhausted warning is emitted.
 
 ```bash
-# 附加紧凑诊断 / Attach compact diagnostics
+# 附加简要诊断 / Attach compact diagnostics
 ssahdrify-cli embed --diagnose input.ass
 
 # 附加完整诊断 / Attach full diagnostics
@@ -428,7 +428,7 @@ SSA/ASS subtitles do not carry color-space metadata, so renderers usually treat 
 
 _相关讨论 / Related discussion: [libass/libass#297](https://github.com/libass/libass/issues/297)_
 
-相关工具 / Related tool: [arition/SubRenamer](https://github.com/arition/SubRenamer) 也是视频与字幕重命名工作流的一个选择（按字母序 + 下标配对）。本项目的批量重命名功能（Tab 4）则使用面向字幕组命名习惯的正则配对流程，代码独立实现。
+相关工具 / Related tool: [arition/SubRenamer](https://github.com/arition/SubRenamer) 也是视频与字幕重命名工作流的一个选择（按字母顺序 + 序号配对）。本项目的批量重命名功能（Tab 4）则使用面向字幕组命名习惯的正则配对流程，代码独立实现。
 
 For video-and-subtitle rename workflows, [arition/SubRenamer](https://github.com/arition/SubRenamer) is another option (alphabetical + index pairing). This project's Batch Rename feature (Tab 4) uses an independently implemented regex pairing flow built around common fan-sub naming patterns.
 
