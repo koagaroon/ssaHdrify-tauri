@@ -1,7 +1,7 @@
 {
   "name": "ssahdrify-tauri",
   "private": true,
-  "version": "1.7.0",
+  "version": "1.7.1",
   "license": "GPL-3.0-or-later",
   "packageManager": "npm@11.19.0",
   "type": "module",
