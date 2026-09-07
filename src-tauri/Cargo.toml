@@ -44,9 +44,9 @@ serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
 tauri = { version = "2.11.5", features = [] }
-tauri-plugin-log = "2.9.0"
-tauri-plugin-dialog = "2.7.2"
-tauri-plugin-fs = "2.5.1"
+tauri-plugin-log = "2.9.1"
+tauri-plugin-dialog = "2.7.3"
+tauri-plugin-fs = "2.5.2"
 # Exact-pinned (not a semver-compatible range) because deno_core changes its
 # public API at most patch boundaries — V8 binding signatures
 # (`execute_script`, `JsRuntime`, scope macros) and feature-flag
@@ -96,7 +96,7 @@ base64 = { version = "0.23", default-features = false, features = ["std"] }
 rfd = { version = "0.16", default-features = false }
 
 [target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]
-tauri-plugin-single-instance = "2.4.3"
+tauri-plugin-single-instance = "2.4.4"
 
 [dev-dependencies]
 glob = "0.3.3"
