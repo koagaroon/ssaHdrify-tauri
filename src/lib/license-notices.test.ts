@@ -1,10 +1,11 @@
 /// <reference types="node" />
 
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { LICENSE_NOTICES, type LicenseNoticeId } from "./license-notices";
 
-const LEGAL_TEXT_SHA256: Record<LicenseNoticeId, string> = {
+const LEGAL_TEXT_SHA256: Record<Exclude<LicenseNoticeId, "frontend">, string> = {
   ssahdrify: "605e9047a563c5c8396ffb18232aa4304ec56586aee537c45064c6fb425e44ad",
   inter: "262481e844521b326f5ecd053e59b98c8b2da78c8ee1bdbb6e8174305e54935a",
   "smiley-sans": "9401f4050f1b66c26b6ccdc8b0e14a3c1cc37aac122eda84386f25854a9bec72",
@@ -14,8 +15,22 @@ const LEGAL_TEXT_SHA256: Record<LicenseNoticeId, string> = {
 describe("embedded license notices", () => {
   it("preserves every complete legal payload byte-for-byte", () => {
     for (const notice of LICENSE_NOTICES) {
+      if (notice.id === "frontend") continue;
       const digest = createHash("sha256").update(notice.text, "utf8").digest("hex");
       expect(digest).toBe(LEGAL_TEXT_SHA256[notice.id]);
+    }
+  });
+
+  it("embeds the complete installed React-family notices in the offline viewer", () => {
+    const frontend = LICENSE_NOTICES.find((notice) => notice.id === "frontend");
+    for (const name of ["react", "react-dom", "scheduler", "react-window"]) {
+      const file = name === "react-window" ? "LICENSE.md" : "LICENSE";
+      const license = readFileSync(
+        new URL(`../../node_modules/${name}/${file}`, import.meta.url),
+        "utf8"
+      ).replace(/\r\n/gu, "\n");
+      expect(frontend?.text).toContain(license);
+      expect(frontend?.text).toContain(`Source: https://www.npmjs.com/package/${name}/v/`);
     }
   });
 

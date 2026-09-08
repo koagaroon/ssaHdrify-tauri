@@ -5,7 +5,7 @@
  * categorization, count chips, cross-tab dedup). Pairing engine +
  * preview grid. Output-mode radios (rename / copy-to-video /
  * copy-to-chosen) + per-row checkbox toggle + run flow with
- * rename-confirm + countExistingFiles overwrite-confirm + cancel
+ * rename-confirm + existing-output overwrite-confirm + cancel
  * mid-batch. Manual edit: video-centric grid — exactly one row per
  * video. The subtitle column is a dropdown listing every subtitle
  * in the batch; the first regex-paired sub is pre-selected. The
@@ -19,6 +19,7 @@
  * engine's seed.
  */
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
+import { SubtitlePicker } from "./SubtitlePicker";
 import {
   pickRenameInputs,
   pickOutputDirectory,
@@ -33,7 +34,7 @@ import type { Status } from "../../lib/StatusContext";
 import { useTabStatus } from "../../lib/useTabStatus";
 import { useFolderDrop } from "../../lib/useFolderDrop";
 import { PreviewTable, type PreviewTableColumn } from "../../lib/PreviewTable";
-import { countExistingFiles } from "../../lib/output-collisions";
+import { findExistingOutputKeys } from "../../lib/output-collisions";
 import { useLogPanel } from "../../lib/useLogPanel";
 import { LogPanel } from "../../lib/LogPanel";
 import { DropErrorBanner } from "../../lib/DropErrorBanner";
@@ -148,7 +149,8 @@ function renderSourceBadge(
 
 export default function BatchRename() {
   const { t } = useI18n();
-  const { renameFiles, setRenameFiles, clearFile, isFileInUse } = useFileContext();
+  const { renameFiles, setRenameFiles, clearFile, isFileInUse, findLoadedInputConflictKeys } =
+    useFileContext();
 
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<{ processed: number; total: number } | null>(null);
@@ -176,6 +178,7 @@ export default function BatchRename() {
   // marking edited rows as `source: 'manual'`. ↺ Reset restores the
   // engine's seed.
   const [editedRows, setEditedRows] = useState<PairingRow[]>([]);
+  const [activePickerRow, setActivePickerRow] = useState<string | null>(null);
 
   const pickGenRef = useRef(0);
   // Output-directory picks have their own generation because the chosen
@@ -354,27 +357,21 @@ export default function BatchRename() {
           // when there are no subs at all in the batch — otherwise
           // it would be useless and the muted "(none)" placeholder
           // would mislead.
-          const currentValue = row.subtitle?.path ?? "";
           return (
-            <select
-              name={`subtitle-picker-${row.id}`}
-              value={currentValue}
-              disabled={busy || availableSubtitles.length === 0}
-              onChange={(e) => {
-                const path = e.target.value;
-                assignSubtitleLocal(row.id, path === "" ? null : path);
-              }}
-              className={`rename-row-picker${row.subtitle ? " is-paired" : ""}`}
-              aria-label={t("rename_pick_subtitle")}
-              title={row.subtitle ? sanitizeForDialog(row.subtitle.name) : undefined}
-            >
-              <option value="">{t("rename_pick_subtitle_none")}</option>
-              {availableSubtitles.map((s) => (
-                <option key={s.path} value={s.path}>
-                  {sanitizeForDialog(s.name)}
-                </option>
-              ))}
-            </select>
+            <SubtitlePicker
+              rowId={row.id}
+              subtitle={row.subtitle}
+              choices={availableSubtitles}
+              active={activePickerRow === row.id}
+              disabled={busy}
+              label={t("rename_pick_subtitle")}
+              emptyLabel={t("rename_pick_subtitle_none")}
+              onActivate={() => setActivePickerRow(row.id)}
+              onDeactivate={() =>
+                setActivePickerRow((current) => (current === row.id ? null : current))
+              }
+              onAssign={(path) => assignSubtitleLocal(row.id, path)}
+            />
           );
         },
       },
@@ -385,7 +382,7 @@ export default function BatchRename() {
         render: (row) => renderSourceBadge(row.source, t),
       },
     ],
-    [t, busy, toggleRow, assignSubtitleLocal, availableSubtitles]
+    [t, busy, toggleRow, assignSubtitleLocal, availableSubtitles, activePickerRow]
   );
 
   const actionableRows = useMemo(
@@ -520,6 +517,10 @@ export default function BatchRename() {
     // Synchronous double-click gate — see HdrConvert::handleConvert.
     if (busyRef.current) return;
     busyRef.current = true;
+    pickGenRef.current++;
+    chosenDirPickGenRef.current++;
+    abortRef.current = new AbortController();
+    setBusy(true);
     try {
       if (outputMode === "copy_to_chosen" && !chosenDir) {
         addLog(t("msg_rename_no_chosen_dir"), "error");
@@ -651,6 +652,32 @@ export default function BatchRename() {
           (tgt) => !duplicateOutputKeys.has(normalizeOutputKey(tgt.outputPath))
         );
       }
+      let canonicalInputConflicts: ReadonlySet<string> = new Set();
+      if (targets.length > 0) {
+        try {
+          canonicalInputConflicts = await findLoadedInputConflictKeys(
+            targets.map((target) => target.outputPath),
+            abortRef.current?.signal
+          );
+          if (abortRef.current?.signal.aborted) {
+            setLastActionResult("cancelled");
+            return;
+          }
+          targets = targets.filter((target) => {
+            if (!canonicalInputConflicts.has(normalizeOutputKey(target.outputPath))) return true;
+            addLog(
+              t("msg_rename_input_conflict", sanitizeForDialog(target.row.subtitle!.name)),
+              "error"
+            );
+            preflightFailedCount++;
+            return false;
+          });
+        } catch (error) {
+          addLog(t("error_prefix", sanitizeError(error)), "error");
+          setLastActionResult("error");
+          return;
+        }
+      }
       if (targets.length === 0) {
         if (preflightFailedCount > 0 || duplicateTargets.length > 0) {
           addLog(
@@ -721,7 +748,7 @@ export default function BatchRename() {
             skippedSuffix,
           { title: t("dialog_rename_inplace_title"), kind: "warning" }
         );
-        if (!confirmed) {
+        if (!confirmed || abortRef.current?.signal.aborted) {
           addLog(t("msg_rename_cancelled"), "info");
           setLastActionResult("cancelled");
           return;
@@ -750,8 +777,14 @@ export default function BatchRename() {
           seenProjected.add(key);
           return true;
         });
+      let existingOutputs: ReadonlySet<string> = new Set();
       try {
-        const existingCount = await countExistingFiles(projectedOutputs);
+        existingOutputs = await findExistingOutputKeys(projectedOutputs);
+        if (abortRef.current?.signal.aborted) {
+          setLastActionResult("cancelled");
+          return;
+        }
+        const existingCount = existingOutputs.size;
         if (existingCount > 0) {
           // Show the skipped-count once per run: the rename-mode confirm
           // above already includes `skippedSuffix`, so suppress it here
@@ -765,7 +798,7 @@ export default function BatchRename() {
               kind: "warning",
             }
           );
-          if (!confirmed) {
+          if (!confirmed || abortRef.current?.signal.aborted) {
             addLog(t("msg_rename_cancelled"), "info");
             setLastActionResult("cancelled");
             return;
@@ -777,10 +810,6 @@ export default function BatchRename() {
         return;
       }
 
-      // Construct AbortController at the boundary into busy state —
-      // see HdrConvert::handleConvert for rationale.
-      abortRef.current = new AbortController();
-      setBusy(true);
       setProgress({ processed: 0, total: targets.length });
 
       try {
@@ -838,6 +867,9 @@ export default function BatchRename() {
             // write; keep this loop check so future refactors cannot
             // accidentally reintroduce first-wins overwrite behavior.
             const normalizedOut = normalizeOutputKey(outputPath);
+            if (canonicalInputConflicts.has(normalizedOut)) {
+              throw new Error(t("msg_rename_input_conflict", subName));
+            }
             if (seenOutputs.has(normalizedOut)) {
               addLog(t("msg_skipped_duplicate", subName), "error");
               continue;
@@ -847,9 +879,17 @@ export default function BatchRename() {
             if (abortRef.current?.signal.aborted) break;
 
             if (outputMode === "rename") {
-              await renamePath(row.subtitle!.path, outputPath);
+              await renamePath(
+                row.subtitle!.path,
+                outputPath,
+                existingOutputs.has(normalizeOutputKey(outputPath))
+              );
             } else {
-              await copyPath(row.subtitle!.path, outputPath);
+              await copyPath(
+                row.subtitle!.path,
+                outputPath,
+                existingOutputs.has(normalizeOutputKey(outputPath))
+              );
             }
             addLog(t("msg_rename_done", subName, outName), "success");
             successCount++;
@@ -925,6 +965,9 @@ export default function BatchRename() {
       }
     } finally {
       busyRef.current = false;
+      setBusy(false);
+      setProgress(null);
+      abortRef.current = null;
     }
   }, [
     busy,
@@ -937,6 +980,7 @@ export default function BatchRename() {
     renameFiles,
     setRenameFiles,
     isFileInUse,
+    findLoadedInputConflictKeys,
     addLog,
     t,
   ]);
@@ -1046,7 +1090,7 @@ export default function BatchRename() {
           className="flex-none px-5 rounded-lg font-medium text-sm transition-colors"
           style={{
             background: busy ? "var(--bg-input)" : "var(--accent)",
-            color: busy ? "var(--text-muted)" : "white",
+            color: busy ? "var(--text-muted)" : "var(--accent-text)",
             height: "38px",
           }}
         >
@@ -1091,7 +1135,7 @@ export default function BatchRename() {
                     }
                   : {
                       background: "var(--accent)",
-                      color: "#fff",
+                      color: "var(--accent-text)",
                       height: "38px",
                       minWidth: "140px",
                     }
@@ -1187,7 +1231,7 @@ export default function BatchRename() {
                   className="px-3 py-1 rounded text-xs font-medium"
                   style={{
                     background: busy ? "var(--bg-input)" : "var(--accent)",
-                    color: busy ? "var(--text-muted)" : "white",
+                    color: busy ? "var(--text-muted)" : "var(--accent-text)",
                   }}
                 >
                   {t("btn_pick_chosen_dir")}

@@ -13,7 +13,7 @@ import {
   type FontUsage,
   type FontKey,
 } from "./font-collector";
-import { buildFontEntry } from "./ass-uuencode";
+import { FontSectionBuilder } from "./ass-uuencode";
 import {
   findSystemFont,
   lookupFontFamily,
@@ -443,10 +443,44 @@ export interface FileAnalysis {
 // coverage count. Exported so `font-embedder.test.ts` can pin the cap.
 export const MAX_AGGREGATE_CODEPOINTS_PER_KEY = 1_000_000;
 
+export const MAX_BATCH_ANALYSIS_CODEPOINTS = 2_000_000;
+export const MAX_BATCH_ANALYSIS_VARIANTS = 5_000;
+
+/** Counts retained per-file sets, including repeated glyphs in different files. */
+export class FontAnalysisBudget {
+  private codepoints = 0;
+  private variants = 0;
+
+  add(usages: readonly FontUsage[]): void {
+    const nextVariants = this.variants + usages.length;
+    if (nextVariants > MAX_BATCH_ANALYSIS_VARIANTS) {
+      throw new Error(
+        `Font analysis exceeds ${MAX_BATCH_ANALYSIS_VARIANTS} retained font variants; select fewer subtitle files`
+      );
+    }
+    let nextCodepoints = this.codepoints;
+    for (const usage of usages) {
+      const count = usage.codepoints.size;
+      if (!Number.isSafeInteger(count) || count < 0)
+        throw new Error("Invalid font codepoint count");
+      nextCodepoints += count;
+      if (nextCodepoints > MAX_BATCH_ANALYSIS_CODEPOINTS) {
+        throw new Error(
+          `Font analysis exceeds ${MAX_BATCH_ANALYSIS_CODEPOINTS} retained codepoints; select fewer subtitle files`
+        );
+      }
+    }
+    this.variants = nextVariants;
+    this.codepoints = nextCodepoints;
+  }
+}
+
 export function aggregateFonts(perFile: Map<string, FileAnalysis>): {
   infos: FontInfo[];
   usages: FontUsage[];
 } {
+  const budget = new FontAnalysisBudget();
+  for (const analysis of perFile.values()) budget.add(analysis.usages);
   // Union codepoints per font key across all files, capped per key. The
   // per-file caps in font-collector (MAX_CODEPOINTS_PER_VARIANT,
   // MAX_TOTAL_CODEPOINTS) bound each file's contribution but NOT their union
@@ -547,7 +581,7 @@ function embeddedOutputName(inputPath: string): {
  *
  * Why a derived path instead of a per-file native save dialog: those
  * dialogs are blocking and don't scale to N files. Derived paths give
- * the user a single overwrite-confirm gate via `countExistingFiles`
+ * the user a single overwrite-confirm gate for existing outputs
  * before the batch begins.
  */
 export function deriveEmbeddedPath(
@@ -663,7 +697,7 @@ export async function embedFonts(
   isCancelled?: () => boolean,
   t?: (key: string, ...args: (string | number)[]) => string
 ): Promise<EmbedFontsResult | null> {
-  const fontEntries: string[] = [];
+  const fontSection = new FontSectionBuilder();
   const warnings: string[] = [];
   const fontStyleLabels = t
     ? { bold: t("font_style_bold"), italic: t("font_style_italic") }
@@ -894,7 +928,7 @@ export async function embedFonts(
           });
           continue;
         }
-        fontEntries.push(buildFontEntry(aliasFontName, aliasSubsetData));
+        fontSection.add(aliasFontName, aliasSubsetData);
       }
       continue; // Group handled; advance to next face.
     }
@@ -958,7 +992,7 @@ export async function embedFonts(
     }
 
     // Build the [Fonts] entry
-    fontEntries.push(buildFontEntry(fontName, subsetData));
+    fontSection.add(fontName, subsetData);
   }
 
   if (isCancelled?.()) {
@@ -974,7 +1008,7 @@ export async function embedFonts(
   // assertAssShape so the contract is "valid ASS in, valid ASS out
   // (or throw)" regardless of font count.
   assertAssShape(assContent);
-  if (fontEntries.length === 0) {
+  if (fontSection.count === 0) {
     // zero-font early-return returns
     // `assContent` verbatim — no [Fonts] insertion means no
     // separator normalization either. The non-zero path below
@@ -991,12 +1025,12 @@ export async function embedFonts(
   }
 
   // Build [Fonts] section (no leading \n — insertFontsSection handles the separator)
-  const fontsSection = `[Fonts]\n${fontEntries.join("\n\n")}\n`;
+  const fontsSection = fontSection.build();
 
   // Insert [Fonts] section into ASS file
   return {
     content: insertFontsSection(assContent, fontsSection),
-    embeddedCount: fontEntries.length,
+    embeddedCount: fontSection.count,
     warnings,
   };
 }

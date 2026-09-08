@@ -36,6 +36,73 @@ import { ASCII_CONTROL_CHARS, BIDI_AND_ZERO_WIDTH_CHARS } from "../../lib/unicod
  * plus the `fontname:` header overhead — well past any realistic subset.
  */
 export const MAX_FONT_DATA_SIZE = 50 * 1024 * 1024;
+export const MAX_ENCODED_FONT_SECTION_BYTES = 50 * 1024 * 1024;
+
+function safeFontEntryName(fontName: string): string {
+  if (fontName.length > 1024) throw new Error("Font entry name exceeds 1024 characters");
+  return fontName.replace(
+    new RegExp(`[${ASCII_CONTROL_CHARS}${BIDI_AND_ZERO_WIDTH_CHARS}:/\\\\]`, "gu"),
+    "_"
+  );
+}
+
+function utf8ByteLength(text: string): number {
+  let bytes = 0;
+  for (const character of text) {
+    const point = character.codePointAt(0)!;
+    bytes += point < 0x80 ? 1 : point < 0x800 ? 2 : point < 0x10000 ? 3 : 4;
+  }
+  return bytes;
+}
+
+/** Exact UTF-8 size, including the header and 80-column line separators. */
+export function fontEntryByteLength(fontName: string, dataLength: number): number {
+  if (!Number.isSafeInteger(dataLength) || dataLength <= 0 || dataLength > MAX_FONT_DATA_SIZE) {
+    throw new Error(`Invalid font data size: ${dataLength} (max ${MAX_FONT_DATA_SIZE})`);
+  }
+  const remainder = dataLength % 3;
+  const encodedChars = Math.floor(dataLength / 3) * 4 + (remainder ? remainder + 1 : 0);
+  return (
+    11 +
+    // The CLI's bare V8 runtime has no TextEncoder or Buffer. Lone UTF-16
+    // surrogates occupy three bytes after UTF-8 replacement, like U+FFFD.
+    utf8ByteLength(safeFontEntryName(fontName)) +
+    encodedChars +
+    Math.floor((encodedChars - 1) / 80)
+  );
+}
+
+/** Reject cumulative growth before allocating the next encoded entry. */
+export class FontSectionBuilder {
+  private entries: string[] = [];
+  private bytes = 9; // [Fonts] header and final newline.
+  private readonly maxBytes: number;
+
+  constructor(maxBytes = MAX_ENCODED_FONT_SECTION_BYTES) {
+    this.maxBytes = maxBytes;
+  }
+
+  get count(): number {
+    return this.entries.length;
+  }
+
+  add(fontName: string, data: Uint8Array): void {
+    const projected =
+      this.bytes + (this.count ? 2 : 0) + fontEntryByteLength(fontName, data.length);
+    if (projected > this.maxBytes) {
+      throw new Error(
+        `Embedded fonts exceed the ${this.maxBytes}-byte encoded output limit; select fewer fonts`
+      );
+    }
+    const entry = buildFontEntry(fontName, data);
+    this.entries.push(entry);
+    this.bytes = projected;
+  }
+
+  build(): string {
+    return this.count ? `[Fonts]\n${this.entries.join("\n\n")}\n` : "";
+  }
+}
 
 /**
  * Encode a binary buffer into ASS [Fonts] section format.
@@ -141,10 +208,7 @@ export function buildFontEntry(fontName: string, data: Uint8Array): string {
   // control set; the extra boundary-specific chars are
   // intentional and MUST NOT be unified into a single helper without
   // re-checking the per-boundary character implications.
-  const safeName = fontName.replace(
-    new RegExp(`[${ASCII_CONTROL_CHARS}${BIDI_AND_ZERO_WIDTH_CHARS}:/\\\\]`, "gu"),
-    "_"
-  );
+  const safeName = safeFontEntryName(fontName);
   const encodedLines = assUuencode(data);
   return `fontname: ${safeName}\n${encodedLines.join("\n")}`;
 }

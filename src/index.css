@@ -68,7 +68,7 @@
   /* Text — near-black with violet undertone */
   --text-primary: #1e1a2e;
   --text-secondary: #3f3857;
-  --text-muted: #6b6380;
+  --text-muted: #4b425e;
 
   /* Structure */
   --border: #9d85c4;
@@ -76,6 +76,7 @@
 
   /* Hero accent — deep violet */
   --accent: #6d28d9;
+  --accent-text: #fff;
   --accent-hover: #5b21b6;
   --accent-disabled-bg: #c2b0dd;
   --accent-disabled-text: #6b6380;
@@ -169,8 +170,8 @@
 
   /* Text — warm off-white with violet undertone */
   --text-primary: #e8e5f0;
-  --text-secondary: #a5a0b5;
-  --text-muted: #6b6575;
+  --text-secondary: #c3bed0;
+  --text-muted: #bfb8cc;
 
   /* Structure */
   --border: #7c63a8;
@@ -178,6 +179,7 @@
 
   /* Hero accent — amethyst */
   --accent: #a78bfa;
+  --accent-text: #1e1a2e;
   --accent-hover: #c4b5fd;
   --accent-disabled-bg: #1e1a26;
   --accent-disabled-text: #4e4658;

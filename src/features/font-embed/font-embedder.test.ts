@@ -27,6 +27,9 @@ vi.mock("../../lib/tauri-api", () => ({
 import {
   analyzeFonts,
   aggregateFonts,
+  FontAnalysisBudget,
+  MAX_BATCH_ANALYSIS_CODEPOINTS,
+  MAX_BATCH_ANALYSIS_VARIANTS,
   buildUserFontMap,
   embedFonts,
   userFontKey,
@@ -38,6 +41,7 @@ import {
   type FileAnalysis,
 } from "./font-embedder";
 import type { FontUsage, FontKey } from "./font-collector";
+import { MAX_FONT_DATA_SIZE } from "./ass-uuencode";
 
 const MINIMAL_ASS = `[Script Info]
 ScriptType: v4.00+
@@ -52,6 +56,53 @@ Format: Layer, Start, End, Style, Text
 Dialogue: 0,0:00:00.00,0:00:05.00,Default,Hello
 Dialogue: 0,0:00:05.00,0:00:10.00,Emphasis,Bold text
 `;
+
+describe("retained font analysis budget", () => {
+  const usage = (codepoints: Set<number>): FontUsage => ({
+    key: { family: "Arial", bold: false, italic: false },
+    codepoints,
+  });
+
+  it("counts repeated glyph sets across files and accepts exactly the batch boundary", () => {
+    const block = new Set(Array.from({ length: 65_536 }, (_, i) => i));
+    const budget = new FontAnalysisBudget();
+    for (let i = 0; i < 30; i++) budget.add([usage(block)]);
+    const remainder = MAX_BATCH_ANALYSIS_CODEPOINTS - 30 * block.size;
+    budget.add([usage(new Set(Array.from({ length: remainder }, (_, i) => i)))]);
+    expect(() => budget.add([usage(new Set([65]))])).toThrow(/retained codepoints/);
+    expect(() => budget.add([])).not.toThrow();
+  });
+
+  it("bounds variants independently of glyph diversity", () => {
+    const budget = new FontAnalysisBudget();
+    const empty = usage(new Set());
+    budget.add(Array.from({ length: MAX_BATCH_ANALYSIS_VARIANTS }, () => empty));
+    expect(() => budget.add([empty])).toThrow(/retained font variants/);
+    expect(() => budget.add([])).not.toThrow();
+  });
+
+  it("rejects an oversized aggregate before iterating or cloning any input set", () => {
+    class OversizedSet extends Set<number> {
+      override get size() {
+        return MAX_BATCH_ANALYSIS_CODEPOINTS + 1;
+      }
+      override [Symbol.iterator](): SetIterator<number> {
+        throw new Error("must not iterate");
+      }
+    }
+    const perFile = new Map<string, FileAnalysis>([
+      [
+        "input.ass",
+        {
+          content: "",
+          infos: [],
+          usages: [usage(new OversizedSet())],
+        },
+      ],
+    ]);
+    expect(() => aggregateFonts(perFile)).toThrow(/retained codepoints/);
+  });
+});
 
 describe("deriveEmbeddedPath / planEmbeddedOutputs", () => {
   it("keeps sibling output behavior unchanged for ASS and SSA inputs", () => {
@@ -991,6 +1042,27 @@ Dialogue: 0,0:00:05.00,0:00:10.00,Alt,你好
     expect(subsetFontMock).toHaveBeenCalledTimes(2);
   });
 
+  it("fails the file at the encoded budget before reading bytes or requesting another font", async () => {
+    const oversizedSubset = {
+      length: MAX_FONT_DATA_SIZE,
+      get 0() {
+        throw new Error("The rejected subset must not be encoded");
+      },
+    } as unknown as Uint8Array;
+    subsetFontMock.mockResolvedValue(oversizedSubset);
+    const first = makeInfo("First", "/fonts/first.ttf", 0);
+    const second = makeInfo("Second", "/fonts/second.ttf", 0);
+
+    await expect(
+      embedFonts(
+        SHELL_ASS,
+        [first, second],
+        [makeUsage("First", [0x41]), makeUsage("Second", [0x42])]
+      )
+    ).rejects.toThrow("encoded output limit");
+    expect(subsetFontMock).toHaveBeenCalledTimes(1);
+  });
+
   it("returns no-usage warnings instead of leaving them as transient progress only", async () => {
     subsetFontMock.mockResolvedValue(new Uint8Array([1, 2, 3, 4]));
 
@@ -1182,6 +1254,7 @@ describe("aggregateFonts — cross-file union + cap", () => {
     // the one aggregateFonts necessarily builds for its result.
     const key: FontKey = { family: "Arial", bold: false, italic: false };
     const lazyCodepoints = {
+      size: MAX_AGGREGATE_CODEPOINTS_PER_KEY + 1,
       *[Symbol.iterator](): Generator<number> {
         for (let i = 0; i <= MAX_AGGREGATE_CODEPOINTS_PER_KEY; i++) yield i;
       },

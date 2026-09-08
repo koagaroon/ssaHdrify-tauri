@@ -92,10 +92,7 @@ describe("parseSubtitle", () => {
     const result = parseSubtitle(content);
     expect(result.format).toBe("ass");
     expect(result.captions).toHaveLength(2);
-    // ASS timing only — the parseAss `text` field is the post-comma
-    // remainder which still includes the Style field; the timing
-    // operations don't care about text content. Anchor on the
-    // load-bearing fields.
+    expect(result.captions.map((caption) => caption.text)).toEqual(["Hello", "World"]);
     expect(result.captions[0]!.start).toBe(1000);
     expect(result.captions[0]!.end).toBe(2500);
     expect(result.captions[1]!.start).toBe(3000);
@@ -109,7 +106,7 @@ describe("parseSubtitle", () => {
       "Dialogue: 0,0:00:01.00,0:00:02.00,Default,Hello\r\n";
 
     const result = parseSubtitle(content);
-    expect(result.captions[0]!.text).toBe("Default,Hello");
+    expect(result.captions[0]!.text).toBe("Hello");
     expect(result.captions[0]!.text).not.toContain("\r");
   });
 
@@ -858,5 +855,117 @@ describe("parseSubtitle / shiftSubtitle — oversized-ASS-Dialogue placeholder a
     expect(result.captions[0]!.skipped).toBe(true);
     expect(result.captions[0]!.text).toBe("");
     expect(result.captions[1]!.text).toBe("NORMAL");
+  });
+});
+
+describe("ASS declared event formats", () => {
+  const header = "[Script Info]\nScriptType: v4.00+\n[Events]\n";
+
+  it("uses named Start for threshold decisions and preserves reordered fields", () => {
+    const content =
+      header +
+      "Format: Layer, End, Style, Start, Text\r\n" +
+      "Dialogue: -1,0:00:02.00,Default,0:00:01.00,early, with comma\r\n" +
+      "\tDialogue: 2, 0:00:04.00 ,Default,\t0:00:03.00 ,late\n";
+    const result = shiftSubtitle(content, 1000, 1500);
+    expect(result.captions.map(({ start, end, text }) => ({ start, end, text }))).toEqual([
+      { start: 1000, end: 2000, text: "early, with comma" },
+      { start: 3000, end: 4000, text: "late" },
+    ]);
+    expect(result.output).toBe(
+      content.replace(" 0:00:04.00 ", " 0:00:05.00 ").replace("\t0:00:03.00 ", "\t0:00:04.00 ")
+    );
+  });
+
+  it("shifts negative and nonnegative Layer events together", () => {
+    const content =
+      header +
+      "Format: Layer, Start, End, Text\n" +
+      [-1, 0, 2147483647]
+        .map((layer) => `Dialogue: ${layer},0:00:01.00,0:00:02.00,text`)
+        .join("\n");
+    const result = shiftSubtitle(content, 1000);
+    expect(result.captions).toHaveLength(3);
+    expect(result.output).toBe(
+      content.replaceAll("0:00:02.00", "0:00:03.00").replaceAll("0:00:01.00", "0:00:02.00")
+    );
+  });
+
+  it.each([false, true])(
+    "keeps the declared columns for threshold decisions with repeated Events=%s",
+    (repeatHeader) => {
+      const first = "Dialogue: 0,0:00:05.00,0:00:04.00,first 0:00:04.00";
+      const second = "Dialogue: 0,0:00:04.00,0:00:03.00,second";
+      const content =
+        header +
+        `Format: Layer, End, Start, Text\r\n${first}\r\n` +
+        (repeatHeader ? "[Events]\r\n" : "") +
+        second;
+      const result = shiftSubtitle(content, 1000, 3500);
+      expect(result.captions.map(({ start, end }) => ({ start, end }))).toEqual([
+        { start: 4000, end: 5000 },
+        { start: 3000, end: 4000 },
+      ]);
+      expect(result.output).toBe(
+        content.replace(first, "Dialogue: 0,0:00:06.00,0:00:05.00,first 0:00:04.00")
+      );
+    }
+  );
+
+  it("supports shortened formats without Layer and preserves comments and unrelated sections", () => {
+    const content =
+      header +
+      "Format: End, Start, Text\n" +
+      "Comment: 0:00:02.00,0:00:01.00,unchanged\n" +
+      "Dialogue: 0:00:02.00,0:00:01.00,visible\n" +
+      "[Other]\nFormat: invalid\nDialogue: 0:00:02.00,0:00:01.00,metadata\n";
+    const result = shiftSubtitle(content, 1000);
+    expect(result.captions).toHaveLength(1);
+    expect(result.output).toBe(
+      content.replace(
+        "Dialogue: 0:00:02.00,0:00:01.00,visible",
+        "Dialogue: 0:00:03.00,0:00:02.00,visible"
+      )
+    );
+  });
+
+  it("uses each declaration locally and keeps oversized placeholders aligned", () => {
+    const big = "X".repeat(64001);
+    const content =
+      header +
+      "Format: End, Start, Text\n" +
+      `Dialogue: 0:00:02.00,0:00:01.00,${big}\n` +
+      "Format: Start, End, Text\nDialogue: 0:00:03.00,0:00:04.00,normal";
+    const result = shiftSubtitle(content, 1000);
+    expect(result.captions[0]!.skipped).toBe(true);
+    expect(result.output).toBe(
+      content.replace(
+        "Dialogue: 0:00:03.00,0:00:04.00,normal",
+        "Dialogue: 0:00:04.00,0:00:05.00,normal"
+      )
+    );
+  });
+
+  it.each(["Start, Start, End, Text", "End, Text", "Start, End", "Text, Start, End"])(
+    "refuses ambiguous or unsupported event declaration %s",
+    (format) => {
+      expect(() =>
+        parseSubtitle(header + `Format: ${format}\nDialogue: 0,0:00:01.00,0:00:02.00,text`)
+      ).toThrow(/unique Start, End, and final Text/);
+    }
+  );
+
+  it("accepts 1024 declared fields and rejects the next field before splitting events", () => {
+    const fields = ["Start", "End", ...Array<string>(1021).fill("Metadata"), "Text"];
+    const values = [
+      "0:00:01.00",
+      "0:00:02.00",
+      ...Array<string>(1021).fill("unused"),
+      "text,comma",
+    ];
+    const content = header + `Format: ${fields.join(",")}\nDialogue: ${values.join(",")}`;
+    expect(shiftSubtitle(content, 1000).captions[0]!.text).toBe("text,comma");
+    fields.splice(2, 0, "Extra");
+    expect(() => parseSubtitle(header + `Format: ${fields.join(",")}`)).toThrow(/too many fields/);
   });
 });

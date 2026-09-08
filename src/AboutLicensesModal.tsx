@@ -8,6 +8,7 @@ interface Props {
 }
 
 const SUMMARY_KEYS: Record<LicenseNoticeId, string> = {
+  frontend: "licenses_frontend_summary",
   ssahdrify: "licenses_ssahdrify_summary",
   inter: "licenses_inter_summary",
   "smiley-sans": "licenses_smiley_sans_summary",

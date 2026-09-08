@@ -106,6 +106,10 @@ Format support is not identical across workflows. The table below describes curr
 >
 > Here `.sub` means MicroDVD text subtitles. Blu-ray PGS `.sup` and VobSub `.sub/.idx` are image subtitle formats, so HDR text color conversion, Timing Shift, ASS font embedding, and `diagnose-fonts` do not apply. `.sup` is only paired, copied, or renamed as an opaque sidecar in Batch Rename. To turn image subtitles into text subtitles, use a dedicated subtitle conversion/OCR tool first.
 
+ASS/SSA 的时间轴处理遵循 `[Events]` 中的 `Format:` 字段声明，支持字段重排及带正负号的 Layer。当前支持范围要求 `Text` 位于最后，且 Start/End 字段完整、无歧义；超出此范围的声明会明确报错。为获得跨播放器兼容性，建议使用标准 ASS 字段顺序。
+
+ASS/SSA timing operations follow the `Format:` declaration in `[Events]`, including reordered fields and signed Layer values. The supported format requires `Text` last and unambiguous Start/End fields; unsupported declarations produce an explicit error. Standard ASS field order is recommended for compatibility across players.
+
 ---
 
 ## 使用方法 | Usage
@@ -243,6 +247,14 @@ ssahdrify-cli rename "<series-folder>" --langs all --dry-run
 `rename --mode` 控制文件操作。默认的 `copy-to-video` 会把字幕复制到匹配视频所在的目录；`rename` 会在字幕原目录中直接重命名源文件；`copy-to-chosen` 会把字幕复制到 `--output-dir` 指定的目录。`copy-to-chosen` 必须同时传入 `--output-dir`，另外两种模式则不接受该参数。
 
 `rename --mode` controls the file operation. The default `copy-to-video` copies each subtitle beside its matched video; `rename` renames the source subtitle in its existing directory; and `copy-to-chosen` copies it to the directory supplied through `--output-dir`. `--output-dir` is required with `copy-to-chosen` and is rejected with the other two modes.
+
+仅包含时间轴偏移的 `chain` 默认保留输入扩展名；包含 HDR 或字体嵌入步骤时默认输出 `.ass`。自定义输出模板仍按指定内容使用。
+
+A shift-only `chain` preserves the input extension by default. A chain containing HDR conversion or font embedding defaults to `.ass`. Explicit output templates retain the requested filename.
+
+GUI 会保护已加载的字幕源文件，CLI 会保护本批次所选的输入文件；普通的覆盖确认或 `--overwrite` 不允许用另一个输出替换这些源文件。在 GUI 中，覆盖确认仅涵盖预检查中列出的目标（包括无法确认是否存在的目标）；其他路径仍使用独占创建或重命名检查。
+
+The GUI protects loaded subtitle sources, and the CLI protects inputs selected for the current batch. Ordinary overwrite consent or `--overwrite` does not allow another output to replace these sources. In the GUI, overwrite consent covers destinations included in the preflight confirmation, including destinations whose existence could not be checked. Other paths retain exclusive creation or rename checks.
 
 `rename --langs auto` 保持和 GUI 一致的默认行为：每个视频只选一个字幕，输出文件名与视频主名（stem）完全一致（如 `Video.ass`）。`rename --langs all` 或显式列表（如 `--langs sc,jp`）可以为同一个视频规划多个字幕，并写成带语言后缀的文件名（如 `Video.sc.ass`、`Video.jp.srt`）；没有语言标记的字幕仍使用与视频同名的文件名（如 `Video.ass`）。如果多行会写入同一个目标路径，CLI 会在写入前拦截这些存在冲突的条目。
 
@@ -641,6 +653,7 @@ The tables below list the main direct dependencies and bundled assets. For the f
 | [fontcull](https://github.com/bearcove/fontcull)                             | MIT / MIT OR Apache-2.0                        | 字体子集化（含 fontcull-klippa、fontcull-skrifa）/ Font subsetting (includes fontcull-klippa, fontcull-skrifa) |
 | [chardetng](https://github.com/hsivonen/chardetng)                           | MIT OR Apache-2.0                              | 编码检测 (Firefox 引擎) / Encoding detection (Firefox's engine)                                                |
 | [encoding_rs](https://github.com/hsivonen/encoding_rs)                       | (Apache-2.0 OR MIT) AND BSD-3-Clause           | 编码转换 / Encoding conversion                                                                                 |
+| [rustix](https://github.com/bytecodealliance/rustix)                         | Apache-2.0 OR MIT                              | Linux、Android 和 Apple 平台上的独占重命名 / Exclusive rename on Linux, Android, and Apple platforms           |
 | [rusqlite](https://github.com/rusqlite/rusqlite)                             | MIT                                            | 字体缓存和本地字体索引 / Font cache and local font index                                                       |
 | [serde](https://serde.rs/) / serde_json                                      | MIT OR Apache-2.0                              | Rust 序列化 / Rust serialization                                                                               |
 | [deno_core](https://github.com/denoland/deno)                                | MIT                                            | 嵌入式 V8 JS 运行时（CLI）/ Embedded V8 JS runtime (CLI)                                                       |
@@ -665,9 +678,9 @@ The tables below list the main direct dependencies and bundled assets. For the f
 >
 > OFL-1.1 allows these fonts to be bundled, embedded, and redistributed alongside any software, including GPL-3.0 projects. The fonts and their derivatives must remain licensed under OFL, must not be sold on their own, and modified versions must not use Reserved Font Names declared by their respective licenses. The bundled Smiley Sans license declares `Smiley` and `得意黑`; the bundled Inter license declares none.
 
-在桌面版中，点击页脚的「许可证」即可离线阅读项目 GPL 正文、两款捆绑字体的完整 OFL 文本，以及 Feather Icons 的 MIT 声明。
+在桌面版中，点击页脚的「许可证」即可离线阅读项目 GPL 正文、锁定版本的 JavaScript 运行时依赖及 Vite 注入辅助代码的许可声明、两款捆绑字体的完整 OFL 文本，以及 Feather Icons 的 MIT 声明。前端构建同时生成 `third-party-notices.txt`；这些前端声明不代表完整的 Rust 原生依赖许可清单。
 
-In the desktop app, choose **Licenses** in the footer to read offline copies of the project GPL, both bundled fonts' complete OFL texts, and the Feather Icons MIT notice.
+In the desktop app, choose **Licenses** in the footer to read offline copies of the project GPL, notices for locked JavaScript runtime dependencies and Vite-injected helper code, both bundled fonts' complete OFL texts, and the Feather Icons MIT notice. The frontend build also emits `third-party-notices.txt`; this frontend inventory does not represent a complete Rust native dependency license inventory.
 
 #### 构建时依赖（不随应用分发）| Build-time only (not shipped)
 

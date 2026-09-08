@@ -11,6 +11,7 @@
 import { describe, it, expect } from "vitest";
 
 import { collectFonts, ensureLoaded, fontKeyLabel } from "./font-collector";
+import { convertTextCueSubtitleToAss } from "../hdr-convert/srt-converter";
 
 function makeASS(dialogue: string): string {
   return `[Script Info]
@@ -917,5 +918,44 @@ describe("font-collector font-variant + total-codepoint cap boundaries", () => {
     const run = makeUniqueGlyphRun(65536);
     const ass = makeMultiDialogueAss(Array.from({ length: 16 }, (_, i) => `{\\fnFam${i}}${run}`));
     expect(() => collectFonts(ass)).toThrow(/Too many codepoints across fonts/);
+  });
+});
+
+describe("font collection of literal brace escapes", () => {
+  it("collects escaped braces and their CJK text under the active font", async () => {
+    await ensureLoaded();
+    const usage = collectFonts(makeASS(String.raw`\{漢\}`));
+    expect(usage).toHaveLength(1);
+    expect(usage[0]!.key.family).toBe("Arial");
+    expect([...usage[0]!.codepoints]).toEqual([123, 0x6f22, 125]);
+  });
+
+  it("does not interpret escaped font or drawing tags, but still applies real overrides", async () => {
+    await ensureLoaded();
+    const usage = collectFonts(makeASS(String.raw`\{\fnOther\}漢\{\p1\}字{\fnActual}語`));
+    expect(usage.map((font) => font.key.family)).toEqual(["Arial", "Actual"]);
+    expect(usage[0]!.codepoints.has(0x6f22)).toBe(true);
+    expect(usage[0]!.codepoints.has(0x5b57)).toBe(true);
+    expect([...usage[1]!.codepoints]).toEqual([0x8a9e]);
+  });
+
+  it("treats a brace preceded by two backslashes as escaped, matching libass", async () => {
+    await ensureLoaded();
+    const usage = collectFonts(makeASS(String.raw`\\{漢\}`));
+    expect([...usage[0]!.codepoints]).toEqual([92, 123, 0x6f22, 125]);
+  });
+
+  it("does not leave drawing mode for escaped override-shaped text", async () => {
+    await ensureLoaded();
+    const usage = collectFonts(makeASS(String.raw`{\p1}\{\p0\}漢{\p0}字`));
+    expect([...usage[0]!.codepoints]).toEqual([0x5b57]);
+  });
+
+  it("retains glyphs from the application's SRT-to-ASS brace escaping", async () => {
+    await ensureLoaded();
+    const converted = convertTextCueSubtitleToAss("1\n00:00:01,000 --> 00:00:02,000\n{漢}\n");
+    const usage = collectFonts(converted.content);
+    expect(usage).toHaveLength(1);
+    expect([...usage[0]!.codepoints]).toEqual([123, 0x6f22, 125]);
   });
 });

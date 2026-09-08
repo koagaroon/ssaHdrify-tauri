@@ -13,6 +13,7 @@ import {
 import { ask } from "@tauri-apps/plugin-dialog";
 import {
   aggregateFonts,
+  FontAnalysisBudget,
   analyzeFonts,
   embedFonts,
   planEmbeddedOutputs,
@@ -29,12 +30,17 @@ import type { Status } from "../../lib/StatusContext";
 import { useTabStatus } from "../../lib/useTabStatus";
 import FontSourceModal, { type FontSource } from "./FontSourceModal";
 import { useFolderDrop } from "../../lib/useFolderDrop";
-import { countExistingFiles } from "../../lib/output-collisions";
+import { findExistingOutputKeys } from "../../lib/output-collisions";
 import { useClickOutside } from "../../lib/useClickOutside";
 import { useLogPanel } from "../../lib/useLogPanel";
 import { LogPanel } from "../../lib/LogPanel";
 import { DropErrorBanner } from "../../lib/DropErrorBanner";
-import { buildConflictMessage, sanitizeError, sanitizeForDialog } from "../../lib/dedup-helpers";
+import {
+  buildConflictMessage,
+  normalizeOutputKey,
+  sanitizeError,
+  sanitizeForDialog,
+} from "../../lib/dedup-helpers";
 import { isFontCacheUnavailable } from "../../lib/font-cache-ui-state";
 
 type FontEmbedOutputMode = "beside_input" | "chosen_dir";
@@ -78,34 +84,8 @@ function fileNameHasAssExt(name: string): boolean {
   return ASS_EXTS.has(name.slice(dot + 1).toLowerCase());
 }
 
-// Batch ingest caps — OOM-by-input defense.
-//
-// Font Embed is the only tab that retains EVERY batch file's decoded content
-// in `perFileAnalysisRef` for the unified detection grid + embed loop —
-// HDR / Time Shift / Batch Rename process per-file and discard. Without
-// these caps, a 5000-file folder drop (the drag-drop expansion ceiling on
-// the Rust side) × the 50 MB per-file encoding-layer cap = up to 250 GB
-// theoretical retention. Realistic batches are season-scoped: ≤ 24 ASS
-// files per pick; 500 leaves ample slack for full-series or multi-language
-// batches without straying into adversarial territory.
-//
-// The aggregate-bytes cap is the load-bearing one — file count alone
-// doesn't bound memory when individual files approach 50 MB. 500 MB
-// covers any legitimate workflow (a typical fan-sub ASS is 30-200 KB,
-// even rich-typography ones rarely exceed 5 MB).
+// Decoded text and retained glyph sets have separate batch budgets.
 const MAX_BATCH_FILES = 500;
-// lowered from 500 MB to 200 MB headroom. The
-// cap counts decoded UTF-16 string bytes (`content.length * 2`)
-// only — per-file `usages` Maps with up to MAX_CODEPOINTS_PER_VARIANT
-// entries × MAX_FONT_VARIANTS variants per file add another ~25-100
-// MB of JS Set memory PER FILE under adversarial inputs (a fan-sub
-// pack crafted to maximize codepoint diversity). At 500 MB
-// content-bytes + N×100 MB Set retention, a 5-file batch could
-// reach ~1 GB JS heap before the cap fires. 200 MB content-bytes
-// keeps total batch retention under ~700 MB even under the worst-
-// case Set inflation, comfortably inside V8's default heap. Real-
-// world batches (24 ASS at 30-200 KB each) consume single-digit MB,
-// so the lower cap is invisible to legitimate workflows.
 const MAX_BATCH_AGGREGATE_BYTES = 200 * 1024 * 1024;
 
 interface FontEmbedProps {
@@ -119,7 +99,8 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
     () => ({ bold: t("font_style_bold"), italic: t("font_style_italic") }),
     [t]
   );
-  const { fontsFiles, setFontsFiles, clearFile, isFileInUse } = useFileContext();
+  const { fontsFiles, setFontsFiles, clearFile, isFileInUse, findLoadedInputConflictKeys } =
+    useFileContext();
 
   // Aggregated font state for the unified detection grid and checkbox
   // selection. Every selected file is analyzed during ingest; single-file
@@ -166,6 +147,7 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
   // outdated work without writing state. Standard "discard stale
   // async results" idiom — see the same shape in BatchRename.
   const pickGenRef = useRef(0);
+  const outputDirPickGenRef = useRef(0);
   // Per-file analysis cache: <path → {content, infos, usages}>. Holds
   // all batch contents in memory so the unified detection grid + the
   // embed loop don't have to re-read or re-parse on every interaction.
@@ -285,14 +267,7 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
         // Symmetric cache for the persistent font cache lookup tier
         // (#5). Same N×M IPC concern as sysCache.
         const cacheLookupCache = new Map<string, { path: string; index: number } | null>();
-        // Tracks total decoded-content bytes already retained in
-        // `cache` so we abort before the next read pushes the batch
-        // past MAX_BATCH_AGGREGATE_BYTES. UTF-16 string length × 2
-        // approximates the JS-engine retention; the actual memory
-        // footprint with `infos`/`usages` is somewhat higher, but the
-        // dominant term is the decoded content (subtitles average
-        // hundreds of bytes per Dialogue line; analysis structures
-        // average a couple of bytes per font reference).
+        const analysisBudget = new FontAnalysisBudget();
         let aggregateBytes = 0;
         for (const path of paths) {
           if (gen !== pickGenRef.current) return;
@@ -335,6 +310,7 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
             cacheLookupCache
           );
           if (gen !== pickGenRef.current) return;
+          analysisBudget.add(analyzed.usages);
           cache.set(path, {
             content,
             infos: analyzed.infos,
@@ -461,7 +437,10 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
     // user manually unchecked gets auto-re-checked the next time
     // any source mutation triggers reanalyze — explicit user intent
     // silently overridden.
-    const prevResolved = keysOfResolvedFonts(aggregateFonts(cache).infos);
+    const prevResolved = new Set<string>();
+    for (const analysis of cache.values()) {
+      for (const key of keysOfResolvedFonts(analysis.infos)) prevResolved.add(key);
+    }
     const gen = (pickGenRef.current = pickGenRef.current + 1);
     // set analyzing=true during the sequential
     // per-file IPC sequence. Without this, the Embed button remains
@@ -472,6 +451,7 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
     setAnalyzing(true);
     try {
       const newCache = new Map<string, FileAnalysis>();
+      const analysisBudget = new FontAnalysisBudget();
       // Same batch-shared caches as ingestPaths — one round of
       // system / cache lookups per source change, not per (file × font).
       const sysCache = new Map<string, SystemFontResolution>();
@@ -480,6 +460,7 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
         if (gen !== pickGenRef.current) return;
         const analyzed = await analyzeFonts(prev.content, null, sysCache, true, cacheLookupCache);
         if (gen !== pickGenRef.current) return;
+        analysisBudget.add(analyzed.usages);
         newCache.set(path, {
           ...prev,
           infos: analyzed.infos,
@@ -593,10 +574,13 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
 
   const handlePickOutputDir = useCallback(async () => {
     if (analyzing || embedding) return;
+    const gen = ++outputDirPickGenRef.current;
     try {
       const dir = await pickOutputDirectory(t);
+      if (gen !== outputDirPickGenRef.current) return;
       if (dir) setChosenOutputDir(dir);
     } catch (e) {
+      if (gen !== outputDirPickGenRef.current) return;
       addLog(t("error_prefix", sanitizeError(e)), "error");
     }
   }, [analyzing, embedding, addLog, t]);
@@ -633,6 +617,10 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
     // Synchronous double-click gate — see HdrConvert::handleConvert.
     if (busyRef.current) return;
     busyRef.current = true;
+    pickGenRef.current++;
+    outputDirPickGenRef.current++;
+    abortRef.current = new AbortController();
+    setEmbedding(true);
     try {
       if (outputMode === "chosen_dir" && !chosenOutputDir) {
         addLog(t("msg_rename_no_chosen_dir"), "error");
@@ -662,23 +650,46 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
         setLastActionResult("error");
         return;
       }
+      let existingOutputs: ReadonlySet<string> = new Set();
+      let inputConflicts: ReadonlySet<string> = new Set();
+      let targets = planned.targets;
+      let skippedCount = planned.skipped.length;
       try {
-        const existingCount = await countExistingFiles(
-          planned.targets.map((target) => target.outputPath)
+        inputConflicts = await findLoadedInputConflictKeys(
+          targets.map((target) => target.outputPath),
+          abortRef.current?.signal
         );
+        if (abortRef.current?.signal.aborted) {
+          setLastActionResult("cancelled");
+          return;
+        }
+        targets = targets.filter((target) => {
+          if (!inputConflicts.has(normalizeOutputKey(target.outputPath))) return true;
+          addLog(t("msg_fonts_input_conflict", safeDisplayFileName(target.inputPath)), "error");
+          skippedCount++;
+          return false;
+        });
+        if (targets.length === 0) {
+          setLastActionResult("error");
+          return;
+        }
+        existingOutputs = await findExistingOutputKeys(targets.map((target) => target.outputPath));
+        if (abortRef.current?.signal.aborted) {
+          setLastActionResult("cancelled");
+          return;
+        }
+        const existingCount = existingOutputs.size;
         if (existingCount > 0) {
           const skippedSuffix =
-            planned.skipped.length > 0
-              ? `\n\n${t("msg_fonts_skipped_count", planned.skipped.length)}`
-              : "";
+            skippedCount > 0 ? `\n\n${t("msg_fonts_skipped_count", skippedCount)}` : "";
           const confirmed = await ask(
-            t("msg_overwrite_confirm", existingCount, planned.targets.length) + skippedSuffix,
+            t("msg_overwrite_confirm", existingCount, targets.length) + skippedSuffix,
             {
               title: t("dialog_overwrite_title"),
               kind: "warning",
             }
           );
-          if (!confirmed) {
+          if (!confirmed || abortRef.current?.signal.aborted) {
             addLog(t("msg_fonts_cancelled"), "info");
             setLastActionResult("cancelled");
             return;
@@ -690,20 +701,16 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
         return;
       }
 
-      // Construct AbortController at the boundary into busy state — see
-      // HdrConvert::handleConvert for rationale.
-      abortRef.current = new AbortController();
-      setEmbedding(true);
-      setBatchProgress({ processed: planned.skipped.length, total: filePaths.length });
+      setBatchProgress({ processed: skippedCount, total: filePaths.length });
 
       try {
         addLog(t("msg_fonts_start", filePaths.length));
 
         let successCount = 0;
-        let issueCount = planned.skipped.length;
-        let processedCount = planned.skipped.length;
+        let issueCount = skippedCount;
+        let processedCount = skippedCount;
 
-        for (const target of planned.targets) {
+        for (const target of targets) {
           const filePath = target.inputPath;
           const outputPath = target.outputPath;
 
@@ -823,7 +830,14 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
             if (cached.inferredEncodingId) {
               addLog(t("msg_inferred_utf16", safeFileName, cached.inferredEncodingId), "warn");
             }
-            await writeText(outputPath, result.content);
+            if (inputConflicts.has(normalizeOutputKey(outputPath))) {
+              throw new Error(t("msg_fonts_input_conflict", safeFileName));
+            }
+            await writeText(
+              outputPath,
+              result.content,
+              existingOutputs.has(normalizeOutputKey(outputPath))
+            );
             const fileWarnings = [...missingWarnings, ...result.warnings];
             if (fileWarnings.length > 0) {
               issueCount += fileWarnings.length;
@@ -883,8 +897,23 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
       }
     } finally {
       busyRef.current = false;
+      setEmbedding(false);
+      setBatchProgress(null);
+      setProgress(null);
+      setEmbedCancelRequested(false);
+      abortRef.current = null;
     }
-  }, [fileCount, filePaths, isSingleFile, selected, outputMode, chosenOutputDir, addLog, t]);
+  }, [
+    fileCount,
+    filePaths,
+    isSingleFile,
+    selected,
+    outputMode,
+    chosenOutputDir,
+    addLog,
+    t,
+    findLoadedInputConflictKeys,
+  ]);
 
   const outputControlsDisabled = analyzing || embedding;
   const missingChosenOutputDir = outputMode === "chosen_dir" && !chosenOutputDir;
@@ -939,6 +968,7 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
 
   const handleClearFiles = useCallback(() => {
     pickGenRef.current = pickGenRef.current + 1;
+    outputDirPickGenRef.current++;
     clearFile("fonts");
     setFonts([]);
     setFontUsages([]);
@@ -1091,7 +1121,8 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
           style={{
             background:
               analyzing || embedding || sourceLocked ? "var(--bg-input)" : "var(--accent)",
-            color: analyzing || embedding || sourceLocked ? "var(--text-muted)" : "white",
+            color:
+              analyzing || embedding || sourceLocked ? "var(--text-muted)" : "var(--accent-text)",
             height: "38px",
           }}
         >
@@ -1155,7 +1186,7 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
               className="px-3 py-1 rounded text-xs font-medium"
               style={{
                 background: outputControlsDisabled ? "var(--bg-input)" : "var(--accent)",
-                color: outputControlsDisabled ? "var(--text-muted)" : "white",
+                color: outputControlsDisabled ? "var(--text-muted)" : "var(--accent-text)",
               }}
             >
               {t("btn_pick_chosen_dir")}
@@ -1196,7 +1227,7 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
                   color: "var(--accent-disabled-text)",
                   height: "38px",
                 }
-              : { background: "var(--accent)", color: "#fff", height: "38px" }
+              : { background: "var(--accent)", color: "var(--accent-text)", height: "38px" }
           }
         >
           {fontSources.length > 0
@@ -1273,7 +1304,12 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
                   height: "38px",
                   minWidth: "140px",
                 }
-              : { background: "var(--accent)", color: "#fff", height: "38px", minWidth: "140px" }
+              : {
+                  background: "var(--accent)",
+                  color: "var(--accent-text)",
+                  height: "38px",
+                  minWidth: "140px",
+                }
           }
         >
           {embedButtonLabel()}

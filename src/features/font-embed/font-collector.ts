@@ -325,6 +325,12 @@ export function collectFontsWithParser(assContent: string, parser: AssParseFunct
 // karaoke songs rarely cross a few KB).
 const MAX_DIALOGUE_TEXT_LEN = 1_000_000;
 
+function decodePlainText(text: string): string {
+  return text.replace(/\\([Nnh{}])/g, (_, escaped: string) =>
+    escaped === "{" || escaped === "}" ? escaped : ""
+  );
+}
+
 function processDialogueText(
   text: string,
   eventStyle: FontKey,
@@ -351,7 +357,7 @@ function processDialogueText(
   let i = 0;
 
   while (i < text.length) {
-    if (text[i] === "{") {
+    if (text[i] === "{" && (i === 0 || text[i - 1] !== "\\")) {
       // Override block — parse tags until closing }
       const closeIdx = text.indexOf("}", i);
       if (closeIdx === -1) {
@@ -374,7 +380,7 @@ function processDialogueText(
           // intermediate string; for a 1 MB malformed-brace tail packed
           // with `\N` / `\n` / `\h`, three passes allocated ~3 MB of
           // intermediate strings. Single alternation is semantic-identical.
-          const cleanTail = tail.replace(/\\[Nnh]/g, "");
+          const cleanTail = decodePlainText(tail);
           if (cleanTail.length > 0) recordChars(current, cleanTail);
         }
         return;
@@ -395,7 +401,12 @@ function processDialogueText(
       i = closeIdx + 1;
     } else {
       // Plain text — find the next override block or end
-      const nextBrace = text.indexOf("{", i);
+      let nextBrace = text.indexOf("{", i);
+      // The converter emits libass's literal-brace escapes. Those braces
+      // cannot begin an override, even when another backslash precedes them.
+      while (nextBrace > 0 && text[nextBrace - 1] === "\\") {
+        nextBrace = text.indexOf("{", nextBrace + 1);
+      }
       const plainEnd = nextBrace >= 0 ? nextBrace : text.length;
       const plain = text.slice(i, plainEnd);
 
@@ -403,7 +414,7 @@ function processDialogueText(
       // combined alternation (one allocator pass, was
       // three sequential .replace calls) — see the malformed-brace
       // tail path above for the rationale.
-      const cleanText = plain.replace(/\\[Nnh]/g, "");
+      const cleanText = decodePlainText(plain);
 
       if (cleanText.length > 0 && !isDrawing) {
         recordChars(current, cleanText);

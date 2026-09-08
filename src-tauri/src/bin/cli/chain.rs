@@ -560,14 +560,18 @@ fn collect_suspicious_orderings(steps: &[ParsedStep]) -> Vec<String> {
 /// Build the chain's default output template by stacking each
 /// step's natural suffix: `{name}.<suffix1>.<suffix2>...<suffixN>.ass`.
 ///
-/// All chain default outputs use `.ass` extension regardless of input
-/// — chains in practice include HDR or embed (both ASS-producing),
-/// so an `.ass`-stripped default is wrong for the typical case more
-/// often than the input-extension-preserving alternative. Single-step
-/// chains on non-ASS input should pass `--output-template` explicitly.
+/// Shift-only chains preserve their input format; HDR and embed use ASS outputs.
 fn derive_stacked_default(steps: &[ParsedStep]) -> String {
     let suffixes: Vec<&str> = steps.iter().map(ParsedStep::stack_suffix).collect();
-    format!("{{name}}.{}.ass", suffixes.join("."))
+    let extension = if steps
+        .iter()
+        .all(|step| matches!(step, ParsedStep::Shift(_)))
+    {
+        "{ext}"
+    } else {
+        ".ass"
+    };
+    format!("{{name}}.{}{extension}", suffixes.join("."))
 }
 
 #[cfg(test)]
@@ -939,6 +943,13 @@ mod tests {
         let step = parse_one_step(&segment, true).unwrap();
         let template = derive_stacked_default(&[step]);
         assert_eq!(template, "{name}.hdr.ass");
+    }
+
+    #[test]
+    fn stacked_default_shift_only_preserves_the_input_extension() {
+        let step =
+            parse_one_step(&argv_of(&["shift", "--offset", "+1s", "cat.srt"]), true).unwrap();
+        assert_eq!(derive_stacked_default(&[step]), "{name}.shifted{ext}");
     }
 
     #[test]

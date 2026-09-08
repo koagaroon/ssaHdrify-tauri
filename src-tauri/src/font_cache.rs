@@ -688,6 +688,39 @@ pub fn cache_source_key(
     Ok(CacheSourceKey { source_root, scope })
 }
 
+fn collect_snapshot_children(
+    entries: impl IntoIterator<Item = std::io::Result<PathBuf>>,
+    directory: &Path,
+    visited_entries: &mut usize,
+    retained_path_bytes: usize,
+) -> Result<Vec<PathBuf>, String> {
+    let mut children = Vec::new();
+    let mut temporary_path_bytes = 0usize;
+    for entry in entries {
+        if *visited_entries >= crate::fonts::MAX_PREFLIGHT_ENTRIES {
+            return Err(format!(
+                "Font source exceeds the {}-entry traversal limit",
+                crate::fonts::MAX_PREFLIGHT_ENTRIES
+            ));
+        }
+        *visited_entries += 1;
+        let path =
+            entry.map_err(|e| format!("read directory entry in {}: {e}", directory.display()))?;
+        temporary_path_bytes = temporary_path_bytes.saturating_add(path.as_os_str().len());
+        if retained_path_bytes.saturating_add(temporary_path_bytes)
+            > crate::fonts::MAX_SCAN_PATH_BYTES
+        {
+            return Err(format!(
+                "Font source exceeds the {}-byte retained-path limit",
+                crate::fonts::MAX_SCAN_PATH_BYTES
+            ));
+        }
+        children.push(path);
+    }
+    children.sort();
+    Ok(children)
+}
+
 /// Build the metadata-only freshness snapshot used by drift detection and by
 /// the publication stability check. Recursive traversal is deterministic and
 /// never follows symlinks, junctions, or other reparse points.
@@ -721,24 +754,16 @@ pub fn snapshot_source_directories(
     while let Some((directory, depth)) = pending.pop() {
         let read_dir = std::fs::read_dir(&directory)
             .map_err(|e| format!("read directory {}: {e}", directory.display()))?;
-        let mut children = Vec::new();
-        for entry in read_dir {
-            let entry = entry
-                .map_err(|e| format!("read directory entry in {}: {e}", directory.display()))?;
-            children.push(entry.path());
-        }
-        children.sort();
+        let children = collect_snapshot_children(
+            read_dir.map(|entry| entry.map(|entry| entry.path())),
+            &directory,
+            &mut visited_entries,
+            retained_path_bytes,
+        )?;
 
         // Reverse push preserves ascending traversal with a LIFO stack. Final
         // output is sorted too, so database contents never depend on OS order.
         for child in children {
-            visited_entries = visited_entries.saturating_add(1);
-            if visited_entries > crate::fonts::MAX_PREFLIGHT_ENTRIES {
-                return Err(format!(
-                    "Font source exceeds the {}-entry traversal limit",
-                    crate::fonts::MAX_PREFLIGHT_ENTRIES
-                ));
-            }
             match crate::util::try_is_reparse_point(&child) {
                 Ok(false) => {}
                 Ok(true) => continue,
@@ -4085,6 +4110,61 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM cached_fonts", [], |row| row.get(0))
             .unwrap();
         assert_eq!(face_count, 20_130);
+    }
+
+    #[test]
+    fn snapshot_children_preserve_sorting_at_the_entry_limit() {
+        let mut visited = crate::fonts::MAX_PREFLIGHT_ENTRIES - 2;
+        let children = collect_snapshot_children(
+            [Ok(PathBuf::from("z.ttf")), Ok(PathBuf::from("a.ttf"))],
+            Path::new("library"),
+            &mut visited,
+            0,
+        )
+        .unwrap();
+        assert_eq!(children, [PathBuf::from("a.ttf"), PathBuf::from("z.ttf")]);
+        assert_eq!(visited, crate::fonts::MAX_PREFLIGHT_ENTRIES);
+    }
+
+    #[test]
+    fn snapshot_children_stop_consuming_an_over_limit_iterator() {
+        let read = std::cell::Cell::new(0);
+        let entries = std::iter::repeat_with(|| {
+            read.set(read.get() + 1);
+            assert!(
+                read.get() <= 3,
+                "must stop before consuming the rest of a wide directory"
+            );
+            Ok(PathBuf::from("candidate.ttf"))
+        });
+        let mut visited = crate::fonts::MAX_PREFLIGHT_ENTRIES - 2;
+        let error =
+            collect_snapshot_children(entries, Path::new("library"), &mut visited, 0).unwrap_err();
+        assert!(error.contains("traversal limit"));
+        assert_eq!(read.get(), 3);
+        assert_eq!(visited, crate::fonts::MAX_PREFLIGHT_ENTRIES);
+    }
+
+    #[test]
+    fn snapshot_children_include_temporary_paths_in_the_byte_budget() {
+        let path = PathBuf::from("candidate.ttf");
+        let remaining = path.as_os_str().len();
+        let mut visited = 0;
+        assert!(collect_snapshot_children(
+            [Ok(path.clone())],
+            Path::new("library"),
+            &mut visited,
+            crate::fonts::MAX_SCAN_PATH_BYTES - remaining
+        )
+        .is_ok());
+        let error = collect_snapshot_children(
+            [Ok(path)],
+            Path::new("library"),
+            &mut visited,
+            crate::fonts::MAX_SCAN_PATH_BYTES - remaining + 1,
+        )
+        .unwrap_err();
+        assert!(error.contains("retained-path limit"));
     }
 
     #[test]
