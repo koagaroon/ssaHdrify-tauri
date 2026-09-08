@@ -2,8 +2,9 @@ import projectLicenseText from "../../LICENSE?raw";
 import featherLicenseText from "../assets/licenses/feather-LICENSE.txt?raw";
 import interLicenseText from "../assets/fonts/inter/LICENSE.txt?raw";
 import smileySansLicenseText from "../assets/fonts/smiley-sans/LICENSE.txt?raw";
+import frontendLicenseText from "virtual:frontend-notices";
 
-export type LicenseNoticeId = "ssahdrify" | "inter" | "smiley-sans" | "feather";
+export type LicenseNoticeId = "ssahdrify" | "inter" | "smiley-sans" | "feather" | "frontend";
 
 export interface LicenseNotice {
   id: LicenseNoticeId;
@@ -14,6 +15,13 @@ export interface LicenseNotice {
 }
 
 export const LICENSE_NOTICES: readonly LicenseNotice[] = [
+  {
+    id: "frontend",
+    name: "JavaScript dependencies",
+    licenseId: "Multiple licenses",
+    source: "https://github.com/koagaroon/ssaHdrify-tauri",
+    text: frontendLicenseText,
+  },
   {
     id: "ssahdrify",
     name: "SSA HDRify",

@@ -491,3 +491,40 @@ describe("SRT pipeline integration — composed (braces + color tags)", () => {
     expect(doc).toContain("green");
   });
 });
+
+describe("unknown HTML stripping", () => {
+  function convert(text: string): string {
+    return convertTextCueSubtitleToAss(`1\n00:00:01,000 --> 00:00:02,000\n${text}\n`)
+      .content.split("\n")
+      .at(-1)!;
+  }
+
+  it("strips unknown complete tags while keeping supported tags and unmatched tails", () => {
+    expect(convert("<unknown>before</unknown><b>bold</b><br>after <<unfinished")).toBe(
+      "Dialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,before{\\b1}bold{\\b0}\\Nafter <<unfinished"
+    );
+  });
+
+  it("retains the existing first-opener-to-next-closer behavior", () => {
+    expect(convert("a<outer<inner>b<>c>tail<")).toBe(
+      "Dialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,abc>tail<"
+    );
+  });
+
+  it("handles repeated unmatched openers at the accepted cue boundary across a batch", () => {
+    const text = "<".repeat(64000);
+    const input = Array.from(
+      { length: 8 },
+      (_, i) => `${i + 1}\n00:00:01,000 --> 00:00:02,000\n${text}`
+    ).join("\n\n");
+    const result = convertTextCueSubtitleToAss(input);
+    expect(result.skippedCount).toBe(0);
+    const dialogues = result.content.split("\n").filter((line) => line.startsWith("Dialogue:"));
+    expect(dialogues).toHaveLength(8);
+    for (const line of dialogues)
+      expect(line).toBe(`Dialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,${text}`);
+    expect(() => convertTextCueSubtitleToAss(`1\n00:00:01,000 --> 00:00:02,000\n${text}<`)).toThrow(
+      /64000-character limit/
+    );
+  });
+});

@@ -103,8 +103,8 @@ export function parseAssColor(assColor: string): {
   // inputs pad with leading zeros (alpha defaults opaque). Inputs LONGER than
   // 8 are NOT rejected: padStart is a no-op and the slices below take the
   // FIRST 8 chars, silently ignoring the overflow. This is a caller-trusted
-  // contract, not a guard — every production caller bounds the input to 6 or
-  // 8 hex upstream (the color-tag matchers + the 6/8-hex GUI color field). A
+  // contract, not a guard — production callers bound color inputs to at most
+  // 8 hex digits or normalize a 32-bit integer first. A
   // future caller passing >8 hex would get the leading-8 prefix as
   // wrong-but-valid; validate at that caller if one ever appears.
   const stripped = assColor.replace(/^&H/i, "").padStart(8, "0");
@@ -140,26 +140,21 @@ function transformColorString(assColor: string, targetBrightness: number, eotf: 
   return formatAssColor(hr, hg, hb, alpha);
 }
 
-// Matches: \c&HBBGGRR, \1c&HBBGGRR, \2c&HAABBGGRR, etc.
-// Groups: (1) prefix like "\c&H" or "\1c&H", (2) 6 or 8 hex digits.
-// Strict 6/8 length is per ASS spec — any other count (e.g. a 7-digit
-// run from a malformed file) is intentionally left un-transformed
-// rather than risk corrupting unknown content.
-// Lookahead ensures the color ends at a valid ASS delimiter. `\r\n` are
-// included so a color tag at end-of-line (within a multi-line ASS input
-// before line-splitting) still matches instead of being left untransformed.
-//
-// Hoisted to module scope so a 50k-dialogue file doesn't re-compile this
-// regex per line.
-const COLOR_TAG_RE = /(\\[0-9]?c&H)([0-9a-fA-F]{6}|[0-9a-fA-F]{8})(?=[&}),\\\r\n]|$)/g;
+// FFmpeg emits short BGR values without leading zeros. Keep the existing
+// eight-digit alpha extension, but do not match prefixes of longer values.
+const COLOR_TAG_RE = /(\\[0-9]?c&H)([0-9a-fA-F]{1,6}|[0-9a-fA-F]{8})(?=[&}),\\\r\n]|$)/g;
+const COLOR_FIELD_RE = /^&H[0-9A-Fa-f]{1,8}$/i;
+const DECIMAL_COLOR_FIELD_RE = /^[+-]?\d{1,10}$/;
 
-// hoisted from inside transformStyleLine
-// to match COLOR_TAG_RE's module-scope precedent. Previously the
-// regex literal compiled per style-line; with thousands of styled
-// dialogues a per-call recompile is wasted work, and `no-misleading-
-// character-class` / consistency reads better when the two regexes
-// sit side by side.
-const COLOR_FIELD_RE = /^&H(?:[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$/;
+function normalizeStyleColor(value: string): string | null {
+  if (COLOR_FIELD_RE.test(value)) return value;
+  if (!DECIMAL_COLOR_FIELD_RE.test(value)) return null;
+  const color = Number(value);
+  if (color < -2147483648 || color > 4294967295) return null;
+  // SSA stores colors as signed or unsigned 32-bit integers; canonical hex
+  // preserves their bit pattern, including alpha, through the shared converter.
+  return `&H${(color >>> 0).toString(16).padStart(8, "0")}`;
+}
 
 /**
  * Transform inline color tags in a dialogue event text.
@@ -204,23 +199,13 @@ function transformStyleLine(
     throw new Error(`Style line has too many fields: ${fields.length} (max ${MAX_STYLE_FIELDS})`);
   }
 
-  // Only transform fields that actually look like ASS colors. A
-  // crafted Format line with empty middle fields would shift the index
-  // we computed from the Format header against this Style line; if the
-  // shifted slot lands on something that isn't a color, transformColorString
-  // would produce garbage and we'd silently corrupt the output. Validate
-  // the `&Hxxxxxx` or `&Hxxxxxxxx` shape (6 or 8 hex digits — RGB or
-  // ABGR with alpha) before transforming. A previous `{2,8}` form
-  // accepted 2-, 3-, 4-, 5-, and 7-digit values that the inline
-  // `\cN&Hxxxxxx` tag regex (`COLOR_TAG_RE`) correctly
-  // rejected — the asymmetry let a malformed Style field through that
-  // wouldn't have been transformed if inlined as `\c&H...`. The regex
-  // now lives at module scope — see `COLOR_FIELD_RE` definition.
+  // Normalize only declared color fields; unrelated numeric metadata stays intact.
   for (const idx of styleColorIndices) {
     if (idx < fields.length && fields[idx]) {
       const raw = fields[idx];
       const trimmed = raw.trim();
-      if (COLOR_FIELD_RE.test(trimmed)) {
+      const color = normalizeStyleColor(trimmed);
+      if (color !== null) {
         // preserve any leading/trailing whitespace
         // padding from the original field so byte-for-byte file
         // structure (excluding the color hex itself) survives the
@@ -232,7 +217,7 @@ function transformStyleLine(
         const trailingLen = raw.length - raw.trimEnd().length;
         const leading = raw.slice(0, leadingLen);
         const trailing = trailingLen > 0 ? raw.slice(raw.length - trailingLen) : "";
-        const transformed = transformColorString(trimmed, targetBrightness, eotf);
+        const transformed = transformColorString(color, targetBrightness, eotf);
         fields[idx] = `${leading}${transformed}${trailing}`;
       }
     }

@@ -427,7 +427,7 @@ fn chain_normalizes_relative_input_and_output_directory() {
         .expect("failed to run chain");
 
     assert!(output.status.success(), "{}", combined_output(&output));
-    let shifted = fs::read_to_string(root.join("out").join("episode.shifted.ass")).unwrap();
+    let shifted = fs::read_to_string(root.join("out").join("episode.shifted.srt")).unwrap();
     assert!(shifted.contains("00:00:02,000 --> 00:00:03,000"));
     let _ = fs::remove_dir_all(root);
 }

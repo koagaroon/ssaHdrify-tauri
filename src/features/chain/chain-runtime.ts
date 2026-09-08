@@ -12,7 +12,7 @@
 
 import { processAssContent } from "../hdr-convert/ass-processor";
 import { assertFiniteShiftMs, shiftSubtitlesCompact } from "../timing-shift/timing-engine";
-import { buildFontEntry } from "../font-embed/ass-uuencode";
+import { FontSectionBuilder } from "../font-embed/ass-uuencode";
 import { assertAssShape, insertFontsSection } from "../font-embed/ass-font-section";
 import {
   assertSafeOutputFilename,
@@ -154,8 +154,8 @@ function embedTransform(ctx: TransformContext, params: EmbedStepParams): Transfo
   //
   // Resource budgets are layered. Before V8, the Rust shell caps the
   // aggregate raw subset payload at 100 MiB and subset_font rejects
-  // source font files above 64 MiB. After decoding, buildFontEntry's
-  // encoder applies its own stricter 50 MiB per-subset cap. decodeBase64
+  // source font files above 64 MiB. Before encoding each entry, FontSectionBuilder
+  // enforces a 50 MiB aggregate encoded-section cap. decodeBase64
   // itself has no local cap, so the Rust preflight remains load-bearing.
   // Today the chain V8 entry is ONLY reached via the Rust shell;
   // any future caller that constructs a ChainPlan from another
@@ -185,12 +185,12 @@ function embedTransform(ctx: TransformContext, params: EmbedStepParams): Transfo
     };
   }
 
-  const fontEntries = params.subsets.map((s) =>
-    buildFontEntry(s.fontName, decodeBase64(s.dataB64, s.fontName))
-  );
-  const fontsSection = `[Fonts]\n${fontEntries.join("\n\n")}\n`;
-  const content = insertFontsSection(ctx.content, fontsSection);
-  const note = `embed: ${fontEntries.length} font(s) embedded`;
+  const fontSection = new FontSectionBuilder();
+  for (const subset of params.subsets) {
+    fontSection.add(subset.fontName, decodeBase64(subset.dataB64, subset.fontName));
+  }
+  const content = insertFontsSection(ctx.content, fontSection.build());
+  const note = `embed: ${fontSection.count} font(s) embedded`;
   return { content, note };
 }
 

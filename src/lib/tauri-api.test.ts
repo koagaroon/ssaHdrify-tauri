@@ -18,6 +18,7 @@
  *      the return. This pins the async-after-resolve regression.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { normalizeOutputKey } from "./dedup-helpers";
 
 interface MockChannel {
   onmessage: ((msg: unknown) => void) | null;
@@ -49,6 +50,7 @@ import {
   pickAssFiles,
   pickFontFiles,
   outputPathExists,
+  findSelectedInputConflictKeys,
   pickRenameInputs,
   preflightFontDirectory,
   preflightFontFiles,
@@ -57,6 +59,9 @@ import {
   scanFontFiles,
   subsetFont,
   writeStyleEditOutput,
+  writeText,
+  copyPath,
+  renamePath,
 } from "./tauri-api";
 
 beforeEach(() => {
@@ -72,6 +77,50 @@ describe("outputPathExists", () => {
     expect(invokeMock).toHaveBeenCalledWith("safe_output_path_exists", {
       path: "D:/Anime/out.ass",
     });
+  });
+});
+
+describe("selected-input aliases", () => {
+  it("checks the whole batch once and returns normalized conflicting output keys", async () => {
+    const inputs = ["D:/Subtitles/source.ass"];
+    const outputs = ["D:/Alias/source.ass", "D:/Subtitles/new.ass"];
+    invokeMock.mockResolvedValueOnce([outputs[0], outputs[0]]);
+    const keys = await findSelectedInputConflictKeys(inputs, outputs);
+    expect(invokeMock).toHaveBeenCalledExactlyOnceWith("safe_find_selected_input_conflicts", {
+      inputPaths: inputs,
+      outputPaths: outputs,
+    });
+    expect([...keys]).toEqual([normalizeOutputKey(outputs[0]!)]);
+  });
+
+  it("propagates unresolved-input failures rather than approving the outputs", async () => {
+    invokeMock.mockRejectedValueOnce(new Error("Failed to resolve selected input"));
+    await expect(findSelectedInputConflictKeys(["D:/missing.ass"], ["D:/out.ass"])).rejects.toThrow(
+      "Failed to resolve selected input"
+    );
+  });
+});
+
+describe("per-destination overwrite permission", () => {
+  it.each([false, true])(
+    "passes explicit overwrite=%s through every ordinary write operation",
+    async (overwrite) => {
+      await writeText("D:/Subtitles/output.ass", "subtitle", overwrite);
+      await copyPath("D:/Subtitles/input.ass", "D:/Subtitles/output.ass", overwrite);
+      await renamePath("D:/Subtitles/input.ass", "D:/Subtitles/output.ass", overwrite);
+      expect(invokeMock.mock.calls.map((call) => call[1].overwrite)).toEqual([
+        overwrite,
+        overwrite,
+        overwrite,
+      ]);
+    }
+  );
+
+  it("defaults all ordinary writes to exclusive creation", async () => {
+    await writeText("D:/Subtitles/output.ass", "subtitle");
+    await copyPath("D:/Subtitles/input.ass", "D:/Subtitles/output.ass");
+    await renamePath("D:/Subtitles/input.ass", "D:/Subtitles/output.ass");
+    expect(invokeMock.mock.calls.map((call) => call[1].overwrite)).toEqual([false, false, false]);
   });
 });
 

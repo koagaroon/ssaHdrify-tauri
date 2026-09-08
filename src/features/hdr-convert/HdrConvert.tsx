@@ -34,7 +34,8 @@ import { useFileContext } from "../../lib/FileContext";
 import type { Status } from "../../lib/StatusContext";
 import { useTabStatus } from "../../lib/useTabStatus";
 import { useFolderDrop } from "../../lib/useFolderDrop";
-import { countExistingFiles } from "../../lib/output-collisions";
+import { findExistingOutputKeys } from "../../lib/output-collisions";
+import { assertOutputDoesNotReplaceSelectedInput } from "../../lib/path-validation";
 import { useClickOutside } from "../../lib/useClickOutside";
 import { useLogPanel } from "../../lib/useLogPanel";
 import { LogPanel } from "../../lib/LogPanel";
@@ -93,7 +94,8 @@ const COMMON_FONTS_SET = new Set(COMMON_FONTS);
 
 export default function HdrConvert() {
   const { t } = useI18n();
-  const { hdrFiles, setHdrFiles, clearFile, isFileInUse } = useFileContext();
+  const { hdrFiles, setHdrFiles, clearFile, isFileInUse, findLoadedInputConflictKeys } =
+    useFileContext();
   const [eotf, setEotf] = useState<Eotf>("PQ");
   const [brightness, setBrightness] = useState(DEFAULT_BRIGHTNESS);
   const [brightnessText, setBrightnessText] = useState(String(DEFAULT_BRIGHTNESS));
@@ -319,6 +321,10 @@ export default function HdrConvert() {
     // / loop throw) clears it.
     if (busyRef.current) return;
     busyRef.current = true;
+    pickGenRef.current += 1;
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setProcessing(true);
     try {
       // Validate brightness
       if (brightness < MIN_BRIGHTNESS || brightness > MAX_BRIGHTNESS) {
@@ -327,46 +333,42 @@ export default function HdrConvert() {
       }
 
       const paths = hdrFiles.filePaths;
+      const selectedInputKeys = new Set(paths.map(normalizeOutputKey));
 
-      // Pre-flight overwrite check. Template-derived output paths are
-      // deterministic — re-clicking Convert (e.g., the user came back to
-      // the window after minimizing and forgot the run already finished)
-      // would silently overwrite previous outputs. Stat each projected
-      // path; if any already exist, surface a single ask() dialog before
-      // entering the busy state. Failed-to-resolve paths skip pre-flight
-      // (the main loop will log per-file errors as before).
-      // silent skip on resolve failure is
-      // intentional and bounded. The pre-flight's job is to count
-      // existing outputs for the overwrite-confirm dialog; an
-      // unresolvable path doesn't contribute to that count by
-      // construction (no projected output → can't possibly collide).
-      // The main processing loop below re-runs `resolveOutputPath`
-      // per file inside its own try/catch, surfacing the resolution
-      // error with full file context (which the dialog summary
-      // couldn't fit anyway). Collecting these errors here for a
-      // pre-dialog surface would mean a second display shape ("X
-      // files could not be resolved, Y files would be overwritten")
-      // that adds UI complexity without telling the user anything
-      // new — the unresolvable paths will surface as red error rows
-      // in the log panel once processing starts. Skip is the right
-      // failure mode at this layer.
+      // Invalid targets are reported per file; selected sources never enter overwrite preflight.
       const projectedOutputs: string[] = [];
       for (const filePath of paths) {
         try {
-          projectedOutputs.push(resolveOutputPath(filePath, activeTemplate, eotf));
+          const outputPath = resolveOutputPath(filePath, activeTemplate, eotf);
+          assertOutputDoesNotReplaceSelectedInput(outputPath, selectedInputKeys);
+          projectedOutputs.push(outputPath);
         } catch {
-          // See pre-loop WHY comment above: intentional silent skip,
-          // not an oversight. Main loop logs per-file with context.
+          // Report this target with its input context in the processing loop.
         }
       }
+      let existingOutputs: ReadonlySet<string>;
+      let conflictingOutputs: ReadonlySet<string>;
       try {
-        const existingCount = await countExistingFiles(projectedOutputs);
+        conflictingOutputs = await findLoadedInputConflictKeys(projectedOutputs, controller.signal);
+        if (controller.signal.aborted) {
+          setLastActionResult("cancelled");
+          return;
+        }
+        existingOutputs = await findExistingOutputKeys(
+          projectedOutputs.filter((path) => !conflictingOutputs.has(normalizeOutputKey(path)))
+        );
+        if (controller.signal.aborted) {
+          addLog(t("msg_cancelled"), "info");
+          setLastActionResult("cancelled");
+          return;
+        }
+        const existingCount = existingOutputs.size;
         if (existingCount > 0) {
           const confirmed = await ask(t("msg_overwrite_confirm", existingCount, paths.length), {
             title: t("dialog_overwrite_title"),
             kind: "warning",
           });
-          if (!confirmed) {
+          if (!confirmed || controller.signal.aborted) {
             addLog(t("msg_cancelled"), "info");
             setLastActionResult("cancelled");
             return;
@@ -378,12 +380,6 @@ export default function HdrConvert() {
         return;
       }
 
-      // Construct the AbortController at the boundary into busy state —
-      // pre-flight bail-out paths must not leak unaborted controllers.
-      // busyRef above is the synchronous gate for double clicks; the
-      // controller is only allocated once we're committed to a run.
-      abortRef.current = new AbortController();
-      setProcessing(true);
       setProgress({ processed: 0, total: paths.length });
 
       try {
@@ -436,6 +432,8 @@ export default function HdrConvert() {
             let outputPath: string;
             try {
               outputPath = resolveOutputPath(filePath, activeTemplate, eotf);
+              assertOutputDoesNotReplaceSelectedInput(outputPath, selectedInputKeys);
+              assertOutputDoesNotReplaceSelectedInput(outputPath, conflictingOutputs);
             } catch (e) {
               addLog(t("msg_skipped", fileName, sanitizeError(e)), "error");
               continue;
@@ -503,7 +501,7 @@ export default function HdrConvert() {
             if (abortRef.current?.signal.aborted) break;
 
             // Write output
-            await writeText(outputPath, assContent);
+            await writeText(outputPath, assContent, existingOutputs.has(normalizedOut));
             // FontEmbed and BatchRename also sanitize display names
             // before logging. fileNameFromPath already strips
             // C0/C1/DEL + BiDi via stripUnicodeControls, so this is
@@ -546,14 +544,15 @@ export default function HdrConvert() {
           setLastActionResult("error");
         }
       } finally {
-        setProcessing(false);
         setProgress(null);
       }
     } finally {
+      setProcessing(false);
       busyRef.current = false;
     }
   }, [
     hdrFiles,
+    findLoadedInputConflictKeys,
     processing,
     brightnessInvalid,
     templateInvalid,
@@ -697,7 +696,7 @@ export default function HdrConvert() {
           className="flex-none px-5 rounded-lg font-medium text-sm transition-colors"
           style={{
             background: processing ? "var(--bg-input)" : "var(--accent)",
-            color: processing ? "var(--text-muted)" : "white",
+            color: processing ? "var(--text-muted)" : "var(--accent-text)",
             height: "38px",
           }}
         >
@@ -724,7 +723,7 @@ export default function HdrConvert() {
           className="flex-none px-6 rounded-lg font-medium text-sm transition-colors"
           style={{
             background: convertDisabled ? "var(--bg-input)" : "var(--accent)",
-            color: convertDisabled ? "var(--text-muted)" : "white",
+            color: convertDisabled ? "var(--text-muted)" : "var(--accent-text)",
             height: "38px",
             minWidth: "120px",
           }}

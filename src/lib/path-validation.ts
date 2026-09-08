@@ -631,6 +631,15 @@ export function assertSafeOutputFilename(
   }
 }
 
+export function assertOutputDoesNotReplaceSelectedInput(
+  outputPath: string,
+  selectedInputKeys: ReadonlySet<string>
+): void {
+  if (selectedInputKeys.has(normalizeOutputKey(outputPath))) {
+    throw new Error("Output path matches a selected input file; choose a different output name");
+  }
+}
+
 /**
  * Validate a full output path against the input path's directory.
  * Throws on traversal, directory escape, MAX_PATH overflow, and

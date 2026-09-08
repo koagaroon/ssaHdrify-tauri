@@ -8,6 +8,25 @@ async function readText(relativePath: string): Promise<string> {
 }
 
 describe("release configuration contract", () => {
+  it("permits native IPC without allowing external network connections", async () => {
+    const config = JSON.parse(await readText("../../src-tauri/tauri.conf.json")) as {
+      app: { security: { csp: string; devCsp: string } };
+    };
+    const sources = (csp: string, directive: string) =>
+      csp
+        .split(";")
+        .map((value) => value.trim().split(/\s+/u))
+        .find((parts) => parts[0] === directive)
+        ?.slice(1) ?? [];
+    expect(new Set(sources(config.app.security.csp, "connect-src"))).toEqual(
+      new Set(["ipc:", "http://ipc.localhost", "https://ipc.localhost"])
+    );
+    expect(sources(config.app.security.csp, "script-src")).toEqual(["'self'"]);
+    expect(sources(config.app.security.csp, "object-src")).toEqual(["'none'"]);
+    expect(sources(config.app.security.devCsp, "connect-src")).toEqual(
+      expect.arrayContaining(["ipc:", "http://ipc.localhost", "https://ipc.localhost"])
+    );
+  });
   it("keeps manifest and lockfile versions synchronized", async () => {
     const packageJson = JSON.parse(await readText("../../package.json")) as {
       version: string;

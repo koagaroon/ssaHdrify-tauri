@@ -15,9 +15,15 @@
  * group of N chars yields N-1 bytes. A wrong tail therefore fails BOTH the
  * decoder-independent char-count assertion AND the decode round-trip.
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 
-import { assUuencode, buildFontEntry, MAX_FONT_DATA_SIZE } from "./ass-uuencode";
+import {
+  assUuencode,
+  buildFontEntry,
+  MAX_FONT_DATA_SIZE,
+  FontSectionBuilder,
+  fontEntryByteLength,
+} from "./ass-uuencode";
 
 // ── Faithful libass decoder (libass/ass.c::decode_font) ───────────────────
 // Independent of the encoder under test: reconstructs bytes from the
@@ -176,5 +182,69 @@ describe("buildFontEntry", () => {
 
   it("throws on empty font data (no bare fontname: header)", () => {
     expect(() => buildFontEntry("x.ttf", new Uint8Array(0))).toThrow(/empty font data/);
+  });
+});
+
+describe("cumulative encoded font output budget", () => {
+  it("counts ASCII, CJK, astral and lone surrogate names without browser or Node byte APIs", () => {
+    const names = ["ascii.ttf", "字体.ttf", "emoji😀.ttf", "high\ud800.ttf", "low\udc00.ttf"];
+    const expected = names.map(
+      (name) => new TextEncoder().encode(buildFontEntry(name, makeData(3))).length
+    );
+    vi.stubGlobal("TextEncoder", undefined);
+    vi.stubGlobal("Buffer", undefined);
+    try {
+      for (const [index, name] of names.entries()) {
+        expect(fontEntryByteLength(name, 3)).toBe(expected[index]);
+        const builder = new FontSectionBuilder(9 + expected[index]!);
+        builder.add(name, makeData(3));
+        expect(builder.count).toBe(1);
+      }
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("accepts the font-name bound and rejects the next character", () => {
+    expect(() => fontEntryByteLength("a".repeat(1024), 3)).not.toThrow();
+    expect(() => fontEntryByteLength("a".repeat(1025), 3)).toThrow("Font entry name");
+  });
+
+  it.each([1, 2, 3, 59, 60, 61, 120, 121])(
+    "predicts exact UTF-8 entry size for %i bytes",
+    (size) => {
+      const name = "字体:/name.ttf";
+      expect(fontEntryByteLength(name, size)).toBe(
+        new TextEncoder().encode(buildFontEntry(name, makeData(size))).length
+      );
+    }
+  );
+
+  it("accepts the exact complete-section budget and refuses the next font without changing output", () => {
+    const first = buildFontEntry("first.ttf", makeData(61));
+    const second = buildFontEntry("second.ttf", makeData(2));
+    const expected = `[Fonts]\n${first}\n\n${second}\n`;
+    const builder = new FontSectionBuilder(new TextEncoder().encode(expected).length);
+    builder.add("first.ttf", makeData(61));
+    builder.add("second.ttf", makeData(2));
+    expect(builder.build()).toBe(expected);
+    expect(() => builder.add("third.ttf", makeData(1))).toThrow(/encoded output limit/);
+    expect(builder.count).toBe(2);
+    expect(builder.build()).toBe(expected);
+    const oneByteShort = new FontSectionBuilder(new TextEncoder().encode(expected).length - 1);
+    oneByteShort.add("first.ttf", makeData(61));
+    expect(() => oneByteShort.add("second.ttf", makeData(2))).toThrow(/encoded output limit/);
+  });
+
+  it("rejects excessive encoded growth before reading raw byte contents", () => {
+    const unreadable = {
+      length: MAX_FONT_DATA_SIZE,
+      get 0() {
+        throw new Error("must not encode");
+      },
+    } as unknown as Uint8Array;
+    expect(() => new FontSectionBuilder().add("large.ttf", unreadable)).toThrow(
+      /encoded output limit/
+    );
   });
 });

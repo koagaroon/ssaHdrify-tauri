@@ -746,7 +746,7 @@ export default function StyleEdit() {
           className="flex-none px-5 rounded-lg font-medium text-sm transition-colors"
           style={{
             background: analyzing || writing ? "var(--bg-input)" : "var(--accent)",
-            color: analyzing || writing ? "var(--text-muted)" : "white",
+            color: analyzing || writing ? "var(--text-muted)" : "var(--accent-text)",
             height: "38px",
           }}
         >
@@ -769,7 +769,7 @@ export default function StyleEdit() {
           className="flex-none px-6 rounded-lg font-medium text-sm transition-colors"
           style={{
             background: writeDisabled ? "var(--accent-disabled-bg)" : "var(--accent)",
-            color: writeDisabled ? "var(--accent-disabled-text)" : "white",
+            color: writeDisabled ? "var(--accent-disabled-text)" : "var(--accent-text)",
             height: "38px",
             minWidth: "120px",
           }}

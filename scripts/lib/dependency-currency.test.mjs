@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 import { describe, expect, test, vi } from "vitest";
@@ -312,6 +313,136 @@ describe("GitHub Actions pins", () => {
     expect(parsed).toEqual({ actions: [], errors: [] });
   });
 
+  test("reports quoted uses keys in flow mappings instead of silently omitting actions", () => {
+    const lines = [
+      `steps: [{ "uses": actions/checkout@${SHA_ONE} }]`,
+      `- { 'uses': actions/checkout@${SHA_ONE} }`,
+      `- { name: checkout, "uses": actions/checkout@${SHA_ONE} }`,
+      `jobs: { test: { steps: [{ 'uses': actions/checkout@${SHA_ONE} }] } }`,
+      `steps: &reused [{ "uses": actions/checkout@${SHA_ONE} }]`,
+    ];
+    const parsed = parseActionReferences([{ path: "flow.yml", content: lines.join("\n") }]);
+    assert.deepEqual(parsed.actions, []);
+    assert.deepEqual(
+      parsed.errors.map(({ reason, dependency }) => ({
+        location: reason.split(" ")[0],
+        dependency,
+      })),
+      lines.map((_, index) => ({
+        location: `flow.yml:${index + 1}`,
+        dependency: "unsupported uses syntax",
+      }))
+    );
+  });
+
+  test("ignores quoted uses text in commands, scalar values, and comments", () => {
+    const parsed = parseActionReferences([
+      {
+        path: "literals.yml",
+        content: [
+          `- run: echo '{ "uses": actions/checkout@${SHA_ONE} }'`,
+          `- run: 'echo { "uses": actions/checkout@${SHA_ONE} }'`,
+          `- { run: 'echo { "uses": actions/checkout@${SHA_ONE} }' }`,
+          `- { name: "a uses: label", run: 'echo ''uses'': text' }`,
+          `# steps: [{ "uses": actions/checkout@${SHA_ONE} }]`,
+          `- "run": |`,
+          `    echo '{ "uses": actions/checkout@${SHA_ONE} }'`,
+          `    uses: text in a script`,
+          `- uses: actions/checkout@${SHA_ONE} # v7.0.1`,
+        ].join("\n"),
+      },
+    ]);
+    assert.deepEqual(parsed.errors, []);
+    assert.equal(parsed.actions.length, 1);
+    assert.deepEqual(parsed.actions[0].locations, ["literals.yml:9"]);
+  });
+
+  test.each(["|", ">", "|2", "|2-", "|-2", ">2+", ">+2", "&script |2-", "!!str >-2"])(
+    "keeps uses text inside run: %s scalar content",
+    (header) => {
+      const parsed = parseActionReferences([
+        {
+          path: "block.yml",
+          content: [
+            `  - run: ${header}`,
+            `      uses: actions/setup-node@${SHA_TWO} # v7.0.1`,
+            `    shell: bash`,
+            `  - uses: actions/checkout@${SHA_ONE} # v7.0.1`,
+          ].join("\n"),
+        },
+      ]);
+      assert.deepEqual(parsed.errors, []);
+      assert.equal(parsed.actions.length, 1);
+      assert.deepEqual(parsed.actions[0].locations, ["block.yml:4"]);
+    }
+  );
+
+  test.each(["|", ">2-", "&action |-2"])(
+    "reports uses: %s itself as unsupported rather than skipping the declaration",
+    (header) => {
+      const parsed = parseActionReferences([
+        {
+          path: "action-block.yml",
+          content: [
+            `  - uses: ${header}`,
+            `      actions/checkout@${SHA_ONE}`,
+            `  - uses: actions/setup-node@${SHA_TWO} # v7.0.1`,
+          ].join("\n"),
+        },
+      ]);
+      assert.equal(parsed.errors.length, 1);
+      assert.equal(parsed.errors[0].dependency, "unsupported uses syntax");
+      assert.equal(parsed.errors[0].reason.split(" ")[0], "action-block.yml:1");
+      assert.equal(parsed.actions.length, 1);
+      assert.deepEqual(parsed.actions[0].locations, ["action-block.yml:3"]);
+    }
+  );
+
+  test.each(["'", '"'])(
+    "keeps multiline %s scalar contents out of the action inventory",
+    (quote) => {
+      const parsed = parseActionReferences([
+        {
+          path: "quoted.yml",
+          content: [
+            `- run: ${quote}echo first line`,
+            `    uses: actions/setup-node@${SHA_TWO} # v7.0.1`,
+            `    last line${quote}`,
+            `- uses: actions/checkout@${SHA_ONE} # v7.0.1`,
+          ].join("\n"),
+        },
+      ]);
+      assert.deepEqual(parsed.errors, []);
+      assert.equal(parsed.actions.length, 1);
+      assert.deepEqual(parsed.actions[0].locations, ["quoted.yml:4"]);
+    }
+  );
+
+  test("resumes flow-key inspection after multiline quoted content and ignores plain apostrophes", () => {
+    const parsed = parseActionReferences([
+      {
+        path: "flow-quoted.yml",
+        content: [
+          `steps: [{ run: "echo first line`,
+          `    uses: actions/setup-node@${SHA_TWO} # v7.0.1`,
+          `    last line", 'uses': actions/checkout@${SHA_ONE} }]`,
+          `- { name: John's job, uses: actions/checkout@${SHA_ONE} }`,
+        ].join("\n"),
+      },
+    ]);
+    assert.deepEqual(parsed.actions, []);
+    assert.deepEqual(
+      parsed.errors.map(({ reason }) => reason.split(" ")[0]),
+      ["flow-quoted.yml:3", "flow-quoted.yml:4"]
+    );
+  });
+
+  test("reports an unterminated quoted scalar instead of claiming a complete inventory", () => {
+    const parsed = parseActionReferences([{ path: "broken.yml", content: '- run: "unterminated' }]);
+    assert.equal(parsed.errors.length, 1);
+    assert.match(parsed.errors[0].reason, /unterminated quoted scalar/u);
+  });
+
   test("selects the greatest stable semantic release rather than a later backport", () => {
     const release = inspectGitHubReleases([
       { tag_name: "v6.9.1", draft: false, prerelease: false },
@@ -474,5 +605,62 @@ describe("repository no-branch contract", () => {
     expect(workflowText).not.toMatch(/permissions:\s*write-all/u);
     expect(dependabotText.match(/open-pull-requests-limit:\s*0/gu)).toHaveLength(3);
     expect(dependabotText).not.toMatch(/open-pull-requests-limit:\s*[1-9]/u);
+  });
+});
+
+describe("unsupported YAML key notation", () => {
+  test.each([
+    String.raw`"us\u0065s"`,
+    String.raw`"\x75ses"`,
+    String.raw`"\U00000075ses"`,
+    String.raw`"\u0075\u0073\u0065\u0073"`,
+  ])("refuses a credible escaped uses key %s but ignores the same command text", (key) => {
+    for (const content of [
+      `- ${key}: actions/checkout@v7`,
+      `steps: [{ ${key}: actions/checkout@v7 }]`,
+    ]) {
+      const parsed = parseActionReferences([{ path: "escaped.yml", content }]);
+      assert.equal(parsed.errors.length, 1);
+      assert.equal(parsed.errors[0].dependency, "unsupported uses syntax");
+    }
+    for (const content of [
+      `- run: echo '${key}: actions/checkout@v7'`,
+      `- { run: 'echo ${key}: actions/checkout@v7' }`,
+      `# - ${key}: actions/checkout@v7`,
+      `- run: |\n    ${key}: actions/checkout@v7`,
+    ]) {
+      assert.deepEqual(parseActionReferences([{ path: "literal.yml", content }]).errors, []);
+    }
+  });
+
+  test.each(["uses", "'uses'", '"uses"', String.raw`"us\u0065s"`])(
+    "refuses an explicit uses key %s without treating quoted shell text as a key",
+    (key) => {
+      for (const content of [
+        `- ? ${key}\n  : actions/checkout@v7`,
+        `steps: [{ ? ${key}: actions/checkout@v7 }]`,
+      ]) {
+        const parsed = parseActionReferences([{ path: "explicit.yml", content }]);
+        assert.equal(parsed.errors.length, 1);
+        assert.equal(parsed.errors[0].dependency, "unsupported uses syntax");
+      }
+      const literal = `- run: |\n    ? ${key}\n    : actions/checkout@v7\n- uses: actions/checkout@${SHA_ONE} # v7.0.1`;
+      const parsed = parseActionReferences([{ path: "script.yml", content: literal }]);
+      assert.deepEqual(parsed.errors, []);
+      assert.equal(parsed.actions.length, 1);
+    }
+  );
+
+  test("does not decode single-quoted or escaped-backslash literals as uses keys", () => {
+    const lines = [
+      String.raw`- 'us\u0065s': ordinary value`,
+      String.raw`- "us\\u0065s": ordinary value`,
+      `- ? name\n  : ordinary value`,
+      `- uses: actions/checkout@${SHA_ONE} # v7.0.1`,
+    ];
+    const parsed = parseActionReferences([{ path: "ordinary.yml", content: lines.join("\n") }]);
+    assert.deepEqual(parsed.errors, []);
+    assert.equal(parsed.actions.length, 1);
+    assert.deepEqual(parsed.actions[0].locations, ["ordinary.yml:5"]);
   });
 });

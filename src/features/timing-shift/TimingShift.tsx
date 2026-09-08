@@ -21,7 +21,8 @@ import { useFileContext } from "../../lib/FileContext";
 import type { Status } from "../../lib/StatusContext";
 import { useTabStatus } from "../../lib/useTabStatus";
 import { useFolderDrop } from "../../lib/useFolderDrop";
-import { countExistingFiles } from "../../lib/output-collisions";
+import { findExistingOutputKeys } from "../../lib/output-collisions";
+import { assertOutputDoesNotReplaceSelectedInput } from "../../lib/path-validation";
 import { useClickOutside } from "../../lib/useClickOutside";
 import { useLogPanel } from "../../lib/useLogPanel";
 import { LogPanel } from "../../lib/LogPanel";
@@ -127,7 +128,8 @@ function PreviewRow({
 
 export default function TimingShift() {
   const { t } = useI18n();
-  const { timingFiles, setTimingFiles, clearFile, isFileInUse } = useFileContext();
+  const { timingFiles, setTimingFiles, clearFile, isFileInUse, findLoadedInputConflictKeys } =
+    useFileContext();
 
   const [previewState, setPreviewState] = useState<TimingPreviewState>(() =>
     emptyTimingPreviewState()
@@ -430,33 +432,48 @@ export default function TimingShift() {
     // for the same idiom. Released in the outer finally below.
     if (busyRef.current) return;
     busyRef.current = true;
+    pickGenRef.current += 1;
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setBusy(true);
     try {
       const paths = filePaths;
+      const selectedInputKeys = new Set(paths.map(normalizeOutputKey));
 
-      // Pre-flight overwrite check — same project-wide pattern as HDR
-      // Convert. Template-derived output paths would silently overwrite
-      // a previous run otherwise; one ask() before the batch is the
-      // single safety net. Per-file try mirrors HDR Convert's shape: a
-      // single bad path must not fail the entire batch with no
-      // attribution — resolution failures fall through to the main
-      // loop's per-file error logging and the pre-flight existence
-      // check just skips them.
+      // Invalid targets are reported per file; selected sources never enter overwrite preflight.
       const projectedOutputs: string[] = [];
       for (const filePath of paths) {
         try {
-          projectedOutputs.push(deriveShiftedPath(filePath));
+          const outputPath = deriveShiftedPath(filePath);
+          assertOutputDoesNotReplaceSelectedInput(outputPath, selectedInputKeys);
+          projectedOutputs.push(outputPath);
         } catch {
           // Re-thrown with per-file context inside the main loop below.
         }
       }
+      let existingOutputs: ReadonlySet<string>;
+      let conflictingOutputs: ReadonlySet<string>;
       try {
-        const existingCount = await countExistingFiles(projectedOutputs);
+        conflictingOutputs = await findLoadedInputConflictKeys(projectedOutputs, controller.signal);
+        if (controller.signal.aborted) {
+          setLastActionResult("cancelled");
+          return;
+        }
+        existingOutputs = await findExistingOutputKeys(
+          projectedOutputs.filter((path) => !conflictingOutputs.has(normalizeOutputKey(path)))
+        );
+        if (controller.signal.aborted) {
+          addLog(t("msg_timing_cancelled"), "info");
+          setLastActionResult("cancelled");
+          return;
+        }
+        const existingCount = existingOutputs.size;
         if (existingCount > 0) {
           const confirmed = await ask(t("msg_overwrite_confirm", existingCount, paths.length), {
             title: t("dialog_overwrite_title"),
             kind: "warning",
           });
-          if (!confirmed) {
+          if (!confirmed || controller.signal.aborted) {
             addLog(t("msg_timing_cancelled"), "info");
             setLastActionResult("cancelled");
             return;
@@ -468,10 +485,6 @@ export default function TimingShift() {
         return;
       }
 
-      // Construct AbortController at the boundary into busy state — see
-      // HdrConvert::handleConvert for rationale.
-      abortRef.current = new AbortController();
-      setBusy(true);
       setProgress({ processed: 0, total: paths.length });
 
       try {
@@ -510,6 +523,8 @@ export default function TimingShift() {
 
           try {
             const outputPath = deriveShiftedPath(filePath);
+            assertOutputDoesNotReplaceSelectedInput(outputPath, selectedInputKeys);
+            assertOutputDoesNotReplaceSelectedInput(outputPath, conflictingOutputs);
 
             // Within-batch dedup. Two inputs that resolve to the same
             // output path (different paths on disk pointing at the same
@@ -555,7 +570,7 @@ export default function TimingShift() {
 
             if (abortRef.current?.signal.aborted) break;
 
-            await writeText(outputPath, result.content);
+            await writeText(outputPath, result.content, existingOutputs.has(normalizedOut));
             // Match the sibling features: sanitize output display names
             // before writing them into the visible log.
             const outName = sanitizeForDialog(fileNameFromPath(outputPath));
@@ -586,15 +601,16 @@ export default function TimingShift() {
           setLastActionResult("error");
         }
       } finally {
-        setBusy(false);
         setProgress(null);
       }
     } finally {
+      setBusy(false);
       busyRef.current = false;
     }
   }, [
     fileCount,
     filePaths,
+    findLoadedInputConflictKeys,
     effectiveOffsetMs,
     thresholdMs,
     thresholdInvalid,
@@ -755,7 +771,7 @@ export default function TimingShift() {
           className="flex-none px-5 rounded-lg font-medium text-sm transition-colors"
           style={{
             background: busy ? "var(--bg-input)" : "var(--accent)",
-            color: busy ? "var(--text-muted)" : "white",
+            color: busy ? "var(--text-muted)" : "var(--accent-text)",
             height: "38px",
           }}
         >
@@ -782,7 +798,7 @@ export default function TimingShift() {
           className="flex-none px-6 rounded-lg font-medium text-sm transition-colors"
           style={{
             background: saveDisabled ? "var(--bg-input)" : "var(--accent)",
-            color: saveDisabled ? "var(--text-muted)" : "white",
+            color: saveDisabled ? "var(--text-muted)" : "var(--accent-text)",
             height: "38px",
             minWidth: "120px",
           }}

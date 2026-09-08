@@ -19,7 +19,7 @@ import {
   type PairingSource,
   type ParsedFile,
 } from "./features/batch-rename/pairing-engine";
-import { buildFontEntry } from "./features/font-embed/ass-uuencode";
+import { FontSectionBuilder } from "./features/font-embed/ass-uuencode";
 import { assertAssShape, insertFontsSection } from "./features/font-embed/ass-font-section";
 import { buildFontFileName } from "./features/font-embed/font-embedder";
 import { collectFontsWithParser, fontKeyLabel } from "./features/font-embed/font-collector";
@@ -399,21 +399,21 @@ export function applyFontEmbed(request: FontEmbedApplyRequest): FontEmbedApplyRe
   // short-circuit) without shape validation.
   assertAssShape(request.content);
 
-  const fontEntries = request.fonts.map((font) =>
-    buildFontEntry(font.fontName, decodeSubsetBase64(font.dataB64, font.fontName))
-  );
+  const fontSection = new FontSectionBuilder();
+  for (const font of request.fonts) {
+    fontSection.add(font.fontName, decodeSubsetBase64(font.dataB64, font.fontName));
+  }
 
-  if (fontEntries.length === 0) {
+  if (fontSection.count === 0) {
     return {
       content: request.content,
       embeddedCount: 0,
     };
   }
 
-  const fontsSection = `[Fonts]\n${fontEntries.join("\n\n")}\n`;
   return {
-    content: insertFontsSection(request.content, fontsSection),
-    embeddedCount: fontEntries.length,
+    content: insertFontsSection(request.content, fontSection.build()),
+    embeddedCount: fontSection.count,
   };
 }
 

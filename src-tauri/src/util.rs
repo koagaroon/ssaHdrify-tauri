@@ -301,7 +301,11 @@ pub fn validate_output_path_shape(path: &Path, label: &str) -> Result<(), String
                 return Ok(());
             }
             let end_exclusive = components.len().saturating_sub(1);
-            for component in &components[first_directory_index..end_exclusive] {
+            for component in components
+                .iter()
+                .take(end_exclusive)
+                .skip(first_directory_index)
+            {
                 if component.is_empty() || matches!(*component, "." | "..") {
                     continue;
                 }
@@ -836,6 +840,26 @@ mod tests {
         let err =
             validate_output_path(r"//server.//share./dir./episode.ass", "Output").unwrap_err();
         assert!(err.contains("directory component ending in an unsupported ASCII dot"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn output_path_shape_handles_bare_unc_roots_without_panicking() {
+        for path in [
+            r"\\server\share",
+            r"\\server\share\",
+            "//server/share",
+            "//server//share",
+            "//server/share/",
+        ] {
+            validate_output_path_shape(Path::new(path), "Output").unwrap();
+        }
+        validate_output_path_shape(Path::new(r"\\server\share\episode.ass"), "Output").unwrap();
+        assert!(validate_output_path_shape(
+            Path::new(r"\\server\share\dir.\episode.ass"),
+            "Output"
+        )
+        .is_err());
     }
 
     #[cfg(windows)]

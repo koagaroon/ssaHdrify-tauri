@@ -22,6 +22,7 @@
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
 
 import { pathsEqualOnFs } from "./path-validation";
+import { findSelectedInputConflictKeys, SELECTED_INPUT_CONFLICT_BATCH_LIMIT } from "./tauri-api";
 
 // ── Types ────────────────────────────────────────────────
 
@@ -91,6 +92,11 @@ interface FileContextValue {
    * Returns the tab ID if in use, or null if free.
    */
   isFileInUse: (path: string, excludeTab?: TabId) => TabId | null;
+  /** Protect loaded subtitle sources across all tabs before confirming outputs. */
+  findLoadedInputConflictKeys: (
+    outputPaths: readonly string[],
+    signal?: AbortSignal
+  ) => Promise<ReadonlySet<string>>;
 }
 
 const FileContext = createContext<FileContextValue | null>(null);
@@ -103,6 +109,42 @@ export function FileProvider({ children }: { children: ReactNode }) {
   const [fontsFiles, setFontsFiles] = useState<FontsFilesState | null>(null);
   const [renameFiles, setRenameFiles] = useState<BatchRenameFilesState | null>(null);
   const [styleFiles, setStyleFiles] = useState<StyleFilesState | null>(null);
+
+  const loadedSubtitlePaths = useMemo(
+    () => [
+      ...new Set([
+        ...(hdrFiles?.filePaths ?? []),
+        ...(timingFiles?.filePaths ?? []),
+        ...(fontsFiles?.filePaths ?? []),
+        ...(renameFiles?.subtitlePaths ?? []),
+        ...(styleFiles?.filePaths ?? []),
+      ]),
+    ],
+    [hdrFiles, timingFiles, fontsFiles, renameFiles, styleFiles]
+  );
+
+  const findLoadedInputConflictKeys = useCallback(
+    async (outputPaths: readonly string[], signal?: AbortSignal): Promise<ReadonlySet<string>> => {
+      const outputs = [...new Set(outputPaths)];
+      const conflicts = new Set<string>();
+      const chunkSize = SELECTED_INPUT_CONFLICT_BATCH_LIMIT;
+      // This bounds each IPC request without imposing a combined selection cap
+      // on independent tabs. Sources are the context snapshot for this run.
+      for (let outputStart = 0; outputStart < outputs.length; outputStart += chunkSize) {
+        const outputChunk = outputs.slice(outputStart, outputStart + chunkSize);
+        for (let inputStart = 0; inputStart < loadedSubtitlePaths.length; inputStart += chunkSize) {
+          if (signal?.aborted) return conflicts;
+          const found = await findSelectedInputConflictKeys(
+            loadedSubtitlePaths.slice(inputStart, inputStart + chunkSize),
+            outputChunk
+          );
+          for (const key of found) conflicts.add(key);
+        }
+      }
+      return conflicts;
+    },
+    [loadedSubtitlePaths]
+  );
 
   const isFileInUse = useCallback(
     (path: string, excludeTab?: TabId): TabId | null => {
@@ -186,8 +228,18 @@ export function FileProvider({ children }: { children: ReactNode }) {
       setStyleFiles,
       clearFile,
       isFileInUse,
+      findLoadedInputConflictKeys,
     }),
-    [hdrFiles, timingFiles, fontsFiles, renameFiles, styleFiles, clearFile, isFileInUse]
+    [
+      hdrFiles,
+      timingFiles,
+      fontsFiles,
+      renameFiles,
+      styleFiles,
+      clearFile,
+      isFileInUse,
+      findLoadedInputConflictKeys,
+    ]
   );
 
   return <FileContext.Provider value={value}>{children}</FileContext.Provider>;

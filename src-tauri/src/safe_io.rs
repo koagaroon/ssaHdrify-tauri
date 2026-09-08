@@ -56,6 +56,7 @@
 
 use crate::encoding::{read_text_detect_encoding_inner, ALLOWED_TEXT_EXTENSIONS, MAX_TEXT_SIZE};
 use crate::util::{is_reparse_point, validate_ipc_path, validate_output_path};
+use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -624,6 +625,79 @@ pub fn safe_output_path_exists_inner(
         Err(e) => Err(format!("Failed to check output path existence: {e}")),
     }
 }
+/// Resolve a bounded batch before overwrite consent, including existing parent
+/// aliases. This is a read-only snapshot, not a guard against later path swaps.
+pub fn safe_find_selected_input_conflicts_inner(
+    input_paths: &[String],
+    output_paths: &[String],
+    is_allowed: impl Fn(&Path) -> bool,
+) -> Result<Vec<String>, String> {
+    let limit = crate::dropzone::MAX_RESULT_FILES;
+    if input_paths.len() > limit || output_paths.len() > limit {
+        return Err(format!(
+            "Selected-input conflict check accepts at most {limit} inputs and {limit} outputs"
+        ));
+    }
+    if output_paths.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut selected = HashSet::with_capacity(input_paths.len());
+    let mut visited_inputs = HashSet::new();
+    for input in input_paths {
+        if !visited_inputs.insert(input) {
+            continue;
+        }
+        validate_ipc_path(input, "Selected input")?;
+        let path = Path::new(input);
+        check_output_probe_extension(path, "Selected input")?;
+        check_scope_allows(&is_allowed, path, "Selected input")?;
+        // A missing or inaccessible source cannot supply a reliable identity;
+        // abort preparation instead of silently dropping it from protection.
+        let canonical = path.canonicalize().map_err(|error| {
+            format!(
+                "Failed to resolve selected input {}: {error}",
+                path.display()
+            )
+        })?;
+        check_scope_allows(&is_allowed, &canonical, "Selected input")?;
+        let metadata = fs::metadata(&canonical)
+            .map_err(|error| format!("Failed to inspect selected input: {error}"))?;
+        if !metadata.is_file() {
+            return Err(format!(
+                "Selected input is not a regular file: {}",
+                path.display()
+            ));
+        }
+        selected.insert(canonical);
+    }
+
+    let mut conflicts = Vec::new();
+    let mut visited_outputs = HashSet::new();
+    for output in output_paths {
+        if !visited_outputs.insert(output) {
+            continue;
+        }
+        validate_output_path(output, "Output")?;
+        let path = Path::new(output);
+        check_output_probe_extension(path, "Output")?;
+        check_scope_allows(&is_allowed, path, "Output")?;
+        match path.canonicalize() {
+            Ok(canonical) => {
+                check_scope_allows(&is_allowed, &canonical, "Output")?;
+                if selected.contains(&canonical) {
+                    conflicts.push(output.clone());
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                check_scope_allows_resolved(&is_allowed, path, "Output")?;
+            }
+            Err(error) => return Err(format!("Failed to resolve output path: {error}")),
+        }
+    }
+    Ok(conflicts)
+}
+
 pub fn safe_write_text_file_inner(
     path: &str,
     content: &str,
@@ -811,8 +885,84 @@ pub fn safe_rename_file_inner(
     is_allowed: impl Fn(&Path) -> bool,
 ) -> Result<(), String> {
     safe_rename_file_inner_with_rename(src, dst, overwrite, is_allowed, |source, destination| {
-        fs::rename(source, destination)
+        if overwrite {
+            fs::rename(source, destination)
+        } else {
+            rename_without_overwrite(source, destination)
+        }
     })
+}
+
+#[cfg(windows)]
+fn windows_rename_path(path: &Path) -> std::io::Result<Vec<u16>> {
+    use std::os::windows::ffi::OsStrExt;
+
+    // Normalize without resolving links. Long paths require the extended
+    // namespace when calling Win32 directly, independent of process opt-in.
+    let absolute = std::path::absolute(path)?;
+    let wide: Vec<u16> = absolute.as_os_str().encode_wide().collect();
+    if wide.contains(&0) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Path contains NUL",
+        ));
+    }
+    let mut wide = if wide.len() >= 260 && !wide.starts_with(&[92, 92, 63, 92]) {
+        if wide.starts_with(&[92, 92]) {
+            r"\\?\UNC\"
+                .encode_utf16()
+                .chain(wide[2..].iter().copied())
+                .collect()
+        } else {
+            r"\\?\".encode_utf16().chain(wide).collect()
+        }
+    } else {
+        wide
+    };
+    wide.push(0);
+    Ok(wide)
+}
+
+#[cfg(windows)]
+fn rename_without_overwrite(source: &Path, destination: &Path) -> std::io::Result<()> {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn MoveFileExW(existing: *const u16, new: *const u16, flags: u32) -> i32;
+    }
+    let source = windows_rename_path(source)?;
+    let destination = windows_rename_path(destination)?;
+    // Both buffers are NUL-terminated and live through the call. Flags zero
+    // forbids replacement and cross-volume copy/delete fallback atomically.
+    if unsafe { MoveFileExW(source.as_ptr(), destination.as_ptr(), 0) } == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+fn rename_without_overwrite(source: &Path, destination: &Path) -> std::io::Result<()> {
+    rustix::fs::renameat_with(
+        rustix::fs::CWD,
+        source,
+        rustix::fs::CWD,
+        destination,
+        rustix::fs::RenameFlags::NOREPLACE,
+    )
+    .map_err(Into::into)
+}
+
+#[cfg(not(any(
+    windows,
+    target_os = "linux",
+    target_os = "android",
+    target_vendor = "apple"
+)))]
+fn rename_without_overwrite(_source: &Path, _destination: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "Atomic no-overwrite rename is unavailable on this platform",
+    ))
 }
 
 fn safe_rename_file_inner_with_rename(
@@ -832,6 +982,11 @@ fn safe_rename_file_inner_with_rename(
     check_scope_allows_resolved(&is_allowed, src_ref, "Source")?;
     check_scope_allows_resolved(&is_allowed, dst_ref, "Destination")?;
     reject_reparse_source(src_ref, "rename")?;
+    let source_metadata = fs::symlink_metadata(src_ref)
+        .map_err(|error| format!("Failed to inspect rename source: {error}"))?;
+    if !source_metadata.is_file() {
+        return Err("Source is not a regular file; refusing to rename it".to_string());
+    }
     reject_same_canonical_path(src_ref, dst_ref)?;
     ensure_parent_dir(dst_ref)?;
     // Keep an ordinary existing destination in place until the OS performs the
@@ -852,13 +1007,8 @@ fn safe_rename_file_inner_with_rename(
         );
         return Err("Refusing to rename symlink / junction (race-time detection)".to_string());
     }
-    // Rename destination TOCTOU symmetry: copy's destination
-    // is implicitly protected by `OpenOptions::create_new(true)` at
-    // open time; rename has no equivalent atomic guard. Between
-    // destination inspection and the `fs::rename` below, an attacker can
-    // replace dst with a symlink — same window copy already closes.
-    // One syscall (`is_reparse_point` = lstat on POSIX, file_attributes
-    // on Windows); race window is narrow but the cost is trivial.
+    // Keep explicit reparse rejection for overwrite=true too; no-overwrite
+    // additionally rejects every late-created destination in the OS operation.
     if is_reparse_point(dst_ref) {
         log::warn!(
             "Refusing to rename to possible symlink / junction at rename-time: {}",
@@ -884,6 +1034,17 @@ pub fn safe_output_path_exists(app: tauri::AppHandle, path: String) -> Result<bo
     let scope = crate::fs_policy::app_fs_scope(&app)?;
     safe_output_path_exists_inner(&path, move |p| scope.is_allowed(p))
 }
+pub fn safe_find_selected_input_conflicts(
+    app: tauri::AppHandle,
+    input_paths: Vec<String>,
+    output_paths: Vec<String>,
+) -> Result<Vec<String>, String> {
+    let scope = crate::fs_policy::app_fs_scope(&app)?;
+    safe_find_selected_input_conflicts_inner(&input_paths, &output_paths, move |p| {
+        scope.is_allowed(p)
+    })
+}
+
 /// Write a text file safely. Layered defenses: scope deny enforcement,
 /// subtitle-extension whitelist, symlink rejection on destination,
 /// atomic `create_new(true)` open.
@@ -1000,6 +1161,219 @@ mod tests {
         );
 
         (real_dir, raw, resolved)
+    }
+
+    #[test]
+    fn selected_input_conflicts_keep_ordinary_and_missing_outputs_eligible() {
+        let dir = temp_dir("selected_conflicts_ordinary");
+        let input = dir.join("source.ass");
+        let existing = dir.join("previous.ass");
+        let missing = dir.join("new").join("output.ass");
+        fs::write(&input, "source").unwrap();
+        fs::write(&existing, "previous output").unwrap();
+        let conflicts = safe_find_selected_input_conflicts_inner(
+            &[input.to_string_lossy().into_owned()],
+            &[
+                input.to_string_lossy().into_owned(),
+                existing.to_string_lossy().into_owned(),
+                missing.to_string_lossy().into_owned(),
+            ],
+            allow_all,
+        )
+        .unwrap();
+        assert_eq!(conflicts, [input.to_string_lossy()]);
+        assert_eq!(fs::read_to_string(input).unwrap(), "source");
+        assert_eq!(fs::read_to_string(existing).unwrap(), "previous output");
+        assert!(!missing.parent().unwrap().exists());
+    }
+
+    #[test]
+    fn selected_input_conflicts_resolve_existing_aliases_in_both_directions() {
+        let (dir, raw, _) = scope_alias_paths("selected_conflicts_alias", "source.ass");
+        let original = dir.join("source.ass");
+        fs::write(&original, "source").unwrap();
+        #[cfg(windows)]
+        let raw = PathBuf::from(raw.to_string_lossy().to_uppercase());
+        let original = original.to_string_lossy().into_owned();
+        let alias = raw.to_string_lossy().into_owned();
+        assert_ne!(original, alias);
+        for (input, output) in [(&original, &alias), (&alias, &original)] {
+            assert_eq!(
+                safe_find_selected_input_conflicts_inner(
+                    std::slice::from_ref(input),
+                    std::slice::from_ref(output),
+                    allow_all,
+                )
+                .unwrap(),
+                std::slice::from_ref(output)
+            );
+        }
+    }
+
+    #[test]
+    fn selected_input_conflicts_fail_closed_for_missing_selected_source() {
+        let dir = temp_dir("selected_conflicts_missing_input");
+        let existing = dir.join("source.ass");
+        fs::write(&existing, "source").unwrap();
+        let error = safe_find_selected_input_conflicts_inner(
+            &[dir.join("missing.ass").to_string_lossy().into_owned()],
+            &[existing.to_string_lossy().into_owned()],
+            allow_all,
+        )
+        .unwrap_err();
+        assert!(error.contains("Failed to resolve selected input"));
+        assert_eq!(fs::read_to_string(existing).unwrap(), "source");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn selected_input_conflicts_resolve_a_selected_directory_junction() {
+        use std::os::windows::process::CommandExt;
+
+        struct JunctionGuard(PathBuf);
+        impl Drop for JunctionGuard {
+            fn drop(&mut self) {
+                // RemoveDirectory removes the junction itself without following it.
+                let _ = fs::remove_dir(&self.0);
+            }
+        }
+
+        let dir = temp_dir("selected_conflicts_junction");
+        let real = dir.join("real");
+        fs::create_dir(&real).unwrap();
+        let junction = dir.join("picked_alias");
+        let result = std::process::Command::new("powershell.exe")
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "$ErrorActionPreference = 'Stop'; New-Item -ItemType Junction -Path $env:SSAHDRIFY_TEST_JUNCTION_PATH -Target $env:SSAHDRIFY_TEST_JUNCTION_TARGET | Out-Null",
+            ])
+            .env("SSAHDRIFY_TEST_JUNCTION_PATH", &junction)
+            .env("SSAHDRIFY_TEST_JUNCTION_TARGET", &real)
+            .creation_flags(0x08000000)
+            .output()
+            .expect("run Windows junction fixture setup");
+        let _cleanup = JunctionGuard(junction.clone());
+        assert!(
+            result.status.success(),
+            "junction creation failed: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+
+        let source = real.join("episode.srt");
+        let output = real.join("episode.hdr.ass");
+        let selected_alias = junction.join("episode.hdr.ass");
+        fs::write(&source, "original subtitle").unwrap();
+        fs::write(&output, "selected original output").unwrap();
+        assert_ne!(output, selected_alias);
+        let output = output.to_string_lossy().into_owned();
+        let conflicts = safe_find_selected_input_conflicts_inner(
+            &[
+                source.to_string_lossy().into_owned(),
+                selected_alias.to_string_lossy().into_owned(),
+            ],
+            std::slice::from_ref(&output),
+            allow_all,
+        )
+        .unwrap();
+        assert_eq!(conflicts, [output]);
+        assert_eq!(
+            fs::read_to_string(selected_alias).unwrap(),
+            "selected original output"
+        );
+        assert_eq!(fs::read_to_string(source).unwrap(), "original subtitle");
+    }
+
+    #[test]
+    fn selected_input_conflicts_validate_extensions_and_regular_sources() {
+        let dir = temp_dir("selected_conflicts_kinds");
+        let source = dir.join("source.sup");
+        fs::write(&source, [0u8, 1, 2]).unwrap();
+        let input = source.to_string_lossy().into_owned();
+        let output = dir.join("out.sup").to_string_lossy().into_owned();
+        assert!(safe_find_selected_input_conflicts_inner(
+            std::slice::from_ref(&input),
+            std::slice::from_ref(&output),
+            allow_all,
+        )
+        .unwrap()
+        .is_empty());
+        for (inputs, outputs) in [
+            (
+                vec![dir.join("private.txt").to_string_lossy().into_owned()],
+                vec![output.clone()],
+            ),
+            (
+                vec![input.clone()],
+                vec![dir.join("out.exe").to_string_lossy().into_owned()],
+            ),
+        ] {
+            assert!(
+                safe_find_selected_input_conflicts_inner(&inputs, &outputs, allow_all)
+                    .unwrap_err()
+                    .contains("subtitle extension")
+            );
+        }
+        let directory = dir.join("folder.ass");
+        fs::create_dir(&directory).unwrap();
+        assert!(safe_find_selected_input_conflicts_inner(
+            &[directory.to_string_lossy().into_owned()],
+            &[output],
+            allow_all,
+        )
+        .unwrap_err()
+        .contains("not a regular file"));
+    }
+
+    #[test]
+    fn selected_input_conflicts_enforce_raw_and_resolved_scopes() {
+        let (dir, input, resolved_input) =
+            scope_alias_paths("selected_conflicts_scope", "source.ass");
+        fs::write(&input, "source").unwrap();
+        let output = dir.join("out.ass");
+        fs::write(&output, "output").unwrap();
+        let resolved_output = output.canonicalize().unwrap();
+        let inputs = vec![input.to_string_lossy().into_owned()];
+        let outputs = vec![output.to_string_lossy().into_owned()];
+        for denied in [&input, &resolved_input, &output, &resolved_output] {
+            assert!(
+                safe_find_selected_input_conflicts_inner(&inputs, &outputs, |path| path != denied)
+                    .unwrap_err()
+                    .contains("scope")
+            );
+        }
+        let missing = dir.join("missing.ass");
+        let resolved_missing = dir.canonicalize().unwrap().join("missing.ass");
+        assert!(safe_find_selected_input_conflicts_inner(
+            &inputs,
+            &[missing.to_string_lossy().into_owned()],
+            |path| path != resolved_missing,
+        )
+        .unwrap_err()
+        .contains("scope"));
+    }
+
+    #[test]
+    fn selected_input_conflicts_accept_the_batch_limit_and_reject_one_more() {
+        let dir = temp_dir("selected_conflicts_limit");
+        let path = dir.join("source.ass");
+        fs::write(&path, "source").unwrap();
+        let value = path.to_string_lossy().into_owned();
+        let at_limit = vec![value.clone(); crate::dropzone::MAX_RESULT_FILES];
+        assert_eq!(
+            safe_find_selected_input_conflicts_inner(&at_limit, &at_limit, allow_all).unwrap(),
+            std::slice::from_ref(&value)
+        );
+        let over_limit = vec![value; crate::dropzone::MAX_RESULT_FILES + 1];
+        for (inputs, outputs) in [(&over_limit, &at_limit), (&at_limit, &over_limit)] {
+            assert!(
+                safe_find_selected_input_conflicts_inner(inputs, outputs, allow_all)
+                    .unwrap_err()
+                    .contains("at most 5000")
+            );
+        }
     }
 
     #[test]
@@ -1636,6 +2010,103 @@ mod tests {
         .unwrap();
         assert!(!src.exists());
         assert_eq!(fs::read(&dst).unwrap(), b"payload");
+    }
+
+    #[test]
+    fn rename_no_overwrite_preserves_a_destination_created_after_inspection() {
+        let dir = temp_dir("rename_late_destination");
+        let src = dir.join("src.ass");
+        let dst = dir.join("dst.ass");
+        fs::write(&src, b"source payload").unwrap();
+        let error = safe_rename_file_inner_with_rename(
+            &src.to_string_lossy(),
+            &dst.to_string_lossy(),
+            false,
+            allow_all,
+            |source, destination| {
+                fs::write(destination, b"late destination").unwrap();
+                rename_without_overwrite(source, destination)
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("Failed to rename file"), "got: {error}");
+        assert_eq!(fs::read(&src).unwrap(), b"source payload");
+        assert_eq!(fs::read(&dst).unwrap(), b"late destination");
+    }
+
+    #[test]
+    fn rename_rejects_directory_sources_before_creating_or_overwriting_outputs() {
+        let dir = temp_dir("rename_directory_source");
+        let src = dir.join("folder.ass");
+        fs::create_dir(&src).unwrap();
+        fs::write(src.join("child.txt"), b"keep child").unwrap();
+        for overwrite in [false, true] {
+            let dst = if overwrite {
+                dir.join("existing.ass")
+            } else {
+                dir.join("new_parent/output.ass")
+            };
+            if overwrite {
+                fs::write(&dst, b"existing output").unwrap();
+            }
+            let error = safe_rename_file_inner_with_rename(
+                &src.to_string_lossy(),
+                &dst.to_string_lossy(),
+                overwrite,
+                allow_all,
+                |_, _| panic!("directory source reached the rename operation"),
+            )
+            .unwrap_err();
+            assert!(error.contains("not a regular file"), "got: {error}");
+            assert_eq!(fs::read(src.join("child.txt")).unwrap(), b"keep child");
+            if overwrite {
+                assert_eq!(fs::read(&dst).unwrap(), b"existing output");
+            } else {
+                assert!(!dst.parent().unwrap().exists());
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn rename_no_overwrite_supports_windows_paths_beyond_max_path() {
+        let mut dir = temp_dir("rename_long_path");
+        while dir.to_string_lossy().encode_utf16().count() < 280 {
+            dir = dir.join("nested_directory_component");
+        }
+        fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("source.ass");
+        let dst = dir.join("destination.ass");
+        fs::write(&src, b"long path payload").unwrap();
+        safe_rename_file_inner(
+            &src.to_string_lossy(),
+            &dst.to_string_lossy(),
+            false,
+            allow_all,
+        )
+        .unwrap();
+        assert!(!src.exists());
+        assert_eq!(fs::read(&dst).unwrap(), b"long path payload");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn rename_wide_paths_keep_short_paths_and_extend_drive_and_unc_paths() {
+        use std::ffi::OsString;
+        use std::os::windows::ffi::OsStringExt;
+        let decode = |path: &Path| {
+            let wide = windows_rename_path(path).unwrap();
+            assert_eq!(wide.last(), Some(&0));
+            OsString::from_wide(&wide[..wide.len() - 1])
+                .to_string_lossy()
+                .into_owned()
+        };
+        assert_eq!(decode(Path::new(r"C:\base\file.ass")), r"C:\base\file.ass");
+        let drive = format!("C:\\{}\\file.ass", "directory\\".repeat(30));
+        assert!(decode(Path::new(&drive)).starts_with(r"\\?\C:\"));
+        let unc = format!("\\\\server\\share\\{}file.ass", "directory\\".repeat(30));
+        assert!(decode(Path::new(&unc)).starts_with(r"\\?\UNC\server\share\"));
+        assert!(windows_rename_path(Path::new("C:\\bad\0.ass")).is_err());
     }
 
     #[test]

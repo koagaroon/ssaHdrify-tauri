@@ -428,8 +428,8 @@ export default function FontCacheDriftModal({
               disabled={working !== null || totalChanged === 0}
               className="px-3 py-1.5 rounded text-sm"
               style={{
-                background: "var(--accent-bg, #6e56cf)",
-                color: "var(--accent-text, white)",
+                background: "var(--accent)",
+                color: "var(--accent-text)",
                 border: "1px solid var(--accent-border, #6e56cf)",
                 cursor: working !== null ? "not-allowed" : "pointer",
                 filter: working !== null ? "grayscale(1)" : "none",

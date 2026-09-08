@@ -168,6 +168,18 @@ pub async fn safe_output_path_exists(app: tauri::AppHandle, path: String) -> Res
 }
 
 #[tauri::command]
+pub async fn safe_find_selected_input_conflicts(
+    app: tauri::AppHandle,
+    input_paths: Vec<String>,
+    output_paths: Vec<String>,
+) -> Result<Vec<String>, String> {
+    run_blocking_command("safe_find_selected_input_conflicts", move || {
+        crate::safe_io::safe_find_selected_input_conflicts(app, input_paths, output_paths)
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn safe_write_text_file(
     app: tauri::AppHandle,
     path: String,

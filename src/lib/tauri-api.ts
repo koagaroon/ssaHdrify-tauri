@@ -8,6 +8,7 @@ import { strings } from "../i18n/strings";
 import { fileNameFromPath } from "./path-validation";
 import { VIDEO_EXTS, SUBTITLE_EXTS, RENAME_SUBTITLE_EXTS } from "./rename-extensions";
 import { decodeBase64Bytes } from "./base64-bytes";
+import { normalizeOutputKey } from "./dedup-helpers";
 
 // ── File Dialogs ──────────────────────────────────────────
 
@@ -214,6 +215,20 @@ export async function readTextDetectEncoding(path: string): Promise<ReadTextResu
 export async function outputPathExists(path: string): Promise<boolean> {
   return invoke<boolean>("safe_output_path_exists", { path });
 }
+
+export const SELECTED_INPUT_CONFLICT_BATCH_LIMIT = 5_000;
+
+/** Resolve existing path aliases once before overwrite consent for a batch. */
+export async function findSelectedInputConflictKeys(
+  inputPaths: readonly string[],
+  outputPaths: readonly string[]
+): Promise<ReadonlySet<string>> {
+  const conflicts = await invoke<string[]>("safe_find_selected_input_conflicts", {
+    inputPaths,
+    outputPaths,
+  });
+  return new Set(conflicts.map(normalizeOutputKey));
+}
 /** Write a text file with explicit UTF-8.
  *
  *  Routes through the Rust-side `safe_write_text_file` command (not
@@ -225,11 +240,9 @@ export async function outputPathExists(path: string): Promise<boolean> {
  *  regular-file destinations it removes the file first and re-creates
  *  via `OpenOptions::create_new(true)` for an atomic guard.
  *
- *  Overwrite is hardcoded to true here: every callsite preflights
- *  collisions via `countExistingFiles` in `src/lib/output-collisions.ts`
- *  and asks the user before invoking writeText. */
-export async function writeText(path: string, content: string): Promise<void> {
-  await invoke("safe_write_text_file", { path, content, overwrite: true });
+ *  Overwrite applies only to a destination covered by accepted preflight. */
+export async function writeText(path: string, content: string, overwrite = false): Promise<void> {
+  await invoke("safe_write_text_file", { path, content, overwrite });
 }
 
 export interface StyleEditWriteRequest {
@@ -265,8 +278,8 @@ export async function writeStyleEditOutput(request: StyleEditWriteRequest): Prom
  *  or let a symlinked destination redirect the move outside the user-
  *  selected output dir. The command refuses if either endpoint is a
  *  reparse point. */
-export async function renamePath(from: string, to: string): Promise<void> {
-  await invoke("safe_rename_file", { src: from, dst: to, overwrite: true });
+export async function renamePath(from: string, to: string, overwrite = false): Promise<void> {
+  await invoke("safe_rename_file", { src: from, dst: to, overwrite });
 }
 
 /** Copy a file. Source is preserved. Used by Batch Rename's two copy
@@ -279,8 +292,8 @@ export async function renamePath(from: string, to: string): Promise<void> {
  *  malicious or accidental shortcut in a downloaded fan-sub pack can
  *  abuse to read a sensitive source (e.g. `~/.ssh/id_rsa`) and copy
  *  it into the user's video directory under a subtitle-looking name. */
-export async function copyPath(from: string, to: string): Promise<void> {
-  await invoke("safe_copy_file", { src: from, dst: to, overwrite: true });
+export async function copyPath(from: string, to: string, overwrite = false): Promise<void> {
+  await invoke("safe_copy_file", { src: from, dst: to, overwrite });
 }
 
 // ── Path Utilities ───────────────────────────────────────

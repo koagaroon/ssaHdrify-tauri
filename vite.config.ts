@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 // Shared resolver between this config and scripts/build-engine.mjs.
 // See scripts/lib/app-version.mjs for the version-precedence logic.
 import { resolveAppVersion } from "./scripts/lib/app-version.mjs";
+import { buildFrontendNotices } from "./scripts/lib/frontend-notices.mjs";
 
 // ESM-safe equivalent of CommonJS __dirname — Vite injects a shim today, but
 // relying on import.meta.url keeps this config portable across strict-ESM
@@ -21,10 +22,31 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
  * sanitization allowlist + fallback ladder.
  */
 const APP_VERSION = resolveAppVersion(__dirname);
+const frontendNotices = buildFrontendNotices(__dirname);
+const noticesModule = "virtual:frontend-notices";
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [
+    react(),
+    tailwindcss(),
+    {
+      name: "frontend-notices",
+      resolveId(id) {
+        if (id === noticesModule) return "\0" + noticesModule;
+      },
+      load(id) {
+        if (id === "\0" + noticesModule) return `export default ${JSON.stringify(frontendNotices)}`;
+      },
+      generateBundle() {
+        this.emitFile({
+          type: "asset",
+          fileName: "third-party-notices.txt",
+          source: frontendNotices,
+        });
+      },
+    },
+  ],
   define: {
     __APP_VERSION__: JSON.stringify(APP_VERSION),
   },

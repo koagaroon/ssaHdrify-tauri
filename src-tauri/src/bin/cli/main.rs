@@ -1063,6 +1063,7 @@ struct ShiftProcessContext<'a> {
     threshold_ms: Option<i64>,
     timing_map_rules: Option<Vec<engine::TimingMapRule>>,
     output_dir: Option<&'a Path>,
+    selected_input_keys: &'a HashSet<String>,
 }
 
 struct TempFontDbDir(PathBuf);
@@ -1996,6 +1997,7 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
     // transitive bound that run_hdr / run_shift / run_embed rely on,
     // so no chain-local cap is added.
     let mut seen_outputs: HashSet<String> = HashSet::new();
+    let selected_inputs = selected_input_keys(&plan.input_files);
     // Named `chain_aborted` instead of the CommandReport field name
     // `aborted_by_fail_fast` so the chain-local flag and the per-
     // CommandReport struct field don't collide on grep.
@@ -2012,6 +2014,7 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
             input,
             globals,
             &mut seen_outputs,
+            &selected_inputs,
         ) {
             ChainFileOutcome::Written(out, warnings) => {
                 if !warnings.is_empty() {
@@ -2515,6 +2518,7 @@ fn process_one_chain_input(
     input: &Path,
     globals: &GlobalOptions,
     seen_outputs: &mut HashSet<String>,
+    selected_inputs: &HashSet<String>,
 ) -> ChainFileOutcome {
     // Outcome funnel owns the warnings vec; each early-return consumes
     // the builder via `.into_failed(…)` /
@@ -2564,6 +2568,11 @@ fn process_one_chain_input(
                 "refusing self-overwrite: predicted output path {} is the input file; choose a different --output-template or --output-dir",
                 predicted.display()
             ));
+        }
+        if output_matches_selected_input(&predicted, selected_inputs) {
+            return builder.into_failed(
+                "output path matches a selected input file; choose a different --output-template or --output-dir".to_string(),
+            );
         }
         if !seen_outputs.insert(key.clone()) {
             // `predicted.display()` is interpolated
@@ -2765,6 +2774,12 @@ fn process_one_chain_input(
     // predictor abstained (template too dynamic), so this is the
     // first insertion of the actual key.
     let output_key = normalize_output_key(&output_path);
+    if output_matches_selected_input(&output_path, selected_inputs) {
+        evict_predicted(seen_outputs);
+        return builder.into_failed(
+            "output path matches a selected input file; choose a different --output-template or --output-dir".to_string(),
+        );
+    }
     if predicted_key.as_deref() != Some(output_key.as_str()) {
         if let Some(stale) = predicted_key.as_deref() {
             seen_outputs.remove(stale);
@@ -2847,6 +2862,7 @@ fn process_one_chain_input(
 }
 
 fn emit_chain_dry_run(plan: &chain::ChainPlan, globals: &GlobalOptions) -> Result<(), String> {
+    let selected_inputs = selected_input_keys(&plan.input_files);
     // Dry-run normally treats predictor abstention as non-fatal, but a concrete
     // predicted filename plus an invalid relocation is not abstention. Validate
     // that final relocated path before printing a plan so output-directory
@@ -2856,7 +2872,13 @@ fn emit_chain_dry_run(plan: &chain::ChainPlan, globals: &GlobalOptions) -> Resul
             if let Some(predicted) =
                 predict_chain_output_path(&absolute, &plan.output_template, None)
             {
-                relocate_output_path(&predicted.to_string_lossy(), globals.output_dir.as_deref())?;
+                let output = relocate_output_path(
+                    &predicted.to_string_lossy(),
+                    globals.output_dir.as_deref(),
+                )?;
+                if output_matches_selected_input(&output, &selected_inputs) {
+                    return Err("output path matches a selected input file; choose a different --output-template or --output-dir".to_string());
+                }
             }
         }
     }
@@ -2954,6 +2976,7 @@ fn run_hdr(
         .map(absolute_path)
         .transpose()?;
     let mut report = CommandReport::new("hdr");
+    let selected_inputs = selected_input_keys(&args.files);
     // First-input-wins dedup is intentional for non-destructive
     // transformations (HDR/Shift/Embed): the second input's work is
     // wasted but no source data is lost. Rename takes the opposite
@@ -2969,6 +2992,7 @@ fn run_hdr(
             &mut engine,
             file,
             &mut seen_outputs,
+            &selected_inputs,
         );
         let failed = result.status == FileStatus::Failed;
         emit_file_report(globals, &result);
@@ -2992,6 +3016,7 @@ fn process_hdr_file(
     engine: &mut engine::CliEngine,
     file: &Path,
     seen_outputs: &mut HashSet<String>,
+    selected_inputs: &HashSet<String>,
 ) -> FileReport {
     let input_path = match absolute_path(file) {
         Ok(path) => path,
@@ -3031,6 +3056,7 @@ fn process_hdr_file(
         &output,
         None,
         seen_outputs,
+        selected_inputs,
     ) {
         Ok(reservation) => reservation,
         Err(early) => return *early,
@@ -3256,6 +3282,7 @@ fn run_shift(
         .map(absolute_path)
         .transpose()?;
     let mut report = CommandReport::new("shift");
+    let selected_inputs = selected_input_keys(&args.files);
     // Same first-wins dedup policy as run_hdr. Shift now does
     // cheap-first dedup for the common case (default template, no
     // `{format}` token). Templates that reference `{format}` need
@@ -3272,6 +3299,7 @@ fn run_shift(
                 threshold_ms,
                 timing_map_rules: timing_map_rules.clone(),
                 output_dir: output_dir.as_deref(),
+                selected_input_keys: &selected_inputs,
             },
             &mut engine,
             file,
@@ -3344,8 +3372,17 @@ fn reserve_output<'a>(
     output: &str,
     encoding: Option<&str>,
     seen_outputs: &'a mut HashSet<String>,
+    selected_inputs: &HashSet<String>,
 ) -> Result<OutputReservation<'a>, Box<FileReport>> {
     let cloned_encoding = || encoding.map(|s| s.to_string());
+    if output_matches_selected_input(output_path, selected_inputs) {
+        return Err(Box::new(failed_report(
+            input_path,
+            Some(output.to_string()),
+            cloned_encoding(),
+            "output path matches a selected input file; choose a different --output-template or --output-dir".to_string(),
+        )));
+    }
     let key = normalize_output_key(output_path);
     if !seen_outputs.insert(key.clone()) {
         return Err(Box::new(failed_report(
@@ -3424,6 +3461,7 @@ fn process_shift_file_cheap_first(
         &output,
         None,
         seen_outputs,
+        context.selected_input_keys,
     ) {
         Ok(reservation) => reservation,
         Err(early) => return *early,
@@ -3603,6 +3641,7 @@ fn process_shift_file_heavy_first(
         &output,
         Some(&read_result.encoding),
         seen_outputs,
+        context.selected_input_keys,
     ) {
         Ok(reservation) => reservation,
         Err(mut early) => {
@@ -3700,6 +3739,7 @@ fn run_embed(
         .map(absolute_path)
         .transpose()?;
     let mut report = CommandReport::new("embed");
+    let selected_inputs = selected_input_keys(&args.files);
     let collect_font_diagnostics = diagnose.is_some();
     let mut font_diagnostics = Vec::new();
     // Same first-wins dedup policy as run_hdr. Embed already orders
@@ -3718,6 +3758,7 @@ fn run_embed(
             &mut engine,
             file,
             &mut seen_outputs,
+            &selected_inputs,
         );
         if collect_font_diagnostics {
             for diagnostic in &mut diagnostics {
@@ -4892,6 +4933,7 @@ fn process_embed_file(
     engine: &mut engine::CliEngine,
     file: &Path,
     seen_outputs: &mut HashSet<String>,
+    selected_inputs: &HashSet<String>,
 ) -> EmbedFileOutcome {
     let input_path = match absolute_path(file) {
         Ok(path) => path,
@@ -4941,6 +4983,7 @@ fn process_embed_file(
         &output,
         None,
         seen_outputs,
+        selected_inputs,
     ) {
         Ok(reservation) => reservation,
         Err(early) => return (*early, Vec::new()),
@@ -5512,6 +5555,15 @@ fn group_resolved_fonts_by_face(
 /// instead of shipping silently.
 const MAX_SUBSET_CODEPOINTS_FOR_DEDUP: usize = 200_000;
 
+fn checked_subset_total(current: usize, additional: usize) -> Result<usize, String> {
+    current
+        .checked_add(additional)
+        .filter(|total| *total <= MAX_V8_SUBSET_TOTAL_BYTES)
+        .ok_or_else(|| format!(
+            "font subsets exceed the {MAX_V8_SUBSET_TOTAL_BYTES}-byte total cap; reduce per-input font count or split the input"
+        ))
+}
+
 fn subset_resolved_fonts(
     globals: &GlobalOptions,
     args: &EmbedArgs,
@@ -5521,6 +5573,7 @@ fn subset_resolved_fonts(
 
     let mut payloads = Vec::new();
     let mut skipped = Vec::new();
+    let mut total_bytes = 0;
 
     for group in face_groups.values() {
         let merged = match group.merged_codepoints_with_cap(MAX_SUBSET_CODEPOINTS_FOR_DEDUP) {
@@ -5544,10 +5597,13 @@ fn subset_resolved_fonts(
                         alias.index,
                         alias.codepoints.clone(),
                     ) {
-                        Ok(data) => payloads.push(engine::FontSubsetPayload {
-                            font_name: alias.font_name.clone(),
-                            data,
-                        }),
+                        Ok(data) => {
+                            total_bytes = checked_subset_total(total_bytes, data.len())?;
+                            payloads.push(engine::FontSubsetPayload {
+                                font_name: alias.font_name.clone(),
+                                data,
+                            });
+                        }
                         Err(error) => {
                             skipped.push(format!("{} ({error})", alias.label));
                         }
@@ -5560,10 +5616,13 @@ fn subset_resolved_fonts(
         let codepoints: Vec<u32> = merged.into_iter().collect();
         let template = group.template();
         match app_lib::fonts::subset_font(template.path.clone(), template.index, codepoints) {
-            Ok(data) => payloads.push(engine::FontSubsetPayload {
-                font_name: template.font_name.clone(),
-                data,
-            }),
+            Ok(data) => {
+                total_bytes = checked_subset_total(total_bytes, data.len())?;
+                payloads.push(engine::FontSubsetPayload {
+                    font_name: template.font_name.clone(),
+                    data,
+                });
+            }
             Err(error) => {
                 // Surface every alias that hit this face — the user
                 // needs to know all the Styles that lost their font,
@@ -7199,6 +7258,26 @@ fn sanitize_for_display(s: &str) -> String {
         .collect()
 }
 
+fn selected_input_keys(inputs: &[PathBuf]) -> HashSet<String> {
+    let mut keys = HashSet::new();
+    for input in inputs {
+        if let Ok(absolute) = absolute_path(input) {
+            keys.insert(normalize_output_key(&absolute));
+            if let Ok(canonical) = absolute.canonicalize() {
+                keys.insert(normalize_output_key(&canonical));
+            }
+        }
+    }
+    keys
+}
+
+fn output_matches_selected_input(output: &Path, selected_inputs: &HashSet<String>) -> bool {
+    selected_inputs.contains(&normalize_output_key(output))
+        || output
+            .canonicalize()
+            .is_ok_and(|canonical| selected_inputs.contains(&normalize_output_key(&canonical)))
+}
+
 fn normalize_output_key(path: &Path) -> String {
     let raw = path.to_string_lossy();
     // Strip the Win32 extended-length prefix BEFORE slash folding so a
@@ -7457,6 +7536,16 @@ fn parse_timestamp_part(part: &str, label: &str) -> Result<i64, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn subset_retention_budget_accepts_boundary_and_rejects_excess_or_overflow() {
+        assert_eq!(
+            super::checked_subset_total(super::MAX_V8_SUBSET_TOTAL_BYTES - 1, 1).unwrap(),
+            super::MAX_V8_SUBSET_TOTAL_BYTES
+        );
+        assert!(super::checked_subset_total(super::MAX_V8_SUBSET_TOTAL_BYTES, 1).is_err());
+        assert!(super::checked_subset_total(usize::MAX, 1).is_err());
+    }
+
     #[cfg(unix)]
     use super::run_refresh_fonts;
     use super::{

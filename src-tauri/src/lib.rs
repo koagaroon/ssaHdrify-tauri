@@ -151,6 +151,7 @@ pub fn run() {
             ipc_commands::clear_font_cache,
             ipc_commands::lookup_font_family,
             ipc_commands::safe_output_path_exists,
+            ipc_commands::safe_find_selected_input_conflicts,
             ipc_commands::safe_write_text_file,
             ipc_commands::safe_write_style_edit_output,
             ipc_commands::safe_copy_file,

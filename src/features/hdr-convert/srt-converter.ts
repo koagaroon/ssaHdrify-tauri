@@ -242,6 +242,23 @@ export const DEFAULT_STYLE: StyleConfig = {
 
 // ── ASS Document Builder ─────────────────────────────────
 
+function stripUnknownHtmlTags(text: string): string {
+  const parts: string[] = [];
+  let cursor = 0;
+  while (cursor < text.length) {
+    const open = text.indexOf("<", cursor);
+    if (open < 0) break;
+    const close = text.indexOf(">", open + 1);
+    // An unmatched opener leaves the entire tail literal. Retrying at each
+    // following '<' would repeatedly scan that tail and make the work quadratic.
+    if (close < 0) break;
+    parts.push(text.slice(cursor, open));
+    cursor = close + 1;
+  }
+  parts.push(text.slice(cursor));
+  return parts.join("");
+}
+
 /**
  * Build a minimal ASS document from parsed subtitle entries.
  * This creates a properly formatted ASS file with styles and events.
@@ -306,26 +323,27 @@ export function buildAssDocument(
     // `{\1c&H…}` tags into literal text, silently defeating SRT→HDR color
     // conversion. See escapeSrtUserText's docstring for the required
     // pipeline ordering.
-    const cleanText = entry.text
-      // Normalize ALL line-break variants (LF, CRLF, bare CR, NEL,
-      // LINE SEPARATOR U+2028, PARAGRAPH SEPARATOR U+2029) to the ASS
-      // `\N` hard break. A bare `\r` would otherwise break the
-      // one-line-per-Dialogue invariant; U+2028 smuggles a line break
-      // past naive renderers.
-      .replace(/\r\n|\r|\n|\u0085|\u2028|\u2029/g, "\\N")
-      // Convert `<br>` / `<br/>` to ASS hard break BEFORE the
-      // unknown-tag strip below. SRT is HTML-ish in many real-world
-      // exports (legacy tools, fan-sub edits); without this step
-      // intentional line breaks get silently absorbed by the
-      // `<[^>]*>` strip pass and the cue collapses to a single line.
-      .replace(/<br\s*\/?>/gi, "\\N")
-      .replace(/<b>/gi, "{\\b1}")
-      .replace(/<\/b>/gi, "{\\b0}")
-      .replace(/<i>/gi, "{\\i1}")
-      .replace(/<\/i>/gi, "{\\i0}")
-      .replace(/<u>/gi, "{\\u1}")
-      .replace(/<\/u>/gi, "{\\u0}")
-      .replace(/<[^>]*>/g, ""); // strip remaining unknown HTML tags
+    const cleanText = stripUnknownHtmlTags(
+      entry.text
+        // Normalize ALL line-break variants (LF, CRLF, bare CR, NEL,
+        // LINE SEPARATOR U+2028, PARAGRAPH SEPARATOR U+2029) to the ASS
+        // `\N` hard break. A bare `\r` would otherwise break the
+        // one-line-per-Dialogue invariant; U+2028 smuggles a line break
+        // past naive renderers.
+        .replace(/\r\n|\r|\n|\u0085|\u2028|\u2029/g, "\\N")
+        // Convert `<br>` / `<br/>` to ASS hard break BEFORE the
+        // unknown-tag strip below. SRT is HTML-ish in many real-world
+        // exports (legacy tools, fan-sub edits); without this step
+        // intentional line breaks get silently absorbed by the
+        // `<[^>]*>` strip pass and the cue collapses to a single line.
+        .replace(/<br\s*\/?>/gi, "\\N")
+        .replace(/<b>/gi, "{\\b1}")
+        .replace(/<\/b>/gi, "{\\b0}")
+        .replace(/<i>/gi, "{\\i1}")
+        .replace(/<\/i>/gi, "{\\i0}")
+        .replace(/<u>/gi, "{\\u1}")
+        .replace(/<\/u>/gi, "{\\u0}")
+    );
     lines.push(`Dialogue: 0,${startTime},${endTime},Default,,0,0,0,,${cleanText}`);
   }
 

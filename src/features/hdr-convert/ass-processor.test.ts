@@ -133,20 +133,20 @@ describe("processAssContent — inline color tags", () => {
     expect(output).not.toContain("00FFFFFF");
   });
 
-  it("ignores 7-digit hex values (invalid ASS format)", () => {
+  it("leaves the unsupported seven-digit inline alpha spelling unchanged", () => {
     const input = makeAss("{\\1c&HFFFFFFF&}Hello");
     const output = processAssContent(input, 203, "PQ");
-    // 7-digit should pass through — regex matches exactly 6 or 8 digits.
+    // Keep this unsupported inline alpha spelling intact, without converting a prefix.
     // Assert on the EXACT token so the test fails if the transformer ever
     // accidentally matches 6/8 digits inside a 7-digit run; `toContain`
     // alone would still pass with a leftover 6-digit match.
     expect(output).toContain("{\\1c&HFFFFFFF&}");
   });
 
-  it("ignores short color values (< 6 hex digits)", () => {
+  it("transforms short color values without requiring leading zeros", () => {
     const input = makeAss("{\\1c&HFF&}Hello");
     const output = processAssContent(input, 203, "PQ");
-    expect(output).toContain("{\\1c&HFF&}Hello");
+    expect(output).toContain("{\\1c&H385388&}Hello");
   });
 
   it("leaves non-color tags unchanged", () => {
@@ -225,5 +225,62 @@ describe("processAssContent — pre-split line-count probe", () => {
     // probe runs unconditionally and slows the small-file fast path.
     const small = ["[Script Info]", "ScriptType: v4.00+", "", "[Events]", ""].join("\n");
     expect(() => processAssContent(small, 1000, "PQ")).not.toThrow();
+  });
+});
+
+describe("equivalent color representations", () => {
+  it.each(["0", "F", "FF", "F00", "FF00", "1FF00"])(
+    "converts inline %s exactly like its six-digit form",
+    (hex) => {
+      expect(processAssContent(makeAss(`{\\c&H${hex}&}text`))).toBe(
+        processAssContent(makeAss(`{\\c&H${hex.padStart(6, "0")}&}text`))
+      );
+    }
+  );
+
+  it.each(["0", "F", "FF", "F00", "FF00", "1FF00", "FFF0000"])(
+    "converts style hex %s exactly like its eight-digit form",
+    (hex) => {
+      const colors = `&h${hex},&H0,&H0,&H0`;
+      const canonical = `&H${hex.padStart(8, "0")},&H00000000,&H00000000,&H00000000`;
+      expect(processAssContent(makeAss("text", colors))).toBe(
+        processAssContent(makeAss("text", canonical))
+      );
+    }
+  );
+
+  function makeSsa(color: string): string {
+    return [
+      "[Script Info]",
+      "ScriptType: v4.00",
+      "[V4 Styles]",
+      "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, TertiaryColour, BackColour, Bold, Italic, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, AlphaLevel, Encoding",
+      `Style: Default,Arial,20,${color},${color},0,${color},0,0,1,2,0,2,10,10,10,0,1`,
+      "[Events]",
+      "Format: Marked, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+      "Dialogue: Marked=0,0:00:01.00,0:00:02.00,Default,,0,0,0,,text",
+    ].join("\n");
+  }
+
+  it.each([0, 255, 16777215, -2147483648, 4294967295])(
+    "converts SSA integer color %s with its 32-bit alpha intact",
+    (color) => {
+      const expected = makeSsa(`&H${(color >>> 0).toString(16).padStart(8, "0")}`);
+      expect(processAssContent(makeSsa(String(color)))).toBe(processAssContent(expected));
+    }
+  );
+
+  it.each(["4294967296", "-2147483649", "99999999999", "12x", "&H123456789"])(
+    "preserves out-of-range or malformed style color %s",
+    (color) => {
+      expect(processAssContent(makeSsa(color))).toBe(makeSsa(color));
+    }
+  );
+
+  it("does not convert prefixes of overlong or malformed inline colors", () => {
+    for (const hex of ["123456789", "FFFFFG", ""]) {
+      const tag = `{\\c&H${hex}&}text`;
+      expect(processAssContent(makeAss(tag))).toContain(tag);
+    }
   });
 });

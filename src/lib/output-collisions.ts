@@ -1,18 +1,9 @@
 /**
- * Output-path collision detection.
- *
- * Feature tabs that auto-derive output paths from templates (HDR Convert
- * today; Tab 4 Batch Rename + Time Shift / Font Embed batch in later
- * stages) can silently overwrite previously-written files when the user
- * re-runs without realizing — they had no chance to opt in. The
- * antidote is a pre-flight pass that asks the OS whether each projected
- * output already exists; the consumer pairs the count with a confirm
- * dialog before entering its busy state.
- *
- * Save-As-style flows (single file picked through a native save dialog)
- * already have OS-level overwrite confirmation and don't need this util.
+ * Snapshot existing destinations before requesting overwrite consent.
+ * Each writer uses that snapshot to choose replacement or exclusive creation.
  */
 import { outputPathExists } from "./tauri-api";
+import { normalizeOutputKey } from "./dedup-helpers";
 
 /** Maximum concurrent fs::stat probes. Real-world batch sizes top out
  *  around 26 (typical anime episode count), so 32 covers the common
@@ -22,24 +13,17 @@ import { outputPathExists } from "./tauri-api";
  *  calls into Tauri's command pump and briefly hang the runtime. */
 const MAX_CONCURRENT_STAT = 32;
 
-/**
- * Count how many of the given paths already exist on disk. Stat checks
- * run in parallel (capped at `MAX_CONCURRENT_STAT`) so batch latency is
- * a small number of round-trips regardless of path count.
- *
- * Stat failures are counted as EXISTING (fail-safe). An earlier
- * version counted them as non-existent, which meant a transient FS
- * error during pre-flight could suppress the overwrite-confirm dialog
- * and let the batch silently overwrite real files. The current
- * behavior — bias toward showing the dialog — is the conservative
- * one: a false-positive collision warning is annoying
- * (user clicks "Yes, overwrite"), but a false-negative miss destroys
- * data. `errorCount` continues to be logged for diagnosis.
- */
+/** Count unique existing destination keys; failed stat checks count as existing. */
 export async function countExistingFiles(paths: string[]): Promise<number> {
-  if (paths.length === 0) return 0;
+  return (await findExistingOutputKeys(paths)).size;
+}
+
+/** Snapshot destinations covered by an overwrite prompt. Paths absent from
+ * this snapshot must still use exclusive creation if they appear later. */
+export async function findExistingOutputKeys(paths: string[]): Promise<ReadonlySet<string>> {
+  const uniquePaths = [...new Map(paths.map((path) => [normalizeOutputKey(path), path])).values()];
   let errorCount = 0;
-  let existingCount = 0;
+  const existingKeys = new Set<string>();
   // Worker-pool pattern: keep up to MAX_CONCURRENT_STAT probes in flight;
   // each worker pulls the next index off a shared cursor. Order doesn't
   // matter for the count, so no result reassembly needed.
@@ -47,25 +31,25 @@ export async function countExistingFiles(paths: string[]): Promise<number> {
   const worker = async () => {
     while (true) {
       const idx = cursor++;
-      if (idx >= paths.length) return;
+      if (idx >= uniquePaths.length) return;
+      const path = uniquePaths[idx]!;
       try {
-        if (await outputPathExists(paths[idx]!)) {
-          existingCount += 1;
+        if (await outputPathExists(path)) {
+          existingKeys.add(normalizeOutputKey(path));
         }
       } catch {
-        // Count as existing (fail-safe). See function-level docblock
-        // for the WHY.
+        // A failed probe must not silently authorize replacement.
         errorCount += 1;
-        existingCount += 1;
+        existingKeys.add(normalizeOutputKey(path));
       }
     }
   };
-  const workerCount = Math.min(MAX_CONCURRENT_STAT, paths.length);
+  const workerCount = Math.min(MAX_CONCURRENT_STAT, uniquePaths.length);
   await Promise.all(Array.from({ length: workerCount }, () => worker()));
   if (errorCount > 0) {
     console.warn(
       `[ssaHdrify] countExistingFiles: ${errorCount} stat failure(s) treated as existing (fail-safe overwrite-confirm bias).`
     );
   }
-  return existingCount;
+  return existingKeys;
 }

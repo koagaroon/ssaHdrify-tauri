@@ -10,7 +10,6 @@
  * Only implements what we need: parse timestamps, shift them, rebuild.
  * Does NOT attempt full semantic parsing of style tags etc.
  */
-import { stripUnicodeControls } from "./unicode-controls";
 
 export interface Caption {
   /** Raw line(s) from the original file for this caption block */
@@ -637,136 +636,128 @@ function buildVtt(content: string, captions: Caption[]): string {
 
 // ── ASS/SSA Parser (timing only) ─────────────────────────
 
-// Single source of truth for the Dialogue line regex.
-// `i`: ASS renderers are case-insensitive on `Dialogue:` — real-world tooling
-// sometimes emits `DIALOGUE:`. Leading `[\t ]*` tolerates indentation
-// WITHOUT spanning lines: with the `m` flag, `\s*` here would have let the
-// engine consume any number of newlines + blank-line whitespace at each line
-// anchor before failing to match `Dialogue:` and backtracking — a crafted
-// file like `[Script Info]\n` + thousands of empty lines without any
-// Dialogue line drove O(n^2) regex work — ReDoS via quadratic
-// backtracking on attacker-controlled subtitle inputs. The
-// captured whitespace is preserved via the prefix group so buildAss round-
-// trips it exactly. A factory (not a shared instance) is used so each call
-// gets a fresh `lastIndex` — guarding against pollution if a previous
-// parseAss call threw mid-loop.
-// hour fields bounded to {1,12} digits,
-// matching `parseAssTime`. Unbounded `\d+` would let pathological
-// `999…9:00:00.00` (100+ hour digits) saturate parseInt to Infinity
-// before the time-math even runs. 12 digits is identical to the SRT /
-// VTT / display-time bound used elsewhere in this file.
-const DIALOGUE_PATTERN = String.raw`^([\t ]*Dialogue:[\t ]*(?:\d{1,12}|Marked[\t ]*=[\t ]*-?\d{1,12}),)(\d{1,12}:\d{2}:\d{2}\.\d{2}),( *)(\d{1,12}:\d{2}:\d{2}\.\d{2}),(.*)$`;
-const DIALOGUE_FLAGS = "gim";
+const MAX_ASS_EVENT_FIELDS = 1024;
+const ASS_TIME_FIELD = /^[\t ]*(\d{1,12}:\d{2}:\d{2}\.\d{2})[\t ]*$/;
 
-function createDialogueRe(): RegExp {
-  return new RegExp(DIALOGUE_PATTERN, DIALOGUE_FLAGS);
+interface AssDialogue {
+  raw: string;
+  offset: number;
+  start: { offset: number; value: string };
+  end: { offset: number; value: string };
+  text: string;
+}
+
+// A missing Format keeps the historical timing-only fallback. Declared formats
+// follow libass's named columns; supported declarations keep Text last because
+// it may contain commas. A declaration remains active across section headers.
+function* assDialogues(content: string): Generator<AssDialogue> {
+  let inEvents = false;
+  let fields = ["layer", "start", "end", "text"];
+  let startIndex = 1;
+  let endIndex = 2;
+  for (const sourceLine of iterateSourceLines(content)) {
+    const line = sourceLine.body;
+    const section = /^[\t ]*\[([^\]]+)\][\t ]*$/.exec(line);
+    if (section) {
+      inEvents = section[1]!.toLowerCase() === "events";
+      continue;
+    }
+    if (!inEvents) continue;
+    const format = /^[\t ]*Format:[\t ]*(.*)$/i.exec(line);
+    if (format) {
+      fields = format[1]!
+        .split(",", MAX_ASS_EVENT_FIELDS + 1)
+        .map((field) => field.trim().toLowerCase());
+      if (fields.length > MAX_ASS_EVENT_FIELDS) {
+        throw new Error(`ASS/SSA event Format has too many fields (max ${MAX_ASS_EVENT_FIELDS})`);
+      }
+      if (
+        ["start", "end", "text"].some(
+          (name) => fields.filter((field) => field === name).length !== 1
+        ) ||
+        fields.at(-1) !== "text"
+      ) {
+        throw new Error(
+          "ASS/SSA event Format must contain unique Start, End, and final Text fields"
+        );
+      }
+      startIndex = fields.indexOf("start");
+      endIndex = fields.indexOf("end");
+      continue;
+    }
+    const prefix = /^[\t ]*Dialogue:[\t ]*/i.exec(line);
+    if (!prefix) continue;
+    const offsets = [prefix[0].length];
+    let fieldStart = offsets[0]!;
+    for (let i = 1; i < fields.length; i++) {
+      const comma = line.indexOf(",", fieldStart);
+      if (comma < 0) break;
+      fieldStart = comma + 1;
+      offsets.push(fieldStart);
+    }
+    if (offsets.length !== fields.length) continue;
+    const timingField = (index: number) => {
+      const offset = offsets[index]!;
+      const field = line.slice(offset, offsets[index + 1]! - 1);
+      const time = ASS_TIME_FIELD.exec(field);
+      return time
+        ? { offset: offset + field.length - field.trimStart().length, value: time[1]! }
+        : null;
+    };
+    const start = timingField(startIndex);
+    const end = timingField(endIndex);
+    if (!start || !end) continue;
+    yield { raw: line, offset: sourceLine.start, start, end, text: line.slice(offsets.at(-1)!) };
+  }
 }
 
 function parseAss(content: string): Caption[] {
   const captions: Caption[] = [];
-  const dialogueRe = createDialogueRe();
-  let match;
-  while ((match = dialogueRe.exec(content)) !== null) {
+  for (const dialogue of assDialogues(content)) {
     if (captions.length >= MAX_PARSED_ENTRIES) {
-      // Match the SRT/SUB sibling errors which include the actual
-      // count for diagnosis. Strict `>=` here means "we just refused
-      // to add the next one"; report N+ to make the boundary clear
-      // (we can't get the exact dialogue count without one more
-      // iteration, and that's the bound we just refused to cross).
       throw new Error(`Too many subtitle entries: ${captions.length}+ (max ${MAX_PARSED_ENTRIES})`);
     }
-    const text = match[5]!;
-    if (text.length > MAX_CAPTION_TEXT_LEN) {
-      // Emit a skipped placeholder rather than continuing past the
-      // match. buildAss walks the same `dialogueRe` over the original
-      // content and consumes captions sequentially; if parseAss
-      // silently dropped this entry the index would drift and every
-      // subsequent Dialogue line would receive the wrong timestamps.
-      //
-      // Retention: the upstream 50 MB file-read cap (Rust IPC,
-      // `MAX_TEXT_SIZE` in encoding.rs) bounds total retained raw
-      // size; clearing `text` to `""` keeps the parsed-content path
-      // clean so downstream feature layers count `c.skipped` rather
-      // than inspecting `c.text` for the oversized class.
-      //
-      // The `raw: match[0]` field below IS load-bearing — it retains
-      // the entire original Dialogue line (potentially multi-MB for a
-      // single oversized caption) because `buildAss`'s positional
-      // walk over `dialogueRe` matches the SAME bytes when
-      // rebuilding output; substituting `raw` with a truncated
-      // string would break drift detection (parsedAss[i].raw must
-      // equal originalContent.match(dialogueRe)[i]). Worst-case
-      // retention: a single 50 MB Dialogue line + `MAX_PARSED_ENTRIES`
-      // other captions at ≤ MAX_CAPTION_TEXT_LEN (64 KB). Sum stays
-      // bounded by the file-read cap; the surface is documented, not
-      // closed.
-      captions.push({
-        raw: match[0],
-        start: parseAssTime(match[2]!),
-        end: parseAssTime(match[4]!),
-        text: "",
-        skipped: true,
-      });
-      continue;
-    }
+    const skipped = dialogue.text.length > MAX_CAPTION_TEXT_LEN;
+    // Retain oversized entries as placeholders so the shared rebuild walk
+    // preserves their bytes without shifting the following event's timestamps.
     captions.push({
-      raw: match[0],
-      start: parseAssTime(match[2]!),
-      end: parseAssTime(match[4]!),
-      text,
+      raw: dialogue.raw,
+      start: parseAssTime(dialogue.start.value),
+      end: parseAssTime(dialogue.end.value),
+      text: skipped ? "" : dialogue.text,
+      ...(skipped ? { skipped: true } : {}),
     });
   }
   return captions;
 }
 
 function buildAss(content: string, captions: Caption[]): string {
-  // For ASS, we replace timestamps in-place rather than rebuilding.
-  const dialogueRe = createDialogueRe();
-  let idx = 0;
-  const result = content.replace(dialogueRe, (original, prefix, _start, space, _end, rest) => {
-    if (idx < captions.length) {
-      const c = captions[idx++]!;
-      // Skipped placeholder (oversized text in parseAss): preserve the
-      // original Dialogue line verbatim. Advancing idx is what keeps
-      // the next non-skipped caption aligned with the next Dialogue
-      // match downstream.
-      if (c.skipped) return original;
-      return `${prefix}${formatAssTime(c.start)},${space}${formatAssTime(c.end)},${rest}`;
+  const parts: string[] = [];
+  let cursor = 0;
+  let index = 0;
+  for (const dialogue of assDialogues(content)) {
+    const caption = captions[index++];
+    if (!caption || caption.raw !== dialogue.raw) {
+      throw new Error("buildAss/parseAss drift: dialogue entries no longer match");
     }
-    return original;
-  });
-  // A mismatch means the input changed shape between parseAss and buildAss
-  // (or the two sides drifted): the output would carry wrong timestamps.
-  // Hard-fail rather than warn; silent timing drift is the worst kind.
-  if (idx !== captions.length) {
-    // This branch should be unreachable: parseAss + buildAss share
-    // the same dialogueRe and walk identical positions. If we get
-    // here, it means the regex consumed the input differently
-    // between the two passes — typically a sign of stateful regex
-    // contamination or a future behavior-changing edit to one but
-    // not the other. The error string is intentionally diagnostic-
-    // grade rather than user-facing because it's a developer
-    // invariant: it surfaces to the user only as the prefix
-    // before the colon ("buildAss/parseAss drift:"), which the
-    // shift-flow's addLog wraps with msg_timing_error and the
-    // file name. If users start reporting it, that's the signal
-    // to investigate parser/regex divergence in this file.
-    const firstUnconsumed = captions[idx]?.raw ?? "(no raw line captured)";
-    // Defense-in-depth: sanitize the excerpt before interpolating
-    // into the error string. The branch is documented unreachable,
-    // but if a crafted ASS does reach here the raw caption text
-    // could carry U+202E (Trojan-Source) or other BiDi marks; the
-    // error message lands in addLog / stderr where reversed display
-    // misleads the user about which file is failing.
-    const raw =
-      firstUnconsumed.length > 120 ? `${firstUnconsumed.slice(0, 120)}…` : firstUnconsumed;
-    const excerpt = stripUnicodeControls(raw);
+    if (caption.skipped) continue;
+    const replacements = [
+      { field: dialogue.start, value: formatAssTime(caption.start) },
+      { field: dialogue.end, value: formatAssTime(caption.end) },
+    ].sort((a, b) => a.field.offset - b.field.offset);
+    for (const replacement of replacements) {
+      const offset = dialogue.offset + replacement.field.offset;
+      parts.push(content.slice(cursor, offset), replacement.value);
+      cursor = offset + replacement.field.value.length;
+    }
+  }
+  if (index !== captions.length) {
     throw new Error(
-      `buildAss/parseAss drift: consumed ${idx}/${captions.length} shifted entries; ` +
-        `first unconsumed entry index=${idx}, raw="${excerpt}"`
+      `buildAss/parseAss drift: consumed ${index}/${captions.length} shifted entries`
     );
   }
-  return result;
+  parts.push(content.slice(cursor));
+  return parts.join("");
 }
 
 // ── SUB (MicroDVD) Parser ─────────────────────────────────
