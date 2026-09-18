@@ -2,29 +2,36 @@
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](LICENSE) [![GitHub release](https://img.shields.io/github/v/release/koagaroon/ssaHdrify-tauri)](https://github.com/koagaroon/ssaHdrify-tauri/releases) ![Platform](https://img.shields.io/badge/release%20platform-Windows-blue)
 
-> **SSA HDRify 是一款桌面工具，能将 SSA/ASS 字幕的颜色转换为适合 HDR 播放的值，并附带时间轴偏移、字体嵌入和批量重命名等配套工具。** 它是 [gky99/ssaHdrify](https://github.com/gky99/ssaHdrify)（Python 原版）的 Tauri 桌面重写版。
->
-> _SSA HDRify is a desktop tool that converts SSA/ASS subtitle colors into values suitable for HDR playback, with companion tools for timing shift, font embedding, and batch renaming._ It is a Tauri desktop rewrite of [gky99/ssaHdrify](https://github.com/gky99/ssaHdrify) (the original Python version).
+**SSA HDRify prepares subtitles for high dynamic range (HDR) playback.** It converts SSA/ASS subtitle colors and provides tools for timing adjustment, font embedding, batch renaming, and style editing. It processes subtitle files; it does not convert the video.
 
-### 浅色主题（中文）/ Light Theme (Chinese)
+**SSA HDRify 用于为高动态范围（HDR）播放准备字幕。** 它能转换 SSA/ASS 字幕颜色，并提供时间轴偏移、字体嵌入、批量重命名和样式编辑工具。处理对象是字幕文件，不会转换视频。
 
-|                       HDR 转换 / HDR Convert                       |                       时间轴偏移 / Time Shift                       |
-| :----------------------------------------------------------------: | :-----------------------------------------------------------------: |
-| <img src="docs/screenshots/hdr-convert-light-zh.jpg" width="450"/> | <img src="docs/screenshots/timing-shift-light-zh.jpg" width="450"/> |
+Built with **Tauri, React, TypeScript, and Rust**, the project offers a desktop app and a command-line tool that share the subtitle-processing engine. Windows releases are portable executables. The desktop interface supports English and Chinese, with light and dark themes.
 
-|                       字体嵌入 / Font Embed                       |                      批量重命名 / Batch Rename                      |
-| :---------------------------------------------------------------: | :-----------------------------------------------------------------: |
-| <img src="docs/screenshots/font-embed-light-zh.jpg" width="450"/> | <img src="docs/screenshots/batch-rename-light-zh.jpg" width="450"/> |
+项目基于 **Tauri、React、TypeScript 和 Rust**，提供共享字幕处理引擎的桌面应用和命令行工具。Windows 发布版为免安装的便携式可执行文件；桌面界面支持中英文和浅色、深色主题。
 
-### 深色主题（英文）/ Dark Theme (English)
+This is a Tauri rewrite of the original Python [gky99/ssaHdrify](https://github.com/gky99/ssaHdrify). See [Origin and Derivative Work](#来源与衍生作品--origin-and-derivative-work) for its lineage and licensing.
 
-|                      HDR 转换 / HDR Convert                       |                      时间轴偏移 / Time Shift                       |
-| :---------------------------------------------------------------: | :----------------------------------------------------------------: |
-| <img src="docs/screenshots/hdr-convert-dark-en.jpg" width="450"/> | <img src="docs/screenshots/timing-shift-dark-en.jpg" width="450"/> |
+本项目是 Python 原版 [gky99/ssaHdrify](https://github.com/gky99/ssaHdrify) 的 Tauri 重写版；项目来源和许可关系见[来源与衍生作品](#来源与衍生作品--origin-and-derivative-work)。
 
-|                      字体嵌入 / Font Embed                       |                     批量重命名 / Batch Rename                      |
-| :--------------------------------------------------------------: | :----------------------------------------------------------------: |
-| <img src="docs/screenshots/font-embed-dark-en.jpg" width="450"/> | <img src="docs/screenshots/batch-rename-dark-en.jpg" width="450"/> |
+[Download / 下载](https://github.com/koagaroon/ssaHdrify-tauri/releases/latest) · [Desktop usage / 桌面使用](#使用方法--usage) · [CLI examples / 命令行示例](#快速示例--quick-examples) · [Architecture / 架构](#架构--architecture)
+
+### 界面预览 | Screenshots
+
+|                                      深色主题（英文）/ Dark Theme (English)                                      |                                浅色主题（中文）/ Light Theme (Chinese)                                 |
+| :--------------------------------------------------------------------------------------------------------------: | :----------------------------------------------------------------------------------------------------: |
+| <img src="docs/screenshots/hdr-convert-dark-en.jpg" alt="HDR conversion in the English dark theme" width="450"/> | <img src="docs/screenshots/hdr-convert-light-zh.jpg" alt="中文浅色主题下的 HDR 转换界面" width="450"/> |
+
+<details>
+<summary>更多功能截图 / More workflow screenshots</summary>
+
+|                                     深色主题（英文）/ Dark Theme (English)                                      |                                 浅色主题（中文）/ Light Theme (Chinese)                                  |
+| :-------------------------------------------------------------------------------------------------------------: | :------------------------------------------------------------------------------------------------------: |
+| <img src="docs/screenshots/timing-shift-dark-en.jpg" alt="Timing shift in the English dark theme" width="450"/> | <img src="docs/screenshots/timing-shift-light-zh.jpg" alt="中文浅色主题下的时间轴偏移界面" width="450"/> |
+| <img src="docs/screenshots/font-embed-dark-en.jpg" alt="Font embedding in the English dark theme" width="450"/> |   <img src="docs/screenshots/font-embed-light-zh.jpg" alt="中文浅色主题下的字体嵌入界面" width="450"/>   |
+| <img src="docs/screenshots/batch-rename-dark-en.jpg" alt="Batch rename in the English dark theme" width="450"/> | <img src="docs/screenshots/batch-rename-light-zh.jpg" alt="中文浅色主题下的批量重命名界面" width="450"/> |
+
+</details>
 
 ---
 
@@ -450,25 +457,25 @@ For video-and-subtitle rename workflows, [arition/SubRenamer](https://github.com
 
 ```
 SSA/ASS 字幕颜色 (sRGB)
-├─ 1. sRGB → rec2100-linear（Color.js 色彩空间转换）
-├─ 2. 亮度缩放：Y × (targetBrightness / 203)
-├─ 3. rec2100-linear → rec2100pq 或 rec2100hlg
-└─ 4. 输出 RGB
+├─ 1. Color.js 转换为 XYZ (D65)
+├─ 2. PQ：按目标亮度 / 203 缩放，再由 Color.js 转换为 rec2100pq
+│     HLG：按目标亮度缩放，转换为 BT.2020 线性 RGB，再手动应用逆 OOTF + OETF
+└─ 3. 限制到 0–255 并取整，写回字幕颜色值
 ```
 
 ```
 SSA/ASS subtitle colors (sRGB)
-├─ 1. sRGB → rec2100-linear (Color.js color space conversion)
-├─ 2. Luminance scaling: Y × (targetBrightness / 203)
-├─ 3. rec2100-linear → rec2100pq or rec2100hlg
-└─ 4. Output RGB
+├─ 1. Convert to XYZ (D65) with Color.js
+├─ 2. PQ: scale by target brightness / 203, then use Color.js to convert to rec2100pq
+│     HLG: scale by target brightness, convert to BT.2020 linear RGB, then apply manual inverse OOTF + OETF
+└─ 3. Clamp to 0–255, round, and write the subtitle color values
 ```
 
 ### 精度说明 | Accuracy Note
 
-PQ 模式已验证与 Python 原版（colour-science）逐像素一致。HLG 模式使用手动实现的 BT.2100 逆 OOTF + OETF（绕过 Color.js 的 rec2100hlg 空间），同样与 Python 原版完全一致。
+颜色引擎的[回归测试](src/features/hdr-convert/color-engine.test.ts)将 PQ 和 HLG 的代表性输入与 Python `colour-science` 生成的参考值逐项比较，要求输出的 8 位 RGB 数值完全一致。HLG 路径手动实现 BT.2100 逆 OOTF + OETF，不使用 Color.js 的 `rec2100hlg` 转换。这些测试验证的是所选输入的数值结果，不代表所有输入或所有播放器上的显示效果均已验证。
 
-PQ mode is verified pixel-exact against the Python version (colour-science). HLG mode uses a manually implemented BT.2100 inverse OOTF + OETF (bypassing Color.js's rec2100hlg space) and also matches the Python version exactly.
+The color engine's [regression tests](src/features/hdr-convert/color-engine.test.ts) compare representative PQ and HLG inputs with reference values from Python `colour-science`, requiring exact 8-bit RGB results. The HLG path manually implements the BT.2100 inverse OOTF + OETF rather than using Color.js's `rec2100hlg` conversion. These tests cover selected numerical results, not every possible input or the appearance in every player.
 
 由于字幕混合链路和 HDR 显示环境很复杂（HDMI 元数据协商、显示器色调映射等），实际效果主要保证「红还是红、蓝还是蓝」的基础观感，不适合严格校色场景。
 
@@ -488,12 +495,13 @@ Due to the complexity of subtitle blending pipelines and HDR display environment
 - [Node.js](https://nodejs.org/) (v22.13 minimum, v24 LTS recommended, or v26 Current)
 - npm 11.19.0（由 `packageManager` 声明并由 CI 强制 / declared by `packageManager` and enforced in CI）
 - [Rust 工具链 / Rust toolchain](https://rustup.rs/)（最低 1.91；rustup 会自动安装仓库锁定且经过测试的稳定工具链 / 1.91 minimum; rustup automatically installs the repository-pinned tested stable toolchain）
-- Windows: WebView2 (Windows 10/11 已预装 / pre-installed on Windows 10/11)
+- Windows: [Microsoft C++ Build Tools and WebView2 / C++ 构建工具与 WebView2](https://v2.tauri.app/start/prerequisites/#windows)。安装构建工具时勾选「Desktop development with C++ / 使用 C++ 的桌面开发」，并使用 MSVC Rust 工具链。WebView2 通常已随较新的 Windows 安装；缺失时按链接中的说明安装。 / Select **Desktop development with C++** in the Build Tools installer and use the MSVC Rust toolchain. WebView2 is normally present on recent Windows installations; follow the linked instructions if it is missing.
 - macOS / Linux: 参考 / see [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)
 
 ### 开发 | Development
 
 ```bash
+git clone https://github.com/koagaroon/ssaHdrify-tauri.git
 cd ssaHdrify-tauri
 npm ci
 npm run tauri dev
