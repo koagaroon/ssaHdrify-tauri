@@ -657,6 +657,7 @@ The tables below list the main direct dependencies and bundled assets. For the f
 | [React Window](https://github.com/bvaughn/react-window)                      | MIT                                            | 大列表虚拟滚动 / Virtualized large lists                                                                       |
 | [Color.js](https://colorjs.io/)                                              | MIT                                            | HDR 色彩空间转换 (PQ/HLG) / HDR color space conversion                                                         |
 | [ass-compiler](https://github.com/weizhenye/ass-compiler)                    | MIT                                            | ASS 字幕解析（字体收集）/ ASS subtitle parsing for font collection                                             |
+| [entities](https://github.com/fb55/entities)                                 | BSD-2-Clause                                   | WebVTT 文本字符引用解码（GUI 与 CLI）/ WebVTT text character-reference decoding (GUI and CLI)                  |
 | [font-kit](https://github.com/servo/font-kit)                                | MIT OR Apache-2.0                              | 跨平台系统字体发现 (Rust) / Cross-platform system font discovery                                               |
 | [fontcull](https://github.com/bearcove/fontcull)                             | MIT / MIT OR Apache-2.0                        | 字体子集化（含 fontcull-klippa、fontcull-skrifa）/ Font subsetting (includes fontcull-klippa, fontcull-skrifa) |
 | [chardetng](https://github.com/hsivonen/chardetng)                           | MIT OR Apache-2.0                              | 编码检测 (Firefox 引擎) / Encoding detection (Firefox's engine)                                                |
@@ -689,6 +690,10 @@ The tables below list the main direct dependencies and bundled assets. For the f
 在桌面版中，点击页脚的「许可证」即可离线阅读项目 GPL 正文、锁定版本的 JavaScript 运行时依赖及 Vite 注入辅助代码的许可声明、两款捆绑字体的完整 OFL 文本，以及 Feather Icons 的 MIT 声明。前端构建同时生成 `third-party-notices.txt`；这份前端声明清单并不等同于完整的 Rust 原生依赖许可清单。
 
 In the desktop app, choose **Licenses** in the footer to read offline copies of the project GPL, notices for locked JavaScript runtime dependencies and Vite-injected helper code, both bundled fonts' complete OFL texts, and the Feather Icons MIT notice. The frontend build also emits `third-party-notices.txt`; this frontend inventory does not represent a complete Rust native dependency license inventory.
+
+命令行版可运行 `ssahdrify-cli licenses` 离线查看同一份 JavaScript 依赖和界面资源声明，其中包括 `entities` 的完整 BSD 许可证。这份共享清单也列出了部分仅用于桌面界面的组件；Rust 原生依赖的归属说明见上表。
+
+Run `ssahdrify-cli licenses` to read the same JavaScript dependency and interface-asset notices offline, including the full BSD licence for `entities`. This shared inventory also lists some GUI-only components; native Rust dependency attribution is listed in the table above.
 
 #### 构建时依赖（不随应用分发）| Build-time only (not shipped)
 

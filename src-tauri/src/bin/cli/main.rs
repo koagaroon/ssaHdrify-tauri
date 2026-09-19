@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Component, Path, PathBuf};
@@ -169,6 +169,9 @@ enum DiagnoseMode {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Print bundled JavaScript and GUI asset license notices as plain text.
+    /// 输出内嵌的 JavaScript 与 GUI 资源许可证声明（纯文本）。
+    Licenses,
     /// Convert SDR subtitle colors to HDR. 将 SDR 字幕颜色转换为 HDR。
     Hdr(HdrCommandArgs),
     /// Shift subtitle timings by an offset. 按偏移量平移字幕时间轴。
@@ -1188,9 +1191,18 @@ fn run() -> Result<ExitCode, String> {
         mut globals,
         command,
     } = Cli::parse();
-    normalize_global_paths(&mut globals)?;
+    if !matches!(command, Command::Licenses) {
+        normalize_global_paths(&mut globals)?;
+    }
 
     match command {
+        Command::Licenses => {
+            print!(
+                "{}",
+                include_str!(concat!(env!("OUT_DIR"), "/cli-third-party-notices.txt"))
+            );
+            Ok(ExitCode::SUCCESS)
+        }
         Command::Hdr(args) => {
             emit_inert_cache_flags_notice(&globals, "hdr");
             run_hdr(&globals, args.args, args.diagnose.mode())
@@ -2644,8 +2656,8 @@ fn process_one_chain_input(
             return builder.into_failed(err);
         }
     };
-    if let Some(warning) = format_inferred_encoding_warning(globals, &read_result) {
-        builder.extend_warnings([warning]);
+    if let Some(warnings) = format_decode_warnings(globals, &read_result) {
+        builder.extend_warnings(warnings);
     }
 
     // Build the JSON payload matching the TS-side ChainRunRequest.
@@ -3075,11 +3087,7 @@ fn process_hdr_file(
         Ok(result) => result,
         Err(error) => return failed_report(&input_path, Some(output), None, error),
     };
-    let mut warnings = None;
-    append_warning(
-        &mut warnings,
-        format_inferred_encoding_warning(globals, &read_result),
-    );
+    let mut warnings = format_decode_warnings(globals, &read_result);
 
     let request = engine::HdrConversionRequest {
         input_path: input.clone(),
@@ -3196,12 +3204,13 @@ fn format_oversized_caption_warning(
     Some(vec![message])
 }
 
-fn format_inferred_encoding_warning(
+fn format_decode_warnings(
     globals: &GlobalOptions,
     result: &app_lib::encoding::ReadTextResult,
-) -> Option<String> {
-    result.inferred_without_bom.then(|| {
-        localize(
+) -> Option<Vec<String>> {
+    let mut warnings = Vec::new();
+    if result.inferred_without_bom {
+        warnings.push(localize(
             globals,
             format!(
                 "Detected BOM-less {} from its byte pattern. This is a best-effort inference; verify the output.",
@@ -3211,13 +3220,25 @@ fn format_inferred_encoding_warning(
                 "已根据字节模式推测该文件使用无 BOM 的 {} 编码。此结果并非完全确定，请核对输出。",
                 result.encoding_id
             ),
-        )
-    })
-}
-
-fn append_warning(warnings: &mut Option<Vec<String>>, warning: Option<String>) {
-    if let Some(warning) = warning {
-        warnings.get_or_insert_with(Vec::new).push(warning);
+        ));
+    }
+    if result.lossy {
+        warnings.push(localize(
+            globals,
+            format!(
+                "Decoding {} replaced malformed source bytes with replacement characters (U+FFFD). Some text may be damaged; verify the output.",
+                result.encoding_id
+            ),
+            format!(
+                "解码 {} 时已将格式错误的源字节替换为替代字符（U+FFFD）。部分文本可能已损坏，请核对输出。",
+                result.encoding_id
+            ),
+        ));
+    }
+    if warnings.is_empty() {
+        None
+    } else {
+        Some(warnings)
     }
 }
 
@@ -3479,11 +3500,7 @@ fn process_shift_file_cheap_first(
         Ok(result) => result,
         Err(error) => return failed_report(&input_path, Some(output), None, error),
     };
-    let mut warnings = None;
-    append_warning(
-        &mut warnings,
-        format_inferred_encoding_warning(globals, &read_result),
-    );
+    let mut warnings = format_decode_warnings(globals, &read_result);
 
     let request = build_shift_request(
         input.clone(),
@@ -3579,11 +3596,7 @@ fn process_shift_file_heavy_first(
         Ok(result) => result,
         Err(error) => return failed_report(&input_path, None, None, error),
     };
-    let mut warnings = None;
-    append_warning(
-        &mut warnings,
-        format_inferred_encoding_warning(globals, &read_result),
-    );
+    let mut warnings = format_decode_warnings(globals, &read_result);
 
     let request = build_shift_request(
         input.clone(),
@@ -3951,7 +3964,7 @@ fn diagnose_font_file(ctx: &mut DiagnoseFontContext<'_>, file: &Path) -> EmbedFi
         Ok(result) => result,
         Err(error) => return (failed_report(&input_path, None, None, error), Vec::new()),
     };
-    let inferred_warning = format_inferred_encoding_warning(ctx.globals, &read_result);
+    let decode_warnings = format_decode_warnings(ctx.globals, &read_result);
 
     let plan_request = engine::FontDiagnosticsPlanRequest {
         content: read_result.text,
@@ -3960,7 +3973,7 @@ fn diagnose_font_file(ctx: &mut DiagnoseFontContext<'_>, file: &Path) -> EmbedFi
         Ok(result) => result,
         Err(error) => {
             let mut report = failed_report(&input_path, None, Some(read_result.encoding), error);
-            append_warning(&mut report.warnings, inferred_warning);
+            report.warnings = decode_warnings;
             return (report, Vec::new());
         }
     };
@@ -3975,7 +3988,7 @@ fn diagnose_font_file(ctx: &mut DiagnoseFontContext<'_>, file: &Path) -> EmbedFi
     ) {
         Ok(outcome) => {
             let mut diagnostics = outcome.diagnostics;
-            let mut warnings: Vec<String> = inferred_warning.into_iter().collect();
+            let mut warnings = decode_warnings.unwrap_or_default();
             warnings.extend(outcome.warnings);
             if ctx.subset_check {
                 warnings.extend(apply_subset_checks_to_diagnostics(
@@ -4004,7 +4017,7 @@ fn diagnose_font_file(ctx: &mut DiagnoseFontContext<'_>, file: &Path) -> EmbedFi
         Err(error) => {
             let mut report =
                 failed_report(&input_path, None, Some(read_result.encoding), error.error);
-            append_warning(&mut report.warnings, inferred_warning);
+            report.warnings = decode_warnings;
             (report, error.diagnostics)
         }
     }
@@ -5007,9 +5020,7 @@ fn process_embed_file(
             )
         }
     };
-    let mut warnings: Vec<String> = format_inferred_encoding_warning(globals, &read_result)
-        .into_iter()
-        .collect();
+    let mut warnings = format_decode_warnings(globals, &read_result).unwrap_or_default();
 
     let plan_request = engine::FontEmbedPlanRequest {
         input_path: input.clone(),
@@ -5965,7 +5976,8 @@ fn run_rename(
         output_dir: output_dir.as_deref().map(display_path),
         langs: args.langs.clone(),
     };
-    let plan = engine.plan_rename(&request)?;
+    let mut plan = engine.plan_rename(&request)?;
+    protect_rename_selected_inputs(&request.paths, &mut plan.pairings)?;
     let mut report = CommandReport::new("rename");
 
     let v = plan.video_count;
@@ -6052,6 +6064,86 @@ fn expand_rename_inputs(globals: &GlobalOptions, paths: &[PathBuf]) -> Result<Ve
     Ok(expanded.files)
 }
 
+fn protect_rename_selected_inputs(
+    selected_paths: &[String],
+    rows: &mut [engine::RenamePlanRow],
+) -> Result<(), String> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+
+    let mut input_identities = HashMap::new();
+    for input in selected_paths {
+        let path = Path::new(input);
+        if !app_lib::safe_io::is_rename_subtitle_path(path)
+            || input_identities.contains_key(input.as_str())
+        {
+            continue;
+        }
+        let canonical = path.canonicalize().map_err(|error| {
+            format!(
+                "Failed to resolve selected subtitle input {}: {error}",
+                path.display()
+            )
+        })?;
+        let metadata = fs::metadata(&canonical)
+            .map_err(|error| format!("Failed to inspect selected subtitle input: {error}"))?;
+        if !metadata.is_file() {
+            return Err(format!(
+                "Selected subtitle input is not a regular file: {}",
+                path.display()
+            ));
+        }
+        input_identities.insert(input.as_str(), normalize_output_key(&canonical));
+    }
+    let protected_identities: HashSet<&str> =
+        input_identities.values().map(String::as_str).collect();
+    let mut input_owners: HashMap<&str, Vec<usize>> = HashMap::new();
+    let mut row_identities = Vec::with_capacity(rows.len());
+    for (index, row) in rows.iter().enumerate() {
+        let identity = input_identities
+            .get(row.input_path.as_str())
+            .ok_or_else(|| {
+                format!(
+                    "Rename plan input is not a selected subtitle: {}",
+                    row.input_path
+                )
+            })?;
+        input_owners.entry(identity).or_default().push(index);
+        row_identities.push(identity.as_str());
+    }
+
+    // Resolve the whole plan before executing any row: an earlier source
+    // must stay in place when a later output reaches it through an alias.
+    let mut conflicts = vec![false; rows.len()];
+    let mut no_ops = vec![false; rows.len()];
+    for (index, row) in rows.iter().enumerate() {
+        let canonical = match Path::new(&row.output_path).canonicalize() {
+            Ok(path) => path,
+            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            Err(error) => return Err(format!("Failed to resolve rename output path: {error}")),
+        };
+        let identity = normalize_output_key(&canonical);
+        if identity == row_identities[index] {
+            no_ops[index] = true;
+            continue;
+        }
+        if protected_identities.contains(identity.as_str()) {
+            conflicts[index] = true;
+            if let Some(owners) = input_owners.get(identity.as_str()) {
+                for &owner in owners {
+                    conflicts[owner] = true;
+                }
+            }
+        }
+    }
+    for (index, row) in rows.iter_mut().enumerate() {
+        row.input_conflict = conflicts[index];
+        row.no_op |= no_ops[index];
+    }
+    Ok(())
+}
+
 fn process_rename_pair(
     globals: &GlobalOptions,
     args: &RenameArgs,
@@ -6063,8 +6155,8 @@ fn process_rename_pair(
     let input = display_path(&input_path);
     let output = display_path(&output_path);
 
-    // planRename computes this flag against every loaded subtitle path (not
-    // only executable rows) before the Rust shell enters this loop. Keep this
+    // Native preflight computes this flag against every selected subtitle
+    // identity (not only executable rows) before this loop. Keep this
     // guard before no-op, duplicate, exists, dry-run, and overwrite handling:
     // every participant in a swap/chain must fail without touching the disk.
     if row.input_conflict {
@@ -8031,6 +8123,74 @@ mod tests {
             cache_file: None,
             fail_fast: false,
         }
+    }
+
+    #[test]
+    fn decode_warning_flags_are_independent_and_counted_once() {
+        for inferred in [false, true] {
+            for lossy in [false, true] {
+                let decoded = app_lib::encoding::ReadTextResult {
+                    text: String::new(),
+                    encoding: "UTF-16LE".into(),
+                    encoding_id: "UTF-16LE".into(),
+                    had_bom: false,
+                    lossy,
+                    inferred_without_bom: inferred,
+                    source_revision: String::new(),
+                    source_byte_length: 0,
+                };
+                let warnings = super::format_decode_warnings(&test_globals(), &decoded);
+                let expected = usize::from(inferred) + usize::from(lossy);
+                assert_eq!(warnings.as_ref().map_or(0, Vec::len), expected);
+                let messages = warnings
+                    .as_ref()
+                    .map(|items| items.join("\n"))
+                    .unwrap_or_default();
+                assert_eq!(
+                    messages.matches("best-effort inference").count(),
+                    usize::from(inferred)
+                );
+                assert_eq!(messages.matches("malformed").count(), usize::from(lossy));
+                let mut report = CommandReport::new("shift");
+                report.push(FileReport {
+                    input: "source.ass".into(),
+                    output: Some("source.shifted.ass".into()),
+                    encoding: Some(decoded.encoding),
+                    status: FileStatus::Written,
+                    error: None,
+                    warnings,
+                });
+                let files = usize::from(expected > 0);
+                assert_eq!(super::warning_counts(&report), (files, expected, files));
+            }
+        }
+    }
+
+    #[test]
+    fn rename_preflight_requires_unpaired_subtitle_identity_but_excludes_videos() {
+        let root = create_cli_font_db_dir().unwrap();
+        let source = root.join("source.ass");
+        fs::write(&source, "source-original").unwrap();
+        let mut rows = vec![engine::RenamePlanRow {
+            input_path: display_path(&source),
+            output_path: display_path(&root.join("target.ass")),
+            video_path: display_path(&root.join("unavailable.mkv")),
+            source: "regex".into(),
+            no_op: false,
+            input_conflict: false,
+        }];
+        let mut selected = vec![display_path(&source), rows[0].video_path.clone()];
+        super::protect_rename_selected_inputs(&selected, &mut rows).unwrap();
+        assert!(!rows[0].input_conflict);
+        selected.push(display_path(&root.join("unavailable.sup")));
+        let error = super::protect_rename_selected_inputs(&selected, &mut rows).unwrap_err();
+        assert!(
+            error.contains("Failed to resolve selected subtitle input"),
+            "{error}"
+        );
+        assert_eq!(fs::read_to_string(source).unwrap(), "source-original");
+        assert!(!root.join("target.ass").exists());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

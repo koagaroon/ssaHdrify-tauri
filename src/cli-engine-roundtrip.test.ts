@@ -247,22 +247,22 @@ describe("HDR convert — GUI ↔ CLI byte equivalence", () => {
     expect(cli.content).not.toContain(huge);
   });
 
-  it("ASS path stays byte-identical for CRLF and bare-CR line endings", () => {
-    // Every other fixture is \n-joined. Pin that non-LF line endings
-    // round-trip identically through BOTH the CLI and GUI paths, so neither
-    // side normalizes line endings differently from the other.
-    for (const eol of ["\r\n", "\r"]) {
+  it("ASS GUI and CLI paths convert colors and preserve LF, CRLF, and bare CR", () => {
+    for (const eol of ["\n", "\r\n", "\r"]) {
       const content = ASS_FIXTURE.replace(/\n/g, eol);
       const cli = convertHdr({
         inputPath: inputAss,
         content,
         eotf: "PQ",
-        brightness: 1000,
+        brightness: 203,
         outputTemplate: DEFAULT_TEMPLATE,
       });
-      const gui = guiHdrFlow(inputAss, content, "PQ", 1000, DEFAULT_TEMPLATE);
+      const gui = guiHdrFlow(inputAss, content, "PQ", 203, DEFAULT_TEMPLATE);
       expect(cli.outputPath).toBe(gui.outputPath);
       expect(cli.content).toBe(gui.content);
+      expect(cli.content).toContain("&H00949494");
+      expect(cli.content).not.toContain("&H00FFFFFF");
+      expect(cli.content.match(/\r\n|\r|\n/g)).toEqual(content.match(/\r\n|\r|\n/g));
     }
   });
 });

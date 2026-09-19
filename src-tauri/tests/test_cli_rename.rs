@@ -387,3 +387,234 @@ fn fail_fast_blocks_a_threatened_endpoint_before_it_can_move() {
 
     let _ = fs::remove_dir_all(work);
 }
+
+#[cfg(any(windows, unix))]
+struct DirectoryAlias(PathBuf);
+
+#[cfg(any(windows, unix))]
+impl Drop for DirectoryAlias {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        let _ = fs::remove_dir(&self.0);
+        #[cfg(unix)]
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
+#[cfg(any(windows, unix))]
+fn directory_alias(real: &Path) -> DirectoryAlias {
+    let alias = real.with_file_name("selected-alias");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let output = Command::new("powershell.exe")
+            .args([
+                "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+                "$ErrorActionPreference = 'Stop'; New-Item -ItemType Junction -Path $env:SSAHDRIFY_TEST_ALIAS -Target $env:SSAHDRIFY_TEST_TARGET | Out-Null",
+            ])
+            .env("SSAHDRIFY_TEST_ALIAS", &alias)
+            .env("SSAHDRIFY_TEST_TARGET", real)
+            .creation_flags(0x08000000)
+            .output()
+            .expect("run Windows junction fixture setup");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(real, &alias).expect("create directory alias");
+    DirectoryAlias(alias)
+}
+
+fn rename_args(mode: &str, output_dir: &Path) -> Vec<String> {
+    let mut args = vec!["--lang".into(), "en".into(), "--json".into()];
+    if mode == "copy-to-chosen" {
+        args.push("--output-dir".into());
+        push_path(&mut args, output_dir);
+    }
+    args.extend(["rename".into(), "--mode".into(), mode.into()]);
+    args
+}
+
+#[cfg(any(windows, unix))]
+#[test]
+fn alias_unpaired_selected_inputs_are_protected_in_every_mode_and_dry_run() {
+    for mode in ["rename", "copy-to-video", "copy-to-chosen"] {
+        for dry_run in [false, true] {
+            for overwrite in [false, true] {
+                let work = temp_dir("alias-unpaired");
+                let real = work.join("real");
+                fs::create_dir(&real).unwrap();
+                let alias = directory_alias(&real);
+                let video = write_fixture(&alias.0, "[Raw][Show][01][1080p].mkv", "video");
+                let source =
+                    write_fixture(&alias.0, "[Raw][Show][01][720p].sup", "source-original");
+                let protected =
+                    write_fixture(&real, "[Raw][Show][01][1080p].sup", "unpaired-original");
+                let mut args = rename_args(mode, &alias.0);
+                if dry_run {
+                    args.push("--dry-run".into());
+                }
+                if overwrite {
+                    args.push("--overwrite".into());
+                }
+                // One video pairs with the first subtitle; the second subtitle
+                // remains selected but has no executable row.
+                for path in [&video, &source, &protected] {
+                    push_path(&mut args, path);
+                }
+                let output = run_cli_owned(&args);
+                let value = parse_json_output(&output);
+                assert!(
+                    !output.status.success(),
+                    "{mode} dry_run={dry_run} overwrite={overwrite}: {value:#}"
+                );
+                assert_eq!(value["failed"], 1, "{value:#}");
+                assert_eq!(value["written"], 0, "{value:#}");
+                assert_eq!(value["planned"], 0, "{value:#}");
+                assert!(value["results"][0]["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("loaded subtitle input"));
+                assert_eq!(fs::read_to_string(&source).unwrap(), "source-original");
+                assert_eq!(fs::read_to_string(&protected).unwrap(), "unpaired-original");
+                drop(alias);
+                fs::remove_dir_all(work).unwrap();
+            }
+        }
+    }
+}
+
+#[cfg(any(windows, unix))]
+#[test]
+fn alias_conflict_blocks_its_earlier_endpoint_before_fail_fast() {
+    for mode in ["rename", "copy-to-video", "copy-to-chosen"] {
+        let work = temp_dir("alias-chain");
+        let real = work.join("real");
+        fs::create_dir(&real).unwrap();
+        let alias = directory_alias(&real);
+        let video_d = write_fixture(&alias.0, "[RawD][Show][01][480p].mkv", "video-d");
+        let video_b = write_fixture(&alias.0, "[RawB][Show][01][1080p].mkv", "video-b");
+        let source_b = write_fixture(&real, "[RawB][Show][01][1080p].ass", "source-b-original");
+        let source_a = write_fixture(&alias.0, "[RawA][Show][01][2160p].ass", "source-a-original");
+        let mut args = rename_args(mode, &alias.0);
+        args.extend(["--overwrite".into(), "--fail-fast".into()]);
+        // B -> D runs first, but later A -> alias(B) must block B as well.
+        for path in [&video_d, &video_b, &source_b, &source_a] {
+            push_path(&mut args, path);
+        }
+        let output = run_cli_owned(&args);
+        let value = parse_json_output(&output);
+        assert!(!output.status.success(), "{mode}: {value:#}");
+        assert_eq!(value["failed"], 1, "{value:#}");
+        assert_eq!(value["written"], 0, "{value:#}");
+        assert_eq!(value["abortedByFailFast"], true, "{value:#}");
+        assert_eq!(value["results"].as_array().unwrap().len(), 1, "{value:#}");
+        assert_eq!(fs::read_to_string(&source_b).unwrap(), "source-b-original");
+        assert_eq!(fs::read_to_string(&source_a).unwrap(), "source-a-original");
+        assert!(!real.join("[RawD][Show][01][480p].ass").exists());
+        drop(alias);
+        fs::remove_dir_all(work).unwrap();
+    }
+}
+
+#[cfg(any(windows, unix))]
+#[test]
+fn alias_conflict_protects_an_executable_no_op_source_row() {
+    for mode in ["rename", "copy-to-video", "copy-to-chosen"] {
+        let work = temp_dir("alias-no-op-source");
+        let real = work.join("real");
+        fs::create_dir(&real).unwrap();
+        let alias = directory_alias(&real);
+        let video = write_fixture(&real, "[Raw][Show][01][1080p].mkv", "video");
+        let aliased_video = alias.0.join("[Raw][Show][01][1080p].mkv");
+        let no_op_source = write_fixture(&real, "[Raw][Show][01][1080p].ass", "no-op-original");
+        let writer = write_fixture(&alias.0, "[Raw][Show][01][720p].ass", "writer-original");
+        let mut args = rename_args(mode, &alias.0);
+        args.push("--overwrite".into());
+        for path in [&video, &aliased_video, &no_op_source, &writer] {
+            push_path(&mut args, path);
+        }
+        let output = run_cli_owned(&args);
+        let value = parse_json_output(&output);
+        assert!(!output.status.success(), "{mode}: {value:#}");
+        assert_eq!(value["failed"], 2, "{value:#}");
+        assert_eq!(value["written"], 0, "{value:#}");
+        assert!(
+            value["results"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|row| row["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("loaded subtitle input")),
+            "{value:#}"
+        );
+        assert_eq!(fs::read_to_string(&no_op_source).unwrap(), "no-op-original");
+        assert_eq!(fs::read_to_string(&writer).unwrap(), "writer-original");
+        drop(alias);
+        fs::remove_dir_all(work).unwrap();
+    }
+}
+
+#[cfg(any(windows, unix))]
+#[test]
+fn alias_of_own_source_is_a_no_op_instead_of_an_input_conflict() {
+    for mode in ["rename", "copy-to-video", "copy-to-chosen"] {
+        let work = temp_dir("alias-own-source");
+        let real = work.join("real");
+        fs::create_dir(&real).unwrap();
+        let alias = directory_alias(&real);
+        let video = write_fixture(&alias.0, "Show - 01.mkv", "video");
+        let source = write_fixture(&real, "Show - 01.ass", "source-original");
+        let mut args = rename_args(mode, &alias.0);
+        args.push("--overwrite".into());
+        let selected_alias = alias.0.join("Show - 01.ass");
+        for path in [&video, &source, &selected_alias] {
+            push_path(&mut args, path);
+        }
+        let output = run_cli_owned(&args);
+        let value = parse_json_output(&output);
+        assert!(output.status.success(), "{mode}: {value:#}");
+        assert_eq!(value["skipped"], 1, "{value:#}");
+        assert_eq!(value["failed"], 0, "{value:#}");
+        assert_eq!(value["written"], 0, "{value:#}");
+        assert_eq!(fs::read_to_string(&source).unwrap(), "source-original");
+        drop(alias);
+        fs::remove_dir_all(work).unwrap();
+    }
+}
+
+#[test]
+fn own_source_rename_preserves_explicit_overwrite_consent() {
+    for overwrite in [false, true] {
+        let work = temp_dir("ordinary-overwrite");
+        let video = write_fixture(&work, "Show - 01.mkv", "video");
+        let source = write_fixture(&work, "Other - 01.ass", "source-original");
+        let output_path = write_fixture(&work, "Show - 01.ass", "existing-unselected-output");
+        let mut args = rename_args("rename", &work);
+        if overwrite {
+            args.push("--overwrite".into());
+        }
+        for path in [&video, &source] {
+            push_path(&mut args, path);
+        }
+        let output = run_cli_owned(&args);
+        let value = parse_json_output(&output);
+        assert!(output.status.success(), "{value:#}");
+        assert_eq!(value["written"], usize::from(overwrite), "{value:#}");
+        assert_eq!(source.exists(), !overwrite);
+        assert_eq!(
+            fs::read_to_string(output_path).unwrap(),
+            if overwrite {
+                "source-original"
+            } else {
+                "existing-unselected-output"
+            }
+        );
+        fs::remove_dir_all(work).unwrap();
+    }
+}

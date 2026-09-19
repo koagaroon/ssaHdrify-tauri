@@ -9,6 +9,7 @@
  * build a minimal ASS document for the HDR processor.
  */
 
+import { decodeHTML } from "entities/decode";
 import { ASCII_CONTROL_CHARS, BIDI_AND_ZERO_WIDTH_CHARS } from "../../lib/unicode-controls";
 import { parseSubtitle, safeMs } from "../../lib/subtitle-parser";
 
@@ -52,8 +53,7 @@ const SRT_COLOR_OPEN_RE =
 
 // The longest opener accepted by SRT_COLOR_OPEN_RE is 1,045 characters:
 // `<font` + two 512-character attribute windows + `color="#RRGGBB"` + `>`.
-// Longer tags remain ordinary HTML-like text and are stripped later by the
-// document builder; they never inject an ASS override.
+// Longer tags follow unknown-tag handling; they never inject an ASS override.
 const MAX_SRT_FONT_TAG_LENGTH = 1_045;
 
 // Production cue text is already capped at 64,000 characters, but keep the
@@ -72,22 +72,16 @@ interface SrtFontFrame {
 // ── Text Cue Color Preprocessing ─────────────────────────
 
 /**
- * Neutralize raw `\`, `{`, `}` in user-supplied SRT text BEFORE any of our
- * own ASS override tags are injected (via `preprocessSrtColors` or the
- * HTML-tag conversion in `buildAssDocument`). After this step runs, every
- * `{…}` seen downstream in the pipeline is a tag WE emitted — so nothing
- * can smuggle a libass override through user text.
- *
- * Callers MUST run this BEFORE `preprocessSrtColors` and must NOT re-escape
- * after; re-escaping would turn our trusted `{\1c&H…}` injections into
- * literal `\{\\1c&H…\}` text and silently break HDR color conversion.
- *
- * @internal — production callers must use `processSrtUserText` (composed
- * single entry point). Exported only so unit tests can exercise each
- * stage in isolation.
+ * Encode literal cue text before emitting any trusted ASS override tags.
+ * @internal — production callers use the composed cue conversion below.
  */
 export function escapeSrtUserText(text: string): string {
-  return text.replace(/\\/g, "\\\\").replace(/\{/g, "\\{").replace(/\}/g, "\\}");
+  // ASS has no \\ escape. FFmpeg also inserts WORD JOINER to keep literal
+  // backslashes from forming \N, \h, or an escape of a following trusted tag.
+  return text
+    .replace(/\\(?!\u2060)/g, "\\\u2060")
+    .replace(/\{/g, "\\{")
+    .replace(/\}/g, "\\}");
 }
 
 /**
@@ -102,53 +96,68 @@ export function escapeSrtUserText(text: string): string {
  * `\r`, because that would also erase bold, italic, underline, font, and other
  * active styling.
  *
- * CONTRACT: the `text` argument MUST have been passed through
- * `escapeSrtUserText` first. That's the only way to guarantee the `{…}`
- * sequences this function injects for color conversion are distinguishable
- * from literal `{…}` in user-supplied text. Calling this on raw SRT content
- * re-introduces an injection path that lets a hostile subtitle smuggle ASS
- * overrides into the HDR pipeline.
- *
- * Production callers should prefer `processSrtUserText`, which composes
- * the two steps in the correct order. Direct exports remain for unit
- * tests that need to exercise each step in isolation.
- *
- * @internal — production callers must use `processSrtUserText`.
+ * This isolated color stage preserves other markup and assumes literal ASS
+ * characters were already escaped. Production conversion uses the composed
+ * cue serializer; this export permits focused color-stack tests.
+ * @internal
  */
 export function preprocessSrtColors(text: string): string {
+  return processCueMarkup(
+    text,
+    (part) => part,
+    (tag) => tag
+  );
+}
+
+function processCueMarkup(
+  text: string,
+  renderText: (text: string) => string,
+  renderTag: (tag: string) => string
+): string {
   const output: string[] = [];
   const frames: SrtFontFrame[] = [];
   let currentColor: InlinePrimaryColor = null;
   let overflowDepth = 0;
   let cursor = 0;
+  // Literal '<3' / '< $5' must not consume a later formatting tag. Recognize
+  // tag names, declarations, empty tags, and WebVTT timestamps without rescanning.
+  const tagStartPattern = /<(?:\/?[a-z]|[!?>]|\d{2,12}:)/gi;
 
   while (cursor < text.length) {
-    const tagStart = text.indexOf("<", cursor);
-    if (tagStart < 0) {
-      output.push(text.slice(cursor));
+    tagStartPattern.lastIndex = cursor;
+    const tagStartMatch = tagStartPattern.exec(text);
+    if (!tagStartMatch) {
+      output.push(renderText(text.slice(cursor)));
       break;
     }
 
-    output.push(text.slice(cursor, tagStart));
+    const tagStart = tagStartMatch.index;
+    output.push(renderText(text.slice(cursor, tagStart)));
+    const tagEnd = text.indexOf(">", tagStart + 1);
+    if (tagEnd < 0) {
+      // An unmatched opener makes the remaining tail literal; scanning it
+      // again for every following '<' would make this path quadratic.
+      output.push(renderText(text.slice(tagStart)));
+      break;
+    }
+    const openTag = text.slice(tagStart, tagEnd + 1);
+    cursor = tagEnd + 1;
 
-    if (text.slice(tagStart, tagStart + 7).toLowerCase() === "</font>") {
-      const closeTag = text.slice(tagStart, tagStart + 7);
-      cursor = tagStart + 7;
-
+    if (openTag.toLowerCase() === "</font>") {
       if (overflowDepth > 0) {
         overflowDepth -= 1;
-        output.push(closeTag);
+        output.push(renderTag(openTag));
         continue;
       }
 
       const frame = frames.pop();
       if (!frame) {
-        output.push(closeTag);
+        output.push(renderTag(openTag));
         continue;
       }
 
       if (!frame.setsColor) {
-        output.push(closeTag);
+        output.push(renderTag(openTag));
         continue;
       }
 
@@ -157,41 +166,31 @@ export function preprocessSrtColors(text: string): string {
       continue;
     }
 
-    const openingPrefix = text.slice(tagStart, tagStart + 5).toLowerCase();
-    const boundary = text[tagStart + 5];
+    const openingPrefix = openTag.slice(0, 5).toLowerCase();
+    const boundary = openTag[5];
     const isFontOpener =
       openingPrefix === "<font" && (boundary === undefined || !/[a-zA-Z0-9_]/.test(boundary));
     if (!isFontOpener) {
-      output.push("<");
-      cursor = tagStart + 1;
+      output.push(renderTag(openTag));
       continue;
     }
 
-    const tagEnd = text.indexOf(">", tagStart + 5);
-    if (tagEnd < 0) {
-      output.push(text.slice(tagStart));
-      break;
-    }
-
-    const openTag = text.slice(tagStart, tagEnd + 1);
-    cursor = tagEnd + 1;
-
     if (openTag.length > MAX_SRT_FONT_TAG_LENGTH || overflowDepth > 0) {
       overflowDepth += 1;
-      output.push(openTag);
+      output.push(renderTag(openTag));
       continue;
     }
 
     if (frames.length >= MAX_TRACKED_SRT_FONT_DEPTH) {
       overflowDepth = 1;
-      output.push(openTag);
+      output.push(renderTag(openTag));
       continue;
     }
 
     const colorMatch = SRT_COLOR_OPEN_RE.exec(openTag);
     frames.push({ previousColor: currentColor, setsColor: colorMatch !== null });
     if (!colorMatch) {
-      output.push(openTag);
+      output.push(renderTag(openTag));
       continue;
     }
 
@@ -209,15 +208,27 @@ export function preprocessSrtColors(text: string): string {
 }
 
 /**
- * Composed SRT-user-text pipeline: escape user text, then inject our
- * trusted color tags. This is the only entry point production callers
- * should use — it makes the contract between the two steps a single
- * function call rather than a documented call ordering, eliminating
- * the regression class where a future caller swaps the order or skips
- * the escape step.
+ * Convert one parsed SRT/MicroDVD cue body into safe ASS text.
  */
 export function processSrtUserText(text: string): string {
-  return preprocessSrtColors(escapeSrtUserText(text));
+  return processTextCueUserText(text, false);
+}
+
+function processTextCueUserText(text: string, webVtt: boolean): string {
+  return processCueMarkup(
+    text,
+    (plainText) => {
+      // Decode original text tokens exactly once. Decoded '<' must stay text,
+      // and decoded braces/backslashes must not become ASS instructions.
+      const decoded = webVtt ? decodeHTML(plainText) : plainText;
+      return escapeSrtUserText(decoded).replace(/\r\n|\r|\n|\u0085|\u2028|\u2029/g, "\\N");
+    },
+    (tag) => {
+      if (/^<br\s*\/?>$/i.test(tag)) return "\\N";
+      const style = /^<(\/?)([biu])>$/i.exec(tag);
+      return style ? `{\\${style[2]!.toLowerCase()}${style[1] ? 0 : 1}}` : "";
+    }
+  );
 }
 
 // ── Style Configuration ──────────────────────────────────
@@ -242,33 +253,10 @@ export const DEFAULT_STYLE: StyleConfig = {
 
 // ── ASS Document Builder ─────────────────────────────────
 
-function stripUnknownHtmlTags(text: string): string {
-  const parts: string[] = [];
-  let cursor = 0;
-  while (cursor < text.length) {
-    const open = text.indexOf("<", cursor);
-    if (open < 0) break;
-    const close = text.indexOf(">", open + 1);
-    // An unmatched opener leaves the entire tail literal. Retrying at each
-    // following '<' would repeatedly scan that tail and make the work quadratic.
-    if (close < 0) break;
-    parts.push(text.slice(cursor, open));
-    cursor = close + 1;
-  }
-  parts.push(text.slice(cursor));
-  return parts.join("");
-}
-
 /**
- * Build a minimal ASS document from parsed subtitle entries.
- * This creates a properly formatted ASS file with styles and events.
- *
- * CONTRACT: raw subtitle structure MUST be parsed first; each resulting cue
- * body must then flow through `escapeSrtUserText` → `preprocessSrtColors` on
- * the way in. This function does NOT re-escape `{`/`}`/`\` — doing so would silently
- * defeat our own injected color/bold/italic overrides and was the root of
- * a past regression. The integration tests in `srt-converter.test.ts`
- * guard against future callers dropping the escape step.
+ * Build a minimal ASS document from entries with already prepared ASS text.
+ * Cue markup and literal escaping belong to the composed cue serializer;
+ * processing them again here would reinterpret decoded text or trusted tags.
  */
 export function buildAssDocument(
   entries: { start: number; end: number; text: string }[],
@@ -316,35 +304,7 @@ export function buildAssDocument(
   for (const entry of entries) {
     const startTime = msToAssTime(entry.start);
     const endTime = msToAssTime(entry.end);
-    // IMPORTANT: we do NOT escape `{` / `}` / `\` here. Callers are
-    // expected to have already run `processSrtUserText` on this parsed cue
-    // body. Whole-document escaping is forbidden because it corrupts
-    // MicroDVD timing syntax. Re-escaping at this stage would turn injected
-    // `{\1c&H…}` tags into literal text, silently defeating SRT→HDR color
-    // conversion. See escapeSrtUserText's docstring for the required
-    // pipeline ordering.
-    const cleanText = stripUnknownHtmlTags(
-      entry.text
-        // Normalize ALL line-break variants (LF, CRLF, bare CR, NEL,
-        // LINE SEPARATOR U+2028, PARAGRAPH SEPARATOR U+2029) to the ASS
-        // `\N` hard break. A bare `\r` would otherwise break the
-        // one-line-per-Dialogue invariant; U+2028 smuggles a line break
-        // past naive renderers.
-        .replace(/\r\n|\r|\n|\u0085|\u2028|\u2029/g, "\\N")
-        // Convert `<br>` / `<br/>` to ASS hard break BEFORE the
-        // unknown-tag strip below. SRT is HTML-ish in many real-world
-        // exports (legacy tools, fan-sub edits); without this step
-        // intentional line breaks get silently absorbed by the
-        // `<[^>]*>` strip pass and the cue collapses to a single line.
-        .replace(/<br\s*\/?>/gi, "\\N")
-        .replace(/<b>/gi, "{\\b1}")
-        .replace(/<\/b>/gi, "{\\b0}")
-        .replace(/<i>/gi, "{\\i1}")
-        .replace(/<\/i>/gi, "{\\i0}")
-        .replace(/<u>/gi, "{\\u1}")
-        .replace(/<\/u>/gi, "{\\u0}")
-    );
-    lines.push(`Dialogue: 0,${startTime},${endTime},Default,,0,0,0,,${cleanText}`);
+    lines.push(`Dialogue: 0,${startTime},${endTime},Default,,0,0,0,,${entry.text}`);
   }
 
   return lines.join("\n");
@@ -393,9 +353,11 @@ export function convertTextCueSubtitleToAss(
   style: StyleConfig = DEFAULT_STYLE,
   fpsOverride?: number
 ): { content: string; skippedCount: number } {
-  const { captions } = parseSubtitle(rawContent, fpsOverride);
+  const { captions, format } = parseSubtitle(rawContent, fpsOverride);
   const processedCaptions = captions.map((caption) =>
-    caption.skipped ? caption : { ...caption, text: processSrtUserText(caption.text) }
+    caption.skipped
+      ? caption
+      : { ...caption, text: processTextCueUserText(caption.text, format === "vtt") }
   );
   return buildAssDocumentFromCaptions(processedCaptions, style);
 }

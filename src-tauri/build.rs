@@ -1,9 +1,32 @@
 fn main() {
-    copy_cli_engine_bundle();
+    let has_engine = copy_cli_engine_bundle();
+    copy_cli_engine_notices(has_engine);
     tauri_build::build()
 }
 
-fn copy_cli_engine_bundle() {
+fn copy_cli_engine_notices(has_engine: bool) {
+    let manifest_dir = std::path::PathBuf::from(
+        std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set by Cargo"),
+    );
+    let source_path = manifest_dir.join("../dist-engine/third-party-notices.txt");
+    let out_dir =
+        std::path::PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR is set by Cargo"));
+    println!("cargo:rerun-if-changed={}", source_path.display());
+    let notices = match std::fs::read_to_string(&source_path) {
+        Ok(notices) => notices,
+        Err(error) if !has_engine && error.kind() == std::io::ErrorKind::NotFound => {
+            "No CLI engine is bundled. Run `npm run build:engine` to include JavaScript dependency notices.\n".to_string()
+        }
+        Err(error) => panic!(
+            "CLI notices are missing or unreadable: {error}. Run `npm run build:engine` before building."
+        ),
+    };
+    assert!(!notices.trim().is_empty(), "CLI notices must not be empty");
+    std::fs::write(out_dir.join("cli-third-party-notices.txt"), notices)
+        .expect("failed to write CLI third-party notices for Cargo");
+}
+
+fn copy_cli_engine_bundle() -> bool {
     const ENGINE_BUNDLE_GLOBAL_TOKEN: &str = "ssaHdrifyCliEngine";
     const ENGINE_BUNDLE_COMPLETION_MARKER: &str = "/* ssahdrify-engine-bundle-complete */";
 
@@ -61,7 +84,9 @@ fn copy_cli_engine_bundle() {
         }
     };
 
+    let has_engine = source.trim_end().ends_with(ENGINE_BUNDLE_COMPLETION_MARKER);
     std::fs::write(output_path, source).expect("failed to write CLI engine bundle for Cargo");
+    has_engine
 }
 
 fn missing_engine_stub() -> String {

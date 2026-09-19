@@ -11,6 +11,8 @@
  * Does NOT attempt full semantic parsing of style tags etc.
  */
 
+import { iterateSourceLines } from "./source-lines";
+
 export interface Caption {
   /** Raw line(s) from the original file for this caption block */
   raw: string;
@@ -766,13 +768,6 @@ export const MICRODVD_DEFAULT_FPS = 23.976;
 export const MICRODVD_MIN_FPS_EXCLUSIVE = 3;
 export const MICRODVD_MAX_FPS = 120;
 
-interface SourceLine {
-  start: number;
-  end: number;
-  body: string;
-  ending: string;
-}
-
 export interface MicroDvdFpsDeclaration {
   /** Offset of the physical line in the original source string. */
   lineStart: number;
@@ -785,32 +780,6 @@ export interface MicroDvdFpsInspection {
   declarations: MicroDvdFpsDeclaration[];
   /** Last valid declaration among the first three nonempty lines. */
   declaredFps?: number;
-}
-
-function* iterateSourceLines(content: string): Generator<SourceLine> {
-  let start = 0;
-  while (start < content.length) {
-    let bodyEnd = start;
-    while (bodyEnd < content.length && content[bodyEnd] !== "\r" && content[bodyEnd] !== "\n") {
-      bodyEnd += 1;
-    }
-
-    let end = bodyEnd;
-    if (content[end] === "\r") {
-      end += 1;
-      if (content[end] === "\n") end += 1;
-    } else if (content[end] === "\n") {
-      end += 1;
-    }
-
-    yield {
-      start,
-      end,
-      body: content.slice(start, bodyEnd),
-      ending: content.slice(bodyEnd, end),
-    };
-    start = end;
-  }
 }
 
 // A MicroDVD declaration is syntax, not a caption. Keep this expression

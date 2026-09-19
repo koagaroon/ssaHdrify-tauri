@@ -27,15 +27,18 @@
 // here).
 
 import { build } from "esbuild";
+import { writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveAppVersion } from "./lib/app-version.mjs";
+import { buildFrontendNotices } from "./lib/frontend-notices.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(__dirname, "..");
 const ENGINE_BUNDLE_COMPLETION_MARKER = "/* ssahdrify-engine-bundle-complete */";
 
 const APP_VERSION = resolveAppVersion(projectRoot);
+const thirdPartyNotices = buildFrontendNotices(projectRoot);
 
 await build({
   entryPoints: [resolve(projectRoot, "src/cli-engine-entry.ts")],
@@ -55,5 +58,11 @@ await build({
     "import.meta.env.DEV": "false",
   },
 });
+
+await writeFile(
+  resolve(projectRoot, "dist-engine/third-party-notices.txt"),
+  thirdPartyNotices,
+  "utf8"
+);
 
 console.log(`build:engine — bundled with __APP_VERSION__ = ${JSON.stringify(APP_VERSION)}`);

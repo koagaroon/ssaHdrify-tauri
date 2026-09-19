@@ -6,6 +6,9 @@
  */
 import { describe, it, expect } from "vitest";
 import { parseAssColor, formatAssColor, detectSection, processAssContent } from "./ass-processor";
+import { runChain } from "../chain/chain-runtime";
+import type { ChainStep } from "../chain/chain-types";
+import { parseSubtitle } from "../../lib/subtitle-parser";
 
 // ── Helpers ──────────────────────────────────────────────
 
@@ -108,6 +111,56 @@ describe("detectSection", () => {
 // Ported from Python regex/event transform tests
 
 describe("processAssContent — inline color tags", () => {
+  it("changes only real override blocks, preserving literal and escaped tag-shaped text", () => {
+    const text = String.raw`literal \c&HFFFFFF& \{\c&HFFFFFF&\} \\{\c&HFFFFFF&\} {\t(0,500,\c&HFFFFFF&)}real {unclosed \c&HFFFFFF&`;
+    const expected = String.raw`literal \c&HFFFFFF& \{\c&HFFFFFF&\} \\{\c&HFFFFFF&\} {\t(0,500,\c&H949494&)}real {unclosed \c&HFFFFFF&`;
+    expect(processAssContent(makeAss(text), 203, "PQ")).toContain(expected);
+  });
+
+  it("leaves unsupported numbered color tags unchanged inside real blocks", () => {
+    const text = String.raw`{\0c&HFFFFFF&\5c&HFFFFFF&\9c&HFFFFFF&\4c&HFFFFFF&}text`;
+    const expected = String.raw`{\0c&HFFFFFF&\5c&HFFFFFF&\9c&HFFFFFF&\4c&H949494&}text`;
+    expect(processAssContent(makeAss(text), 203, "PQ")).toContain(expected);
+  });
+
+  it("uses the declared final Text field without changing metadata or comments", () => {
+    const input = [
+      "[Events]",
+      "Format: End, Name, Start, Effect, Text",
+      String.raw`Dialogue: 0:00:02.00,{\c&HFFFFFF&},0:00:01.00,\c&HFFFFFF&,{\c&HFFFFFF&}hello, world`,
+      String.raw`Comment: 0:00:02.00,{\c&HFFFFFF&},0:00:01.00,,{\c&HFFFFFF&}comment`,
+      "[Unknown]",
+      String.raw`Dialogue: {\c&HFFFFFF&}`,
+    ].join("\n");
+    const expected = input.replace(
+      String.raw`,{\c&HFFFFFF&}hello, world`,
+      String.raw`,{\c&H949494&}hello, world`
+    );
+    expect(processAssContent(input, 203, "PQ")).toBe(expected);
+  });
+
+  it("uses ten event columns when no Format is declared", () => {
+    const input = String.raw`[Events]
+Dialogue: 0,0:00:01.00,0:00:02.00,Default,{\c&HFFFFFF&},0,0,0,\c&HFFFFFF&,{\c&HFFFFFF&}text`;
+    expect(processAssContent(input, 203, "PQ")).toBe(
+      input.replace(String.raw`,{\c&HFFFFFF&}text`, String.raw`,{\c&H949494&}text`)
+    );
+  });
+
+  it.each(["Layer, Start, End", "Text, Start, End", "Text, Text"])(
+    "rejects an ambiguous declared Text boundary: %s",
+    (format) => {
+      expect(() => processAssContent(`[Events]\nFormat: ${format}`)).toThrow(/one final Text/);
+    }
+  );
+
+  it("bounds declared event fields before accepting their Text boundary", () => {
+    expect(() => processAssContent(`[Events]\nFormat: ${"Other,".repeat(1023)}Text`)).not.toThrow();
+    expect(() => processAssContent(`[Events]\nFormat: ${"Other,".repeat(1024)}Text`)).toThrow(
+      /too many fields/
+    );
+  });
+
   it("transforms 6-digit color tags in dialogue", () => {
     const input = makeAss("{\\1c&HFFFFFF&}Hello");
     const output = processAssContent(input, 203, "PQ");
@@ -205,24 +258,56 @@ describe("processAssContent — style lines", () => {
   });
 });
 
-describe("processAssContent — pre-split line-count probe", () => {
-  it("rejects pure-newline blob exceeding the line cap before .split allocates", () => {
-    // Fixture must EXCEED the > 1_000_000 byte probe gate; a fixture
-    // with 600k newlines (600k bytes) falls BELOW the gate, so the
-    // probe code path is never actually exercised and the test would
-    // pass via the post-split line-count throw at the end of
-    // processAssContent. 1.1 MB of pure newlines lands above the gate
-    // AND above LINE_CAP, so the probe path is the actual code path
-    // the test pins.
+describe("processAssContent — physical lines", () => {
+  it.each(["\n", "\r\n", "\r"])("converts colors while preserving %j line endings", (ending) => {
+    const input =
+      makeAss("{\\c&HFFFFFF&}text", "&H00FFFFFF,&H00000000,&H00000000,&H00000000").replace(
+        /\n/g,
+        ending
+      ) + ending;
+    const output = processAssContent(input, 203, "PQ");
+    expect(output).toBe(input.replace(/FFFFFF/g, "949494"));
+    expect(output.match(/\r\n|\r|\n/g)).toEqual(input.match(/\r\n|\r|\n/g));
+  });
+
+  it("preserves mixed endings, blank lines, and a missing final newline", () => {
+    const endings = ["\r", "\r\n", "\n"];
+    let index = 0;
+    const input = makeAss(
+      "{\\c&HFFFFFF&}text",
+      "&H00FFFFFF,&H00000000,&H00000000,&H00000000"
+    ).replace(/\n/g, () => endings[index++ % endings.length]!);
+    expect(processAssContent(input, 203, "PQ")).toBe(input.replace(/FFFFFF/g, "949494"));
+  });
+
+  it("preserves CR lines and literal text through either HDR/shift chain order", () => {
+    const input = makeAss(String.raw`literal \c&HFFFFFF& {\c&HFFFFFF&}colored`).replace(
+      /\n/g,
+      "\r"
+    );
+    const hdr: ChainStep = { kind: "hdr", params: { eotf: "PQ", brightness: 203 } };
+    const shift: ChainStep = { kind: "shift", params: { offsetMs: 1000 } };
+    for (const steps of [
+      [hdr, shift],
+      [shift, hdr],
+    ]) {
+      const result = runChain({
+        inputPath: "C:\\subs\\example.ass",
+        content: input,
+        plan: { steps, outputTemplate: "{name}.chain{ext}" },
+      });
+      expect(result.content).toContain(String.raw`literal \c&HFFFFFF& {\c&H949494&}colored`);
+      expect(result.content.match(/\r\n|\r|\n/g)).toEqual(input.match(/\r\n|\r|\n/g));
+      expect(parseSubtitle(result.content).captions[0]).toMatchObject({ start: 1000, end: 6000 });
+    }
+  });
+
+  it("rejects content exceeding the line cap before accumulating output", () => {
     const blob = "\n".repeat(1_100_000) + "x";
     expect(() => processAssContent(blob, 1000, "PQ")).toThrow(/too large.*lines/i);
   });
 
-  it("accepts normal-size content (well under the 1 MB gate) without false-positive", () => {
-    // A typical subtitle is 5-200 KB. Pre-split probe should be skipped
-    // entirely (`content.length > 1_000_000` is false) and the file
-    // should process normally. Guard against regression where the
-    // probe runs unconditionally and slows the small-file fast path.
+  it("accepts ordinary content", () => {
     const small = ["[Script Info]", "ScriptType: v4.00+", "", "[Events]", ""].join("\n");
     expect(() => processAssContent(small, 1000, "PQ")).not.toThrow();
   });

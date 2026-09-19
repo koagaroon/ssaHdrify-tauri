@@ -261,7 +261,16 @@ describe("HDR text-cue engine helpers", () => {
     expect(result.skippedCount).toBe(0);
     expect(dialogues).toHaveLength(1);
     expect(dialogues[0]).toContain("0:00:01.00,0:00:02.00");
-    expect(dialogues[0]).toContain("\\{\\\\an8\\}Hello");
+    const dialogueText = dialogues[0]!.split(",").slice(9).join(",");
+    // This literal-only cue must have no real override block. Decode libass's
+    // text escapes independently so an escaping change cannot bless itself.
+    expect(dialogueText).not.toMatch(/(?<!\\)\{/u);
+    const visibleText = dialogueText
+      .replace(/\\([Nnh{}])/gu, (_, escaped: string) =>
+        escaped === "N" ? "\n" : escaped === "n" ? " " : escaped === "h" ? "\u00a0" : escaped
+      )
+      .replaceAll("\u2060", "");
+    expect(visibleText).toBe("{\\an8}Hello");
     expect(result.content).not.toContain("25.000");
   });
 
