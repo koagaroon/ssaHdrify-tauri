@@ -538,6 +538,31 @@ describe("WebVTT HDR conversion prep", () => {
 });
 
 describe("literal ASS text semantics", () => {
+  it("preserves short literal escape combinations between trusted formatting tags", () => {
+    const characters = ["\\", "{", "}", "N", "n", "h", "\u2060", "🙂"];
+    for (const first of characters) {
+      for (const second of characters) {
+        for (const third of characters) {
+          const input = first + second + third;
+          const encoded = escapeSrtUserText(input);
+          expect(readAssText(`{\\b1}${encoded}{\\b0}`)).toEqual({
+            visible: input.replaceAll("\u2060", ""),
+            overrides: ["\\b1", "\\b0"],
+          });
+        }
+      }
+    }
+  });
+
+  it("retains existing word joiners without duplicating or consuming them", () => {
+    const input = "\u2060\\\u2060N \\\u2060\u2060🙂\u2060";
+    expect(escapeSrtUserText(input)).toBe(input);
+    expect(readAssText(escapeSrtUserText(input))).toEqual({
+      visible: "\\N \\🙂",
+      overrides: [],
+    });
+  });
+
   it.each([
     String.raw`C:\Temp`,
     String.raw`C:\New`,

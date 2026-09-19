@@ -78,10 +78,22 @@ interface SrtFontFrame {
 export function escapeSrtUserText(text: string): string {
   // ASS has no \\ escape. FFmpeg also inserts WORD JOINER to keep literal
   // backslashes from forming \N, \h, or an escape of a following trusted tag.
-  return text
-    .replace(/\\(?!\u2060)/g, "\\\u2060")
-    .replace(/\{/g, "\\{")
-    .replace(/\}/g, "\\}");
+  const output: string[] = [];
+  let literalStart = 0;
+  for (let index = 0; index < text.length; index++) {
+    const character = text[index]!;
+    if (character !== "\\" && character !== "{" && character !== "}") continue;
+
+    output.push(text.slice(literalStart, index));
+    if (character === "\\") {
+      output.push(text[index + 1] === "\u2060" ? "\\" : "\\\u2060");
+    } else {
+      output.push("\\", character);
+    }
+    literalStart = index + 1;
+  }
+  output.push(text.slice(literalStart));
+  return output.join("");
 }
 
 /**
