@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import {
   fileNameFromPath,
-  isInferredUtf16,
+  textDecodingWarnings,
   pickSubtitleFiles,
   readText,
   writeText,
@@ -115,7 +115,7 @@ export default function HdrConvert() {
   // overwrite-confirm dialog) and mid-batch cancel (user clicked the
   // in-flight Cancel button); both should read the same to the user.
   const [lastActionResult, setLastActionResult] = useState<
-    "success" | "error" | "cancelled" | null
+    "success" | "partial" | "error" | "cancelled" | null
   >(null);
   // N-of-M progress for the active batch, surfaced in the footer chip.
   // Null between batches; never persists past `setProcessing(false)` in
@@ -164,6 +164,8 @@ export default function HdrConvert() {
       };
     }
     if (lastActionResult === "success") return { kind: "done", message: t("status_hdr_done") };
+    if (lastActionResult === "partial")
+      return { kind: "pending", message: t("status_hdr_partial") };
     if (lastActionResult === "error") return { kind: "error", message: t("status_hdr_error") };
     if (lastActionResult === "cancelled") {
       // Cancellation is neither a success nor a failure — the user
@@ -387,6 +389,7 @@ export default function HdrConvert() {
 
         const outputPaths = new Set<string>();
         let successCount = 0;
+        let warnedCount = 0;
         let processedCount = 0;
 
         for (const filePath of paths) {
@@ -450,11 +453,12 @@ export default function HdrConvert() {
 
             // Read input file
             let content: string;
+            let fileWarned = false;
             try {
               content = await readText(filePath, (read) => {
-                if (isInferredUtf16(read)) {
-                  addLog(t("msg_inferred_utf16", fileName, read.encodingId), "warn");
-                }
+                const warnings = textDecodingWarnings(read, fileName, t);
+                fileWarned = warnings.length > 0;
+                for (const warning of warnings) addLog(warning, "warn");
               });
             } catch (e) {
               addLog(t("msg_read_error", fileName, sanitizeError(e)), "error");
@@ -487,6 +491,7 @@ export default function HdrConvert() {
                 fpsOverride
               );
               if (skippedCount > 0) {
+                fileWarned = true;
                 addLog(t("msg_oversized_skipped", skippedCount, fileName), "warn");
               }
 
@@ -508,7 +513,8 @@ export default function HdrConvert() {
             // defense-in-depth for sibling-feature symmetry if that
             // helper ever loosens.
             const outName = sanitizeForDialog(fileNameFromPath(outputPath));
-            addLog(t("msg_done", outName), "success");
+            addLog(t("msg_done", outName), fileWarned ? "warn" : "success");
+            if (fileWarned) warnedCount++;
             successCount++;
           } catch (e) {
             addLog(t("msg_convert_error", fileName, sanitizeError(e)), "error");
@@ -537,8 +543,13 @@ export default function HdrConvert() {
         if (aborted) {
           setLastActionResult("cancelled");
         } else if (successCount > 0) {
-          addLog(t("msg_complete", successCount, paths.length), "success");
-          setLastActionResult("success");
+          if (warnedCount > 0) {
+            addLog(t("msg_complete_warnings", successCount, paths.length, warnedCount), "warn");
+            setLastActionResult("partial");
+          } else {
+            addLog(t("msg_complete", successCount, paths.length), "success");
+            setLastActionResult("success");
+          }
         } else {
           addLog(t("msg_all_failed", paths.length), "error");
           setLastActionResult("error");

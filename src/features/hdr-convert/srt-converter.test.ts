@@ -5,6 +5,7 @@
  * format detection helpers, and custom style configuration.
  */
 import { describe, it, expect } from "vitest";
+import { parse as parseAss } from "ass-compiler";
 import {
   escapeSrtUserText,
   preprocessSrtColors,
@@ -17,6 +18,44 @@ import {
   DEFAULT_STYLE,
 } from "./srt-converter";
 import { parseSubtitle } from "../../lib/subtitle-parser";
+import { collectFontsWithParser } from "../font-embed/font-collector";
+import { shiftSubtitles } from "../timing-shift/timing-engine";
+import { processAssContent } from "./ass-processor";
+
+function generatedDialogueText(document: string): string {
+  const match = /^Dialogue: (?:[^,\r\n]*,){9}(.*)$/m.exec(document);
+  if (!match) throw new Error("Missing generated Dialogue text");
+  return match[1]!;
+}
+
+// Independent text-token oracle, not a renderer: libass ass_get_next_char and
+// parse_events define these escapes and block boundaries. WORD JOINER has no
+// visible glyph. https://github.com/libass/libass/blob/master/libass/ass_parse.c
+function readAssText(text: string): { visible: string; overrides: string[] } {
+  let visible = "";
+  const overrides: string[] = [];
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i]!;
+    if (char === "{") {
+      const close = text.indexOf("}", i + 1);
+      if (close >= 0) {
+        overrides.push(text.slice(i + 1, close));
+        i = close;
+        continue;
+      }
+    }
+    if (char === "\\") {
+      const next = text[i + 1];
+      if (next === "N" || next === "n" || next === "h" || next === "{" || next === "}") {
+        visible += next === "N" ? "\n" : next === "n" ? " " : next === "h" ? "\u00a0" : next;
+        i++;
+        continue;
+      }
+    }
+    if (char !== "\u2060") visible += char === "\t" ? " " : char;
+  }
+  return { visible, overrides };
+}
 
 // ── preprocessSrtColors ──────────────────────────────────
 
@@ -78,7 +117,7 @@ describe("preprocessSrtColors", () => {
   it("handles text with no color attribute on font tag", () => {
     const input = '<font face="Arial">Styled</font>';
     const result = preprocessSrtColors(input);
-    // This stage owns color only. The document builder strips the untouched
+    // This stage owns color only. The composed serializer strips the untouched
     // non-color HTML tags later, so neither side may inject a style reset.
     expect(result).toBe(input);
     expect(result).not.toContain("{\\r}");
@@ -187,7 +226,7 @@ describe("processSrtUserText", () => {
     const input = '{\\an8}<font color="#FF0000">Red</font>';
     const out = processSrtUserText(input);
     // User's `{` got escaped — no raw `{\` of user origin remains.
-    expect(out).toContain("\\{\\\\an8\\}");
+    expect(readAssText(out).visible).toBe("{\\an8}Red");
     // Our injected color tag DID land in the output (real `{\1c…}`).
     expect(out).toMatch(/\{\\1c&H/);
   });
@@ -196,23 +235,42 @@ describe("processSrtUserText", () => {
     const input = '<font color="#FF0000" title="{\\an8}">Red</font>{\\pos(10,20)} after color';
     const out = processSrtUserText(input);
 
-    expect(out).toBe("{\\1c&H0000FF&}Red{\\1c}\\{\\\\pos(10,20)\\} after color");
+    expect(readAssText(out)).toEqual({
+      visible: "Red{\\pos(10,20)} after color",
+      overrides: ["\\1c&H0000FF&", "\\1c"],
+    });
     expect(out).not.toContain("{\\an8}");
     expect(out).not.toContain("{\\pos(10,20)}");
   });
 
-  it("equals preprocessSrtColors(escapeSrtUserText(text)) by composition", () => {
-    // Pin the composition contract — if a future refactor reorders or
-    // skips a step inside processSrtUserText, this test fails.
-    const samples = [
-      "Plain text only",
-      '<font color="#00FF00">Green</font>',
-      'Text with {literal-braces} and a <font color="#FFFF00">tag</font>',
-      "Backslash \\ + brace { + close }",
-    ];
-    for (const s of samples) {
-      expect(processSrtUserText(s)).toBe(preprocessSrtColors(escapeSrtUserText(s)));
+  it("keeps literal text separate from trusted formatting and line breaks", () => {
+    const input = String.raw`C:\New\<b>bold</b><br>{\fnOther}`;
+    expect(readAssText(processSrtUserText(input))).toEqual({
+      visible: "C:\\New\\bold\n{\\fnOther}",
+      overrides: ["\\b1", "\\b0"],
+    });
+  });
+
+  it.each<[string, string, string[]]>([
+    ["I <3 <b>you</b>", "I <3 you", ["\\b1", "\\b0"]],
+    ['Price < $5 <font color="#fff">today</font>', "Price < $5 today", ["\\1c&Hffffff&", "\\1c"]],
+    ["I <3", "I <3", []],
+    ["<b>you</b>", "you", ["\\b1", "\\b0"]],
+    ["<unknown>you</unknown>", "you", []],
+    ["<00:00:01.000>you", "you", []],
+  ])(
+    "preserves literal prefixes and original markup boundaries: %s",
+    (input, visible, overrides) => {
+      expect(readAssText(processSrtUserText(input))).toEqual({ visible, overrides });
     }
+  );
+
+  it("preserves many literal less-than prefixes before one real tag", () => {
+    const prefix = "<3 < $5 ".repeat(64);
+    expect(readAssText(processSrtUserText(`${prefix}<i>end</i>`))).toEqual({
+      visible: `${prefix}end`,
+      overrides: ["\\i1", "\\i0"],
+    });
   });
 
   it("is idempotent on text with no user braces and no color tags", () => {
@@ -229,7 +287,7 @@ describe("shared text-cue to ASS conversion", () => {
 
     expect(dialogues).toHaveLength(1);
     expect(dialogues[0]).toContain("0:00:01.00,0:00:02.00");
-    expect(dialogues[0]).toContain("\\{\\\\an8\\}");
+    expect(readAssText(generatedDialogueText(result.content)).visible).toBe("{\\an8}Red");
     expect(dialogues[0]).toContain("{\\1c&H0000FF&}Red");
     expect(result.content).not.toContain("25.000");
   });
@@ -326,7 +384,7 @@ describe("buildAssDocument", () => {
 
   it("does not reveal a second tag when nested unknown HTML-like markup is stripped", () => {
     const result = buildAssDocument([
-      { start: 0, end: 1000, text: "<scr<script>ipt>alert</script>" },
+      { start: 0, end: 1000, text: processSrtUserText("<scr<script>ipt>alert</script>") },
     ]);
     const dialogue = result.split("\n").find((line) => line.startsWith("Dialogue:"));
 
@@ -390,8 +448,7 @@ describe("WebVTT HDR conversion prep", () => {
       "<i>Second</i> line",
     ].join("\n");
 
-    const { captions } = parseSubtitle(processSrtUserText(vtt));
-    const { content: doc } = buildAssDocumentFromCaptions(captions);
+    const { content: doc } = convertTextCueSubtitleToAss(vtt);
 
     expect(doc).toContain("Dialogue: 0,0:00:01.00,0:00:02.50");
     expect(doc).toContain("First line");
@@ -406,8 +463,7 @@ describe("WebVTT HDR conversion prep", () => {
       "Positioned cue",
     ].join("\n");
 
-    const { captions } = parseSubtitle(processSrtUserText(vtt));
-    const { content: doc } = buildAssDocumentFromCaptions(captions);
+    const { content: doc } = convertTextCueSubtitleToAss(vtt);
 
     expect(doc).toContain("Positioned cue");
     expect(doc).not.toContain("line:90%");
@@ -418,6 +474,141 @@ describe("WebVTT HDR conversion prep", () => {
     const { captions } = parseSubtitle("WEBVTT\n\nNOTE\ncomment only");
 
     expect(() => buildAssDocumentFromCaptions(captions)).toThrow(/No subtitle cues/);
+  });
+
+  it.each([
+    ["A &amp; B &lt;3 &gt;2 &copy; &eacute; &NotEqualTilde;", "A & B <3 >2 © é \u2242\u0338"],
+    ["&#65; &#x1F642; &nbsp;&lrm;&rlm;", "A 🙂 \u00a0\u200e\u200f"],
+    ["&copy 2026 &amp=x", "© 2026 &=x"],
+    ["&madeup; &#x; &#;", "&madeup; &#x; &#;"],
+    ["&#0; &#xD800; &#1114112; &#128;", "� � � €"],
+    ["&amp;amp; &amp;lt;b&amp;gt;", "&amp; &lt;b&gt;"],
+    ["&#92;N &#92;h", "\\N \\h"],
+  ])("decodes WebVTT references once with HTML data-state rules: %s", (input, expected) => {
+    const { content } = convertTextCueSubtitleToAss(
+      `WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n${input}\n`
+    );
+    expect(readAssText(generatedDialogueText(content))).toEqual({
+      visible: expected,
+      overrides: [],
+    });
+  });
+
+  it("keeps decoded markup and ASS-looking references literal while original tags remain active", () => {
+    const input =
+      '&lt;b&gt;literal&lt;/b&gt; &#123;&#92;an8&#125; <b>bold</b> <font color="#FFFFFF">white</font>';
+    const { content } = convertTextCueSubtitleToAss(
+      `WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n${input}\n`
+    );
+    const result = readAssText(generatedDialogueText(processAssContent(content, 203, "PQ")));
+    expect(result).toEqual({
+      visible: "<b>literal</b> {\\an8} bold white",
+      overrides: ["\\b1", "\\b0", "\\1c&H949494&", "\\1c"],
+    });
+  });
+
+  it("does not create new markup or a reference across original tag boundaries", () => {
+    const input = '&am<c>p;</c> &lt;<i>b</i>&gt; <span title="<b>">tail';
+    const { content } = convertTextCueSubtitleToAss(
+      `WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n${input}\n`
+    );
+    expect(readAssText(generatedDialogueText(content))).toEqual({
+      visible: '&amp; <b> ">tail',
+      overrides: ["\\i1", "\\i0"],
+    });
+  });
+
+  it("keeps decoded physical line breaks inside one ASS Dialogue record", () => {
+    const { content } = convertTextCueSubtitleToAss(
+      "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nfirst&#13;&#10;Dialogue: literal&#10;last\n"
+    );
+    expect(content.match(/^Dialogue:/gm)).toHaveLength(1);
+    expect(readAssText(generatedDialogueText(content)).visible).toBe(
+      "first\nDialogue: literal\nlast"
+    );
+  });
+
+  it("does not decode references in SRT or MicroDVD as a side effect", () => {
+    const text = "A &amp; B &#123;";
+    for (const input of [`1\n00:00:01,000 --> 00:00:02,000\n${text}\n`, `{25}{50}${text}`]) {
+      const { content } = convertTextCueSubtitleToAss(input);
+      expect(readAssText(generatedDialogueText(content)).visible).toBe(text);
+    }
+  });
+});
+
+describe("literal ASS text semantics", () => {
+  it("preserves short literal escape combinations between trusted formatting tags", () => {
+    const characters = ["\\", "{", "}", "N", "n", "h", "\u2060", "🙂"];
+    for (const first of characters) {
+      for (const second of characters) {
+        for (const third of characters) {
+          const input = first + second + third;
+          const encoded = escapeSrtUserText(input);
+          expect(readAssText(`{\\b1}${encoded}{\\b0}`)).toEqual({
+            visible: input.replaceAll("\u2060", ""),
+            overrides: ["\\b1", "\\b0"],
+          });
+        }
+      }
+    }
+  });
+
+  it("retains existing word joiners without duplicating or consuming them", () => {
+    const input = "\u2060\\\u2060N \\\u2060\u2060🙂\u2060";
+    expect(escapeSrtUserText(input)).toBe(input);
+    expect(readAssText(escapeSrtUserText(input))).toEqual({
+      visible: "\\N \\🙂",
+      overrides: [],
+    });
+  });
+
+  it.each([
+    String.raw`C:\Temp`,
+    String.raw`C:\New`,
+    String.raw`\N \n \h`,
+    String.raw`a\\b \{literal\} {\an8}`,
+    "trailing\\",
+  ])("preserves visible literal characters across text formats: %s", (text) => {
+    const inputs = [
+      `1\n00:00:01,000 --> 00:00:02,000\n${text}\n`,
+      `WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n${text}\n`,
+      `{25}{50}${text}`,
+    ];
+    for (const input of inputs) {
+      const { content } = convertTextCueSubtitleToAss(input);
+      expect(readAssText(generatedDialogueText(content))).toEqual({ visible: text, overrides: [] });
+    }
+  });
+
+  it("keeps real breaks distinct from literal backslash-N and preserves an existing word joiner", () => {
+    const input = "literal \\N<br>next\r\nlast\\\u2060N";
+    const text = processSrtUserText(input);
+    expect(readAssText(text)).toEqual({ visible: "literal \\N\nnext\nlast\\N", overrides: [] });
+    expect(text).not.toContain("\u2060\u2060");
+  });
+
+  it("preserves glyph coverage and literal text through HDR and timing conversion", () => {
+    const cue = String.raw`C:\New {\fnOther} &eacute; &#x1F642; <b>bold</b>`;
+    const { content } = convertTextCueSubtitleToAss(
+      `WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n${cue}\n`
+    );
+    const shifted = shiftSubtitles(processAssContent(content, 203, "PQ"), { offsetMs: 1000 });
+    expect(readAssText(generatedDialogueText(shifted.content))).toEqual({
+      visible: "C:\\New {\\fnOther} é 🙂 bold",
+      overrides: ["\\b1", "\\b0"],
+    });
+    expect(parseSubtitle(shifted.content).captions[0]).toMatchObject({ start: 2000, end: 3000 });
+    const usage = collectFontsWithParser(shifted.content, parseAss);
+    expect(usage.map((font) => font.key)).toEqual([
+      { family: "Arial", bold: false, italic: false },
+      { family: "Arial", bold: true, italic: false },
+    ]);
+    const plainGlyphs = usage[0]!.codepoints;
+    for (const char of "C:\\New{\\fnOther}é🙂") {
+      expect(plainGlyphs.has(char.codePointAt(0)!)).toBe(true);
+    }
+    expect([...usage[1]!.codepoints]).toEqual([98, 111, 108, 100]);
   });
 });
 
@@ -471,7 +662,10 @@ describe("SRT pipeline integration — override-injection security", () => {
     const doc = buildAssDocument([{ start: 0, end: 1000, text: escaped }]);
     // The emitted Dialogue must carry escaped braces — libass renders as
     // literal `{\an8}hello`, NOT as a repositioning override.
-    expect(doc).toContain("\\{\\\\an8\\}hello");
+    expect(readAssText(generatedDialogueText(doc))).toEqual({
+      visible: "{\\an8}hello",
+      overrides: [],
+    });
   });
 });
 

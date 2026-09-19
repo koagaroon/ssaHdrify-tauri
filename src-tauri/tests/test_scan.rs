@@ -362,8 +362,9 @@ fn scan_font_files_accepts_max_input_paths_boundary() {
     // Exactly MAX_INPUT_PATHS (1000) paths must pass length validation
     // and reach the worker — even though every path is a non-existent
     // dummy that fails canonicalize and contributes zero faces, the
-    // command must NOT reject before spawning the worker. Catches a
-    // future `> ↔ >=` flip in the validation.
+    // command must NOT reject before spawning the worker. The worker
+    // reports incomplete I/O because a selected path is unreadable.
+    // Catches a future `> ↔ >=` flip in the validation.
     // Absolute paths anchored at the OS temp dir; see oversize test.
     let temp_root = std::env::temp_dir();
     let boundary: Vec<String> = (0..1000)
@@ -387,7 +388,7 @@ fn scan_font_files_accepts_max_input_paths_boundary() {
     );
     let done = take_done(&done);
     assert_eq!(done.added, 0);
-    assert_eq!(done.reason, REASON_NATURAL);
+    assert_eq!(done.reason, "incompleteIo");
 }
 
 // The three rejection paths are distinct contracts.

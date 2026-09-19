@@ -9,6 +9,7 @@
  */
 import { sRgbToHdr, type Eotf, DEFAULT_BRIGHTNESS, MIN_BRIGHTNESS } from "./color-engine";
 import { MAX_PARSED_ENTRIES } from "../../lib/subtitle-parser";
+import { iterateSourceLines } from "../../lib/source-lines";
 
 // Derive LINE_CAP from MAX_PARSED_ENTRIES plus a header-overhead
 // budget so the cap accommodates SRT→ASS upcasts. A hardcoded
@@ -54,6 +55,8 @@ const MAX_LINE_CHARS = 1_000_000;
 // would tighten the bound at the cost of an O(N) prefix walk on
 // every Style line; not worth it given the upstream guard.
 const MAX_STYLE_FIELDS = 1024;
+const MAX_EVENT_FIELDS = 1024;
+const EVENT_TEXT_INDEX_FALLBACK = 9;
 
 // ── Style color fields in ASS [V4+ Styles] section ────────
 // Format line: "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, ..."
@@ -142,7 +145,7 @@ function transformColorString(assColor: string, targetBrightness: number, eotf: 
 
 // FFmpeg emits short BGR values without leading zeros. Keep the existing
 // eight-digit alpha extension, but do not match prefixes of longer values.
-const COLOR_TAG_RE = /(\\[0-9]?c&H)([0-9a-fA-F]{1,6}|[0-9a-fA-F]{8})(?=[&}),\\\r\n]|$)/g;
+const COLOR_TAG_RE = /(\\[1-4]?c&H)([0-9a-fA-F]{1,6}|[0-9a-fA-F]{8})(?=[&}),\\\r\n]|$)/g;
 const COLOR_FIELD_RE = /^&H[0-9A-Fa-f]{1,8}$/i;
 const DECIMAL_COLOR_FIELD_RE = /^[+-]?\d{1,10}$/;
 
@@ -161,13 +164,64 @@ function normalizeStyleColor(value: string): string | null {
  * e.g., {\1c&H0000FF} → {\1c&H002D45}
  */
 function transformEventText(text: string, targetBrightness: number, eotf: Eotf): string {
-  return text.replace(COLOR_TAG_RE, (_, prefix: string, hexColor: string) => {
-    const { r, g, b, alpha } = parseAssColor(`&H${hexColor}`);
-    const [hr, hg, hb] = sRgbToHdr(r, g, b, targetBrightness, eotf);
-    // Inline color tags use the same alpha prefix as the input
-    const alphaPrefix = hexColor.length === 8 ? alpha : "";
-    return `${prefix}${alphaPrefix}${hexByte(hb)}${hexByte(hg)}${hexByte(hr)}`;
-  });
+  const parts: string[] = [];
+  let cursor = 0;
+  let searchFrom = 0;
+  while (searchFrom < text.length) {
+    const open = text.indexOf("{", searchFrom);
+    if (open < 0) break;
+    // libass consumes \{ as a literal even when another backslash precedes it.
+    if (open > 0 && text[open - 1] === "\\") {
+      searchFrom = open + 1;
+      continue;
+    }
+    const close = text.indexOf("}", open + 1);
+    if (close < 0) break;
+    const block = text
+      .slice(open + 1, close)
+      .replace(COLOR_TAG_RE, (_, prefix: string, hexColor: string) => {
+        const { r, g, b, alpha } = parseAssColor(`&H${hexColor}`);
+        const [hr, hg, hb] = sRgbToHdr(r, g, b, targetBrightness, eotf);
+        const alphaPrefix = hexColor.length === 8 ? alpha : "";
+        return `${prefix}${alphaPrefix}${hexByte(hb)}${hexByte(hg)}${hexByte(hr)}`;
+      });
+    parts.push(text.slice(cursor, open + 1), block, "}");
+    cursor = close + 1;
+    searchFrom = cursor;
+  }
+  parts.push(text.slice(cursor));
+  return parts.join("");
+}
+
+function parseEventTextIndex(line: string): number {
+  const fields = line
+    .slice(line.indexOf(":") + 1)
+    .split(",", MAX_EVENT_FIELDS + 1)
+    .map((field) => field.trim().toLowerCase());
+  if (fields.length > MAX_EVENT_FIELDS) {
+    throw new Error(`ASS/SSA event Format has too many fields (max ${MAX_EVENT_FIELDS})`);
+  }
+  if (fields.filter((field) => field === "text").length !== 1 || fields.at(-1) !== "text") {
+    throw new Error("ASS/SSA event Format must contain one final Text field");
+  }
+  return fields.length - 1;
+}
+
+function transformDialogueLine(
+  line: string,
+  textIndex: number,
+  targetBrightness: number,
+  eotf: Eotf
+): string {
+  let textStart = line.indexOf(":") + 1;
+  for (let field = 0; field < textIndex; field++) {
+    const comma = line.indexOf(",", textStart);
+    if (comma < 0) return line;
+    textStart = comma + 1;
+  }
+  return (
+    line.slice(0, textStart) + transformEventText(line.slice(textStart), targetBrightness, eotf)
+  );
 }
 
 /**
@@ -289,34 +343,18 @@ export function processAssContent(
     throw new Error(`File too large: ${(content.length / 1_000_000).toFixed(1)} MB (max 100 MB)`);
   }
 
-  // Pre-split line-count probe . 50 MB of pure '\n'
-  // passes the byte-size guard above, but `.split(/\r?\n/)` then
-  // allocates ~50M empty strings (~2 GB V8 heap) BEFORE the post-split
-  // throw at line 221 can fire. A small content+pure-newline blob
-  // crafted via a hostile subtitle file is reachable (untrusted-input: subtitle
-  // content from public release channels). Probe the count manually
-  // and throw before the split allocates. Gated on content.length to
-  // keep the small-file fast path zero-overhead. The 1 MB gate is well
-  // above any realistic small subtitle (5-200 KB) and well below the
-  // attack threshold (tens of MB).
-  if (content.length > 1_000_000) {
-    let nl = 1;
-    for (let i = 0; i < content.length; i++) {
-      if (content.charCodeAt(i) === 10 /* '\n' */) {
-        nl++;
-        if (nl > LINE_CAP) {
-          throw new Error(`File too large: >${LINE_CAP} lines`);
-        }
-      }
+  // Count without allocating a line array; all supported separators share the
+  // same cap. Retain the trailing empty-line slot used by the prior split.
+  let totalLines = 1;
+  for (const sourceLine of iterateSourceLines(content)) {
+    if (sourceLine.body.length > MAX_LINE_CHARS) {
+      throw new Error(
+        `Line ${totalLines} too long: ${sourceLine.body.length} chars (max ${MAX_LINE_CHARS})`
+      );
     }
-  }
-
-  // Preserve the original line ending style
-  const lineEnding = content.includes("\r\n") ? "\r\n" : "\n";
-  const lines = content.split(/\r?\n/);
-
-  if (lines.length > LINE_CAP) {
-    throw new Error(`File too large: ${lines.length} lines (max ${LINE_CAP})`);
+    if (sourceLine.ending && ++totalLines > LINE_CAP) {
+      throw new Error(`File too large: >${LINE_CAP} lines`);
+    }
   }
 
   let currentSection: AssSection = "info";
@@ -325,26 +363,16 @@ export function processAssContent(
   // Fresh per-call copy so a Format line parsed in one file doesn't leak its
   // color-field indices into the next file when callers reuse this module.
   let styleColorIndices = STYLE_COLOR_INDICES_FALLBACK.slice();
+  let eventTextIndex = EVENT_TEXT_INDEX_FALLBACK;
+  let i = 0;
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!;
-
-    // per-line byte cap fires BEFORE
-    // detectSection / transformStyleLine / transformEventText so a
-    // single pathological line can't burn 99 MB of trim/lowercase +
-    // regex work on the UI thread. See MAX_LINE_CHARS docblock.
-    if (line.length > MAX_LINE_CHARS) {
-      throw new Error(`Line ${i + 1} too long: ${line.length} chars (max ${MAX_LINE_CHARS})`);
-    }
+  for (const { body: line, ending } of iterateSourceLines(content)) {
+    let transformed = line;
 
     const newSection = detectSection(line);
     if (newSection !== null) {
       currentSection = newSection;
-      result.push(line);
-      continue;
-    }
-
-    if (currentSection === "styles") {
+    } else if (currentSection === "styles") {
       // Format lines declare the color-field positions for later Style lines;
       // pass them through unchanged. Case-insensitive, tolerate leading
       // whitespace — same lenience the style branch applies below.
@@ -354,31 +382,30 @@ export function processAssContent(
         if (parsed) {
           styleColorIndices = parsed;
         }
-        result.push(line);
       } else {
-        result.push(transformStyleLine(line, targetBrightness, eotf, styleColorIndices));
+        transformed = transformStyleLine(line, targetBrightness, eotf, styleColorIndices);
       }
-    } else if (currentSection === "events" && /^\s*dialogue:/i.test(line)) {
-      // Comment: lines are non-rendering and must not be mutated.
-      // Dialogue: match is case-insensitive and accepts leading whitespace so
-      // renderers' lenience is mirrored here — otherwise "dialogue:" or
-      // " Dialogue:" would slip through untransformed.
-      result.push(transformEventText(line, targetBrightness, eotf));
-    } else {
-      result.push(line);
+    } else if (currentSection === "events") {
+      if (/^\s*format:/i.test(line)) {
+        eventTextIndex = parseEventTextIndex(line);
+      } else if (/^\s*dialogue:/i.test(line)) {
+        transformed = transformDialogueLine(line, eventTextIndex, targetBrightness, eotf);
+      }
     }
+    result.push(transformed, ending);
 
     // Skip the i === 0 fire : `0 % 100 === 0` would
     // emit a 0% update on every call, which for small files makes the
     // UI jump 0% → 100% with no intermediate ticks. Starting at the
     // first real boundary keeps the progress bar smooth.
     if (onProgress && i > 0 && i % 100 === 0) {
-      onProgress(i, lines.length);
+      onProgress(i, totalLines);
     }
+    i++;
   }
 
   // Signal completion — callers displaying progress need the final 100% tick
-  onProgress?.(lines.length, lines.length);
+  onProgress?.(totalLines, totalLines);
 
-  return result.join(lineEnding);
+  return result.join("");
 }

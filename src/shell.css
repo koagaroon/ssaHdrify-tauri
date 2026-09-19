@@ -1292,7 +1292,7 @@
   background: var(--bg-hover);
 }
 
-.dir-btn[aria-pressed="true"] {
+.dir-btn[aria-checked="true"] {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 10%, var(--bg-app));
   color: var(--text-primary);
@@ -1309,7 +1309,7 @@
   color: var(--text-muted);
 }
 
-.dir-btn[aria-pressed="true"] .dir-arrow {
+.dir-btn[aria-checked="true"] .dir-arrow {
   color: var(--accent);
 }
 

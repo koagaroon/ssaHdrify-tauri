@@ -86,6 +86,12 @@ fn sidecar_ext_allowed(ext: &str) -> bool {
     ALLOWED_RENAME_SIDECAR_EXTENSIONS.contains(&ext)
 }
 
+/// Include text subtitles and opaque sidecars in Rename's source protection.
+pub fn is_rename_subtitle_path(path: &Path) -> bool {
+    let ext = path_extension_lower(path);
+    text_ext_allowed(&ext) || sidecar_ext_allowed(&ext)
+}
+
 fn check_subtitle_extension(path: &Path, label: &str) -> Result<(), String> {
     let ext = path_extension_lower(path);
     if !text_ext_allowed(&ext) {
@@ -1113,6 +1119,18 @@ pub fn safe_rename_file(
 mod tests {
     use super::*;
     use std::io::Read as _;
+
+    #[test]
+    fn rename_source_classification_includes_sidecars_and_excludes_other_files() {
+        for extension in ["ass", "ssa", "srt", "vtt", "sub", "sup", "ASS", "SUP"] {
+            assert!(is_rename_subtitle_path(Path::new(&format!(
+                "source.{extension}"
+            ))));
+        }
+        for name in ["video.mkv", "font.ttf", "notes.txt", "lyrics.lrc", "source"] {
+            assert!(!is_rename_subtitle_path(Path::new(name)));
+        }
+    }
 
     fn allow_all(_: &Path) -> bool {
         true

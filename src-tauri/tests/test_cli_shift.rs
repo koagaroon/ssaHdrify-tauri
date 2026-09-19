@@ -319,7 +319,26 @@ fn declared_microdvd_hdr_converts_one_cue_without_metadata_dialogue() {
         fs::read_to_string(root.join("episode.hdr.ass")).expect("declared-FPS HDR output missing");
     assert_eq!(converted.matches("Dialogue:").count(), 1);
     assert!(converted.contains("0:00:01.00,0:00:02.00"));
-    assert!(converted.contains("\\{\\\\an8\\}Hello"));
+    let text = converted
+        .lines()
+        .find(|line| line.starts_with("Dialogue:"))
+        .unwrap()
+        .splitn(10, ',')
+        .nth(9)
+        .unwrap();
+    // Decode this literal-only cue's brace escapes; an active override or
+    // doubled visible backslash must fail independently of its serialization.
+    let mut chars = text.chars().peekable();
+    let mut visible = String::new();
+    while let Some(ch) = chars.next() {
+        assert_ne!(ch, '{', "literal text became an ASS override block");
+        if ch == '\\' && matches!(chars.peek(), Some('{' | '}')) {
+            visible.push(chars.next().unwrap());
+        } else if ch != '\u{2060}' {
+            visible.push(ch);
+        }
+    }
+    assert_eq!(visible, "{\\an8}Hello");
     assert!(!converted.contains("25.000"));
     let _ = fs::remove_dir_all(root);
 }

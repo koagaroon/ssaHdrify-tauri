@@ -20,6 +20,7 @@ import {
   resolveUserFont,
   subsetFont,
   type LocalFontEntry,
+  type TextDecodingInfo,
 } from "../../lib/tauri-api";
 import { assertAssShape, insertFontsSection } from "./ass-font-section";
 import {
@@ -417,8 +418,8 @@ export interface FileAnalysis {
   content: string;
   infos: FontInfo[];
   usages: FontUsage[];
-  /** Encoding inferred without a BOM; retained so every later write warns. */
-  inferredEncodingId?: string;
+  /** Retained across source reanalysis so every later write reports decoding warnings. */
+  decoding?: TextDecodingInfo;
 }
 
 /**
