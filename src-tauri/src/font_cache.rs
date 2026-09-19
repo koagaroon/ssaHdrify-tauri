@@ -203,7 +203,8 @@ fn reject_cache_reparse_paths(cache_path: &Path) -> Result<(), CacheError> {
 /// rules, or face-index encoding, bump first. Long-term: persist a
 /// git-describe-derived build_id in cache_meta alongside the
 /// version number to catch unbumped semantic shifts.
-pub const SCHEMA_VERSION: i32 = 6;
+// Version 6 can contain incomplete scans whose read failures left no recovery marker.
+pub const SCHEMA_VERSION: i32 = 7;
 
 const KEY_KIND_FAMILY: i32 = 0;
 const KEY_KIND_FACE_ALIAS: i32 = 1;
@@ -2548,6 +2549,56 @@ mod tests {
             }
             other => panic!("expected SchemaVersionMismatch, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn version_six_cache_requires_explicit_recovery_in_both_open_modes() {
+        let (_guard, path) = temp_cache_path();
+        FontCache::open_or_create(&path).expect("create cache");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute(
+                "UPDATE cache_meta SET value = '6' WHERE key = 'schema_version'",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO cache_meta(key, value) VALUES('preserve-until-rebuild', 'old-data')",
+                [],
+            )
+            .unwrap();
+        }
+
+        for result in [
+            FontCache::open_or_create(&path),
+            FontCache::open_existing_read_only(&path),
+        ] {
+            match result {
+                Err(CacheError::SchemaVersionMismatch { found, expected }) => {
+                    assert_eq!(found, 6);
+                    assert_eq!(expected, 7);
+                }
+                other => panic!("old incomplete scans require explicit rebuild: {other:?}"),
+            }
+        }
+
+        let conn = Connection::open(&path).expect("old cache must still exist");
+        let version: String = conn
+            .query_row(
+                "SELECT value FROM cache_meta WHERE key = 'schema_version'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let old_data: String = conn
+            .query_row(
+                "SELECT value FROM cache_meta WHERE key = 'preserve-until-rebuild'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, "6", "opening must not silently migrate the cache");
+        assert_eq!(old_data, "old-data", "opening must not silently clear rows");
     }
 
     #[test]

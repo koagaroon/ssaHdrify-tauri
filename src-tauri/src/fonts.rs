@@ -2148,6 +2148,18 @@ enum FontFileSkipReason {
     NoUsableFaces,
 }
 
+impl FontFileSkipReason {
+    fn is_incomplete_io(self) -> bool {
+        matches!(
+            self,
+            Self::MetadataUnreadable
+                | Self::OpenFailed
+                | Self::ReadFailed
+                | Self::GrewPastReadLimit
+        )
+    }
+}
+
 impl std::fmt::Display for FontFileSkipReason {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let message = match self {
@@ -2177,16 +2189,16 @@ fn format_font_file_skip_warning(path: &Path, reason: FontFileSkipReason) -> Str
     )
 }
 
-fn parse_local_font_file(canonical: &Path, scan_id: u64) -> Vec<LocalFontEntry> {
-    match try_parse_local_font_file(canonical, scan_id) {
-        Ok(entries) => entries,
-        Err(reason) => {
-            // One warning per wholly skipped candidate. Use only the validated
-            // basename so local library layout never leaks into a shared log.
-            log::warn!("{}", format_font_file_skip_warning(canonical, reason));
-            Vec::new()
-        }
+fn parse_local_font_file(
+    canonical: &Path,
+    scan_id: u64,
+) -> Result<Vec<LocalFontEntry>, FontFileSkipReason> {
+    let result = try_parse_local_font_file(canonical, scan_id);
+    if let Err(reason) = &result {
+        // Use only the validated basename so library layout stays out of shared logs.
+        log::warn!("{}", format_font_file_skip_warning(canonical, *reason));
     }
+    result
 }
 
 /// Parse one font file (TTF/OTF/TTC/OTC) and return a `LocalFontEntry` per
@@ -2270,8 +2282,8 @@ fn try_parse_local_font_file(
     // `File::open + take(MAX_FONT_DATA_SIZE + 1) + read_to_end`
     // caps the buffer at the OS layer; the +1 byte lets us
     // distinguish "exactly at cap" from "over cap" — if the read
-    // returns more than MAX_FONT_DATA_SIZE bytes, the file was over
-    // cap and we silent-skip.
+    // returns more than MAX_FONT_DATA_SIZE bytes, the file changed during
+    // reading and the scan must remain incomplete.
     use std::io::Read;
     let mut data = Vec::new();
     {
@@ -2289,10 +2301,8 @@ fn try_parse_local_font_file(
     // `encoding.rs::read_text_detect_encoding` and `subset_font` below).
     // Belt-and-suspenders with the bounded-read above: the +1 byte trick
     // means `data.len() > MAX_FONT_DATA_SIZE` cleanly identifies over-cap
-    // reads even if the OS short-reads. Silent-skip pattern matches
-    // the rest of this function (return `Vec::new()` instead of
-    // Err); per-face errors here are all consumed by the scan loop
-    // the same way.
+    // reads even if the OS short-reads. Unlike a file already over the cap
+    // before reading, this changed file cannot contribute to a complete scan.
     if data.len() as u64 > MAX_FONT_DATA_SIZE {
         return Err(FontFileSkipReason::GrewPastReadLimit);
     }
@@ -2731,6 +2741,23 @@ fn add_preflight_file(path: &Path, out: &mut FontScanPreflight) {
     out.total_bytes = out.total_bytes.saturating_add(metadata.len());
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum ExplicitFontPathError {
+    Rejected(String),
+    IncompleteIo,
+}
+
+impl std::fmt::Display for ExplicitFontPathError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Rejected(reason) => formatter.write_str(reason),
+            Self::IncompleteIo => {
+                formatter.write_str("A selected font file could not be resolved or inspected")
+            }
+        }
+    }
+}
+
 /// Resolve one explicitly selected font file and validate both sides of the
 /// resolution boundary. The second validation is required even when the raw
 /// picker path passed: a symlink / junction / filesystem alias may resolve to
@@ -2741,23 +2768,50 @@ fn add_preflight_file(path: &Path, out: &mut FontScanPreflight) {
 fn canonicalize_and_validate_explicit_font_path_with<F>(
     path: &str,
     canonicalize: F,
-) -> Result<(PathBuf, String), String>
+) -> Result<(PathBuf, String), ExplicitFontPathError>
 where
     F: FnOnce(&Path) -> std::io::Result<PathBuf>,
 {
-    validate_ipc_path(path, "File")?;
-    let canonical = canonicalize(Path::new(path))
-        .map_err(|_| "A selected font file became unreadable".to_string())?;
-    let canonical_text = canonical
-        .to_str()
-        .ok_or_else(|| "A selected font path is not valid UTF-8".to_string())?;
+    validate_ipc_path(path, "File").map_err(ExplicitFontPathError::Rejected)?;
+    let canonical =
+        canonicalize(Path::new(path)).map_err(|_| ExplicitFontPathError::IncompleteIo)?;
+    let canonical_text = canonical.to_str().ok_or_else(|| {
+        ExplicitFontPathError::Rejected("A selected font path is not valid UTF-8".to_string())
+    })?;
     let normalized = normalize_canonical_path(canonical_text);
-    validate_ipc_path(&normalized, "Resolved font")?;
+    validate_ipc_path(&normalized, "Resolved font").map_err(ExplicitFontPathError::Rejected)?;
     Ok((canonical, normalized))
 }
 
-fn canonicalize_and_validate_explicit_font_path(path: &str) -> Result<(PathBuf, String), String> {
+fn canonicalize_and_validate_explicit_font_path(
+    path: &str,
+) -> Result<(PathBuf, String), ExplicitFontPathError> {
     canonicalize_and_validate_explicit_font_path_with(path, Path::canonicalize)
+}
+
+fn resolve_explicit_font_file_with<C, M>(
+    path: &str,
+    canonicalize: C,
+    metadata: M,
+) -> Result<Option<(PathBuf, String)>, ExplicitFontPathError>
+where
+    C: FnOnce(&Path) -> std::io::Result<PathBuf>,
+    M: FnOnce(&Path) -> std::io::Result<fs::Metadata>,
+{
+    let resolved = canonicalize_and_validate_explicit_font_path_with(path, canonicalize)?;
+    if !has_allowed_font_extension(&resolved.0) {
+        return Ok(None);
+    }
+    let metadata = metadata(&resolved.0).map_err(|_| ExplicitFontPathError::IncompleteIo)?;
+    Ok(metadata.is_file().then_some(resolved))
+}
+
+fn resolve_explicit_font_file(
+    path: &str,
+) -> Result<Option<(PathBuf, String)>, ExplicitFontPathError> {
+    resolve_explicit_font_file_with(path, Path::canonicalize, |canonical| {
+        fs::metadata(canonical)
+    })
 }
 
 fn preflight_files_inner(paths: Vec<String>) -> FontScanPreflight {
@@ -2885,9 +2939,31 @@ fn scan_directory_with_scope_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), S
     canonical_dir: &Path,
     scope: FontDirectoryScope,
     scan_id: u64,
-    mut captured_snapshot: Option<&mut Option<crate::font_cache::CacheSourceSnapshot>>,
-    mut emit_batch: F,
+    captured_snapshot: Option<&mut Option<crate::font_cache::CacheSourceSnapshot>>,
+    emit_batch: F,
 ) -> Result<ScanOutcome, String> {
+    scan_directory_with_scope_inner_with_parser(
+        canonical_dir,
+        scope,
+        scan_id,
+        captured_snapshot,
+        parse_local_font_file,
+        emit_batch,
+    )
+}
+
+fn scan_directory_with_scope_inner_with_parser<F, P>(
+    canonical_dir: &Path,
+    scope: FontDirectoryScope,
+    scan_id: u64,
+    mut captured_snapshot: Option<&mut Option<crate::font_cache::CacheSourceSnapshot>>,
+    mut parse_font: P,
+    mut emit_batch: F,
+) -> Result<ScanOutcome, String>
+where
+    F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>,
+    P: FnMut(&Path, u64) -> Result<Vec<LocalFontEntry>, FontFileSkipReason>,
+{
     let mut discovery = discover_font_files(canonical_dir, scope, scan_id)?;
     if discovery.reason == ScanStopReason::UserCancel {
         return Ok(ScanOutcome {
@@ -2946,7 +3022,19 @@ fn scan_directory_with_scope_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), S
                 reason: ScanStopReason::IncompleteIo,
             });
         }
-        let parsed_entries = parse_local_font_file(&discovered.path, scan_id);
+        let parsed_entries = match parse_font(&discovered.path, scan_id) {
+            Ok(entries) => entries,
+            Err(reason) if reason.is_incomplete_io() => {
+                if !buffer.is_empty() {
+                    emit_batch(std::mem::take(&mut buffer))?;
+                }
+                return Ok(ScanOutcome {
+                    total,
+                    reason: ScanStopReason::IncompleteIo,
+                });
+            }
+            Err(_) => Vec::new(),
+        };
         let stable_after_parse = fs::metadata(&discovered.path)
             .ok()
             .filter(|metadata| metadata.is_file() && metadata.len() == discovered.size_bytes)
@@ -3242,7 +3330,7 @@ pub fn scan_directory_collecting_with_scope(
     dir: &Path,
     scope: FontDirectoryScope,
 ) -> Result<Vec<LocalFontEntry>, String> {
-    scan_directory_collecting_impl(dir, scope, None)
+    scan_directory_collecting_impl(dir, scope, None, parse_local_font_file)
 }
 
 pub(crate) fn scan_directory_collecting_with_snapshot(
@@ -3250,7 +3338,8 @@ pub(crate) fn scan_directory_collecting_with_snapshot(
     scope: FontDirectoryScope,
 ) -> Result<(Vec<LocalFontEntry>, crate::font_cache::CacheSourceSnapshot), String> {
     let mut snapshot = None;
-    let entries = scan_directory_collecting_impl(dir, scope, Some(&mut snapshot))?;
+    let entries =
+        scan_directory_collecting_impl(dir, scope, Some(&mut snapshot), parse_local_font_file)?;
     let snapshot = snapshot.ok_or_else(|| {
         "Font source scan completed without a cache snapshot; persistent cache was not changed"
             .to_string()
@@ -3258,11 +3347,15 @@ pub(crate) fn scan_directory_collecting_with_snapshot(
     Ok((entries, snapshot))
 }
 
-fn scan_directory_collecting_impl(
+fn scan_directory_collecting_impl<P>(
     dir: &Path,
     scope: FontDirectoryScope,
     captured_snapshot: Option<&mut Option<crate::font_cache::CacheSourceSnapshot>>,
-) -> Result<Vec<LocalFontEntry>, String> {
+    parse_font: P,
+) -> Result<Vec<LocalFontEntry>, String>
+where
+    P: FnMut(&Path, u64) -> Result<Vec<LocalFontEntry>, FontFileSkipReason>,
+{
     // (considered, rejected): GUI's
     // scan_font_directory validates inside because it's an IPC entry
     // point (untrusted JS string). The CLI's scan_directory_collecting
@@ -3290,11 +3383,12 @@ fn scan_directory_collecting_impl(
         return Err(format!("Not a directory: {}", canonical.display()));
     }
     let mut entries: Vec<LocalFontEntry> = Vec::new();
-    let outcome = scan_directory_with_scope_inner(
+    let outcome = scan_directory_with_scope_inner_with_parser(
         &canonical,
         scope,
         NO_SCAN_ID,
         captured_snapshot,
+        parse_font,
         |batch| {
             // Defense-in-depth against refresh-fonts OOM on crafted font
             // folders: fail fast if a single source would
@@ -3522,8 +3616,29 @@ pub async fn scan_font_directory(
 fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
     paths: Vec<String>,
     scan_id: u64,
-    mut emit_batch: F,
+    emit_batch: F,
 ) -> Result<ScanOutcome, String> {
+    scan_files_inner_with_operations(
+        paths,
+        scan_id,
+        resolve_explicit_font_file,
+        parse_local_font_file,
+        emit_batch,
+    )
+}
+
+fn scan_files_inner_with_operations<F, P, R>(
+    paths: Vec<String>,
+    scan_id: u64,
+    mut resolve_file: R,
+    mut parse_font: P,
+    mut emit_batch: F,
+) -> Result<ScanOutcome, String>
+where
+    F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>,
+    P: FnMut(&Path, u64) -> Result<Vec<LocalFontEntry>, FontFileSkipReason>,
+    R: FnMut(&str) -> Result<Option<(PathBuf, String)>, ExplicitFontPathError>,
+{
     // hard cap inside the function instead of relying
     // on caller-trust. Public commands already enforce MAX_INPUT_PATHS
     // at IPC boundary, but this matches `scan_directory_inner`'s shape
@@ -3546,7 +3661,7 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
     let mut seen: HashSet<String> = HashSet::new();
 
     // mirror dropzone.rs's aggregate-count pattern.
-    // Per-path validate / canonicalize failures `continue` silently; a
+    // Invalid paths and non-font targets are intentional skips; a
     // single `log::info!` post-loop tells anyone reading the log why
     // the parsed face count came from fewer than `total_inputs` source
     // files. Emitted unconditionally before any cancel / ceiling
@@ -3557,7 +3672,7 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
     let log_rejected = |rejected: usize| {
         if rejected > 0 {
             log::info!(
-                "scan_files: dropped {rejected} of {total_inputs} input path(s) (validate / canonicalize failure)"
+                "scan_files: dropped {rejected} of {total_inputs} input path(s) (invalid path or non-font target)"
             );
         }
     };
@@ -3590,24 +3705,49 @@ fn scan_files_inner<F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>>(
         // the per-folder count past the XL-safety preflight (untrusted-input). For
         // the file-list path the user picked each entry on its own, so
         // chasing a single symlinked entry doesn't bypass any aggregate
-        // count gate. `canonicalize` below + `has_allowed_font_extension`
-        // (in `parse_local_font_file`) still bound the exfil surface
+        // count gate. `canonicalize` + `has_allowed_font_extension`
+        // in the resolver still bound the exfil surface
         // to font-extension targets.
-        let (canonical, canonical_key) = match canonicalize_and_validate_explicit_font_path(&p) {
-            Ok(resolved) => resolved,
-            Err(_) => {
+        let (canonical, canonical_key) = match resolve_file(&p) {
+            Ok(Some(resolved)) => resolved,
+            Ok(None) | Err(ExplicitFontPathError::Rejected(_)) => {
                 rejected += 1;
                 continue;
             }
+            Err(ExplicitFontPathError::IncompleteIo) => {
+                if !buffer.is_empty() {
+                    emit_batch(std::mem::take(&mut buffer))?;
+                }
+                log::warn!(
+                    "Selected font file '{}' could not be resolved or inspected",
+                    safe_font_file_log_label(Path::new(&p))
+                );
+                log_rejected(rejected);
+                return Ok(ScanOutcome {
+                    total,
+                    reason: ScanStopReason::IncompleteIo,
+                });
+            }
         };
-        if !canonical.is_file() {
-            continue;
-        }
         if !seen.insert(canonical_key) {
             continue;
         }
 
-        for font_entry in parse_local_font_file(&canonical, scan_id) {
+        let parsed_entries = match parse_font(&canonical, scan_id) {
+            Ok(entries) => entries,
+            Err(reason) if reason.is_incomplete_io() => {
+                if !buffer.is_empty() {
+                    emit_batch(std::mem::take(&mut buffer))?;
+                }
+                log_rejected(rejected);
+                return Ok(ScanOutcome {
+                    total,
+                    reason: ScanStopReason::IncompleteIo,
+                });
+            }
+            Err(_) => Vec::new(),
+        };
+        for font_entry in parsed_entries {
             buffer.push(font_entry);
             total += 1;
             if total > MAX_FONTS_PER_SCAN {
@@ -4868,7 +5008,8 @@ fn subset_with_index(font_data: &[u8], index: u32, codepoints: &[u32]) -> Result
 
     let empty_gids: IntSet<GlyphId> = IntSet::empty();
     let layout_scripts: IntSet<Tag> = IntSet::all();
-    let layout_features: IntSet<Tag> = IntSet::empty();
+    // Required features may use tags outside the defaults; retain their glyph closure too.
+    let layout_features: IntSet<Tag> = IntSet::all();
 
     let subset_once = |drop_gpos: bool| {
         // Drop the three "dead in subtitle rendering" tables. The set
@@ -4921,6 +5062,9 @@ fn subset_with_index(font_data: &[u8], index: u32, codepoints: &[u32]) -> Result
 }
 
 #[cfg(test)]
+mod layout_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -4951,7 +5095,8 @@ mod tests {
         .expect_err("an unsafe canonical target must be rejected");
 
         assert!(canonicalizer_called);
-        assert!(error.to_lowercase().contains("invalid"));
+        assert!(matches!(&error, ExplicitFontPathError::Rejected(_)));
+        assert!(error.to_string().to_lowercase().contains("invalid"));
     }
 
     #[test]
@@ -4986,7 +5131,8 @@ mod tests {
             })
             .expect_err("an ADS canonical target must be rejected");
 
-        assert!(error.to_lowercase().contains("colon"));
+        assert!(matches!(&error, ExplicitFontPathError::Rejected(_)));
+        assert!(error.to_string().to_lowercase().contains("colon"));
     }
 
     fn cache_candidate(
@@ -6221,7 +6367,8 @@ mod tests {
         let canonical = fixture
             .canonicalize()
             .expect("Dream Han fixture should canonicalize");
-        let entries = parse_local_font_file(&canonical, NO_SCAN_ID);
+        let entries = parse_local_font_file(&canonical, NO_SCAN_ID)
+            .expect("the supplied font should be readable and parseable");
         let sc_face = entries
             .iter()
             .find(|entry| {
@@ -6777,6 +6924,262 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    struct ReadFailureFixtures(PathBuf);
+
+    impl ReadFailureFixtures {
+        fn new(label: &str) -> Self {
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let root = std::env::temp_dir().join(format!(
+                "ssahdrify-font-read-{label}-{}-{stamp}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&root).unwrap();
+            for basename in ["a.ttf", "b.ttf", "c.ttf"] {
+                let font = font_with_name_records(&[(
+                    1,
+                    0x0409,
+                    utf16be_test_bytes(&format!("Test {basename}")),
+                )]);
+                fs::write(root.join(basename), font).unwrap();
+            }
+            Self(root.canonicalize().unwrap())
+        }
+
+        fn paths(&self) -> Vec<String> {
+            ["a.ttf", "b.ttf", "c.ttf"]
+                .map(|name| normalize_canonical_path(&self.0.join(name).to_string_lossy()))
+                .to_vec()
+        }
+    }
+
+    impl Drop for ReadFailureFixtures {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn scan_with_file_result(
+        fixtures: &ReadFailureFixtures,
+        scope: Option<FontDirectoryScope>,
+        failure: Option<FontFileSkipReason>,
+    ) -> (ScanOutcome, Vec<LocalFontEntry>, Vec<String>) {
+        let mut parsed_names = Vec::new();
+        let mut emitted = Vec::new();
+        let parser = |path: &Path, scan_id| {
+            let name = path.file_name().unwrap().to_str().unwrap();
+            parsed_names.push(name.to_string());
+            if name == "b.ttf" {
+                if let Some(reason) = failure {
+                    return Err(reason);
+                }
+            }
+            parse_local_font_file(path, scan_id)
+        };
+        let emit = |batch| {
+            emitted.extend(batch);
+            Ok(())
+        };
+        let outcome = match scope {
+            Some(scope) => scan_directory_with_scope_inner_with_parser(
+                &fixtures.0,
+                scope,
+                NO_SCAN_ID,
+                None,
+                parser,
+                emit,
+            ),
+            None => scan_files_inner_with_operations(
+                fixtures.paths(),
+                NO_SCAN_ID,
+                resolve_explicit_font_file,
+                parser,
+                emit,
+            ),
+        }
+        .expect("scan outcome should preserve partial results");
+        (outcome, emitted, parsed_names)
+    }
+
+    #[test]
+    fn font_read_failures_preserve_partial_results_and_refuse_cache_publication() {
+        let fixtures = ReadFailureFixtures::new("incomplete");
+        for scope in [
+            Some(FontDirectoryScope::Shallow),
+            Some(FontDirectoryScope::Recursive),
+            None,
+        ] {
+            let (control, entries, parsed) = scan_with_file_result(&fixtures, scope, None);
+            assert_eq!(control.reason, ScanStopReason::Natural);
+            assert_eq!(control.total, 3);
+            assert_eq!(entries.len(), 3);
+            assert_eq!(parsed, ["a.ttf", "b.ttf", "c.ttf"]);
+
+            for failure in [
+                FontFileSkipReason::MetadataUnreadable,
+                FontFileSkipReason::OpenFailed,
+                FontFileSkipReason::ReadFailed,
+                FontFileSkipReason::GrewPastReadLimit,
+            ] {
+                let (outcome, entries, parsed) =
+                    scan_with_file_result(&fixtures, scope, Some(failure));
+                assert_eq!(outcome.reason, ScanStopReason::IncompleteIo, "{failure:?}");
+                assert_eq!(outcome.total, 1);
+                assert_eq!(entries.len(), 1, "valid earlier faces remain available");
+                assert!(entries[0].path.ends_with("a.ttf"));
+                assert_eq!(parsed, ["a.ttf", "b.ttf"], "stop after incomplete I/O");
+                assert!(!is_cache_publication_eligible(&cache_candidate(
+                    outcome.reason,
+                    entries.len(),
+                    false,
+                )));
+            }
+        }
+    }
+
+    #[test]
+    fn malformed_and_preexisting_oversize_fonts_remain_complete_scan_skips() {
+        let fixtures = ReadFailureFixtures::new("intentional-skip");
+        for scope in [
+            Some(FontDirectoryScope::Shallow),
+            Some(FontDirectoryScope::Recursive),
+            None,
+        ] {
+            for failure in [
+                FontFileSkipReason::NoUsableFaces,
+                FontFileSkipReason::TooLargeBeforeRead,
+            ] {
+                let (outcome, entries, parsed) =
+                    scan_with_file_result(&fixtures, scope, Some(failure));
+                assert_eq!(outcome.reason, ScanStopReason::Natural, "{failure:?}");
+                assert_eq!(outcome.total, 2);
+                assert_eq!(entries.len(), 2);
+                assert!(entries[0].path.ends_with("a.ttf"));
+                assert!(entries[1].path.ends_with("c.ttf"));
+                assert_eq!(parsed, ["a.ttf", "b.ttf", "c.ttf"]);
+            }
+        }
+    }
+
+    #[test]
+    fn collecting_scan_rejects_incomplete_reads_instead_of_returning_cache_rows() {
+        let fixtures = ReadFailureFixtures::new("collecting");
+        for scope in [FontDirectoryScope::Shallow, FontDirectoryScope::Recursive] {
+            let mut snapshot = None;
+            let result = scan_directory_collecting_impl(
+                &fixtures.0,
+                scope,
+                Some(&mut snapshot),
+                |path, scan_id| {
+                    if path.file_name().unwrap() == "b.ttf" {
+                        Err(FontFileSkipReason::OpenFailed)
+                    } else {
+                        parse_local_font_file(path, scan_id)
+                    }
+                },
+            );
+            let error = result
+                .err()
+                .expect("incomplete scan cannot return publishable rows");
+            assert!(error.contains("IncompleteIo"));
+            assert!(error.contains("persistent cache was not changed"));
+            assert_eq!(snapshot.unwrap().files.len(), 3);
+        }
+    }
+
+    #[test]
+    fn explicit_file_resolution_failures_preserve_partial_results_as_incomplete() {
+        let fixtures = ReadFailureFixtures::new("resolution");
+        for fail_metadata in [false, true] {
+            for kind in [
+                std::io::ErrorKind::PermissionDenied,
+                std::io::ErrorKind::NotFound,
+            ] {
+                let mut emitted = Vec::new();
+                let mut parsed = Vec::new();
+                let outcome = scan_files_inner_with_operations(
+                    fixtures.paths(),
+                    NO_SCAN_ID,
+                    |selected| {
+                        resolve_explicit_font_file_with(
+                            selected,
+                            |path| {
+                                if !fail_metadata && path.file_name().unwrap() == "b.ttf" {
+                                    Err(std::io::Error::new(kind, "injected resolution failure"))
+                                } else {
+                                    path.canonicalize()
+                                }
+                            },
+                            |path| {
+                                if fail_metadata && path.file_name().unwrap() == "b.ttf" {
+                                    Err(std::io::Error::new(kind, "injected metadata failure"))
+                                } else {
+                                    fs::metadata(path)
+                                }
+                            },
+                        )
+                    },
+                    |path, scan_id| {
+                        parsed.push(path.file_name().unwrap().to_string_lossy().into_owned());
+                        parse_local_font_file(path, scan_id)
+                    },
+                    |batch| {
+                        emitted.extend(batch);
+                        Ok(())
+                    },
+                )
+                .unwrap();
+                assert_eq!(outcome.reason, ScanStopReason::IncompleteIo);
+                assert_eq!(outcome.total, 1);
+                assert_eq!(emitted.len(), 1);
+                assert!(emitted[0].path.ends_with("a.ttf"));
+                assert_eq!(parsed, ["a.ttf"], "the unresolved file must not be parsed");
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_file_scan_keeps_unsupported_and_non_file_targets_as_normal_skips() {
+        let fixtures = ReadFailureFixtures::new("non-font-targets");
+        let unsupported = fixtures.0.join("notes.txt");
+        fs::write(&unsupported, "not a font").unwrap();
+        let directory = fixtures.0.join("directory.ttf");
+        fs::create_dir(&directory).unwrap();
+        let mut paths = vec![
+            String::new(),
+            "has\u{0000}control.ttf".to_string(),
+            normalize_canonical_path(&unsupported.to_string_lossy()),
+            normalize_canonical_path(&directory.to_string_lossy()),
+        ];
+        paths.extend(fixtures.paths());
+        let mut emitted = Vec::new();
+        let outcome = scan_files_inner(paths, NO_SCAN_ID, |batch| {
+            emitted.extend(batch);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(outcome.reason, ScanStopReason::Natural);
+        assert_eq!(outcome.total, 3);
+        assert_eq!(emitted.len(), 3);
+    }
+
+    #[test]
+    fn explicit_file_scan_reports_a_disappeared_font_as_incomplete() {
+        let fixtures = ReadFailureFixtures::new("missing-target");
+        let missing = normalize_canonical_path(&fixtures.0.join("missing.ttf").to_string_lossy());
+        let mut emitted = Vec::new();
+        let outcome = scan_files_inner(vec![missing], NO_SCAN_ID, |batch| {
+            emitted.extend(batch);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(outcome.reason, ScanStopReason::IncompleteIo);
+        assert_eq!(outcome.total, 0);
+        assert!(emitted.is_empty());
+    }
+
     /// `scan_directory_inner` on a non-existent path surfaces the read_dir
     /// error as the user-facing string. The closure is never called.
     #[test]
@@ -6859,7 +7262,6 @@ mod tests {
             String::new(),                    // empty
             "x".repeat(5000),                 // oversized
             "has\u{0000}control".to_string(), // control char
-            "Z:\\does-not-exist.ttf".to_string(),
         ];
         let outcome = scan_files_inner(bad_paths, 2, |batch| {
             emitted.push(batch);
