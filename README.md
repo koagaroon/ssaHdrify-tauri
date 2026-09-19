@@ -94,7 +94,7 @@ macOS / Linux users may attempt the source-build workflow below. File dialogs, f
 
 ## 支持格式 | Supported Formats
 
-不同功能的格式支持范围并不完全相同；下表是当前行为。`HDR 色彩转换` 会先将 `.srt`、`.sub`、`.vtt` 转换为 ASS 再进行处理。
+不同功能的格式支持范围并不完全相同；下表描述的是当前实际行为。`HDR 色彩转换` 会先将 `.srt`、`.sub`、`.vtt` 转换为 ASS 再进行处理。
 
 Format support is not identical across workflows. The table below describes current behavior. `HDR Color Conversion` first converts `.srt`, `.sub`, and `.vtt` to ASS before processing.
 
@@ -152,7 +152,7 @@ ASS/SSA timing operations follow the `Format:` declaration in `[Events]`, includ
 4. 选择输出位置：默认保存到源字幕旁，也可以保存到指定文件夹；指定文件夹模式会将输出平铺到该文件夹，重复输出名会自动跳过 / Choose the output location: save beside each source subtitle by default, or save into a chosen folder; chosen-folder mode writes flat outputs into that folder and skips duplicate output names
 5. 点击「嵌入已选字体」，将子集化后的字体数据写入 `.embedded.ass` 输出文件 / Click **Embed Selected Fonts** to write the subset font data into `.embedded.ass` output files
 
-字幕组排版常用字体通常没有安装在系统中。打开「字体来源 / Font Sources」面板：选择「添加文件夹 / Add Folder」只扫描所选文件夹这一层；选择「添加字体库 / Add Font Library」会扫描所选根目录及其所有子文件夹。这些字体无需系统安装，也可以参与匹配。
+字幕组排版所用的字体往往没有安装在系统中。打开「字体来源 / Font Sources」面板：选择「添加文件夹 / Add Folder」只扫描所选文件夹这一层；选择「添加字体库 / Add Font Library」会扫描所选根目录及其所有子文件夹。这些字体无需系统安装，也可以参与匹配。
 
 Fonts commonly used in fan-sub typesetting are often not installed system-wide. Open **Font Sources**: **Add Folder** scans only the selected folder, while **Add Font Library** scans the selected root and all of its subfolders. These fonts can be matched without installing them into the OS.
 
@@ -162,7 +162,7 @@ Large font folders and nested libraries are supported; discovery and parsing sho
 
 > **字体名称匹配 / Font Name Matching**
 >
-> 工具会读取字体文件的 OpenType `name` 表，并索引受支持的本地化 family、typographic family、full-face 和 PostScript 名称变体（英文、中文等），同时内置了针对异常字体的安全上限。ASS 脚本无论引用哪个受支持名称，都能匹配到同一个字体文件；`@家族名` 这类竖排前缀也会按同一字体处理。
+> 工具会读取字体文件的 OpenType `name` 表，并索引受支持的本地化字体族名称、排印字体族名称（typographic family）、完整字体名称（full-face）和 PostScript 名称变体（英文、中文等），同时内置了针对异常字体的安全上限。ASS 脚本无论引用哪个受支持名称，都能匹配到同一个字体文件；`@字体族名` 这类竖排前缀也会按同一字体处理。
 >
 > The tool reads each font's OpenType `name` table and indexes supported localized family, typographic-family, full-face, and PostScript name variants (English, Chinese, etc.), with built-in safety caps against abnormal fonts. An ASS script referencing any supported name resolves to the same font file; the ASS `@FamilyName` vertical-writing prefix is treated as the same font.
 >
@@ -192,7 +192,7 @@ The editor changes only `Fontname` and `Fontsize` fields in the style table and 
 2. 应用会按字幕组常见命名方式提取剧集号，并预填配对表 / The app extracts episode numbers from common fan-sub naming patterns and pre-fills the pairing table
 3. 如果出现错配或漏配，可直接在对应行的下拉框中手动选择字幕；选中后该行会自动加入重命名队列 / If a row is paired incorrectly or missed, choose a subtitle from that row's dropdown; once selected, the row is automatically added to the rename queue
 4. 如果要为同一视频保留多个语言字幕，启用「保留每个视频的多个字幕」；带语言标签的字幕会写成 `Video.sc.ass`、`Video.tc.ass` 这类文件名 / To keep multiple language subtitles for the same video, enable **Keep multiple subtitles per video**; tagged subtitles are written as names such as `Video.sc.ass` and `Video.tc.ass`
-5. 选择输出策略：原文件直接改名 / 复制到视频所在目录 / 复制到自定义目录 / Pick the output strategy: rename in place, copy to the video's directory, or copy to a custom directory
+5. 选择输出策略：就地重命名 / 复制到视频所在目录 / 复制到自定义目录 / Pick the output strategy: rename in place, copy to the video's directory, or copy to a custom directory
 6. 点击「运行」；如果目标路径已存在按同一规则生成的同名文件，程序会先弹出覆盖确认对话框 / Click **Run**; if a file with the generated name already exists at the target path, an overwrite confirmation appears first
 
 > **配对算法 | Pairing Algorithm**
@@ -205,9 +205,9 @@ The editor changes only `Fontname` and `Fontsize` fields in the style table and 
 
 ## CLI 使用 | CLI Usage
 
-`ssahdrify-cli` 与 GUI 从同一份源代码构建，并提供 HDR 转换、时间轴偏移、字体嵌入和批量重命名。新增的样式编辑器目前仅在 GUI 中提供。CLI 另外提供 `chain`（一次调用串联多个步骤，只有最后一步写入文件）、`refresh-fonts`（构建或刷新 CLI 字体缓存）和 `diagnose-fonts`（只诊断字体解析，不写字幕）等子命令。
+`ssahdrify-cli` 与 GUI 从同一份源代码构建，并提供 HDR 转换、时间轴偏移、字体嵌入和批量重命名。样式编辑目前仅在 GUI 中提供。CLI 另外提供 `chain`（一次调用串联多个步骤，只有最后一步写入文件）、`refresh-fonts`（构建或刷新 CLI 字体缓存）和 `diagnose-fonts`（只诊断字体解析，不写字幕）等子命令。
 
-`ssahdrify-cli` is built from the same source as the GUI and provides HDR Convert, Time Shift, Font Embed, and Batch Rename. The new Style Edit workbench is currently GUI-only. The CLI also provides `chain` (run multiple steps with only the last step writing), `refresh-fonts` (build or refresh the CLI font cache), and `diagnose-fonts` (read-only font diagnostics).
+`ssahdrify-cli` is built from the same source as the GUI and provides HDR Convert, Time Shift, Font Embed, and Batch Rename. Style Edit is currently GUI-only. The CLI also provides `chain` (run multiple steps with only the last step writing), `refresh-fonts` (build or refresh the CLI font cache), and `diagnose-fonts` (read-only font diagnostics).
 
 ### 快速示例 | Quick Examples
 
@@ -255,7 +255,7 @@ ssahdrify-cli rename "<series-folder>" --langs all --dry-run
 
 `rename --mode` controls the file operation. The default `copy-to-video` copies each subtitle beside its matched video; `rename` renames the source subtitle in its existing directory; and `copy-to-chosen` copies it to the directory supplied through `--output-dir`. `--output-dir` is required with `copy-to-chosen` and is rejected with the other two modes.
 
-仅包含时间轴偏移的 `chain` 默认保留输入扩展名；包含 HDR 或字体嵌入步骤时默认输出 `.ass`。自定义输出模板仍按指定内容使用。
+仅包含时间轴偏移的 `chain` 默认保留输入扩展名；包含 HDR 或字体嵌入步骤时默认输出 `.ass`。若显式指定输出模板，则仍按模板生成文件名。
 
 A shift-only `chain` preserves the input extension by default. A chain containing HDR conversion or font embedding defaults to `.ass`. Explicit output templates retain the requested filename.
 
@@ -309,17 +309,17 @@ ssahdrify-cli chain          --help
 
 > **JSON 模式 | JSON Mode**
 >
-> `--json` 目前适用于 `hdr` / `shift` / `embed` / `rename` 和 `diagnose-fonts`。常规子命令会输出固定 schema 的报告，按文件列出 status (`written` / `planned` / `skipped` / `failed`)、output path、encoding、warnings 等字段；stderr 仍可输出供人阅读的诊断信息。`diagnose-fonts --json` 直接输出诊断报告。`chain` v1 会明确提示不支持 JSON，并改用纯文本报告；`refresh-fonts` 使用 stderr 输出状态。
+> `--json` 目前适用于 `hdr` / `shift` / `embed` / `rename` 和 `diagnose-fonts`。常规子命令会输出固定 schema 的报告，按文件列出 status (`written` / `planned` / `skipped` / `failed`)、output path、encoding、warnings 等字段；stderr 仍可输出文本形式的诊断信息。`diagnose-fonts --json` 直接输出诊断报告。`chain` v1 会明确提示不支持 JSON，并改用纯文本报告；`refresh-fonts` 使用 stderr 输出状态。
 >
 > `--json` currently applies to `hdr` / `shift` / `embed` / `rename` and `diagnose-fonts`. Normal subcommands emit a fixed-schema report listing per-file status (`written` / `planned` / `skipped` / `failed`), output path, encoding, warnings, and related fields; stderr can still print human-readable diagnostics. `diagnose-fonts --json` emits the diagnostic report directly. `chain` v1 explicitly reports that JSON output is not supported and uses a plain-text report instead; `refresh-fonts` reports status on stderr.
 >
-> 启用 `--diagnose` 时，即使供人阅读的输出采用默认的 summary 模式，JSON 也会额外包含完整的 `diagnostics` 对象。未启用 `--diagnose` 时，常规 JSON schema 保持不变。
+> 启用 `--diagnose` 时，即使常规文本输出采用默认的 summary 模式，JSON 也会额外包含完整的 `diagnostics` 对象。未启用 `--diagnose` 时，常规 JSON schema 保持不变。
 >
 > When `--diagnose` is enabled, JSON additionally includes the full `diagnostics` object even when human output uses the default summary mode. Without `--diagnose`, the normal JSON schema is unchanged.
 >
 > **终端字符串插值安全注意事项 | Terminal string-interpolation safety note**
 >
-> `--json` 按 RFC 8259 输出；BiDi 控制符（U+200E/U+202E 等）、零宽字符，以及 U+2028/U+2029 行分隔符在 JSON 字符串中都是合法字符，因此不会额外转义。如果用 `jq -r` 将 `.input` / `.output` 等字段还原后再插入到终端（例如 `echo`、提示符或其他 CLI 参数），恶意构造的文件名可能影响终端显示。下游脚本应在终端输出边界自行过滤（如 jq 的 `gsub` 或 shell 包装工具）。CLI 自身供人阅读的输出（未启用 `--json`）已在所有打印点调用 `sanitize_for_display`，不受此问题影响。
+> `--json` 按 RFC 8259 输出；BiDi 控制符（U+200E/U+202E 等）、零宽字符，以及 U+2028/U+2029 行分隔符在 JSON 字符串中都是合法字符，因此不会额外转义。如果用 `jq -r` 将 `.input` / `.output` 等字段还原后再插入到终端（例如 `echo`、提示符或其他 CLI 参数），恶意构造的文件名可能影响终端显示。下游脚本应在终端输出边界自行过滤（如 jq 的 `gsub` 或 shell 包装工具）。CLI 自身的常规文本输出（未启用 `--json`）已在所有打印点调用 `sanitize_for_display`，不受此问题影响。
 >
 > `--json` output follows RFC 8259, but BiDi format characters (U+200E/U+202E etc.), zero-width characters, and the U+2028/U+2029 line separators are valid in JSON strings and are not additionally escaped. If you use `jq -r` to restore fields such as `.input` / `.output` and then insert or interpolate those values into a terminal (`echo`, prompts, or another CLI's arguments), crafted filenames may affect terminal display. Downstream scripts should sanitize at the terminal output boundary (for example with jq's `gsub` or a wrapping shell tool). The CLI's own human-readable output (without `--json`) already passes every print site through `sanitize_for_display` and is not affected.
 
@@ -419,7 +419,7 @@ At startup, `embed` validates each cached source's directory inventory and candi
 
 - `--font-dir` 和 GUI 的「添加文件夹 / Add Folder」始终只扫描一层；`--recursive-font-dir` 和「添加字体库 / Add Font Library」才会递归扫描。两种范围可以同时用于同一个根目录，并作为独立来源管理。
 - 字体缓存最多记录 256 个来源。单个递归扫描还受 4096 个真实目录、64 层深度、50,000 个候选字体文件、128 GiB 候选文件总量和 200,000 个目录项等安全上限约束。
-- 单个缓存来源最多安全写入 **32,768 个 font faces**。超过上限、用户取消、遇到读取不完整或扫描期间来源变化时，结果不会作为完整缓存发布；GUI 已成功读取的部分字体可以仅在当前会话继续使用，并会明确提示。
+- 单个缓存来源最多安全写入 **32,768 个 font faces**。超过上限、用户取消、遇到读取不完整或扫描期间来源变化时，结果不会作为完整缓存写入；GUI 已成功读取的部分字体可以仅在当前会话继续使用，并会明确提示。
 - 单个字体文件的扫描/子集化读取上限为 **64 MiB**；超过会被拒绝并报告错误。
 - 递归扫描不会跟随符号链接、Windows junction 或其他 reparse point（重解析点），从而避免越过所选字体库根目录或形成目录循环。
 - GUI 和 CLI 各自使用独立缓存文件，避免 SQLite 锁竞争；同一个可执行文件同一时间只会打开一个缓存文件（默认路径或 `--cache-file` 覆盖路径）。`chain` v1 暂不读取缓存（其中的 embed 步始终使用显式 `--font-dir`、`--recursive-font-dir` 或系统字体）。
@@ -473,7 +473,7 @@ SSA/ASS subtitle colors (sRGB)
 
 ### 精度说明 | Accuracy Note
 
-颜色引擎的[回归测试](src/features/hdr-convert/color-engine.test.ts)将 PQ 和 HLG 的代表性输入与 Python `colour-science` 生成的参考值逐项比较，要求输出的 8 位 RGB 数值完全一致。HLG 路径手动实现 BT.2100 逆 OOTF + OETF，不使用 Color.js 的 `rec2100hlg` 转换。这些测试验证的是所选输入的数值结果，不代表所有输入或所有播放器上的显示效果均已验证。
+颜色引擎的[回归测试](src/features/hdr-convert/color-engine.test.ts)将 PQ 和 HLG 的代表性输入与 Python `colour-science` 生成的参考值逐项比较，要求输出的 8 位 RGB 数值完全一致。HLG 路径手动实现 BT.2100 逆 OOTF + OETF，不使用 Color.js 的 `rec2100hlg` 转换。这些测试仅验证了所选输入的数值结果，并未覆盖所有可能的输入，也未验证在所有播放器中的显示效果。
 
 The color engine's [regression tests](src/features/hdr-convert/color-engine.test.ts) compare representative PQ and HLG inputs with reference values from Python `colour-science`, requiring exact 8-bit RGB results. The HLG path manually implements the BT.2100 inverse OOTF + OETF rather than using Color.js's `rec2100hlg` conversion. These tests cover selected numerical results, not every possible input or the appearance in every player.
 
@@ -624,7 +624,7 @@ This project is a Tauri desktop rewrite of [ssaHdrify](https://github.com/gky99/
 The original project was created by ying (2021) and later maintained by gky99 (2024-2025).
 It is also licensed under GPL-3.0.
 
-HDR 色彩转换算法由 TypeScript（基于 [Color.js](https://colorjs.io/)）重新实现，方案参考了 Python 原版（使用 [colour-science](https://www.colour-science.org/)）。没有逐字复制代码；实现本身是新的，但出于许可证考量，本项目仍按衍生作品处理。
+HDR 色彩转换算法由 TypeScript（基于 [Color.js](https://colorjs.io/)）重新实现，方案参考了 Python 原版（使用 [colour-science](https://www.colour-science.org/)）。实现代码重新编写，未原样照搬；但出于许可证考量，本项目仍按衍生作品处理。
 
 The HDR color conversion algorithm was reimplemented in TypeScript (using
 [Color.js](https://colorjs.io/)) based on the approach in the Python version
@@ -686,7 +686,7 @@ The tables below list the main direct dependencies and bundled assets. For the f
 >
 > OFL-1.1 allows these fonts to be bundled, embedded, and redistributed alongside any software, including GPL-3.0 projects. The fonts and their derivatives must remain licensed under OFL, must not be sold on their own, and modified versions must not use Reserved Font Names declared by their respective licenses. The bundled Smiley Sans license declares `Smiley` and `得意黑`; the bundled Inter license declares none.
 
-在桌面版中，点击页脚的「许可证」即可离线阅读项目 GPL 正文、锁定版本的 JavaScript 运行时依赖及 Vite 注入辅助代码的许可声明、两款捆绑字体的完整 OFL 文本，以及 Feather Icons 的 MIT 声明。前端构建同时生成 `third-party-notices.txt`；这些前端声明不代表完整的 Rust 原生依赖许可清单。
+在桌面版中，点击页脚的「许可证」即可离线阅读项目 GPL 正文、锁定版本的 JavaScript 运行时依赖及 Vite 注入辅助代码的许可声明、两款捆绑字体的完整 OFL 文本，以及 Feather Icons 的 MIT 声明。前端构建同时生成 `third-party-notices.txt`；这份前端声明清单并不等同于完整的 Rust 原生依赖许可清单。
 
 In the desktop app, choose **Licenses** in the footer to read offline copies of the project GPL, notices for locked JavaScript runtime dependencies and Vite-injected helper code, both bundled fonts' complete OFL texts, and the Feather Icons MIT notice. The frontend build also emits `third-party-notices.txt`; this frontend inventory does not represent a complete Rust native dependency license inventory.
 
