@@ -147,8 +147,8 @@ ASS/SSA timing operations follow the `Format:` declaration in `[Events]`, includ
 ### 字体嵌入 / Font Embedding
 
 1. 点击「选择字幕文件 / Select Subtitle File」，选择一个或多个 ASS/SSA 字幕文件 / Click **Select Subtitle File** to pick one or more ASS/SSA files
-2. 工具会自动检测字幕引用的字体，并优先尝试从系统字体库匹配 / The tool detects fonts referenced by the subtitle and first tries to match them against the system font library
-3. 主面板会实时显示本地字体源覆盖情况（覆盖 N / M）和尚未匹配的字体；每个字体都会标注来源（本地 / 系统）和状态（已找到 / 缺失）/ The main panel shows live local-source coverage (Coverage: N / M) and lists any still-missing families; each detected font is tagged with its source (Local / System) and status (Found / Missing)
+2. 工具会自动检测字幕引用的字体，依次尝试已添加的字体来源、字体缓存和系统字体库 / The tool detects fonts referenced by the subtitle and checks added font sources, the font cache, and system fonts in that order
+3. 主面板会实时显示本地字体源覆盖情况（覆盖 N / M）和尚未匹配的字体；每个字体都会标注来源（本地 / 缓存 / 系统）和状态（已找到 / 缺失）/ The main panel shows live local-source coverage (Coverage: N / M) and lists any still-missing families; each detected font is tagged with its source (Local / Cache / System) and status (Found / Missing)
 4. 选择输出位置：默认保存到源字幕旁，也可以保存到指定文件夹；指定文件夹模式会将输出平铺到该文件夹，重复输出名会自动跳过 / Choose the output location: save beside each source subtitle by default, or save into a chosen folder; chosen-folder mode writes flat outputs into that folder and skips duplicate output names
 5. 点击「嵌入已选字体」，将子集化后的字体数据写入 `.embedded.ass` 输出文件 / Click **Embed Selected Fonts** to write the subset font data into `.embedded.ass` output files
 
@@ -290,6 +290,7 @@ ssahdrify-cli rename         --help
 ssahdrify-cli diagnose-fonts --help
 ssahdrify-cli refresh-fonts  --help
 ssahdrify-cli chain          --help
+ssahdrify-cli licenses       --help
 ```
 
 ### 全局选项 | Global Options
@@ -299,7 +300,7 @@ ssahdrify-cli chain          --help
 | `--lang <en\|zh>`     | 输出语言；不指定时按系统区域设置自动检测（zh\* → zh，否则 en）/ Output language; auto-detected from OS locale when omitted (zh\* → zh, otherwise en)                                                                                                             |
 | `--json`              | 为支持的子命令输出机器可读 JSON 报告；详见下方 JSON 模式 / Emit machine-readable JSON for supported subcommands; see JSON Mode below                                                                                                                             |
 | `--verbose`           | 显示更详细的进度 / Show more detailed progress                                                                                                                                                                                                                   |
-| `--quiet`             | 隐藏常规进度输出 / Suppress normal progress output                                                                                                                                                                                                               |
+| `--quiet`             | 隐藏常规进度和逐文件文本警告；JSON 报告保留警告字段 / Suppress normal progress and per-file text warnings; JSON reports retain warning fields                                                                                                                    |
 | `--dry-run`           | 预览计划执行的操作，不写入文件 / Preview planned work without writing files                                                                                                                                                                                      |
 | `--overwrite`         | 允许覆盖已存在的输出文件 / Replace existing output files instead of skipping                                                                                                                                                                                     |
 | `--output-dir <DIR>`  | 将输出重定向到指定目录 / Redirect output to a specific directory                                                                                                                                                                                                 |
@@ -524,15 +525,25 @@ npm run build:all
 
 `npm run build:all` produces both native release executables in sequence. During the GUI stage, Tauri's `beforeBuildCommand` automatically runs the TypeScript 7 type-check and Vite frontend build.
 
-在 Windows 上，便携式 exe 会生成到 `src-tauri/target/release/`，可直接运行，无需安装。`tauri.conf.json` 目前设置了 `bundle.active: false`，因此默认生成便携式二进制文件，而不是安装包。
+在 Windows 上，便携式 exe 默认生成到 `src-tauri/target/release/`，可直接运行，无需安装。`tauri.conf.json` 目前设置了 `bundle.active: false`，因此默认生成便携式二进制文件，而不是安装包。
 
-On Windows, portable executables are produced under `src-tauri/target/release/` and can be run directly with no installation required. `tauri.conf.json` currently sets `bundle.active: false`, so the default output is portable binaries rather than installers.
+On Windows, portable executables are produced under `src-tauri/target/release/` by default and can be run directly with no installation required. `tauri.conf.json` currently sets `bundle.active: false`, so the default output is portable binaries rather than installers.
 
-Expected Windows release build outputs:
+Default Windows release build outputs:
 
 ```text
 src-tauri/target/release/ssahdrify.exe
 src-tauri/target/release/ssahdrify-cli.exe
+```
+
+设置 `CARGO_TARGET_DIR` 或显式传入 `--target` 会改变输出位置。如果 Windows 上的 Rusty V8 构建因 Cargo 缓存与构建输出位于不同盘符而报目录链接权限错误，可在当前 PowerShell 会话中将输出目录移到 Cargo 缓存所在盘，再重试构建：
+
+Setting `CARGO_TARGET_DIR` or passing an explicit `--target` changes the output location. If a Windows Rusty V8 build reports a directory-link privilege error while the Cargo cache and build output are on different drives, move the output to the cache's drive for the current PowerShell session and retry:
+
+```powershell
+$cargoCache = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $env:USERPROFILE ".cargo" }
+$env:CARGO_TARGET_DIR = Join-Path $cargoCache "ssahdrify-target"
+npm run build:all
 ```
 
 ### 测试 | Testing
@@ -540,6 +551,7 @@ src-tauri/target/release/ssahdrify-cli.exe
 ```bash
 npm run test:run                                  # 前端单元测试 / Frontend unit tests
 npm run typecheck:all                             # TypeScript 7 release gate + TypeScript 6 API compatibility
+npm run build:engine                              # 构建 CLI 内嵌引擎及许可声明 / Build the embedded CLI engine and notices
 cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端测试 / Rust backend tests
 ```
 
