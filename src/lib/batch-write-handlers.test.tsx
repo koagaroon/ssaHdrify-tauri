@@ -1,11 +1,12 @@
 /// <reference types="node" />
 import { resolve } from "node:path";
 import { readFileSync } from "node:fs";
-import { isValidElement, type ReactElement, type ReactNode } from "react";
+import { isValidElement, type ComponentProps, type ReactElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import TimingShift from "../features/timing-shift/TimingShift";
 import HdrConvert from "../features/hdr-convert/HdrConvert";
 import FontEmbed from "../features/font-embed/FontEmbed";
+import FontSourceModal from "../features/font-embed/FontSourceModal";
 import BatchRename from "../features/batch-rename/BatchRename";
 import {
   useFileContext,
@@ -15,7 +16,7 @@ import {
   type TimingFilesState,
   type StyleFilesState,
 } from "./FileContext";
-import { SELECTED_INPUT_CONFLICT_BATCH_LIMIT } from "./tauri-api";
+import { SELECTED_INPUT_CONFLICT_BATCH_LIMIT, type ReadTextResult } from "./tauri-api";
 
 const state = vi.hoisted(() => ({
   values: [] as unknown[],
@@ -29,6 +30,13 @@ const state = vi.hoisted(() => ({
   aliases: new Map<string, string>(),
   conflictCalls: [] as { inputPaths: string[]; outputPaths: string[] }[],
   readProbe: undefined as undefined | ((path: string) => Promise<void>),
+  readMetadata: {} as Partial<ReadTextResult>,
+  sourceProbe: undefined as undefined | (() => Promise<void>),
+  subsetProbe: undefined as undefined | (() => Promise<void>),
+  sourceEnabled: false,
+  sourceMutations: 0,
+  subsetPaths: [] as string[],
+  translations: [] as { key: string; args: unknown[] }[],
   onRead: undefined as undefined | ((path: string) => void),
   onWrite: undefined as undefined | ((path: string) => void),
   onDrop: undefined as undefined | ((paths: string[]) => Promise<void>),
@@ -96,7 +104,14 @@ vi.mock("@tauri-apps/api/core", () => ({
       state.onRead?.(path);
       const text = state.files.get(path);
       if (text === undefined) throw new Error("Missing input");
-      return { text, encoding: "UTF-8", encodingId: "utf-8", inferredWithoutBom: false };
+      return {
+        text,
+        encoding: "UTF-8",
+        encodingId: "utf-8",
+        inferredWithoutBom: false,
+        lossy: false,
+        ...state.readMetadata,
+      };
     }
     if (command === "safe_write_text_file") {
       state.onWrite?.(path);
@@ -118,9 +133,21 @@ vi.mock("@tauri-apps/api/core", () => ({
       if (command === "safe_rename_file") state.files.delete(source);
       return;
     }
-    if (command === "resolve_user_font" || command === "lookup_font_family") return null;
+    if (command === "remove_font_source" || command === "clear_font_sources") {
+      state.sourceMutations++;
+      await state.sourceProbe?.();
+      state.sourceEnabled = false;
+      return;
+    }
+    if (command === "resolve_user_font")
+      return state.sourceEnabled ? { path: "/fonts/local.ttf", index: 0 } : null;
+    if (command === "lookup_font_family") return null;
     if (command === "find_system_font") return { path: "/fonts/fixture.ttf", index: 0 };
-    if (command === "subset_font_bytes") return new Uint8Array([1, 2, 3]).buffer;
+    if (command === "subset_font_bytes") {
+      state.subsetPaths.push(String(args.fontPath));
+      await state.subsetProbe?.();
+      return new Uint8Array([1, 2, 3]).buffer;
+    }
     throw new Error(`Unexpected native command: ${command}`);
   },
 }));
@@ -128,7 +155,14 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
   ask: (...args: unknown[]) => state.ask(...args),
   open: (...args: unknown[]) => state.open(...args),
 }));
-vi.mock("../i18n/useI18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
+vi.mock("../i18n/useI18n", () => ({
+  useI18n: () => ({
+    t: (key: string, ...args: unknown[]) => {
+      state.translations.push({ key, args });
+      return key;
+    },
+  }),
+}));
 vi.mock("./FileContext", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./FileContext")>();
   return {
@@ -216,6 +250,13 @@ beforeEach(() => {
   state.aliasConflicts = [];
   state.onRead = undefined;
   state.readProbe = undefined;
+  state.readMetadata = {};
+  state.sourceProbe = undefined;
+  state.subsetProbe = undefined;
+  state.sourceEnabled = false;
+  state.sourceMutations = 0;
+  state.subsetPaths = [];
+  state.translations = [];
   state.aliases = new Map();
   state.conflictCalls = [];
   state.onWrite = undefined;
@@ -376,6 +417,122 @@ describe.each(["Font Embed", "Batch Copy", "Batch Rename"] as const)(
       expect(state.files.get(source())).toBe(isRename ? undefined : assSubtitle);
       expect(state.ask).toHaveBeenCalledTimes(isRename ? 1 : 0);
     });
+
+    if (isFont) {
+      const sourceModal = () =>
+        render().find((entry) => entry.type === FontSourceModal)!
+          .props as unknown as ComponentProps<typeof FontSourceModal>;
+
+      it("retains both decoding warnings through reanalysis and reports one affected file", async () => {
+        state.readMetadata = { lossy: true, inferredWithoutBom: true, encodingId: "utf-16le" };
+        await prepare();
+        sourceModal().onRemoveSource("fixture");
+        await vi.waitFor(() => expect(labeled(button).disabled).toBe(false));
+        state.log.mockClear();
+        await labeled(button).onClick!();
+        expect(state.log).toHaveBeenCalledWith("msg_inferred_utf16", "warn");
+        expect(state.log).toHaveBeenCalledWith("msg_lossy_decoding", "warn");
+        expect(state.translations).toContainEqual({
+          key: "msg_fonts_complete_partial",
+          args: [1, 1, 1],
+        });
+        expect(state.log).not.toHaveBeenCalledWith("msg_fonts_complete", "success");
+        expect(state.attempts).toHaveLength(1);
+      });
+
+      it("blocks embedding immediately during removal, then embeds using the refreshed source index", async () => {
+        state.sourceEnabled = true;
+        await prepare(2);
+        let finishSource!: () => void;
+        state.sourceProbe = () =>
+          new Promise<void>((done) => {
+            finishSource = done;
+          });
+        const staleEmbed = labeled(button).onClick!;
+        const staleRemove = sourceModal().onRemoveSource;
+        staleRemove("fixture");
+        staleRemove("fixture");
+        await staleEmbed();
+        expect(state.sourceMutations).toBe(1);
+        expect(state.attempts).toEqual([]);
+        expect(labeled(button).disabled).toBe(true);
+        finishSource();
+        await vi.waitFor(() => expect(labeled(button).disabled).toBe(false));
+        await labeled(button).onClick!();
+        expect(state.subsetPaths).toEqual(["/fonts/fixture.ttf", "/fonts/fixture.ttf"]);
+        expect(state.attempts).toHaveLength(2);
+      });
+
+      it("keeps the same font sources for the whole embed batch and blocks stale source handlers", async () => {
+        state.sourceEnabled = true;
+        await prepare(2);
+        const staleRemove = sourceModal().onRemoveSource;
+        let finishSubset!: () => void;
+        state.subsetProbe = () =>
+          new Promise<void>((done) => {
+            finishSubset = done;
+          });
+        const embedding = labeled(button).onClick!();
+        await vi.waitFor(() => expect(finishSubset).toBeTypeOf("function"));
+        staleRemove("fixture");
+        expect(state.sourceMutations).toBe(0);
+        state.subsetProbe = undefined;
+        finishSubset();
+        await embedding;
+        expect(state.subsetPaths).toEqual(["/fonts/local.ttf", "/fonts/local.ttf"]);
+        expect(state.attempts).toHaveLength(2);
+        expect(labeled(button).disabled).toBe(false);
+      });
+
+      it("locks embedding during the modal picker or scan and releases it on cancellation", async () => {
+        await prepare();
+        const staleEmbed = labeled(button).onClick!;
+        const modal = sourceModal();
+        expect(modal.canStartMutation()).toBe(true);
+        modal.onScanStateChange!(true);
+        expect(modal.canStartMutation()).toBe(false);
+        await staleEmbed();
+        expect(state.attempts).toEqual([]);
+        expect(labeled(button).disabled).toBe(true);
+        modal.onScanStateChange!(false);
+        expect(labeled(button).disabled).toBe(false);
+        await labeled(button).onClick!();
+        expect(state.attempts).toHaveLength(1);
+      });
+
+      it("releases the source lock after a native removal error", async () => {
+        await prepare();
+        state.sourceProbe = async () => {
+          throw new Error("Removal failed");
+        };
+        sourceModal().onRemoveSource("fixture");
+        await vi.waitFor(() => expect(state.log).toHaveBeenCalledWith("error_prefix", "error"));
+        expect(labeled(button).disabled).toBe(false);
+        expect(sourceModal().canStartMutation()).toBe(true);
+        await labeled(button).onClick!();
+        expect(state.attempts).toHaveLength(1);
+      });
+
+      it("keeps source mutations locked until an embedding cancellation settles", async () => {
+        await prepare();
+        const staleModal = sourceModal();
+        let finishSubset!: () => void;
+        state.subsetProbe = () =>
+          new Promise<void>((done) => {
+            finishSubset = done;
+          });
+        const embedding = labeled(button).onClick!();
+        await vi.waitFor(() => expect(finishSubset).toBeTypeOf("function"));
+        expect(staleModal.canStartMutation()).toBe(false);
+        labeled("btn_cancel").onClick!();
+        staleModal.onRemoveSource("fixture");
+        expect(state.sourceMutations).toBe(0);
+        finishSubset();
+        await embedding;
+        expect(state.attempts).toEqual([]);
+        expect(sourceModal().canStartMutation()).toBe(true);
+      });
+    }
 
     it("only grants replacement to the existing output covered by acceptance", async () => {
       await prepare(2);
@@ -583,6 +740,15 @@ describe.each([
     return match!.props;
   }
   const output = (stem = "episode") => inputPath(stem + suffix);
+
+  it("reports combined decoding warnings once per written file in the summary", async () => {
+    state.readMetadata = { lossy: true, inferredWithoutBom: true, encodingId: "utf-16le" };
+    await labeled(button).onClick!();
+    expect(state.log).toHaveBeenCalledWith("msg_inferred_utf16", "warn");
+    expect(state.log).toHaveBeenCalledWith("msg_lossy_decoding", "warn");
+    expect(state.translations).toContainEqual({ key: "msg_complete_warnings", args: [1, 1, 1] });
+    expect(state.attempts).toHaveLength(1);
+  });
 
   it("writes a new output exclusively and preserves its input", async () => {
     await labeled(button).onClick!();

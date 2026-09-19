@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { List, type RowComponentProps } from "react-window";
 import {
   fileNameFromPath,
-  isInferredUtf16,
+  textDecodingWarnings,
   pickSubtitleFiles,
   readText,
   writeText,
@@ -158,7 +158,7 @@ export default function TimingShift() {
   // the footer and log can both acknowledge that the user stepped back
   // (overwrite-confirm dismissed OR mid-batch cancel button).
   const [lastActionResult, setLastActionResult] = useState<
-    "success" | "error" | "cancelled" | null
+    "success" | "partial" | "error" | "cancelled" | null
   >(null);
   const [progress, setProgress] = useState<{ processed: number; total: number } | null>(null);
   const [dropActive, setDropActive] = useState(false);
@@ -316,6 +316,8 @@ export default function TimingShift() {
       };
     }
     if (lastActionResult === "success") return { kind: "done", message: t("status_timing_done") };
+    if (lastActionResult === "partial")
+      return { kind: "pending", message: t("status_timing_partial") };
     if (lastActionResult === "error") return { kind: "error", message: t("status_timing_error") };
     if (lastActionResult === "cancelled") {
       return { kind: "pending", message: t("status_timing_cancelled") };
@@ -491,6 +493,7 @@ export default function TimingShift() {
         addLog(t("msg_timing_start", paths.length, effectiveOffsetMs));
 
         let successCount = 0;
+        let warnedCount = 0;
         let processedCount = 0;
         const seenOutputs = new Set<string>();
 
@@ -539,11 +542,12 @@ export default function TimingShift() {
             seenOutputs.add(normalizedOut);
 
             let content: string;
+            let fileWarned = false;
             try {
               content = await readText(filePath, (read) => {
-                if (isInferredUtf16(read)) {
-                  addLog(t("msg_inferred_utf16", fileName, read.encodingId), "warn");
-                }
+                const warnings = textDecodingWarnings(read, fileName, t);
+                fileWarned = warnings.length > 0;
+                for (const warning of warnings) addLog(warning, "warn");
               });
             } catch (e) {
               addLog(t("msg_read_error", fileName, sanitizeError(e)), "error");
@@ -561,6 +565,7 @@ export default function TimingShift() {
             // ASS/WebVTT writers leave them unchanged; SRT/MicroDVD writers
             // omit them because those formats are rebuilt from parsed cues.
             if (result.skippedCount > 0) {
+              fileWarned = true;
               const warningKey =
                 result.format === "ass" || result.format === "vtt"
                   ? "msg_oversized_unchanged"
@@ -574,7 +579,8 @@ export default function TimingShift() {
             // Match the sibling features: sanitize output display names
             // before writing them into the visible log.
             const outName = sanitizeForDialog(fileNameFromPath(outputPath));
-            addLog(t("msg_saved", outName, result.captionCount), "success");
+            addLog(t("msg_saved", outName, result.captionCount), fileWarned ? "warn" : "success");
+            if (fileWarned) warnedCount++;
             successCount++;
           } catch (e) {
             addLog(t("msg_timing_error", fileName, sanitizeError(e)), "error");
@@ -594,8 +600,13 @@ export default function TimingShift() {
         if (aborted) {
           setLastActionResult("cancelled");
         } else if (successCount > 0) {
-          addLog(t("msg_timing_complete", successCount, paths.length), "success");
-          setLastActionResult("success");
+          if (warnedCount > 0) {
+            addLog(t("msg_complete_warnings", successCount, paths.length, warnedCount), "warn");
+            setLastActionResult("partial");
+          } else {
+            addLog(t("msg_timing_complete", successCount, paths.length), "success");
+            setLastActionResult("success");
+          }
         } else {
           addLog(t("msg_timing_all_failed", paths.length), "error");
           setLastActionResult("error");

@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import {
   clearFontSources,
   fileNameFromPath,
-  isInferredUtf16,
+  textDecodingWarnings,
   pickAssFiles,
   pickOutputDirectory,
   readTextDetectEncoding,
@@ -139,6 +139,9 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
   // at handler entry and released in the outer finally so every exit
   // path clears it.
   const busyRef = useRef(false);
+  const analysisBusyRef = useRef(false);
+  const sourceBusyRef = useRef(false);
+  const modalScanningRef = useRef(false);
   // Generation counter for ingest flows. Each handlePickFiles /
   // handleDroppedPaths / handleClearFiles bumps the counter, and the
   // async work captured the value at entry — when it later checks
@@ -184,6 +187,18 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
   // outside the modal: own clear/remove/add operations OR the modal's
   // active scan.
   const sourceLocked = sourceBusy || modalScanning;
+  const canStartSourceMutation = useCallback(
+    () =>
+      !busyRef.current &&
+      !analysisBusyRef.current &&
+      !sourceBusyRef.current &&
+      !modalScanningRef.current,
+    []
+  );
+  const handleScanStateChange = useCallback((scanning: boolean) => {
+    modalScanningRef.current = scanning;
+    setModalScanning(scanning);
+  }, []);
 
   // This is a source-entry total, not a unique-font total: one font that
   // belongs to two sources contributes one entry to each source.
@@ -224,7 +239,7 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
       // A font-source scan/mutation changes the resolver underneath this
       // batch. Keep the two workflows mutually exclusive so one selection is
       // always analyzed against a single source-index generation.
-      if (sourceLocked) return;
+      if (busyRef.current || sourceBusyRef.current || modalScanningRef.current) return;
       const conflictMsg = buildConflictMessage(paths, "fonts", isFileInUse, t);
       if (conflictMsg) {
         setDropError(conflictMsg);
@@ -252,6 +267,7 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
       setFontUsages([]);
       setSelected(new Set());
 
+      analysisBusyRef.current = true;
       setAnalyzing(true);
       try {
         await ensureLoaded();
@@ -272,14 +288,18 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
         for (const path of paths) {
           if (gen !== pickGenRef.current) return;
           let content: string;
-          let inferredEncodingId: string | undefined;
+          let decoding: FileAnalysis["decoding"];
           try {
             const read = await readTextDetectEncoding(path);
             if (gen !== pickGenRef.current) return;
             content = read.text;
-            if (isInferredUtf16(read)) {
-              inferredEncodingId = read.encodingId;
-              addLog(t("msg_inferred_utf16", safeDisplayFileName(path), read.encodingId), "warn");
+            decoding = {
+              encodingId: read.encodingId,
+              inferredWithoutBom: read.inferredWithoutBom,
+              lossy: read.lossy,
+            };
+            for (const warning of textDecodingWarnings(decoding, safeDisplayFileName(path), t)) {
+              addLog(warning, "warn");
             }
           } catch (e) {
             // BiDi parity: read errors carry the file path
@@ -315,7 +335,7 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
             content,
             infos: analyzed.infos,
             usages: analyzed.usages,
-            ...(inferredEncodingId !== undefined && { inferredEncodingId }),
+            decoding,
           });
         }
 
@@ -351,13 +371,23 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
         if (gen !== pickGenRef.current) return;
         addLog(t("error_prefix", sanitizeError(e)), "error");
       } finally {
-        if (gen === pickGenRef.current) setAnalyzing(false);
+        if (gen === pickGenRef.current) {
+          analysisBusyRef.current = false;
+          setAnalyzing(false);
+        }
       }
     },
-    [sourceLocked, isFileInUse, setFontsFiles, addLog, t]
+    [isFileInUse, setFontsFiles, addLog, t]
   );
 
   const handlePickFiles = useCallback(async () => {
+    if (
+      busyRef.current ||
+      analysisBusyRef.current ||
+      sourceBusyRef.current ||
+      modalScanningRef.current
+    )
+      return;
     const gen = (pickGenRef.current = pickGenRef.current + 1);
     // Match drag-and-drop: a new selection attempt must not leave the
     // previous embed outcome visible beside a fresh picker error or batch.
@@ -380,6 +410,13 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
 
   const handleDroppedPaths = useCallback(
     async (paths: string[]) => {
+      if (
+        busyRef.current ||
+        analysisBusyRef.current ||
+        sourceBusyRef.current ||
+        modalScanningRef.current
+      )
+        return;
       // Bump pickGenRef at function entry, symmetric with
       // handlePickFiles. Previously the bump happened AFTER the
       // filter — concurrent in-flight pick wouldn't see the
@@ -448,6 +485,7 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
     // (changed) sources — clicking Embed mid-reanalyze would consume
     // the stale `selected` set and skip fonts that the user just
     // unlocked by adding a source. Symmetric with ingestPaths above.
+    analysisBusyRef.current = true;
     setAnalyzing(true);
     try {
       const newCache = new Map<string, FileAnalysis>();
@@ -496,7 +534,10 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
       // the latest reanalyze flips analyzing back off, so an in-flight
       // older run completing late doesn't briefly un-lock the UI
       // while a newer reanalyze is still mid-IPC.
-      if (gen === pickGenRef.current) setAnalyzing(false);
+      if (gen === pickGenRef.current) {
+        analysisBusyRef.current = false;
+        setAnalyzing(false);
+      }
     }
   }, [addLog, t]);
 
@@ -505,6 +546,8 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
   // separate ✕ on the source button gives the user one-click recovery
   // without diving into the modal.
   const handleClearFontSources = useCallback(() => {
+    if (!canStartSourceMutation()) return;
+    sourceBusyRef.current = true;
     void (async () => {
       setSourceBusy(true);
       try {
@@ -514,15 +557,17 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
       } catch (e) {
         addLog(t("error_prefix", sanitizeError(e)), "error");
       } finally {
+        sourceBusyRef.current = false;
         setSourceBusy(false);
       }
     })();
-  }, [reanalyzeWithSources, addLog, t]);
+  }, [canStartSourceMutation, reanalyzeWithSources, addLog, t]);
 
   const handleAddFontSource = useCallback(
     (source: FontSource) => {
-      const nextSources = [...fontSources, source];
-      setFontSources(nextSources);
+      if (busyRef.current || analysisBusyRef.current || sourceBusyRef.current) return;
+      sourceBusyRef.current = true;
+      setFontSources((previous) => [...previous, source]);
       // Wrap the reanalyze in the same sourceBusy envelope as
       // clear/remove. Without this, a user adding a source then
       // immediately clicking the parent ✕ Clear before the reanalyze
@@ -543,15 +588,18 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
           // didn't update the detection grid.
           addLog(t("error_prefix", sanitizeError(e)), "error");
         } finally {
+          sourceBusyRef.current = false;
           setSourceBusy(false);
         }
       })();
     },
-    [fontSources, reanalyzeWithSources, addLog, t]
+    [reanalyzeWithSources, addLog, t]
   );
 
   const handleRemoveFontSource = useCallback(
     (id: string) => {
+      if (!canStartSourceMutation()) return;
+      sourceBusyRef.current = true;
       void (async () => {
         setSourceBusy(true);
         try {
@@ -559,17 +607,17 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
           // ownership on one side prevents stale frontend state from evicting
           // the wrong persistent-cache source.
           await removeFontSource(id);
-          const nextSources = fontSources.filter((s) => s.id !== id);
-          setFontSources(nextSources);
+          setFontSources((previous) => previous.filter((s) => s.id !== id));
           await reanalyzeWithSources();
         } catch (e) {
           addLog(t("error_prefix", sanitizeError(e)), "error");
         } finally {
+          sourceBusyRef.current = false;
           setSourceBusy(false);
         }
       })();
     },
-    [fontSources, reanalyzeWithSources, addLog, t]
+    [canStartSourceMutation, reanalyzeWithSources, addLog, t]
   );
 
   const handlePickOutputDir = useCallback(async () => {
@@ -615,7 +663,14 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
   const handleEmbed = useCallback(async () => {
     if (fileCount === 0) return;
     // Synchronous double-click gate — see HdrConvert::handleConvert.
-    if (busyRef.current) return;
+    if (
+      busyRef.current ||
+      analysisBusyRef.current ||
+      sourceBusyRef.current ||
+      modalScanningRef.current
+    )
+      return;
+    const analysisForRun = perFileAnalysisRef.current;
     busyRef.current = true;
     pickGenRef.current++;
     outputDirPickGenRef.current++;
@@ -739,7 +794,7 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
             // this point is a real inconsistency that should surface
             // as an error rather than silently re-read outside the
             // ingest guards.
-            const cached = perFileAnalysisRef.current.get(filePath);
+            const cached = analysisForRun.get(filePath);
             if (!cached) {
               issueCount++;
               addLog(
@@ -768,6 +823,10 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
             const missingFonts = missingReferencedFonts(cached.infos);
             const missingWarnings =
               missingFonts.length > 0 ? [t("msg_fonts_missing_warning", missingFonts.length)] : [];
+            const decodingWarnings = cached.decoding
+              ? textDecodingWarnings(cached.decoding, safeFileName, t)
+              : [];
+            for (const warning of decodingWarnings) addLog(warning, "warn");
 
             if (selectedFonts.length === 0) {
               // misattributed message correction.
@@ -820,15 +879,12 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
               // produces an entry or a warning inside embedFonts. Therefore a
               // zero-entry result is a failed/skipped embed, never an
               // "already present" no-op.
-              issueCount += fileWarnings.length;
+              issueCount++;
               for (const warning of fileWarnings) {
                 addLog(t("msg_fonts_file_warning", safeFileName, warning), "warn");
               }
               addLog(t("msg_embed_no_change", safeOutName), "warn");
               continue;
-            }
-            if (cached.inferredEncodingId) {
-              addLog(t("msg_inferred_utf16", safeFileName, cached.inferredEncodingId), "warn");
             }
             if (inputConflicts.has(normalizeOutputKey(outputPath))) {
               throw new Error(t("msg_fonts_input_conflict", safeFileName));
@@ -839,18 +895,14 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
               existingOutputs.has(normalizeOutputKey(outputPath))
             );
             const fileWarnings = [...missingWarnings, ...result.warnings];
-            if (fileWarnings.length > 0) {
-              issueCount += fileWarnings.length;
+            const warningCount = fileWarnings.length + decodingWarnings.length;
+            if (warningCount > 0) {
+              issueCount++;
               for (const warning of fileWarnings) {
                 addLog(t("msg_fonts_file_warning", safeFileName, warning), "warn");
               }
               addLog(
-                t(
-                  "msg_embed_saved_partial",
-                  safeOutName,
-                  result.embeddedCount,
-                  fileWarnings.length
-                ),
+                t("msg_embed_saved_partial", safeOutName, result.embeddedCount, warningCount),
                 "warn"
               );
             } else {
@@ -967,6 +1019,7 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
   const formatFontLabel = (info: FontInfo) => fontKeyLabel(info.key, fontStyleLabels);
 
   const handleClearFiles = useCallback(() => {
+    if (busyRef.current || sourceBusyRef.current || modalScanningRef.current) return;
     pickGenRef.current = pickGenRef.current + 1;
     outputDirPickGenRef.current++;
     clearFile("fonts");
@@ -974,6 +1027,7 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
     setFontUsages([]);
     setSelected(new Set());
     setAnalyzing(false);
+    analysisBusyRef.current = false;
     setProgress(null);
     setDropError(null);
     perFileAnalysisRef.current = new Map();
@@ -993,7 +1047,12 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
   // that publishes per-file would otherwise quietly let Embed fire on a
   // partially-analyzed batch.
   const isEmbedDisabled =
-    embedding || analyzing || selected.size === 0 || fileCount === 0 || missingChosenOutputDir;
+    embedding ||
+    analyzing ||
+    sourceLocked ||
+    selected.size === 0 ||
+    fileCount === 0 ||
+    missingChosenOutputDir;
 
   function embedButtonLabel(): string {
     if (embedding) return t("btn_embedding");
@@ -1465,9 +1524,10 @@ export default function FontEmbed({ cacheStatus, cacheProbeFailed }: FontEmbedPr
         localCoveredKeys={localCoveredKeys}
         hasSubtitle={fileCount > 0}
         mutationLocked={analyzing || embedding || sourceBusy}
+        canStartMutation={canStartSourceMutation}
         onAddSource={handleAddFontSource}
         onRemoveSource={handleRemoveFontSource}
-        onScanStateChange={setModalScanning}
+        onScanStateChange={handleScanStateChange}
       />
     </div>
   );

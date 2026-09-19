@@ -193,6 +193,19 @@ export function isInferredUtf16(result: Pick<ReadTextResult, "inferredWithoutBom
   return result.inferredWithoutBom;
 }
 
+export type TextDecodingInfo = Pick<ReadTextResult, "encodingId" | "inferredWithoutBom" | "lossy">;
+
+export function textDecodingWarnings(
+  info: TextDecodingInfo,
+  fileName: string,
+  t: DialogTranslator
+): string[] {
+  const warnings: string[] = [];
+  if (info.inferredWithoutBom) warnings.push(t("msg_inferred_utf16", fileName, info.encodingId));
+  if (info.lossy) warnings.push(t("msg_lossy_decoding", fileName, info.encodingId));
+  return warnings;
+}
+
 export async function readText(
   path: string,
   onRead?: (result: ReadTextResult) => void

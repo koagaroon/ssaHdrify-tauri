@@ -58,6 +58,7 @@ interface Props {
   hasSubtitle: boolean;
   /** Parent-owned analysis/embed work currently requires a stable source index. */
   mutationLocked: boolean;
+  canStartMutation: () => boolean;
   onAddSource: (source: FontSource) => void;
   onRemoveSource: (id: string) => void;
   /**
@@ -160,6 +161,7 @@ export default function FontSourceModal(props: Props) {
     localCoveredKeys,
     hasSubtitle,
     mutationLocked,
+    canStartMutation,
     onAddSource,
     onRemoveSource,
     onScanStateChange,
@@ -423,7 +425,7 @@ export default function FontSourceModal(props: Props) {
   }, [t]);
 
   const claimScanFlow = useCallback(() => {
-    if (busyRef.current || mutationLocked) return false;
+    if (busyRef.current || mutationLocked || !canStartMutation()) return false;
     busyRef.current = true;
     setBusy(true);
     setCancelRequested(false);
@@ -437,7 +439,7 @@ export default function FontSourceModal(props: Props) {
     // mutate . Mirrored in releaseScanFlow.
     setScanningWithParent(true);
     return true;
-  }, [mutationLocked, setScanningWithParent]);
+  }, [mutationLocked, canStartMutation, setScanningWithParent]);
 
   const releaseScanFlow = useCallback(() => {
     // Ordering note: clearing busyRef synchronously while setBusy(false)

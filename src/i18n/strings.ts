@@ -23,12 +23,14 @@ export const strings: Record<string, StringEntry> = {
   },
   status_hdr_busy: { en: "Converting…", zh: "转换中…" },
   status_hdr_done: { en: "Conversion complete", zh: "转换完成" },
+  status_hdr_partial: { en: "Converted with warnings", zh: "转换完成，但有警告" },
   status_hdr_error: { en: "Conversion failed", zh: "转换失败" },
   status_hdr_cancelled: { en: "Conversion cancelled", zh: "已取消转换" },
   status_timing_idle: { en: "No subtitles loaded", zh: "未加载字幕" },
   status_timing_pending: { en: "Adjust offset, then save", zh: "调整偏移后保存" },
   status_timing_busy: { en: "Saving…", zh: "保存中…" },
   status_timing_done: { en: "Save complete", zh: "保存完成" },
+  status_timing_partial: { en: "Saved with warnings", zh: "保存完成，但有警告" },
   status_timing_error: { en: "Save failed", zh: "保存失败" },
   status_timing_cancelled: { en: "Save cancelled", zh: "已取消保存" },
   status_fonts_idle: { en: "No subtitle loaded", zh: "未加载字幕" },
@@ -88,8 +90,8 @@ export const strings: Record<string, StringEntry> = {
   nit_presets_label: { en: "Quick presets", zh: "常用预设" },
   nit_presets_hint: { en: "click to apply a standard", zh: "点击应用标准" },
   nit_interaction_hint: {
-    en: "Drag the track · click a preset · ← → adjust by 10 · Shift+← → by 100 · Home/End jump to ends",
-    zh: "拖动滑轨 · 点击预设 · ← → 步进 10 · Shift+← → 步进 100 · Home/End 跳两端",
+    en: "Drag the track · click a preset · ← → adjust · Shift+← → larger steps · Home/End jump to ends",
+    zh: "拖动滑轨 · 点击预设 · ← → 调整 · Shift+← → 大幅调整 · Home/End 跳两端",
   },
   preset_sdr_desc: { en: "Standard", zh: "标清" },
   preset_bt2408_desc: { en: "Reference", zh: "参考白" },
@@ -238,6 +240,14 @@ export const strings: Record<string, StringEntry> = {
   msg_inferred_utf16: {
     en: "{0}: detected BOM-less {1} from its byte pattern. This is a best-effort guess; verify the preview or output.",
     zh: "已根据字节模式将 {0} 推测为无 BOM 的 {1} 编码。此结果并非完全确定，请核对预览或输出。",
+  },
+  msg_lossy_decoding: {
+    en: "{0}: some source bytes could not be decoded as {1} and were replaced with �. Check the output text.",
+    zh: "{0}：部分源字节无法按 {1} 解码，已替换为 �。请核对输出文本。",
+  },
+  msg_complete_warnings: {
+    en: "Complete: {0}/{1} file(s) written, {2} with warnings (see log)",
+    zh: "完成：已写入 {0}/{1} 个文件，其中 {2} 个有警告（见日志）",
   },
   msg_unsupported: { en: "Skipped {0}: unsupported format", zh: "已跳过 {0}：不支持的格式" },
   // HDR Convert and Time Shift both surface a per-file count of
@@ -399,8 +409,8 @@ export const strings: Record<string, StringEntry> = {
     zh: "嵌入完成：已处理 {0}/{1} 个文件",
   },
   msg_fonts_complete_partial: {
-    en: "Embed incomplete: {0}/{1} file(s) written, {2} issue(s)",
-    zh: "嵌入不完整：已写入 {0}/{1} 个文件，{2} 个问题",
+    en: "Embed incomplete: {0}/{1} file(s) written, {2} file(s) with warnings or errors",
+    zh: "嵌入不完整：已写入 {0}/{1} 个文件，{2} 个文件有警告或错误",
   },
   msg_fonts_skipped_count: {
     en: "Note: {0} file(s) were skipped before this prompt (see log).",
