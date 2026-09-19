@@ -423,7 +423,7 @@ At startup, `embed` validates each cached source's directory inventory and candi
 - 单个字体文件的扫描/子集化读取上限为 **64 MiB**；超过会被拒绝并报告错误。
 - 递归扫描不会跟随符号链接、Windows junction 或其他 reparse point（重解析点），从而避免越过所选字体库根目录或形成目录循环。
 - GUI 和 CLI 各自使用独立缓存文件，避免 SQLite 锁竞争；同一个可执行文件同一时间只会打开一个缓存文件（默认路径或 `--cache-file` 覆盖路径）。`chain` v1 暂不读取缓存（其中的 embed 步始终使用显式 `--font-dir`、`--recursive-font-dir` 或系统字体）。
-- 跨版本不会自动迁移缓存结构。递归来源支持目前使用 cache schema v6；旧缓存会进入明确的一次性重建流程。CLI 会提示删除旧缓存文件并重新运行 `refresh-fonts`，GUI 会在确认后重建，不会静默改写。
+- 字体缓存目前使用格式版本 7，不会自动迁移旧缓存。v1.7.1 及更早版本的缓存可能包含未标记的扫描不完整结果，因此需要明确重建一次：GUI 用户应选择「清除缓存」后重新添加字体来源；CLI 用户应删除命令报告的不兼容缓存文件，再使用自己的 `--font-dir` 或 `--recursive-font-dir` 来源运行 `refresh-fonts`。旧缓存不会被静默改写。
 
 - `--font-dir` and GUI **Add Folder** always scan one level; only `--recursive-font-dir` and **Add Font Library** recurse. The same root can be tracked independently in both scopes.
 - The font cache tracks at most 256 sources. A recursive scan is also bounded to 4096 real directories, 64 levels, 50,000 candidate font files, 128 GiB of candidate-file data, and 200,000 directory entries.
@@ -431,7 +431,7 @@ At startup, `embed` validates each cached source's directory inventory and candi
 - A single font file is capped at **64 MiB** for scanning/subsetting; larger files are refused with an error.
 - Recursive scans do not follow symbolic links, Windows junctions, or other reparse points, which prevents traversal outside the chosen library root and directory cycles.
 - GUI and CLI use separate cache files to avoid SQLite lock contention; a single binary opens exactly one cache at a time (default path or `--cache-file` override). `chain` v1 does not consult the cache; its embed step always uses explicit `--font-dir`, `--recursive-font-dir`, or system fonts.
-- Cache schemas are not migrated silently. Recursive source support uses cache schema v6, so an older cache goes through a visible one-time rebuild flow: the CLI asks you to remove it and rerun `refresh-fonts`, while the GUI rebuilds only after confirmation.
+- The font cache now uses format version 7 and does not migrate older caches automatically. Caches from v1.7.1 or earlier may contain incomplete scans without a recovery marker, so they need one explicit rebuild: GUI users should choose **Clear cache** and add their font sources again; CLI users should remove the incompatible cache file reported by the command, then run `refresh-fonts` with their own `--font-dir` or `--recursive-font-dir` sources. The old cache is not silently rewritten.
 
 ---
 
