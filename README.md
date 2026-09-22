@@ -661,32 +661,37 @@ The tables below list the main direct dependencies and bundled assets. For the f
 
 #### 运行时依赖（随应用分发）| Runtime (shipped with the application)
 
-| 组件 / Component                                                             | 许可证 / License                               | 用途 / Usage                                                                                                   |
-| ---------------------------------------------------------------------------- | ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| [Tauri](https://tauri.app/)                                                  | Apache-2.0 OR MIT                              | 桌面应用框架 / Desktop app framework                                                                           |
-| [Tauri plugins](https://v2.tauri.app/plugin/)                                | Apache-2.0 OR MIT                              | 对话框、文件访问、日志和单实例启动保护 / Dialog, filesystem, logging, and single-instance startup protection   |
-| [React](https://react.dev/) / React DOM                                      | MIT                                            | UI 框架 / UI framework                                                                                         |
-| [React Window](https://github.com/bvaughn/react-window)                      | MIT                                            | 大列表虚拟滚动 / Virtualized large lists                                                                       |
-| [Color.js](https://colorjs.io/)                                              | MIT                                            | HDR 色彩空间转换 (PQ/HLG) / HDR color space conversion                                                         |
-| [ass-compiler](https://github.com/weizhenye/ass-compiler)                    | MIT                                            | ASS 字幕解析（字体收集）/ ASS subtitle parsing for font collection                                             |
-| [entities](https://github.com/fb55/entities)                                 | BSD-2-Clause                                   | WebVTT 文本字符引用解码（GUI 与 CLI）/ WebVTT text character-reference decoding (GUI and CLI)                  |
-| [font-kit](https://github.com/servo/font-kit)                                | MIT OR Apache-2.0                              | 跨平台系统字体发现 (Rust) / Cross-platform system font discovery                                               |
-| [fontcull](https://github.com/bearcove/fontcull)                             | MIT / MIT OR Apache-2.0                        | 字体子集化（含 fontcull-klippa、fontcull-skrifa）/ Font subsetting (includes fontcull-klippa, fontcull-skrifa) |
-| [chardetng](https://github.com/hsivonen/chardetng)                           | MIT OR Apache-2.0                              | 编码检测 (Firefox 引擎) / Encoding detection (Firefox's engine)                                                |
-| [encoding_rs](https://github.com/hsivonen/encoding_rs)                       | (Apache-2.0 OR MIT) AND BSD-3-Clause           | 编码转换 / Encoding conversion                                                                                 |
-| [rustix](https://github.com/bytecodealliance/rustix)                         | Apache-2.0 OR MIT                              | Linux、Android 和 Apple 平台上的独占重命名 / Exclusive rename on Linux, Android, and Apple platforms           |
-| [rusqlite](https://github.com/rusqlite/rusqlite)                             | MIT                                            | 字体缓存和本地字体索引 / Font cache and local font index                                                       |
-| [serde](https://serde.rs/) / serde_json                                      | MIT OR Apache-2.0                              | Rust 序列化 / Rust serialization                                                                               |
-| [deno_core](https://github.com/denoland/deno)                                | MIT                                            | 嵌入式 V8 JS 运行时（CLI）/ Embedded V8 JS runtime (CLI)                                                       |
-| [V8](https://v8.dev/)                                                        | BSD-3-Clause                                   | JavaScript 引擎（经 deno_core 嵌入，CLI）/ JavaScript engine via deno_core (CLI)                               |
-| [clap](https://github.com/clap-rs/clap)                                      | MIT OR Apache-2.0                              | CLI 参数解析（CLI）/ CLI argument parsing (CLI)                                                                |
-| [env_logger](https://github.com/rust-cli/env_logger)                         | MIT OR Apache-2.0                              | CLI 日志后端（输出到 stderr）/ CLI logging backend on stderr (CLI)                                             |
-| [sys-locale](https://github.com/1Password/sys-locale)                        | MIT OR Apache-2.0                              | OS 区域设置检测（驱动 `--lang` 自动检测，CLI）/ OS locale detection driving `--lang` auto (CLI)                |
-| [base64](https://github.com/marshallpierce/rust-base64)                      | MIT OR Apache-2.0                              | Rust 侧字体载荷 base64 编码 / Base64 encoding for Rust-side font payloads                                      |
-| [unicode-normalization](https://github.com/unicode-rs/unicode-normalization) | MIT OR Apache-2.0                              | Unicode 路径 / 输出键规范化 / Unicode path and output-key normalization                                        |
-| [sha2](https://github.com/RustCrypto/hashes)                                 | MIT OR Apache-2.0                              | 样式编辑源文件 SHA-256 修订指纹 / SHA-256 source-revision fingerprints for Style Edit                          |
-| [rfd](https://github.com/PolyMeilex/rfd)                                     | MIT                                            | 启动失败时的原生错误对话框 / Native error dialog for startup failures                                          |
-| [Feather Icons](https://github.com/feathericons/feather)                     | [MIT](src/assets/licenses/feather-LICENSE.txt) | 主题切换等内联界面图标 / Inline interface glyphs, including the theme toggle                                   |
+| 组件 / Component                                                             | 许可证 / License                                              | 用途 / Usage                                                                                                   |
+| ---------------------------------------------------------------------------- | ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| [Tauri](https://tauri.app/)                                                  | Apache-2.0 OR MIT                                             | 桌面应用框架 / Desktop app framework                                                                           |
+| [Tauri plugins](https://v2.tauri.app/plugin/)                                | Apache-2.0 OR MIT                                             | 对话框、文件访问、日志和单实例启动保护 / Dialog, filesystem, logging, and single-instance startup protection   |
+| [React](https://react.dev/) / React DOM                                      | MIT                                                           | UI 框架 / UI framework                                                                                         |
+| [React Window](https://github.com/bvaughn/react-window)                      | MIT                                                           | 大列表虚拟滚动 / Virtualized large lists                                                                       |
+| [Color.js](https://colorjs.io/)                                              | MIT                                                           | HDR 色彩空间转换 (PQ/HLG) / HDR color space conversion                                                         |
+| [ass-compiler](https://github.com/weizhenye/ass-compiler)                    | MIT                                                           | ASS 字幕解析（字体收集）/ ASS subtitle parsing for font collection                                             |
+| [entities](https://github.com/fb55/entities)                                 | BSD-2-Clause                                                  | WebVTT 文本字符引用解码（GUI 与 CLI）/ WebVTT text character-reference decoding (GUI and CLI)                  |
+| [font-kit](https://github.com/servo/font-kit)                                | MIT OR Apache-2.0                                             | 跨平台系统字体发现 (Rust) / Cross-platform system font discovery                                               |
+| [fontcull](https://github.com/bearcove/fontcull)                             | MIT / MIT OR Apache-2.0                                       | 字体子集化（含 fontcull-klippa、fontcull-skrifa）/ Font subsetting (includes fontcull-klippa, fontcull-skrifa) |
+| [chardetng](https://github.com/hsivonen/chardetng)                           | MIT OR Apache-2.0                                             | 编码检测 (Firefox 引擎) / Encoding detection (Firefox's engine)                                                |
+| [encoding_rs](https://github.com/hsivonen/encoding_rs)                       | (Apache-2.0 OR MIT) AND BSD-3-Clause                          | 编码转换 / Encoding conversion                                                                                 |
+| [rustix](https://github.com/bytecodealliance/rustix)                         | Apache-2.0 OR MIT                                             | Linux、Android 和 Apple 平台上的独占重命名 / Exclusive rename on Linux, Android, and Apple platforms           |
+| [rusqlite / libsqlite3-sys](https://github.com/rusqlite/rusqlite)            | [MIT](src-tauri/vendor/libsqlite3-sys/LICENSE)                | 字体缓存和本地字体索引的 Rust 绑定 / Rust bindings for the font cache and local font index                     |
+| [SQLite](https://sqlite.org/)                                                | [公有领域 / Public domain](https://sqlite.org/copyright.html) | 随可执行文件静态编译的缓存数据库 / Cache database statically compiled into the executables                     |
+| [serde](https://serde.rs/) / serde_json                                      | MIT OR Apache-2.0                                             | Rust 序列化 / Rust serialization                                                                               |
+| [deno_core](https://github.com/denoland/deno)                                | MIT                                                           | 嵌入式 V8 JS 运行时（CLI）/ Embedded V8 JS runtime (CLI)                                                       |
+| [V8](https://v8.dev/)                                                        | BSD-3-Clause                                                  | JavaScript 引擎（经 deno_core 嵌入，CLI）/ JavaScript engine via deno_core (CLI)                               |
+| [clap](https://github.com/clap-rs/clap)                                      | MIT OR Apache-2.0                                             | CLI 参数解析（CLI）/ CLI argument parsing (CLI)                                                                |
+| [env_logger](https://github.com/rust-cli/env_logger)                         | MIT OR Apache-2.0                                             | CLI 日志后端（输出到 stderr）/ CLI logging backend on stderr (CLI)                                             |
+| [sys-locale](https://github.com/1Password/sys-locale)                        | MIT OR Apache-2.0                                             | OS 区域设置检测（驱动 `--lang` 自动检测，CLI）/ OS locale detection driving `--lang` auto (CLI)                |
+| [base64](https://github.com/marshallpierce/rust-base64)                      | MIT OR Apache-2.0                                             | Rust 侧字体载荷 base64 编码 / Base64 encoding for Rust-side font payloads                                      |
+| [unicode-normalization](https://github.com/unicode-rs/unicode-normalization) | MIT OR Apache-2.0                                             | Unicode 路径 / 输出键规范化 / Unicode path and output-key normalization                                        |
+| [sha2](https://github.com/RustCrypto/hashes)                                 | MIT OR Apache-2.0                                             | 样式编辑源文件 SHA-256 修订指纹 / SHA-256 source-revision fingerprints for Style Edit                          |
+| [rfd](https://github.com/PolyMeilex/rfd)                                     | MIT                                                           | 启动失败时的原生错误对话框 / Native error dialog for startup failures                                          |
+| [Feather Icons](https://github.com/feathericons/feather)                     | [MIT](src/assets/licenses/feather-LICENSE.txt)                | 主题切换等内联界面图标 / Inline interface glyphs, including the theme toggle                                   |
+
+当前构建通过临时本地源码覆盖，将 SQLite 3.53.4 编译进两个可执行文件，以纳入日志恢复加固；无需单独安装 SQLite。来源校验、修改范围和移除覆盖的条件见 [SQLite 源码说明](src-tauri/vendor/README.md)。
+
+The current build uses a temporary local source override to compile SQLite 3.53.4 into both executables, including journal recovery hardening. No separate SQLite installation is needed. See the [SQLite source notes](src-tauri/vendor/README.md) for provenance, patch scope, and conditions for removing the override.
 
 #### 捆绑字体（随应用分发）| Bundled Fonts (shipped with the application)
 
@@ -699,13 +704,13 @@ The tables below list the main direct dependencies and bundled assets. For the f
 >
 > OFL-1.1 allows these fonts to be bundled, embedded, and redistributed alongside any software, including GPL-3.0 projects. The fonts and their derivatives must remain licensed under OFL, must not be sold on their own, and modified versions must not use Reserved Font Names declared by their respective licenses. The bundled Smiley Sans license declares `Smiley` and `得意黑`; the bundled Inter license declares none.
 
-在桌面版中，点击页脚的「许可证」即可离线阅读项目 GPL 正文、锁定版本的 JavaScript 运行时依赖及 Vite 注入辅助代码的许可声明、两款捆绑字体的完整 OFL 文本，以及 Feather Icons 的 MIT 声明。前端构建同时生成 `third-party-notices.txt`；这份前端声明清单并不等同于完整的 Rust 原生依赖许可清单。
+在桌面版中，点击页脚的「许可证」即可离线阅读项目 GPL 正文、锁定版本的 JavaScript 运行时依赖及 Vite 注入辅助代码的许可声明、两款捆绑字体的完整 OFL 文本、Feather Icons 和 SQLite Rust 绑定的 MIT 声明，以及 SQLite 的公有领域说明。前端构建同时生成 `third-party-notices.txt`；这份声明清单并不等同于完整的 Rust 原生依赖许可清单。
 
-In the desktop app, choose **Licenses** in the footer to read offline copies of the project GPL, notices for locked JavaScript runtime dependencies and Vite-injected helper code, both bundled fonts' complete OFL texts, and the Feather Icons MIT notice. The frontend build also emits `third-party-notices.txt`; this frontend inventory does not represent a complete Rust native dependency license inventory.
+In the desktop app, choose **Licenses** in the footer to read offline copies of the project GPL, notices for locked JavaScript runtime dependencies and Vite-injected helper code, both bundled fonts' complete OFL texts, the Feather Icons and SQLite Rust bindings' MIT notices, and SQLite's public-domain statement. The frontend build also emits `third-party-notices.txt`; this inventory does not represent a complete Rust native dependency license inventory.
 
-命令行版可运行 `ssahdrify-cli licenses` 离线查看同一份 JavaScript 依赖和界面资源声明，其中包括 `entities` 的完整 BSD 许可证。这份共享清单也列出了部分仅用于桌面界面的组件；Rust 原生依赖的归属说明见上表。
+命令行版可运行 `ssahdrify-cli licenses` 离线查看同一份 JavaScript 依赖、界面资源和 SQLite 声明，其中包括 `entities` 的完整 BSD 许可证。这份共享清单也列出了部分仅用于桌面界面的组件；其他 Rust 原生依赖的归属说明见上表。
 
-Run `ssahdrify-cli licenses` to read the same JavaScript dependency and interface-asset notices offline, including the full BSD licence for `entities`. This shared inventory also lists some GUI-only components; native Rust dependency attribution is listed in the table above.
+Run `ssahdrify-cli licenses` to read the same JavaScript dependency, interface-asset, and SQLite notices offline, including the full BSD licence for `entities`. This shared inventory also lists some GUI-only components; other native Rust dependency attribution is listed in the table above.
 
 #### 构建时依赖（不随应用分发）| Build-time only (not shipped)
 

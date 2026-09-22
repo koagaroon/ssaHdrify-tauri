@@ -55,6 +55,9 @@ fn licenses_prints_entities_bsd_notice_without_touching_cache_or_output_paths() 
         assert!(entity_notice.contains(required), "missing notice text: {required}");
     }
     assert!(text.contains("this is not a complete native dependency license inventory"));
+    assert!(text.contains(include_str!("../vendor/libsqlite3-sys/LICENSE")));
+    assert!(text.contains("Source: https://github.com/rusqlite/rusqlite"));
+    assert!(text.contains("SQLite's deliverable source is in the public domain."));
     assert!(!cache_path.exists());
     assert!(!output_path.exists());
     assert_eq!(fs::read_dir(&root).unwrap().count(), 0);

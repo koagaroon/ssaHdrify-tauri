@@ -1,0 +1,121 @@
+{
+  "crate": {
+    "name": "libsqlite3-sys",
+    "version": "0.38.2",
+    "url": "https://static.crates.io/crates/libsqlite3-sys/libsqlite3-sys-0.38.2.crate",
+    "sha256": "f1d20bef17f513b9b3004532233187769cd072d790971f4e4da0e346eb6401e8"
+  },
+  "sqlite": {
+    "version": "3.53.4",
+    "sourceId": "2026-07-24 19:02:57 bf7c7f30031888f4e796e429ab3978879485813aaca6f641c7b33e4e09459bcc",
+    "url": "https://sqlite.org/2026/sqlite-amalgamation-3530400.zip",
+    "sha3_256": "628a44cfe82c66aed1ccbbe85a562d2e33ebe64b3288981ed76285612227934e",
+    "sourceSha3_256": "67f423e9ebbbdc473cbc4772c872ee6b89f31fde4ed0279a5c25d5f65c043a16"
+  },
+  "files": {
+    ".cargo_vcs_info.json": {
+      "upstreamSha256": "9f28537652d5b7bccd910c5e6afdeccd3862e5decbadd33c53cb3ae561c53892",
+      "sha256": "9f28537652d5b7bccd910c5e6afdeccd3862e5decbadd33c53cb3ae561c53892"
+    },
+    ".gitignore": {
+      "upstreamSha256": "d89b7a44f37a816f5b0ca8297e0d17067ca5f41e45d1455b0a56d072679a00a6",
+      "sha256": "d89b7a44f37a816f5b0ca8297e0d17067ca5f41e45d1455b0a56d072679a00a6"
+    },
+    "Cargo.lock": {
+      "upstreamSha256": "98613943806be93e12c818c0b612824435f8f8460e9c4acf42fd564b18d37d4c",
+      "sha256": "98613943806be93e12c818c0b612824435f8f8460e9c4acf42fd564b18d37d4c"
+    },
+    "Cargo.toml": {
+      "upstreamSha256": "ce2c66104c29834e8c5e875f765e2ddfc577b9366b1ccef80f3680c2039948b3",
+      "sha256": "ce2c66104c29834e8c5e875f765e2ddfc577b9366b1ccef80f3680c2039948b3"
+    },
+    "Cargo.toml.orig": {
+      "upstreamSha256": "f7a4bf06e3f2b8ad8f1e559637b84c19fec5ad3daee05c42b75fb596c3c188e9",
+      "sha256": "f7a4bf06e3f2b8ad8f1e559637b84c19fec5ad3daee05c42b75fb596c3c188e9"
+    },
+    "LICENSE": {
+      "upstreamSha256": "c10c1f27337546471e5f7e4e97fdd398b35b9d4e126115dcd22de8d8e65abf6f",
+      "sha256": "c10c1f27337546471e5f7e4e97fdd398b35b9d4e126115dcd22de8d8e65abf6f"
+    },
+    "README.md": {
+      "upstreamSha256": "17a4e830209b642f0bfebd4b3f581fa4fea24efca5e500e10eee58760de99969",
+      "sha256": "17a4e830209b642f0bfebd4b3f581fa4fea24efca5e500e10eee58760de99969"
+    },
+    "Upgrade.md": {
+      "upstreamSha256": "d151a67d4bbb1a5a300d084d210d6cd238d833a6d4bd5d958ae7469a9deccb36",
+      "sha256": "d151a67d4bbb1a5a300d084d210d6cd238d833a6d4bd5d958ae7469a9deccb36"
+    },
+    "bindgen-bindings/bindgen_3.34.1.rs": {
+      "upstreamSha256": "4f94d0192ec890b62773368cb026daf219f5182094952c007d28ed6d3812fd68",
+      "sha256": "4f94d0192ec890b62773368cb026daf219f5182094952c007d28ed6d3812fd68"
+    },
+    "bindgen-bindings/bindgen_3.34.1_ext.rs": {
+      "upstreamSha256": "44ff11f09886f8c41494f65043ac2ddba4e476bb17a81fe93a8c10c7bffdf4a8",
+      "sha256": "44ff11f09886f8c41494f65043ac2ddba4e476bb17a81fe93a8c10c7bffdf4a8"
+    },
+    "build.rs": {
+      "upstreamSha256": "269acf1864de5046ac5b77814926d41fe24108b0d027f635812a1db3c965f81f",
+      "sha256": "269acf1864de5046ac5b77814926d41fe24108b0d027f635812a1db3c965f81f"
+    },
+    "sqlcipher/LICENSE": {
+      "upstreamSha256": "ea4fcb309f14a22065e1ea45362d494d320012249ed865fe9c7c0946db754131",
+      "sha256": "ea4fcb309f14a22065e1ea45362d494d320012249ed865fe9c7c0946db754131"
+    },
+    "sqlcipher/bindgen_bundled_version.rs": {
+      "upstreamSha256": "971ec006a2405a7cc443ec69500b1b6fbe45cf3f6ababf7f7815e9a3edbd6dbe",
+      "sha256": "971ec006a2405a7cc443ec69500b1b6fbe45cf3f6ababf7f7815e9a3edbd6dbe"
+    },
+    "sqlcipher/sqlite3.c": {
+      "upstreamSha256": "ea0bf0b08f688ca5d9312b2e33e7f81b3f4ae54b5016fb062ae1f2632a30a1b9",
+      "sha256": "ea0bf0b08f688ca5d9312b2e33e7f81b3f4ae54b5016fb062ae1f2632a30a1b9"
+    },
+    "sqlcipher/sqlite3.h": {
+      "upstreamSha256": "91190701218669c31d2f56835c98882074ad051f2d38afee9f5b9c35d8406149",
+      "sha256": "91190701218669c31d2f56835c98882074ad051f2d38afee9f5b9c35d8406149"
+    },
+    "sqlcipher/sqlite3ext.h": {
+      "upstreamSha256": "ea81fb7bd05882e0e0b92c4d60f677b205f7f1fbf085f218b12f0b5b3f0b9e48",
+      "sha256": "ea81fb7bd05882e0e0b92c4d60f677b205f7f1fbf085f218b12f0b5b3f0b9e48"
+    },
+    "sqlite3/bindgen_bundled_version.rs": {
+      "upstreamSha256": "5b5a37a74dc728fb0bcd041867eb577c03c95e2fe46285262c589a3b1cd4bbac",
+      "sha256": "9805120b2dc82b7de40a2e623a641cf57e3c51ec05c517f62792fd6b69d614aa"
+    },
+    "sqlite3/bindgen_bundled_version_ext.rs": {
+      "upstreamSha256": "445cc206e04a87131d4690742517ee7dcc3a430319bac847ce5e9586f98ee301",
+      "sha256": "7106ae211e2eb345f88763de4bb3ae42f825aa3ba989010c902cc9dc5aafec66"
+    },
+    "sqlite3/sqlite3.c": {
+      "upstreamSha256": "0a409f1633283fa31a9126b11fbfd64a1991c5d30defad07e5745d4667f5e23d",
+      "sha256": "b1dd5d74ec7f29055a6684fa06fb3c2f6821c87dd38f9a458dfd2e8a1db28189"
+    },
+    "sqlite3/sqlite3.h": {
+      "upstreamSha256": "9e69a1353a4288450b0d5239ede11fc7f1f4c8e5eb07491fc8317eacb5b7de7e",
+      "sha256": "919e7f2e8ed1d8f56ac17b412b8971c76aa5d1a879752cc6058f75e7d5910e1d"
+    },
+    "sqlite3/sqlite3ext.h": {
+      "upstreamSha256": "ac9645e5c9ff0cf176efdd6e75cb5e98f46295d38e02db5c4d208826a39ab4be",
+      "sha256": "ac9645e5c9ff0cf176efdd6e75cb5e98f46295d38e02db5c4d208826a39ab4be"
+    },
+    "sqlite3/wasm32-wasi-vfs.c": {
+      "upstreamSha256": "b95842044da2b8777876b7d3fef8c9711e8c201fb4a4255dbac98729a456bb5d",
+      "sha256": "b95842044da2b8777876b7d3fef8c9711e8c201fb4a4255dbac98729a456bb5d"
+    },
+    "src/error.rs": {
+      "upstreamSha256": "9685678a8752bf47e5e39923bb2cf466cc312a25848d91cc206bf89eaccfb7d6",
+      "sha256": "9685678a8752bf47e5e39923bb2cf466cc312a25848d91cc206bf89eaccfb7d6"
+    },
+    "src/lib.rs": {
+      "upstreamSha256": "f61d8e306e11357479e20999f7b7adc5f3dbaea40cd17361853574001cf79360",
+      "sha256": "f61d8e306e11357479e20999f7b7adc5f3dbaea40cd17361853574001cf79360"
+    },
+    "wrapper.h": {
+      "upstreamSha256": "b78f576f7eeabf316e183d476b0f16344b6897680b4df47628d3ce38c0aa979a",
+      "sha256": "b78f576f7eeabf316e183d476b0f16344b6897680b4df47628d3ce38c0aa979a"
+    },
+    "wrapper_ext.h": {
+      "upstreamSha256": "fa7a53fea99318ee29d75e6d5fab4d7ed26e9599803268e6a24396265f2a6f3a",
+      "sha256": "fa7a53fea99318ee29d75e6d5fab4d7ed26e9599803268e6a24396265f2a6f3a"
+    }
+  }
+}

@@ -2291,6 +2291,148 @@ mod tests {
     }
 
     #[test]
+    fn bundled_sqlite_includes_required_recovery_hardening() {
+        assert!(
+            rusqlite::version_number() >= 3_053_004,
+            "SQLite {} predates the required recovery hardening",
+            rusqlite::version()
+        );
+        let conn = Connection::open_in_memory().expect("open SQLite probe");
+        let source_id: String = conn
+            .query_row("SELECT sqlite_source_id()", [], |row| row.get(0))
+            .expect("read the linked SQLite source ID");
+        assert_eq!(
+            source_id,
+            rusqlite::ffi::SQLITE_SOURCE_ID.to_str().unwrap(),
+            "the linked SQLite library must match the reviewed bundled source"
+        );
+    }
+
+    enum SuperJournalFixture {
+        None,
+        UnrelatedFilename,
+        MissingBacklink,
+        Valid,
+    }
+
+    fn assert_hot_journal_recovery(fixture: SuperJournalFixture) {
+        const JOURNAL_MAGIC: [u8; 8] = [0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7];
+        let (guard, path) = temp_cache_path();
+        let cache = FontCache::open_or_create(&path).expect("create recovery fixture");
+        cache
+            .conn
+            .execute(
+                "INSERT INTO cache_meta(key, value) VALUES('recovery_probe', 'before')",
+                [],
+            )
+            .unwrap();
+        let journal_name = format!("{}-journal", cache.conn.path().unwrap());
+        let journal_path = std::path::PathBuf::from(&journal_name);
+        let page_size: u32 = cache
+            .conn
+            .pragma_query_value(None, "page_size", |row| row.get(0))
+            .unwrap();
+        let committed = fs::read(&path).unwrap();
+        cache
+            .conn
+            .execute_batch(
+                "PRAGMA synchronous=OFF; BEGIN IMMEDIATE; \
+                 UPDATE cache_meta SET value='after' WHERE key='recovery_probe';",
+            )
+            .unwrap();
+        cache.conn.cache_flush().expect("flush uncommitted pages");
+        let dirty = fs::read(&path).unwrap();
+        let mut journal = fs::read(&journal_path).unwrap();
+        assert_ne!(dirty, committed, "recovery must undo an on-disk change");
+        assert!(journal.starts_with(&JOURNAL_MAGIC));
+        // Save/close/restore follows SQLite's mjournal.test without crashing a process.
+        drop(cache);
+
+        let referenced = match fixture {
+            SuperJournalFixture::None => None,
+            _ => {
+                let name = if matches!(fixture, SuperJournalFixture::UnrelatedFilename) {
+                    "keep-me.txt"
+                } else {
+                    "cache.sqlite3-mj1234569AA"
+                };
+                let target = guard.0.join(name);
+                let child = if matches!(fixture, SuperJournalFixture::MissingBacklink) {
+                    guard.0.join("unrelated.sqlite3-journal")
+                } else {
+                    journal_path.clone()
+                };
+                let mut contents = child.to_str().unwrap().as_bytes().to_vec();
+                contents.push(0);
+                fs::write(&target, &contents).unwrap();
+                let target_bytes = target.to_str().unwrap().as_bytes();
+                let checksum = target_bytes.iter().fold(0u32, |sum, byte| {
+                    sum.wrapping_add(i32::from(*byte as i8) as u32)
+                });
+                journal.extend_from_slice(&(0x4000_0000 / page_size + 1).to_be_bytes());
+                journal.extend_from_slice(target_bytes);
+                journal
+                    .extend_from_slice(&u32::try_from(target_bytes.len()).unwrap().to_be_bytes());
+                journal.extend_from_slice(&checksum.to_be_bytes());
+                journal.extend_from_slice(&JOURNAL_MAGIC);
+                Some((target, contents))
+            }
+        };
+        fs::write(&path, dirty).unwrap();
+        fs::write(&journal_path, journal).unwrap();
+
+        let recovered = FontCache::open_or_create(&path).expect("recover hot journal");
+        let value: String = recovered
+            .conn
+            .query_row(
+                "SELECT value FROM cache_meta WHERE key='recovery_probe'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(value, "before");
+        let integrity: String = recovered
+            .conn
+            .pragma_query_value(None, "integrity_check", |row| row.get(0))
+            .unwrap();
+        assert_eq!(integrity, "ok");
+        assert!(!journal_path.exists(), "the recovered journal is removed");
+        if let Some((target, contents)) = referenced {
+            if matches!(fixture, SuperJournalFixture::Valid) {
+                assert!(
+                    !target.exists(),
+                    "a completed valid super-journal is removed"
+                );
+            } else {
+                assert_eq!(
+                    fs::read(&target).expect("recovery must preserve unrelated files"),
+                    contents
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hot_journal_recovery_preserves_unrelated_filenames() {
+        assert_hot_journal_recovery(SuperJournalFixture::UnrelatedFilename);
+    }
+
+    #[test]
+    fn hot_journal_recovery_preserves_files_without_a_backlink() {
+        assert_hot_journal_recovery(SuperJournalFixture::MissingBacklink);
+    }
+
+    #[test]
+    fn hot_journal_recovery_cleans_up_a_valid_super_journal() {
+        assert_hot_journal_recovery(SuperJournalFixture::Valid);
+    }
+
+    #[test]
+    fn hot_journal_recovery_rolls_back_an_ordinary_transaction() {
+        assert_hot_journal_recovery(SuperJournalFixture::None);
+    }
+
+    #[test]
     fn sqlite_error_classifier_only_marks_invalid_database_codes_for_rebuild() {
         for code in [rusqlite::ffi::SQLITE_CORRUPT, rusqlite::ffi::SQLITE_NOTADB] {
             let error = cache_sqlite_error("opening cache", sqlite_failure(code));

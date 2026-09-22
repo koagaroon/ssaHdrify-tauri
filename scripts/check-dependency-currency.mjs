@@ -10,6 +10,7 @@ import {
   classifyNpmCurrency,
   collectCargoTargets,
   collectNpmTargets,
+  collectSqliteOverrideTarget,
   cratesIndexPath,
   dependencyWatchExitCode,
   fetchTextWithPolicy,
@@ -86,9 +87,16 @@ const cargoPolicies = {
     reviewedThrough: "0.412.0",
   },
   rusqlite: {
-    mode: /** @type {const} */ ("hold-line"),
+    mode: /** @type {const} */ ("manual"),
     reason:
-      "Keep 0.39 until rusqlite bundles SQLite 3.53.4 or newer; 0.40.2 passed the Rust 1.91 gate but bundles SQLite 3.53.2.",
+      "Review the bundled SQLite source and temporary override; remove it only when a published sys crate bundles SQLite 3.53.4 or newer and passes recovery tests and Rust 1.91 checks.",
+    reviewedThrough: "0.40.2",
+  },
+  "libsqlite3-sys": {
+    mode: /** @type {const} */ ("manual"),
+    reason:
+      "The temporary local override bundles SQLite 3.53.4. Review new upstream sys-crate releases for a qualifying replacement, even if rusqlite itself has not changed.",
+    reviewedThrough: "0.38.2",
   },
   rfd: {
     mode: /** @type {const} */ ("hold-line"),
@@ -345,6 +353,12 @@ async function checkCargoDependencies() {
   let cargoScope;
   try {
     cargoScope = collectCargoTargets(metadata);
+    cargoScope.targets.push(
+      collectSqliteOverrideTarget(
+        metadata,
+        resolve(projectRoot, "src-tauri", "vendor", "libsqlite3-sys", "Cargo.toml")
+      )
+    );
   } catch (error) {
     return [errorRow("Cargo", "direct dependency graph", "unknown", error)];
   }

@@ -10,6 +10,7 @@ import {
   classifyNpmCurrency,
   collectCargoTargets,
   collectNpmTargets,
+  collectSqliteOverrideTarget,
   cratesIndexPath,
   dependencyWatchExitCode,
   fetchTextWithPolicy,
@@ -136,6 +137,58 @@ describe("npm direct dependencies", () => {
 });
 
 describe("Cargo direct dependencies", () => {
+  test("keeps manual-review policy visible and flags an unreviewed native release", () => {
+    const input = {
+      locked: "0.38.2",
+      versions: [{ version: "0.38.2", yanked: false, rustVersion: null }],
+      mode: /** @type {const} */ ("manual"),
+      policyReason: "Review the temporary SQLite source override.",
+      msrv: "1.91",
+      reviewedThrough: "0.38.2",
+    };
+    expect(classifyCargoCurrency(input)).toMatchObject({
+      status: "current",
+      reason: "Tracked release is current. Review the temporary SQLite source override.",
+    });
+    input.versions.push({ version: "0.38.3", yanked: false, rustVersion: null });
+    expect(classifyCargoCurrency(input)).toMatchObject({ latest: "0.38.3", status: "review" });
+  });
+
+  test("tracks the exact bundled SQLite override independently of rusqlite", () => {
+    const metadata = {
+      packages: [
+        {
+          id: "sqlite",
+          name: "libsqlite3-sys",
+          version: "0.38.2",
+          source: null,
+          manifest_path: "vendor/libsqlite3-sys/Cargo.toml",
+        },
+      ],
+      resolve: { nodes: [{ id: "sqlite", features: ["bundled", "cc"] }] },
+    };
+    const manifestPath = "vendor/libsqlite3-sys/Cargo.toml";
+    expect(collectSqliteOverrideTarget(metadata, manifestPath)).toEqual({
+      name: "libsqlite3-sys",
+      locked: "0.38.2",
+      kinds: ["vendored"],
+    });
+    const wrongSource = structuredClone(metadata);
+    wrongSource.packages[0].manifest_path = "unreviewed/Cargo.toml";
+    const duplicate = structuredClone(metadata);
+    duplicate.packages.push({ ...duplicate.packages[0] });
+    for (const broken of [wrongSource, duplicate, { ...metadata, packages: [] }]) {
+      expect(() => collectSqliteOverrideTarget(broken, manifestPath)).toThrow(
+        "Expected exactly one reviewed vendored"
+      );
+    }
+    const external = structuredClone(metadata);
+    external.resolve.nodes[0].features = [];
+    expect(() => collectSqliteOverrideTarget(external, manifestPath)).toThrow(
+      "must enable the bundled build"
+    );
+  });
+
   test("builds sparse-index paths for crates.io", () => {
     expect(cratesIndexPath("a")).toBe("1/a");
     expect(cratesIndexPath("ab")).toBe("2/ab");

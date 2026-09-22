@@ -88,6 +88,7 @@ describe("frontend runtime notice inventory", () => {
       "src/assets/fonts/inter/LICENSE.txt",
       "src/assets/fonts/smiley-sans/LICENSE.txt",
       "src/assets/licenses/feather-LICENSE.txt",
+      "src-tauri/vendor/libsqlite3-sys/LICENSE",
     ]) {
       const source = readFileSync(new URL(`../../${file}`, import.meta.url), "utf8").replace(
         /\r\n/gu,
