@@ -76,9 +76,9 @@ export function buildFrontendNotices(root) {
   const sections = [
     "SSA HDRify — Third-party notices\n\n" +
       "This inventory covers the locked JavaScript runtime packages, Vite's generated " +
-      "runtime helpers, and the bundled fonts and icon attribution. Some included package " +
+      "runtime helpers, bundled fonts and icon attribution, and the SQLite source override. Some included package " +
       "notices also describe code used only during development.\n" +
-      "Native Rust dependency attribution is listed separately in the project README; " +
+      "Other native Rust dependency attribution is listed separately in the project README; " +
       "this is not a complete native dependency license inventory.\n",
     `Application license\n\n${readText("LICENSE")}`,
   ];
@@ -91,6 +91,11 @@ export function buildFrontendNotices(root) {
     );
   }
   for (const [name, source, file] of [
+    [
+      "SQLite Rust bindings (rusqlite / libsqlite3-sys)",
+      "https://github.com/rusqlite/rusqlite",
+      "src-tauri/vendor/libsqlite3-sys/LICENSE",
+    ],
     ["Inter", "https://github.com/rsms/inter", "src/assets/fonts/inter/LICENSE.txt"],
     [
       "Smiley Sans",
@@ -105,5 +110,10 @@ export function buildFrontendNotices(root) {
   ]) {
     sections.push(`${name}\nSource: ${source}\n\n${readText(file)}`);
   }
+  sections.push(
+    "SQLite\nSource: https://sqlite.org/\n\n" +
+      "SQLite's deliverable source is in the public domain.\n" +
+      "See https://sqlite.org/copyright.html.\n"
+  );
   return sections.join("\n\n" + "=".repeat(72) + "\n\n") + "\n";
 }

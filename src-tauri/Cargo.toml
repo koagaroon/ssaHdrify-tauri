@@ -65,7 +65,7 @@ clap = { version = "4.6.4", features = ["derive"] }
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "time"] }
 font-kit = "0.14"
 once_cell = "1"
-rusqlite = { version = "0.39", features = ["bundled"] }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
 chardetng = "1.0"
 encoding_rs = "0.8"
 sha2 = "0.11.0"
@@ -103,6 +103,11 @@ rustix = { version = "1.1.5", features = ["fs"] }
 
 [dev-dependencies]
 glob = "0.3.3"
+
+[patch.crates-io]
+# The released sys crate still bundles SQLite 3.53.2; keep the security fixes
+# in both portable binaries until an upstream bundle meets the tested floor.
+libsqlite3-sys = { path = "vendor/libsqlite3-sys" }
 
 # Release-profile tuning was introduced for the CLI binary and applies
 # to BOTH the CLI and GUI binaries because they share this `[package]`.

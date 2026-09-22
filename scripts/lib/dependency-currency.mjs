@@ -1,3 +1,5 @@
+import { resolve } from "node:path";
+
 const MAX_VERSION_LENGTH = 128;
 const MAX_REPORT_FIELD_LENGTH = 240;
 const MAX_REPORT_ROWS = 250;
@@ -553,7 +555,7 @@ export function classifyCargoCurrency({
       return {
         latest: globalLatest.version,
         status: /** @type {const} */ ("current"),
-        reason: "Tracked release is current.",
+        reason: `Tracked release is current. ${policyReason}`.trim(),
       };
     }
 
@@ -794,6 +796,38 @@ export function collectCargoTargets(metadata) {
     targets: [...targets.values()].sort((left, right) => left.name.localeCompare(right.name)),
     msrv: projectMsrv.raw,
   };
+}
+
+/** @param {unknown} metadata @param {string} expectedManifestPath @returns {CargoTarget} */
+export function collectSqliteOverrideTarget(metadata, expectedManifestPath) {
+  if (
+    !isRecord(metadata) ||
+    !Array.isArray(metadata.packages) ||
+    !isRecord(metadata.resolve) ||
+    !Array.isArray(metadata.resolve.nodes)
+  ) {
+    throw new MonitorDataError("Cargo metadata is missing the SQLite override graph.");
+  }
+  const matches = metadata.packages.filter(
+    (entry) => isRecord(entry) && entry.name === "libsqlite3-sys"
+  );
+  const entry = matches[0];
+  if (
+    matches.length !== 1 ||
+    !isRecord(entry) ||
+    typeof entry.id !== "string" ||
+    entry.source !== null ||
+    typeof entry.manifest_path !== "string" ||
+    resolve(entry.manifest_path) !== resolve(expectedManifestPath) ||
+    parseStableVersion(entry.version) === null
+  ) {
+    throw new MonitorDataError("Expected exactly one reviewed vendored libsqlite3-sys package.");
+  }
+  const node = metadata.resolve.nodes.find((node) => isRecord(node) && node.id === entry.id);
+  if (!isRecord(node) || !Array.isArray(node.features) || !node.features.includes("bundled")) {
+    throw new MonitorDataError("The resolved SQLite override must enable the bundled build.");
+  }
+  return { name: "libsqlite3-sys", locked: String(entry.version), kinds: ["vendored"] };
 }
 
 /** @param {string} key */
@@ -1177,7 +1211,7 @@ export function renderDependencyReport(rows) {
   const lines = [
     "# Dependency Watch",
     "",
-    "This read-only check monitors ordinary direct dependency updates. A red workflow run means maintenance is available; it does not mean the product build is broken.",
+    "This read-only check monitors direct dependency updates and the temporary SQLite source override. A red workflow run means maintenance is available; it does not mean the product build is broken.",
     "",
     "Security vulnerabilities remain a separate GitHub Dependabot Alerts responsibility. This workflow cannot push, create branches, or open pull requests.",
     "",

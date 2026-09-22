@@ -4,6 +4,9 @@
 # Encoding-sensitive subtitle fixtures must remain byte-for-byte exact.
 src-tauri/tests/fixtures/*.ass binary
 
+# Preserve upstream whitespace and bytes for the audited payload's checksums.
+src-tauri/vendor/libsqlite3-sys/** -text -whitespace
+
 # Bundled binary assets.
 *.png binary
 *.jpg binary

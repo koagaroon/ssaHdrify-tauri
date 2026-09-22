@@ -43,6 +43,17 @@ describe("embedded license notices", () => {
     expect(project?.text).toContain("Version 3, 29 June 2007");
   });
 
+  it("includes the complete vendored SQLite binding license and source attribution", () => {
+    const notices = LICENSE_NOTICES.find((notice) => notice.id === "frontend");
+    const license = readFileSync(
+      new URL("../../src-tauri/vendor/libsqlite3-sys/LICENSE", import.meta.url),
+      "utf8"
+    );
+    expect(notices?.text).toContain(license);
+    expect(notices?.text).toContain("Source: https://github.com/rusqlite/rusqlite");
+    expect(notices?.text).toContain("SQLite's deliverable source is in the public domain.");
+  });
+
   it("preserves each bundled font's copyright header and complete OFL text", () => {
     const inter = LICENSE_NOTICES.find((notice) => notice.id === "inter");
     const smileySans = LICENSE_NOTICES.find((notice) => notice.id === "smiley-sans");
