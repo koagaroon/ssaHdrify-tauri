@@ -14,6 +14,7 @@ import {
   cratesIndexPath,
   dependencyWatchExitCode,
   fetchTextWithPolicy,
+  getNodeTypesPolicy,
   inspectGitHubReleases,
   inspectNpmMetadata,
   inspectResolvedCommitSha,
@@ -58,7 +59,7 @@ describe("npm direct dependencies", () => {
   const packageJson = {
     dependencies: { react: "^19.2.0" },
     devDependencies: {
-      "@types/node": "~22.13.17",
+      "@types/node": "~24.19.1",
       typescript: "npm:@typescript/typescript6@6.0.2",
     },
   };
@@ -67,12 +68,12 @@ describe("npm direct dependencies", () => {
       "": {
         dependencies: { react: "^19.2.0" },
         devDependencies: {
-          "@types/node": "~22.13.17",
+          "@types/node": "~24.19.1",
           typescript: "npm:@typescript/typescript6@6.0.2",
         },
       },
       "node_modules/react": { version: "19.2.8" },
-      "node_modules/@types/node": { version: "22.13.17" },
+      "node_modules/@types/node": { version: "24.19.1" },
       "node_modules/transitive-only": { version: "99.0.0" },
     },
   };
@@ -84,8 +85,8 @@ describe("npm direct dependencies", () => {
       { name: "react", requested: "^19.2.0", locked: "19.2.8", kind: "dependency" },
       {
         name: "@types/node",
-        requested: "~22.13.17",
-        locked: "22.13.17",
+        requested: "~24.19.1",
+        locked: "24.19.1",
         kind: "development",
       },
     ]);
@@ -97,42 +98,108 @@ describe("npm direct dependencies", () => {
     expect(() => collectNpmTargets(packageJson, staleLock)).toThrow(MonitorDataError);
   });
 
-  test("reports an in-line patch while retaining the Node typings hold", () => {
+  test("reports eligible Node typing minor updates without crossing the build API floor", () => {
+    const policy = getNodeTypesPolicy({ engines: { node: "^24.21.0 || ^26.10.0" } }, "24.19.1");
     const inspection = inspectNpmMetadata(
-      npmMetadata("@types/node", ["22.13.17", "22.13.18", "26.2.0"], "26.2.0"),
+      npmMetadata("@types/node", ["24.19.1", "24.21.0", "24.22.0", "26.6.4"], "26.6.4"),
       "@types/node",
-      { major: 22, minor: 13 }
+      policy.line
     );
     const result = classifyNpmCurrency({
-      locked: "22.13.17",
+      locked: "24.19.1",
       inspection,
-      linePolicy: { outsideLine: "held", reason: "Keep the Node 22.13 API floor." },
+      linePolicy: policy.linePolicy,
     });
     expect(result.status).toBe("update");
-    expect(result.latest).toBe("22.13.18");
-    expect(result.reason).toContain("26.2.0");
+    expect(result.latest).toBe("24.21.0");
+    expect(result.reason).toContain("26.6.4");
   });
 
-  test("shows later held lines without keeping a current tracked line red", () => {
-    const inspection = inspectNpmMetadata(
-      npmMetadata("@types/node", ["22.13.18", "26.2.0"], "26.2.0"),
-      "@types/node",
-      { major: 22, minor: 13 }
-    );
-    const result = classifyNpmCurrency({
-      locked: "22.13.18",
-      inspection,
-      linePolicy: { outsideLine: "held", reason: "Keep the Node 22.13 API floor." },
-    });
-    expect(result).toMatchObject({ latest: "26.2.0", status: "held" });
-  });
+  test.each(["24.22.0", "26.6.4"])(
+    "keeps newer typings %s visible as a build-policy hold",
+    (newer) => {
+      const policy = getNodeTypesPolicy({ engines: { node: "^24.21.0 || ^26.10.0" } }, "24.21.0");
+      const inspection = inspectNpmMetadata(
+        npmMetadata("@types/node", ["24.21.0", newer], newer),
+        "@types/node",
+        policy.line
+      );
+      const result = classifyNpmCurrency({
+        locked: "24.21.0",
+        inspection,
+        linePolicy: policy.linePolicy,
+      });
+      expect(result).toMatchObject({ latest: newer, status: "held" });
+      expect(result.reason).toContain("Node 24.21.0 build API floor");
+      expect(
+        dependencyWatchExitCode([
+          { ecosystem: "npm", dependency: "@types/node", locked: "24.21.0", ...result },
+        ])
+      ).toBe(0);
+    }
+  );
 
   test("rejects an incomplete selected npm line record", () => {
-    const metadata = npmMetadata("@types/node", ["22.13.17", "22.13.18", "26.2.0"], "26.2.0");
-    metadata.versions["22.13.18"].version = "22.13.17";
-    expect(() => inspectNpmMetadata(metadata, "@types/node", { major: 22, minor: 13 })).toThrow(
+    const metadata = npmMetadata("@types/node", ["24.19.1", "24.20.0", "26.6.4"], "26.6.4");
+    metadata.versions["24.20.0"].version = "24.19.1";
+    expect(() => inspectNpmMetadata(metadata, "@types/node", { major: 24, maxMinor: 21 })).toThrow(
       "incomplete selected-version metadata"
     );
+  });
+});
+
+describe("Node typing build policy", () => {
+  test("derives the lowest supported build floor independently of engine alternative order", () => {
+    const policy = getNodeTypesPolicy({ engines: { node: "^26.10.0 || ^24.21.0" } }, "24.19.1");
+    expect(policy.line).toEqual({ major: 24, maxMinor: 21 });
+    const advanced = getNodeTypesPolicy({ engines: { node: "^26.10.0" } }, "26.6.4");
+    expect(advanced.line).toEqual({ major: 26, maxMinor: 10 });
+  });
+
+  test("accepts typings at the build minor boundary and rejects a newer minor or different major", () => {
+    const manifest = { engines: { node: "^24.21.0 || ^26.10.0" } };
+    expect(() => getNodeTypesPolicy(manifest, "24.21.3")).not.toThrow();
+    for (const version of ["24.22.0", "26.0.0", "22.20.5", "24.21.0-beta.1"]) {
+      expect(() => getNodeTypesPolicy(manifest, version)).toThrow("Locked @types/node must match");
+    }
+  });
+
+  test.each([null, {}, { engines: null }, { engines: { node: 24 } }])(
+    "rejects a missing or malformed Node build declaration: %j",
+    (manifest) => {
+      expect(() => getNodeTypesPolicy(manifest, "24.19.1")).toThrow(MonitorDataError);
+    }
+  );
+
+  test.each(["", ">=24", "^24.21.0 ||", "^24.21.0-beta.1", "^024.21.0", "^0.21.0"])(
+    "reports unsupported engine syntax instead of inventing a build floor: %s",
+    (node) => {
+      expect(() => getNodeTypesPolicy({ engines: { node } }, "24.19.1")).toThrow(
+        "Node engines must use stable caret-major alternatives"
+      );
+    }
+  );
+
+  test("keeps the repository's locked typings within its declared build floor", async () => {
+    const manifest = JSON.parse(await readFile(new URL("package.json", repositoryRoot), "utf8"));
+    const lockfile = JSON.parse(
+      await readFile(new URL("package-lock.json", repositoryRoot), "utf8")
+    );
+    expect(lockfile.packages[""].engines).toEqual(manifest.engines);
+    expect(() =>
+      getNodeTypesPolicy(manifest, lockfile.packages["node_modules/@types/node"].version)
+    ).not.toThrow();
+  });
+
+  test("checks every declared Node build minimum in CI", async () => {
+    const manifest = JSON.parse(await readFile(new URL("package.json", repositoryRoot), "utf8"));
+    const workflow = await readFile(new URL(".github/workflows/ci.yml", repositoryRoot), "utf8");
+    const exactLanes = [...workflow.matchAll(/- node: "([0-9.]+)"\s+check_latest: false/gu)].map(
+      (match) => match[1]
+    );
+    for (const range of manifest.engines.node.split(/\s*\|\|\s*/u)) {
+      expect(exactLanes).toContain(range.slice(1));
+    }
   });
 });
 

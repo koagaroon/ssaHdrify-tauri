@@ -493,11 +493,15 @@ Due to the complexity of subtitle blending pipelines and HDR display environment
 
 ### 前置条件 | Prerequisites
 
-- [Node.js](https://nodejs.org/) (v22.13 minimum, v24 LTS recommended, or v26 Current)
+- [Node.js](https://nodejs.org/)（支持 v24.21.0 及以上的 v24 LTS，或 v26.10.0 及以上的 v26；推荐 v24 LTS / v24 LTS from v24.21.0, or v26 from v26.10.0; v24 LTS recommended）
 - npm 11.19.0（由 `packageManager` 声明并由 CI 强制 / declared by `packageManager` and enforced in CI）
 - [Rust 工具链 / Rust toolchain](https://rustup.rs/)（最低 1.91；rustup 会自动安装仓库锁定且经过测试的稳定工具链 / 1.91 minimum; rustup automatically installs the repository-pinned tested stable toolchain）
 - Windows: [Microsoft C++ Build Tools and WebView2 / C++ 构建工具与 WebView2](https://v2.tauri.app/start/prerequisites/#windows)。安装构建工具时勾选「Desktop development with C++ / 使用 C++ 的桌面开发」，并使用 MSVC Rust 工具链。WebView2 通常已随较新的 Windows 安装；缺失时按链接中的说明安装。 / Select **Desktop development with C++** in the Build Tools installer and use the MSVC Rust toolchain. WebView2 is normally present on recent Windows installations; follow the linked instructions if it is missing.
 - macOS / Linux: 参考 / see [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)
+
+Node.js、npm 和 Rust 仅用于源码构建；使用发布的可执行文件不需要安装它们。
+
+Node.js, npm, and Rust are only needed to build from source; users of the released executables do not need to install them.
 
 ### 开发 | Development
 

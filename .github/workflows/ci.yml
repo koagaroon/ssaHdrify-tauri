@@ -22,12 +22,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - node: "22.13.0"
+          - node: "24.21.0"
             check_latest: false
             audit: false
           - node: "24"
             check_latest: true
             audit: true
+          - node: "26.10.0"
+            check_latest: false
+            audit: false
           - node: "26"
             check_latest: true
             audit: false
