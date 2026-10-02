@@ -25,7 +25,8 @@ updates:
         update-types:
           - "version-update:semver-major"
 
-      # These typings intentionally enforce the Node 22.13 API floor.
+      # Minor typing updates need a check against the declared Node build floor.
+      # Dependency Watch derives the eligible lines from package.json engines.
       - dependency-name: "@types/node"
         update-types:
           - "version-update:semver-minor"
@@ -50,15 +51,15 @@ updates:
           - "version-update:semver-minor"
           - "version-update:semver-major"
 
-      # rusqlite 0.40.2 passes the Rust 1.91 gate but bundles SQLite 3.53.2;
-      # keep 0.39 until upstream bundles SQLite 3.53.4 or newer.
+      # Review the actual bundled SQLite source and temporary override before
+      # changing this line; the override carries required recovery fixes.
       - dependency-name: rusqlite
         update-types:
           - "version-update:semver-minor"
           - "version-update:semver-major"
 
-      # Keep shared rfd 0.16 until tauri-plugin-dialog supports 0.17;
-      # its current XDG feature mapping is incompatible with rfd 0.17.
+      # Prefer sharing the dialog plugin's rfd version and platform features.
+      # A separate version needs a concrete benefit and explicit native validation.
       - dependency-name: rfd
         update-types:
           - "version-update:semver-minor"

@@ -14,6 +14,7 @@ import {
   cratesIndexPath,
   dependencyWatchExitCode,
   fetchTextWithPolicy,
+  getNodeTypesPolicy,
   inspectGitHubReleases,
   inspectNpmMetadata,
   inspectResolvedCommitSha,
@@ -101,7 +102,7 @@ const cargoPolicies = {
   rfd: {
     mode: /** @type {const} */ ("hold-line"),
     reason:
-      "Keep 0.16 until tauri-plugin-dialog officially supports rfd 0.17; direct defaults stay disabled so the plugin alone selects the shared Linux backend.",
+      "Retain the shared rfd line while the dialog plugin requires it. A separate newer version needs a concrete fix or feature, explicit platform features, and native validation.",
   },
 };
 
@@ -228,22 +229,13 @@ async function checkNpmDependencies() {
   const genericRows = await mapWithConcurrency(targets, 6, async (target) => {
     try {
       const metadata = await fetchNpmMetadata(target.name);
-      const isNodeTypes = target.name === "@types/node";
-      const inspection = inspectNpmMetadata(
-        metadata,
-        target.name,
-        isNodeTypes ? { major: 22, minor: 13 } : null
-      );
+      const nodeTypesPolicy =
+        target.name === "@types/node" ? getNodeTypesPolicy(packageJson, target.locked) : null;
+      const inspection = inspectNpmMetadata(metadata, target.name, nodeTypesPolicy?.line ?? null);
       const result = classifyNpmCurrency({
         locked: target.locked,
         inspection,
-        linePolicy: isNodeTypes
-          ? {
-              outsideLine: "held",
-              reason:
-                "Later @types/node lines are held so type-checking continues to enforce the Node 22.13 API floor.",
-            }
-          : null,
+        linePolicy: nodeTypesPolicy?.linePolicy ?? null,
       });
       if (result.status === "update" && scriptApprovalNames.has(target.name)) {
         result.reason +=

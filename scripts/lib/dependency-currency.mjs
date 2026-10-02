@@ -219,9 +219,51 @@ export function collectNpmTargets(packageJson, lockfile) {
 }
 
 /**
+ * @param {unknown} packageJson
+ * @param {string} locked
+ */
+export function getNodeTypesPolicy(packageJson, locked) {
+  if (
+    !isRecord(packageJson) ||
+    !isRecord(packageJson.engines) ||
+    typeof packageJson.engines.node !== "string"
+  ) {
+    throw new MonitorDataError("package.json must declare the supported Node build versions");
+  }
+  const floors = packageJson.engines.node.split(/\s*\|\|\s*/u).map((range) => {
+    const version = /^\^\d+\.\d+\.\d+$/u.test(range) ? parseStableVersion(range.slice(1)) : null;
+    if (version === null || version.major === 0) {
+      throw new MonitorDataError("Node engines must use stable caret-major alternatives");
+    }
+    return version;
+  });
+  const floor = floors.reduce((lowest, version) =>
+    compareStableVersions(version, lowest) < 0 ? version : lowest
+  );
+  const lockedVersion = parseStableVersion(locked);
+  if (
+    lockedVersion === null ||
+    lockedVersion.major !== floor.major ||
+    lockedVersion.minor > floor.minor
+  ) {
+    throw new MonitorDataError(
+      "Locked @types/node must match the minimum Node build major without exceeding its minor"
+    );
+  }
+
+  return {
+    line: { major: floor.major, maxMinor: floor.minor },
+    linePolicy: {
+      outsideLine: /** @type {const} */ ("held"),
+      reason: `Newer typings exceed the Node ${floor.raw} build API floor. Review the build baseline, engines, typings, and CI together to change this hold.`,
+    },
+  };
+}
+
+/**
  * @param {unknown} metadata
  * @param {string} expectedName
- * @param {{major: number, minor?: number} | null} [line]
+ * @param {{major: number, minor?: number, maxMinor?: number} | null} [line]
  */
 export function inspectNpmMetadata(metadata, expectedName, line = null) {
   if (!NPM_PACKAGE_PATTERN.test(expectedName) || !isRecord(metadata)) {
@@ -260,7 +302,8 @@ export function inspectNpmMetadata(metadata, expectedName, line = null) {
       : maxStableVersion(stableVersions, (version) => {
           return (
             version.major === line.major &&
-            (line.minor === undefined || version.minor === line.minor)
+            (line.minor === undefined || version.minor === line.minor) &&
+            (line.maxMinor === undefined || version.minor <= line.maxMinor)
           );
         });
 
