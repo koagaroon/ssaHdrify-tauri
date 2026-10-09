@@ -8,6 +8,8 @@ import {
   classifyActionCurrency,
   classifyCargoCurrency,
   classifyNpmCurrency,
+  classifyRustToolchainCurrency,
+  classifySqliteSourceCurrency,
   collectCargoTargets,
   collectNpmTargets,
   collectSqliteOverrideTarget,
@@ -15,9 +17,13 @@ import {
   dependencyWatchExitCode,
   fetchTextWithPolicy,
   getNodeTypesPolicy,
+  getNpmToolchainPin,
+  getRustToolchainPin,
+  getSqliteSourcePin,
   inspectGitHubReleases,
   inspectNpmMetadata,
   inspectResolvedCommitSha,
+  inspectSqliteDownloads,
   isRecord,
   mapWithConcurrency,
   parseActionReferences,
@@ -30,6 +36,8 @@ const projectRoot = fileURLToPath(new URL("../", import.meta.url));
 const packageJsonPath = resolve(projectRoot, "package.json");
 const packageLockPath = resolve(projectRoot, "package-lock.json");
 const cargoManifestPath = resolve(projectRoot, "src-tauri", "Cargo.toml");
+const rustToolchainPath = resolve(projectRoot, "rust-toolchain.toml");
+const sqliteProvenancePath = resolve(projectRoot, "src-tauri", "vendor", "sqlite-provenance.json");
 const workflowRoots = [
   resolve(projectRoot, ".github", "workflows"),
   resolve(projectRoot, ".github", "actions"),
@@ -109,13 +117,17 @@ const cargoPolicies = {
 /** @typedef {import("./lib/dependency-currency.mjs").CurrencyRow} CurrencyRow */
 
 /** @param {string} path */
-async function readJson(path) {
-  let text;
+async function readProjectText(path) {
   try {
-    text = await readFile(path, "utf8");
+    return await readFile(path, "utf8");
   } catch {
     throw new MonitorDataError(`Unable to read ${relative(projectRoot, path)}`);
   }
+}
+
+/** @param {string} path */
+async function readJson(path) {
+  const text = await readProjectText(path);
   try {
     return JSON.parse(text);
   } catch {
@@ -304,6 +316,66 @@ async function checkNpmDependencies() {
   return rows;
 }
 
+/** @returns {Promise<CurrencyRow>} */
+async function checkNpmToolchain() {
+  let locked = "unknown";
+  try {
+    locked = getNpmToolchainPin(await readJson(packageJsonPath));
+    const inspection = inspectNpmMetadata(await fetchNpmMetadata("npm"), "npm");
+    const result = classifyNpmCurrency({ locked, inspection });
+    return {
+      ecosystem: "Build tools",
+      dependency: "npm package manager",
+      locked,
+      ...result,
+      reason: `${result.reason} Pinned build tool; validate installation and lockfile behavior before changing it.`,
+    };
+  } catch (error) {
+    return errorRow("Build tools", "npm package manager", locked, error);
+  }
+}
+
+/** @returns {Promise<CurrencyRow>} */
+async function checkRustToolchain() {
+  let locked = "unknown";
+  try {
+    locked = getRustToolchainPin(await readProjectText(rustToolchainPath));
+    const release = await fetchGitHubJson(
+      "https://api.github.com/repos/rust-lang/rust/releases/latest"
+    );
+    return {
+      ecosystem: "Build tools",
+      dependency: "Rust compiler",
+      locked,
+      ...classifyRustToolchainCurrency({ locked, release }),
+    };
+  } catch (error) {
+    return errorRow("Build tools", "Rust compiler", locked, error);
+  }
+}
+
+/** @returns {Promise<CurrencyRow>} */
+async function checkSqliteSource() {
+  let locked = "unknown";
+  try {
+    const bundled = getSqliteSourcePin(await readJson(sqliteProvenancePath));
+    locked = bundled.version;
+    const downloads = await cachedFetchText(
+      "https://sqlite.org/download.html",
+      { Accept: "text/html", "User-Agent": userAgent },
+      2 * 1024 * 1024
+    );
+    return {
+      ecosystem: "Bundled source",
+      dependency: "SQLite amalgamation",
+      locked,
+      ...classifySqliteSourceCurrency({ bundled, latest: inspectSqliteDownloads(downloads) }),
+    };
+  } catch (error) {
+    return errorRow("Bundled source", "SQLite amalgamation", locked, error);
+  }
+}
+
 /** @returns {Promise<string>} */
 function runCargoMetadata() {
   return new Promise((resolvePromise, rejectPromise) => {
@@ -430,7 +502,7 @@ async function fetchGitHubJson(url) {
   try {
     return JSON.parse(text);
   } catch {
-    throw new MonitorDataError("GitHub returned malformed JSON for an action release");
+    throw new MonitorDataError("GitHub returned malformed JSON for a release");
   }
 }
 
@@ -517,7 +589,14 @@ async function main() {
   let rows;
   try {
     rows = (
-      await Promise.all([checkNpmDependencies(), checkCargoDependencies(), checkGitHubActions()])
+      await Promise.all([
+        checkNpmDependencies(),
+        checkCargoDependencies(),
+        checkGitHubActions(),
+        checkNpmToolchain(),
+        checkRustToolchain(),
+        checkSqliteSource(),
+      ])
     ).flat();
   } catch (error) {
     rows = [errorRow("Monitor", "orchestration", "unknown", error)];

@@ -1,0 +1,106 @@
+{
+  "schemaVersion": 1,
+  "advisory": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+  "reviewedAt": "2026-10-09T00:00:00+08:00",
+  "expiresAt": "2026-11-08T00:00:00+08:00",
+  "reason": "This unpatched advisory affects recursive brace patterns in the development-only Stylelint chain. The reviewed lint commands use fixed patterns, and the GUI/CLI build entries and source imports exclude this chain. Any change to that scope requires a new review.",
+  "devRoots": {
+    "stylelint": "^17.16.0",
+    "stylelint-config-standard": "^40.0.0"
+  },
+  "packages": {
+    "braces": {
+      "via": ["https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"],
+      "effects": ["micromatch"],
+      "version": "3.0.3",
+      "integrity": "sha512-yQbXgO/OSZVD2IsiLlro+7Hf6Q18EJrKSEsdoMzKePKXct3gvD8oLcOQdIzGupr5Fj+EDe8gO/lxc1BzfMpxvA==",
+      "inbound": ["node_modules/micromatch:dependencies:^3.0.3"]
+    },
+    "fast-glob": {
+      "via": ["micromatch"],
+      "effects": ["globby", "stylelint"],
+      "version": "3.3.3",
+      "integrity": "sha512-7MptL8U0cqcFdzIzwOTHoilX9x5BrNqye7Z/LuC7kCMRio1EMSyqRK3BEAUD7sXRq4iT4AzTVuZdhgQ2TCvYLg==",
+      "inbound": [
+        "node_modules/globby:dependencies:^3.3.3",
+        "node_modules/stylelint:dependencies:^3.3.3"
+      ]
+    },
+    "globby": {
+      "via": ["fast-glob", "micromatch"],
+      "effects": ["stylelint"],
+      "version": "16.2.4",
+      "integrity": "sha512-c8B/VNLmxRcmqqenRA9t+9IyOjf9+V6lTxPaUJLqOCONdQkWZ0ETYgX0qbtJqPsgCNusT9MZ5Jeidw8Eb9tn2g==",
+      "inbound": ["node_modules/stylelint:dependencies:^16.2.4"]
+    },
+    "micromatch": {
+      "via": ["braces"],
+      "effects": ["fast-glob", "globby", "stylelint"],
+      "version": "4.0.8",
+      "integrity": "sha512-PXwfBhYu0hBCPw8Dn0E+WDYb7af3dSLVWKi3HGv84IdF4TyFoC0ysxFd0Goxw7nSv4T/PzEJQxsYsEiFCKo2BA==",
+      "inbound": [
+        "node_modules/fast-glob:dependencies:^4.0.8",
+        "node_modules/globby:dependencies:^4.0.8",
+        "node_modules/stylelint:dependencies:^4.0.8"
+      ]
+    },
+    "stylelint": {
+      "via": ["fast-glob", "globby", "micromatch"],
+      "effects": ["stylelint-config-recommended", "stylelint-config-standard"],
+      "version": "17.16.0",
+      "integrity": "sha512-ejlWnbJ13x1GU32+zZXa6sYQJsKKkwSdv2B4rAdO3OWdEmvhSJKcXi5pOphQYSzyaj1kXpuGJr7pcMBNfDIuPw==",
+      "inbound": [
+        ":devDependencies:^17.16.0",
+        "node_modules/stylelint-config-recommended:peerDependencies:^17.0.0",
+        "node_modules/stylelint-config-standard:peerDependencies:^17.0.0"
+      ]
+    },
+    "stylelint-config-recommended": {
+      "via": ["stylelint"],
+      "effects": ["stylelint-config-standard"],
+      "version": "18.0.0",
+      "integrity": "sha512-mxgT2XY6YZ3HWWe3Di8umG6aBmWmHTblTgu/f10rqFXnyWxjKWwNdjSWkgkwCtxIKnqjSJzvFmPT5yabVIRxZg==",
+      "inbound": ["node_modules/stylelint-config-standard:dependencies:^18.0.0"]
+    },
+    "stylelint-config-standard": {
+      "via": ["stylelint", "stylelint-config-recommended"],
+      "effects": [],
+      "version": "40.0.0",
+      "integrity": "sha512-EznGJxOUhtWck2r6dJpbgAdPATIzvpLdK9+i5qPd4Lx70es66TkBPljSg4wN3Qnc6c4h2n+WbUrUynQ3fanjHw==",
+      "inbound": [":devDependencies:^40.0.0"]
+    }
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "npm run typecheck:ts7 && vite build",
+    "build:gui": "vite build",
+    "build:engine": "node scripts/build-engine.mjs",
+    "build:cli": "npm run typecheck:ts7 && npm run build:engine && cargo build --release --bin ssahdrify-cli --manifest-path src-tauri/Cargo.toml",
+    "build:all": "npm run tauri build && npm run build:cli",
+    "lint": "npm run lint:js && npm run lint:css && npm run lint:rs",
+    "lint:js": "eslint . && prettier --check .",
+    "lint:css": "stylelint --config .stylelintrc.json \"src/**/*.css\"",
+    "lint:rs": "cargo fmt --manifest-path src-tauri/Cargo.toml --check && cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings",
+    "lint:fix": "eslint . --fix && prettier --write . && stylelint --config .stylelintrc.json \"src/**/*.css\" --fix && cargo fmt --manifest-path src-tauri/Cargo.toml",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "typecheck:versions": "node scripts/verify-typescript-toolchains.mjs",
+    "typecheck:ts6": "node ./node_modules/typescript/bin/tsc6 -b",
+    "typecheck:ts7": "node ./node_modules/@typescript/native/bin/tsc -b tsconfig.ts7.json",
+    "typecheck:all": "npm run typecheck:versions && npm run typecheck:ts7 && npm run typecheck:ts6"
+  },
+  "boundaryFiles": {
+    ".stylelintrc.json": "a2bf641153184a197eed90af2eac589623e2438d8c8d994bae5a7f7c6be3d370",
+    "index.html": "c90988003671df224547fe82c2d75777d8fd75087d2e3f77c6a221c6cb9f40a3",
+    "scripts/build-engine.mjs": "9c45c3f40a314d94c5cc14969fefc5b3b4c22b9ed1f2cc19acedd7ec30a6deb8",
+    "src-tauri/build.rs": "ba33720c9a000550c6c6b31658d9d4e0546ceb210557e61162deb9c2b5039ff4",
+    "src-tauri/tauri.conf.json": "fe02b5a5b008655eba63fff61fbce49196375900a51cf22f19bf47018a771ec5",
+    "tsconfig.app.json": "3f4b186e2e7ab8dc08efaab0df0ad5ad097e384fb7586099abfdb8d90c331274",
+    "tsconfig.json": "e8d6f7b50828db3953e21c7e92584f9206b3cd2551b4012507372afbb7fe9ce3",
+    "tsconfig.node.json": "81bb37b0c0e55ce5b5704ac66480f449598236f31d5021418bd88a9f5402afa3",
+    "tsconfig.ts7.app.json": "941a99ddcf9da5dd6c005ebdfd5bc851b575f9702a14addf44e6026fff08ae71",
+    "tsconfig.ts7.json": "7549bb70e7f511b269719071def45eb5858d9acd74e88833c69e4152cea01eaa",
+    "tsconfig.ts7.node.json": "82b48da6459bb0761945177fac50061104306f79b06aec9e00f0fa99759e7729",
+    "vite.config.ts": "9de1cb306fbefd6950f8669f4f7bbe0783ab35a4b00a9af23e063e7fff336f81"
+  }
+}

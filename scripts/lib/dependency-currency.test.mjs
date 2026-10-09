@@ -8,6 +8,8 @@ import {
   classifyActionCurrency,
   classifyCargoCurrency,
   classifyNpmCurrency,
+  classifyRustToolchainCurrency,
+  classifySqliteSourceCurrency,
   collectCargoTargets,
   collectNpmTargets,
   collectSqliteOverrideTarget,
@@ -15,9 +17,13 @@ import {
   dependencyWatchExitCode,
   fetchTextWithPolicy,
   getNodeTypesPolicy,
+  getNpmToolchainPin,
+  getRustToolchainPin,
+  getSqliteSourcePin,
   inspectGitHubReleases,
   inspectNpmMetadata,
   inspectResolvedCommitSha,
+  inspectSqliteDownloads,
   maxStableVersion,
   parseActionReferences,
   parseCratesIndex,
@@ -203,6 +209,245 @@ describe("Node typing build policy", () => {
   });
 });
 
+describe("pinned build tools", () => {
+  const rustRelease = {
+    tag_name: "1.99.0",
+    html_url: "https://github.com/rust-lang/rust/releases/tag/1.99.0",
+    draft: false,
+    prerelease: false,
+  };
+
+  test.each([
+    ["11.19.0", "update"],
+    ["12.2.0", "current"],
+    ["12.3.0", "review"],
+  ])("compares the exact npm pin %s with its stable publisher channel", (version, status) => {
+    const locked = getNpmToolchainPin({ packageManager: `npm@${version}` });
+    const inspection = inspectNpmMetadata(
+      npmMetadata("npm", ["11.19.0", "12.2.0", "12.3.0", "13.0.0-beta.1"], "12.2.0"),
+      "npm"
+    );
+    expect(classifyNpmCurrency({ locked, inspection })).toMatchObject({ latest: "12.2.0", status });
+  });
+
+  test("reports an npm prerelease latest tag for review instead of treating it as an update", () => {
+    const locked = getNpmToolchainPin({ packageManager: "npm@12.2.0" });
+    const inspection = inspectNpmMetadata(
+      npmMetadata("npm", ["12.2.0", "13.0.0-beta.1"], "13.0.0-beta.1"),
+      "npm"
+    );
+    expect(classifyNpmCurrency({ locked, inspection })).toMatchObject({
+      latest: "13.0.0-beta.1",
+      status: "review",
+    });
+  });
+
+  test.each([
+    null,
+    {},
+    { packageManager: null },
+    { packageManager: "pnpm@12.2.0" },
+    { packageManager: "npm@^12.2.0" },
+    { packageManager: "npm@12.2" },
+    { packageManager: "npm@012.2.0" },
+    { packageManager: "npm@12.2.0-beta.1" },
+    { packageManager: "npm@12.2.0+hash" },
+    { packageManager: "npm@9007199254740992.0.0" },
+  ])("rejects a missing or unsupported npm exact pin: %j", (manifest) => {
+    expect(() => getNpmToolchainPin(manifest)).toThrow(MonitorDataError);
+  });
+
+  test("reads the Rust channel from the supported table with comments and optional arrays", () => {
+    const toolchain = [
+      "# Reviewed build compiler",
+      "[toolchain] # rustup settings",
+      'channel = "1.99.0" # exact stable version',
+      'profile = "minimal"',
+      'components = ["clippy", "rustfmt",]',
+      "targets = []",
+    ].join("\r\n");
+    expect(getRustToolchainPin(toolchain)).toBe("1.99.0");
+  });
+
+  test.each([
+    "stable",
+    "nightly",
+    "1.99",
+    "01.99.0",
+    "1.99.0-beta.1",
+    "1.99.0+local",
+    "1.99.0-x86_64-pc-windows-msvc",
+  ])("rejects the non-exact stable Rust channel %s", (channel) => {
+    expect(() => getRustToolchainPin(`[toolchain]\nchannel = "${channel}"`)).toThrow(
+      MonitorDataError
+    );
+  });
+
+  test.each([
+    "",
+    'channel = "1.99.0"',
+    '[unrelated]\nchannel = "1.99.0"',
+    '[toolchain]\nprofile = "minimal"',
+    '[toolchain]\nchannel = "1.99.0"\nchannel = "1.98.0"',
+    '[toolchain]\nchannel = "1.99.0"\n[toolchain]',
+    '[toolchain]\nchannel = "1.99.0"\npath = "local"',
+    '[toolchain]\nchannel = "1.99.0"\ncomponents = [\n"clippy"\n]',
+    '[toolchain]\nchannel = "1.99.0"\nprofile = "unknown"',
+    '[toolchain]\nprofile = """\nchannel = "1.99.0"\n"""',
+  ])("fails closed on unsupported or ambiguous Rust toolchain syntax: %j", (text) => {
+    expect(() => getRustToolchainPin(text)).toThrow(MonitorDataError);
+  });
+
+  test.each([
+    ["1.98.0", "update"],
+    ["1.99.0", "current"],
+    ["1.100.0", "review"],
+  ])("compares Rust pin %s without recommending an automatic downgrade", (locked, status) => {
+    const result = classifyRustToolchainCurrency({ locked, release: rustRelease });
+    expect(result).toMatchObject({ latest: "1.99.0", status });
+    if (status === "review") expect(result.reason).toContain("do not downgrade automatically");
+  });
+
+  test.each([
+    null,
+    {},
+    { ...rustRelease, draft: true },
+    { ...rustRelease, prerelease: true },
+    { ...rustRelease, prerelease: null },
+    { ...rustRelease, tag_name: "v1.99.0" },
+    { ...rustRelease, tag_name: "1.99.0-beta.1" },
+    { ...rustRelease, tag_name: "1.99.0+local" },
+    { ...rustRelease, html_url: "https://github.com/other/rust/releases/tag/1.99.0" },
+    { ...rustRelease, html_url: "https://github.com/rust-lang/rust/releases/tag/1.98.0" },
+  ])(
+    "rejects malformed, prerelease, or mismatched official Rust release metadata: %j",
+    (release) => {
+      expect(() => classifyRustToolchainCurrency({ locked: "1.98.0", release })).toThrow(
+        MonitorDataError
+      );
+    }
+  );
+
+  test("reads both exact build-tool pins from the current repository", async () => {
+    const manifest = JSON.parse(await readFile(new URL("package.json", repositoryRoot), "utf8"));
+    const rustToolchain = await readFile(new URL("rust-toolchain.toml", repositoryRoot), "utf8");
+    expect(getNpmToolchainPin(manifest)).toMatch(/^\d+\.\d+\.\d+$/u);
+    expect(getRustToolchainPin(rustToolchain)).toMatch(/^\d+\.\d+\.\d+$/u);
+  });
+});
+
+describe("bundled SQLite source currency", () => {
+  const digest = "a".repeat(64);
+  const bundled = {
+    version: "3.53.4",
+    url: "https://sqlite.org/2026/sqlite-amalgamation-3530400.zip",
+    sha3_256: digest,
+  };
+  const stableRow = `PRODUCT,3.53.4,2026/sqlite-amalgamation-3530400.zip,2946650,${digest}`;
+  /** @param {string[]} rows @param {string} [extraHeader] */
+  const downloadPage = (rows, extraHeader = "") =>
+    `<!doctype html>\n<!-- Download product data for scripts to read\nPRODUCT,VERSION,RELATIVE-URL,SIZE-IN-BYTES,SHA3-HASH${extraHeader}\n${rows.join("\n")}\n -->`;
+
+  test("reads the reviewed source pin and ignores snapshot and unrelated binary products", () => {
+    expect(getSqliteSourcePin({ sqlite: bundled })).toEqual(bundled);
+    const latest = inspectSqliteDownloads(
+      downloadPage([
+        `PRODUCT,2026-07-31 22:45 UTC,snapshot/sqlite-snapshot-202607312245.tar.gz,3312178,${digest}`,
+        `PRODUCT,3.99.0,2026/sqlite-dll-win-x64-3990000.zip,12345,${digest}`,
+        stableRow,
+      ])
+    );
+    expect(latest).toEqual(bundled);
+    expect(classifySqliteSourceCurrency({ bundled, latest })).toMatchObject({
+      latest: "3.53.4",
+      status: "current",
+    });
+  });
+
+  test("accepts appended product columns and selects the greatest stable amalgamation", () => {
+    const latest = inspectSqliteDownloads(
+      downloadPage(
+        [
+          `${stableRow},extra`,
+          `PRODUCT,3.54.0,2026/sqlite-amalgamation-3540000.zip,3000000,${digest},extra`,
+          `PRODUCT,3.53.5,2026/sqlite-amalgamation-3530500.zip,2950000,${digest},extra`,
+        ],
+        ",FUTURE-COLUMN"
+      )
+    );
+    expect(latest.version).toBe("3.54.0");
+    expect(classifySqliteSourceCurrency({ bundled, latest })).toMatchObject({ status: "review" });
+  });
+
+  test("recognizes a stable fourth-component branch release", () => {
+    const latest = inspectSqliteDownloads(
+      downloadPage([`PRODUCT,3.53.4.1,2026/sqlite-amalgamation-3530401.zip,2946650,${digest}`])
+    );
+    expect(classifySqliteSourceCurrency({ bundled, latest })).toMatchObject({
+      latest: "3.53.4.1",
+      status: "review",
+    });
+  });
+
+  test("does not recommend a downgrade or silently accept changed archive identity", () => {
+    const older = { ...bundled, version: "3.53.3", url: bundled.url.replace("3530400", "3530300") };
+    const result = classifySqliteSourceCurrency({ bundled, latest: older });
+    expect(result.status).toBe("review");
+    expect(result.reason).toContain("without automatically downgrading");
+    expect(
+      classifySqliteSourceCurrency({ bundled, latest: { ...bundled, sha3_256: "b".repeat(64) } })
+    ).toMatchObject({
+      status: "review",
+    });
+  });
+
+  test.each([
+    null,
+    {},
+    { sqlite: {} },
+    { sqlite: { ...bundled, version: "3.53.4-beta.1" } },
+    { sqlite: { ...bundled, version: "3.100.4" } },
+    { sqlite: { ...bundled, url: "https://example.invalid/2026/sqlite-amalgamation-3530400.zip" } },
+    { sqlite: { ...bundled, url: "https://sqlite.org/2026/sqlite-amalgamation-3530300.zip" } },
+    { sqlite: { ...bundled, sha3_256: digest.slice(1) } },
+    { sqlite: { ...bundled, sha3_256: `${digest}a` } },
+  ])("rejects malformed bundled SQLite provenance: %j", (provenance) => {
+    expect(() => getSqliteSourcePin(provenance)).toThrow(MonitorDataError);
+  });
+
+  test.each([
+    stableRow.replace("3.53.4,", "3.53.4-beta.1,"),
+    stableRow.replace("3530400", "3530300"),
+    stableRow.replace("2026/", "../2026/"),
+    stableRow.replace("2946650", "0"),
+    stableRow.replace("2946650", "9007199254740992"),
+    stableRow.replace(digest, digest.slice(1)),
+    stableRow.replace(digest, `${digest}a`),
+    stableRow.replace(",2946650", ""),
+  ])("rejects incomplete or contradictory stable download rows: %s", (row) => {
+    expect(() => inspectSqliteDownloads(downloadPage([row]))).toThrow(MonitorDataError);
+  });
+
+  test("rejects missing, repeated, malformed, and conflicting stable product data", () => {
+    for (const page of [
+      "<html>no product data</html>",
+      downloadPage([]),
+      downloadPage([stableRow]).replace("SHA3-HASH", "HASH"),
+      downloadPage([stableRow]) + downloadPage([stableRow]),
+      downloadPage([stableRow, stableRow.replace(digest, "b".repeat(64))]),
+    ]) {
+      expect(() => inspectSqliteDownloads(page)).toThrow(MonitorDataError);
+    }
+  });
+
+  test("validates the repository's bundled-source provenance without fetching a binary", async () => {
+    const provenance = JSON.parse(
+      await readFile(new URL("src-tauri/vendor/sqlite-provenance.json", repositoryRoot), "utf8")
+    );
+    expect(getSqliteSourcePin(provenance).version).toBe(provenance.sqlite.version);
+  });
+});
+
 describe("Cargo direct dependencies", () => {
   test("keeps manual-review policy visible and flags an unreviewed native release", () => {
     const input = {
@@ -300,7 +545,7 @@ describe("Cargo direct dependencies", () => {
     expect(result.reason).toContain("resolved graph still requires exact Rust 1.91 verification");
   });
 
-  test("classifies a release above the declared Rust floor as held", () => {
+  test("requests review for a new release above the declared Rust build floor", () => {
     const result = classifyCargoCurrency({
       locked: "1.0.0",
       versions: [
@@ -311,7 +556,13 @@ describe("Cargo direct dependencies", () => {
       policyReason: "",
       msrv: "1.91",
     });
-    expect(result).toMatchObject({ latest: "1.1.0", status: "held" });
+    expect(result).toMatchObject({ latest: "1.1.0", status: "review" });
+    expect(result.reason).toContain("Review raising that baseline");
+    expect(
+      dependencyWatchExitCode([
+        { ecosystem: "Cargo", dependency: "demo", locked: "1.0.0", ...result },
+      ])
+    ).toBe(1);
   });
 
   test("does not let an MSRV-blocked latest release hide an actionable update", () => {
@@ -328,7 +579,7 @@ describe("Cargo direct dependencies", () => {
     });
     expect(result).toMatchObject({ latest: "1.1.0", status: "update" });
     expect(result.reason).toContain("1.2.0");
-    expect(result.reason).toContain("remains held");
+    expect(result.reason).toContain("review raising the Rust 1.91 build floor");
   });
 
   test("fails closed when the sparse index omits the locked crate release", () => {
@@ -624,6 +875,9 @@ describe("safe reporting and network failures", () => {
     ]);
     expect(report).toContain("Dependabot Alerts");
     expect(report).toContain("cannot push, create branches, or open pull requests");
+    expect(report).toContain("pinned npm and Rust build tools");
+    expect(report).toContain("bundled SQLite source");
+    expect(report).toContain("Transitive-only lockfile updates are outside its scope");
   });
 
   test("puts actionable rows before current rows", () => {
