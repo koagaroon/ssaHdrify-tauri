@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { lstat, readFile, readdir, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { checkNpmInstallBoundary } from "./check-npm-install.mjs";
 import { evaluateNpmAudit, isObject, readAuditException } from "./lib/npm-audit-policy.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -58,6 +59,7 @@ function runAudit(npmCli) {
 }
 
 async function main() {
+  checkNpmInstallBoundary(root);
   /** @type {unknown} */
   const manifest = JSON.parse(await readText(join(root, "package.json")));
   if (!isObject(manifest)) throw new Error("Invalid package manifest");

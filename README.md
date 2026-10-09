@@ -508,6 +508,7 @@ Node.js, npm, and Rust are only needed to build from source; users of the releas
 ```bash
 git clone https://github.com/koagaroon/ssaHdrify-tauri.git
 cd ssaHdrify-tauri
+node scripts/check-npm-install.mjs
 npm ci
 npm run tauri dev
 ```
@@ -572,9 +573,13 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端测试 / Rust bac
 >
 > `Dependency Watch` is a read-only weekly check for direct npm and Cargo dependencies, the aliased TypeScript toolchain, pinned npm and Rust build tools, the actual bundled SQLite source, and GitHub Actions pinned to full commit hashes. Available updates or new versions needing manual review mark the workflow run red and produce a summary; the watch cannot create a branch or pull request. Build tools affect source builds; dependencies compiled into the executables still require runtime compatibility checks. Ordinary transitive dependency updates are outside this monitor's scope; GitHub Dependabot Alerts separately monitor dependency security vulnerabilities.
 
-`npm run audit:dependencies` 会审计完整的 npm 依赖图，并显示 `scripts/npm-audit-exceptions.json` 中已评估、带到期日的例外。其他漏洞、例外到期或相关依赖图及用途变化仍会使检查失败。直接运行 `npm audit` 可查看未经例外处理的原始结果。
+安装依赖前，先直接运行 `node scripts/check-npm-install.mjs`；它不依赖 `node_modules`，会拒绝未经评估的项目安装脚本、工作区和隐式原生安装入口。CI 也会在每次 `npm ci` 前执行这项检查。
 
-`npm run audit:dependencies` audits the complete npm dependency graph and displays reviewed, expiring exceptions from `scripts/npm-audit-exceptions.json`. Other advisories, expired exceptions, or changes to the affected graph or usage still fail the check. Run `npm audit` directly to inspect the unfiltered result.
+Before installing dependencies, run `node scripts/check-npm-install.mjs` directly. It needs no `node_modules` and rejects unreviewed project install hooks, workspaces, and implicit native installation. CI also runs it before every `npm ci`.
+
+`npm run audit:dependencies` 会审计完整的 npm 依赖图，并显示 `scripts/npm-audit-exceptions.json` 中已评估、带到期日的例外。其他漏洞、例外到期、相关依赖图及用途变化，或 npm 建议的修复方案变化，仍会使检查失败。直接运行 `npm audit` 可查看未经例外处理的原始结果。
+
+`npm run audit:dependencies` audits the complete npm dependency graph and displays reviewed, expiring exceptions from `scripts/npm-audit-exceptions.json`. Other advisories, expired exceptions, or changes to the affected graph, usage, or npm's suggested fix still fail the check. Run `npm audit` directly to inspect the unfiltered result.
 
 ---
 

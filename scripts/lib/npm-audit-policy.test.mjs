@@ -1,4 +1,6 @@
 import { readFile } from "node:fs/promises";
+import { posix } from "node:path";
+import ts from "typescript";
 import { describe, expect, test } from "vitest";
 import {
   boundaryDigest,
@@ -71,7 +73,7 @@ function fixture() {
             }
           : via
       ),
-      fixAvailable: false,
+      fixAvailable: structuredClone(pkg.fixAvailable),
     };
   }
   for (const [name, pkg] of Object.entries(exception.packages)) {
@@ -122,6 +124,17 @@ function firstAdvisory(vulnerability) {
 }
 
 describe("the single reviewed npm audit exception", () => {
+  test("includes local imports of every reviewed build helper in the boundary", () => {
+    for (const [path, source] of Object.entries(boundaryFiles)) {
+      if (!/\.[cm]?[jt]s$/u.test(path)) continue;
+      for (const imported of ts.preProcessFile(source, true, true).importedFiles) {
+        if (!imported.fileName.startsWith(".")) continue;
+        const target = posix.normalize(posix.join(posix.dirname(path), imported.fileName));
+        expect(Object.hasOwn(boundaryFiles, target), `${path} imports ${target}`).toBe(true);
+      }
+    }
+  });
+
   test("accepts the seven reviewed packages and visibly identifies the reason and expiry", () => {
     const result = evaluate(fixture());
     expect(result.accepted).toBe(7);
@@ -166,6 +179,17 @@ describe("the single reviewed npm audit exception", () => {
     firstAdvisory(input.report.vulnerabilities.braces).url =
       "https://github.com/advisories/GHSA-aaaa-bbbb-cccc";
     expect(() => evaluate(input)).toThrow("advisory graph");
+  });
+
+  test.each([
+    true,
+    false,
+    { name: "stylelint", version: "17.16.1", isSemVerMajor: false },
+    { name: "stylelint", version: "7.7.0", isSemVerMajor: false },
+  ])("requires review when npm's suggested fix changes to %j", (fixAvailable) => {
+    const input = fixture();
+    input.report.vulnerabilities.braces.fixAvailable = fixAvailable;
+    expect(() => evaluate(input)).toThrow("suggested fix changed");
   });
 
   test.each(["extra", "missing"])("fails a %s affected package", (change) => {
@@ -259,6 +283,15 @@ describe("the single reviewed npm audit exception", () => {
     expect(() => evaluate(input)).toThrow("configuration changed");
   });
 
+  test.each(["scripts/lib/app-version.mjs", "scripts/lib/frontend-notices.mjs"])(
+    "requires review when a transitive build helper changes: %s",
+    (path) => {
+      const input = fixture();
+      input.boundaryFiles[path] += '\nimport "braces/lib/parse.js";\n';
+      expect(() => evaluate(input)).toThrow("configuration changed");
+    }
+  );
+
   test.each(["prelint:css", "postlint:css", "prebuild", "postbuild:engine", "pretypecheck:ts7"])(
     "rejects an unreviewed npm lifecycle hook: %s",
     (hook) => {
@@ -267,6 +300,12 @@ describe("the single reviewed npm audit exception", () => {
       expect(() => evaluate(input)).toThrow("lint or build scripts");
     }
   );
+
+  test("also rejects root install hooks in the full audit policy", () => {
+    const input = fixture();
+    input.manifest.scripts.postinstall = "node install-helper.mjs";
+    expect(() => evaluate(input)).toThrow("installation scripts require review");
+  });
 
   test.each([
     'export { default } from "../scripts/runtime-helper.mjs";',

@@ -2,12 +2,14 @@ import { createHash } from "node:crypto";
 import { posix } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import ts from "typescript";
+import { assertNpmInstallManifest, npmInstallLifecycleScripts } from "../check-npm-install.mjs";
 
 /**
  * @typedef {"dependencies" | "devDependencies" | "optionalDependencies" | "peerDependencies"} DependencyField
+ * @typedef {boolean | { name: string, version: string, isSemVerMajor: boolean }} AuditFix
  * @typedef {{ source: number, name: string, dependency: string, title: string, url: string, range: string, severity: string }} AuditAdvisory
- * @typedef {{ name: string, severity: string, isDirect: boolean, range: string, via: (string | AuditAdvisory)[], nodes: string[], effects: string[], fixAvailable: boolean | { name: string, version: string, isSemVerMajor: boolean } }} AuditVulnerability
- * @typedef {{ version: string, integrity: string, inbound: string[], via: string[], effects: string[] }} ExceptionPackage
+ * @typedef {{ name: string, severity: string, isDirect: boolean, range: string, via: (string | AuditAdvisory)[], nodes: string[], effects: string[], fixAvailable: AuditFix }} AuditVulnerability
+ * @typedef {{ version: string, integrity: string, inbound: string[], via: string[], effects: string[], fixAvailable: AuditFix }} ExceptionPackage
  * @typedef {{ schemaVersion: number, advisory: string, reviewedAt: string, expiresAt: string, reason: string, packages: Record<string, ExceptionPackage>, devRoots: Record<string, string>, scripts: Record<string, string>, boundaryFiles: Record<string, string> }} AuditException
  */
 
@@ -63,8 +65,9 @@ export function boundaryDigest(text) {
 
 /** @param {string} name */
 export function isReviewedScript(name) {
-  return /^(?:pre|post)?(?:build(?::.*)?|lint(?::.*)?|typecheck(?::.*)?|dev|preview|tauri)$/u.test(
-    name
+  return (
+    npmInstallLifecycleScripts.includes(name) ||
+    /^(?:pre|post)?(?:build(?::.*)?|lint(?::.*)?|typecheck(?::.*)?|dev|preview|tauri)$/u.test(name)
   );
 }
 
@@ -84,6 +87,17 @@ function isAdvisory(value) {
   );
 }
 
+/** @param {unknown} value @returns {value is AuditFix} */
+function isAuditFix(value) {
+  return (
+    typeof value === "boolean" ||
+    (isObject(value) &&
+      typeof value.name === "string" &&
+      typeof value.version === "string" &&
+      typeof value.isSemVerMajor === "boolean")
+  );
+}
+
 /** @param {unknown} value @returns {value is AuditVulnerability} */
 function isVulnerability(value) {
   return (
@@ -100,11 +114,7 @@ function isVulnerability(value) {
     value.nodes.length > 0 &&
     sameMembers(value.nodes, value.nodes) &&
     sameMembers(value.effects, value.effects) &&
-    (typeof value.fixAvailable === "boolean" ||
-      (isObject(value.fixAvailable) &&
-        typeof value.fixAvailable.name === "string" &&
-        typeof value.fixAvailable.version === "string" &&
-        typeof value.fixAvailable.isSemVerMajor === "boolean"))
+    isAuditFix(value.fixAvailable)
   );
 }
 
@@ -263,7 +273,8 @@ export function readAuditException(value) {
         typeof pkg.integrity === "string" &&
         isStringArray(pkg.inbound) &&
         isStringArray(pkg.via) &&
-        isStringArray(pkg.effects),
+        isStringArray(pkg.effects) &&
+        isAuditFix(pkg.fixAvailable),
       "invalid exception package"
     );
     packages[name] = {
@@ -272,6 +283,7 @@ export function readAuditException(value) {
       inbound: pkg.inbound,
       via: pkg.via,
       effects: pkg.effects,
+      fixAvailable: pkg.fixAvailable,
     };
   }
   return {
@@ -327,6 +339,7 @@ export function evaluateNpmAudit({
       lockfile.lockfileVersion === 3,
     "missing manifest or supported lockfile"
   );
+  assertNpmInstallManifest(manifest);
   const root = lockfile.packages[""];
   requirePolicy(isObject(root), "missing lockfile root");
   for (const field of dependencyFields) {
@@ -377,6 +390,10 @@ export function evaluateNpmAudit({
     requirePolicy(
       sameMembers(inbound[name], expected.inbound),
       `dependency edges changed for ${name}`
+    );
+    requirePolicy(
+      isDeepStrictEqual(item.fixAvailable, expected.fixAvailable),
+      `npm's suggested fix changed for ${name}; review the available remediation`
     );
     requirePolicy(
       item.severity === "high" &&
