@@ -61,6 +61,13 @@ const CRATES_IO_SOURCE_IDS = new Set([
  */
 
 /**
+ * @typedef {object} SqliteSource
+ * @property {string} version
+ * @property {string} url
+ * @property {string} sha3_256
+ */
+
+/**
  * @typedef {object} ActionTarget
  * @property {string} repository
  * @property {string} pin
@@ -158,6 +165,234 @@ export function compareRustVersions(left, right) {
     if (left[key] !== right[key]) return left[key] < right[key] ? -1 : 1;
   }
   return 0;
+}
+
+/** @param {unknown} packageJson */
+export function getNpmToolchainPin(packageJson) {
+  const declaration = isRecord(packageJson) ? packageJson.packageManager : undefined;
+  const version =
+    typeof declaration === "string" && /^npm@\d+\.\d+\.\d+$/u.test(declaration)
+      ? parseStableVersion(declaration.slice(4))
+      : null;
+  if (version === null) {
+    throw new MonitorDataError("package.json packageManager must pin npm@MAJOR.MINOR.PATCH");
+  }
+  return version.raw;
+}
+
+/** @param {unknown} text */
+export function getRustToolchainPin(text) {
+  if (typeof text !== "string" || Buffer.byteLength(text, "utf8") > 64 * 1024) {
+    throw new MonitorDataError("rust-toolchain.toml is missing or exceeds the 64 KiB safety cap");
+  }
+
+  let toolchainTable = false;
+  const fields = new Set();
+  let pinnedVersion = null;
+  for (const sourceLine of text.split(/\r?\n/u)) {
+    const line = sourceLine.trim();
+    if (line === "" || line.startsWith("#")) continue;
+    if (/^\[toolchain\]\s*(?:#.*)?$/u.test(line)) {
+      if (toolchainTable) throw new MonitorDataError("rust-toolchain.toml repeats [toolchain]");
+      toolchainTable = true;
+      continue;
+    }
+
+    const field = /^([a-z-]+)\s*=\s*(.+)$/u.exec(line);
+    if (!toolchainTable || field === null || fields.has(field[1])) {
+      throw new MonitorDataError("rust-toolchain.toml contains duplicate or unsupported syntax");
+    }
+    const [, key, value] = field;
+    fields.add(key);
+    const stringValue = /^"([^"\\]*)"\s*(?:#.*)?$/u.exec(value);
+    if (key === "channel") {
+      pinnedVersion =
+        stringValue !== null && /^\d+\.\d+\.\d+$/u.test(stringValue[1])
+          ? parseStableVersion(stringValue[1])
+          : null;
+      if (pinnedVersion === null) {
+        throw new MonitorDataError("rust-toolchain.toml channel must pin stable MAJOR.MINOR.PATCH");
+      }
+    } else if (key === "profile") {
+      if (stringValue === null || !["minimal", "default", "complete"].includes(stringValue[1])) {
+        throw new MonitorDataError("rust-toolchain.toml contains an unsupported profile");
+      }
+    } else if (key === "components" || key === "targets") {
+      if (!/^\[\s*(?:"[^"\\]*"\s*(?:,\s*"[^"\\]*"\s*)*,?)?\s*\]\s*(?:#.*)?$/u.test(value)) {
+        throw new MonitorDataError(
+          "Rust toolchain component and target lists must use single-line string arrays"
+        );
+      }
+    } else {
+      throw new MonitorDataError("rust-toolchain.toml contains an unsupported field");
+    }
+  }
+  if (pinnedVersion === null) {
+    throw new MonitorDataError("rust-toolchain.toml has no exact stable toolchain.channel pin");
+  }
+  return pinnedVersion.raw;
+}
+
+/** @param {{locked: string, release: unknown}} input */
+export function classifyRustToolchainCurrency({ locked, release }) {
+  const lockedVersion = /^\d+\.\d+\.\d+$/u.test(locked) ? parseStableVersion(locked) : null;
+  if (lockedVersion === null) {
+    throw new MonitorDataError("The pinned Rust compiler must use stable MAJOR.MINOR.PATCH");
+  }
+  if (
+    !isRecord(release) ||
+    release.draft !== false ||
+    release.prerelease !== false ||
+    typeof release.tag_name !== "string" ||
+    !/^\d+\.\d+\.\d+$/u.test(release.tag_name) ||
+    release.html_url !== `https://github.com/rust-lang/rust/releases/tag/${release.tag_name}`
+  ) {
+    throw new MonitorDataError("GitHub returned an invalid stable rust-lang/rust release");
+  }
+  const latestVersion = parseStableVersion(release.tag_name);
+  if (latestVersion === null) {
+    throw new MonitorDataError("GitHub returned an invalid Rust release version");
+  }
+  const comparison = compareStableVersions(lockedVersion, latestVersion);
+  if (comparison > 0) {
+    return {
+      latest: latestVersion.raw,
+      status: /** @type {const} */ ("review"),
+      reason:
+        "The pinned Rust compiler is newer than the stable release channel; do not downgrade automatically.",
+    };
+  }
+  return {
+    latest: latestVersion.raw,
+    status: comparison < 0 ? /** @type {const} */ ("update") : /** @type {const} */ ("current"),
+    reason:
+      comparison < 0
+        ? "A newer stable Rust build compiler is available. Validate the build and lockfile before updating the pin; binary users do not need Rust installed."
+        : "The pinned Rust build compiler is current.",
+  };
+}
+
+/** @param {unknown} value */
+function parseSqliteVersion(value) {
+  if (
+    typeof value !== "string" ||
+    !/^[1-9]\.(?:0|[1-9]\d?)\.(?:0|[1-9]\d?)(?:\.(?:0|[1-9]\d?))?$/u.test(value)
+  ) {
+    throw new MonitorDataError("SQLite source version must be a stable numeric release");
+  }
+  const parts = value.split(".").map(Number);
+  const encoded = `${parts[0]}${String(parts[1]).padStart(2, "0")}${String(parts[2]).padStart(2, "0")}${String(parts[3] ?? 0).padStart(2, "0")}`;
+  return { raw: value, encoded };
+}
+
+/** @param {unknown} value @returns {SqliteSource} */
+function inspectSqliteSource(value) {
+  if (!isRecord(value)) throw new MonitorDataError("SQLite source metadata is missing");
+  const version = parseSqliteVersion(value.version);
+  const url =
+    typeof value.url === "string"
+      ? /^https:\/\/sqlite\.org\/20\d{2}\/sqlite-amalgamation-(\d{7})\.zip$/u.exec(value.url)
+      : null;
+  if (
+    url === null ||
+    url[1] !== version.encoded ||
+    typeof value.sha3_256 !== "string" ||
+    !/^[a-f0-9]{64}$/iu.test(value.sha3_256)
+  ) {
+    throw new MonitorDataError("SQLite amalgamation URL, version, or SHA3-256 metadata is invalid");
+  }
+  return { version: version.raw, url: String(value.url), sha3_256: value.sha3_256.toLowerCase() };
+}
+
+/** @param {unknown} provenance */
+export function getSqliteSourcePin(provenance) {
+  return inspectSqliteSource(isRecord(provenance) ? provenance.sqlite : undefined);
+}
+
+/** @param {unknown} text @returns {SqliteSource} */
+export function inspectSqliteDownloads(text) {
+  if (typeof text !== "string" || Buffer.byteLength(text, "utf8") > 2 * 1024 * 1024) {
+    throw new MonitorDataError(
+      "SQLite download metadata is missing or exceeds the 2 MiB safety cap"
+    );
+  }
+  const tables = [...text.matchAll(/<!--([\s\S]*?)-->/gu)]
+    .map((match) => match[1].trim().split(/\r?\n/u))
+    .filter((lines) => lines[0] === "Download product data for scripts to read");
+  if (tables.length !== 1) {
+    throw new MonitorDataError("SQLite downloads must contain exactly one product-data table");
+  }
+  const [, header, ...rows] = tables[0];
+  const expectedHeader = "PRODUCT,VERSION,RELATIVE-URL,SIZE-IN-BYTES,SHA3-HASH";
+  if (header !== expectedHeader && !header?.startsWith(`${expectedHeader},`)) {
+    throw new MonitorDataError("SQLite download product-data columns are unsupported");
+  }
+
+  /** @type {Map<string, SqliteSource & {size: number}>} */
+  const releases = new Map();
+  for (const row of rows) {
+    if (row.trim() === "") continue;
+    const fields = row.split(",");
+    if (fields.length < 5 || fields[0] !== "PRODUCT") {
+      throw new MonitorDataError("SQLite download product data contains a malformed row");
+    }
+    const [, version, path, byteLength, sha3_256] = fields;
+    if (!path.includes("sqlite-amalgamation")) continue;
+    if (!/^20\d{2}\/sqlite-amalgamation-\d{7}\.zip$/u.test(path)) {
+      throw new MonitorDataError("SQLite download data has an invalid amalgamation path");
+    }
+    const source = inspectSqliteSource({ version, url: `https://sqlite.org/${path}`, sha3_256 });
+    const size = Number(byteLength);
+    if (!/^[1-9]\d*$/u.test(byteLength) || !Number.isSafeInteger(size)) {
+      throw new MonitorDataError("SQLite amalgamation download size is invalid");
+    }
+    const key = parseSqliteVersion(version).encoded;
+    const existing = releases.get(key);
+    if (
+      existing !== undefined &&
+      (existing.url !== source.url ||
+        existing.sha3_256 !== source.sha3_256 ||
+        existing.size !== size)
+    ) {
+      throw new MonitorDataError("SQLite download data contains conflicting stable amalgamations");
+    }
+    releases.set(key, { ...source, size });
+  }
+  const latestCode = [...releases.keys()].sort().at(-1);
+  const latest = latestCode === undefined ? undefined : releases.get(latestCode);
+  if (latest === undefined) {
+    throw new MonitorDataError("SQLite download data has no stable amalgamation release");
+  }
+  return { version: latest.version, url: latest.url, sha3_256: latest.sha3_256 };
+}
+
+/** @param {{bundled: SqliteSource, latest: SqliteSource}} input */
+export function classifySqliteSourceCurrency({ bundled, latest }) {
+  const bundledCode = parseSqliteVersion(bundled.version).encoded;
+  const latestCode = parseSqliteVersion(latest.version).encoded;
+  if (bundledCode !== latestCode) {
+    return {
+      latest: latest.version,
+      status: /** @type {const} */ ("review"),
+      reason:
+        bundledCode < latestCode
+          ? "Newer SQLite source is available for the shipped binaries. Review fixes, source integrity, bindings, and recovery tests before replacing the bundled payload."
+          : "The bundled SQLite source is newer than the stable download channel; review the channel without automatically downgrading.",
+    };
+  }
+  if (bundled.url !== latest.url || bundled.sha3_256 !== latest.sha3_256) {
+    return {
+      latest: latest.version,
+      status: /** @type {const} */ ("review"),
+      reason:
+        "The stable SQLite archive identity differs from the reviewed bundle at the same version. Inspect the source before replacing it.",
+    };
+  }
+  return {
+    latest: latest.version,
+    status: /** @type {const} */ ("current"),
+    reason: "The reviewed bundled SQLite source matches the stable amalgamation download.",
+  };
 }
 
 /**
@@ -666,7 +901,7 @@ export function classifyCargoCurrency({
         ? `The crate does not declare rust_version; exact Rust ${msrv} verification is required.`
         : `The crate declares Rust ${candidate.rustVersion}; the resolved graph still requires exact Rust ${msrv} verification.`;
     const blockedNote = blockedByRust
-      ? ` Newer tracked release ${trackedLatest.version} declares a Rust version above ${msrv} and remains held.`
+      ? ` Newer tracked release ${trackedLatest.version} declares Rust ${trackedLatest.rustVersion}; review raising the Rust ${msrv} build floor before applying it.`
       : "";
     const outsideNote = outsideTrackedLine
       ? ` ${policyReason} Latest upstream: ${globalLatest.version}.`
@@ -681,8 +916,8 @@ export function classifyCargoCurrency({
   if (blockedByRust) {
     return {
       latest: trackedLatest.version,
-      status: /** @type {const} */ ("held"),
-      reason: `The newer tracked release declares Rust ${trackedLatest.rustVersion}, above the project's Rust ${msrv} floor.`,
+      status: /** @type {const} */ ("review"),
+      reason: `The newer tracked release declares Rust ${trackedLatest.rustVersion}, above the project's Rust ${msrv} build floor. Review raising that baseline; it is not a requirement on binary users.`,
     };
   }
 
@@ -1254,7 +1489,7 @@ export function renderDependencyReport(rows) {
   const lines = [
     "# Dependency Watch",
     "",
-    "This read-only check monitors direct dependency updates and the temporary SQLite source override. A red workflow run means maintenance is available; it does not mean the product build is broken.",
+    "This read-only check monitors direct dependencies, pinned npm and Rust build tools, the TypeScript aliases, GitHub Actions, and the bundled SQLite source and temporary sys-crate override. Transitive-only lockfile updates are outside its scope. A red workflow run means maintenance is available; it does not mean the product build is broken.",
     "",
     "Security vulnerabilities remain a separate GitHub Dependabot Alerts responsibility. This workflow cannot push, create branches, or open pull requests.",
     "",

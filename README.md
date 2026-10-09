@@ -494,7 +494,7 @@ Due to the complexity of subtitle blending pipelines and HDR display environment
 ### 前置条件 | Prerequisites
 
 - [Node.js](https://nodejs.org/)（支持 v24.21.0 及以上的 v24 LTS，或 v26.10.0 及以上的 v26；推荐 v24 LTS / v24 LTS from v24.21.0, or v26 from v26.10.0; v24 LTS recommended）
-- npm 11.19.0（由 `packageManager` 声明并由 CI 强制 / declared by `packageManager` and enforced in CI）
+- npm 12.2.0（由 `packageManager` 声明并由 CI 强制 / declared by `packageManager` and enforced in CI）
 - [Rust 工具链 / Rust toolchain](https://rustup.rs/)（最低 1.91；rustup 会自动安装仓库锁定且经过测试的稳定工具链 / 1.91 minimum; rustup automatically installs the repository-pinned tested stable toolchain）
 - Windows: [Microsoft C++ Build Tools and WebView2 / C++ 构建工具与 WebView2](https://v2.tauri.app/start/prerequisites/#windows)。安装构建工具时勾选「Desktop development with C++ / 使用 C++ 的桌面开发」，并使用 MSVC Rust 工具链。WebView2 通常已随较新的 Windows 安装；缺失时按链接中的说明安装。 / Select **Desktop development with C++** in the Build Tools installer and use the MSVC Rust toolchain. WebView2 is normally present on recent Windows installations; follow the linked instructions if it is missing.
 - macOS / Linux: 参考 / see [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)
@@ -508,6 +508,7 @@ Node.js, npm, and Rust are only needed to build from source; users of the releas
 ```bash
 git clone https://github.com/koagaroon/ssaHdrify-tauri.git
 cd ssaHdrify-tauri
+node scripts/check-npm-install.mjs
 npm ci
 npm run tauri dev
 ```
@@ -555,6 +556,7 @@ npm run build:all
 ```bash
 npm run test:run                                  # 前端单元测试 / Frontend unit tests
 npm run typecheck:all                             # TypeScript 7 release gate + TypeScript 6 API compatibility
+npm run audit:dependencies                       # 完整依赖审计及限期例外检查 / Full dependency audit with expiring exceptions
 npm run build:engine                              # 构建 CLI 内嵌引擎及许可声明 / Build the embedded CLI engine and notices
 cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端测试 / Rust backend tests
 ```
@@ -567,9 +569,17 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端测试 / Rust bac
 >
 > Release builds use native TypeScript 7 for type-checking. ESLint and `typescript-eslint` continue to use TypeScript 6's programmatic API through the official `@typescript/typescript6` compatibility package, and CI checks both toolchains. Use the `npm run typecheck:*` scripts above instead of relying on bare `tsc` / `npx tsc` resolution order.
 >
-> `Dependency Watch` 是只读的每周检查：它监视直接 npm 和 Cargo 依赖、TypeScript 别名工具链，以及锁定到完整提交哈希的 GitHub Actions。发现普通更新时，它只会将工作流运行标红并写入汇总；不会创建分支或拉取请求。依赖安全漏洞由 GitHub Dependabot Alerts 单独监视。
+> `Dependency Watch` 是只读的每周检查：它监视直接 npm 和 Cargo 依赖、TypeScript 别名工具链、锁定的 npm 和 Rust 构建工具、实际内置的 SQLite 源码，以及锁定到完整提交哈希的 GitHub Actions。发现更新或需要人工评估的新版本时，它只会将工作流运行标红并写入汇总；不会创建分支或拉取请求。构建工具仅影响源码构建；编译进可执行文件的依赖仍需检查运行兼容性。间接依赖的普通更新不在监视范围内；依赖安全漏洞由 GitHub Dependabot Alerts 单独监视。
 >
-> `Dependency Watch` is a read-only weekly check for direct npm and Cargo dependencies, the aliased TypeScript toolchain, and GitHub Actions pinned to full commit hashes. When an ordinary update exists, it only marks the workflow run red and writes a summary; it cannot create a branch or pull request. GitHub Dependabot Alerts separately monitor dependency security vulnerabilities.
+> `Dependency Watch` is a read-only weekly check for direct npm and Cargo dependencies, the aliased TypeScript toolchain, pinned npm and Rust build tools, the actual bundled SQLite source, and GitHub Actions pinned to full commit hashes. Available updates or new versions needing manual review mark the workflow run red and produce a summary; the watch cannot create a branch or pull request. Build tools affect source builds; dependencies compiled into the executables still require runtime compatibility checks. Ordinary transitive dependency updates are outside this monitor's scope; GitHub Dependabot Alerts separately monitor dependency security vulnerabilities.
+
+安装依赖前，先直接运行 `node scripts/check-npm-install.mjs`；它不依赖 `node_modules`，会拒绝未经评估的项目安装脚本、工作区和隐式原生安装入口。CI 也会在每次 `npm ci` 前执行这项检查。
+
+Before installing dependencies, run `node scripts/check-npm-install.mjs` directly. It needs no `node_modules` and rejects unreviewed project install hooks, workspaces, and implicit native installation. CI also runs it before every `npm ci`.
+
+`npm run audit:dependencies` 会审计完整的 npm 依赖图，并显示 `scripts/npm-audit-exceptions.json` 中已评估、带到期日的例外。其他漏洞、例外到期、相关依赖图及用途变化，或 npm 建议的修复方案变化，仍会使检查失败。直接运行 `npm audit` 可查看未经例外处理的原始结果。
+
+`npm run audit:dependencies` audits the complete npm dependency graph and displays reviewed, expiring exceptions from `scripts/npm-audit-exceptions.json`. Other advisories, expired exceptions, or changes to the affected graph, usage, or npm's suggested fix still fail the check. Run `npm audit` directly to inspect the unfiltered result.
 
 ---
 

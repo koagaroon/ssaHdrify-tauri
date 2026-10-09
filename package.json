@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.7.2",
   "license": "GPL-3.0-or-later",
-  "packageManager": "npm@11.19.0",
+  "packageManager": "npm@12.2.0",
   "type": "module",
   "engines": {
     "node": "^24.21.0 || ^26.10.0"
@@ -22,15 +22,16 @@
     "build:all": "npm run tauri build && npm run build:cli",
     "lint": "npm run lint:js && npm run lint:css && npm run lint:rs",
     "lint:js": "eslint . && prettier --check .",
-    "lint:css": "stylelint \"src/**/*.css\"",
+    "lint:css": "stylelint --config .stylelintrc.json \"src/**/*.css\"",
     "lint:rs": "cargo fmt --manifest-path src-tauri/Cargo.toml --check && cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings",
-    "lint:fix": "eslint . --fix && prettier --write . && stylelint \"src/**/*.css\" --fix && cargo fmt --manifest-path src-tauri/Cargo.toml",
+    "lint:fix": "eslint . --fix && prettier --write . && stylelint --config .stylelintrc.json \"src/**/*.css\" --fix && cargo fmt --manifest-path src-tauri/Cargo.toml",
     "preview": "vite preview",
     "tauri": "tauri",
     "test": "vitest",
     "test:run": "vitest run",
     "typecheck:versions": "node scripts/verify-typescript-toolchains.mjs",
     "check:dependency-currency": "node scripts/check-dependency-currency.mjs",
+    "audit:dependencies": "node scripts/check-npm-audit.mjs",
     "typecheck:ts6": "node ./node_modules/typescript/bin/tsc6 -b",
     "typecheck:ts7": "node ./node_modules/@typescript/native/bin/tsc -b tsconfig.ts7.json",
     "typecheck:all": "npm run typecheck:versions && npm run typecheck:ts7 && npm run typecheck:ts6"
