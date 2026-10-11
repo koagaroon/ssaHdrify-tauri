@@ -2,7 +2,7 @@
  * LogPanel — shared log section UI used by every batch tab.
  *
  * Renders the standard "Log" header (title + Clear button) plus the
- * scroll body containing color-coded entries (error / success / info).
+ * scroll body containing readable entries with small status markers.
  * The four feature tabs originally inlined the same JSX block
  * verbatim; the only variation was the entries themselves and the
  * scroll-ref binding.
@@ -23,11 +23,11 @@ interface LogPanelProps {
   scrollRef: RefObject<HTMLDivElement | null>;
 }
 
-const LOG_COLOR: Record<LogEntry["type"], string> = {
-  error: "var(--error)",
-  warn: "var(--warning)",
-  success: "var(--success)",
-  info: "var(--text-muted)",
+const LOG_MARKERS: Record<LogEntry["type"], { symbol: string; label: string }> = {
+  error: { symbol: "×", label: "log_level_error" },
+  warn: { symbol: "!", label: "log_level_warning" },
+  success: { symbol: "✓", label: "log_level_success" },
+  info: { symbol: "i", label: "log_level_info" },
 };
 
 export function LogPanel({ logs, onClear, scrollRef }: LogPanelProps) {
@@ -57,11 +57,12 @@ export function LogPanel({ logs, onClear, scrollRef }: LogPanelProps) {
       </div>
       <div ref={scrollRef} className="max-h-48 overflow-y-auto p-3 font-mono text-xs space-y-0.5">
         {logs.map((log) => (
-          // LOG_COLOR is a const map keyed by the closed log-type union;
-          // values are var(--token) literals, never user input.
-          // eslint-disable-next-line no-restricted-syntax
-          <div key={log.id} style={{ color: LOG_COLOR[log.type] }}>
-            {log.text}
+          <div key={log.id} className={`log-entry log-entry-${log.type}`}>
+            <span className="log-marker" aria-hidden="true">
+              {LOG_MARKERS[log.type].symbol}
+            </span>
+            <span className="sr-only">{t(LOG_MARKERS[log.type].label)}: </span>
+            <span>{log.text}</span>
           </div>
         ))}
       </div>

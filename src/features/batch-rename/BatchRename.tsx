@@ -91,58 +91,20 @@ function categorizePaths(paths: string[]): Categorized {
   return { videos, subtitles, unknown };
 }
 
-// Source badge — color-coded chip per pairing's `source` field. Uses
-// existing palette tokens (success / warning / muted / accent) so the
-// theme swap stays consistent across light/dark.
 function renderSourceBadge(
   source: PairingSource,
   t: (key: string, ...args: (string | number)[]) => string
 ) {
-  const map: Record<PairingSource, { labelKey: string; color: string; bg: string }> = {
-    regex: {
-      labelKey: "rename_source_regex",
-      color: "var(--success)",
-      bg: "var(--badge-green-bg)",
-    },
-    lcs: {
-      labelKey: "rename_source_lcs",
-      color: "var(--text-muted)",
-      bg: "var(--bg-input)",
-    },
-    manual: {
-      labelKey: "rename_source_manual",
-      color: "var(--accent)",
-      bg: "var(--bg-input)",
-    },
-    unmatched: {
-      labelKey: "rename_source_unmatched",
-      color: "var(--text-muted)",
-      bg: "transparent",
-    },
-    warning: {
-      labelKey: "rename_source_warning",
-      color: "var(--warning)",
-      bg: "color-mix(in srgb, var(--warning) 15%, transparent)",
-    },
+  const labels: Record<PairingSource, string> = {
+    regex: "rename_source_regex",
+    lcs: "rename_source_lcs",
+    manual: "rename_source_manual",
+    unmatched: "rename_source_unmatched",
+    warning: "rename_source_warning",
   };
-  const { labelKey, color, bg } = map[source];
   return (
-    <span
-      style={{
-        display: "inline-block",
-        padding: "1px 8px",
-        borderRadius: "4px",
-        fontSize: "10px",
-        fontWeight: 600,
-        letterSpacing: "0.04em",
-        // color / bg from the local `map` literal above; never user input.
-        // eslint-disable-next-line no-restricted-syntax
-        color,
-        // eslint-disable-next-line no-restricted-syntax
-        background: bg,
-      }}
-    >
-      {t(labelKey)}
+    <span className={`badge ${source === "warning" ? "badge-warning" : "badge-mute"}`}>
+      {t(labels[source])}
     </span>
   );
 }

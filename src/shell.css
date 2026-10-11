@@ -1,11 +1,7 @@
 /* ========================================================================
    SSA HDRify — Shell
-   Stage frame + frosted window + custom titlebar + app header (logo,
-   tabs, controls) + footer.
-
-   Port of the "bloom" direction from ssa Tauri revamp/src/styles.css,
-   shrunk ≈0.83× so the design's 1160×720 window fits inside our 960×760
-   Tauri window (the stage now fills the OS window — no inset gutter).
+   Neutral window surfaces + custom titlebar + app header (logo,
+   tabs, appearance controls) + footer.
    ======================================================================== */
 
 /* Last-resort render fallback. This deliberately does not depend on any
@@ -49,7 +45,7 @@
   border: 1px solid var(--accent);
   border-radius: var(--radius-sm);
   background: var(--accent);
-  color: var(--bg-app);
+  color: var(--accent-text);
   cursor: pointer;
   font: inherit;
   font-size: 14px;
@@ -65,12 +61,7 @@
   outline-offset: 3px;
 }
 
-/* ── Stage — full-window backdrop for the frosted glass ───
-   The stage fills the OS window (no inset frame) and hosts the
-   animated bloom layer behind the frosted pane. Prior versions
-   floated the window inside a 20 px stage gutter, but the gap
-   read as a stray rectangle around the app on Windows, so the
-   stage now behaves as the window background itself. */
+/* ── Stage — opaque surface filling the OS window ──────── */
 .stage {
   width: 100vw;
   height: 100vh;
@@ -78,73 +69,19 @@
   place-items: stretch;
   position: relative;
   overflow: hidden;
-  background: #eee1c8;
+  background: var(--bg-app);
 }
 
-[data-theme="dark"] .stage {
-  background: #050309;
-}
-
-/* Animated radial-gradient bloom backdrop.
-   A real <div> (not a pseudo) — pseudos rendered unreliably with
-   the heavy blur+saturate combo. */
-.stage-bloom {
-  position: absolute;
-  inset: -12%;
-  z-index: 0;
-  pointer-events: none;
-  animation: bloom-drift 34s ease-in-out infinite alternate;
-}
-
-@keyframes bloom-drift {
-  0% {
-    transform: translate(0, 0) scale(1);
-  }
-
-  100% {
-    transform: translate(3%, -2%) scale(1.06);
-  }
-}
-
-[data-theme="dark"] .stage-bloom {
-  background:
-    radial-gradient(720px 620px at 8% 12%, #ff1744 0%, transparent 60%),
-    radial-gradient(660px 580px at 94% 6%, #ffb300 0%, transparent 60%),
-    radial-gradient(800px 720px at 52% 108%, #651fff 0%, transparent 62%),
-    radial-gradient(620px 560px at 102% 82%, #00e5ff 0%, transparent 62%),
-    radial-gradient(520px 480px at 42% 42%, #e040fb 0%, transparent 65%);
-  filter: blur(22px) saturate(220%);
-  opacity: 0.95;
-}
-
-[data-theme="light"] .stage-bloom {
-  background:
-    radial-gradient(660px 560px at 10% 18%, #ff9b5a 0%, transparent 58%),
-    radial-gradient(620px 560px at 92% 12%, #ffd866 0%, transparent 60%),
-    radial-gradient(720px 640px at 58% 100%, #ff6b8a 0%, transparent 62%),
-    radial-gradient(520px 500px at 98% 78%, #ffb347 0%, transparent 60%),
-    radial-gradient(480px 440px at 35% 50%, #c8a8ff 0%, transparent 60%);
-  filter: blur(30px) saturate(150%);
-  opacity: 0.85;
-}
-
-/* ── Window — frosted pane catching the stage bloom ──────── */
+/* ── Window ────────────────────────────────────────────── */
 .window {
   width: 100%;
   height: 100%;
-  background: color-mix(in srgb, var(--bg-app) 62%, transparent);
-  backdrop-filter: blur(60px) saturate(180%);
+  background: var(--bg-app);
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  box-shadow: inset 0 1px 0 color-mix(in srgb, white 14%, transparent);
   position: relative;
   isolation: isolate;
-}
-
-[data-theme="light"] .window {
-  background: color-mix(in srgb, #fdfaf3 58%, transparent);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 60%);
 }
 
 /* ── Titlebar — custom, Windows-style ────────────────────── */
@@ -247,9 +184,7 @@
   font-weight: 600;
   letter-spacing: -0.03em;
   line-height: 0.95;
-  background: linear-gradient(120deg, var(--text-primary) 40%, var(--accent) 100%);
-  background-clip: text;
-  color: transparent;
+  color: var(--text-primary);
 }
 
 .app-tagline {
@@ -307,26 +242,141 @@
   gap: 6px;
 }
 
-/* Theme picker popover — items get :hover via CSS instead of inline
-   onMouseEnter/Leave swaps, matching the spinner pattern. */
-.theme-menu-item {
-  width: 100%;
-  text-align: left;
-  padding: 6px 12px;
-  font-size: 14px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+/* ── Appearance — independent palette and display-mode choices ── */
+.appearance-menu {
+  position: absolute;
+  z-index: 1;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 284px;
+  max-width: calc(100vw - 36px);
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
   color: var(--text-primary);
-  background: transparent;
-  border: 0;
-  cursor: pointer;
-  transition: background-color 0.15s;
-  font-family: inherit;
+  box-shadow: var(--shadow-popover);
 }
 
-.theme-menu-item:hover {
+.appearance-section {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.appearance-section + .appearance-section {
+  margin-top: 16px;
+}
+
+.appearance-label {
+  padding: 0;
+  margin-bottom: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.palette-options,
+.mode-options {
+  display: grid;
+  gap: 8px;
+}
+
+.palette-options {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.mode-options {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.palette-option,
+.mode-option {
+  position: relative;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 9px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: center;
+  cursor: pointer;
+  transition:
+    background-color 0.15s,
+    border-color 0.15s;
+}
+
+.mode-option {
+  min-height: 46px;
+}
+
+.palette-option input,
+.mode-option input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.palette-option:hover,
+.mode-option:hover {
   background: var(--bg-hover);
+}
+
+.palette-option:has(input:checked),
+.mode-option:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--bg-selected);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  font-weight: 600;
+}
+
+.palette-option:has(input:focus-visible),
+.mode-option:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.palette-swatch {
+  width: 42px;
+  height: 24px;
+  border: 1px solid;
+  border-radius: 4px;
+}
+
+.palette-swatch[data-palette="cool"] {
+  border-color: #adb8c5;
+  background: #e4e9ef;
+  box-shadow: inset 0 -8px #f0f3f7;
+}
+
+.palette-swatch[data-palette="warm"] {
+  border-color: #bab3a8;
+  background: #e9e6df;
+  box-shadow: inset 0 -8px #f4f1ec;
+}
+
+:root[data-theme="dark"] .palette-swatch[data-palette="cool"] {
+  border-color: #68778a;
+  background: #21262e;
+  box-shadow: inset 0 -8px #2a313b;
+}
+
+:root[data-theme="dark"] .palette-swatch[data-palette="warm"] {
+  border-color: #6f695e;
+  background: #252422;
+  box-shadow: inset 0 -8px #302e2a;
 }
 
 /* ── Tabs — underline with mono index chip ───────────────── */
@@ -372,13 +422,8 @@
   right: 0;
   bottom: -1px;
   height: 3px;
-  background: linear-gradient(
-    90deg,
-    var(--accent),
-    color-mix(in srgb, var(--accent) 40%, transparent)
-  );
+  background: var(--accent);
   border-radius: 2px 2px 0 0;
-  box-shadow: 0 0 20px 0 var(--accent);
 }
 
 .tab-index {
@@ -390,7 +435,7 @@
 }
 
 .tab[data-active="true"] .tab-index {
-  color: var(--accent);
+  color: var(--text-secondary);
 }
 
 /* Five feature tabs still fit the default 960 px window. Compress the
@@ -428,14 +473,7 @@
   gap: 10px;
   font-size: 11px;
 
-  /* Bumped from --text-muted to
-     --text-secondary. Footer is an active status surface (shows
-     current tab state, progress N/M, error/success dots) — keeping
-     the body text at --text-muted made the message itself fade
-     when surrounding controls were active, violating the project
-     "status text must not fade" readability principle. The
-     state-color cues (dot background, busy/done/error tint) stay
-     where they were; only the inline message moves up one tier. */
+  /* Status color belongs to the dot; the message stays readable. */
   color: var(--text-secondary);
   font-family: var(--font-mono);
   letter-spacing: 0.02em;
@@ -447,34 +485,25 @@
   border-radius: 50%;
   flex-shrink: 0;
   background: var(--text-muted);
-  transition:
-    background-color 0.2s,
-    box-shadow 0.2s;
+  transition: background-color 0.2s;
 }
 
-/* Status indicator color states — red for idle/error, amber for
-   pending + busy (pulse when actually working), green for done.
-   Pulse applied via animation on .busy only. */
-.app-footer .dot.idle,
+/* Keep status color on the dot; idle has the default neutral tone. */
 .app-footer .dot.error {
   background: var(--error);
-  box-shadow: 0 0 8px 0 var(--error);
 }
 
 .app-footer .dot.pending {
   background: var(--warning);
-  box-shadow: 0 0 8px 0 var(--warning);
 }
 
 .app-footer .dot.busy {
   background: var(--warning);
-  box-shadow: 0 0 8px 0 var(--warning);
   animation: dot-pulse 1.5s ease-in-out infinite;
 }
 
 .app-footer .dot.done {
   background: var(--success);
-  box-shadow: 0 0 8px 0 var(--success);
 }
 
 @keyframes dot-pulse {
@@ -614,11 +643,9 @@
   font-size: 12px;
 }
 
-/* Per-row state class — warning rows in the Tab 4 pairing grid get a
-   yellow tint so the user can spot ambiguous keys (multiple videos
-   sharing the same season+episode) at a glance. Subtle, not loud. */
+/* A narrow edge marks ambiguous pairings without tinting the whole row. */
 .preview-table-row.preview-row-warning {
-  background: color-mix(in srgb, var(--warning) 6%, transparent);
+  box-shadow: inset 2px 0 var(--warning);
 }
 
 /* ── Style Edit workbench ──────────────────────────────── */
@@ -777,7 +804,7 @@
 }
 
 .style-preview-table .preview-table-row.style-preview-error {
-  background: color-mix(in srgb, var(--error) 7%, transparent);
+  box-shadow: inset 2px 0 var(--error);
 }
 
 .style-preview-value {
@@ -947,7 +974,7 @@
 
 /* ─────────────────────────────────────────────────────────────
    NIT VISUALIZATION — HDR tab brightness slider + presets
-   Log-scale rainbow track (1→10k nits), 4 standard presets,
+   Log-scale neutral track (1→10k nits), 4 standard presets,
    large mono readout. Shrunk ≈0.85× from design spec.
    ───────────────────────────────────────────────────────────── */
 .nit-viz {
@@ -960,9 +987,7 @@
   position: relative;
 }
 
-/* Disabled rainbow track: desaturate the gradient and dim the border instead
-   of dropping the whole viz to opacity:0.6 (washed-out reads worse than
-   gray). Pointer events are off so the track can't be dragged. */
+/* Keep labels readable while disabling interaction with the track. */
 .nit-viz.is-disabled {
   border-color: var(--border-muted, var(--border-light));
 }
@@ -1021,13 +1046,9 @@
   cursor: pointer;
   background: linear-gradient(
     90deg,
-    #0a0614 0%,
-    #321850 10%,
-    #6e1d9c 28%,
-    #b347ff 46%,
-    #ff5caa 62%,
-    #ffb347 80%,
-    #2ee0ff 100%
+    var(--nit-track-start),
+    var(--nit-track-mid),
+    var(--nit-track-end)
   );
   touch-action: none;
   user-select: none;
@@ -1043,9 +1064,9 @@
   top: 0;
   bottom: 0;
   left: 0;
-  background: linear-gradient(90deg, transparent 0%, rgb(255 255 255 / 8%) 100%);
+  background: color-mix(in srgb, var(--bg-input) 8%, transparent);
   pointer-events: none;
-  border-right: 1px solid rgb(255 255 255 / 35%);
+  border-right: 1px solid var(--text-primary);
 }
 
 .nit-marker {
@@ -1062,18 +1083,9 @@
 .nit-marker-dot {
   width: 4px;
   height: calc(100% + 12px);
-  background: #fff;
+  background: var(--bg-input);
   border-radius: 2px;
-  box-shadow:
-    0 0 0 2px rgb(0 0 0 / 35%),
-    0 0 24px 4px var(--accent),
-    0 0 40px 6px color-mix(in srgb, var(--accent) 40%, transparent);
-}
-
-[data-theme="light"] .nit-marker-dot {
-  box-shadow:
-    0 0 0 2px rgb(0 0 0 / 20%),
-    0 0 16px 3px var(--accent);
+  box-shadow: 0 0 0 2px var(--text-primary);
 }
 
 .nit-ticks {
@@ -1086,7 +1098,7 @@
 
 .nit-ticks span {
   width: 1px;
-  background: rgb(255 255 255 / 14%);
+  background: color-mix(in srgb, var(--text-primary) 18%, transparent);
 }
 
 .nit-scale {
@@ -1154,14 +1166,11 @@
   filter: grayscale(1);
 }
 
-/* Active state — color-coding via border + background only.
-   Text stays on theme-aware primary/secondary for readability
-   regardless of which preset is lit or which theme is active.
-   (See feedback_visibility_priority.md — tinted-on-tinted text
-   fails contrast, especially in light mode.) */
+/* Every preset uses the same selection treatment. */
 .nit-preset[aria-pressed="true"] {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+  background: var(--bg-selected);
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
 }
 
 .nit-preset[aria-pressed="true"] .nit-preset-label {
@@ -1173,58 +1182,7 @@
 }
 
 .nit-preset[aria-pressed="true"] .nit-preset-v {
-  color: var(--accent);
-}
-
-/* Per-preset color coding — border + background only.
-   The big number (.nit-preset-v) also tints, with light/dark
-   variants to keep contrast on either theme. */
-.nit-preset[aria-pressed="true"][data-key="sdr"] {
-  background: color-mix(in srgb, #ffb347 22%, transparent);
-  border-color: #ffb347;
-}
-
-.nit-preset[aria-pressed="true"][data-key="sdr"] .nit-preset-v {
-  color: #b45309; /* dark amber — readable on light lilac */
-}
-
-[data-theme="dark"] .nit-preset[aria-pressed="true"][data-key="sdr"] .nit-preset-v {
-  color: #fbbf24; /* bright amber — readable on dark plum */
-}
-
-.nit-preset[aria-pressed="true"][data-key="bt2408"] {
-  background: color-mix(in srgb, var(--accent) 20%, transparent);
-  border-color: var(--accent);
-}
-
-.nit-preset[aria-pressed="true"][data-key="bt2408"] .nit-preset-v {
-  color: var(--accent);
-}
-
-.nit-preset[aria-pressed="true"][data-key="hdr10"] {
-  background: color-mix(in srgb, #2ee0ff 18%, transparent);
-  border-color: #2ee0ff;
-}
-
-.nit-preset[aria-pressed="true"][data-key="hdr10"] .nit-preset-v {
-  color: #0369a1; /* dark cyan — readable on light */
-}
-
-[data-theme="dark"] .nit-preset[aria-pressed="true"][data-key="hdr10"] .nit-preset-v {
-  color: #7dd3fc; /* bright cyan — readable on dark */
-}
-
-.nit-preset[aria-pressed="true"][data-key="dv"] {
-  background: color-mix(in srgb, #ff5caa 20%, transparent);
-  border-color: #ff5caa;
-}
-
-.nit-preset[aria-pressed="true"][data-key="dv"] .nit-preset-v {
-  color: #be185d; /* dark magenta — readable on light */
-}
-
-[data-theme="dark"] .nit-preset[aria-pressed="true"][data-key="dv"] .nit-preset-v {
-  color: #f9a8d4; /* bright pink — readable on dark */
+  color: var(--text-primary);
 }
 
 .nit-preset-label {
@@ -1294,11 +1252,9 @@
 
 .dir-btn[aria-checked="true"] {
   border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 10%, var(--bg-app));
+  background: var(--bg-selected);
   color: var(--text-primary);
-  box-shadow:
-    0 0 0 1px var(--accent),
-    0 0 20px -8px var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
 }
 
 .dir-arrow {
@@ -1310,7 +1266,7 @@
 }
 
 .dir-btn[aria-checked="true"] .dir-arrow {
-  color: var(--accent);
+  color: var(--text-primary);
 }
 
 .dir-label {
@@ -1532,17 +1488,76 @@
 
 .badge-green {
   background: var(--badge-green-bg);
-  color: var(--badge-green-text);
+  color: var(--text-primary);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--success) 40%, var(--border-light));
 }
 
 .badge-red {
   background: var(--badge-red-bg);
-  color: var(--badge-red-text);
+  color: var(--text-primary);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--error) 40%, var(--border-light));
 }
 
 .badge-mute {
-  background: color-mix(in srgb, var(--text-muted) 22%, transparent);
+  background: var(--bg-input);
   color: var(--text-secondary);
+  box-shadow: inset 0 0 0 1px var(--border-light);
+}
+
+.badge-warning {
+  background: var(--bg-input);
+  color: var(--text-primary);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warning) 40%, var(--border-light));
+}
+
+.badge-green::before,
+.badge-red::before,
+.badge-warning::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  flex: none;
+  border-radius: 50%;
+}
+
+.badge-green::before {
+  background: var(--success);
+}
+
+.badge-red::before {
+  background: var(--error);
+}
+
+.badge-warning::before {
+  background: var(--warning);
+}
+
+.log-entry {
+  display: flex;
+  gap: 0.5em;
+  color: var(--text-secondary);
+}
+
+.log-entry > span:last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.log-marker {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.log-entry-error .log-marker {
+  color: var(--error);
+}
+
+.log-entry-warn .log-marker {
+  color: var(--warning);
+}
+
+.log-entry-success .log-marker {
+  color: var(--success);
 }
 
 /* ─────────────────────────────────────────────────────────────
@@ -1576,9 +1591,7 @@
   background: var(--bg-app);
   border: 1px solid var(--border);
   border-radius: 12px;
-  box-shadow:
-    0 24px 60px -10px rgb(0 0 0 / 40%),
-    0 0 80px -20px var(--accent);
+  box-shadow: var(--shadow-popover);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -1823,7 +1836,7 @@
 
 .modal-opt:hover:not(:disabled) {
   border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 6%, var(--bg-app));
+  background: var(--bg-hover);
 }
 
 .modal-opt:disabled {
@@ -1837,8 +1850,8 @@
   width: 40px;
   height: 40px;
   border-radius: 10px;
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  color: var(--accent);
+  background: var(--bg-selected);
+  color: var(--text-secondary);
   display: grid;
   place-items: center;
   flex-shrink: 0;

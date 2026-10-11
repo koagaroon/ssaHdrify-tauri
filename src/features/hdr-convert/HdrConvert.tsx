@@ -773,7 +773,7 @@ export default function HdrConvert() {
             value={eotf}
             onChange={(e) => setEotf(e.target.value as Eotf)}
             disabled={processing}
-            className="px-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="px-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
             style={{
               background: "var(--bg-input)",
               border: "1px solid var(--border)",
@@ -813,7 +813,7 @@ export default function HdrConvert() {
         </div>
       </div>
 
-      {/* ── Brightness visualization (rainbow slider + standard presets) ── */}
+      {/* ── Brightness visualization (neutral slider + standard presets) ── */}
       <NitViz value={brightness} onChange={handleBrightnessFromNits} disabled={processing} />
 
       {/* Output Template */}
@@ -833,7 +833,7 @@ export default function HdrConvert() {
             value={template}
             onChange={(e) => setTemplate(e.target.value)}
             disabled={processing}
-            className="w-64 px-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-64 px-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
             style={{
               background: "var(--bg-input)",
               border: "1px solid var(--border)",
@@ -860,7 +860,7 @@ export default function HdrConvert() {
                 aria-labelledby="hdr-template-label"
                 aria-invalid={templateInvalid}
                 aria-describedby={templateInvalid ? "hdr-custom-template-error" : undefined}
-                className="w-64 px-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-64 px-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
                 style={{
                   background: "var(--bg-input)",
                   border: templateInvalid ? "1px solid var(--error)" : "1px solid var(--border)",
