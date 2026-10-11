@@ -6,9 +6,13 @@
 
 **SSA HDRify 用于为高动态范围（HDR）播放准备字幕。** 它能转换 SSA/ASS 字幕颜色，并提供时间轴偏移、字体嵌入、批量重命名和样式编辑工具。处理对象是字幕文件，不会转换视频。
 
-Built with **Tauri, React, TypeScript, and Rust**, the project offers a desktop app and a command-line tool that share the subtitle-processing engine. Windows releases are portable executables. The desktop interface supports English and Chinese, with light and dark themes.
+Built with **Tauri, React, TypeScript, and Rust**, the project offers a desktop app and a command-line tool that share the subtitle-processing engine. Windows releases are portable executables. The desktop interface supports English and Chinese, with Cool gray and Warm gray palettes; each supports light, dark, and system-following modes.
 
-项目基于 **Tauri、React、TypeScript 和 Rust**，提供共享字幕处理引擎的桌面应用和命令行工具。Windows 发布版为免安装的便携式可执行文件；桌面界面支持中英文和浅色、深色主题。
+项目基于 **Tauri、React、TypeScript 和 Rust**，提供共享字幕处理引擎的桌面应用和命令行工具。Windows 发布版为免安装的便携式可执行文件；桌面界面支持中英文，提供冷灰、暖灰两种色调，均可搭配浅色、深色或跟随系统模式。
+
+Use the appearance button in the top-right corner to choose a palette and mode independently. Cool gray is the default palette. Upgrading preserves your saved light, dark, or system-following mode, and both choices are remembered after restart.
+
+点击右上角的外观按钮，可分别选择色调与明暗模式。默认色调为冷灰；升级会保留原有的浅色、深色或跟随系统设置，色调与模式都会在下次启动时恢复。
 
 This is a Tauri rewrite of the original Python [gky99/ssaHdrify](https://github.com/gky99/ssaHdrify). See [Origin and Derivative Work](#来源与衍生作品--origin-and-derivative-work) for its lineage and licensing.
 
@@ -17,6 +21,8 @@ This is a Tauri rewrite of the original Python [gky99/ssaHdrify](https://github.
 [Download / 下载](https://github.com/koagaroon/ssaHdrify-tauri/releases/latest) · [Desktop usage / 桌面使用](#使用方法--usage) · [CLI examples / 命令行示例](#快速示例--quick-examples) · [Architecture / 架构](#架构--architecture)
 
 ### 界面预览 | Screenshots
+
+以下截图展示较早版本的配色。/ These screenshots show an earlier version's colors.
 
 |                                      深色主题（英文）/ Dark Theme (English)                                      |                                浅色主题（中文）/ Light Theme (Chinese)                                 |
 | :--------------------------------------------------------------------------------------------------------------: | :----------------------------------------------------------------------------------------------------: |

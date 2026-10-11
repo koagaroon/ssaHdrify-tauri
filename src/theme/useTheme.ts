@@ -1,6 +1,6 @@
 /**
- * Theme hook — three-mode system matching the Python version:
- *   "auto"  — follow system preference (Windows: registry, others: prefers-color-scheme)
+ * Theme hook — an independent palette and appearance mode:
+ *   "auto"  — follow the system preference via prefers-color-scheme
  *   "light" — force light
  *   "dark"  — force dark
  *
@@ -12,17 +12,22 @@ import { createContext, useContext } from "react";
 export type ThemeMode = "auto" | "light" | "dark";
 /** What actually renders */
 export type ThemeAppearance = "light" | "dark";
+export type ThemePalette = "cool" | "warm";
 
 export interface ThemeContextValue {
   mode: ThemeMode;
   appearance: ThemeAppearance;
+  palette: ThemePalette;
   setMode: (mode: ThemeMode) => void;
+  setPalette: (palette: ThemePalette) => void;
 }
 
 export const ThemeContext = createContext<ThemeContextValue>({
   mode: "light",
   appearance: "light",
+  palette: "cool",
   setMode: () => {},
+  setPalette: () => {},
 });
 
 export function useTheme() {

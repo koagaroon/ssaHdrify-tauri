@@ -8,10 +8,8 @@ import StyleEdit from "./features/style-edit/StyleEdit";
 import FontCacheDriftModal from "./features/font-embed/FontCacheDriftModal";
 import AboutLicensesModal from "./AboutLicensesModal";
 import { useI18n } from "./i18n/useI18n";
-import { useTheme } from "./theme/useTheme";
-import type { ThemeMode } from "./theme/useTheme";
+import AppearanceMenu from "./theme/AppearanceMenu";
 import { useStatus, type StatusTab } from "./lib/StatusContext";
-import { useClickOutside } from "./lib/useClickOutside";
 import { resolveAppModalVisibility } from "./lib/modal-coordination";
 import { TAB_LABEL_KEYS } from "./lib/tab-labels";
 import { completeFontCacheProbe } from "./lib/font-cache-ui-state";
@@ -34,31 +32,9 @@ const TAB_IDS: { id: Tab; labelKey: string }[] = (Object.keys(TAB_LABEL_KEYS) as
   (id) => ({ id, labelKey: TAB_LABEL_KEYS[id] })
 );
 
-// Theme label keys — explicit map instead of `t("theme_" + mode)` string
-// concat. If a ThemeMode value is ever renamed the compiler will flag the
-// gap here, where silent string concat would just return the bare key.
-const THEME_LABEL_KEYS: Record<ThemeMode, string> = {
-  auto: "theme_auto",
-  light: "theme_light",
-  dark: "theme_dark",
-};
-
-// derive THEME_OPTIONS from THEME_LABEL_KEYS as
-// the single source — the TAB_IDS pattern (line ~29) above does the
-// same Object.keys map. Previously THEME_OPTIONS and THEME_LABEL_KEYS
-// were parallel manual maps that had to stay in sync; adding /
-// renaming a theme mode required edits in two places. JS guarantees
-// insertion-order iteration for string keys, so the display order in
-// the theme picker remains the declaration order of THEME_LABEL_KEYS
-// (auto → light → dark).
-const THEME_OPTIONS: { mode: ThemeMode; labelKey: string }[] = (
-  Object.keys(THEME_LABEL_KEYS) as ThemeMode[]
-).map((mode) => ({ mode, labelKey: THEME_LABEL_KEYS[mode] }));
-
 function App() {
   const [activeTab, setActiveTab] = useState<Tab>("hdr");
   const { t, lang, setLang } = useI18n();
-  const { mode, appearance, setMode } = useTheme();
   const { statuses } = useStatus();
   const currentStatus = statuses[activeTab];
   // Resolve the Tauri window handle once — doing this at module scope would
@@ -75,12 +51,7 @@ function App() {
     }
   }, []);
 
-  const [themeOpen, setThemeOpen] = useState(false);
   const [licensesOpen, setLicensesOpen] = useState(false);
-  const themeRef = useRef<HTMLDivElement>(null);
-  // Close on click-outside + Escape — see useClickOutside for the
-  // armed-on-next-tick rationale.
-  useClickOutside(themeOpen, themeRef, () => setThemeOpen(false));
 
   // Persistent font cache (#5): launch-time drift check. Probe the
   // cache, and if it exists with drift OR with a schema mismatch,
@@ -185,7 +156,6 @@ function App() {
 
   return (
     <div className="stage">
-      <div className="stage-bloom" aria-hidden="true" />
       <div className="window">
         {/* ── Titlebar ────────────────────────────── */}
         <div className="titlebar" data-tauri-drag-region>
@@ -304,94 +274,7 @@ function App() {
                 {lang === "en" ? "中" : "EN"}
               </button>
 
-              <div ref={themeRef} style={{ position: "relative" }}>
-                <button
-                  className="icon-btn"
-                  onClick={() => setThemeOpen(!themeOpen)}
-                  title={t(THEME_LABEL_KEYS[mode])}
-                >
-                  {appearance === "light" ? (
-                    <svg
-                      width="15"
-                      height="15"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      aria-hidden="true"
-                    >
-                      <circle cx="12" cy="12" r="5" />
-                      <line x1="12" y1="1" x2="12" y2="3" />
-                      <line x1="12" y1="21" x2="12" y2="23" />
-                      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
-                      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
-                      <line x1="1" y1="12" x2="3" y2="12" />
-                      <line x1="21" y1="12" x2="23" y2="12" />
-                      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
-                      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
-                    </svg>
-                  ) : (
-                    <svg
-                      width="15"
-                      height="15"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      aria-hidden="true"
-                    >
-                      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-                    </svg>
-                  )}
-                </button>
-
-                {themeOpen && (
-                  <div
-                    className="absolute right-0 mt-1 py-1 rounded-lg z-50"
-                    style={{
-                      background: "var(--bg-app)",
-                      border: "1px solid var(--border)",
-                      boxShadow: "var(--shadow-popover)",
-                      minWidth: "140px",
-                    }}
-                  >
-                    {THEME_OPTIONS.map((opt, idx) => (
-                      <div key={opt.mode}>
-                        {idx === 1 && (
-                          <div
-                            className="my-1"
-                            style={{ height: "1px", background: "var(--border-light)" }}
-                          />
-                        )}
-                        <button
-                          onClick={() => {
-                            setMode(opt.mode);
-                            setThemeOpen(false);
-                          }}
-                          className="theme-menu-item"
-                        >
-                          <span>{t(opt.labelKey)}</span>
-                          {mode === opt.mode && (
-                            <span
-                              style={{
-                                color: "var(--accent)",
-                                fontSize: "1.25rem",
-                                lineHeight: 1,
-                              }}
-                            >
-                              {"\u2022"}
-                            </span>
-                          )}
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
+              <AppearanceMenu />
             </div>
           </div>
 

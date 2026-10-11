@@ -160,6 +160,12 @@ export const strings: Record<string, StringEntry> = {
   },
 
   // ── Theme ───────────────────────────────────────────────
+  appearance: { en: "Appearance", zh: "外观" },
+  appearance_current: { en: "Appearance: {0} · {1}", zh: "外观：{0} · {1}" },
+  appearance_palette: { en: "Palette", zh: "色调" },
+  appearance_mode: { en: "Mode", zh: "明暗模式" },
+  palette_cool: { en: "Cool gray", zh: "冷灰" },
+  palette_warm: { en: "Warm gray", zh: "暖灰" },
   theme_auto: { en: "Follow System", zh: "跟随系统" },
   theme_light: { en: "Light", zh: "浅色" },
   theme_dark: { en: "Dark", zh: "深色" },
@@ -220,6 +226,10 @@ export const strings: Record<string, StringEntry> = {
   btn_cancelling: { en: "Cancelling…", zh: "正在取消…" },
   log_title: { en: "Log", zh: "日志" },
   log_clear: { en: "Clear", zh: "清空" },
+  log_level_error: { en: "Error", zh: "错误" },
+  log_level_warning: { en: "Warning", zh: "警告" },
+  log_level_success: { en: "Success", zh: "成功" },
+  log_level_info: { en: "Info", zh: "信息" },
 
   // HDR Convert — log messages
   msg_invalid_brightness: {

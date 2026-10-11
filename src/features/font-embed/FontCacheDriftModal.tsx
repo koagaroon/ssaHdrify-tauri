@@ -430,7 +430,7 @@ export default function FontCacheDriftModal({
               style={{
                 background: "var(--accent)",
                 color: "var(--accent-text)",
-                border: "1px solid var(--accent-border, #6e56cf)",
+                border: "1px solid var(--accent)",
                 cursor: working !== null ? "not-allowed" : "pointer",
                 filter: working !== null ? "grayscale(1)" : "none",
               }}
