@@ -114,6 +114,21 @@ const cargoPolicies = {
   },
 };
 
+const sqliteSourceHold = {
+  bundled: {
+    version: "3.53.4",
+    url: "https://sqlite.org/2026/sqlite-amalgamation-3530400.zip",
+    sha3_256: "628a44cfe82c66aed1ccbbe85a562d2e33ebe64b3288981ed76285612227934e",
+  },
+  latest: {
+    version: "3.54.0",
+    url: "https://sqlite.org/2026/sqlite-amalgamation-3540000.zip",
+    sha3_256: "7b670a62fdfbd672b75fef004cb703c8a3e87d3a5cc7d675b4a08337004a2d93",
+  },
+  reason:
+    "SQLite 3.54.0 recompiles the session-font lookup on every fresh execution; 3.53.4 does not. Await a stable release with upstream fix 7f154192db, then rerun query and recovery tests. See src-tauri/vendor/README.md.",
+};
+
 /** @typedef {import("./lib/dependency-currency.mjs").CurrencyRow} CurrencyRow */
 
 /** @param {string} path */
@@ -369,7 +384,11 @@ async function checkSqliteSource() {
       ecosystem: "Bundled source",
       dependency: "SQLite amalgamation",
       locked,
-      ...classifySqliteSourceCurrency({ bundled, latest: inspectSqliteDownloads(downloads) }),
+      ...classifySqliteSourceCurrency({
+        bundled,
+        latest: inspectSqliteDownloads(downloads),
+        reviewedHold: sqliteSourceHold,
+      }),
     };
   } catch (error) {
     return errorRow("Bundled source", "SQLite amalgamation", locked, error);

@@ -389,6 +389,50 @@ describe("bundled SQLite source currency", () => {
     });
   });
 
+  test("holds only the exact reviewed pair of SQLite archives and keeps the reason visible", () => {
+    const latest = {
+      version: "3.54.0",
+      url: "https://sqlite.org/2026/sqlite-amalgamation-3540000.zip",
+      sha3_256: "b".repeat(64),
+    };
+    const reviewedHold = { bundled, latest, reason: "A production query recompiles redundantly." };
+    const held = classifySqliteSourceCurrency({ bundled, latest, reviewedHold });
+    expect(held).toEqual({ latest: latest.version, status: "held", reason: reviewedHold.reason });
+
+    for (const changedLatest of [
+      { ...latest, version: "3.54.1", url: latest.url.replace("3540000", "3540100") },
+      { ...latest, version: "3.54.0.1", url: latest.url.replace("3540000", "3540001") },
+      { ...latest, url: latest.url.replace("2026", "2027") },
+      { ...latest, sha3_256: "c".repeat(64) },
+    ]) {
+      expect(
+        classifySqliteSourceCurrency({ bundled, latest: changedLatest, reviewedHold }).status
+      ).toBe("review");
+    }
+    for (const changedBundle of [
+      { ...bundled, version: "3.53.5", url: bundled.url.replace("3530400", "3530500") },
+      { ...bundled, url: bundled.url.replace("2026", "2027") },
+      { ...bundled, sha3_256: "c".repeat(64) },
+    ]) {
+      expect(
+        classifySqliteSourceCurrency({ bundled: changedBundle, latest, reviewedHold }).status
+      ).toBe("review");
+    }
+    expect(
+      classifySqliteSourceCurrency({
+        bundled,
+        latest,
+        reviewedHold: { ...reviewedHold, reason: " " },
+      }).status
+    ).toBe("review");
+    expect(classifySqliteSourceCurrency({ bundled: latest, latest, reviewedHold }).status).toBe(
+      "current"
+    );
+    expect(
+      classifySqliteSourceCurrency({ bundled: latest, latest: bundled, reviewedHold }).status
+    ).toBe("review");
+  });
+
   test("does not recommend a downgrade or silently accept changed archive identity", () => {
     const older = { ...bundled, version: "3.53.3", url: bundled.url.replace("3530400", "3530300") };
     const result = classifySqliteSourceCurrency({ bundled, latest: older });
