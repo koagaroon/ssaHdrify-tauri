@@ -37,20 +37,20 @@
     "typecheck:all": "npm run typecheck:versions && npm run typecheck:ts7 && npm run typecheck:ts6"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2.12.1",
-    "@tauri-apps/plugin-dialog": "^2.8.1",
+    "@tauri-apps/api": "^2.12.3",
+    "@tauri-apps/plugin-dialog": "^2.8.2",
     "ass-compiler": "0.1.16",
     "colorjs.io": "0.7.1",
     "entities": "8.1.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
-    "react-window": "^2.3.3"
+    "react-window": "^2.3.4"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@tailwindcss/vite": "^4.3.3",
-    "@tauri-apps/cli": "^2.12.1",
-    "@types/node": "~24.19.1",
+    "@tauri-apps/cli": "^2.12.2",
+    "@types/node": "~24.19.2",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@typescript/native": "npm:typescript@~7.0.2",
@@ -61,13 +61,13 @@
     "eslint-plugin-react-refresh": "^0.5.7",
     "globals": "^17.13.0",
     "js-base64": "^3.9.4",
-    "prettier": "3.9.9",
+    "prettier": "3.9.10",
     "stylelint": "^17.16.0",
     "stylelint-config-standard": "^40.0.0",
     "tailwindcss": "^4.3.3",
     "typescript": "npm:@typescript/typescript6@6.0.2",
-    "typescript-eslint": "^8.71.0",
+    "typescript-eslint": "^8.71.2",
     "vite": "^8.3.2",
-    "vitest": "^5.0.3"
+    "vitest": "^5.0.4"
   }
 }

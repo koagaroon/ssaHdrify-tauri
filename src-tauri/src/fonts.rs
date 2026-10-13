@@ -908,6 +908,19 @@ fn user_font_key(family: &str, bold: bool, italic: bool) -> String {
 
 const USER_FONT_KEY_KIND_FAMILY: i32 = 0;
 const USER_FONT_KEY_KIND_FACE_ALIAS: i32 = 1;
+const USER_FONT_LOOKUP_SQL: &str = "
+        SELECT f.path, f.face_index
+        FROM font_family_keys k
+        JOIN font_faces f ON f.face_id = k.face_id
+        JOIN font_source_faces sf ON sf.face_id = f.face_id
+        JOIN font_sources s ON s.source_id = sf.source_id
+        WHERE k.family_name_key = ?1
+          AND ((k.key_kind = ?2 AND k.bold = ?3 AND k.italic = ?4)
+               OR (k.key_kind = ?5 AND k.bold = 0 AND k.italic = 0))
+        ORDER BY k.key_kind, s.source_kind DESC, s.source_order DESC,
+                 f.path, f.face_index
+        LIMIT 1
+        ";
 
 fn validate_font_source_id(source_id: &str) -> Result<(), String> {
     // `len()` is byte count (O(1)). The frontend always mints source
@@ -3936,19 +3949,7 @@ pub fn resolve_user_font(
     let family_name_key = crate::font_cache::family_lookup_key(&family);
     let conn = open_user_font_db()?;
     conn.query_row(
-        "
-        SELECT f.path, f.face_index
-        FROM font_family_keys k
-        JOIN font_faces f ON f.face_id = k.face_id
-        JOIN font_source_faces sf ON sf.face_id = f.face_id
-        JOIN font_sources s ON s.source_id = sf.source_id
-        WHERE k.family_name_key = ?1
-          AND ((k.key_kind = ?2 AND k.bold = ?3 AND k.italic = ?4)
-               OR (k.key_kind = ?5 AND k.bold = 0 AND k.italic = 0))
-        ORDER BY k.key_kind, s.source_kind DESC, s.source_order DESC,
-                 f.path, f.face_index
-        LIMIT 1
-        ",
+        USER_FONT_LOOKUP_SQL,
         params![
             family_name_key,
             USER_FONT_KEY_KIND_FAMILY,
@@ -6416,6 +6417,72 @@ mod tests {
             .expect("empty source cleanup should work");
         tx.commit().expect("transaction should commit");
         outcome
+    }
+
+    #[test]
+    fn user_font_lookup_returns_expected_rows_without_repreparing() {
+        let conn = Connection::open_in_memory().expect("test database should open");
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        init_user_font_schema(&conn).expect("font schema should initialize");
+        conn.execute_batch(
+            "INSERT INTO font_sources VALUES('source', 1, 2, NULL, 0);
+             INSERT INTO font_faces VALUES
+                 (1, 'alpha-regular.ttf', 0, 0, 0, 1),
+                 (2, 'alpha-bold.ttf', 1, 1, 0, 1),
+                 (3, 'alpha-italic.ttf', 2, 0, 1, 1),
+                 (4, 'beta-bold-italic.ttf', 3, 1, 1, 1);
+             INSERT INTO font_source_faces VALUES
+                 ('source', 1), ('source', 2), ('source', 3), ('source', 4);
+             INSERT INTO font_family_keys VALUES
+                 ('alpha', 0, 0, 0, 1), ('alpha', 1, 0, 0, 2),
+                 ('alpha', 0, 1, 0, 3), ('beta', 1, 1, 0, 4),
+                 ('beta alias', 0, 0, 1, 4);",
+        )
+        .expect("font lookup fixtures should insert");
+
+        for (family, bold, italic, expected) in [
+            ("alpha", false, false, Some(("alpha-regular.ttf", 0))),
+            ("alpha", true, false, Some(("alpha-bold.ttf", 1))),
+            ("alpha", false, true, Some(("alpha-italic.ttf", 2))),
+            ("beta", true, true, Some(("beta-bold-italic.ttf", 3))),
+            (
+                "beta alias",
+                false,
+                false,
+                Some(("beta-bold-italic.ttf", 3)),
+            ),
+            ("beta alias", true, true, Some(("beta-bold-italic.ttf", 3))),
+            ("alpha", true, true, None),
+            ("missing", false, false, None),
+        ] {
+            // Match resolve_user_font's fresh prepare/bind/step sequence.
+            let mut statement = conn
+                .prepare(USER_FONT_LOOKUP_SQL)
+                .expect("font lookup should prepare");
+            let actual = statement
+                .query_row(
+                    params![
+                        crate::font_cache::family_lookup_key(family),
+                        USER_FONT_KEY_KIND_FAMILY,
+                        i32::from(bold),
+                        i32::from(italic),
+                        USER_FONT_KEY_KIND_FACE_ALIAS,
+                    ],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, u32>(1)?)),
+                )
+                .optional()
+                .expect("font lookup should execute");
+            assert_eq!(
+                actual,
+                expected.map(|(path, index)| (path.to_string(), index)),
+                "family={family}, bold={bold}, italic={italic}"
+            );
+            assert_eq!(
+                statement.get_status(rusqlite::StatementStatus::RePrepare),
+                0,
+                "a fresh font lookup must not compile its query twice: family={family}, bold={bold}, italic={italic}"
+            );
+        }
     }
 
     #[test]

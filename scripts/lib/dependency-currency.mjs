@@ -366,10 +366,33 @@ export function inspectSqliteDownloads(text) {
   return { version: latest.version, url: latest.url, sha3_256: latest.sha3_256 };
 }
 
-/** @param {{bundled: SqliteSource, latest: SqliteSource}} input */
-export function classifySqliteSourceCurrency({ bundled, latest }) {
+/** @param {SqliteSource} left @param {SqliteSource} right */
+function sameSqliteSource(left, right) {
+  return (
+    left.version === right.version && left.url === right.url && left.sha3_256 === right.sha3_256
+  );
+}
+
+/**
+ * @param {{bundled: SqliteSource, latest: SqliteSource,
+ * reviewedHold?: {bundled: SqliteSource, latest: SqliteSource, reason: string}}} input
+ */
+export function classifySqliteSourceCurrency({ bundled, latest, reviewedHold }) {
   const bundledCode = parseSqliteVersion(bundled.version).encoded;
   const latestCode = parseSqliteVersion(latest.version).encoded;
+  if (
+    bundledCode < latestCode &&
+    reviewedHold !== undefined &&
+    reviewedHold.reason.trim() !== "" &&
+    sameSqliteSource(bundled, reviewedHold.bundled) &&
+    sameSqliteSource(latest, reviewedHold.latest)
+  ) {
+    return {
+      latest: latest.version,
+      status: /** @type {const} */ ("held"),
+      reason: reviewedHold.reason,
+    };
+  }
   if (bundledCode !== latestCode) {
     return {
       latest: latest.version,

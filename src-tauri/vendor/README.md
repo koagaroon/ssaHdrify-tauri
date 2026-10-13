@@ -50,6 +50,22 @@ The optional, unused SQLCipher payload retains its own
 [license](libsqlite3-sys/sqlcipher/LICENSE). The GUI and CLI offline notices
 include the Rust binding license and SQLite attribution.
 
+## Reviewed source hold
+
+SQLite 3.54.0 returns the expected session-font lookup results, but redundantly
+reprepares the statement on its first execution. With the bundled build's flags
+on Windows x64, the application's exact query reports one extra preparation per
+fresh lookup, while 3.53.4 reports none. Retain 3.53.4 until a stable release
+resolves this [upstream regression](https://sqlite.org/bugs/forumpost/3badc48abc)
+([upstream fix](https://sqlite.org/src/info/7f154192db)). The native session-query
+test checks both returned rows and the preparation count.
+
+Dependency Watch recognizes only the reviewed 3.53.4 and 3.54.0 archive identities
+as this hold. A changed archive or newer stable release requires review again.
+Before replacing the payload, also compare the C interfaces and extension header:
+the four-file, metadata-only binding procedure above describes the retained
+3.53.4 patch and does not establish compatibility with a future source release.
+
 ## Removing the override
 
 Dependency Watch checks both `rusqlite` and the resolved `libsqlite3-sys`
