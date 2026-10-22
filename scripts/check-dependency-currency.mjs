@@ -93,18 +93,18 @@ const cargoPolicies = {
     mode: /** @type {const} */ ("manual"),
     reason:
       "Every deno_core release requires a manual V8, API, and runtime audit before updating the exact pin.",
-    reviewedThrough: "0.412.0",
+    reviewedThrough: "0.413.0",
   },
   rusqlite: {
     mode: /** @type {const} */ ("manual"),
     reason:
-      "Review the bundled SQLite source and temporary override; remove it only when a published sys crate bundles SQLite 3.53.4 or newer and passes recovery tests and Rust 1.91 checks.",
+      "Review the bundled SQLite source and temporary override; remove it only when a published sys crate bundles SQLite 3.53.4 or newer and passes recovery, font-query behavior, and Rust 1.91 checks.",
     reviewedThrough: "0.40.2",
   },
   "libsqlite3-sys": {
     mode: /** @type {const} */ ("manual"),
     reason:
-      "The temporary local override bundles SQLite 3.53.4. Review new upstream sys-crate releases for a qualifying replacement, even if rusqlite itself has not changed.",
+      "The temporary local override bundles SQLite 3.54.1. Review new upstream sys-crate releases for a qualifying replacement, even if rusqlite itself has not changed.",
     reviewedThrough: "0.38.2",
   },
   rfd: {
@@ -112,21 +112,6 @@ const cargoPolicies = {
     reason:
       "Retain the shared rfd line while the dialog plugin requires it. A separate newer version needs a concrete fix or feature, explicit platform features, and native validation.",
   },
-};
-
-const sqliteSourceHold = {
-  bundled: {
-    version: "3.53.4",
-    url: "https://sqlite.org/2026/sqlite-amalgamation-3530400.zip",
-    sha3_256: "628a44cfe82c66aed1ccbbe85a562d2e33ebe64b3288981ed76285612227934e",
-  },
-  latest: {
-    version: "3.54.0",
-    url: "https://sqlite.org/2026/sqlite-amalgamation-3540000.zip",
-    sha3_256: "7b670a62fdfbd672b75fef004cb703c8a3e87d3a5cc7d675b4a08337004a2d93",
-  },
-  reason:
-    "SQLite 3.54.0 recompiles the session-font lookup on every fresh execution; 3.53.4 does not. Await a stable release with upstream fix 7f154192db, then rerun query and recovery tests. See src-tauri/vendor/README.md.",
 };
 
 /** @typedef {import("./lib/dependency-currency.mjs").CurrencyRow} CurrencyRow */
@@ -387,7 +372,6 @@ async function checkSqliteSource() {
       ...classifySqliteSourceCurrency({
         bundled,
         latest: inspectSqliteDownloads(downloads),
-        reviewedHold: sqliteSourceHold,
       }),
     };
   } catch (error) {

@@ -54,6 +54,23 @@ describe("embedded license notices", () => {
     expect(notices?.text).toContain("SQLite's deliverable source is in the public domain.");
   });
 
+  it("embeds the complete verified unicode-normalization code and data licenses", () => {
+    const notices = LICENSE_NOTICES.find((notice) => notice.id === "frontend");
+    for (const [file, sha256] of [
+      ["LICENSE-MIT", "7b63ecd5f1902af1b63729947373683c32745c16a10e8e6292e2e2dcd7e90ae0"],
+      ["LICENSE-UNICODE", "f7db81051789b729fea528a63ec4c938fdcb93d9d61d97dc8cc2e9df6d47f2a1"],
+    ]) {
+      const license = readFileSync(
+        new URL(`../assets/licenses/unicode-normalization-${file}.txt`, import.meta.url)
+      );
+      expect(createHash("sha256").update(license).digest("hex")).toBe(sha256);
+      expect(notices?.text).toContain(license.toString("utf8"));
+    }
+    expect(notices?.text).toContain(
+      "Source: https://crates.io/crates/unicode-normalization/0.1.26"
+    );
+  });
+
   it("preserves each bundled font's copyright header and complete OFL text", () => {
     const inter = LICENSE_NOTICES.find((notice) => notice.id === "inter");
     const smileySans = LICENSE_NOTICES.find((notice) => notice.id === "smiley-sans");
