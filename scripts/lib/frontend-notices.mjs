@@ -76,7 +76,8 @@ export function buildFrontendNotices(root) {
   const sections = [
     "SSA HDRify — Third-party notices\n\n" +
       "This inventory covers the locked JavaScript runtime packages, Vite's generated " +
-      "runtime helpers, bundled fonts and icon attribution, and the SQLite source override. Some included package " +
+      "runtime helpers, bundled fonts and icon attribution, the SQLite source override, " +
+      "and unicode-normalization's code and Unicode data. Some included package " +
       "notices also describe code used only during development.\n" +
       "Other native Rust dependency attribution is listed separately in the project README; " +
       "this is not a complete native dependency license inventory.\n",
@@ -95,6 +96,16 @@ export function buildFrontendNotices(root) {
       "SQLite Rust bindings (rusqlite / libsqlite3-sys)",
       "https://github.com/rusqlite/rusqlite",
       "src-tauri/vendor/libsqlite3-sys/LICENSE",
+    ],
+    [
+      "unicode-normalization Rust code (MIT option)",
+      "https://crates.io/crates/unicode-normalization/0.1.26",
+      "src/assets/licenses/unicode-normalization-LICENSE-MIT.txt",
+    ],
+    [
+      "unicode-normalization Unicode data (Unicode-3.0)",
+      "https://crates.io/crates/unicode-normalization/0.1.26",
+      "src/assets/licenses/unicode-normalization-LICENSE-UNICODE.txt",
     ],
     ["Inter", "https://github.com/rsms/inter", "src/assets/fonts/inter/LICENSE.txt"],
     [

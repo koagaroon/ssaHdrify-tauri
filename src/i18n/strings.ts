@@ -128,8 +128,8 @@ export const strings: Record<string, StringEntry> = {
   licenses_open: { en: "Licenses", zh: "许可证" },
   licenses_title: { en: "About & Licenses", zh: "关于与许可证" },
   licenses_intro: {
-    en: "Offline copies of the application license and notices for JavaScript dependencies, bundled fonts, and adapted interface icons.",
-    zh: "应用许可证、JavaScript 依赖、捆绑字体及改编界面图标声明的离线副本。",
+    en: "Offline copies of the application license and bundled third-party notices.",
+    zh: "应用许可证及随附第三方许可声明的离线副本。",
   },
   licenses_exact_text_note: {
     en: "Legal texts below are embedded verbatim in English. Chinese UI text is an informal navigation aid, not a legal translation.",
@@ -155,8 +155,8 @@ export const strings: Record<string, StringEntry> = {
     zh: "部分界面图标改编自 Feather Icons。版权所有 © 2013–2023 Cole Bemis。",
   },
   licenses_frontend_summary: {
-    en: "Complete license texts for the JavaScript dependencies and generated runtime helpers included with this app. Native dependency attribution is listed separately in the README.",
-    zh: "随应用提供的 JavaScript 依赖与生成的运行时辅助代码的完整许可证。原生依赖署名单独列于 README。",
+    en: "Complete notices for JavaScript dependencies, generated runtime helpers, SQLite, and Unicode normalization. Other native dependency attribution is listed separately in the README.",
+    zh: "JavaScript 依赖、生成的运行时辅助代码、SQLite 及 Unicode 规范化库的完整声明。其他原生依赖署名单独列于 README。",
   },
 
   // ── Theme ───────────────────────────────────────────────

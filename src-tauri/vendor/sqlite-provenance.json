@@ -6,11 +6,11 @@
     "sha256": "f1d20bef17f513b9b3004532233187769cd072d790971f4e4da0e346eb6401e8"
   },
   "sqlite": {
-    "version": "3.53.4",
-    "sourceId": "2026-07-24 19:02:57 bf7c7f30031888f4e796e429ab3978879485813aaca6f641c7b33e4e09459bcc",
-    "url": "https://sqlite.org/2026/sqlite-amalgamation-3530400.zip",
-    "sha3_256": "628a44cfe82c66aed1ccbbe85a562d2e33ebe64b3288981ed76285612227934e",
-    "sourceSha3_256": "67f423e9ebbbdc473cbc4772c872ee6b89f31fde4ed0279a5c25d5f65c043a16"
+    "version": "3.54.1",
+    "sourceId": "2026-10-16 14:45:20 555e07ef33f69a0957d24d8e555b702464a131d6f1607f4c3c1e4551e8e6ca76",
+    "url": "https://sqlite.org/2026/sqlite-amalgamation-3540100.zip",
+    "sha3_256": "92281c86e2957f9b9305890f9ac04204caa7b677cc868dc326d942689df28e30",
+    "sourceSha3_256": "e2b869d3003b33c942b7dd7063604fbc53553e1b66609570df39b9b7b558ee81"
   },
   "files": {
     ".cargo_vcs_info.json": {
@@ -79,23 +79,23 @@
     },
     "sqlite3/bindgen_bundled_version.rs": {
       "upstreamSha256": "5b5a37a74dc728fb0bcd041867eb577c03c95e2fe46285262c589a3b1cd4bbac",
-      "sha256": "9805120b2dc82b7de40a2e623a641cf57e3c51ec05c517f62792fd6b69d614aa"
+      "sha256": "a66d532b5a8741230f2550b9c7169f6533a1bd7b242d7791db3ccfb5d981fd8c"
     },
     "sqlite3/bindgen_bundled_version_ext.rs": {
       "upstreamSha256": "445cc206e04a87131d4690742517ee7dcc3a430319bac847ce5e9586f98ee301",
-      "sha256": "7106ae211e2eb345f88763de4bb3ae42f825aa3ba989010c902cc9dc5aafec66"
+      "sha256": "ea6cae9f0640fae382c8259c061122dc1d8c586496d29debb8f2c7be0e875509"
     },
     "sqlite3/sqlite3.c": {
       "upstreamSha256": "0a409f1633283fa31a9126b11fbfd64a1991c5d30defad07e5745d4667f5e23d",
-      "sha256": "b1dd5d74ec7f29055a6684fa06fb3c2f6821c87dd38f9a458dfd2e8a1db28189"
+      "sha256": "0c657666d819f261cc4007526ad57e1669de9949df7a8ea847aa284a2bf0ee52"
     },
     "sqlite3/sqlite3.h": {
       "upstreamSha256": "9e69a1353a4288450b0d5239ede11fc7f1f4c8e5eb07491fc8317eacb5b7de7e",
-      "sha256": "919e7f2e8ed1d8f56ac17b412b8971c76aa5d1a879752cc6058f75e7d5910e1d"
+      "sha256": "d6c84557261893439b341d2e6c35187ae3ea24fbfd843ad94616f72d89242b8c"
     },
     "sqlite3/sqlite3ext.h": {
       "upstreamSha256": "ac9645e5c9ff0cf176efdd6e75cb5e98f46295d38e02db5c4d208826a39ab4be",
-      "sha256": "ac9645e5c9ff0cf176efdd6e75cb5e98f46295d38e02db5c4d208826a39ab4be"
+      "sha256": "48963abfefb41ac329ef9d706acb5eadba952a99a748285c9ded6b5e0942721b"
     },
     "sqlite3/wasm32-wasi-vfs.c": {
       "upstreamSha256": "b95842044da2b8777876b7d3fef8c9711e8c201fb4a4255dbac98729a456bb5d",

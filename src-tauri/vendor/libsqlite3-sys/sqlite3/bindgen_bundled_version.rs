@@ -23,13 +23,13 @@ extern "C" {
     ) -> ::core::ffi::c_int;
 }
 
-pub const SQLITE_VERSION: &::core::ffi::CStr = c"3.53.4";
-pub const SQLITE_VERSION_NUMBER: i32 = 3053004;
+pub const SQLITE_VERSION: &::core::ffi::CStr = c"3.54.1";
+pub const SQLITE_VERSION_NUMBER: i32 = 3054001;
 pub const SQLITE_SOURCE_ID: &::core::ffi::CStr =
-    c"2026-07-24 19:02:57 bf7c7f30031888f4e796e429ab3978879485813aaca6f641c7b33e4e09459bcc";
-pub const SQLITE_SCM_BRANCH: &::core::ffi::CStr = c"branch-3.53";
-pub const SQLITE_SCM_TAGS: &::core::ffi::CStr = c"release version-3.53.4";
-pub const SQLITE_SCM_DATETIME: &::core::ffi::CStr = c"2026-07-24T19:02:57.525Z";
+    c"2026-10-16 14:45:20 555e07ef33f69a0957d24d8e555b702464a131d6f1607f4c3c1e4551e8e6ca76";
+pub const SQLITE_SCM_BRANCH: &::core::ffi::CStr = c"branch-3.54";
+pub const SQLITE_SCM_TAGS: &::core::ffi::CStr = c"release version-3.54.1";
+pub const SQLITE_SCM_DATETIME: &::core::ffi::CStr = c"2026-10-16T14:45:20.546Z";
 pub const SQLITE_OK: i32 = 0;
 pub const SQLITE_ERROR: i32 = 1;
 pub const SQLITE_INTERNAL: i32 = 2;

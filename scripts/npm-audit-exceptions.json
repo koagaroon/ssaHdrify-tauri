@@ -109,7 +109,7 @@
     "index.html": "c90988003671df224547fe82c2d75777d8fd75087d2e3f77c6a221c6cb9f40a3",
     "scripts/build-engine.mjs": "9c45c3f40a314d94c5cc14969fefc5b3b4c22b9ed1f2cc19acedd7ec30a6deb8",
     "scripts/lib/app-version.mjs": "2ff46b21df25a8cdbbe08a350649974cef7b9770a6e1b42f23564d10b04088dc",
-    "scripts/lib/frontend-notices.mjs": "b42146415beacb45117ed8a400ea3b71546f574b44a44f1de86bc43c4d9b1631",
+    "scripts/lib/frontend-notices.mjs": "34769650f7e23fdfc56cf3840ee7efd6b0e48ed51b132708e720e8b2274a7455",
     "src-tauri/build.rs": "ba33720c9a000550c6c6b31658d9d4e0546ceb210557e61162deb9c2b5039ff4",
     "src-tauri/tauri.conf.json": "fe02b5a5b008655eba63fff61fbce49196375900a51cf22f19bf47018a771ec5",
     "tsconfig.app.json": "3f4b186e2e7ab8dc08efaab0df0ad5ad097e384fb7586099abfdb8d90c331274",
