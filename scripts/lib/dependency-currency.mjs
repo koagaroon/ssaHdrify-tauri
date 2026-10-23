@@ -463,6 +463,11 @@ export function collectNpmTargets(packageJson, lockfile) {
         aliases.push(name);
         continue;
       }
+      if (/[:/\\]/u.test(requested) || /\.(?:tgz|tar\.gz)(?:$|[?#])/iu.test(requested.trim())) {
+        throw new MonitorDataError(
+          `Direct npm dependency ${name} uses an unsupported non-registry source`
+        );
+      }
 
       const lockEntry = lockfile.packages[`node_modules/${name}`];
       if (!isRecord(lockEntry) || parseStableVersion(lockEntry.version) === null) {
@@ -719,7 +724,11 @@ export function parseCratesIndex(text, expectedName) {
         `crates.io returned an invalid schema version for ${expectedName}`
       );
     }
-    if (typeof entry.v === "number" && entry.v > 2) continue;
+    if (typeof entry.v === "number" && entry.v > 2) {
+      throw new MonitorDataError(
+        `crates.io returned an unsupported schema version for ${expectedName}`
+      );
+    }
     if (
       typeof entry.name !== "string" ||
       entry.name.toLowerCase() !== expectedName.toLowerCase() ||
@@ -775,7 +784,7 @@ function maxCrateVersion(versions, predicate = () => true) {
  * @param {"default" | "manual" | "hold-line"} input.mode
  * @param {string} input.policyReason
  * @param {string} input.msrv
- * @param {string | null} [input.reviewedThrough]
+ * @param {string[]} [input.reviewedVersions]
  */
 export function classifyCargoCurrency({
   locked,
@@ -783,7 +792,7 @@ export function classifyCargoCurrency({
   mode,
   policyReason,
   msrv,
-  reviewedThrough = null,
+  reviewedVersions = [],
 }) {
   const lockedVersion = parseStableVersion(locked);
   const msrvVersion = parseRustVersion(msrv);
@@ -844,6 +853,16 @@ export function classifyCargoCurrency({
   }
 
   if (mode === "manual") {
+    if (
+      !Array.isArray(reviewedVersions) ||
+      reviewedVersions.some((version) => parseStableVersion(version) === null)
+    ) {
+      return {
+        latest: globalLatest.version,
+        status: /** @type {const} */ ("error"),
+        reason: "The manual-review policy contains an invalid reviewed-version list.",
+      };
+    }
     const comparison = compareStableVersions(lockedVersion, globalVersion);
     if (comparison > 0) {
       return {
@@ -860,25 +879,28 @@ export function classifyCargoCurrency({
       };
     }
 
-    const reviewedVersion = reviewedThrough === null ? null : parseStableVersion(reviewedThrough);
-    if (reviewedThrough !== null && reviewedVersion === null) {
+    const acknowledgedVersions = new Set(reviewedVersions);
+    const unreviewedLatest = maxCrateVersion(versions, (version, entry) => {
+      return (
+        compareStableVersions(version, lockedVersion) > 0 &&
+        !acknowledgedVersions.has(entry.version)
+      );
+    });
+    if (unreviewedLatest !== undefined) {
+      const reviewedNote =
+        unreviewedLatest.version !== globalLatest.version
+          ? `Latest upstream ${globalLatest.version} is acknowledged; this release is not. `
+          : "";
       return {
-        latest: globalLatest.version,
-        status: /** @type {const} */ ("error"),
-        reason: "The manual-review policy contains an invalid reviewed-through version.",
-      };
-    }
-    if (reviewedVersion !== null && compareStableVersions(reviewedVersion, globalVersion) >= 0) {
-      return {
-        latest: globalLatest.version,
-        status: /** @type {const} */ ("held"),
-        reason: `${policyReason} This release has already been reviewed and deliberately retained outside the lock.`,
+        latest: unreviewedLatest.version,
+        status: /** @type {const} */ ("review"),
+        reason: `${reviewedNote}${policyReason}`,
       };
     }
     return {
       latest: globalLatest.version,
-      status: /** @type {const} */ ("review"),
-      reason: policyReason,
+      status: /** @type {const} */ ("held"),
+      reason: `${policyReason} All newer stable releases have been explicitly reviewed and retained outside the lock.`,
     };
   }
 
@@ -927,12 +949,12 @@ export function classifyCargoCurrency({
       ? ` Newer tracked release ${trackedLatest.version} declares Rust ${trackedLatest.rustVersion}; review raising the Rust ${msrv} build floor before applying it.`
       : "";
     const outsideNote = outsideTrackedLine
-      ? ` ${policyReason} Latest upstream: ${globalLatest.version}.`
+      ? `Latest upstream: ${globalLatest.version}, outside the tracked line. `
       : "";
     return {
       latest: candidate.version,
       status: /** @type {const} */ ("update"),
-      reason: `${rustNote}${blockedNote}${outsideNote}`,
+      reason: `${outsideNote}${rustNote}${blockedNote}${outsideTrackedLine ? ` ${policyReason}` : ""}`,
     };
   }
 

@@ -499,15 +499,19 @@ Due to the complexity of subtitle blending pipelines and HDR display environment
 
 ### 前置条件 | Prerequisites
 
-- [Node.js](https://nodejs.org/)（支持 v24.21.0 及以上的 v24 LTS，或 v26.10.0 及以上的 v26；推荐 v24 LTS / v24 LTS from v24.21.0, or v26 from v26.10.0; v24 LTS recommended）
+- [Node.js](https://nodejs.org/)（支持 v24.22.1 及以上的 v24 LTS / v24 LTS from v24.22.1）
 - npm 12.2.1（由 `packageManager` 声明并由 CI 强制 / declared by `packageManager` and enforced in CI）
-- [Rust 工具链 / Rust toolchain](https://rustup.rs/)（最低 1.91；rustup 会自动安装仓库锁定且经过测试的稳定工具链 / 1.91 minimum; rustup automatically installs the repository-pinned tested stable toolchain）
+- [Rust 工具链 / Rust toolchain](https://rustup.rs/)（最低 1.99.1，与仓库锁定且经过测试的稳定工具链一致；rustup 会自动选择该版本 / 1.99.1 minimum, matching the repository-pinned tested stable toolchain; rustup selects that version automatically）
 - Windows: [Microsoft C++ Build Tools and WebView2 / C++ 构建工具与 WebView2](https://v2.tauri.app/start/prerequisites/#windows)。安装构建工具时勾选「Desktop development with C++ / 使用 C++ 的桌面开发」，并使用 MSVC Rust 工具链。WebView2 通常已随较新的 Windows 安装；缺失时按链接中的说明安装。 / Select **Desktop development with C++** in the Build Tools installer and use the MSVC Rust toolchain. WebView2 is normally present on recent Windows installations; follow the linked instructions if it is missing.
 - macOS / Linux: 参考 / see [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)
 
 Node.js、npm 和 Rust 仅用于源码构建；使用发布的可执行文件不需要安装它们。
 
 Node.js, npm, and Rust are only needed to build from source; users of the released executables do not need to install them.
+
+源码构建支持一个 Node LTS 主版本，并在 CI 中检查该版本线的最低版本和最新版本。Rust 的最低版本与锁定的构建工具链保持一致，不再额外承诺旧编译器兼容性。构建基线会随经过验证的维护更新调整；这不等于改变可执行文件的系统运行要求。
+
+Source builds support one Node LTS major, with CI checking its declared minimum and latest version. The Rust minimum matches the pinned build toolchain, without a separate older-compiler compatibility promise. Reviewed maintenance may advance these build baselines; the executables' operating-system requirements are a separate concern.
 
 ### 开发 | Development
 
@@ -578,6 +582,10 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端测试 / Rust bac
 > `Dependency Watch` 是只读的每周检查：它监视直接 npm 和 Cargo 依赖、TypeScript 别名工具链、锁定的 npm 和 Rust 构建工具、实际内置的 SQLite 源码，以及锁定到完整提交哈希的 GitHub Actions。发现更新或需要人工评估的新版本时，它只会将工作流运行标红并写入汇总；不会创建分支或拉取请求。构建工具仅影响源码构建；编译进可执行文件的依赖仍需检查运行兼容性。间接依赖的普通更新不在监视范围内；依赖安全漏洞由 GitHub Dependabot Alerts 单独监视。
 >
 > `Dependency Watch` is a read-only weekly check for direct npm and Cargo dependencies, the aliased TypeScript toolchain, pinned npm and Rust build tools, the actual bundled SQLite source, and GitHub Actions pinned to full commit hashes. Available updates or new versions needing manual review mark the workflow run red and produce a summary; the watch cannot create a branch or pull request. Build tools affect source builds; dependencies compiled into the executables still require runtime compatibility checks. Ordinary transitive dependency updates are outside this monitor's scope; GitHub Dependabot Alerts separately monitor dependency security vulnerabilities.
+>
+> 报告另行比较当前源码与最新稳定发布标签中的依赖和构建输入，区分仅涉及构建环境的文件与可能同时影响运行和构建的依赖图。差异仅供发布决策参考，不代表已检查可执行文件内容或必须立即发布。发布标签、历史记录或网络数据无法核实时，监视结果会标为不完整；成功确认尚无稳定发布则会明确显示没有比较基线。
+>
+> A separate report compares selected dependency and build inputs with the latest stable release tag, distinguishing build-environment files from dependency graphs that may affect both runtime and builds. Differences inform a release decision; they do not establish executable contents or require immediate publication. Unverifiable release tags, history, or network data make the monitor incomplete; a verified absence of stable releases is reported explicitly as no baseline.
 
 安装依赖前，先直接运行 `node scripts/check-npm-install.mjs`；它不依赖 `node_modules`，会拒绝未经评估的项目安装脚本、工作区和隐式原生安装入口。CI 也会在每次 `npm ci` 前执行这项检查。
 

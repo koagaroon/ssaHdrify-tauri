@@ -67,6 +67,7 @@ describe("npm direct dependencies", () => {
     devDependencies: {
       "@types/node": "~24.19.1",
       typescript: "npm:@typescript/typescript6@6.0.2",
+      "@typescript/native": "npm:typescript@~7.0.2",
     },
   };
   const lockfile = {
@@ -76,6 +77,7 @@ describe("npm direct dependencies", () => {
         devDependencies: {
           "@types/node": "~24.19.1",
           typescript: "npm:@typescript/typescript6@6.0.2",
+          "@typescript/native": "npm:typescript@~7.0.2",
         },
       },
       "node_modules/react": { version: "19.2.8" },
@@ -86,7 +88,7 @@ describe("npm direct dependencies", () => {
 
   test("uses only direct locked packages and separates npm aliases", () => {
     const result = collectNpmTargets(packageJson, lockfile);
-    expect(result.aliases).toEqual(["typescript"]);
+    expect(result.aliases).toEqual(["typescript", "@typescript/native"]);
     expect(result.targets).toEqual([
       { name: "react", requested: "^19.2.0", locked: "19.2.8", kind: "dependency" },
       {
@@ -102,6 +104,50 @@ describe("npm direct dependencies", () => {
     const staleLock = structuredClone(lockfile);
     staleLock.packages[""].dependencies.react = "^18.0.0";
     expect(() => collectNpmTargets(packageJson, staleLock)).toThrow(MonitorDataError);
+  });
+
+  test.each([
+    "19.2.0",
+    "^19.2.0",
+    "~19.2.0",
+    ">=19.2.0 <20",
+    "19.2.0 - 19.3.0",
+    "^18 || ^19",
+    "19.x",
+    "*",
+    "",
+    "latest",
+  ])("keeps registry version ranges and tags supported: %j", (requested) => {
+    const manifest = structuredClone(packageJson);
+    const lock = structuredClone(lockfile);
+    manifest.dependencies.react = requested;
+    lock.packages[""].dependencies.react = requested;
+    expect(collectNpmTargets(manifest, lock).targets[0]).toMatchObject({
+      name: "react",
+      requested,
+      locked: "19.2.8",
+    });
+  });
+
+  test.each([
+    "https://example.invalid/react.tgz",
+    "git+ssh://git@example.invalid/owner/react.git",
+    "github:owner/react",
+    "owner/react#main",
+    "file:../react",
+    "workspace:*",
+    "../react",
+    "/packages/react",
+    String.raw`C:\packages\react`,
+    "react.tgz",
+    " react.tgz ",
+    "react.tar.gz",
+  ])("rejects non-registry sources even with a stable locked version: %s", (requested) => {
+    const manifest = structuredClone(packageJson);
+    const lock = structuredClone(lockfile);
+    manifest.dependencies.react = requested;
+    lock.packages[""].dependencies.react = requested;
+    expect(() => collectNpmTargets(manifest, lock)).toThrow("unsupported non-registry source");
   });
 
   test("reports eligible Node typing minor updates without crossing the build API floor", () => {
@@ -197,15 +243,15 @@ describe("Node typing build policy", () => {
     ).not.toThrow();
   });
 
-  test("checks every declared Node build minimum in CI", async () => {
-    const manifest = JSON.parse(await readFile(new URL("package.json", repositoryRoot), "utf8"));
+  test("checks the manifest-derived minimum and latest Node builds in CI", async () => {
     const workflow = await readFile(new URL(".github/workflows/ci.yml", repositoryRoot), "utf8");
-    const exactLanes = [...workflow.matchAll(/- node: "([0-9.]+)"\s+check_latest: false/gu)].map(
-      (match) => match[1]
-    );
-    for (const range of manifest.engines.node.split(/\s*\|\|\s*/u)) {
-      expect(exactLanes).toContain(range.slice(1));
-    }
+    expect(workflow).toContain("node: [minimum, latest]");
+    expect(workflow).toContain("$manifest = Get-Content -Raw package.json | ConvertFrom-Json");
+    expect(workflow).toContain('$nodeVersion = if ("${{ matrix.node }}" -eq "minimum") {');
+    expect(workflow).toMatch(/\$Matches.floor\s*\}\s*else\s*\{\s*\$manifest.engines.node/u);
+    expect(workflow).toContain('"version=$nodeVersion" | Out-File -FilePath $env:GITHUB_OUTPUT');
+    expect(workflow).toContain("node-version: ${{ steps.node.outputs.version }}");
+    expect(workflow).toContain("check-latest: ${{ matrix.node == 'latest' }}");
   });
 });
 
@@ -500,7 +546,7 @@ describe("Cargo direct dependencies", () => {
       mode: /** @type {const} */ ("manual"),
       policyReason: "Review the temporary SQLite source override.",
       msrv: "1.91",
-      reviewedThrough: "0.38.2",
+      reviewedVersions: ["0.38.2"],
     };
     expect(classifyCargoCurrency(input)).toMatchObject({
       status: "current",
@@ -508,6 +554,109 @@ describe("Cargo direct dependencies", () => {
     });
     input.versions.push({ version: "0.38.3", yanked: false, rustVersion: null });
     expect(classifyCargoCurrency(input)).toMatchObject({ latest: "0.38.3", status: "review" });
+  });
+
+  test("reopens review when an exact acknowledgement is removed and restores the held result", () => {
+    const input = {
+      locked: "0.411.0",
+      versions: ["0.411.0", "0.412.0", "0.413.0"].map((version) => ({
+        version,
+        yanked: false,
+        rustVersion: null,
+      })),
+      mode: /** @type {const} */ ("manual"),
+      policyReason: "Review the embedded runtime before changing it.",
+      msrv: "1.91",
+      reviewedVersions: ["0.412.0", "0.413.0"],
+    };
+    const held = classifyCargoCurrency(input);
+    expect(held).toMatchObject({ latest: "0.413.0", status: "held" });
+    const unacknowledged = classifyCargoCurrency({
+      ...input,
+      reviewedVersions: ["0.413.0"],
+    });
+    expect(unacknowledged).toMatchObject({ latest: "0.412.0", status: "review" });
+    expect(unacknowledged.reason).toContain("Latest upstream 0.413.0 is acknowledged");
+    expect(classifyCargoCurrency(input)).toEqual(held);
+  });
+
+  test("detects a new retained-line backport below the acknowledged maximum", () => {
+    const input = {
+      locked: "0.411.0",
+      versions: [
+        { version: "0.410.0", yanked: false, rustVersion: null },
+        { version: "0.411.0", yanked: false, rustVersion: null },
+        { version: "0.413.0", yanked: false, rustVersion: null },
+        { version: "0.414.0-beta.1", yanked: false, rustVersion: null },
+        { version: "0.415.0", yanked: true, rustVersion: null },
+      ],
+      mode: /** @type {const} */ ("manual"),
+      policyReason: "Review the embedded runtime before changing it.",
+      msrv: "1.91",
+      reviewedVersions: ["0.413.0"],
+    };
+    expect(classifyCargoCurrency(input)).toMatchObject({ latest: "0.413.0", status: "held" });
+    input.versions.push({ version: "0.411.1", yanked: false, rustVersion: null });
+    const backport = classifyCargoCurrency(input);
+    expect(backport).toMatchObject({ latest: "0.411.1", status: "review" });
+    expect(
+      dependencyWatchExitCode([
+        { ecosystem: "Cargo", dependency: "deno_core", locked: input.locked, ...backport },
+      ])
+    ).toBe(1);
+    input.reviewedVersions.push("0.411.1");
+    expect(classifyCargoCurrency(input)).toMatchObject({ latest: "0.413.0", status: "held" });
+    input.versions.push({ version: "0.414.0", yanked: false, rustVersion: null });
+    expect(classifyCargoCurrency(input)).toMatchObject({ latest: "0.414.0", status: "review" });
+  });
+
+  test.each([
+    { reviewedVersions: null },
+    { reviewedVersions: "0.413.0" },
+    { reviewedVersions: ["invalid"] },
+    { reviewedVersions: ["0.413.0-beta.1"] },
+  ])("reports malformed manual acknowledgements as monitor errors: %j", ({ reviewedVersions }) => {
+    const result = classifyCargoCurrency({
+      locked: "0.413.0",
+      versions: [{ version: "0.413.0", yanked: false, rustVersion: null }],
+      mode: "manual",
+      policyReason: "Review the embedded runtime.",
+      msrv: "1.91",
+      reviewedVersions: /** @type {string[]} */ (/** @type {unknown} */ (reviewedVersions)),
+    });
+    expect(result).toMatchObject({ status: "error" });
+    expect(result.reason).toContain("invalid reviewed-version list");
+  });
+
+  test("keeps a shared-line patch actionable and its newer upstream version visible after truncation", () => {
+    const input = {
+      locked: "0.16.0",
+      versions: ["0.16.0", "0.16.1", "0.17.2"].map((version) => ({
+        version,
+        yanked: false,
+        rustVersion: null,
+      })),
+      mode: /** @type {const} */ ("hold-line"),
+      policyReason:
+        "Retain the shared rfd line while the dialog plugin requires it. A separate newer version needs a concrete fix or feature, explicit platform features, and native validation.",
+      msrv: "1.91",
+    };
+    const sharedLine = classifyCargoCurrency(input);
+    expect(sharedLine).toMatchObject({ latest: "0.16.1", status: "update" });
+    expect(sharedLine.reason.length).toBeGreaterThan(240);
+    const report = renderDependencyReport([
+      { ecosystem: "Cargo", dependency: "rfd", locked: input.locked, ...sharedLine },
+    ]);
+    expect(report).toContain("Latest upstream: 0.17.2");
+    expect(classifyCargoCurrency({ ...input, mode: "default" })).toMatchObject({
+      latest: "0.17.2",
+      status: "update",
+    });
+    expect(classifyCargoCurrency(input)).toEqual(sharedLine);
+    expect(classifyCargoCurrency({ ...input, locked: "0.16.1" })).toMatchObject({
+      latest: "0.17.2",
+      status: "held",
+    });
   });
 
   test("tracks the exact bundled SQLite override independently of rusqlite", () => {
@@ -559,7 +708,6 @@ describe("Cargo direct dependencies", () => {
         JSON.stringify({ name: "demo", vers: "1.1.0-beta.1", yanked: false }),
         JSON.stringify({ name: "demo", vers: "1.1.0", yanked: true }),
         JSON.stringify({ name: "demo", vers: "1.0.1", yanked: false, rust_version: null, v: 2 }),
-        JSON.stringify({ name: "demo", vers: "9.0.0", yanked: false, v: 3 }),
       ].join("\n"),
       "demo"
     );
@@ -644,6 +792,21 @@ describe("Cargo direct dependencies", () => {
         "demo"
       )
     ).toThrow("invalid schema version");
+  });
+
+  test("accepts schema two and refuses schema three instead of hiding the newer release", () => {
+    const entries = [
+      { name: "demo", vers: "1.0.0", yanked: false, v: 1 },
+      { name: "demo", vers: "1.1.0", yanked: false, v: 2 },
+    ];
+    const supported = entries.map((entry) => JSON.stringify(entry)).join("\n");
+    const baseline = parseCratesIndex(supported, "demo");
+    expect(baseline.map(({ version }) => version)).toEqual(["1.0.0", "1.1.0"]);
+    const unsupported = entries
+      .map((entry, index) => JSON.stringify(index === 1 ? { ...entry, v: 3 } : entry))
+      .join("\n");
+    expect(() => parseCratesIndex(unsupported, "demo")).toThrow("unsupported schema version");
+    expect(parseCratesIndex(supported, "demo")).toEqual(baseline);
   });
 
   test("maps renamed direct edges to the exact locked registry package", () => {

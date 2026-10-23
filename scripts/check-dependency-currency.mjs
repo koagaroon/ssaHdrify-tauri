@@ -31,6 +31,11 @@ import {
   parseStableVersion,
   renderDependencyReport,
 } from "./lib/dependency-currency.mjs";
+import {
+  inspectReleaseDependencyStatus,
+  releaseDependencyExitCode,
+  renderReleaseDependencyReport,
+} from "./lib/release-dependency-status.mjs";
 
 const projectRoot = fileURLToPath(new URL("../", import.meta.url));
 const packageJsonPath = resolve(projectRoot, "package.json");
@@ -87,25 +92,25 @@ const typescriptTargets = [
   },
 ];
 
-/** @type {Record<string, {mode: "manual" | "hold-line", reason: string, reviewedThrough?: string}>} */
+/** @type {Record<string, {mode: "manual" | "hold-line", reason: string, reviewedVersions?: string[]}>} */
 const cargoPolicies = {
   deno_core: {
     mode: /** @type {const} */ ("manual"),
     reason:
       "Every deno_core release requires a manual V8, API, and runtime audit before updating the exact pin.",
-    reviewedThrough: "0.413.0",
+    reviewedVersions: [],
   },
   rusqlite: {
     mode: /** @type {const} */ ("manual"),
     reason:
-      "Review the bundled SQLite source and temporary override; remove it only when a published sys crate bundles SQLite 3.53.4 or newer and passes recovery, font-query behavior, and Rust 1.91 checks.",
-    reviewedThrough: "0.40.2",
+      "Review the bundled SQLite source and temporary override. A published replacement must preserve the reviewed recovery and font-query behavior and pass the declared Rust build baseline.",
+    reviewedVersions: [],
   },
   "libsqlite3-sys": {
     mode: /** @type {const} */ ("manual"),
     reason:
       "The temporary local override bundles SQLite 3.54.1. Review new upstream sys-crate releases for a qualifying replacement, even if rusqlite itself has not changed.",
-    reviewedThrough: "0.38.2",
+    reviewedVersions: [],
   },
   rfd: {
     mode: /** @type {const} */ ("hold-line"),
@@ -442,7 +447,7 @@ async function checkCargoDependencies() {
       const policy = cargoPolicies[target.name] ?? {
         mode: /** @type {const} */ ("default"),
         reason: "",
-        reviewedThrough: undefined,
+        reviewedVersions: [],
       };
       const result = classifyCargoCurrency({
         locked: target.locked,
@@ -450,7 +455,7 @@ async function checkCargoDependencies() {
         mode: policy.mode,
         policyReason: policy.reason,
         msrv: cargoScope.msrv,
-        reviewedThrough: policy.reviewedThrough ?? null,
+        reviewedVersions: policy.reviewedVersions ?? [],
       });
       return {
         ecosystem: "Cargo",
@@ -588,6 +593,10 @@ async function checkGitHubActions() {
 
 /** @returns {Promise<void>} */
 async function main() {
+  const releaseComparison = inspectReleaseDependencyStatus({
+    projectRoot,
+    headers: githubHeaders,
+  });
   /** @type {CurrencyRow[]} */
   let rows;
   try {
@@ -604,10 +613,14 @@ async function main() {
   } catch (error) {
     rows = [errorRow("Monitor", "orchestration", "unknown", error)];
   }
+  const releaseStatus = await releaseComparison;
 
   let report;
   try {
-    report = renderDependencyReport(rows);
+    report = `${renderDependencyReport(rows)}\n${renderReleaseDependencyReport(releaseStatus)}`;
+    if (Buffer.byteLength(report, "utf8") > 1_000_000) {
+      throw new MonitorDataError("The combined dependency report exceeds its size limit.");
+    }
   } catch (error) {
     rows = [errorRow("Monitor", "report generation", "unknown", error)];
     report = renderDependencyReport(rows);
@@ -633,12 +646,15 @@ async function main() {
     }
   }
 
-  const exitCode = dependencyWatchExitCode(rows);
+  const exitCode = Math.max(
+    dependencyWatchExitCode(rows),
+    releaseDependencyExitCode(releaseStatus)
+  );
   if (exitCode === 1) {
     console.log("Dependency Watch found ordinary updates that require one human maintenance task.");
   } else if (exitCode === 2) {
     console.log(
-      "Dependency Watch could not complete reliably; inspect the monitor-error rows above."
+      "Dependency Watch could not complete reliably; inspect the dependency and release-comparison results above."
     );
   } else {
     console.log("Dependency Watch found no actionable ordinary updates.");

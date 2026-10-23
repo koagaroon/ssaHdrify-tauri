@@ -21,29 +21,32 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - node: "24.21.0"
-            check_latest: false
-            audit: false
-          - node: "24"
-            check_latest: true
-            audit: true
-          - node: "26.10.0"
-            check_latest: false
-            audit: false
-          - node: "26"
-            check_latest: true
-            audit: false
+        node: [minimum, latest]
 
     steps:
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Read the supported Node build line
+        id: node
+        shell: pwsh
+        run: |
+          $manifest = Get-Content -Raw package.json | ConvertFrom-Json
+          if ($manifest.engines.node -notmatch '^\^(?<floor>\d+\.\d+\.\d+)$') {
+            throw "Expected one caret-major Node build line"
+          }
+          $nodeVersion = if ("${{ matrix.node }}" -eq "minimum") {
+            $Matches.floor
+          } else {
+            $manifest.engines.node
+          }
+          "version=$nodeVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: ${{ matrix.node }}
-          check-latest: ${{ matrix.check_latest }}
+          node-version: ${{ steps.node.outputs.version }}
+          check-latest: ${{ matrix.node == 'latest' }}
           cache: npm
 
       - name: Use the declared npm version
@@ -62,7 +65,7 @@ jobs:
         run: npm ci
 
       - name: Audit the complete Node dependency graph
-        if: matrix.audit
+        if: matrix.node == 'latest'
         run: npm run audit:dependencies
 
       - name: Check TypeScript 7 release and TypeScript 6 API compatibility
@@ -95,7 +98,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24
+          node-version-file: package.json
           check-latest: true
           cache: npm
 
@@ -154,68 +157,3 @@ jobs:
 
       - name: Smoke-test the Tauri build entry point
         run: npm run tauri build -- --debug --no-bundle --ci
-
-  rust-msrv:
-    name: Rust 1.91 compatibility (Windows)
-    runs-on: windows-2025
-    timeout-minutes: 90
-    env:
-      CARGO_TERM_COLOR: always
-
-    steps:
-      - name: Check out the repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Set up Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 24
-          check-latest: true
-          cache: npm
-
-      - name: Use the declared npm version
-        shell: pwsh
-        run: |
-          $npmVersion = node -p "require('./package.json').packageManager.split('@').at(-1)"
-          npm install --global "npm@$npmVersion"
-          if ((npm --version) -ne $npmVersion) {
-            throw "Expected npm $npmVersion, got $(npm --version)"
-          }
-
-      - name: Cache Cargo downloads
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-          key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-cargo-
-
-      - name: Keep the MSRV target on the Cargo registry drive
-        shell: pwsh
-        run: |
-          $cargoHome = if ([string]::IsNullOrWhiteSpace($env:CARGO_HOME)) {
-            Join-Path $env:USERPROFILE ".cargo"
-          } else {
-            $env:CARGO_HOME
-          }
-          $targetDir = Join-Path $cargoHome "ssahdrify-msrv-target"
-          "CARGO_TARGET_DIR=$targetDir" |
-            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
-      - name: Check project installation scripts before installing dependencies
-        run: node scripts/check-npm-install.mjs
-
-      - name: Install locked Node dependencies
-        run: npm ci
-
-      - name: Build the embedded TypeScript engine
-        run: npm run build:engine
-
-      - name: Install the minimum supported Rust toolchain
-        run: rustup toolchain install 1.91.0 --profile minimal --no-self-update
-
-      - name: Check every target with Rust 1.91
-        run: rustup run 1.91.0 cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets
