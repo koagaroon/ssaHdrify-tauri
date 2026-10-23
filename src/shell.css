@@ -1798,6 +1798,58 @@
   font-weight: 600;
 }
 
+.license-reader,
+.license-component-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.license-component-picker select {
+  width: 100%;
+  min-width: 0;
+  padding: 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.license-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.license-pagination button {
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.license-pagination button:disabled {
+  color: var(--text-muted);
+  border-color: var(--border-light);
+  cursor: default;
+}
+
+.license-pagination button:not(:disabled):hover {
+  background: var(--bg-hover);
+}
+
+.license-component-picker select:focus-visible,
+.license-pagination button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .license-full-text {
   max-height: 280px;
   padding: 12px;
