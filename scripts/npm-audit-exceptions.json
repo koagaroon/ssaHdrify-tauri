@@ -66,7 +66,7 @@
       "version": "18.0.0",
       "fixAvailable": {
         "name": "stylelint-config-standard",
-        "version": "15.0.1",
+        "version": "20.0.0",
         "isSemVerMajor": true
       },
       "integrity": "sha512-mxgT2XY6YZ3HWWe3Di8umG6aBmWmHTblTgu/f10rqFXnyWxjKWwNdjSWkgkwCtxIKnqjSJzvFmPT5yabVIRxZg==",
@@ -78,7 +78,7 @@
       "version": "40.0.0",
       "fixAvailable": {
         "name": "stylelint-config-standard",
-        "version": "15.0.1",
+        "version": "20.0.0",
         "isSemVerMajor": true
       },
       "integrity": "sha512-EznGJxOUhtWck2r6dJpbgAdPATIzvpLdK9+i5qPd4Lx70es66TkBPljSg4wN3Qnc6c4h2n+WbUrUynQ3fanjHw==",

@@ -48,6 +48,24 @@ describe("release configuration contract", () => {
     expect(cargoLockVersion).toBe(packageJson.version);
   });
 
+  it("keeps one Node build line and the declared Rust floor aligned with the tested pin", async () => {
+    const packageJson = JSON.parse(await readText("../../package.json")) as {
+      engines: { node: string };
+    };
+    const packageLock = JSON.parse(await readText("../../package-lock.json")) as {
+      packages: Record<string, { engines?: { node?: string } }>;
+    };
+    const cargoToml = await readText("../../src-tauri/Cargo.toml");
+    const rustToolchain = await readText("../../rust-toolchain.toml");
+    const rustFloor = /^rust-version = "(\d+\.\d+\.\d+)"$/mu.exec(cargoToml)?.[1];
+    const rustPin = /^channel = "(\d+\.\d+\.\d+)"$/mu.exec(rustToolchain)?.[1];
+
+    expect(packageJson.engines.node).toMatch(/^\^\d+\.\d+\.\d+$/u);
+    expect(packageLock.packages[""]?.engines?.node).toBe(packageJson.engines.node);
+    expect(rustPin).toBeDefined();
+    expect(rustFloor).toBe(rustPin);
+  });
+
   it("pins the native GUI and CLI release build composition", async () => {
     const packageJson = JSON.parse(await readText("../../package.json")) as {
       scripts: Record<string, string>;

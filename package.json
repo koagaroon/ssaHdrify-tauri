@@ -6,7 +6,7 @@
   "packageManager": "npm@12.2.1",
   "type": "module",
   "engines": {
-    "node": "^24.21.0 || ^26.10.0"
+    "node": "^24.22.1"
   },
   "allowScripts": {
     "esbuild@0.28.2": true,
