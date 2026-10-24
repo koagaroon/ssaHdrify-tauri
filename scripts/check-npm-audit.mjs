@@ -1,9 +1,9 @@
 import { execFile } from "node:child_process";
-import { lstat, readFile, readdir, realpath } from "node:fs/promises";
+import { lstat, readFile, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkNpmInstallBoundary } from "./check-npm-install.mjs";
-import { evaluateNpmAudit, isObject, readAuditException } from "./lib/npm-audit-policy.mjs";
+import { evaluateNpmAudit, isObject } from "./lib/npm-audit-policy.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const maxBytes = 8 * 1024 * 1024;
@@ -15,20 +15,6 @@ async function readText(path) {
     throw new Error("Audit input is not a bounded regular file");
   }
   return readFile(path, "utf8");
-}
-
-/** @param {string} directory @param {Record<string, string>} sources */
-async function inspectSources(directory, sources = {}) {
-  for (const entry of await readdir(directory, { withFileTypes: true })) {
-    const path = join(directory, entry.name);
-    if (entry.isSymbolicLink()) throw new Error("Source links require audit boundary review");
-    if (entry.isDirectory()) await inspectSources(path, sources);
-    else if (/\.[cm]?[jt]sx?$/u.test(entry.name)) {
-      if (Object.keys(sources).length >= 2000) throw new Error("Source inspection limit exceeded");
-      sources[path.slice(root.length).replace(/\\/gu, "/")] = await readText(path);
-    }
-  }
-  return sources;
 }
 
 /** @param {string} npmCli @returns {Promise<{ stdout: string, exitCode: number }>} */
@@ -80,37 +66,8 @@ async function main() {
   ) {
     throw new Error("Run the audit with the exact npm version declared in packageManager");
   }
-  const exception = readAuditException(
-    JSON.parse(await readText(join(root, "scripts/npm-audit-exceptions.json")))
-  );
-  /** @type {Record<string, string>} */
-  const boundaryFiles = {};
-  for (const path of Object.keys(exception.boundaryFiles ?? {})) {
-    if (!/^[\w./-]+$/u.test(path) || path.split("/").some((part) => part === ".." || part === "")) {
-      throw new Error("Invalid audit boundary path");
-    }
-    boundaryFiles[path] = await readText(join(root, path));
-  }
-  const configFiles = (await readdir(root)).filter((name) =>
-    /^(?:\.stylelint.*|stylelint\.config\..*|tsconfig.*\.json)$/u.test(name)
-  );
-  if (configFiles.some((path) => !Object.hasOwn(boundaryFiles, path))) {
-    throw new Error("Additional lint or TypeScript configuration requires audit boundary review");
-  }
-  const sources = await inspectSources(join(root, "src"));
-  await inspectSources(join(root, "public"), sources);
-  /** @type {unknown} */
-  const lockfile = JSON.parse(await readText(join(root, "package-lock.json")));
-  const result = evaluateNpmAudit({
-    ...(await runAudit(npmCli)),
-    manifest,
-    lockfile,
-    exception,
-    boundaryFiles,
-    sources,
-  });
-  if (result.warning) console.warn(result.warning);
-  else console.log("npm audit: no vulnerabilities reported in the complete dependency graph.");
+  evaluateNpmAudit(await runAudit(npmCli));
+  console.log("npm audit: no vulnerabilities reported in the complete dependency graph.");
 }
 
 try {

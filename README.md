@@ -574,7 +574,7 @@ npm run build:all
 ```bash
 npm run test:run                                  # 前端单元测试 / Frontend unit tests
 npm run typecheck:all                             # TypeScript 7 release gate + TypeScript 6 API compatibility
-npm run audit:dependencies                       # 完整依赖审计及限期例外检查 / Full dependency audit with expiring exceptions
+npm run audit:dependencies                       # 完整依赖审计，不接受漏洞例外 / Full dependency audit without exceptions
 npm run build:engine                              # 构建 CLI 内嵌引擎及许可声明 / Build the embedded CLI engine and notices
 cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端测试 / Rust backend tests
 ```
@@ -599,9 +599,9 @@ cargo test --manifest-path src-tauri/Cargo.toml   # Rust 后端测试 / Rust bac
 
 Before installing dependencies, run `node scripts/check-npm-install.mjs` directly. It needs no `node_modules` and rejects unreviewed project install hooks, workspaces, and implicit native installation. CI also runs it before every `npm ci`.
 
-`npm run audit:dependencies` 会审计完整的 npm 依赖图，并显示 `scripts/npm-audit-exceptions.json` 中已评估、带到期日的例外。其他漏洞、例外到期、相关依赖图及用途变化，或 npm 建议的修复方案变化，仍会使检查失败。直接运行 `npm audit` 可查看未经例外处理的原始结果。
+`npm run audit:dependencies` 会审计完整的 npm 依赖图，包括开发、可选和对等依赖。任何级别的漏洞都会使检查失败，不接受例外；审计无法完成、报告不完整或结果与退出状态不一致时也会失败。直接运行 `npm audit` 可查看原始报告。
 
-`npm run audit:dependencies` audits the complete npm dependency graph and displays reviewed, expiring exceptions from `scripts/npm-audit-exceptions.json`. Other advisories, expired exceptions, or changes to the affected graph, usage, or npm's suggested fix still fail the check. Run `npm audit` directly to inspect the unfiltered result.
+`npm run audit:dependencies` audits the complete npm dependency graph, including development, optional, and peer dependencies. Any reported vulnerability fails the check, regardless of severity, with no exceptions. Failed audits, incomplete reports, and inconsistent exit statuses also fail. Run `npm audit` directly to inspect the raw report.
 
 ---
 
