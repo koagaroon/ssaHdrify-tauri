@@ -1,369 +1,94 @@
-import { readFile } from "node:fs/promises";
-import { posix } from "node:path";
-import ts from "typescript";
+import { spawnSync } from "node:child_process";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import {
-  boundaryDigest,
-  evaluateNpmAudit,
-  readAuditException,
-  readAuditReport,
-} from "./npm-audit-policy.mjs";
+import { evaluateNpmAudit, readAuditReport } from "./npm-audit-policy.mjs";
 
 /**
- * @typedef {import("./npm-audit-policy.mjs").DependencyField} DependencyField
  * @typedef {import("./npm-audit-policy.mjs").AuditVulnerability} AuditVulnerability
- * @typedef {import("./npm-audit-policy.mjs").AuditException} AuditException
- * @typedef {Partial<Record<DependencyField, Record<string, string>>> & { scripts: Record<string, string> }} FixtureManifest
- * @typedef {Partial<Record<DependencyField, Record<string, string>>> & { name?: string, version?: string, integrity?: string, resolved?: string, dev?: boolean }} FixturePackage
  * @typedef {{ auditReportVersion: number, vulnerabilities: Record<string, AuditVulnerability>, metadata: { vulnerabilities: Record<string, number>, dependencies?: Record<string, number> }, error?: unknown }} FixtureReport
- * @typedef {{ report: FixtureReport, exitCode: unknown, manifest: FixtureManifest, lockfile: { lockfileVersion: number, packages: Record<string, FixturePackage> }, exception: AuditException, boundaryFiles: Record<string, string>, sources: Record<string, string>, now: Date }} Fixture
  */
 
-const root = new URL("../../", import.meta.url);
-const exception = readAuditException(
-  JSON.parse(await readFile(new URL("scripts/npm-audit-exceptions.json", root), "utf8"))
-);
-const boundaryFiles = Object.fromEntries(
-  await Promise.all(
-    Object.keys(exception.boundaryFiles).map(async (path) => [
-      path,
-      await readFile(new URL(path, root), "utf8"),
-    ])
-  )
-);
-
-/** @returns {Fixture} */
-function fixture() {
-  /** @type {FixtureManifest} */
-  const manifest = {
-    scripts: structuredClone(exception.scripts),
-    devDependencies: structuredClone(exception.devRoots),
-  };
-  /** @type {Fixture["lockfile"]} */
-  const lockfile = {
-    lockfileVersion: 3,
-    packages: { "": { devDependencies: structuredClone(exception.devRoots) } },
-  };
-  /** @type {Record<string, AuditVulnerability>} */
-  const vulnerabilities = {};
-  for (const [name, pkg] of Object.entries(exception.packages)) {
-    lockfile.packages[`node_modules/${name}`] = {
-      version: pkg.version,
-      integrity: pkg.integrity,
-      resolved: `https://registry.npmjs.org/${name}/-/${name}-${pkg.version}.tgz`,
-      dev: true,
-    };
-    vulnerabilities[name] = {
-      name,
-      severity: "high",
-      isDirect: Object.hasOwn(exception.devRoots, name),
-      range: "*",
-      nodes: [`node_modules/${name}`],
-      effects: structuredClone(pkg.effects),
-      via: pkg.via.map((via) =>
-        via === exception.advisory
-          ? {
-              source: 1240992,
-              name,
-              dependency: name,
-              title: "braces stack exhaustion",
-              url: via,
-              severity: "high",
-              range: "<=3.0.3",
-            }
-          : via
-      ),
-      fixAvailable: structuredClone(pkg.fixAvailable),
-    };
-  }
-  for (const [name, pkg] of Object.entries(exception.packages)) {
-    for (const edge of pkg.inbound) {
-      const [path, fieldName, range] = edge.split(":");
-      if (
-        !["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"].includes(
-          fieldName
-        )
-      ) {
-        throw new Error("Invalid fixture dependency field");
-      }
-      const field = /** @type {DependencyField} */ (fieldName);
-      lockfile.packages[path][field] ??= {};
-      lockfile.packages[path][field][name] = range;
-    }
-  }
-  return structuredClone({
-    report: {
-      auditReportVersion: 2,
-      vulnerabilities,
-      metadata: {
-        vulnerabilities: { info: 0, low: 0, moderate: 0, high: 7, critical: 0, total: 7 },
-        dependencies: { prod: 0, dev: 7, optional: 0, peer: 0, peerOptional: 0, total: 7 },
-      },
+/** @returns {FixtureReport} */
+function cleanReport() {
+  return {
+    auditReportVersion: 2,
+    vulnerabilities: {},
+    metadata: {
+      vulnerabilities: { info: 0, low: 0, moderate: 0, high: 0, critical: 0, total: 0 },
+      dependencies: { prod: 2, dev: 3, optional: 0, peer: 0, peerOptional: 0, total: 5 },
     },
-    exitCode: 1,
-    manifest,
-    lockfile,
-    exception,
-    boundaryFiles,
-    sources: { "src/main.ts": 'import React from "react";' },
-    now: new Date("2026-10-09T12:00:00+08:00"),
-  });
+  };
 }
 
-/** @param {Fixture} input */
-function evaluate(input) {
-  const { report, ...options } = input;
-  return evaluateNpmAudit({ stdout: JSON.stringify(report), ...options });
+/** @param {string} severity @param {string} name @returns {FixtureReport} */
+function vulnerableReport(severity = "high", name = "braces") {
+  const report = cleanReport();
+  report.vulnerabilities = Object.fromEntries([
+    [
+      name,
+      {
+        name,
+        severity,
+        isDirect: false,
+        range: "<=3.0.3",
+        nodes: [`node_modules/${name}`],
+        effects: [],
+        via: [
+          {
+            source: 1240992,
+            name,
+            dependency: name,
+            title: "braces stack exhaustion",
+            url: "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            severity,
+            range: "<=3.0.3",
+          },
+        ],
+        fixAvailable: false,
+      },
+    ],
+  ]);
+  report.metadata.vulnerabilities[severity] = 1;
+  report.metadata.vulnerabilities.total = 1;
+  return report;
 }
 
-/** @param {AuditVulnerability} vulnerability */
-function firstAdvisory(vulnerability) {
-  const advisory = vulnerability.via[0];
-  if (typeof advisory === "string") throw new Error("Fixture has no direct advisory");
-  return advisory;
+/** @param {FixtureReport} report @param {unknown} exitCode */
+function evaluate(report, exitCode) {
+  return evaluateNpmAudit({ stdout: JSON.stringify(report), exitCode });
 }
 
-describe("the single reviewed npm audit exception", () => {
-  test("includes local imports of every reviewed build helper in the boundary", () => {
-    for (const [path, source] of Object.entries(boundaryFiles)) {
-      if (!/\.[cm]?[jt]s$/u.test(path)) continue;
-      for (const imported of ts.preProcessFile(source, true, true).importedFiles) {
-        if (!imported.fileName.startsWith(".")) continue;
-        const target = posix.normalize(posix.join(posix.dirname(path), imported.fileName));
-        expect(Object.hasOwn(boundaryFiles, target), `${path} imports ${target}`).toBe(true);
-      }
-    }
+describe("the complete npm audit gate without exceptions", () => {
+  test("accepts a complete clean report with a successful process status", () => {
+    expect(() => evaluate(cleanReport(), 0)).not.toThrow();
   });
 
-  test("accepts the seven reviewed packages and visibly identifies the reason and expiry", () => {
-    const result = evaluate(fixture());
-    expect(result.accepted).toBe(7);
-    expect(result.warning).toContain(exception.advisory);
-    expect(result.warning).toContain(exception.reason);
-    expect(result.warning).toContain(exception.expiresAt);
-  });
-
-  test("accepts a clean report without applying an expired exception", () => {
-    const input = fixture();
-    input.report.vulnerabilities = {};
-    input.report.metadata.vulnerabilities.high = 0;
-    input.report.metadata.vulnerabilities.total = 0;
-    input.exitCode = 0;
-    input.now = new Date("2027-01-01T00:00:00Z");
-    expect(evaluate(input)).toEqual({ accepted: 0, warning: null });
-  });
-
-  test("expires at the stated instant, after accepting the preceding millisecond", () => {
-    const input = fixture();
-    input.now = new Date(Date.parse(exception.expiresAt) - 1);
-    expect(evaluate(input).accepted).toBe(7);
-    input.now = new Date(exception.expiresAt);
-    expect(() => evaluate(input)).toThrow("expired");
-    input.now = new Date(Date.parse(exception.expiresAt) + 1);
-    expect(() => evaluate(input)).toThrow("expired");
-  });
-
-  test("rejects an invalid clock or an exception longer than 30 days", () => {
-    const input = fixture();
-    input.now = new Date("invalid");
-    expect(() => evaluate(input)).toThrow("review period");
-    input.now = new Date("2026-10-01T00:00:00Z");
-    expect(() => evaluate(input)).toThrow("review period");
-    input.now = new Date("2026-10-10T00:00:00Z");
-    input.exception.expiresAt = "2026-11-09T00:00:00+08:00";
-    expect(() => evaluate(input)).toThrow("review period");
-  });
-
-  test("fails a new advisory even when it affects the same reviewed package", () => {
-    const input = fixture();
-    firstAdvisory(input.report.vulnerabilities.braces).url =
-      "https://github.com/advisories/GHSA-aaaa-bbbb-cccc";
-    expect(() => evaluate(input)).toThrow("advisory graph");
-  });
-
-  test.each([
-    true,
-    false,
-    { name: "stylelint", version: "17.16.1", isSemVerMajor: false },
-    { name: "stylelint", version: "7.7.0", isSemVerMajor: false },
-  ])("requires review when npm's suggested fix changes to %j", (fixAvailable) => {
-    const input = fixture();
-    input.report.vulnerabilities.braces.fixAvailable = fixAvailable;
-    expect(() => evaluate(input)).toThrow("suggested fix changed");
-  });
-
-  test.each(["extra", "missing"])("fails a %s affected package", (change) => {
-    const input = fixture();
-    if (change === "extra") {
-      input.report.vulnerabilities.other = {
-        ...input.report.vulnerabilities.braces,
-        name: "other",
-        nodes: ["node_modules/other"],
-      };
-    } else delete input.report.vulnerabilities["stylelint-config-standard"];
-    const count = Object.keys(input.report.vulnerabilities).length;
-    input.report.metadata.vulnerabilities.high = count;
-    input.report.metadata.vulnerabilities.total = count;
-    expect(() => evaluate(input)).toThrow("affected package set");
-  });
-
-  test.each(
-    /** @type {[string, (values: Record<string, AuditVulnerability>) => void][]} */ ([
-      [
-        "another advisory",
-        (v) => v.braces.via.push({ ...firstAdvisory(v.braces), url: "https://example.com/other" }),
-      ],
-      ["duplicate advisory", (v) => v.braces.via.push(v.braces.via[0])],
-      ["different via edge", (v) => (v.globby.via = ["micromatch"])],
-      ["different effect edge", (v) => (v.braces.effects = [])],
-      ["extra node", (v) => v.braces.nodes.push("node_modules/other/node_modules/braces")],
-      ["different node", (v) => (v.braces.nodes = ["node_modules/other/node_modules/braces"])],
-    ])
-  )("fails %s in the advisory graph", (_label, mutate) => {
-    const input = fixture();
-    mutate(input.report.vulnerabilities);
-    expect(() => evaluate(input)).toThrow("advisory graph");
-  });
-
-  test.each(
-    /** @type {[string, (values: Record<string, FixturePackage>) => void][]} */ ([
-      ["changed version", (p) => (p["node_modules/braces"].version = "3.0.4")],
-      ["changed integrity", (p) => (p["node_modules/braces"].integrity = "sha512-other")],
-      ["runtime inclusion", (p) => (p["node_modules/braces"].dev = false)],
-      ["missing node", (p) => delete p["node_modules/braces"]],
-      [
-        "additional copy",
-        (p) => (p["node_modules/x/node_modules/braces"] = { version: "3.0.3", dev: true }),
-      ],
-      [
-        "aliased copy",
-        (p) => (p["node_modules/alias"] = { name: "braces", version: "3.0.3", dev: true }),
-      ],
-      [
-        "new incoming edge",
-        (p) => (p["node_modules/other"] = { dependencies: { braces: "^3.0.3" } }),
-      ],
-      [
-        "changed incoming edge",
-        (p) => {
-          const dependencies = p["node_modules/micromatch"].dependencies;
-          if (!dependencies) throw new Error("Missing fixture dependency map");
-          dependencies.braces = "*";
-        },
-      ],
-    ])
-  )("fails %s in the lockfile", (_label, mutate) => {
-    const input = fixture();
-    mutate(input.lockfile.packages);
-    expect(() => evaluate(input)).toThrow();
-  });
-
-  test("fails a new runtime root even when lockfile dev flags are still true", () => {
-    const input = fixture();
-    input.manifest.dependencies = { stylelint: "^17.16.0" };
-    input.lockfile.packages[""].dependencies = input.manifest.dependencies;
-    expect(() => evaluate(input)).toThrow("development-only roots");
-  });
-
-  test("fails disagreement between the manifest and lockfile", () => {
-    const input = fixture();
-    input.manifest.dependencies = { example: "1.0.0" };
-    expect(() => evaluate(input)).toThrow("manifest and lockfile");
-  });
-
-  test("requires review when lint patterns, build scripts, or configuration change", () => {
-    const input = fixture();
-    input.manifest.scripts["lint:css"] = 'stylelint "{a,{b,c}}/**/*.css"';
-    expect(() => evaluate(input)).toThrow("lint or build scripts");
-    input.manifest.scripts = structuredClone(exception.scripts);
-    input.manifest.scripts["build:other"] = "node other.mjs";
-    expect(() => evaluate(input)).toThrow("lint or build scripts");
-    input.manifest.scripts = structuredClone(exception.scripts);
-    input.boundaryFiles["vite.config.ts"] += "\n// Changed build behavior needs review.\n";
-    expect(() => evaluate(input)).toThrow("configuration changed");
-  });
-
-  test.each(["scripts/lib/app-version.mjs", "scripts/lib/frontend-notices.mjs"])(
-    "requires review when a transitive build helper changes: %s",
-    (path) => {
-      const input = fixture();
-      input.boundaryFiles[path] += '\nimport "braces/lib/parse.js";\n';
-      expect(() => evaluate(input)).toThrow("configuration changed");
+  test.each(["info", "low", "moderate", "high", "critical"])(
+    "rejects a reported %s vulnerability",
+    (severity) => {
+      expect(() => evaluate(vulnerableReport(severity, "affected-package"), 1)).toThrow(
+        `vulnerabilities reported: affected-package (${severity})`
+      );
     }
   );
 
-  test.each(["prelint:css", "postlint:css", "prebuild", "postbuild:engine", "pretypecheck:ts7"])(
-    "rejects an unreviewed npm lifecycle hook: %s",
-    (hook) => {
-      const input = fixture();
-      input.manifest.scripts[hook] = 'stylelint "{a,{b,c}}/**/*.css"';
-      expect(() => evaluate(input)).toThrow("lint or build scripts");
-    }
-  );
-
-  test("also rejects root install hooks in the full audit policy", () => {
-    const input = fixture();
-    input.manifest.scripts.postinstall = "node install-helper.mjs";
-    expect(() => evaluate(input)).toThrow("installation scripts require review");
+  test("rejects the formerly excepted braces advisory if it is reported again", () => {
+    expect(() => evaluate(vulnerableReport(), 1)).toThrow(
+      "vulnerabilities reported: braces (high)"
+    );
   });
 
-  test.each([
-    'export { default } from "../scripts/runtime-helper.mjs";',
-    'const helper = import("../scripts/runtime-helper.mjs");',
-    'const helper = require("../scripts/runtime-helper.mjs");',
-    'const worker = new Worker(new URL("../scripts/runtime-helper.mjs", import.meta.url));',
-    'export { value } from "../src-other/runtime-helper.mjs";',
-    'export { value } from "./lib/../../scripts/runtime-helper.mjs";',
-  ])("rejects imports that could hide braces/lib/parse.js in an unscanned helper: %s", (source) => {
-    const input = fixture();
-    input.sources["src/main.ts"] = source;
-    expect(() => evaluate(input)).toThrow("escapes the reviewed src/public boundary");
-  });
-
-  test("keeps local source imports inside the inspected trees usable", () => {
-    const input = fixture();
-    input.sources["src/main.ts"] = 'export { value } from "./lib/helper.ts";';
-    input.sources["src/lib/helper.ts"] = "export const value = 1;";
-    expect(evaluate(input).accepted).toBe(7);
-  });
-
-  test("preserves the existing raw license import and license-file URL reads", () => {
-    const input = fixture();
-    input.sources = {
-      "src/lib/license-notices.ts": 'import license from "../../LICENSE?raw";',
-      "src/lib/license-notices.test.ts":
-        'const license = new URL("../../src-tauri/vendor/libsqlite3-sys/LICENSE", import.meta.url);',
-    };
-    expect(evaluate(input).accepted).toBe(7);
-  });
-
-  test.each([
-    'import x from "braces";',
-    'export { x } from "stylelint/lib/standalone.mjs";',
-    'const x = require("micromatch");',
-    'const x = import("braces");',
-    'const x = import("brace" + "s");',
-    'const x = new URL("../node_modules/braces/index.js", import.meta.url);',
-  ])("fails shipped-source references or computed module loading: %s", (source) => {
-    const input = fixture();
-    input.sources["src/main.ts"] = source;
-    expect(() => evaluate(input)).toThrow();
-  });
-
-  test("accepts the same boundary content with Windows or Unix line endings", () => {
-    const input = fixture();
-    for (const path of Object.keys(input.boundaryFiles)) {
-      input.boundaryFiles[path] = input.boundaryFiles[path]
-        .replace(/\r\n/gu, "\n")
-        .replace(/\n/gu, "\r\n");
-    }
-    expect(evaluate(input).accepted).toBe(7);
-    expect(boundaryDigest("a\r\nb\r\n")).toBe(boundaryDigest("a\nb\n"));
+  test("does not lose a vulnerability whose name is an object prototype property", () => {
+    expect(() => evaluate(vulnerableReport("high", "__proto__"), 1)).toThrow(
+      "vulnerabilities reported: __proto__ (high)"
+    );
   });
 });
 
 describe("npm audit report and exit validation", () => {
-  test.each(["", "null", "[]", "not JSON", '{"error":{"code":"E401"}}'])(
+  test.each([undefined, "", "null", "[]", "not JSON", '{"error":{"code":"E401"}}'])(
     "rejects missing, malformed, or API error output: %s",
     (stdout) => expect(() => readAuditReport(stdout, 1)).toThrow()
   );
@@ -375,20 +100,160 @@ describe("npm audit report and exit validation", () => {
       ["null via", (r) => Object.assign(r.vulnerabilities.braces, { via: null })],
       ["null advisory", (r) => Object.assign(r.vulnerabilities.braces, { via: [null] })],
       ["unresolved reference", (r) => (r.vulnerabilities.braces.via = ["missing"])],
+      ["mismatched name", (r) => (r.vulnerabilities.braces.name = "other")],
+      ["unknown severity", (r) => (r.vulnerabilities.braces.severity = "unknown")],
+      ["missing nodes", (r) => (r.vulnerabilities.braces.nodes = [])],
+      ["invalid fix", (r) => Object.assign(r.vulnerabilities.braces, { fixAvailable: null })],
       ["wrong count", (r) => (r.metadata.vulnerabilities.total = 0)],
       ["wrong severity count", (r) => (r.metadata.vulnerabilities.high = 0)],
       ["missing dependency counts", (r) => delete r.metadata.dependencies],
       ["API error", (r) => (r.error = { code: "E401" })],
     ])
-  )("rejects malformed report data: %s", (_label, mutate) => {
-    const input = fixture();
-    mutate(input.report);
-    expect(() => evaluate(input)).toThrow();
+  )("rejects malformed report data before evaluating vulnerabilities: %s", (_label, mutate) => {
+    const report = vulnerableReport();
+    mutate(report);
+    expect(() => readAuditReport(JSON.stringify(report), 1)).toThrow();
   });
 
-  test.each([0, 2, null, "1"])("rejects inconsistent process status %s", (exitCode) => {
-    const input = fixture();
-    input.exitCode = exitCode;
-    expect(() => evaluate(input)).toThrow("exit code");
+  test.each([undefined, -1, 1.5, "0"])(
+    "rejects an otherwise clean report with an invalid dependency count: %s",
+    (count) => {
+      const report = cleanReport();
+      Object.assign(report.metadata, {
+        dependencies: { ...report.metadata.dependencies, dev: count },
+      });
+      expect(() => evaluate(report, 0)).toThrow("malformed dependency counts");
+    }
+  );
+
+  test("rejects a seemingly clean report with nonzero vulnerability counts", () => {
+    const report = cleanReport();
+    report.metadata.vulnerabilities.high = 1;
+    report.metadata.vulnerabilities.total = 1;
+    expect(() => evaluate(report, 0)).toThrow("audit counts");
+  });
+
+  test.each([0, 2, null, "1"])("rejects inconsistent vulnerable status %s", (exitCode) => {
+    expect(() => evaluate(vulnerableReport(), exitCode)).toThrow("exit code");
+  });
+
+  test.each([1, 2, null, "0"])("rejects inconsistent clean status %s", (exitCode) => {
+    expect(() => evaluate(cleanReport(), exitCode)).toThrow("exit code");
+  });
+});
+
+/**
+ * @param {{ stdout?: string, exitCode?: number, npmVersion?: string, differentBin?: boolean, missingNpmPath?: boolean, scripts?: Record<string, string> }} options
+ */
+function runAuditCommand({
+  stdout = JSON.stringify(cleanReport()),
+  exitCode = 0,
+  npmVersion = "1.2.3",
+  differentBin = false,
+  missingNpmPath = false,
+  scripts = {},
+} = {}) {
+  const root = mkdtempSync(join(tmpdir(), "ssahdrify-audit-policy-"));
+  try {
+    mkdirSync(join(root, "scripts", "lib"), { recursive: true });
+    for (const name of [
+      "check-npm-audit.mjs",
+      "check-npm-install.mjs",
+      "lib/npm-audit-policy.mjs",
+    ]) {
+      copyFileSync(new URL(`../${name}`, import.meta.url), join(root, "scripts", name));
+    }
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({ name: "audit-fixture", packageManager: "npm@1.2.3", scripts }),
+      "utf8"
+    );
+    const npmRoot = join(root, "fixture-npm");
+    mkdirSync(join(npmRoot, "bin"), { recursive: true });
+    writeFileSync(
+      join(npmRoot, "package.json"),
+      JSON.stringify({
+        name: "npm",
+        version: npmVersion,
+        type: "module",
+        bin: { npm: differentBin ? "bin/other.js" : "bin/npm-cli.js" },
+      }),
+      "utf8"
+    );
+    writeFileSync(join(npmRoot, "response.json"), JSON.stringify({ stdout, exitCode }), "utf8");
+    const npmCli = join(npmRoot, "bin", "npm-cli.js");
+    writeFileSync(
+      npmCli,
+      `import { deepStrictEqual } from "node:assert";
+import { readFileSync } from "node:fs";
+deepStrictEqual(process.argv.slice(2), [
+  "audit", "--json", "--include=dev", "--include=optional", "--include=peer", "--audit-level=info"
+]);
+const response = JSON.parse(readFileSync(new URL("../response.json", import.meta.url), "utf8"));
+process.stdout.write(response.stdout);
+process.exitCode = response.exitCode;
+`,
+      "utf8"
+    );
+    if (differentBin) copyFileSync(npmCli, join(npmRoot, "bin", "other.js"));
+    // Windows treats environment names case-insensitively, even when a worker exposes uppercase keys.
+    const env = Object.fromEntries(
+      Object.entries(process.env).filter(([name]) => name.toLowerCase() !== "npm_execpath")
+    );
+    env.npm_execpath = missingNpmPath ? "" : npmCli;
+    return spawnSync(process.execPath, [join(root, "scripts", "check-npm-audit.mjs")], {
+      cwd: root,
+      env,
+      encoding: "utf8",
+      timeout: 10_000,
+      windowsHide: true,
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+describe("the npm audit command", () => {
+  test("audits every dependency category without an exception file or source inspection", () => {
+    const result = runAuditCommand();
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("no vulnerabilities reported in the complete dependency graph");
+  });
+
+  test("fails the command for the former braces exception", () => {
+    const result = runAuditCommand({ stdout: JSON.stringify(vulnerableReport()), exitCode: 1 });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("vulnerabilities reported: braces (high)");
+  });
+
+  test("does not turn an audit process failure into a clean result", () => {
+    const result = runAuditCommand({ exitCode: 2 });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("audit exit code contradicts its report");
+  });
+
+  test("rejects npm versions that differ from packageManager", () => {
+    const result = runAuditCommand({ npmVersion: "1.2.4" });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("exact npm version declared");
+  });
+
+  test("rejects an executable that differs from npm's declared binary", () => {
+    const result = runAuditCommand({ differentBin: true });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("exact npm version declared");
+  });
+
+  test("requires the npm invocation path", () => {
+    const result = runAuditCommand({ missingNpmPath: true });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("npm run audit:dependencies");
+  });
+
+  test("still applies the installation preflight before running npm audit", () => {
+    const result = runAuditCommand({ scripts: { postinstall: "node install-helper.mjs" } });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("installation scripts require review: postinstall");
   });
 });
