@@ -149,6 +149,9 @@ jobs:
       - name: Check Rust formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
 
+      - name: Reproduce the locked Windows native license notices
+        run: node scripts/native-notices.mjs --check
+
       - name: Run Clippy on every Rust target
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
 

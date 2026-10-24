@@ -4,7 +4,7 @@ use std::fs;
 use std::process::Command;
 
 #[test]
-fn licenses_prints_entities_bsd_notice_without_touching_cache_or_output_paths() {
+fn licenses_prints_complete_embedded_notices_without_touching_cache_or_output_paths() {
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -40,6 +40,10 @@ fn licenses_prints_entities_bsd_notice_without_touching_cache_or_output_paths() 
     let text = String::from_utf8(output.stdout)
         .unwrap()
         .replace("\r\n", "\n");
+    assert_eq!(
+        text,
+        include_str!("../../dist-engine/third-party-notices.txt").replace("\r\n", "\n")
+    );
     let entity_notice = text
         .split("\n\n========================================================================\n\n")
         .find(|section| section.starts_with("entities 8.1.0\n"))
@@ -54,7 +58,16 @@ fn licenses_prints_entities_bsd_notice_without_touching_cache_or_output_paths() 
     ] {
         assert!(entity_notice.contains(required), "missing notice text: {required}");
     }
-    assert!(text.contains("this is not a complete native dependency license inventory"));
+    for required in [
+        "Native dependency notices — x86_64-pc-windows-msvc",
+        "deno_core 0.413.0",
+        "v8 150.4.0",
+        "Copyright Joyent, Inc. and other Node contributors.",
+        "Copyright notices for The Rust Standard Library",
+        "WebView2 SDK 1.0.3800.47",
+    ] {
+        assert!(text.contains(required), "missing native notice: {required}");
+    }
     assert!(text.contains(include_str!("../vendor/libsqlite3-sys/LICENSE")));
     assert!(text.contains("Source: https://github.com/rusqlite/rusqlite"));
     assert!(text.contains("SQLite's deliverable source is in the public domain."));

@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef } from "react";
 import { useI18n } from "./i18n/useI18n";
 import { LICENSE_NOTICES, type LicenseNoticeId } from "./lib/license-notices";
+import LicenseText from "./LicenseText";
 
 interface Props {
   open: boolean;
@@ -17,6 +18,7 @@ const SUMMARY_KEYS: Record<LicenseNoticeId, string> = {
 
 const FOCUSABLE_SELECTOR = [
   "button:not([disabled])",
+  "select:not([disabled])",
   "a[href]",
   "summary",
   "[tabindex]:not([tabindex='-1'])",
@@ -150,9 +152,7 @@ export default function AboutLicensesModal({ open, onClose }: Props): React.Reac
                     <code>{notice.source}</code>
                   </p>
                   <div className="license-full-text-label">{t("licenses_full_text")}</div>
-                  <pre className="license-full-text" tabIndex={0}>
-                    {notice.text}
-                  </pre>
+                  <LicenseText text={notice.text} components={notice.id === "frontend"} />
                 </div>
               </details>
             ))}

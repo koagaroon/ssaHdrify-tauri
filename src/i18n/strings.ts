@@ -132,12 +132,16 @@ export const strings: Record<string, StringEntry> = {
     zh: "应用许可证及随附第三方许可声明的离线副本。",
   },
   licenses_exact_text_note: {
-    en: "Legal texts below are embedded verbatim in English. Chinese UI text is an informal navigation aid, not a legal translation.",
-    zh: "下列英文法律文本均为逐字嵌入；中文界面文字仅用于辅助阅读，不构成法律翻译。",
+    en: "Legal texts retain their original English wording and are divided into pages for reading. Chinese UI text is an informal navigation aid, not a legal translation.",
+    zh: "法律文本保留英文原文，分页仅为方便阅读；中文界面文字仅用于辅助阅读，不构成法律翻译。",
   },
   licenses_close: { en: "Close licenses", zh: "关闭许可证" },
   licenses_source: { en: "Source", zh: "来源" },
   licenses_full_text: { en: "Full license text", zh: "完整许可证正文" },
+  licenses_component: { en: "Component", zh: "组件" },
+  licenses_page: { en: "Page {0} of {1}", zh: "第 {0} 页，共 {1} 页" },
+  licenses_previous: { en: "Previous page", zh: "上一页" },
+  licenses_next: { en: "Next page", zh: "下一页" },
   licenses_ssahdrify_summary: {
     en: "Copyright © 2021 ying, 2024–2025 gky99, and 2026 koagaroon. SSA HDRify is licensed under GPL-3.0-or-later and comes with absolutely no warranty; see the full terms below.",
     zh: "版权所有 © 2021 ying、2024–2025 gky99、2026 koagaroon。SSA HDRify 以 GPL-3.0-or-later 授权，且不附带任何保证；完整条款见下方。",
@@ -155,8 +159,8 @@ export const strings: Record<string, StringEntry> = {
     zh: "部分界面图标改编自 Feather Icons。版权所有 © 2013–2023 Cole Bemis。",
   },
   licenses_frontend_summary: {
-    en: "Complete notices for JavaScript dependencies, generated runtime helpers, SQLite, and Unicode normalization. Other native dependency attribution is listed separately in the README.",
-    zh: "JavaScript 依赖、生成的运行时辅助代码、SQLite 及 Unicode 规范化库的完整声明。其他原生依赖署名单独列于 README。",
+    en: "Notices for JavaScript, bundled assets, and the Windows x64 native dependencies, including V8 and the Rust standard library. This shared inventory includes components used by only one executable and some build tools.",
+    zh: "JavaScript、捆绑资源及 Windows x64 原生依赖的许可声明，包括 V8 和 Rust 标准库。这份共享清单也包含部分仅由一个可执行文件使用的组件及构建工具。",
   },
 
   // ── Theme ───────────────────────────────────────────────

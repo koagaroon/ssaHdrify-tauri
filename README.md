@@ -59,7 +59,7 @@ This is a Tauri rewrite of the original Python [gky99/ssaHdrify](https://github.
 
 ## 下载 | Download
 
-Windows 用户可从 [Releases](https://github.com/koagaroon/ssaHdrify-tauri/releases) 页面下载免安装的便携版 exe。建议优先使用最新稳定版；预览版也会保留在同一页面，用于测试尚未进入稳定版的功能。
+Windows 用户可从 [Releases](https://github.com/koagaroon/ssaHdrify-tauri/releases) 页面下载便携版 exe，应用本身无需安装。建议优先使用最新稳定版；预览版也会保留在同一页面，用于测试尚未进入稳定版的功能。
 
 > [!NOTE]
 > 预览版可能包含尚未进入稳定版的修复或改进。
@@ -67,15 +67,23 @@ Windows 用户可从 [Releases](https://github.com/koagaroon/ssaHdrify-tauri/rel
 - **`ssahdrify*.exe`** — 图形界面（GUI），适合手动操作
 - **`ssahdrify-cli*.exe`** — 命令行（CLI），适合自动化流水线、批处理和脚本化场景
 
+Windows 发布版面向 **Windows 10/11 x64（64 位 Intel/AMD）**。Windows 7/8/8.1 和 32 位 Windows 不受支持；目前尚未验证最旧可兼容的 Windows 10 具体版本。
+
+**图形界面需要已安装且保持更新的 Microsoft Edge WebView2 Runtime（运行时）**。Windows 11 和大多数 Windows 10 设备通常已安装；如果缺失，请从 [Microsoft 官方页面](https://developer.microsoft.com/microsoft-edge/webview2/)安装 Evergreen Runtime。便携版不会自动安装它。**命令行版内嵌 JavaScript 引擎，不需要 WebView2**；使用这两个可执行文件均无需另行安装 Node.js、npm、Rust 或 Deno。
+
 macOS / Linux 用户可尝试下方的源码构建流程；项目尚未在这些平台上验证文件对话框、文件系统行为、完整构建或发布产物，因此不属于官方支持的发布平台。
 
-Windows users can download portable, no-install exe files from [Releases](https://github.com/koagaroon/ssaHdrify-tauri/releases). Use the latest stable build by default; preview builds remain listed on the same page for testing features that have not entered a stable release yet.
+Windows users can download portable exe files from [Releases](https://github.com/koagaroon/ssaHdrify-tauri/releases); the application itself has no installer. Use the latest stable build by default; preview builds remain listed on the same page for testing features that have not entered a stable release yet.
 
 > [!NOTE]
 > Preview builds may include fixes or improvements that have not entered the stable line yet.
 
 - **`ssahdrify*.exe`** — graphical interface (GUI), for manual use
 - **`ssahdrify-cli*.exe`** — command line (CLI), for automation pipelines, batch jobs, and scripts
+
+Windows releases target **Windows 10/11 x64 (64-bit Intel/AMD)**. Windows 7/8/8.1 and 32-bit Windows are unsupported. The oldest compatible Windows 10 build has not been verified.
+
+**The GUI requires an installed, up-to-date Microsoft Edge WebView2 Runtime**. It is normally present on Windows 11 and most Windows 10 devices. If it is missing, install the Evergreen Runtime from [Microsoft](https://developer.microsoft.com/microsoft-edge/webview2/). These portable executables do not install it automatically. **The CLI embeds its JavaScript engine and does not require WebView2**; neither executable needs a separate Node.js, npm, Rust, or Deno installation.
 
 macOS / Linux users may attempt the source-build workflow below. File dialogs, filesystem behavior, complete builds, and release artifacts have not been validated on those platforms, so they are not officially supported release targets.
 
@@ -502,7 +510,7 @@ Due to the complexity of subtitle blending pipelines and HDR display environment
 - [Node.js](https://nodejs.org/)（支持 v24.22.1 及以上的 v24 LTS / v24 LTS from v24.22.1）
 - npm 12.2.1（由 `packageManager` 声明并由 CI 强制 / declared by `packageManager` and enforced in CI）
 - [Rust 工具链 / Rust toolchain](https://rustup.rs/)（最低 1.99.1，与仓库锁定且经过测试的稳定工具链一致；rustup 会自动选择该版本 / 1.99.1 minimum, matching the repository-pinned tested stable toolchain; rustup selects that version automatically）
-- Windows: [Microsoft C++ Build Tools and WebView2 / C++ 构建工具与 WebView2](https://v2.tauri.app/start/prerequisites/#windows)。安装构建工具时勾选「Desktop development with C++ / 使用 C++ 的桌面开发」，并使用 MSVC Rust 工具链。WebView2 通常已随较新的 Windows 安装；缺失时按链接中的说明安装。 / Select **Desktop development with C++** in the Build Tools installer and use the MSVC Rust toolchain. WebView2 is normally present on recent Windows installations; follow the linked instructions if it is missing.
+- Windows: [Microsoft C++ Build Tools / C++ 构建工具](https://v2.tauri.app/start/prerequisites/#windows)。安装构建工具时勾选「Desktop development with C++ / 使用 C++ 的桌面开发」，并使用 MSVC Rust 工具链。运行图形界面还需要[下载部分](#下载--download)说明的 WebView2 Runtime。 / Select **Desktop development with C++** in the Build Tools installer and use the MSVC Rust toolchain. Running the GUI also requires the WebView2 Runtime described under [Download](#下载--download).
 - macOS / Linux: 参考 / see [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)
 
 Node.js、npm 和 Rust 仅用于源码构建；使用发布的可执行文件不需要安装它们。
@@ -540,9 +548,9 @@ npm run build:all
 
 `npm run build:all` produces both native release executables in sequence. During the GUI stage, Tauri's `beforeBuildCommand` automatically runs the TypeScript 7 type-check and Vite frontend build.
 
-在 Windows 上，便携式 exe 默认生成到 `src-tauri/target/release/`，可直接运行，无需安装。`tauri.conf.json` 目前设置了 `bundle.active: false`，因此默认生成便携式二进制文件，而不是安装包。
+在 Windows 上，便携式 exe 默认生成到 `src-tauri/target/release/`。应用本身无需安装，但图形界面仍需要上文说明的 WebView2 Runtime。`tauri.conf.json` 目前设置了 `bundle.active: false`，因此默认生成便携式二进制文件，而不是安装包。
 
-On Windows, portable executables are produced under `src-tauri/target/release/` by default and can be run directly with no installation required. `tauri.conf.json` currently sets `bundle.active: false`, so the default output is portable binaries rather than installers.
+On Windows, portable executables are produced under `src-tauri/target/release/` by default. The application itself has no installer; the GUI still requires the WebView2 Runtime described above. `tauri.conf.json` currently sets `bundle.active: false`, so the default output is portable binaries rather than installers.
 
 Default Windows release build outputs:
 
@@ -707,7 +715,7 @@ The tables below list the main direct dependencies and bundled assets. For the f
 | [SQLite](https://sqlite.org/)                                                | [公有领域 / Public domain](https://sqlite.org/copyright.html)                                                                                                     | 随可执行文件静态编译的缓存数据库 / Cache database statically compiled into the executables                     |
 | [serde](https://serde.rs/) / serde_json                                      | MIT OR Apache-2.0                                                                                                                                                 | Rust 序列化 / Rust serialization                                                                               |
 | [deno_core](https://github.com/denoland/deno)                                | MIT                                                                                                                                                               | 嵌入式 V8 JS 运行时（CLI）/ Embedded V8 JS runtime (CLI)                                                       |
-| [V8](https://v8.dev/)                                                        | BSD-3-Clause                                                                                                                                                      | JavaScript 引擎（经 deno_core 嵌入，CLI）/ JavaScript engine via deno_core (CLI)                               |
+| [V8](https://v8.dev/)                                                        | BSD-3-Clause + bundled third-party licenses (including LGPL-2.1-or-later)                                                                                         | JavaScript 引擎（经 deno_core 嵌入，CLI）/ JavaScript engine via deno_core (CLI)                               |
 | [clap](https://github.com/clap-rs/clap)                                      | MIT OR Apache-2.0                                                                                                                                                 | CLI 参数解析（CLI）/ CLI argument parsing (CLI)                                                                |
 | [env_logger](https://github.com/rust-cli/env_logger)                         | MIT OR Apache-2.0                                                                                                                                                 | CLI 日志后端（输出到 stderr）/ CLI logging backend on stderr (CLI)                                             |
 | [sys-locale](https://github.com/1Password/sys-locale)                        | MIT OR Apache-2.0                                                                                                                                                 | OS 区域设置检测（驱动 `--lang` 自动检测，CLI）/ OS locale detection driving `--lang` auto (CLI)                |
@@ -732,13 +740,17 @@ The current build uses a temporary local source override to compile SQLite 3.54.
 >
 > OFL-1.1 allows these fonts to be bundled, embedded, and redistributed alongside any software, including GPL-3.0 projects. The fonts and their derivatives must remain licensed under OFL, must not be sold on their own, and modified versions must not use Reserved Font Names declared by their respective licenses. The bundled Smiley Sans license declares `Smiley` and `得意黑`; the bundled Inter license declares none.
 
-在桌面版中，点击页脚的「许可证」即可离线阅读项目 GPL 正文、锁定版本的 JavaScript 运行时依赖及 Vite 注入辅助代码的许可声明、两款捆绑字体的完整 OFL 文本、Feather Icons 和 SQLite Rust 绑定的 MIT 声明、SQLite 的公有领域说明，以及 `unicode-normalization` 的完整 MIT 和 Unicode 数据许可文本。前端构建同时生成 `third-party-notices.txt`；这份声明清单并不等同于完整的 Rust 原生依赖许可清单。
+在桌面版中，点击页脚的「许可证」即可离线阅读项目 GPL 正文、JavaScript 依赖、捆绑字体与图标、SQLite，以及锁定的 Windows x64 原生依赖许可声明。原生部分包括 Rust crate、V8 及其第三方组件、WebView2 SDK 加载器和 Rust 标准库的许可文本与来源。外部安装的 WebView2 Runtime 不随 exe 捆绑。
 
-In the desktop app, choose **Licenses** in the footer to read offline copies of the project GPL, notices for locked JavaScript runtime dependencies and Vite-injected helper code, both bundled fonts' complete OFL texts, the Feather Icons and SQLite Rust bindings' MIT notices, SQLite's public-domain statement, and the full MIT and Unicode data licenses for `unicode-normalization`. The frontend build also emits `third-party-notices.txt`; this inventory does not represent a complete Rust native dependency license inventory.
+In the desktop app, choose **Licenses** in the footer to read offline copies of the project GPL and notices for JavaScript dependencies, bundled fonts and icons, SQLite, and the locked Windows x64 native dependencies. The native section includes Rust crates, V8 and its third-party components, the WebView2 SDK loader, and the Rust standard library, with their license texts and sources. The separately installed WebView2 Runtime is not bundled in the executables.
 
-命令行版可运行 `ssahdrify-cli licenses` 离线查看同一份 JavaScript 依赖、界面资源、SQLite 和 Unicode 规范化库声明，其中包括 `entities` 的完整 BSD 许可证。这份共享清单也列出了部分仅用于桌面界面的组件；其他 Rust 原生依赖的归属说明见上表。
+命令行版运行 `ssahdrify-cli licenses` 可离线查看同一份声明。前端与引擎构建均生成相同的 `third-party-notices.txt` 并将其嵌入各自应用；共享清单保守地包含仅由一个可执行文件使用的组件和部分构建工具，并非逐个二进制文件的链接内容清单。MPL 组件的未修改源码可通过各条目的精确版本来源链接获取，并继续遵循 MPL。其他操作系统的构建需要另行核查原生许可。
 
-Run `ssahdrify-cli licenses` to read the same JavaScript dependency, interface-asset, SQLite, and Unicode normalization notices offline, including the full BSD licence for `entities`. This shared inventory also lists some GUI-only components; other native Rust dependency attribution is listed in the table above.
+Run `ssahdrify-cli licenses` to read the same notices offline. Frontend and engine builds emit identical `third-party-notices.txt` files and embed them in their respective applications. The shared inventory conservatively includes components used by only one executable and some build tools; it is not a per-binary linker inventory. Unmodified MPL-covered source is available under the MPL through each entry's exact-version source link. Builds for other operating systems need a separate native-license review.
+
+原生声明及来源记录保存在 [`src/assets/licenses/native-notices.json`](src/assets/licenses/native-notices.json) 和 [`scripts/native-notice-sources.json`](scripts/native-notice-sources.json)。更新 Cargo 依赖或 Rust 工具链后，先复核新增及内嵌组件的许可证，再运行 `node scripts/native-notices.mjs --write` 并提交生成文件。`--check` 从锁定源码重现清单，CI 会运行该检查；普通前端构建只验证随仓库保存的清单，无需 Cargo 或网络。许可文本不能替代发布时的源码提供义务。
+
+Native notice provenance is recorded in [`src/assets/licenses/native-notices.json`](src/assets/licenses/native-notices.json) and [`scripts/native-notice-sources.json`](scripts/native-notice-sources.json). After changing Cargo dependencies or the Rust toolchain, review licenses for new and embedded components, run `node scripts/native-notices.mjs --write`, and commit the generated files. `--check` reproduces the inventory from locked sources and runs in CI; ordinary frontend builds verify the committed snapshot without Cargo or network access. License notices do not replace source-availability obligations when distributing binaries.
 
 #### 构建时依赖（不随应用分发）| Build-time only (not shipped)
 

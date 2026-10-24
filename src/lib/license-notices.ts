@@ -17,7 +17,7 @@ export interface LicenseNotice {
 export const LICENSE_NOTICES: readonly LicenseNotice[] = [
   {
     id: "frontend",
-    name: "JavaScript dependencies, SQLite and Unicode",
+    name: "Third-party dependency notices",
     licenseId: "Multiple licenses",
     source: "https://github.com/koagaroon/ssaHdrify-tauri",
     text: frontendLicenseText,

@@ -1,0 +1,705 @@
+{
+  "schemaVersion": 1,
+  "target": "x86_64-pc-windows-msvc",
+  "packages": {
+    "alloc-stdlib@0.2.4": {
+      "license": "BSD-3-Clause",
+      "revision": "ae42d22078b98549e987d2f03d12df7b984fde47",
+      "files": [
+        {
+          "path": "src/assets/licenses/native-sources/alloc-stdlib-0.2.4-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/dropbox/rust-alloc-no-stdlib/ae42d22078b98549e987d2f03d12df7b984fde47/LICENSE",
+          "sha256": "c0c56f26d9c051cac4d200c34c84e7ae9aaa853e01a982a1df08b09931e518ae"
+        }
+      ]
+    },
+    "alloc-stdlib@0.3.0": {
+      "license": "BSD-3-Clause",
+      "revision": "0a81fd6928ea3b33c8cd484aa4575d50ffb98012",
+      "files": [
+        {
+          "path": "src/assets/licenses/native-sources/alloc-stdlib-0.3.0-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/dropbox/rust-alloc-no-stdlib/0a81fd6928ea3b33c8cd484aa4575d50ffb98012/LICENSE",
+          "sha256": "c0c56f26d9c051cac4d200c34c84e7ae9aaa853e01a982a1df08b09931e518ae"
+        }
+      ]
+    },
+    "base64-simd@0.8.0": {
+      "license": "MIT",
+      "revision": "d74c030d9dc4f3cae02146d1f497ff62726ef09a",
+      "files": [
+        {
+          "path": "src/assets/licenses/native-sources/base64-simd-0.8.0-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/Nugine/simd/d74c030d9dc4f3cae02146d1f497ff62726ef09a/LICENSE",
+          "sha256": "71674605ec4c087fe9eb534e3e4f9e26eb2e4aabcd76a29fd156c6a844d44b3d"
+        }
+      ]
+    },
+    "defmt-parser@1.0.0": {
+      "license": "MIT OR Apache-2.0",
+      "revision": "4a8cdb44891ed57b8ff5a023b6bec7137c48708f",
+      "files": [
+        {
+          "path": "src/assets/licenses/native-sources/defmt-parser-1.0.0-LICENSE-MIT.txt",
+          "url": "https://raw.githubusercontent.com/knurling-rs/defmt/4a8cdb44891ed57b8ff5a023b6bec7137c48708f/LICENSE-MIT",
+          "sha256": "2710a622a896bba67356913d4d0492cab5465f61b2ecce6d880aeb483834fb50"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/defmt-parser-1.0.0-LICENSE-APACHE.txt",
+          "url": "https://raw.githubusercontent.com/knurling-rs/defmt/4a8cdb44891ed57b8ff5a023b6bec7137c48708f/LICENSE-APACHE",
+          "sha256": "8173d5c29b4f956d532781d2b86e4e30f83e6b7878dce18c919451d6ba707c90"
+        }
+      ]
+    },
+    "deno_core@0.413.0": {
+      "license": "MIT",
+      "revision": "fe7ed012d92c642fd8e5607ac5a45d517538b5c5",
+      "files": [
+        {
+          "path": "src/assets/licenses/native-sources/deno_core-0.413.0-LICENSE.md.txt",
+          "url": "https://raw.githubusercontent.com/denoland/deno/fe7ed012d92c642fd8e5607ac5a45d517538b5c5/LICENSE.md",
+          "sha256": "f62497fffecc0852960c8d3e6934b9db86d16396e9b604072e923892cae3a588"
+        }
+      ]
+    },
+    "deno_error_macro@0.7.1": {
+      "license": "MIT",
+      "revision": "e806d735069caacf511b9a781ef2990a3651256f",
+      "files": [
+        {
+          "path": "src/assets/licenses/native-sources/deno_error_macro-0.7.1-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/denoland/deno_error/e806d735069caacf511b9a781ef2990a3651256f/LICENSE",
+          "sha256": "e70487678a799f089f7f78db7302e779d5dc7320ccd02cc13f494a4fb8b88300"
+        }
+      ]
+    },
+    "deno_ops@0.289.0": {
+      "license": "MIT",
+      "revision": "fe7ed012d92c642fd8e5607ac5a45d517538b5c5",
+      "files": [
+        {
+          "path": "src/assets/licenses/native-sources/deno_ops-0.289.0-LICENSE.md.txt",
+          "url": "https://raw.githubusercontent.com/denoland/deno/fe7ed012d92c642fd8e5607ac5a45d517538b5c5/LICENSE.md",
+          "sha256": "f62497fffecc0852960c8d3e6934b9db86d16396e9b604072e923892cae3a588"
+        }
+      ]
+    },
+    "deno_v8@0.5.0": {
+      "license": "MIT",
+      "revision": "fe7ed012d92c642fd8e5607ac5a45d517538b5c5",
+      "files": [
+        {
+          "path": "src/assets/licenses/native-sources/deno_v8-0.5.0-LICENSE.md.txt",
+          "url": "https://raw.githubusercontent.com/denoland/deno/fe7ed012d92c642fd8e5607ac5a45d517538b5c5/LICENSE.md",
+          "sha256": "f62497fffecc0852960c8d3e6934b9db86d16396e9b604072e923892cae3a588"
+        }
+      ]
+    },
+    "fontcull@2.0.1": {
+      "license": "MIT",
+      "revision": "dee69648ddf502f74bcbe866e9411c49374f0049",
+      "files": [
+        {
+          "path": "src/assets/licenses/native-sources/fontcull-2.0.1-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/bearcove/fontcull/dee69648ddf502f74bcbe866e9411c49374f0049/LICENSE",
+          "sha256": "133cdd0113fb6ac161e8257bd1d1a1fbe41cf3e17692fc69eb69b80fa10b9f7f"
+        }
+      ]
+    },
+    "pathfinder_simd@0.5.6": {
+      "license": "MIT OR Apache-2.0",
+      "revision": "6c3c0466f451c5bd2007087728cd168798cd64e8",
+      "files": [
+        {
+          "path": "src/assets/licenses/native-sources/pathfinder_simd-0.5.6-LICENSE-MIT.txt",
+          "url": "https://raw.githubusercontent.com/servo/pathfinder/6c3c0466f451c5bd2007087728cd168798cd64e8/LICENSE-MIT",
+          "sha256": "0621878e61f0d0fda054bcbe02df75192c28bde1ecc8289cbd86aeba2dd72720"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/pathfinder_simd-0.5.6-LICENSE-APACHE.txt",
+          "url": "https://raw.githubusercontent.com/servo/pathfinder/6c3c0466f451c5bd2007087728cd168798cd64e8/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        }
+      ]
+    },
+    "serde_v8@0.322.0": {
+      "license": "MIT",
+      "revision": "fe7ed012d92c642fd8e5607ac5a45d517538b5c5",
+      "files": [
+        {
+          "path": "src/assets/licenses/native-sources/serde_v8-0.322.0-LICENSE.md.txt",
+          "url": "https://raw.githubusercontent.com/denoland/deno/fe7ed012d92c642fd8e5607ac5a45d517538b5c5/LICENSE.md",
+          "sha256": "f62497fffecc0852960c8d3e6934b9db86d16396e9b604072e923892cae3a588"
+        }
+      ]
+    },
+    "tauri-plugin@2.7.1": {
+      "license": "Apache-2.0 OR MIT",
+      "revision": "30da1fd6e17de6107ecc850c95dfb16b5729f2dd",
+      "files": [
+        {
+          "path": "src/assets/licenses/native-sources/tauri-plugin-2.7.1-LICENSE-MIT.txt",
+          "url": "https://raw.githubusercontent.com/tauri-apps/tauri/30da1fd6e17de6107ecc850c95dfb16b5729f2dd/LICENSE-MIT",
+          "sha256": "9dd42ea92cff2ede5cd477cbfcce051b2d0115c0ac7f368ee88cb545055dff1d"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/tauri-plugin-2.7.1-LICENSE-APACHE-2.0.txt",
+          "url": "https://raw.githubusercontent.com/tauri-apps/tauri/30da1fd6e17de6107ecc850c95dfb16b5729f2dd/LICENSE-APACHE-2.0",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        }
+      ]
+    },
+    "v8@150.4.0": {
+      "license": "MIT",
+      "revision": "5c15a6995c9bb4bacd3e341b59fff32c909c80bf",
+      "files": [
+        {
+          "path": "src/assets/licenses/native-sources/v8-150.4.0-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/denoland/rusty_v8/5c15a6995c9bb4bacd3e341b59fff32c909c80bf/LICENSE",
+          "sha256": "1c6356fb751d45f0c53093ebf8a7f5e580e802f51999178e19d60f3ec39e147d"
+        }
+      ]
+    },
+    "vsimd@0.8.0": {
+      "license": "MIT",
+      "revision": "d74c030d9dc4f3cae02146d1f497ff62726ef09a",
+      "files": [
+        {
+          "path": "src/assets/licenses/native-sources/vsimd-0.8.0-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/Nugine/simd/d74c030d9dc4f3cae02146d1f497ff62726ef09a/LICENSE",
+          "sha256": "71674605ec4c087fe9eb534e3e4f9e26eb2e4aabcd76a29fd156c6a844d44b3d"
+        }
+      ]
+    },
+    "webview2-com@0.39.1": {
+      "license": "MIT",
+      "revision": "edc2caf886175ccaebe86078c9cfe1ae2a187328",
+      "files": [
+        {
+          "path": "src/assets/licenses/native-sources/webview2-com-0.39.1-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/wravery/webview2-rs/edc2caf886175ccaebe86078c9cfe1ae2a187328/LICENSE",
+          "sha256": "0dcf41516e608bbcb6cdc5229feb7b86fe4a643b85e7df251133c93408fdac73"
+        }
+      ]
+    },
+    "webview2-com-macros@0.8.1": {
+      "license": "MIT",
+      "revision": "dffa41a8a46d3f5565eefbff2de57d38d399f158",
+      "files": [
+        {
+          "path": "src/assets/licenses/native-sources/webview2-com-macros-0.8.1-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/wravery/webview2-rs/dffa41a8a46d3f5565eefbff2de57d38d399f158/LICENSE",
+          "sha256": "0dcf41516e608bbcb6cdc5229feb7b86fe4a643b85e7df251133c93408fdac73"
+        }
+      ]
+    },
+    "webview2-com-sys@0.39.1": {
+      "license": "MIT",
+      "revision": "edc2caf886175ccaebe86078c9cfe1ae2a187328",
+      "files": [
+        {
+          "path": "src/assets/licenses/native-sources/webview2-com-sys-0.39.1-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/wravery/webview2-rs/edc2caf886175ccaebe86078c9cfe1ae2a187328/LICENSE",
+          "sha256": "0dcf41516e608bbcb6cdc5229feb7b86fe4a643b85e7df251133c93408fdac73"
+        }
+      ]
+    },
+    "dwrote@0.11.5": {
+      "license": "MPL-2.0",
+      "revision": "5bbe910f7156213cdbaca4e1addfe85ea8b421ef",
+      "note": "The crate declares MPL-2.0 and its source carries the MPL Exhibit A notice; its package omits the full license. This is the official Mozilla license text.",
+      "files": [
+        {
+          "path": "src/assets/licenses/native-sources/MPL-2.0.txt",
+          "url": "https://www.mozilla.org/media/MPL/2.0/index.txt",
+          "sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04"
+        }
+      ]
+    },
+    "selectors@0.38.0": {
+      "license": "MPL-2.0",
+      "revision": "572ecba2d1600e7c3d490586692a209faf703baa",
+      "note": "The crate declares MPL-2.0 and its source carries the MPL Exhibit A notice; its package omits the full license. This is the official Mozilla license text.",
+      "files": [
+        {
+          "path": "src/assets/licenses/native-sources/MPL-2.0.txt",
+          "url": "https://www.mozilla.org/media/MPL/2.0/index.txt",
+          "sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04"
+        }
+      ]
+    },
+    "sys_traits@0.1.28": {
+      "license": "MIT",
+      "revision": "709e02e198721f81b485c078ccdf1835fa3e6a40",
+      "files": [
+        {
+          "path": "src/assets/licenses/native-sources/MIT-standard.txt",
+          "url": "https://spdx.org/licenses/MIT.txt",
+          "sha256": "c3b1b78bc8bd3ea13aa4bc9778442d16560270afa235006d816e5e88cef24db4"
+        }
+      ],
+      "note": "The published crate declares this license but omits its full text. The standard MIT text below is a template, not a recovered author notice; its placeholders do not assert a copyright year or owner. The exact crates.io package is the source authority. Any source copyright headers are reproduced separately."
+    },
+    "sys_traits_macros@0.1.0": {
+      "license": "MIT",
+      "revision": "75cbf3ea478624cc78275b0264e78e9ae13ce3f5",
+      "files": [
+        {
+          "path": "src/assets/licenses/native-sources/MIT-standard.txt",
+          "url": "https://spdx.org/licenses/MIT.txt",
+          "sha256": "c3b1b78bc8bd3ea13aa4bc9778442d16560270afa235006d816e5e88cef24db4"
+        }
+      ],
+      "note": "The published crate declares this license but omits its full text. The standard MIT text below is a template, not a recovered author notice; its placeholders do not assert a copyright year or owner. The exact crates.io package is the source authority. Any source copyright headers are reproduced separately. Its recorded Git revision is marked dirty and lacks the macros directory, so it does not establish the exact published source."
+    },
+    "pathfinder_geometry@0.5.1": {
+      "license": "MIT/Apache-2.0",
+      "revision": "a5e98fac00f433fe2ff4b2135383d82491b8bfc5",
+      "files": [
+        {
+          "path": "src/assets/licenses/native-sources/MIT-standard.txt",
+          "url": "https://spdx.org/licenses/MIT.txt",
+          "sha256": "c3b1b78bc8bd3ea13aa4bc9778442d16560270afa235006d816e5e88cef24db4"
+        }
+      ],
+      "note": "The published crate declares this license but omits its full text. The standard MIT text below is a template, not a recovered author notice; its placeholders do not assert a copyright year or owner. The exact crates.io package is the source authority. Any source copyright headers are reproduced separately. The recorded Git revision could not be retrieved from upstream; the published crate preserves the Pathfinder developer copyright statements included below."
+    },
+    "fontcull-klippa@0.1.2": {
+      "license": "MIT OR Apache-2.0",
+      "revision": "d23ca36033096effc3f9bd240ce0162121f5c8e8",
+      "files": [
+        {
+          "path": "src/assets/licenses/native-sources/fontcull-klippa-0.1.2-fork-MIT.txt",
+          "url": "https://raw.githubusercontent.com/bearcove/fontcull/d23ca36033096effc3f9bd240ce0162121f5c8e8/LICENSE",
+          "sha256": "133cdd0113fb6ac161e8257bd1d1a1fbe41cf3e17692fc69eb69b80fa10b9f7f"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/fontcull-klippa-0.1.2-Fontations-MIT.txt",
+          "url": "https://raw.githubusercontent.com/bearcove/fontcull/d23ca36033096effc3f9bd240ce0162121f5c8e8/vendored/fontcull-font-types/LICENSE-MIT",
+          "sha256": "8a62fa27ffdccc3df19dce90f8bb3d572e27aecffc1a383d0c2601834dcec434"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/fontcull-klippa-0.1.2-Fontations-APACHE.txt",
+          "url": "https://raw.githubusercontent.com/bearcove/fontcull/d23ca36033096effc3f9bd240ce0162121f5c8e8/vendored/fontcull-font-types/LICENSE-APACHE",
+          "sha256": "a14f7d685a79c0f4fb64aee305527a6d5fa55f2401f4e6d688d7b1301868e6c0"
+        }
+      ],
+      "note": "The fork root supplies its MIT notice. The original Fontations MIT and Apache texts are preserved from a sibling in the same source revision because the published Klippa package and its ancestors omit them. Additional HarfBuzz port notices follow separately."
+    }
+  },
+  "supplements": [
+    {
+      "name": "WebView2 SDK 1.0.3800.47",
+      "package": "webview2-com-sys@0.39.1",
+      "files": [
+        {
+          "path": "src/assets/licenses/native-sources/WebView2-SDK-1.0.3800.47.txt",
+          "url": "https://www.nuget.org/packages/Microsoft.Web.WebView2/1.0.3800.47/License",
+          "sha256": "0af8f1b807512aae39c2ac1aa4d0cae65cabecb6fd554b8439a5162a0d6eca55"
+        }
+      ]
+    },
+    {
+      "name": "pathfinder_geometry source copyright statements",
+      "files": [
+        {
+          "path": "src/assets/licenses/native-sources/pathfinder_geometry-0.5.1-source-copyright.txt",
+          "url": "https://crates.io/crates/pathfinder_geometry/0.5.1",
+          "sha256": "5383f8aadf385303fc09c685339510966e5ea96aa5ed131fe90221bf7453db1e"
+        }
+      ],
+      "package": "pathfinder_geometry@0.5.1",
+      "note": "Copyright statements preserved from the published crate source headers, alongside its full license texts."
+    },
+    {
+      "name": "pathfinder_simd source copyright statements",
+      "files": [
+        {
+          "path": "src/assets/licenses/native-sources/pathfinder_simd-0.5.6-source-copyright.txt",
+          "url": "https://crates.io/crates/pathfinder_simd/0.5.6",
+          "sha256": "041356848fd707eedec6cdabb9aa371d38a1074e1af2b867b3fbe6218859f431"
+        }
+      ],
+      "package": "pathfinder_simd@0.5.6",
+      "note": "Copyright statements preserved from the published crate source headers, alongside its full license texts."
+    },
+    {
+      "name": "tauri-plugin source copyright statements",
+      "files": [
+        {
+          "path": "src/assets/licenses/native-sources/tauri-plugin-2.7.1-source-copyright.txt",
+          "url": "https://crates.io/crates/tauri-plugin/2.7.1",
+          "sha256": "6f43534e0de3352f5b19fd9350253269734be43526798beee2bf254e0b314a00"
+        }
+      ],
+      "package": "tauri-plugin@2.7.1",
+      "note": "Copyright statements preserved from the published crate source headers, alongside its full license texts."
+    },
+    {
+      "name": "Deno core: Node.js and Gotham portions",
+      "files": [
+        {
+          "path": "src/assets/licenses/native-sources/deno-core-Node-MIT.txt",
+          "url": "https://raw.githubusercontent.com/denoland/deno/fe7ed012d92c642fd8e5607ac5a45d517538b5c5/libs/core/00_primordials.js#L4-L23",
+          "sha256": "21a82bbee91262a076c2e34533d51d73475d55e889f1c42cf884c86b2a0d5773"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/deno-core-Gotham-MIT.txt",
+          "url": "https://raw.githubusercontent.com/gotham-rs/gotham/bcbbf8923789e341b7a0e62c59909428ca4e22e2/LICENSE-MIT",
+          "sha256": "4a8894b180b3ebee6c74f1b224067d670f61fa388dec3a32b366b280c6415286"
+        }
+      ],
+      "package": "deno_core@0.413.0",
+      "note": "The Node notice covers 00_primordials.js and 00_infra.js; the Gotham notice covers gotham_state.rs. Comment delimiters were removed from the Node license excerpt without changing its text."
+    },
+    {
+      "name": "HarfBuzz portions ported into fontcull-klippa",
+      "files": [
+        {
+          "path": "src/assets/licenses/native-sources/HarfBuzz-port-0b2b7fee4060.txt",
+          "url": "https://raw.githubusercontent.com/harfbuzz/harfbuzz/63d09dbefcf7ad9f794ca96445d37b6d8c3c9124/src/hb-ot-var-gvar-table.hh",
+          "sha256": "0b2b7fee4060f8b0577ad2bd6f53d00c889f8e81a88ad7d22b816e4b45f6fdc7"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/HarfBuzz-port-0cbef442fee4.txt",
+          "url": "https://raw.githubusercontent.com/harfbuzz/harfbuzz/59001aa9527c056ad08626cfec9a079b65d8aec8/src/OT/Layout/GDEF/GDEF.hh",
+          "sha256": "0cbef442fee453d00099411f968047dff89cebceaf01844fcdc809a8eeb5fafd"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/HarfBuzz-port-14ecb60dfbef.txt",
+          "url": "https://raw.githubusercontent.com/harfbuzz/harfbuzz/bcd5aa368d3fd3ef741ea29df15d3d56011811c0/src/hb-ot-var-hvar-table.hh",
+          "sha256": "14ecb60dfbef5fa975058e672c3e39ee2f60367652e3baff47effd5a5b6f78e9"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/HarfBuzz-port-1b0d6982bfe8.txt",
+          "url": "https://raw.githubusercontent.com/harfbuzz/harfbuzz/40ef6c05775885241dd3f4d69f08fa4e7e1e451c/src/hb-ot-cmap-table.hh",
+          "sha256": "1b0d6982bfe816bc6915f8dd281a78855c52b1bb675fd518df3020682bebbe5e"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/HarfBuzz-port-1dec802fc691.txt",
+          "url": "https://raw.githubusercontent.com/harfbuzz/harfbuzz/59001aa9527c056ad08626cfec9a079b65d8aec8/src/OT/Layout/Common/Coverage.hh",
+          "sha256": "1dec802fc691d35ca74351a7ea64e6260545b7db8aa19e2134a602d9c5715b94"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/HarfBuzz-port-21ace733ba1c.txt",
+          "url": "https://raw.githubusercontent.com/harfbuzz/harfbuzz/a070f9ebbe88dc71b248af9731dd49ec93f4e6e6/src/hb-ot-os2-table.hh",
+          "sha256": "21ace733ba1c4b4ce8a609a7652934a9d6927c78a9e09f2eaa1c73a1fcc107cc"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/HarfBuzz-port-38bc86d36e41.txt",
+          "url": "https://raw.githubusercontent.com/harfbuzz/harfbuzz/fc42cdd68df0ce710b507981184ade7bf1b164e6/src/hb-ot-layout-base-table.hh",
+          "sha256": "38bc86d36e4127e36311ee843bb49c76ef7153c086a0a03117472b7d36d7eaa9"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/HarfBuzz-port-391e2b0feede.txt",
+          "url": "https://raw.githubusercontent.com/harfbuzz/harfbuzz/043980a60eb2fe93dd65b8c2f5eaa021fd8653f2/src/OT/Color/COLR/COLR.hh",
+          "sha256": "391e2b0feede8fef9aff08d63efaa660de7e44eee506c02cd01528f263a5466c"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/HarfBuzz-port-40acf57066f8.txt",
+          "url": "https://raw.githubusercontent.com/harfbuzz/harfbuzz/e451e91ec3608a2ebfec34d0c4f0b3d880e00e33/src/hb-ot-hdmx-table.hh",
+          "sha256": "40acf57066f89d63dfb3ed665022231fa3d5dcc15fa0c3752d0b59ca0a9cb916"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/HarfBuzz-port-43a742c46b10.txt",
+          "url": "https://raw.githubusercontent.com/harfbuzz/harfbuzz/a070f9ebbe88dc71b248af9731dd49ec93f4e6e6/src/OT/name/name.hh",
+          "sha256": "43a742c46b103b806372e3788a1e1a807384960c4ede2c9eeea680cc4ad50ded"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/HarfBuzz-port-4d9ed8f02a2a.txt",
+          "url": "https://raw.githubusercontent.com/harfbuzz/harfbuzz/fc6231726e514f96bfbb098283aab332fc6b45fb/src/hb-ot-layout-gsubgpos.hh",
+          "sha256": "4d9ed8f02a2a5abe2345baeb50a0037026663107755b1a976662e3333c8696bd"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/HarfBuzz-port-63350d0ab3b3.txt",
+          "url": "https://raw.githubusercontent.com/harfbuzz/harfbuzz/3c02fcd0e8ebd9330634058839941a672f777ac3/src/OT/Color/CPAL/CPAL.hh",
+          "sha256": "63350d0ab3b34274e82567e4211af4efec9d305f5c5ec066af7042950cb92db1"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/HarfBuzz-port-65dc2dd739ff.txt",
+          "url": "https://raw.githubusercontent.com/harfbuzz/harfbuzz/5e32b5ca8fe430132b87c0eee6a1c056d37c35eb/src/hb-pool.hh",
+          "sha256": "65dc2dd739ff1c522e23657195e94669aa8d981db2b42e5f0674da8ea93690ca"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/HarfBuzz-port-66db39f5eea4.txt",
+          "url": "https://raw.githubusercontent.com/harfbuzz/harfbuzz/5e32b5ca8fe430132b87c0eee6a1c056d37c35eb/src/hb-serialize.hh",
+          "sha256": "66db39f5eea4649e8f7e47951fd209bc8a1c620a06f9cd1c1f4117419f945fdb"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/HarfBuzz-port-676bd922fa06.txt",
+          "url": "https://raw.githubusercontent.com/harfbuzz/harfbuzz/021b44388667903d7bc9c92c924ad079f13b90ce/src/hb-subset-input.cc",
+          "sha256": "676bd922fa06bb2fb7552f1c36e82a2381838033e1ae2740a1d52b01ca1eaf5b"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/HarfBuzz-port-76677ddff5db.txt",
+          "url": "https://raw.githubusercontent.com/harfbuzz/harfbuzz/22fbc7568828b9acfd116be44b2d77d56d2d448b/src/hb-ot-vorg-table.hh",
+          "sha256": "76677ddff5dbe7c57ceedb75d7ac08bee12b939c24612ca17876342df8af4861"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/HarfBuzz-port-a4b2a3b830a7.txt",
+          "url": "https://raw.githubusercontent.com/harfbuzz/harfbuzz/a070f9ebbe88dc71b248af9731dd49ec93f4e6e6/src/hb-ot-hmtx-table.hh",
+          "sha256": "a4b2a3b830a76d0298285f29cc93a579c26fd552713c50de9f5f3053a4b62b34"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/HarfBuzz-port-a77b4dc77dfc.txt",
+          "url": "https://raw.githubusercontent.com/harfbuzz/harfbuzz/e451e91ec3608a2ebfec34d0c4f0b3d880e00e33/src/hb-subset-plan.cc",
+          "sha256": "a77b4dc77dfc53996315b23c58cb4e3e52df157bc2beb90e578ce8d13d3c2fa2"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/HarfBuzz-port-afc9133a0a0b.txt",
+          "url": "https://raw.githubusercontent.com/harfbuzz/harfbuzz/8f2ecfb10303d9970c79f27fc8af0a8f686302f6/src/hb-repacker.hh",
+          "sha256": "afc9133a0a0ba17e27851df36f91e454e9035ef08c2c5eb85c13e628a72bbed2"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/HarfBuzz-port-b8e579ab8996.txt",
+          "url": "https://raw.githubusercontent.com/harfbuzz/harfbuzz/a070f9ebbe88dc71b248af9731dd49ec93f4e6e6/src/hb-ot-head-table.hh",
+          "sha256": "b8e579ab8996a29cde9e7a94c388545c8f36aa335caa2766b4fd5c24e0d1d8e6"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/HarfBuzz-port-c1e893492675.txt",
+          "url": "https://raw.githubusercontent.com/harfbuzz/harfbuzz/22fbc7568828b9acfd116be44b2d77d56d2d448b/src/hb-ot-layout-common.hh",
+          "sha256": "c1e8934926750600c2d5fdbc23c0ad88cfc1819bdf07555f3f2725c3919bdbd4"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/HarfBuzz-port-ce595ab42feb.txt",
+          "url": "https://raw.githubusercontent.com/harfbuzz/harfbuzz/b5a65e0f20c30a7f13b2f6619479a6d666e603e0/src/hb-bimap.hh",
+          "sha256": "ce595ab42febbc4b943c2aa526a6877ee04875cf3debc142f1dfb1ad2afcdc42"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/HarfBuzz-port-e9d4a154f235.txt",
+          "url": "https://raw.githubusercontent.com/harfbuzz/harfbuzz/a070f9ebbe88dc71b248af9731dd49ec93f4e6e6/src/hb-ot-post-table.hh",
+          "sha256": "e9d4a154f2351300b731b73df638eb630d0d896f006bbe70bec6c3c31781c4c8"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/HarfBuzz-port-f5b6d26d3056.txt",
+          "url": "https://raw.githubusercontent.com/harfbuzz/harfbuzz/07ee609f5abe59b591e4a6cf99db890be556501b/src/graph/serialize.hh",
+          "sha256": "f5b6d26d30566a367064fe12c3a430a873691dcf84cf3d8f329e3b70780bf9bb"
+        }
+      ],
+      "package": "fontcull-klippa@0.1.2",
+      "note": "Complete distinct copyright/permission headers from the immutable HarfBuzz references in the locked Klippa production source; test fonts are not part of this component."
+    },
+    {
+      "name": "V8 engine and bundled third-party code",
+      "files": [
+        {
+          "path": "src/assets/licenses/native-sources/V8-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/denoland/v8/ac1e23989121713ca642f6650b34deff7b686896/LICENSE",
+          "sha256": "6ab33af8774a0f396ee3aeeb761e3229057682d6f9fa7f572e390c2cb3a6e509"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/V8-LICENSE.v8.txt",
+          "url": "https://raw.githubusercontent.com/denoland/v8/ac1e23989121713ca642f6650b34deff7b686896/LICENSE.v8",
+          "sha256": "4af93c12062c58058378de2397dc1c92bbff9ddfb1d583a01c84127557ce97ca"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/V8-LICENSE.fdlibm.txt",
+          "url": "https://raw.githubusercontent.com/denoland/v8/ac1e23989121713ca642f6650b34deff7b686896/LICENSE.fdlibm",
+          "sha256": "e7115e18444dae09d17f361ddc365fb1d342640fe500796209c63f7c80dfae10"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/V8-LICENSE.strongtalk.txt",
+          "url": "https://raw.githubusercontent.com/denoland/v8/ac1e23989121713ca642f6650b34deff7b686896/LICENSE.strongtalk",
+          "sha256": "6a585a9f466654abc8fc0829d56b1bc987e3a073d31faa03bba37d33640a23cd"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/V8-third_party-fp16-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/denoland/v8/ac1e23989121713ca642f6650b34deff7b686896/third_party/fp16/LICENSE",
+          "sha256": "c91377adafa2f498211a4fe017788e20c38892124673860f068f2919c289193d"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/V8-third_party-glibc-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/denoland/v8/ac1e23989121713ca642f6650b34deff7b686896/third_party/glibc/LICENSE",
+          "sha256": "b634ab5640e258563c536e658cad87080553df6f34f62269a21d554844e58bfe"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/V8-third_party-highway-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/denoland/v8/ac1e23989121713ca642f6650b34deff7b686896/third_party/highway/LICENSE",
+          "sha256": "43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/V8-third_party-inspector_protocol-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/denoland/v8/ac1e23989121713ca642f6650b34deff7b686896/third_party/inspector_protocol/LICENSE",
+          "sha256": "450ebb9e9e50c2809d9ca581931fc8946d8d5aa0c8c35aae9ac471342fe4a88e"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/V8-third_party-jsoncpp-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/denoland/v8/ac1e23989121713ca642f6650b34deff7b686896/third_party/jsoncpp/LICENSE",
+          "sha256": "76c45ece83a26117f86f4e349e7df118708e061e87225328fb478ce1e8b3eb86"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/V8-third_party-rapidhash-v8-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/denoland/v8/ac1e23989121713ca642f6650b34deff7b686896/third_party/rapidhash-v8/LICENSE",
+          "sha256": "db672df7faf793fbe28b8074fdd10822363e1525816b45c9627754885de842b0"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/V8-third_party-re2-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/denoland/v8/ac1e23989121713ca642f6650b34deff7b686896/third_party/re2/LICENSE",
+          "sha256": "6040cda75d90b1738292a631d89934c411ef7ffd543c4d6a1b7edfc8edf29449"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/V8-third_party-siphash-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/denoland/v8/ac1e23989121713ca642f6650b34deff7b686896/third_party/siphash/LICENSE",
+          "sha256": "36ffd9dc085d529a7e60e1276d73ae5a030b020313e6c5408593a6ae2af39673"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/V8-third_party-utf8-decoder-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/denoland/v8/ac1e23989121713ca642f6650b34deff7b686896/third_party/utf8-decoder/LICENSE",
+          "sha256": "3f712e5fbdfdbd5ee7d9b8c8152580220df55de47f4eba2f26c95c4de19ad096"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/V8-third_party-v8-builtins-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/denoland/v8/ac1e23989121713ca642f6650b34deff7b686896/third_party/v8/builtins/LICENSE",
+          "sha256": "b9a6d9320b8f2693e8d41e496ce56caadacaddcca9be2a64a61749278f425cf2"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/V8-third_party-v8-codegen-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/denoland/v8/ac1e23989121713ca642f6650b34deff7b686896/third_party/v8/codegen/LICENSE",
+          "sha256": "17e4f539024be2749ee729d1e2f01d24cef12ece8c9bf18e91a4349be29c80bf"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/V8-third_party-valgrind-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/denoland/v8/ac1e23989121713ca642f6650b34deff7b686896/third_party/valgrind/LICENSE",
+          "sha256": "ebf25b8ce59c9e8883acd1ca75b6fc121937ca034f666c4077d2be739d2e1622"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/V8-third_party-vtune-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/denoland/v8/ac1e23989121713ca642f6650b34deff7b686896/third_party/vtune/LICENSE",
+          "sha256": "02aea3ade0c02470335987f7d93ffaed877bcefc8414a416e2e548665bb0bfd0"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/V8-third_party-wasm-api-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/denoland/v8/ac1e23989121713ca642f6650b34deff7b686896/third_party/wasm-api/LICENSE",
+          "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/V8-src-builtins-builtins-math-xsum.cc-notice.txt",
+          "url": "https://raw.githubusercontent.com/denoland/v8/ac1e23989121713ca642f6650b34deff7b686896/src/builtins/builtins-math-xsum.cc",
+          "sha256": "4613560c6c4364f8a14208212b74b718a31429d2c1f2c32e4bbd6d6a775da197"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/V8-src-inspector-v8-debugger-script.h-notice.txt",
+          "url": "https://raw.githubusercontent.com/denoland/v8/ac1e23989121713ca642f6650b34deff7b686896/src/inspector/v8-debugger-script.h",
+          "sha256": "52a0d264e30c6fefdadc9ea70573b042240cb537e4253fa20d25ff85d07d68a4"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/V8-src-inspector-v8-inspector-impl.h-notice.txt",
+          "url": "https://raw.githubusercontent.com/denoland/v8/ac1e23989121713ca642f6650b34deff7b686896/src/inspector/v8-inspector-impl.h",
+          "sha256": "f49bf04618a133b46c109867e58f60a30a2095caeab785feb66faabfe94e519b"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/V8-src-inspector-v8-inspector-impl.cc-notice.txt",
+          "url": "https://raw.githubusercontent.com/denoland/v8/ac1e23989121713ca642f6650b34deff7b686896/src/inspector/v8-inspector-impl.cc",
+          "sha256": "652f4e8507ffd951cb05038566a26d168a80f4a07a1fce53f51195b87070d0cc"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/V8-src-inspector-v8-runtime-agent-impl.cc-notice.txt",
+          "url": "https://raw.githubusercontent.com/denoland/v8/ac1e23989121713ca642f6650b34deff7b686896/src/inspector/v8-runtime-agent-impl.cc",
+          "sha256": "cc9e16719866bcea3cc9bfca203ce7db99a50addc862fe2ad0606a66b6bdff7a"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/V8-src-inspector-injected-script.cc-notice.txt",
+          "url": "https://raw.githubusercontent.com/denoland/v8/ac1e23989121713ca642f6650b34deff7b686896/src/inspector/injected-script.cc",
+          "sha256": "9223f4874a0ea140744989276f607e1fea653341d252dd94c077112dd953ffd2"
+        }
+      ],
+      "package": "v8@150.4.0",
+      "note": "Rusty V8 v150.4.0 pins denoland/v8 at ac1e23989121713ca642f6650b34deff7b686896. These license texts conservatively include platform-specific components. The Windows upstream build enables Clang/libm and includes LGPL-2.1-or-later glibc math code; distribution must also satisfy applicable source-availability obligations."
+    },
+    {
+      "name": "V8 pinned submodule notices",
+      "files": [
+        {
+          "path": "src/assets/licenses/native-sources/V8-ICU-LICENSE.txt",
+          "url": "https://chromium.googlesource.com/chromium/deps/icu/+/ee5f27adc28bd3f15b2c293f726d14d2e336cbd5/LICENSE?format=TEXT",
+          "sha256": "451167c55c0fa447cc2d5632714f5e3c567fe4f1e1badefab2c1333852198aca"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/V8-Abseil-LICENSE.txt",
+          "url": "https://chromium.googlesource.com/chromium/src/third_party/abseil-cpp/+/d16e32215c3ab90ba57c2e904a5344d85c7353e4/LICENSE?format=TEXT",
+          "sha256": "c79a7fea0e3cac04cd43f20e7b648e5a0ff8fa5344e644b0ee09ca1162b62747"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/V8-libcxx-LICENSE.TXT.txt",
+          "url": "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libcxx/+/5abc7f839700f0f17338434e1c1c6a8c87c00c11/LICENSE.TXT?format=TEXT",
+          "sha256": "539dd7aed86e8a4f12cbdd0e6c50c189c7d74847e4fecc64ce2c6ee3a01da38b"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/V8-libcxxabi-LICENSE.TXT.txt",
+          "url": "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libcxxabi/+/8f11bb1d4438d0239d0dfc1bd9456a9f31629dda/LICENSE.TXT?format=TEXT",
+          "sha256": "e2b35be49f7284a45b7baca8fc7b3ab7440e7902392b2528a457816b5bb2a15c"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/V8-libunwind-LICENSE.TXT.txt",
+          "url": "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libunwind/+/d6c7a21e978f0adaa43accaad53bc64f0b64f6ec/LICENSE.TXT?format=TEXT",
+          "sha256": "b5efebcaca80879234098e52d1725e6d9eb8fb96a19fce625d39184b705f7b6d"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/V8-libc-LICENSE.TXT.txt",
+          "url": "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libc/+/9309c117ebae84dd2f9df1ef99de4782162527d5/LICENSE.TXT?format=TEXT",
+          "sha256": "ebcd9bbf783a73d05c53ba4d586b8d5813dcdf3bbec50265860ccc885e606f47"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/V8-simdutf-LICENSE.txt",
+          "url": "https://chromium.googlesource.com/chromium/src/third_party/simdutf/+/f7356eed293f8208c40b3c1b344a50bd70971983/LICENSE?format=TEXT",
+          "sha256": "fc8dbc04e03ad4efc08a647ffe7f995b811a95bc04c0e85a56d5277c6593fa5f"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/V8-Highway-LICENSE.txt",
+          "url": "https://chromium.googlesource.com/external/github.com/google/highway/+/2607d3b5b0113992fe84d3848859eae13b3b52c1/LICENSE?format=TEXT",
+          "sha256": "e340270d4f64384569a91d546acb5b094d69ce47f0c015db77abb74dc6f815af"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/V8-Dragonbox-LICENSE-Apache2-LLVM.txt",
+          "url": "https://chromium.googlesource.com/external/github.com/jk-jeon/dragonbox/+/beeeef91cf6fef89a4d4ba5e95d47ca64ccb3a44/LICENSE-Apache2-LLVM?format=TEXT",
+          "sha256": "9e45e856bedccee9f67254082ca11851d954de2fed7448c4bed19ad9aab99a91"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/V8-Dragonbox-LICENSE-Boost.txt",
+          "url": "https://chromium.googlesource.com/external/github.com/jk-jeon/dragonbox/+/beeeef91cf6fef89a4d4ba5e95d47ca64ccb3a44/LICENSE-Boost?format=TEXT",
+          "sha256": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/V8-fast-float-LICENSE-APACHE.txt",
+          "url": "https://chromium.googlesource.com/external/github.com/fastfloat/fast_float/+/05087a303dad9c98768b33c829d398223a649bc6/LICENSE-APACHE?format=TEXT",
+          "sha256": "097a889aa954d04e088b790b10a4014d6189561d0a6013935a73ce3d4ddaaf06"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/V8-fast-float-LICENSE-BOOST.txt",
+          "url": "https://chromium.googlesource.com/external/github.com/fastfloat/fast_float/+/05087a303dad9c98768b33c829d398223a649bc6/LICENSE-BOOST?format=TEXT",
+          "sha256": "8d8291caf1cee26d23acf3eb67c9f9a2d58f1c681b16a4fbe8cbfb9e3c0b5a9b"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/V8-fast-float-LICENSE-MIT.txt",
+          "url": "https://chromium.googlesource.com/external/github.com/fastfloat/fast_float/+/05087a303dad9c98768b33c829d398223a649bc6/LICENSE-MIT?format=TEXT",
+          "sha256": "e562f3f974ced7e69dd1db77b820b36bcf8f30377f1aa105723fba449c53c4e6"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/V8-FP16-LICENSE.txt",
+          "url": "https://raw.githubusercontent.com/Maratyszcza/FP16/3d2de1816307bac63c16a297e8c4dc501b4076df/LICENSE",
+          "sha256": "17e4f539024be2749ee729d1e2f01d24cef12ece8c9bf18e91a4349be29c80bf"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/V8-simdutf-PyTorch-BSD.txt",
+          "url": "https://chromium.googlesource.com/chromium/src/third_party/simdutf/+/f7356eed293f8208c40b3c1b344a50bd70971983/simdutf.h?format=TEXT",
+          "sha256": "204bbed08ddeeecb362b4da36d3479a0167b7356a9d6024a24f9833affbe228a"
+        }
+      ],
+      "package": "v8@150.4.0",
+      "note": "Submodule revisions are pinned by Rusty V8 commit 5c15a6995c9bb4bacd3e341b59fff32c909c80bf. The ICU file includes data notices; the simdutf source excerpt preserves additional BSD terms for SIMD detection. Some components are platform-specific."
+    },
+    {
+      "name": "Rust standard library 1.99.1",
+      "files": [
+        {
+          "path": "src/assets/licenses/native-sources/Rust-1.99.1-COPYRIGHT-library.html",
+          "url": "https://doc.rust-lang.org/1.99.1/COPYRIGHT-library.html",
+          "sha256": "5647be074c8edf7339fd863055923a8fc80bc5610a8d4661ec3b767b9d392c27",
+          "format": "rust-library-html"
+        }
+      ],
+      "rust": "1.99.1",
+      "note": "Library-focused copyright inventory supplied with the pinned official Rust distribution; includes platform-specific library code. Compiler-only notices are not used as a substitute."
+    }
+  ]
+}

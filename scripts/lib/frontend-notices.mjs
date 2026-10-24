@@ -1,5 +1,6 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { buildNativeNotices } from "./native-notices.mjs";
 
 /**
  * @typedef {{name?: string, version?: string, license?: string, dev?: boolean, dependencies?: Record<string, string>}} PackageMetadata
@@ -77,10 +78,9 @@ export function buildFrontendNotices(root) {
     "SSA HDRify — Third-party notices\n\n" +
       "This inventory covers the locked JavaScript runtime packages, Vite's generated " +
       "runtime helpers, bundled fonts and icon attribution, the SQLite source override, " +
-      "and unicode-normalization's code and Unicode data. Some included package " +
-      "notices also describe code used only during development.\n" +
-      "Other native Rust dependency attribution is listed separately in the project README; " +
-      "this is not a complete native dependency license inventory.\n",
+      "and unicode-normalization's code and Unicode data, followed by the locked " +
+      "Windows x64 native dependency notices. The shared inventory includes " +
+      "components used by only one executable and some build tools.\n",
     `Application license\n\n${readText("LICENSE")}`,
   ];
   for (const entry of packages) {
@@ -126,5 +126,6 @@ export function buildFrontendNotices(root) {
       "SQLite's deliverable source is in the public domain.\n" +
       "See https://sqlite.org/copyright.html.\n"
   );
+  sections.push(buildNativeNotices(root));
   return sections.join("\n\n" + "=".repeat(72) + "\n\n") + "\n";
 }
