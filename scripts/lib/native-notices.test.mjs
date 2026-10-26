@@ -111,8 +111,7 @@ describe("locked native notice coverage", () => {
       "src-tauri/Cargo.lock",
       "src-tauri/Cargo.toml",
       "rust-toolchain.toml",
-      "src-tauri/vendor/libsqlite3-sys/Cargo.toml",
-      "src-tauri/vendor/libsqlite3-sys/LICENSE",
+      "src-tauri/sqlite-bundle.json",
       nativeSourcesPath,
     ]) {
       mkdirSync(dirname(join(root, path)), { recursive: true });
@@ -147,7 +146,7 @@ describe("locked native notice coverage", () => {
       "src-tauri/Cargo.lock",
       "src-tauri/Cargo.toml",
       "rust-toolchain.toml",
-      "src-tauri/vendor/libsqlite3-sys/LICENSE",
+      "src-tauri/sqlite-bundle.json",
       nativeSourcesPath,
       nativeTextPath,
     ]) {

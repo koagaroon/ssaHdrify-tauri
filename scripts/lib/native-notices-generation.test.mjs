@@ -10,6 +10,8 @@ import {
   nativeManifestPath,
   textDigest,
 } from "./native-notices.mjs";
+import { sqliteBundleFixture } from "./sqlite-bundle-fixture.mjs";
+import { sqliteBundlePath } from "./sqlite-bundle.mjs";
 
 /** @type {string[]} */
 const temporary = [];
@@ -25,13 +27,11 @@ function fixture() {
     mkdirSync(dirname(join(root, path)), { recursive: true });
     writeFileSync(join(root, path), text, "utf8");
   }
-  for (const path of [
-    "src-tauri/Cargo.lock",
-    "src-tauri/Cargo.toml",
-    "src-tauri/vendor/libsqlite3-sys/Cargo.toml",
-    "src-tauri/vendor/libsqlite3-sys/LICENSE",
-  ])
-    write(path, "fixture\n");
+  write("src-tauri/Cargo.toml", "fixture\n");
+  const sqlite = sqliteBundleFixture(join(root, "sqlite-crate"));
+  write("src-tauri/Cargo.lock", sqlite.lockText);
+  write(sqliteBundlePath, JSON.stringify(sqlite.provenance));
+  for (const [path, text] of Object.entries(sqlite.files)) write(`sqlite-crate/${path}`, text);
   write("rust-toolchain.toml", '[toolchain]\nchannel = "1.0.0"\n');
   write("crate/LICENSE", "Fixture full license\n");
   mkdirSync(join(root, "src/assets/licenses/native-sources"), { recursive: true });
@@ -64,12 +64,21 @@ function fixture() {
         manifest_path: join(root, "crate/Cargo.toml"),
         source: "registry+https://github.com/rust-lang/crates.io-index",
       },
+      sqlite.package,
     ],
     resolve: {
       root: "root",
       nodes: [
-        { id: "root", features: [], deps: [{ pkg: "library", dep_kinds: [{ kind: null }] }] },
+        {
+          id: "root",
+          features: [],
+          deps: [
+            { pkg: "library", dep_kinds: [{ kind: null }] },
+            { pkg: sqlite.package.id, dep_kinds: [{ kind: null }] },
+          ],
+        },
         { id: "library", features: [], deps: [] },
+        sqlite.node,
       ],
     },
   };
@@ -81,10 +90,50 @@ function fixture() {
     assert.equal(args[args.indexOf("--filter-platform") + 1], "x86_64-pc-windows-msvc");
     return JSON.stringify(metadata);
   };
-  return { root, write, sources, execute };
+  return { root, write, sources, metadata, sqlite, execute };
 }
 
 describe("native notice generator guards", () => {
+  it("includes the published SQLite binding license with its exact registry source", () => {
+    const f = fixture();
+    generateNativeNotices(f.root, "--write", f.execute);
+    generateNativeNotices(f.root, "--check", f.execute);
+    const text = readFileSync(join(f.root, nativeTextPath), "utf8");
+    assert.ok(text.includes(f.sqlite.files.LICENSE));
+    assert.ok(
+      text.includes(`Source: https://crates.io/crates/libsqlite3-sys/${f.sqlite.package.version}`)
+    );
+    assert.ok(!text.includes("local SQLite override"));
+    const manifest = JSON.parse(readFileSync(join(f.root, nativeManifestPath), "utf8"));
+    assert.equal(
+      manifest.inputs[sqliteBundlePath],
+      textDigest(JSON.stringify(f.sqlite.provenance))
+    );
+  });
+
+  it("rejects native path or Git sources before writing an inventory", () => {
+    for (const source of [null, "git+https://example.org/library#review-required"]) {
+      const f = fixture();
+      f.metadata.packages[1].source = source;
+      assert.throws(
+        () => generateNativeNotices(f.root, "--write", f.execute),
+        /Review new native dependency source/u
+      );
+      assert.ok(!existsSync(join(f.root, nativeTextPath)));
+    }
+  });
+
+  it("refuses changed installed SQLite bytes before writing a notice snapshot", () => {
+    const f = fixture();
+    f.write("sqlite-crate/sqlite3/sqlite3.c", "unreviewed SQLite source\n");
+    assert.throws(
+      () => generateNativeNotices(f.root, "--write", f.execute),
+      /SQLite bundle source differs from the reviewed package/u
+    );
+    assert.ok(!existsSync(join(f.root, nativeTextPath)));
+    assert.ok(!existsSync(join(f.root, nativeManifestPath)));
+  });
+
   it("reproduces a complete inventory and refuses a removed or modified license", () => {
     const f = fixture();
     generateNativeNotices(f.root, "--write", f.execute);
@@ -109,7 +158,7 @@ describe("native notice generator guards", () => {
         generateNativeNotices(f.root, "--write", (command, args) => {
           const result = f.execute(command, args);
           if (command === "cargo")
-            f.write("src-tauri/Cargo.lock", "changed while Cargo was running\n");
+            f.write("src-tauri/Cargo.toml", "changed while Cargo was running\n");
           return result;
         }),
       /inputs changed during generation/u

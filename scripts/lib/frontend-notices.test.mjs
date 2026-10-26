@@ -90,7 +90,7 @@ describe("frontend runtime notice inventory", () => {
       "src/assets/licenses/feather-LICENSE.txt",
       "src/assets/licenses/unicode-normalization-LICENSE-MIT.txt",
       "src/assets/licenses/unicode-normalization-LICENSE-UNICODE.txt",
-      "src-tauri/vendor/libsqlite3-sys/LICENSE",
+      "src/assets/licenses/native-notices.txt",
     ]) {
       const source = readFileSync(new URL(`../../${file}`, import.meta.url), "utf8").replace(
         /\r\n/gu,

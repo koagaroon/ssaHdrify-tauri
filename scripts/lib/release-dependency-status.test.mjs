@@ -386,7 +386,7 @@ describe("source history and dependency/build input classification", () => {
     });
   });
 
-  test("retains dependency and vendored-source changes as mixed graph inputs", async () => {
+  test("retains dependency, reviewed bundle, and historical vendored-source changes as mixed graph inputs", async () => {
     const context = fixture();
     context.change(
       "package.json",
@@ -399,8 +399,9 @@ describe("source history and dependency/build input classification", () => {
       '{"packages":{"":{"engines":{"node":"^24.22.1"}},"node_modules/react":{"version":"19.3.0"}}}'
     );
     context.state.changes.push("src-tauri/vendor/libsqlite3-sys/sqlite3/sqlite3.c");
+    context.state.changes.push("src-tauri/sqlite-bundle.json");
     const result = await inspectReleaseDependencyStatus(context.options);
-    expect(result.changes.graph).toHaveLength(3);
+    expect(result.changes.graph).toHaveLength(4);
     expect(result.changes.build).toEqual([]);
     expect(renderReleaseDependencyReport(result)).toContain(
       "do not prove a runtime dependency changed"

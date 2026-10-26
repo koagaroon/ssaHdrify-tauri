@@ -1,5 +1,6 @@
 //! The shipped CLI must expose its bundled notices without external files or services.
 
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::process::Command;
 
@@ -68,8 +69,26 @@ fn licenses_prints_complete_embedded_notices_without_touching_cache_or_output_pa
     ] {
         assert!(text.contains(required), "missing native notice: {required}");
     }
-    assert!(text.contains(include_str!("../vendor/libsqlite3-sys/LICENSE")));
-    assert!(text.contains("Source: https://github.com/rusqlite/rusqlite"));
+    let bundle: serde_json::Value =
+        serde_json::from_str(include_str!("../sqlite-bundle.json")).unwrap();
+    let version = bundle["crate"]["version"].as_str().unwrap();
+    let bindings = text
+        .split("\n\n========================================================================\n\n")
+        .find(|section| section.starts_with(&format!("libsqlite3-sys {version}\n")))
+        .expect("the locked SQLite bindings must have their own notice section");
+    assert!(bindings.contains(&format!(
+        "Source: https://crates.io/crates/libsqlite3-sys/{version}"
+    )));
+    let license = bindings
+        .split_once("\n\nLICENSE\n\n")
+        .expect("the complete binding license must be embedded")
+        .1;
+    let license = format!("{}\n", license.trim_end());
+    let license_hash: String = Sha256::digest(license.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    assert_eq!(license_hash, bundle["files"]["LICENSE"].as_str().unwrap());
     assert!(text.contains("SQLite's deliverable source is in the public domain."));
     assert!(!cache_path.exists());
     assert!(!output_path.exists());

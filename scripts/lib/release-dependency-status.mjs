@@ -19,6 +19,7 @@ const GRAPH_INPUTS = [
   "package-lock.json",
   "src-tauri/Cargo.toml",
   "src-tauri/Cargo.lock",
+  "src-tauri/sqlite-bundle.json",
   "src-tauri/vendor",
 ];
 const BUILD_INPUTS = [
@@ -559,7 +560,7 @@ export function renderReleaseDependencyReport(result) {
     }
   }
   lines.push(
-    "Scope: npm and Cargo manifests/lockfiles, vendored source, build-tool configuration, and GitHub workflows/actions. Engine/package-manager metadata alone and Cargo's package rust-version alone are classified as build inputs. Other manifest/lockfile differences remain mixed inputs and do not prove a runtime dependency changed.",
+    "Scope: npm and Cargo manifests/lockfiles, SQLite bundle provenance, historical vendored source, build-tool configuration, and GitHub workflows/actions. Engine/package-manager metadata alone and Cargo's package rust-version alone are classified as build inputs. Other manifest/lockfile differences remain mixed inputs and do not prove a runtime dependency changed.",
     "",
     "This compares selected source inputs, including visible uncommitted and untracked inputs. It does not inspect release binaries, establish shipped security status or release readiness, or decide whether to publish. Application source outside this scope is not compared. Input differences alone do not make this monitor fail.",
     ""

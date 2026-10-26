@@ -22,6 +22,7 @@ import {
   noticeSeparator,
   textDigest,
 } from "./lib/native-notices.mjs";
+import { sqliteBundlePath, verifySqliteBundle } from "./lib/sqlite-bundle.mjs";
 
 /** @param {string} file */
 function readText(file) {
@@ -158,6 +159,11 @@ export function generateNativeNotices(
       "1",
     ])
   );
+  verifySqliteBundle({
+    metadata,
+    lockText: readText(join(root, "src-tauri/Cargo.lock")),
+    provenance: JSON.parse(readText(join(root, sqliteBundlePath))),
+  });
   const packages = nativePackages(metadata);
   /** @type {{schemaVersion: number, target: string, packages: Record<string, {license: string, revision: string, note?: string, files: SupplementFile[]}>, supplements: {name: string, note?: string, package?: string, rust?: string, files: SupplementFile[]}[]}} */
   const sources = JSON.parse(readText(join(root, nativeSourcesPath)));
@@ -178,20 +184,13 @@ export function generateNativeNotices(
       "This shared inventory covers the locked Windows x64 dependency source graph for both executables. " +
       "It conservatively includes build dependencies, generated-code tools, and components used by only one executable; it is not a list of symbols linked into each file. " +
       "Other operating-system builds need a separate native notice review.\n\n" +
-      "Each crates.io source link identifies the exact, unmodified upstream source package. MPL-2.0 covered source remains available there under MPL-2.0; the local SQLite override is available in this project's source repository. " +
+      "Each crates.io source link identifies the exact, unmodified upstream source package. MPL-2.0 covered source remains available there under MPL-2.0. " +
       "License alternatives and additional notices are reproduced as supplied by their authors.\n",
   ];
   const inventory = packages.map((pkg) => {
     const key = `${pkg.name}@${pkg.version}`;
     const directory = dirname(pkg.manifest_path);
-    if (
-      pkg.source !== "registry+https://github.com/rust-lang/crates.io-index" &&
-      !(
-        pkg.source === null &&
-        pkg.name === "libsqlite3-sys" &&
-        resolve(directory) === resolve(root, "src-tauri/vendor/libsqlite3-sys")
-      )
-    ) {
+    if (pkg.source !== "registry+https://github.com/rust-lang/crates.io-index") {
       throw new Error(`Review new native dependency source: ${key}`);
     }
     const paths = licenseFiles(directory);
@@ -230,10 +229,7 @@ export function generateNativeNotices(
         `No primary native license text: ${key}; review its declared license and exact source provenance.`
       );
     }
-    const source =
-      pkg.source === null
-        ? "https://github.com/koagaroon/ssaHdrify-tauri/tree/master/src-tauri/vendor/libsqlite3-sys"
-        : `https://crates.io/crates/${pkg.name}/${pkg.version}`;
+    const source = `https://crates.io/crates/${pkg.name}/${pkg.version}`;
     sections.push(
       `${pkg.name} ${pkg.version}\nLicense: ${pkg.license}\nSource: ${source}\n` +
         (supplement?.note ? `Provenance note: ${supplement.note}\n` : "") +
