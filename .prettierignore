@@ -4,7 +4,6 @@ dist-ssr
 src-tauri/target
 src-tauri/gen
 src-tauri/icons
-src-tauri/vendor/libsqlite3-sys
 package-lock.json
 # Verbatim upstream legal material and deterministic generated inventory.
 src/assets/licenses/native-sources

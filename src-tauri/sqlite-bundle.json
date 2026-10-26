@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "crate": {
+    "name": "libsqlite3-sys",
+    "version": "0.39.1",
+    "source": "registry+https://github.com/rust-lang/crates.io-index",
+    "url": "https://static.crates.io/crates/libsqlite3-sys/libsqlite3-sys-0.39.1.crate",
+    "sha256": "14a5f01b87b92705d07b433c06f96cbc764637d81a0bffb5734ce17cf0f9a2b3",
+    "features": [
+      "bundled",
+      "bundled_bindings",
+      "cc",
+      "default",
+      "min_sqlite_version_3_45_3",
+      "pkg-config",
+      "vcpkg"
+    ]
+  },
+  "sqlite": {
+    "version": "3.54.1",
+    "sourceId": "2026-10-16 14:45:20 555e07ef33f69a0957d24d8e555b702464a131d6f1607f4c3c1e4551e8e6ca76",
+    "url": "https://sqlite.org/2026/sqlite-amalgamation-3540100.zip",
+    "sha3_256": "92281c86e2957f9b9305890f9ac04204caa7b677cc868dc326d942689df28e30",
+    "sourceSha3_256": "e2b869d3003b33c942b7dd7063604fbc53553e1b66609570df39b9b7b558ee81"
+  },
+  "files": {
+    "Cargo.toml": "3fb7e11b7b71251e7e360511000befe692e5aee8d31415d477774f060577bb15",
+    "build.rs": "769b31370a41aa722e1d5a530012432c985bb142eab34d095481ffd1a3436e1b",
+    "LICENSE": "c10c1f27337546471e5f7e4e97fdd398b35b9d4e126115dcd22de8d8e65abf6f",
+    "sqlite3/sqlite3.c": "0c657666d819f261cc4007526ad57e1669de9949df7a8ea847aa284a2bf0ee52",
+    "sqlite3/sqlite3.h": "d6c84557261893439b341d2e6c35187ae3ea24fbfd843ad94616f72d89242b8c",
+    "sqlite3/sqlite3ext.h": "48963abfefb41ac329ef9d706acb5eadba952a99a748285c9ded6b5e0942721b",
+    "sqlite3/bindgen_bundled_version.rs": "a25057a06d8cb5053a61c8f0ff746cc3d81b3bd778fbd3199ba12c8a6ee2945d",
+    "sqlite3/bindgen_bundled_version_ext.rs": "b4757194d9f463c9c9168d38f943eedfd2a06d7c402374a75062e6fda8d4ff2c"
+  }
+}

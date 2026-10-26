@@ -12,7 +12,6 @@ import {
   classifySqliteSourceCurrency,
   collectCargoTargets,
   collectNpmTargets,
-  collectSqliteOverrideTarget,
   cratesIndexPath,
   dependencyWatchExitCode,
   fetchTextWithPolicy,
@@ -532,7 +531,7 @@ describe("bundled SQLite source currency", () => {
 
   test("validates the repository's bundled-source provenance without fetching a binary", async () => {
     const provenance = JSON.parse(
-      await readFile(new URL("src-tauri/vendor/sqlite-provenance.json", repositoryRoot), "utf8")
+      await readFile(new URL("src-tauri/sqlite-bundle.json", repositoryRoot), "utf8")
     );
     expect(getSqliteSourcePin(provenance).version).toBe(provenance.sqlite.version);
   });
@@ -544,13 +543,13 @@ describe("Cargo direct dependencies", () => {
       locked: "0.38.2",
       versions: [{ version: "0.38.2", yanked: false, rustVersion: null }],
       mode: /** @type {const} */ ("manual"),
-      policyReason: "Review the temporary SQLite source override.",
+      policyReason: "Review the published SQLite source bundle.",
       msrv: "1.91",
       reviewedVersions: ["0.38.2"],
     };
     expect(classifyCargoCurrency(input)).toMatchObject({
       status: "current",
-      reason: "Tracked release is current. Review the temporary SQLite source override.",
+      reason: "Tracked release is current. Review the published SQLite source bundle.",
     });
     input.versions.push({ version: "0.38.3", yanked: false, rustVersion: null });
     expect(classifyCargoCurrency(input)).toMatchObject({ latest: "0.38.3", status: "review" });
@@ -657,41 +656,6 @@ describe("Cargo direct dependencies", () => {
       latest: "0.17.2",
       status: "held",
     });
-  });
-
-  test("tracks the exact bundled SQLite override independently of rusqlite", () => {
-    const metadata = {
-      packages: [
-        {
-          id: "sqlite",
-          name: "libsqlite3-sys",
-          version: "0.38.2",
-          source: null,
-          manifest_path: "vendor/libsqlite3-sys/Cargo.toml",
-        },
-      ],
-      resolve: { nodes: [{ id: "sqlite", features: ["bundled", "cc"] }] },
-    };
-    const manifestPath = "vendor/libsqlite3-sys/Cargo.toml";
-    expect(collectSqliteOverrideTarget(metadata, manifestPath)).toEqual({
-      name: "libsqlite3-sys",
-      locked: "0.38.2",
-      kinds: ["vendored"],
-    });
-    const wrongSource = structuredClone(metadata);
-    wrongSource.packages[0].manifest_path = "unreviewed/Cargo.toml";
-    const duplicate = structuredClone(metadata);
-    duplicate.packages.push({ ...duplicate.packages[0] });
-    for (const broken of [wrongSource, duplicate, { ...metadata, packages: [] }]) {
-      expect(() => collectSqliteOverrideTarget(broken, manifestPath)).toThrow(
-        "Expected exactly one reviewed vendored"
-      );
-    }
-    const external = structuredClone(metadata);
-    external.resolve.nodes[0].features = [];
-    expect(() => collectSqliteOverrideTarget(external, manifestPath)).toThrow(
-      "must enable the bundled build"
-    );
   });
 
   test("builds sparse-index paths for crates.io", () => {
@@ -1084,7 +1048,8 @@ describe("safe reporting and network failures", () => {
     expect(report).toContain("cannot push, create branches, or open pull requests");
     expect(report).toContain("pinned npm and Rust build tools");
     expect(report).toContain("bundled SQLite source");
-    expect(report).toContain("Transitive-only lockfile updates are outside its scope");
+    expect(report).toContain("resolved sys crate");
+    expect(report).toContain("Other transitive-only lockfile updates are outside its scope");
   });
 
   test("puts actionable rows before current rows", () => {

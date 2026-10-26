@@ -12,7 +12,6 @@ import {
   classifySqliteSourceCurrency,
   collectCargoTargets,
   collectNpmTargets,
-  collectSqliteOverrideTarget,
   cratesIndexPath,
   dependencyWatchExitCode,
   fetchTextWithPolicy,
@@ -36,13 +35,14 @@ import {
   releaseDependencyExitCode,
   renderReleaseDependencyReport,
 } from "./lib/release-dependency-status.mjs";
+import { sqliteBundlePath, verifySqliteBundle } from "./lib/sqlite-bundle.mjs";
 
 const projectRoot = fileURLToPath(new URL("../", import.meta.url));
 const packageJsonPath = resolve(projectRoot, "package.json");
 const packageLockPath = resolve(projectRoot, "package-lock.json");
 const cargoManifestPath = resolve(projectRoot, "src-tauri", "Cargo.toml");
 const rustToolchainPath = resolve(projectRoot, "rust-toolchain.toml");
-const sqliteProvenancePath = resolve(projectRoot, "src-tauri", "vendor", "sqlite-provenance.json");
+const sqliteProvenancePath = resolve(projectRoot, sqliteBundlePath);
 const workflowRoots = [
   resolve(projectRoot, ".github", "workflows"),
   resolve(projectRoot, ".github", "actions"),
@@ -103,13 +103,13 @@ const cargoPolicies = {
   rusqlite: {
     mode: /** @type {const} */ ("manual"),
     reason:
-      "Review the bundled SQLite source and temporary override. A published replacement must preserve the reviewed recovery and font-query behavior and pass the declared Rust build baseline.",
+      "Review the bundled SQLite source and Rust interface. Updates must preserve the reviewed recovery and font-query behavior and pass the declared Rust build baseline.",
     reviewedVersions: [],
   },
   "libsqlite3-sys": {
     mode: /** @type {const} */ ("manual"),
     reason:
-      "The temporary local override bundles SQLite 3.54.1. Review new upstream sys-crate releases for a qualifying replacement, even if rusqlite itself has not changed.",
+      "Review new sys-crate releases and their actual bundled SQLite source, binding metadata, and build configuration, even if rusqlite itself has not changed.",
     reviewedVersions: [],
   },
   rfd: {
@@ -363,7 +363,7 @@ async function checkRustToolchain() {
 async function checkSqliteSource() {
   let locked = "unknown";
   try {
-    const bundled = getSqliteSourcePin(await readJson(sqliteProvenancePath));
+    const bundled = getSqliteSourcePin(await getVerifiedSqliteBundle());
     locked = bundled.version;
     const downloads = await cachedFetchText(
       "https://sqlite.org/download.html",
@@ -412,12 +412,38 @@ function runCargoMetadata() {
   });
 }
 
+/** @type {Promise<unknown> | undefined} */
+let cargoMetadataPromise;
+function getCargoMetadata() {
+  cargoMetadataPromise ??= runCargoMetadata().then((text) => JSON.parse(text));
+  return cargoMetadataPromise;
+}
+
+/** @type {Promise<ReturnType<typeof verifySqliteBundle>> | undefined} */
+let sqliteBundlePromise;
+function getVerifiedSqliteBundle() {
+  sqliteBundlePromise ??= (async () => {
+    const [metadata, lockText, provenance] = await Promise.all([
+      getCargoMetadata(),
+      readProjectText(resolve(projectRoot, "src-tauri", "Cargo.lock")),
+      readJson(sqliteProvenancePath),
+    ]);
+    try {
+      return verifySqliteBundle({ metadata, lockText, provenance });
+    } catch {
+      throw new MonitorDataError(
+        "The resolved SQLite package, bundled features, lock checksum, or installed source differs from src-tauri/sqlite-bundle.json; review the published bundle before updating its provenance."
+      );
+    }
+  })();
+  return sqliteBundlePromise;
+}
+
 /** @returns {Promise<CurrencyRow[]>} */
 async function checkCargoDependencies() {
   let metadata;
   try {
-    const text = await runCargoMetadata();
-    metadata = JSON.parse(text);
+    metadata = await getCargoMetadata();
   } catch (error) {
     return [errorRow("Cargo", "direct dependency graph", "unknown", error)];
   }
@@ -425,12 +451,13 @@ async function checkCargoDependencies() {
   let cargoScope;
   try {
     cargoScope = collectCargoTargets(metadata);
-    cargoScope.targets.push(
-      collectSqliteOverrideTarget(
-        metadata,
-        resolve(projectRoot, "src-tauri", "vendor", "libsqlite3-sys", "Cargo.toml")
-      )
-    );
+    const verified = await getVerifiedSqliteBundle();
+    cargoScope.targets = cargoScope.targets.filter((target) => target.name !== "libsqlite3-sys");
+    cargoScope.targets.push({
+      name: "libsqlite3-sys",
+      locked: verified.package.version,
+      kinds: ["bundled"],
+    });
   } catch (error) {
     return [errorRow("Cargo", "direct dependency graph", "unknown", error)];
   }

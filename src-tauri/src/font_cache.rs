@@ -2292,10 +2292,17 @@ mod tests {
 
     #[test]
     fn bundled_sqlite_includes_required_recovery_hardening() {
+        let bundle: serde_json::Value = serde_json::from_str(include_str!("../sqlite-bundle.json"))
+            .expect("reviewed SQLite bundle metadata must parse");
         assert!(
             rusqlite::version_number() >= 3_053_004,
             "SQLite {} predates the required recovery hardening",
             rusqlite::version()
+        );
+        assert_eq!(
+            Some(rusqlite::version()),
+            bundle["sqlite"]["version"].as_str(),
+            "the linked SQLite version must match the reviewed bundle"
         );
         let conn = Connection::open_in_memory().expect("open SQLite probe");
         let source_id: String = conn
@@ -2305,6 +2312,11 @@ mod tests {
             source_id,
             rusqlite::ffi::SQLITE_SOURCE_ID.to_str().unwrap(),
             "the linked SQLite library must match the reviewed bundled source"
+        );
+        assert_eq!(
+            Some(source_id.as_str()),
+            bundle["sqlite"]["sourceId"].as_str(),
+            "the linked source ID must match the reviewed provenance"
         );
     }
 

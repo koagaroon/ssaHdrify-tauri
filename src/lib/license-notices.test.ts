@@ -43,14 +43,26 @@ describe("embedded license notices", () => {
     expect(project?.text).toContain("Version 3, 29 June 2007");
   });
 
-  it("includes the complete vendored SQLite binding license and source attribution", () => {
+  it("includes the complete published SQLite binding license and source attribution", () => {
     const notices = LICENSE_NOTICES.find((notice) => notice.id === "frontend");
-    const license = readFileSync(
-      new URL("../../src-tauri/vendor/libsqlite3-sys/LICENSE", import.meta.url),
+    const nativeNotices = readFileSync(
+      new URL("../assets/licenses/native-notices.txt", import.meta.url),
       "utf8"
-    );
-    expect(notices?.text).toContain(license);
-    expect(notices?.text).toContain("Source: https://github.com/rusqlite/rusqlite");
+    ).replace(/\r\n/gu, "\n");
+    const section = nativeNotices
+      .split("\n\n" + "=".repeat(72) + "\n\n")
+      .find((entry) => entry.startsWith("libsqlite3-sys "));
+    const license = section?.match(
+      /Copyright \(c\) 2014 The rusqlite developers\n[\s\S]*?\nTHE SOFTWARE\.\n/u
+    )?.[0];
+    expect(license).toBeDefined();
+    expect(
+      createHash("sha256")
+        .update(license ?? "", "utf8")
+        .digest("hex")
+    ).toBe("c10c1f27337546471e5f7e4e97fdd398b35b9d4e126115dcd22de8d8e65abf6f");
+    expect(notices?.text).toContain(section);
+    expect(section).toContain("Source: https://crates.io/crates/libsqlite3-sys/");
     expect(notices?.text).toContain("SQLite's deliverable source is in the public domain.");
   });
 

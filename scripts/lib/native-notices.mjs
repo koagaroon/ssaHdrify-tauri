@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { sqliteBundlePath } from "./sqlite-bundle.mjs";
 
 export const nativeTarget = "x86_64-pc-windows-msvc";
 export const nativeManifestPath = "src/assets/licenses/native-notices.json";
@@ -28,8 +29,7 @@ export function nativeInputs(root) {
     "src-tauri/Cargo.lock",
     "src-tauri/Cargo.toml",
     "rust-toolchain.toml",
-    "src-tauri/vendor/libsqlite3-sys/Cargo.toml",
-    "src-tauri/vendor/libsqlite3-sys/LICENSE",
+    sqliteBundlePath,
     nativeSourcesPath,
   ];
   const optional = [

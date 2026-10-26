@@ -2,18 +2,17 @@
   "schemaVersion": 1,
   "target": "x86_64-pc-windows-msvc",
   "inputs": {
-    "src-tauri/Cargo.lock": "6c5db0c1ceb3bb85521438fac412d9fdacaf56b37d3e44ae27ebdd72d3f5a77d",
-    "src-tauri/Cargo.toml": "15f3895198a5b34df261431c4bd84906c60b3039ecca2308a704f5acb9cb38b0",
+    "src-tauri/Cargo.lock": "0561bc1eb0222d49b6022245eabe4454570aa59f6236d4388b9cf2bca14f16ad",
+    "src-tauri/Cargo.toml": "10a64807df287a64c4542e0b6c3b81d0bb3690f1b1ffaa0f3d007618fdef2693",
     "rust-toolchain.toml": "f715f440167e20fd8ea9afa0498c3d1ab80174cfcb8cbc895f106a34d907a1e1",
-    "src-tauri/vendor/libsqlite3-sys/Cargo.toml": "ce2c66104c29834e8c5e875f765e2ddfc577b9366b1ccef80f3680c2039948b3",
-    "src-tauri/vendor/libsqlite3-sys/LICENSE": "c10c1f27337546471e5f7e4e97fdd398b35b9d4e126115dcd22de8d8e65abf6f",
+    "src-tauri/sqlite-bundle.json": "6976df5ea7194a6031f1bd089633c3c97053be2e7d14b99845ce592900694e49",
     "scripts/native-notice-sources.json": "18f9f078f5c373894b9b5bcfd7b51eea57faa453ba755fdf315eb75d422faade",
     ".cargo/config": null,
     ".cargo/config.toml": null,
     "src-tauri/.cargo/config": null,
     "src-tauri/.cargo/config.toml": null
   },
-  "sha256": "02f931d8e3783f7a84118973e8578b1597d61290d70f80e3211ca4fc0a3289ba",
+  "sha256": "ea78a720251066ba815e76260def7a5161d9db3f0249b92549aa5e0609161c3c",
   "packages": [
     {
       "name": "adler2",
@@ -3756,15 +3755,15 @@
     },
     {
       "name": "libsqlite3-sys",
-      "version": "0.38.2",
+      "version": "0.39.1",
       "license": "MIT",
-      "source": "https://github.com/koagaroon/ssaHdrify-tauri/tree/master/src-tauri/vendor/libsqlite3-sys",
+      "source": "https://crates.io/crates/libsqlite3-sys/0.39.1",
       "features": [
         "bundled",
         "bundled_bindings",
         "cc",
         "default",
-        "min_sqlite_version_3_34_1",
+        "min_sqlite_version_3_45_3",
         "pkg-config",
         "vcpkg"
       ],
@@ -3773,11 +3772,6 @@
           "name": "LICENSE",
           "source": "crate",
           "sha256": "c10c1f27337546471e5f7e4e97fdd398b35b9d4e126115dcd22de8d8e65abf6f"
-        },
-        {
-          "name": "sqlcipher/LICENSE",
-          "source": "crate",
-          "sha256": "ea4fcb309f14a22065e1ea45362d494d320012249ed865fe9c7c0946db754131"
         }
       ]
     },
@@ -4874,9 +4868,9 @@
     },
     {
       "name": "rfd",
-      "version": "0.16.0",
+      "version": "0.16.1",
       "license": "MIT",
-      "source": "https://crates.io/crates/rfd/0.16.0",
+      "source": "https://crates.io/crates/rfd/0.16.1",
       "features": [
         "common-controls-v6",
         "glib-sys",
@@ -4894,9 +4888,9 @@
     },
     {
       "name": "rusqlite",
-      "version": "0.40.2",
+      "version": "0.41.0",
       "license": "MIT",
-      "source": "https://crates.io/crates/rusqlite/0.40.2",
+      "source": "https://crates.io/crates/rusqlite/0.41.0",
       "features": [
         "bundled",
         "cache",
