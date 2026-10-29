@@ -45,9 +45,14 @@ fn licenses_prints_complete_embedded_notices_without_touching_cache_or_output_pa
         text,
         include_str!("../../dist-engine/third-party-notices.txt").replace("\r\n", "\n")
     );
+    let package_lock: serde_json::Value =
+        serde_json::from_str(include_str!("../../package-lock.json")).unwrap();
+    let entities_version = package_lock["packages"]["node_modules/entities"]["version"]
+        .as_str()
+        .unwrap();
     let entity_notice = text
         .split("\n\n========================================================================\n\n")
-        .find(|section| section.starts_with("entities 8.1.0\n"))
+        .find(|section| section.starts_with(&format!("entities {entities_version}\n")))
         .expect("entities version must have its own notice section");
     for required in [
         "License: BSD-2-Clause",

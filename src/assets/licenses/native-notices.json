@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "target": "x86_64-pc-windows-msvc",
   "inputs": {
-    "src-tauri/Cargo.lock": "0561bc1eb0222d49b6022245eabe4454570aa59f6236d4388b9cf2bca14f16ad",
-    "src-tauri/Cargo.toml": "10a64807df287a64c4542e0b6c3b81d0bb3690f1b1ffaa0f3d007618fdef2693",
+    "src-tauri/Cargo.lock": "8c51b0dfe372a5b5a7a221d7b7b837882e6ef0ddbb81f6dceef7f3a365e36cf8",
+    "src-tauri/Cargo.toml": "5e70b913c8522805492ce0fc591fa13be6e3ff143f7948db873e65c7a84cfdf3",
     "rust-toolchain.toml": "f715f440167e20fd8ea9afa0498c3d1ab80174cfcb8cbc895f106a34d907a1e1",
     "src-tauri/sqlite-bundle.json": "6976df5ea7194a6031f1bd089633c3c97053be2e7d14b99845ce592900694e49",
     "scripts/native-notice-sources.json": "18f9f078f5c373894b9b5bcfd7b51eea57faa453ba755fdf315eb75d422faade",
@@ -12,7 +12,7 @@
     "src-tauri/.cargo/config": null,
     "src-tauri/.cargo/config.toml": null
   },
-  "sha256": "ea78a720251066ba815e76260def7a5161d9db3f0249b92549aa5e0609161c3c",
+  "sha256": "a85fa6095939a7c2f939dfe4ad5ad52ac335470251e51f1724ecc8654ea83bcb",
   "packages": [
     {
       "name": "adler2",
@@ -4888,9 +4888,9 @@
     },
     {
       "name": "rusqlite",
-      "version": "0.41.0",
+      "version": "0.41.1",
       "license": "MIT",
-      "source": "https://crates.io/crates/rusqlite/0.41.0",
+      "source": "https://crates.io/crates/rusqlite/0.41.1",
       "features": [
         "bundled",
         "cache",
@@ -6183,9 +6183,9 @@
     },
     {
       "name": "tauri-plugin-single-instance",
-      "version": "2.5.4",
+      "version": "2.5.5",
       "license": "Apache-2.0 OR MIT",
-      "source": "https://crates.io/crates/tauri-plugin-single-instance/2.5.4",
+      "source": "https://crates.io/crates/tauri-plugin-single-instance/2.5.5",
       "features": [],
       "files": [
         {

@@ -528,6 +528,18 @@ describe("WebVTT HDR conversion prep", () => {
     );
   });
 
+  it("preserves text and later references after an overflowing numeric WebVTT reference", () => {
+    const input = `&#${"9".repeat(4_096)}; tail &amp; &#65;`;
+    const { content } = convertTextCueSubtitleToAss(
+      `WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n${input}\n`
+    );
+    expect(content.match(/^Dialogue:/gm)).toHaveLength(1);
+    expect(readAssText(generatedDialogueText(content))).toEqual({
+      visible: "� tail & A",
+      overrides: [],
+    });
+  });
+
   it("does not decode references in SRT or MicroDVD as a side effect", () => {
     const text = "A &amp; B &#123;";
     for (const input of [`1\n00:00:01,000 --> 00:00:02,000\n${text}\n`, `{25}{50}${text}`]) {

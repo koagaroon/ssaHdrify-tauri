@@ -42457,9 +42457,9 @@ SOFTWARE.
 
 ========================================================================
 
-rusqlite 0.41.0
+rusqlite 0.41.1
 License: MIT
-Source: https://crates.io/crates/rusqlite/0.41.0
+Source: https://crates.io/crates/rusqlite/0.41.1
 
 LICENSE
 
@@ -52543,9 +52543,9 @@ SOFTWARE.
 
 ========================================================================
 
-tauri-plugin-single-instance 2.5.4
+tauri-plugin-single-instance 2.5.5
 License: Apache-2.0 OR MIT
-Source: https://crates.io/crates/tauri-plugin-single-instance/2.5.4
+Source: https://crates.io/crates/tauri-plugin-single-instance/2.5.5
 
 LICENSE.spdx
 

@@ -45,7 +45,9 @@ serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
 tauri = { version = "2.12.3", features = [] }
 tauri-plugin-log = "2.10.1"
-tauri-plugin-dialog = "2.8.2"
+# Dialog 2.8.4 selects rfd 0.17.2, which lacks the GTK3 description-format
+# fix in rfd 0.16.1. Recheck that fix before advancing the shared dialog line.
+tauri-plugin-dialog = "=2.8.3"
 tauri-plugin-fs = "2.7.0"
 # Exact-pinned (not a semver-compatible range) because deno_core changes its
 # public API at most patch boundaries — V8 binding signatures
