@@ -35,7 +35,7 @@ function fixture() {
   write("rust-toolchain.toml", '[toolchain]\nchannel = "1.0.0"\n');
   write("crate/LICENSE", "Fixture full license\n");
   mkdirSync(join(root, "src/assets/licenses/native-sources"), { recursive: true });
-  /** @type {{schemaVersion: number, target: string, packages: Record<string, never>, supplements: {name: string, package: string, files: {path: string, url: string, sha256: string}[]}[]}} */
+  /** @type {{schemaVersion: number, target: string, packages: Record<string, never>, supplements: {name: string, package: string, files: {path: string, url: string, sha256: string, format?: string}[]}[]}} */
   const sources = {
     schemaVersion: 1,
     target: "x86_64-pc-windows-msvc",
@@ -94,6 +94,41 @@ function fixture() {
 }
 
 describe("native notice generator guards", () => {
+  it("preserves encoded literal markup and decodes Rust license references only once", () => {
+    const f = fixture();
+    const source =
+      "<h1>Copyright notices for The Rust Standard Library</h1>" +
+      "<p>Copyright &copy; 2026 &#x1F642;</p>" +
+      "<pre>&lt;license&gt; &amp;lt;literal&amp;gt;<br>Next line</pre>";
+    const path = "src/assets/licenses/native-sources/rust-library.html";
+    f.write(path, source);
+    f.sources.supplements.push({
+      name: "Rust license fixture",
+      package: "library@1.0.0",
+      files: [
+        {
+          path,
+          url: "https://example.org/rust-library.html",
+          sha256: textDigest(source),
+          format: "rust-library-html",
+        },
+      ],
+    });
+    f.write(nativeSourcesPath, JSON.stringify(f.sources));
+
+    generateNativeNotices(f.root, "--write", f.execute);
+    generateNativeNotices(f.root, "--check", f.execute);
+    const text = readFileSync(join(f.root, nativeTextPath), "utf8");
+    assert.ok(
+      text.includes(
+        "Copyright notices for The Rust Standard Library\n" +
+          "Copyright © 2026 🙂\n<license> &lt;literal&gt;\nNext line\n"
+      )
+    );
+    assert.ok(!text.includes("<h1>"));
+    assert.ok(!text.includes("<pre>"));
+  });
+
   it("includes the published SQLite binding license with its exact registry source", () => {
     const f = fixture();
     generateNativeNotices(f.root, "--write", f.execute);

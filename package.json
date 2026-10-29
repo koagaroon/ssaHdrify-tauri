@@ -41,7 +41,7 @@
     "@tauri-apps/plugin-dialog": "^2.8.2",
     "ass-compiler": "0.1.16",
     "colorjs.io": "0.7.1",
-    "entities": "8.1.0",
+    "entities": "9.0.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "react-window": "^2.3.4"
