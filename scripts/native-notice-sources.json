@@ -513,6 +513,21 @@
           "sha256": "b634ab5640e258563c536e658cad87080553df6f34f62269a21d554844e58bfe"
         },
         {
+          "path": "src/assets/licenses/native-sources/V8-third_party-glibc-branred.c-notice.txt",
+          "url": "https://raw.githubusercontent.com/denoland/v8/ac1e23989121713ca642f6650b34deff7b686896/third_party/glibc/src/sysdeps/ieee754/dbl-64/branred.c",
+          "sha256": "1564cadfebba6136cba4c4c711f5cab48e38631b7b313544efe0c11559c6b07e"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/V8-third_party-glibc-s_sin.c-notice.txt",
+          "url": "https://raw.githubusercontent.com/denoland/v8/ac1e23989121713ca642f6650b34deff7b686896/third_party/glibc/src/sysdeps/ieee754/dbl-64/s_sin.c",
+          "sha256": "5f1e11bb398ed6c1c5df3e4cdc8bb743bc3b10ad0e443bfa03ecaa2fda343147"
+        },
+        {
+          "path": "src/assets/licenses/native-sources/V8-third_party-glibc-endian.h-notice.txt",
+          "url": "https://raw.githubusercontent.com/denoland/v8/ac1e23989121713ca642f6650b34deff7b686896/third_party/glibc/src/sysdeps/ieee754/dbl-64/endian.h",
+          "sha256": "92d2eeedf6b379a7a4915a6328828c4152ebc772d3b4463657eabf539567fa33"
+        },
+        {
           "path": "src/assets/licenses/native-sources/V8-third_party-highway-LICENSE.txt",
           "url": "https://raw.githubusercontent.com/denoland/v8/ac1e23989121713ca642f6650b34deff7b686896/third_party/highway/LICENSE",
           "sha256": "43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1"
@@ -604,7 +619,7 @@
         }
       ],
       "package": "v8@150.4.0",
-      "note": "Rusty V8 v150.4.0 pins denoland/v8 at ac1e23989121713ca642f6650b34deff7b686896. These license texts conservatively include platform-specific components. The Windows upstream build enables Clang/libm and includes LGPL-2.1-or-later glibc math code; distribution must also satisfy applicable source-availability obligations."
+      "note": "Rusty V8 v150.4.0 pins denoland/v8 at ac1e23989121713ca642f6650b34deff7b686896. These license texts conservatively include platform-specific components. The Windows upstream build enables Clang/libm and includes LGPL-2.1-or-later glibc math code; distribution must also satisfy applicable source-availability obligations. The glibc source notices preserve the three distinct copyright and permission headers in the selected math source set."
     },
     {
       "name": "V8 pinned submodule notices",

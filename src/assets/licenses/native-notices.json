@@ -2,17 +2,17 @@
   "schemaVersion": 1,
   "target": "x86_64-pc-windows-msvc",
   "inputs": {
-    "src-tauri/Cargo.lock": "63edd888dffa2d1eb4330299395e0025e5a0984676e1116fae0f18355516b89a",
-    "src-tauri/Cargo.toml": "5e70b913c8522805492ce0fc591fa13be6e3ff143f7948db873e65c7a84cfdf3",
+    "src-tauri/Cargo.lock": "b70e14813f1fa582923c001cd422b08e539e8cf8ffb656ee3c964e2ac39b502e",
+    "src-tauri/Cargo.toml": "b6455c09cadbfa5c78dfe6d3de4fce13a77f88a6f280a0e02054a58c95a7da93",
     "rust-toolchain.toml": "f715f440167e20fd8ea9afa0498c3d1ab80174cfcb8cbc895f106a34d907a1e1",
     "src-tauri/sqlite-bundle.json": "6976df5ea7194a6031f1bd089633c3c97053be2e7d14b99845ce592900694e49",
-    "scripts/native-notice-sources.json": "18f9f078f5c373894b9b5bcfd7b51eea57faa453ba755fdf315eb75d422faade",
+    "scripts/native-notice-sources.json": "f692fcd1a6d0122b153187fcfe4764c148618ed8bb4ffac12afaa1f79f16b3b9",
     ".cargo/config": null,
     ".cargo/config.toml": null,
     "src-tauri/.cargo/config": null,
     "src-tauri/.cargo/config.toml": null
   },
-  "sha256": "617b139cf0680267d06d884c25e50908637cc2110a68043bdc103fd95d23c4d2",
+  "sha256": "319311825771c8f16ba744fb0ee603a31bbfb35c14e444be6042aa277f15f4b7",
   "packages": [
     {
       "name": "adler2",
