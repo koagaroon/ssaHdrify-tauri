@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "target": "x86_64-pc-windows-msvc",
   "inputs": {
-    "src-tauri/Cargo.lock": "8c51b0dfe372a5b5a7a221d7b7b837882e6ef0ddbb81f6dceef7f3a365e36cf8",
+    "src-tauri/Cargo.lock": "63edd888dffa2d1eb4330299395e0025e5a0984676e1116fae0f18355516b89a",
     "src-tauri/Cargo.toml": "5e70b913c8522805492ce0fc591fa13be6e3ff143f7948db873e65c7a84cfdf3",
     "rust-toolchain.toml": "f715f440167e20fd8ea9afa0498c3d1ab80174cfcb8cbc895f106a34d907a1e1",
     "src-tauri/sqlite-bundle.json": "6976df5ea7194a6031f1bd089633c3c97053be2e7d14b99845ce592900694e49",
@@ -12,7 +12,7 @@
     "src-tauri/.cargo/config": null,
     "src-tauri/.cargo/config.toml": null
   },
-  "sha256": "a85fa6095939a7c2f939dfe4ad5ad52ac335470251e51f1724ecc8654ea83bcb",
+  "sha256": "617b139cf0680267d06d884c25e50908637cc2110a68043bdc103fd95d23c4d2",
   "packages": [
     {
       "name": "adler2",
@@ -2031,9 +2031,9 @@
     },
     {
       "name": "encoding_rs",
-      "version": "0.8.42",
+      "version": "0.8.44",
       "license": "(Apache-2.0 OR MIT) AND BSD-3-Clause",
-      "source": "https://crates.io/crates/encoding_rs/0.8.42",
+      "source": "https://crates.io/crates/encoding_rs/0.8.44",
       "features": [
         "alloc",
         "default"
@@ -3815,9 +3815,9 @@
     },
     {
       "name": "log",
-      "version": "0.4.34",
+      "version": "0.4.35",
       "license": "MIT OR Apache-2.0",
-      "source": "https://crates.io/crates/log/0.4.34",
+      "source": "https://crates.io/crates/log/0.4.35",
       "features": [
         "alloc",
         "kv",

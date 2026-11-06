@@ -18544,9 +18544,9 @@ SOFTWARE.
 
 ========================================================================
 
-encoding_rs 0.8.42
+encoding_rs 0.8.44
 License: (Apache-2.0 OR MIT) AND BSD-3-Clause
-Source: https://crates.io/crates/encoding_rs/0.8.42
+Source: https://crates.io/crates/encoding_rs/0.8.44
 
 COPYRIGHT
 
@@ -33666,9 +33666,9 @@ DEALINGS IN THE SOFTWARE.
 
 ========================================================================
 
-log 0.4.34
+log 0.4.35
 License: MIT OR Apache-2.0
-Source: https://crates.io/crates/log/0.4.34
+Source: https://crates.io/crates/log/0.4.35
 
 LICENSE-APACHE
 
