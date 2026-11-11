@@ -1,5 +1,6 @@
 import { readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { createRequire } from "node:module";
+import { dirname, join, relative, sep } from "node:path";
 import { buildNativeNotices } from "./native-notices.mjs";
 
 /**
@@ -12,7 +13,33 @@ import { buildNativeNotices } from "./native-notices.mjs";
 /** @param {string} text */
 const normalizeNewlines = (text) => text.replace(/\r\n/gu, "\n");
 const licenseName = /^(?:licen[cs]e|copying)(?:$|[._-])/iu;
-const noticeName = /^(?:licen[cs]e|copying|notice)(?:$|[._-])/iu;
+const noticeName = /^(?:(?:licen[cs]e|copying|notice)(?:$|[._-])|THIRD-PARTY-LICENSE$)/iu;
+
+/** @param {NoticeLockfile} lockfile */
+function resolveRolldownLocation(lockfile) {
+  const vite = lockfile.packages["node_modules/vite"];
+  if (!vite) throw new Error("Vite runtime helper notices are missing from the lock.");
+  const requirement = /^~(\d+)\.(\d+)\.(\d+)$/u.exec(vite.dependencies?.rolldown ?? "");
+  if (!requirement) {
+    throw new Error(
+      "Review Vite's changed Rolldown dependency requirement before building notices."
+    );
+  }
+  const location = ["node_modules/vite/node_modules/rolldown", "node_modules/rolldown"].find(
+    (candidate) => Object.hasOwn(lockfile.packages, candidate)
+  );
+  if (!location) throw new Error("Rolldown runtime helper notices are missing from the lock.");
+  const version = /^(\d+)\.(\d+)\.(\d+)$/u.exec(lockfile.packages[location].version ?? "");
+  if (
+    !version ||
+    version[1] !== requirement[1] ||
+    version[2] !== requirement[2] ||
+    Number(version[3]) < Number(requirement[3])
+  ) {
+    throw new Error("Locked Rolldown does not satisfy Vite's reviewed dependency requirement.");
+  }
+  return location;
+}
 
 /**
  * @param {NoticeLockfile} lockfile
@@ -27,17 +54,21 @@ export function collectNpmNotices(lockfile, readPackage) {
     if (!entry || entry.dev)
       throw new Error(`Runtime dependency is missing from the lock: ${name}`);
   }
+  const rolldownLocation = resolveRolldownLocation(lockfile);
+  if (!lockfile.packages["node_modules/esbuild"]) {
+    throw new Error("esbuild runtime helper notices are missing from the lock.");
+  }
   const locations = Object.keys(lockfile.packages)
     .filter(
       (location) =>
         location !== "" &&
-        // Vite's modulepreload helper is emitted into index.html builds.
-        (!lockfile.packages[location].dev || location === "node_modules/vite")
+        // These build tools emit helper code into the frontend or CLI engine.
+        (!lockfile.packages[location].dev ||
+          location === "node_modules/vite" ||
+          location === "node_modules/esbuild" ||
+          location === rolldownLocation)
     )
     .sort();
-  if (!locations.includes("node_modules/vite")) {
-    throw new Error("Vite runtime helper notices are missing from the lock.");
-  }
   return locations.map((location) => {
     if (!/^node_modules\/(?:[A-Za-z0-9@_.-]+\/)*[A-Za-z0-9_.-]+$/u.test(location)) {
       throw new Error(`Unsupported runtime package location: ${location}`);
@@ -48,11 +79,24 @@ export function collectNpmNotices(lockfile, readPackage) {
     if (metadata.name !== name || metadata.version !== locked.version) {
       throw new Error(`Installed runtime package differs from the lock: ${location}`);
     }
+    if (
+      location === "node_modules/vite" &&
+      metadata.dependencies?.rolldown !== locked.dependencies?.rolldown
+    ) {
+      throw new Error("Installed Vite's Rolldown dependency differs from the lock.");
+    }
     if (typeof metadata.license !== "string" || metadata.license !== locked.license) {
       throw new Error(`Runtime license metadata is missing or inconsistent: ${name}`);
     }
     if (!files.some(({ name: file }) => licenseName.test(file))) {
       throw new Error(`No full runtime license text found for ${name}; review its license files.`);
+    }
+    if (location === rolldownLocation) {
+      for (const required of ["LICENSE", "THIRD-PARTY-LICENSE"]) {
+        if (!files.some(({ name: file }) => file === required)) {
+          throw new Error(`Missing Rolldown runtime notice: ${required}`);
+        }
+      }
     }
     for (const file of files) {
       if (!file.text.trim()) throw new Error(`Empty runtime notice: ${name}/${file.name}`);
@@ -66,6 +110,13 @@ export function buildFrontendNotices(root) {
   /** @param {string} relative */
   const readText = (relative) => normalizeNewlines(readFileSync(join(root, relative), "utf8"));
   const lockfile = JSON.parse(readText("package-lock.json"));
+  const viteRequire = createRequire(join(root, "node_modules/vite/package.json"));
+  const installedRolldown = relative(root, dirname(viteRequire.resolve("rolldown/package.json")))
+    .split(sep)
+    .join("/");
+  if (installedRolldown !== resolveRolldownLocation(lockfile)) {
+    throw new Error("Installed Vite resolves a different Rolldown location than the lock.");
+  }
   const packages = collectNpmNotices(lockfile, (location) => ({
     metadata: JSON.parse(readText(`${location}/package.json`)),
     files: readdirSync(join(root, location), { withFileTypes: true })
@@ -76,8 +127,8 @@ export function buildFrontendNotices(root) {
   }));
   const sections = [
     "SSA HDRify — Third-party notices\n\n" +
-      "This inventory covers the locked JavaScript runtime packages, Vite's generated " +
-      "runtime helpers, bundled fonts and icon attribution, the bundled SQLite source, " +
+      "This inventory covers the locked JavaScript runtime packages, generated runtime helpers " +
+      "from Vite, Rolldown and esbuild, bundled fonts and icon attribution, the bundled SQLite source, " +
       "and unicode-normalization's code and Unicode data, followed by the locked " +
       "Windows x64 native dependency notices. The shared inventory includes " +
       "components used by only one executable and some build tools.\n",

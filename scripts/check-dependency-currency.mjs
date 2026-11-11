@@ -115,8 +115,8 @@ const cargoPolicies = {
   rfd: {
     mode: /** @type {const} */ ("manual"),
     reason:
-      "Retain the shared dialog line with the GTK3 description-format fix. Published rfd 0.17.0 through 0.17.2 lack that fix; review every new stable release, including retained-line backports.",
-    reviewedVersions: ["0.17.0", "0.17.1", "0.17.2"],
+      "Retain shared rfd 0.16.1: 0.17.x lacks the GTK3 description-format fix; 0.18.0 restores it but its GTK3 dependency conflicts with the current dialog plugin. Recheck each new stable release, including retained-line backports.",
+    reviewedVersions: ["0.17.0", "0.17.1", "0.17.2", "0.18.0"],
   },
   "tauri-plugin-dialog": {
     mode: /** @type {const} */ ("manual"),
