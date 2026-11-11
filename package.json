@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.8.0",
   "license": "GPL-3.0-or-later",
-  "packageManager": "npm@12.2.1",
+  "packageManager": "npm@12.2.2",
   "type": "module",
   "engines": {
     "node": "^24.22.1"
@@ -16,7 +16,7 @@
     "eslint": {
       "minimatch@10.2.6": "11.0.4"
     },
-    "@typescript-eslint/typescript-estree@8.72.1": {
+    "@typescript-eslint/typescript-estree@8.72.2": {
       "minimatch@10.2.6": "11.0.4"
     }
   },
@@ -69,9 +69,9 @@
     "eslint-plugin-react-refresh": "^0.5.7",
     "globals": "^17.13.0",
     "js-base64": "^3.9.4",
-    "prettier": "3.9.10",
-    "stylelint": "^17.16.0",
-    "stylelint-config-standard": "^40.0.0",
+    "prettier": "3.10.0",
+    "stylelint": "^18.0.0",
+    "stylelint-config-standard": "^41.0.0",
     "tailwindcss": "^4.3.3",
     "typescript": "npm:@typescript/typescript6@6.0.2",
     "typescript-eslint": "^8.71.2",

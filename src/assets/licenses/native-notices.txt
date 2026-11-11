@@ -33341,9 +33341,9 @@ Copyright notices are retained in src/* files where relevant.
 
 ========================================================================
 
-libsqlite3-sys 0.39.1
+libsqlite3-sys 0.40.0
 License: MIT
-Source: https://crates.io/crates/libsqlite3-sys/0.39.1
+Source: https://crates.io/crates/libsqlite3-sys/0.40.0
 
 LICENSE
 
@@ -42457,9 +42457,9 @@ SOFTWARE.
 
 ========================================================================
 
-rusqlite 0.41.1
+rusqlite 0.42.0
 License: MIT
-Source: https://crates.io/crates/rusqlite/0.41.1
+Source: https://crates.io/crates/rusqlite/0.42.0
 
 LICENSE
 
@@ -52310,9 +52310,9 @@ SOFTWARE.
 
 ========================================================================
 
-tauri-plugin-log 2.10.1
+tauri-plugin-log 2.10.2
 License: Apache-2.0 OR MIT
-Source: https://crates.io/crates/tauri-plugin-log/2.10.1
+Source: https://crates.io/crates/tauri-plugin-log/2.10.2
 
 LICENSE.spdx
 
@@ -54801,9 +54801,9 @@ DEALINGS IN THE SOFTWARE.
 
 ========================================================================
 
-thiserror-impl 2.0.19
+thiserror-impl 2.0.21
 License: MIT OR Apache-2.0
-Source: https://crates.io/crates/thiserror-impl/2.0.19
+Source: https://crates.io/crates/thiserror-impl/2.0.21
 
 LICENSE-APACHE
 
@@ -55227,9 +55227,9 @@ DEALINGS IN THE SOFTWARE.
 
 ========================================================================
 
-thiserror 2.0.19
+thiserror 2.0.21
 License: MIT OR Apache-2.0
-Source: https://crates.io/crates/thiserror/2.0.19
+Source: https://crates.io/crates/thiserror/2.0.21
 
 LICENSE-APACHE
 
