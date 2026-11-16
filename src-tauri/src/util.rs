@@ -143,26 +143,20 @@ pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
     // drive-prefix component (`C:`). Any other colon can select an NTFS
     // alternate data stream (ADS), for example
     // `C:\fonts\safe.ttf:payload`, while ordinary drive-rooted and UNC
-    // paths contain no such component. Keep this Windows-only: `:` is a
-    // legitimate filename character on POSIX filesystems.
-    #[cfg(windows)]
-    {
-        let has_non_drive_colon = path.split(['/', '\\']).enumerate().any(|(index, segment)| {
-            if !segment.contains(':') {
-                return false;
-            }
-            let bytes = segment.as_bytes();
-            let is_drive_prefix = index == 0
-                && bytes.len() == 2
-                && bytes[0].is_ascii_alphabetic()
-                && bytes[1] == b':';
-            !is_drive_prefix
-        });
-        if has_non_drive_colon {
-            return Err(format!(
-                "{label} path contains a colon outside the drive prefix"
-            ));
+    // paths contain no such component.
+    let has_non_drive_colon = path.split(['/', '\\']).enumerate().any(|(index, segment)| {
+        if !segment.contains(':') {
+            return false;
         }
+        let bytes = segment.as_bytes();
+        let is_drive_prefix =
+            index == 0 && bytes.len() == 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
+        !is_drive_prefix
+    });
+    if has_non_drive_colon {
+        return Err(format!(
+            "{label} path contains a colon outside the drive prefix"
+        ));
     }
 
     // Reject exact `.` path components. Besides matching the TypeScript
@@ -257,7 +251,6 @@ pub fn validate_ipc_path(path: &str, label: &str) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(windows)]
 fn output_directory_component_has_unsupported_trailing_dot(component: &std::ffi::OsStr) -> bool {
     let bytes = component.as_encoded_bytes();
     bytes.len() >= 2 && bytes[bytes.len() - 1] == b'.' && bytes[bytes.len() - 2] != b'.'
@@ -275,85 +268,79 @@ fn output_directory_component_has_unsupported_trailing_dot(component: &std::ffi:
 /// contract, while safe-I/O entrypoints call [`validate_output_path`] and retain
 /// the full untrusted-string validation boundary.
 pub fn validate_output_path_shape(path: &Path, label: &str) -> Result<(), String> {
-    #[cfg(windows)]
-    {
-        let raw = path.to_string_lossy();
-        if uses_reserved_path_namespace(raw.as_ref()) {
-            return Ok(());
-        }
+    let raw = path.to_string_lossy();
+    if uses_reserved_path_namespace(raw.as_ref()) {
+        return Ok(());
+    }
 
-        let normalized = raw.replace('\\', "/");
-        if normalized.starts_with("//") {
-            let components: Vec<&str> = normalized.split('/').collect();
-            let mut root_components = 0;
-            let mut first_directory_index = components.len();
-            for (index, component) in components.iter().enumerate().skip(2) {
-                if component.is_empty() {
-                    continue;
-                }
-                root_components += 1;
-                if root_components == 2 {
-                    first_directory_index = index + 1;
-                    break;
-                }
+    let normalized = raw.replace('\\', "/");
+    if normalized.starts_with("//") {
+        let components: Vec<&str> = normalized.split('/').collect();
+        let mut root_components = 0;
+        let mut first_directory_index = components.len();
+        for (index, component) in components.iter().enumerate().skip(2) {
+            if component.is_empty() {
+                continue;
             }
-            if root_components < 2 {
-                return Ok(());
-            }
-            let end_exclusive = components.len().saturating_sub(1);
-            for component in components
-                .iter()
-                .take(end_exclusive)
-                .skip(first_directory_index)
-            {
-                if component.is_empty() || matches!(*component, "." | "..") {
-                    continue;
-                }
-                if output_directory_component_has_unsupported_trailing_dot(std::ffi::OsStr::new(
-                    component,
-                )) {
-                    return Err(format!(
-                        "{label} path contains a directory component ending in an unsupported ASCII dot: {component}"
-                    ));
-                }
-            }
-            return Ok(());
-        }
-
-        if let Some(std::path::Component::Prefix(prefix)) = path.components().next() {
-            if matches!(
-                prefix.kind(),
-                std::path::Prefix::Verbatim(_)
-                    | std::path::Prefix::VerbatimDisk(_)
-                    | std::path::Prefix::VerbatimUNC(_, _)
-                    | std::path::Prefix::DeviceNS(_)
-            ) {
-                return Ok(());
-            }
-        }
-        let mut normal_components = path
-            .components()
-            .filter_map(|component| match component {
-                std::path::Component::Normal(value) => Some(value),
-                _ => None,
-            })
-            .peekable();
-
-        while let Some(component) = normal_components.next() {
-            if normal_components.peek().is_none() {
+            root_components += 1;
+            if root_components == 2 {
+                first_directory_index = index + 1;
                 break;
             }
-            if output_directory_component_has_unsupported_trailing_dot(component) {
+        }
+        if root_components < 2 {
+            return Ok(());
+        }
+        let end_exclusive = components.len().saturating_sub(1);
+        for component in components
+            .iter()
+            .take(end_exclusive)
+            .skip(first_directory_index)
+        {
+            if component.is_empty() || matches!(*component, "." | "..") {
+                continue;
+            }
+            if output_directory_component_has_unsupported_trailing_dot(std::ffi::OsStr::new(
+                component,
+            )) {
                 return Err(format!(
-                    "{label} path contains a directory component ending in an unsupported ASCII dot: {}",
-                    component.to_string_lossy()
+                    "{label} path contains a directory component ending in an unsupported ASCII dot: {component}"
                 ));
             }
         }
+        return Ok(());
     }
 
-    #[cfg(not(windows))]
-    let _ = (path, label);
+    if let Some(std::path::Component::Prefix(prefix)) = path.components().next() {
+        if matches!(
+            prefix.kind(),
+            std::path::Prefix::Verbatim(_)
+                | std::path::Prefix::VerbatimDisk(_)
+                | std::path::Prefix::VerbatimUNC(_, _)
+                | std::path::Prefix::DeviceNS(_)
+        ) {
+            return Ok(());
+        }
+    }
+    let mut normal_components = path
+        .components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(value) => Some(value),
+            _ => None,
+        })
+        .peekable();
+
+    while let Some(component) = normal_components.next() {
+        if normal_components.peek().is_none() {
+            break;
+        }
+        if output_directory_component_has_unsupported_trailing_dot(component) {
+            return Err(format!(
+                "{label} path contains a directory component ending in an unsupported ASCII dot: {}",
+                component.to_string_lossy()
+            ));
+        }
+    }
 
     Ok(())
 }
@@ -480,9 +467,8 @@ pub fn strip_visual_line_breaks(s: &str) -> String {
 /// On Windows, Rust's `is_symlink()` returns `false` for junctions
 /// (IO_REPARSE_TAG_MOUNT_POINT), so a junction-based bypass slips past
 /// a naive symlink check. This helper inspects the raw
-/// `FILE_ATTRIBUTE_REPARSE_POINT` bit on Windows; on non-Windows
-/// platforms it falls back to the standard `is_symlink()` check, which
-/// is sufficient there.
+/// `FILE_ATTRIBUTE_REPARSE_POINT` bit so junctions and symbolic links are
+/// both recognized.
 ///
 /// Callers: `dropzone::expand_dropped_paths` (skip top-level dropped
 /// reparse points), `dropzone::walk_one_level` (skip reparse points
@@ -493,7 +479,6 @@ pub fn strip_visual_line_breaks(s: &str) -> String {
 /// previewing folder size). All callers want the same "is this a
 /// symlink-like thing the OS would chase" answer; keep this helper as
 /// the single source of truth.
-#[cfg(windows)]
 pub fn is_reparse_point(path: &Path) -> bool {
     try_is_reparse_point(path).unwrap_or(false)
 }
@@ -501,21 +486,10 @@ pub fn is_reparse_point(path: &Path) -> bool {
 /// Fallible counterpart used by recursive walkers. A metadata failure must
 /// not be confused with "ordinary entry": callers can mark the traversal
 /// incomplete instead of following a path whose link status is unknown.
-#[cfg(windows)]
 pub fn try_is_reparse_point(path: &Path) -> std::io::Result<bool> {
     use std::os::windows::fs::MetadataExt;
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
     std::fs::symlink_metadata(path).map(|m| m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0)
-}
-
-#[cfg(not(windows))]
-pub fn is_reparse_point(path: &Path) -> bool {
-    try_is_reparse_point(path).unwrap_or(false)
-}
-
-#[cfg(not(windows))]
-pub fn try_is_reparse_point(path: &Path) -> std::io::Result<bool> {
-    std::fs::symlink_metadata(path).map(|m| m.file_type().is_symlink())
 }
 
 #[cfg(test)]
@@ -598,8 +572,8 @@ mod tests {
         let windows = validate_ipc_path(r"C:\Allowed\.\file.ass", "Test").unwrap_err();
         assert!(windows.to_lowercase().contains("current-directory"));
 
-        let posix = validate_ipc_path("/home/u/./file.ass", "Test").unwrap_err();
-        assert!(posix.to_lowercase().contains("current-directory"));
+        let forward_slash = validate_ipc_path("C:/fonts/./file.ass", "Test").unwrap_err();
+        assert!(forward_slash.to_lowercase().contains("current-directory"));
     }
 
     #[test]
@@ -611,7 +585,7 @@ mod tests {
         // callsite (encoding / fonts / safe_io / dropzone).
         let err = validate_ipc_path(r"C:\Allowed\..\Denied\file.ass", "Test").unwrap_err();
         assert!(err.to_lowercase().contains("parent-directory"));
-        // Forward-slash form (POSIX + Windows mixed paths) also rejected.
+        // Windows paths using forward slashes are also rejected.
         let err2 = validate_ipc_path("/home/u/../etc/passwd", "Test").unwrap_err();
         assert!(err2.to_lowercase().contains("parent-directory"));
     }
@@ -694,7 +668,7 @@ mod tests {
         validate_ipc_path("C:\\fonts\\foo..bar.ttf", "Test")
             .expect("dotdot inside a name segment should pass");
         validate_ipc_path("/home/u/file..name.ass", "Test")
-            .expect("dotdot inside a name segment should pass on POSIX shape too");
+            .expect("dotdot inside a forward-slash path segment should pass too");
     }
 
     #[test]
@@ -705,7 +679,6 @@ mod tests {
             .expect("a non-exact dotted component should pass");
     }
 
-    #[cfg(windows)]
     #[test]
     fn validate_rejects_ntfs_alternate_data_stream_components() {
         for path in [
@@ -721,7 +694,6 @@ mod tests {
         }
     }
 
-    #[cfg(windows)]
     #[test]
     fn validate_accepts_windows_drive_and_unc_prefixes() {
         for path in [
@@ -734,18 +706,10 @@ mod tests {
         }
     }
 
-    #[cfg(windows)]
     #[test]
     fn validate_rejects_drive_relative_path_as_non_prefix_colon() {
         let error = validate_ipc_path(r"C:font.ttf", "Test").unwrap_err();
         assert!(error.to_lowercase().contains("colon"));
-    }
-
-    #[cfg(not(windows))]
-    #[test]
-    fn validate_accepts_colon_in_posix_filename() {
-        validate_ipc_path("/fonts/sample:variant.ttf", "Test")
-            .expect("a colon is a legitimate POSIX filename character");
     }
 
     // ── validate_ipc_path: byte-prefix DOS-device check ──
@@ -803,7 +767,6 @@ mod tests {
         assert!(err.contains("reserved device namespace"));
     }
 
-    #[cfg(windows)]
     #[test]
     fn output_directory_component_predicate_has_the_exact_ascii_boundary() {
         for component in ["dir.", ".hidden.", "dir .", "dir. ."] {
@@ -818,7 +781,6 @@ mod tests {
         }
     }
 
-    #[cfg(windows)]
     #[test]
     fn validate_output_path_rejects_only_intermediate_normal_components() {
         let err = validate_output_path(r"C:\base\dir.\episode.ass", "Output").unwrap_err();
@@ -842,7 +804,6 @@ mod tests {
         assert!(err.contains("directory component ending in an unsupported ASCII dot"));
     }
 
-    #[cfg(windows)]
     #[test]
     fn output_path_shape_handles_bare_unc_roots_without_panicking() {
         for path in [
@@ -862,7 +823,6 @@ mod tests {
         .is_err());
     }
 
-    #[cfg(windows)]
     #[test]
     fn validate_output_path_keeps_reserved_namespace_error_priority() {
         validate_output_path_shape(Path::new(r"\\?\C:\dir.\episode.ass"), "Output")

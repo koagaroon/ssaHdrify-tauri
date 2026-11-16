@@ -148,11 +148,6 @@ export function FileProvider({ children }: { children: ReactNode }) {
 
   const isFileInUse = useCallback(
     (path: string, excludeTab?: TabId): TabId | null => {
-      // `pathsEqualOnFs` handles separator + case folding conditionally
-      // on the runtime FS (`\` is a valid filename char on POSIX; only
-      // NTFS / APFS / HFS+ are case-insensitive). Without that gating
-      // Linux users would see false-positive collisions between
-      // legitimately distinct files like `Episode.ass` vs `episode.ass`.
       if (excludeTab !== "hdr" && hdrFiles?.filePaths.some((p) => pathsEqualOnFs(p, path))) {
         return "hdr";
       }

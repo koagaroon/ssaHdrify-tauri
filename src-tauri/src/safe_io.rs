@@ -341,8 +341,7 @@ fn inspect_existing_destination(path: &Path, overwrite: bool) -> Result<bool, St
     // The back-to-back syscalls
     // (`symlink_metadata` returning `meta` here, then `is_reparse_point`
     // calling `symlink_metadata` again) look redundant
-    // — `meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT` on
-    // Windows / `meta.file_type().is_symlink()` on POSIX would
+    // — `meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT` would
     // answer from the already-fetched `meta`. Kept deliberately for
     // call-shape parity with the other `is_reparse_point` usages in
     // this file and across the codebase
@@ -363,7 +362,7 @@ fn inspect_existing_destination(path: &Path, overwrite: bool) -> Result<bool, St
             // happened to be a directory propagated through
             // `remove_file` as
             // an opaque "Failed to remove existing destination:
-            // Access is denied" (Windows) / EISDIR (POSIX) — users
+            // Access is denied" — users
             // received a permission-shaped error for a structural
             // mismatch. Surface it with a clearer message that
             // names what the caller actually expected (a file).
@@ -424,13 +423,9 @@ fn reject_reparse_source(path: &Path, label: &str) -> Result<(), String> {
 }
 
 /// Reject when the destination resolves to the same on-disk file as
-/// the source. Canonicalize asks the OS to walk symlinks AND case-fold
-/// per the actual filesystem the file lives on — so on Linux with a
-/// case-insensitive mount (NTFS via ntfs-3g, exFAT, HFS+ on a removable
-/// drive) this still sees `Episode.ass` and `episode.ass` as the same
-/// file. That's a blind spot of process-level OS-gated heuristics like
-/// the TS-side `isCaseInsensitiveFs`, which derives from `process.platform`
-/// rather than the mount's behavior. Without this gate,
+/// the source. Canonicalize resolves filesystem aliases before comparison,
+/// including case aliases such as `Episode.ass` and `episode.ass`.
+/// Without this gate,
 /// removing/replacing dst would therefore operate on src itself under
 /// filesystem-level case-folding. Both paths must canonicalize for the check
 /// to fire; a not-yet-existing dst (normal rename to a new name)
@@ -603,7 +598,7 @@ fn encode_text_preserving_source(
 // safe_rename_file_inner which re-check before the final fs syscall.
 // The asymmetry is intentional: write's atomic guarantee comes from
 // `OpenOptions::create_new(true)` in `create_new_and_write_bytes` — a
-// direct POSIX `O_EXCL` / Windows `CREATE_NEW` open that refuses to
+// direct Windows `CREATE_NEW` open that refuses to
 // follow a planted symlink at the destination regardless of whether
 // the path was a reparse point when `clear_existing_destination`
 // observed it. Copy / rename have no equivalent atomic primitive for
@@ -899,7 +894,6 @@ pub fn safe_rename_file_inner(
     })
 }
 
-#[cfg(windows)]
 fn windows_rename_path(path: &Path) -> std::io::Result<Vec<u16>> {
     use std::os::windows::ffi::OsStrExt;
 
@@ -929,7 +923,6 @@ fn windows_rename_path(path: &Path) -> std::io::Result<Vec<u16>> {
     Ok(wide)
 }
 
-#[cfg(windows)]
 fn rename_without_overwrite(source: &Path, destination: &Path) -> std::io::Result<()> {
     #[link(name = "kernel32")]
     unsafe extern "system" {
@@ -944,31 +937,6 @@ fn rename_without_overwrite(source: &Path, destination: &Path) -> std::io::Resul
     } else {
         Ok(())
     }
-}
-
-#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
-fn rename_without_overwrite(source: &Path, destination: &Path) -> std::io::Result<()> {
-    rustix::fs::renameat_with(
-        rustix::fs::CWD,
-        source,
-        rustix::fs::CWD,
-        destination,
-        rustix::fs::RenameFlags::NOREPLACE,
-    )
-    .map_err(Into::into)
-}
-
-#[cfg(not(any(
-    windows,
-    target_os = "linux",
-    target_os = "android",
-    target_vendor = "apple"
-)))]
-fn rename_without_overwrite(_source: &Path, _destination: &Path) -> std::io::Result<()> {
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "Atomic no-overwrite rename is unavailable on this platform",
-    ))
 }
 
 fn safe_rename_file_inner_with_rename(
@@ -1156,23 +1124,8 @@ mod tests {
         let real_dir = temp_dir(name);
         let resolved = real_dir.canonicalize().unwrap().join(file_name);
 
-        #[cfg(unix)]
-        let raw = {
-            use std::os::unix::fs::symlink;
-
-            let alias_root = temp_dir(&format!("{name}_alias"));
-            let alias = alias_root.join("selected");
-            symlink(&real_dir, &alias).unwrap();
-            alias.join(file_name)
-        };
-
-        #[cfg(windows)]
         let raw = real_dir.join(file_name);
 
-        #[cfg(not(any(unix, windows)))]
-        let raw = real_dir.join(file_name);
-
-        #[cfg(any(unix, windows))]
         assert_ne!(
             raw, resolved,
             "scope-alias fixture must change after resolution"
@@ -1210,7 +1163,6 @@ mod tests {
         let (dir, raw, _) = scope_alias_paths("selected_conflicts_alias", "source.ass");
         let original = dir.join("source.ass");
         fs::write(&original, "source").unwrap();
-        #[cfg(windows)]
         let raw = PathBuf::from(raw.to_string_lossy().to_uppercase());
         let original = original.to_string_lossy().into_owned();
         let alias = raw.to_string_lossy().into_owned();
@@ -1243,7 +1195,6 @@ mod tests {
         assert_eq!(fs::read_to_string(existing).unwrap(), "source");
     }
 
-    #[cfg(windows)]
     #[test]
     fn selected_input_conflicts_resolve_a_selected_directory_junction() {
         use std::os::windows::process::CommandExt;
@@ -1523,7 +1474,6 @@ mod tests {
         assert!(!path.exists());
     }
 
-    #[cfg(windows)]
     #[test]
     fn write_rejects_windows_trailing_ascii_dot_space_aliases_before_overwrite() {
         let dir = temp_dir("write_windows_trailing_alias");
@@ -1555,7 +1505,6 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
-    #[cfg(windows)]
     #[test]
     fn write_rejects_windows_intermediate_trailing_dot_alias_before_overwrite() {
         let dir = temp_dir("write_windows_intermediate_trailing_dot");
@@ -2085,7 +2034,6 @@ mod tests {
         }
     }
 
-    #[cfg(windows)]
     #[test]
     fn rename_no_overwrite_supports_windows_paths_beyond_max_path() {
         let mut dir = temp_dir("rename_long_path");
@@ -2107,7 +2055,6 @@ mod tests {
         assert_eq!(fs::read(&dst).unwrap(), b"long path payload");
     }
 
-    #[cfg(windows)]
     #[test]
     fn rename_wide_paths_keep_short_paths_and_extend_drive_and_unc_paths() {
         use std::ffi::OsString;
@@ -2269,183 +2216,7 @@ mod tests {
         assert!(!dir.join("dst.ass").exists());
     }
 
-    // Symlink tests are POSIX-only because Windows symlink creation may require
-    // admin or Developer Mode. Windows still compile-checks the shared
-    // reparse-point branches; these fixtures pin the filesystem behavior on
-    // platforms where symlink creation is reliable in unprivileged tests.
-    #[cfg(unix)]
-    #[test]
-    fn output_exists_probe_treats_dangling_symlink_as_occupied() {
-        use std::os::unix::fs::symlink;
-        let dir = temp_dir("exists_probe_dangling_symlink");
-        let target = dir.join("missing.ass");
-        let link = dir.join("out.ass");
-        symlink(&target, &link).unwrap();
-
-        assert!(safe_output_path_exists_inner(&link.to_string_lossy(), allow_all).unwrap());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn output_exists_probe_resolves_parent_alias_before_scope_checking_dangling_symlink() {
-        use std::os::unix::fs::symlink;
-        let dir = temp_dir("exists_probe_dangling_scope");
-        let real_parent = dir.join("real");
-        let alias_parent = dir.join("alias");
-        fs::create_dir(&real_parent).unwrap();
-        symlink(&real_parent, &alias_parent).unwrap();
-        let target = real_parent.join("missing.ass");
-        let real_link = real_parent.join("out.ass");
-        symlink(&target, &real_link).unwrap();
-        let raw_link = alias_parent.join("out.ass");
-        let denied_slot = real_parent.canonicalize().unwrap().join("out.ass");
-
-        let err = safe_output_path_exists_inner(&raw_link.to_string_lossy(), move |path| {
-            path != denied_slot
-        })
-        .unwrap_err();
-
-        assert!(err.contains("denied by"), "got: {err}");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn output_exists_probe_checks_denied_parent_before_relative_dangling_target() {
-        use std::os::unix::fs::symlink;
-        let dir = temp_dir("exists_probe_relative_dangling_scope");
-        let denied_parent = dir.canonicalize().unwrap();
-        let link = dir.join("out.ass");
-        symlink("missing.ass", &link).unwrap();
-
-        // Mirror Tauri 2.11's relevant callback behavior: a terminal symlink
-        // is replaced with read_link's result before policy matching. Its
-        // relative target therefore looks allowed unless our resolver checks
-        // the canonical parent independently.
-        let err = safe_output_path_exists_inner(&link.to_string_lossy(), move |path| {
-            if path == denied_parent {
-                return false;
-            }
-            if fs::symlink_metadata(path)
-                .map(|metadata| metadata.file_type().is_symlink())
-                .unwrap_or(false)
-            {
-                return fs::read_link(path)
-                    .map(|target| target == Path::new("missing.ass"))
-                    .unwrap_or(false);
-            }
-            true
-        })
-        .unwrap_err();
-
-        assert!(err.contains("denied by"), "got: {err}");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn write_refuses_dangling_symlink_destination() {
-        use std::os::unix::fs::symlink;
-        let dir = temp_dir("write_dangling_symlink_dst");
-        let target = dir.join("missing.ass");
-        let link = dir.join("out.ass");
-        symlink(&target, &link).unwrap();
-
-        let err =
-            safe_write_text_file_inner(&link.to_string_lossy(), "replacement", true, allow_all)
-                .unwrap_err();
-
-        assert!(err.contains("symlink"), "got: {err}");
-        assert!(fs::symlink_metadata(&link).is_ok());
-        assert!(!target.exists());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn rename_refuses_live_and_dangling_symlink_destinations() {
-        use std::os::unix::fs::symlink;
-        let root = temp_dir("rename_symlink_dst");
-
-        for (case, target_exists) in [("live", true), ("dangling", false)] {
-            let dir = root.join(case);
-            fs::create_dir(&dir).unwrap();
-            let source = dir.join("src.ass");
-            let target = dir.join("target.ass");
-            let link = dir.join("dst.ass");
-            fs::write(&source, b"new payload").unwrap();
-            if target_exists {
-                fs::write(&target, b"sensitive target").unwrap();
-            }
-            symlink("target.ass", &link).unwrap();
-
-            let err = safe_rename_file_inner(
-                &source.to_string_lossy(),
-                &link.to_string_lossy(),
-                true,
-                allow_all,
-            )
-            .unwrap_err();
-
-            assert!(err.contains("symlink"), "{case}: got {err}");
-            assert_eq!(fs::read(&source).unwrap(), b"new payload", "{case}");
-            assert!(fs::symlink_metadata(&link).is_ok(), "{case}");
-            if target_exists {
-                assert_eq!(fs::read(&target).unwrap(), b"sensitive target", "{case}");
-            } else {
-                assert!(!target.exists(), "{case}");
-            }
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn write_refuses_existing_symlink_destination() {
-        use std::os::unix::fs::symlink;
-        let dir = temp_dir("write_symlink_dst");
-        let target = dir.join("real_target.ass");
-        let link = dir.join("looks_like_output.ass");
-        fs::write(&target, b"sensitive").unwrap();
-        symlink(&target, &link).unwrap();
-
-        let err = safe_write_text_file_inner(
-            &link.to_string_lossy(),
-            "attacker_content",
-            true,
-            allow_all,
-        )
-        .unwrap_err();
-        assert!(err.contains("symlink"));
-        // Target unchanged
-        assert_eq!(fs::read(&target).unwrap(), b"sensitive");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn copy_refuses_symlinked_source() {
-        use std::os::unix::fs::symlink;
-        let dir = temp_dir("copy_symlink_src");
-        let target = dir.join("real_target.ass");
-        let link = dir.join("Show.S01E01.ass");
-        let dst = dir.join("video.ass");
-        fs::write(&target, b"sensitive").unwrap();
-        symlink(&target, &link).unwrap();
-
-        let err = safe_copy_file_inner(
-            &link.to_string_lossy(),
-            &dst.to_string_lossy(),
-            false,
-            allow_all,
-        )
-        .unwrap_err();
-        assert!(err.contains("symlink"));
-        assert!(!dst.exists());
-    }
-
-    // Case-only self-overwrite tests are gated to Windows because NTFS
-    // is case-insensitive by default — the OS reports the same canonical
-    // path for `Episode.ass` and `episode.ass`. On Linux ext4 these are
-    // distinct files, so the canonicalize check correctly does not fire
-    // and the test would not exercise the regression. macOS APFS would
-    // also fire the gate but there's no test machine available.
-    #[cfg(target_os = "windows")]
+    // NTFS case aliases must not overwrite the selected source.
     #[test]
     fn rename_refuses_case_only_self_overwrite() {
         let dir = temp_dir("rename_case_self");
@@ -2463,7 +2234,6 @@ mod tests {
         assert_eq!(fs::read(&src).unwrap(), b"payload");
     }
 
-    #[cfg(target_os = "windows")]
     #[test]
     fn copy_refuses_case_only_self_overwrite() {
         let dir = temp_dir("copy_case_self");

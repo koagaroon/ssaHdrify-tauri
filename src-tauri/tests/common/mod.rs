@@ -4,27 +4,10 @@ use std::sync::OnceLock;
 
 use app_lib::fonts::ALLOWED_FONT_EXTENSIONS;
 
-#[cfg(windows)]
 fn os_font_roots() -> Vec<PathBuf> {
     vec![
         PathBuf::from(std::env::var("SYSTEMROOT").unwrap_or_else(|_| "C:\\Windows".to_string()))
             .join("Fonts"),
-    ]
-}
-
-#[cfg(target_os = "macos")]
-fn os_font_roots() -> Vec<PathBuf> {
-    vec![
-        PathBuf::from("/System/Library/Fonts"),
-        PathBuf::from("/Library/Fonts"),
-    ]
-}
-
-#[cfg(all(unix, not(target_os = "macos")))]
-fn os_font_roots() -> Vec<PathBuf> {
-    vec![
-        PathBuf::from("/usr/share/fonts"),
-        PathBuf::from("/usr/local/share/fonts"),
     ]
 }
 

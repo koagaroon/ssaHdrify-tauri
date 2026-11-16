@@ -71,7 +71,7 @@ Windows 发布版面向 **Windows 10/11 x64（64 位 Intel/AMD）**。Windows 7/
 
 **图形界面需要已安装且保持更新的 Microsoft Edge WebView2 Runtime（运行时）**。Windows 11 和大多数 Windows 10 设备通常已安装；如果缺失，请从 [Microsoft 官方页面](https://developer.microsoft.com/microsoft-edge/webview2/)安装 Evergreen Runtime。便携版不会自动安装它。**命令行版内嵌 JavaScript 引擎，不需要 WebView2**；使用这两个可执行文件均无需另行安装 Node.js、npm、Rust 或 Deno。
 
-macOS / Linux 用户可尝试下方的源码构建流程；项目尚未在这些平台上验证文件对话框、文件系统行为、完整构建或发布产物，因此不属于官方支持的发布平台。
+项目仅支持 Windows 10/11 x64，包括源码构建和发布版；不再维护 Linux 或 macOS 兼容性。
 
 Windows users can download portable exe files from [Releases](https://github.com/koagaroon/ssaHdrify-tauri/releases); the application itself has no installer. Use the latest stable build by default; preview builds remain listed on the same page for testing features that have not entered a stable release yet.
 
@@ -85,7 +85,7 @@ Windows releases target **Windows 10/11 x64 (64-bit Intel/AMD)**. Windows 7/8/8.
 
 **The GUI requires an installed, up-to-date Microsoft Edge WebView2 Runtime**. It is normally present on Windows 11 and most Windows 10 devices. If it is missing, install the Evergreen Runtime from [Microsoft](https://developer.microsoft.com/microsoft-edge/webview2/). These portable executables do not install it automatically. **The CLI embeds its JavaScript engine and does not require WebView2**; neither executable needs a separate Node.js, npm, Rust, or Deno installation.
 
-macOS / Linux users may attempt the source-build workflow below. File dialogs, filesystem behavior, complete builds, and release artifacts have not been validated on those platforms, so they are not officially supported release targets.
+The project supports Windows 10/11 x64 only, including source builds and releases. Linux and macOS compatibility is no longer maintained.
 
 ---
 
@@ -408,19 +408,15 @@ ssahdrify-cli refresh-fonts --font-dir "<anime-font-folder>" --font-dir "<latin-
 
 #### 缓存位置 | Cache Location
 
-默认位置因操作系统而异（与 GUI 缓存独立，避免锁竞争）：
+Windows 默认位置（与 GUI 缓存独立，避免锁竞争）：
 
 - Windows: `%APPDATA%/ssahdrify/cli_font_cache.sqlite3`
-- macOS: `$HOME/Library/Application Support/ssahdrify/cli_font_cache.sqlite3`
-- Linux: `${XDG_DATA_HOME:-$HOME/.local/share}/ssahdrify/cli_font_cache.sqlite3`
 
 `--cache-file <PATH>` 可改用指定路径。
 
-Default locations are OS-specific and separate from the GUI cache to avoid lock contention:
+The default Windows location is separate from the GUI cache to avoid lock contention:
 
 - Windows: `%APPDATA%/ssahdrify/cli_font_cache.sqlite3`
-- macOS: `$HOME/Library/Application Support/ssahdrify/cli_font_cache.sqlite3`
-- Linux: `${XDG_DATA_HOME:-$HOME/.local/share}/ssahdrify/cli_font_cache.sqlite3`
 
 Use `--cache-file <PATH>` to choose a different path.
 
@@ -501,17 +497,16 @@ Due to the complexity of subtitle blending pipelines and HDR display environment
 ## 从源码构建 | Build from Source
 
 > [!IMPORTANT]
-> 官方发布和发布前验证目前仅覆盖 Windows。macOS / Linux 的源码构建仅作为尚未验证的自行构建路径；项目不提供这些平台的预构建二进制文件。
+> 源码构建、运行兼容性和发布版仅支持 Windows 10/11 x64；不再维护 Linux 或 macOS 兼容性。
 >
-> Official releases and release validation currently cover Windows only. macOS and Linux source builds are unvalidated self-build paths; the project does not provide prebuilt binaries for those platforms.
+> Source builds, runtime compatibility, and releases support Windows 10/11 x64 only. Linux and macOS compatibility is no longer maintained.
 
 ### 前置条件 | Prerequisites
 
 - [Node.js](https://nodejs.org/)（支持 v24.22.1 及以上的 v24 LTS / v24 LTS from v24.22.1）
 - npm 12.2.2（由 `packageManager` 声明并由 CI 强制 / declared by `packageManager` and enforced in CI）
-- [Rust 工具链 / Rust toolchain](https://rustup.rs/)（最低 1.99.1，与仓库锁定且经过测试的稳定工具链一致；rustup 会自动选择该版本 / 1.99.1 minimum, matching the repository-pinned tested stable toolchain; rustup selects that version automatically）
+- [Rust 工具链 / Rust toolchain](https://rustup.rs/)（最低 1.100.0，与仓库锁定且经过测试的稳定工具链一致；rustup 会自动选择该版本 / 1.100.0 minimum, matching the repository-pinned tested stable toolchain; rustup selects that version automatically）
 - Windows: [Microsoft C++ Build Tools / C++ 构建工具](https://v2.tauri.app/start/prerequisites/#windows)。安装构建工具时勾选「Desktop development with C++ / 使用 C++ 的桌面开发」，并使用 MSVC Rust 工具链。运行图形界面还需要[下载部分](#下载--download)说明的 WebView2 Runtime。 / Select **Desktop development with C++** in the Build Tools installer and use the MSVC Rust toolchain. Running the GUI also requires the WebView2 Runtime described under [Download](#下载--download).
-- macOS / Linux: 参考 / see [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)
 
 Node.js、npm 和 Rust 仅用于源码构建；使用发布的可执行文件不需要安装它们。
 
@@ -750,11 +745,10 @@ The tables below list the main direct dependencies and bundled assets. For the f
 | [Color.js](https://colorjs.io/)                                              | MIT                                                                                                                                                               | HDR 色彩空间转换 (PQ/HLG) / HDR color space conversion                                                         |
 | [ass-compiler](https://github.com/weizhenye/ass-compiler)                    | MIT                                                                                                                                                               | ASS 字幕解析（字体收集）/ ASS subtitle parsing for font collection                                             |
 | [entities](https://github.com/fb55/entities)                                 | BSD-2-Clause                                                                                                                                                      | WebVTT 文本字符引用解码（GUI 与 CLI）/ WebVTT text character-reference decoding (GUI and CLI)                  |
-| [font-kit](https://github.com/servo/font-kit)                                | MIT OR Apache-2.0                                                                                                                                                 | 跨平台系统字体发现 (Rust) / Cross-platform system font discovery                                               |
+| [font-kit](https://github.com/servo/font-kit)                                | MIT OR Apache-2.0                                                                                                                                                 | Windows 系统字体发现 (Rust) / Windows system font discovery                                                    |
 | [fontcull](https://github.com/bearcove/fontcull)                             | MIT / MIT OR Apache-2.0                                                                                                                                           | 字体子集化（含 fontcull-klippa、fontcull-skrifa）/ Font subsetting (includes fontcull-klippa, fontcull-skrifa) |
 | [chardetng](https://github.com/hsivonen/chardetng)                           | MIT OR Apache-2.0                                                                                                                                                 | 编码检测 (Firefox 引擎) / Encoding detection (Firefox's engine)                                                |
 | [encoding_rs](https://github.com/hsivonen/encoding_rs)                       | (Apache-2.0 OR MIT) AND BSD-3-Clause                                                                                                                              | 编码转换 / Encoding conversion                                                                                 |
-| [rustix](https://github.com/bytecodealliance/rustix)                         | Apache-2.0 OR MIT                                                                                                                                                 | Linux、Android 和 Apple 平台上的独占重命名 / Exclusive rename on Linux, Android, and Apple platforms           |
 | [rusqlite / libsqlite3-sys](https://github.com/rusqlite/rusqlite)            | [MIT](src/assets/licenses/native-notices.txt)                                                                                                                     | 字体缓存和本地字体索引的 Rust 绑定 / Rust bindings for the font cache and local font index                     |
 | [SQLite](https://sqlite.org/)                                                | [公有领域 / Public domain](https://sqlite.org/copyright.html)                                                                                                     | 随可执行文件静态编译的缓存数据库 / Cache database statically compiled into the executables                     |
 | [serde](https://serde.rs/) / serde_json                                      | MIT OR Apache-2.0                                                                                                                                                 | Rust 序列化 / Rust serialization                                                                               |

@@ -162,20 +162,9 @@ fn cancelling_channel(scan_id: u64) -> CancellingChannel {
     (channel, totals, done, batches)
 }
 
-#[cfg(windows)]
 fn os_font_dir() -> String {
     let sys_root = std::env::var("SYSTEMROOT").unwrap_or_else(|_| "C:\\Windows".to_string());
     format!("{sys_root}\\Fonts")
-}
-
-#[cfg(target_os = "macos")]
-fn os_font_dir() -> String {
-    "/Library/Fonts".to_string()
-}
-
-#[cfg(all(unix, not(target_os = "macos")))]
-fn os_font_dir() -> String {
-    "/usr/share/fonts".to_string()
 }
 
 fn take_done(done: &Arc<Mutex<Option<DoneStats>>>) -> DoneStats {

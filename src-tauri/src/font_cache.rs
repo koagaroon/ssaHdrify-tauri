@@ -60,10 +60,7 @@ pub fn try_modified_at(path: &Path) -> Option<i64> {
 }
 
 /// Unified per-user data directory shared by both binaries
-/// (`ssahdrify` GUI + `ssahdrify-cli`). OS-specific:
-/// - Windows: `%APPDATA%/ssahdrify`
-/// - macOS:   `$HOME/Library/Application Support/ssahdrify`
-/// - Linux:   `${XDG_DATA_HOME:-$HOME/.local/share}/ssahdrify`
+/// (`ssahdrify` GUI + `ssahdrify-cli`): `%APPDATA%/ssahdrify`.
 ///
 /// The GUI side used to use Tauri's
 /// `app.path().app_data_dir()` which on Windows resolves to the bundle
@@ -90,56 +87,12 @@ pub fn default_cli_cache_path() -> Result<PathBuf, String> {
     Ok(unified_app_data_dir()?.join("cli_font_cache.sqlite3"))
 }
 
-/// Per-user data directory, resolved per-OS without pulling in the
-/// `dirs` crate (one usage didn't justify the dep). Mirrors the
-/// well-known XDG and platform conventions:
-/// - Windows: `%APPDATA%` (Roaming)
-/// - macOS:   `$HOME/Library/Application Support`
-/// - Linux:   `$XDG_DATA_HOME` if set, else `$HOME/.local/share`
+/// Windows roaming data directory, shared by the GUI and CLI caches.
 fn platform_data_dir() -> Result<PathBuf, String> {
-    #[cfg(target_os = "windows")]
-    {
-        std::env::var("APPDATA").map(PathBuf::from).map_err(|_| {
-            "APPDATA environment variable not set; cannot determine \
-                 default cache location. Pass --cache-file <PATH> to override."
-                .to_string()
-        })
-    }
-    #[cfg(target_os = "macos")]
-    {
-        std::env::var("HOME")
-            .map(|h| PathBuf::from(h).join("Library").join("Application Support"))
-            .map_err(|_| {
-                "HOME environment variable not set; cannot determine \
-                 default cache location. Pass --cache-file <PATH> to override."
-                    .to_string()
-            })
-    }
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        // XDG Base Dir spec § "Environment variables": "If
-        // $XDG_DATA_HOME is either not set or empty, a default equal
-        // to $HOME/.local/share should be used." The empty-check is
-        // spec-required, not defensive paranoia — don't simplify away
-        // the !is_empty() check. The is_absolute() guard rejects
-        // exotic values like "." or relative paths from a misconfigured
-        // shell, falling through to the HOME default.
-        if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
-            if !xdg.is_empty() {
-                let xdg_path = PathBuf::from(&xdg);
-                if xdg_path.is_absolute() {
-                    return Ok(xdg_path);
-                }
-            }
-        }
-        std::env::var("HOME")
-            .map(|h| PathBuf::from(h).join(".local").join("share"))
-            .map_err(|_| {
-                "Neither XDG_DATA_HOME nor HOME is set; cannot determine \
-                 default cache location. Pass --cache-file <PATH> to override."
-                    .to_string()
-            })
-    }
+    std::env::var("APPDATA").map(PathBuf::from).map_err(|_| {
+        "APPDATA environment variable not set; cannot determine default cache location. Pass --cache-file <PATH> to override."
+            .to_string()
+    })
 }
 
 fn cache_sidecar_path(cache_path: &Path, suffix: &str) -> PathBuf {
@@ -469,7 +422,7 @@ fn warn_skipped_cache_candidates(skipped: usize) {
 /// Mirrors `userFontKey`'s normalization in font-embedder.ts (which
 /// uses JS `toLowerCase()`, also full Unicode) so a font's name-table
 /// entry and an ASS file's `\fn` reference match regardless of NFC/NFD
-/// form (macOS HFS+ NFD vs Windows NFC) or case (`Café` vs `CAFÉ`,
+/// form or case (`Café` vs `CAFÉ`,
 /// `Source Han Sans CN` vs `source han sans cn`). Plain ASCII
 /// `to_ascii_lowercase` would miss `É`/`Ñ`/`Ü` etc., breaking the
 /// CJK/Latin-extended fonts the cache exists to accelerate.
@@ -1298,11 +1251,11 @@ impl FontCache {
         // who can swap `cache_path` to a symlink in this window
         // bypasses the guard. Accepted local-user risk: the per-user AppData
         // location requires an attacker who already has write
-        // access to %APPDATA%/$XDG_DATA_HOME, which is well outside
+        // access to %APPDATA%, which is well outside
         // the single-user-desktop threat model. Sibling acknowledgment
         // lives in `migrate_legacy_gui_cache` (also a single-syscall
         // narrow). Tighter forms would need OS-level
-        // `O_NOFOLLOW` / `FILE_FLAG_OPEN_REPARSE_POINT` which
+        // `FILE_FLAG_OPEN_REPARSE_POINT` which
         // rusqlite doesn't expose.
         let already_existed = cache_path.exists();
         let conn = Connection::open(cache_path)
@@ -1774,7 +1727,7 @@ impl FontCache {
     /// never override a true family/style hit. Mirrors the session
     /// DB lookup contract so a font's
     /// name-table form (often NFC) and an ASS file's `\fn` reference
-    /// (often macOS-pasted NFD or arbitrary case) match consistently.
+    /// (which may use decomposed Unicode or arbitrary case) match consistently.
     /// (NOT ASCII-only lowercase — `to_ascii_lowercase` would miss
     /// `É` / `Ñ` / `Ü` and break Latin-extended / CJK lookups.)
     ///
@@ -2653,23 +2606,6 @@ mod tests {
             .is_empty());
         drop(reader);
         drop(writer);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn open_refuses_reparse_sidecar_paths() {
-        use std::os::unix::fs::symlink;
-
-        let (_guard, path) = temp_cache_path();
-        let target = path.with_extension("wal-target");
-        fs::write(&target, b"not sqlite").unwrap();
-        symlink(&target, cache_sidecar_path(&path, "-wal")).unwrap();
-
-        let err = FontCache::open_or_create(&path).unwrap_err();
-        assert!(
-            err.to_string().contains("reparse point"),
-            "expected sidecar reparse refusal, got {err}"
-        );
     }
 
     #[test]
@@ -4412,30 +4348,5 @@ mod tests {
         fs::write(root.join("evil\u{202e}ttf.ttf"), b"candidate").unwrap();
         let err = snapshot_source_directories(&root, FontDirectoryScope::Shallow).unwrap_err();
         assert!(err.contains("contains invalid characters"), "got: {err}");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn snapshot_rejects_non_utf8_source_root() {
-        use std::ffi::OsString;
-        use std::os::unix::ffi::OsStringExt;
-        let guard = TempCacheDir::new();
-        let invalid = guard.0.join(OsString::from_vec(vec![b'f', 0xff]));
-        fs::create_dir_all(&invalid).unwrap();
-        let err = snapshot_source_directories(&invalid, FontDirectoryScope::Shallow).unwrap_err();
-        assert!(err.contains("not valid UTF-8"), "got: {err}");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn snapshot_rejects_symlink_root_before_canonicalizing() {
-        use std::os::unix::fs::symlink;
-        let guard = TempCacheDir::new();
-        let target = guard.0.join("real-library");
-        let linked = guard.0.join("linked-library");
-        fs::create_dir_all(&target).unwrap();
-        symlink(&target, &linked).unwrap();
-        let err = snapshot_source_directories(&linked, FontDirectoryScope::Recursive).unwrap_err();
-        assert!(err.contains("reparse point"), "got: {err}");
     }
 }

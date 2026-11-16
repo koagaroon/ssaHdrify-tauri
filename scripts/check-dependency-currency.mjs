@@ -115,14 +115,14 @@ const cargoPolicies = {
   rfd: {
     mode: /** @type {const} */ ("manual"),
     reason:
-      "Retain shared rfd 0.16.1: 0.17.x lacks the GTK3 description-format fix; 0.18.0 restores it but its GTK3 dependency conflicts with the current dialog plugin. Recheck each new stable release, including retained-line backports.",
-    reviewedVersions: ["0.17.0", "0.17.1", "0.17.2", "0.18.0"],
+      "Share rfd 0.17.2 with the dialog plugin on Windows. Version 0.18.0 adds an unused hidden-file picker option; a separate direct version would not upgrade the plugin's pickers. Recheck each new stable release, including retained-line backports.",
+    reviewedVersions: ["0.18.0"],
   },
   "tauri-plugin-dialog": {
     mode: /** @type {const} */ ("manual"),
     reason:
-      "Version 2.8.4 selects rfd 0.17.2, which lacks the GTK3 description-format fix already present in rfd 0.16.1. Review the selected stable rfd source before advancing the shared dialog line.",
-    reviewedVersions: ["2.8.4"],
+      "Review the selected stable rfd source and Windows dialog behavior before advancing the shared dialog line.",
+    reviewedVersions: [],
   },
 };
 

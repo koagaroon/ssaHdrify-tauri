@@ -266,47 +266,13 @@ describe("deriveEmbeddedPath / planEmbeddedOutputs", () => {
     ]);
   });
 
-  it("deduplicates case-only outputs on an injected case-insensitive runtime", async () => {
-    const platformGlobal = globalThis as typeof globalThis & {
-      __ssahdrifyPlatform?: { isWindows: boolean; isCaseInsensitiveFs: boolean };
-    };
-    platformGlobal.__ssahdrifyPlatform = { isWindows: false, isCaseInsensitiveFs: true };
-    vi.resetModules();
-    try {
-      const mod = await import("./font-embedder");
-      const result = mod.planEmbeddedOutputs(["/s1/EP01.ass", "/s2/ep01.ass"], {
-        outputDir: "/out",
-      });
+  it("deduplicates case-only outputs", () => {
+    const result = planEmbeddedOutputs(["C:/s1/EP01.ass", "C:/s2/ep01.ass"], {
+      outputDir: "D:/out",
+    });
 
-      expect(result.targets).toHaveLength(1);
-      expect(result.skipped).toMatchObject([{ inputPath: "/s2/ep01.ass", reason: "duplicate" }]);
-    } finally {
-      delete platformGlobal.__ssahdrifyPlatform;
-      vi.resetModules();
-    }
-  });
-
-  it("keeps case-only outputs distinct on an injected case-sensitive runtime", async () => {
-    const platformGlobal = globalThis as typeof globalThis & {
-      __ssahdrifyPlatform?: { isWindows: boolean; isCaseInsensitiveFs: boolean };
-    };
-    platformGlobal.__ssahdrifyPlatform = { isWindows: false, isCaseInsensitiveFs: false };
-    vi.resetModules();
-    try {
-      const mod = await import("./font-embedder");
-      const result = mod.planEmbeddedOutputs(["/s1/EP01.ass", "/s2/ep01.ass"], {
-        outputDir: "/out",
-      });
-
-      expect(result.targets).toEqual([
-        { inputPath: "/s1/EP01.ass", outputPath: "/out/EP01.embedded.ass" },
-        { inputPath: "/s2/ep01.ass", outputPath: "/out/ep01.embedded.ass" },
-      ]);
-      expect(result.skipped).toEqual([]);
-    } finally {
-      delete platformGlobal.__ssahdrifyPlatform;
-      vi.resetModules();
-    }
+    expect(result.targets).toHaveLength(1);
+    expect(result.skipped).toMatchObject([{ inputPath: "C:/s2/ep01.ass", reason: "duplicate" }]);
   });
 
   it("keeps valid targets when another input path is invalid", () => {

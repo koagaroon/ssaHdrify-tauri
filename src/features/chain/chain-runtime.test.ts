@@ -388,9 +388,9 @@ describe("resolveChainOutputPath", () => {
     );
   });
 
-  it("preserves forward-slash style on POSIX-shape inputs", () => {
-    expect(resolveChainOutputPath("/home/u/ep01.ass", "{name}.processed.ass")).toBe(
-      "/home/u/ep01.processed.ass"
+  it("preserves forward-slash style on Windows paths", () => {
+    expect(resolveChainOutputPath("C:/subs/ep01.ass", "{name}.processed.ass")).toBe(
+      "C:/subs/ep01.processed.ass"
     );
   });
 

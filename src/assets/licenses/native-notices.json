@@ -2,17 +2,17 @@
   "schemaVersion": 1,
   "target": "x86_64-pc-windows-msvc",
   "inputs": {
-    "src-tauri/Cargo.lock": "0887cdec6104cb3ed5ae0a6c317607f4b3b8e94ca41ef55b74ddb6aafc5efcf0",
-    "src-tauri/Cargo.toml": "ce731d03edfc378313972de2eb583a044a5c768700ee0da2727562e9a5121b2e",
-    "rust-toolchain.toml": "f715f440167e20fd8ea9afa0498c3d1ab80174cfcb8cbc895f106a34d907a1e1",
+    "src-tauri/Cargo.lock": "3fffbdb39853f5207400d272dec73c155d6646b890e06a6405cecae67b320c88",
+    "src-tauri/Cargo.toml": "3746da3ab6457aabf6b161d4e60a5155d356daade09c8038777d7a8d064ebb2d",
+    "rust-toolchain.toml": "d4580150cd6aec323fffc3d1b193cbbf262855081a3e1fb330c18b7ba8a98dff",
     "src-tauri/sqlite-bundle.json": "cc61c4d9ef6400df620a0040a0332b1ffb30220d44f9e2d6c72837e4f3842967",
-    "scripts/native-notice-sources.json": "f692fcd1a6d0122b153187fcfe4764c148618ed8bb4ffac12afaa1f79f16b3b9",
+    "scripts/native-notice-sources.json": "0ea5375c3f1fbcfcdabd0b8eb1cac009fcfda39bb1e0447147f0910352e1fb36",
     ".cargo/config": null,
     ".cargo/config.toml": null,
     "src-tauri/.cargo/config": null,
     "src-tauri/.cargo/config.toml": null
   },
-  "sha256": "01bdf05d18715fdd65cf580828b2d1e0ef6ef97e5545a5b2a8cbfde4cf1dd760",
+  "sha256": "f0c826091e90b057cf31e112d4cf0d1d7a8cf9b8f8bdb7780e6a463fc4c14863",
   "packages": [
     {
       "name": "adler2",
@@ -515,25 +515,6 @@
           "name": "LICENSE.txt",
           "source": "crate",
           "sha256": "411781fd38700f2357a14126d0ab048164ab881f1dcb335c1bb932e232c9a2f5"
-        }
-      ]
-    },
-    {
-      "name": "block-buffer",
-      "version": "0.10.4",
-      "license": "MIT OR Apache-2.0",
-      "source": "https://crates.io/crates/block-buffer/0.10.4",
-      "features": [],
-      "files": [
-        {
-          "name": "LICENSE-APACHE",
-          "source": "crate",
-          "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5"
-        },
-        {
-          "name": "LICENSE-MIT",
-          "source": "crate",
-          "sha256": "d5c22aa3118d240e877ad41c5d9fa232f9c77d757d4aac0c2f943afc0a95e0ef"
         }
       ]
     },
@@ -1202,25 +1183,6 @@
     },
     {
       "name": "cpufeatures",
-      "version": "0.2.17",
-      "license": "MIT OR Apache-2.0",
-      "source": "https://crates.io/crates/cpufeatures/0.2.17",
-      "features": [],
-      "files": [
-        {
-          "name": "LICENSE-APACHE",
-          "source": "crate",
-          "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5"
-        },
-        {
-          "name": "LICENSE-MIT",
-          "source": "crate",
-          "sha256": "ae9baa7beea910273c2f384c2a6b721fb7bd02bda3436074a1072e4ee689f985"
-        }
-      ]
-    },
-    {
-      "name": "cpufeatures",
       "version": "0.3.0",
       "license": "MIT OR Apache-2.0",
       "source": "https://crates.io/crates/cpufeatures/0.3.0",
@@ -1305,27 +1267,6 @@
           "name": "LICENSE-MIT",
           "source": "crate",
           "sha256": "5734ed989dfca1f625b40281ee9f4530f91b2411ec01cb748223e7eb87e201ab"
-        }
-      ]
-    },
-    {
-      "name": "crypto-common",
-      "version": "0.1.7",
-      "license": "MIT OR Apache-2.0",
-      "source": "https://crates.io/crates/crypto-common/0.1.7",
-      "features": [
-        "std"
-      ],
-      "files": [
-        {
-          "name": "LICENSE-APACHE",
-          "source": "crate",
-          "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5"
-        },
-        {
-          "name": "LICENSE-MIT",
-          "source": "crate",
-          "sha256": "3521672491a3479422d5fe1aca6645dd2984090f85da6e5205abfb18fb7a6897"
         }
       ]
     },
@@ -1710,31 +1651,6 @@
           "name": "LICENSE",
           "source": "crate",
           "sha256": "8a35369f3ca263b3c62fbb5032947e53b6bfebc6c8a4d1bb982de1c069f6fba5"
-        }
-      ]
-    },
-    {
-      "name": "digest",
-      "version": "0.10.7",
-      "license": "MIT OR Apache-2.0",
-      "source": "https://crates.io/crates/digest/0.10.7",
-      "features": [
-        "alloc",
-        "block-buffer",
-        "core-api",
-        "default",
-        "std"
-      ],
-      "files": [
-        {
-          "name": "LICENSE-APACHE",
-          "source": "crate",
-          "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5"
-        },
-        {
-          "name": "LICENSE-MIT",
-          "source": "crate",
-          "sha256": "9e0dfd2dd4173a530e238cb6adb37aa78c34c6bc7444e0e10c1ab5d8881f63ba"
         }
       ]
     },
@@ -2804,22 +2720,6 @@
           "name": "LICENSE-MIT",
           "source": "crate",
           "sha256": "6652c868f35dfe5e8ef636810a4e576b9d663f3a17fb0f5613ad73583e1b88fd"
-        }
-      ]
-    },
-    {
-      "name": "generic-array",
-      "version": "0.14.7",
-      "license": "MIT",
-      "source": "https://crates.io/crates/generic-array/0.14.7",
-      "features": [
-        "more_lengths"
-      ],
-      "files": [
-        {
-          "name": "LICENSE",
-          "source": "crate",
-          "sha256": "ad4fcfaf8d5b12b97409c137a03d4a4e4b21024c65c54f976cc3b609c1bd5b0f"
         }
       ]
     },
@@ -4868,29 +4768,30 @@
     },
     {
       "name": "rfd",
-      "version": "0.16.1",
+      "version": "0.17.2",
       "license": "MIT",
-      "source": "https://crates.io/crates/rfd/0.16.1",
+      "source": "https://crates.io/crates/rfd/0.17.2",
       "features": [
-        "common-controls-v6",
-        "glib-sys",
-        "gobject-sys",
-        "gtk-sys",
-        "gtk3"
+        "common-controls-v6"
       ],
       "files": [
         {
           "name": "LICENSE",
           "source": "crate",
           "sha256": "65fc947f4bac882a2cd104ef73c246b1b037059df9f2b3a58b7f77f0b9e56071"
+        },
+        {
+          "name": "src/backend/xdg_desktop_portal/window_identifier/LICENSE",
+          "source": "crate",
+          "sha256": "ae26bc7b1bc91fb8648f6a298decbb1a77090a56c9d04e2c23b8365e5f54acb5"
         }
       ]
     },
     {
       "name": "rusqlite",
-      "version": "0.42.0",
+      "version": "0.43.0",
       "license": "MIT",
-      "source": "https://crates.io/crates/rusqlite/0.42.0",
+      "source": "https://crates.io/crates/rusqlite/0.43.0",
       "features": [
         "bundled",
         "cache",
@@ -5433,28 +5334,6 @@
           "name": "LICENSE-MIT",
           "source": "crate",
           "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
-        }
-      ]
-    },
-    {
-      "name": "sha2",
-      "version": "0.10.9",
-      "license": "MIT OR Apache-2.0",
-      "source": "https://crates.io/crates/sha2/0.10.9",
-      "features": [
-        "default",
-        "std"
-      ],
-      "files": [
-        {
-          "name": "LICENSE-APACHE",
-          "source": "crate",
-          "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5"
-        },
-        {
-          "name": "LICENSE-MIT",
-          "source": "crate",
-          "sha256": "b4eb00df6e2a4d22518fcaa6a2b4646f249b3a3c9814509b22bd2091f1392ff1"
         }
       ]
     },
@@ -6043,9 +5922,9 @@
     },
     {
       "name": "tauri-build",
-      "version": "2.7.4",
+      "version": "2.7.5",
       "license": "Apache-2.0 OR MIT",
-      "source": "https://crates.io/crates/tauri-build/2.7.4",
+      "source": "https://crates.io/crates/tauri-build/2.7.5",
       "features": [
         "config-json",
         "default"
@@ -6065,9 +5944,9 @@
     },
     {
       "name": "tauri-codegen",
-      "version": "2.7.4",
+      "version": "2.7.5",
       "license": "Apache-2.0 OR MIT",
-      "source": "https://crates.io/crates/tauri-codegen/2.7.4",
+      "source": "https://crates.io/crates/tauri-codegen/2.7.5",
       "features": [
         "brotli",
         "compression"
@@ -6087,9 +5966,9 @@
     },
     {
       "name": "tauri-macros",
-      "version": "2.7.4",
+      "version": "2.7.5",
       "license": "Apache-2.0 OR MIT",
-      "source": "https://crates.io/crates/tauri-macros/2.7.4",
+      "source": "https://crates.io/crates/tauri-macros/2.7.5",
       "features": [
         "compression"
       ],
@@ -6108,13 +5987,10 @@
     },
     {
       "name": "tauri-plugin-dialog",
-      "version": "2.8.3",
+      "version": "2.8.4",
       "license": "Apache-2.0 OR MIT",
-      "source": "https://crates.io/crates/tauri-plugin-dialog/2.8.3",
-      "features": [
-        "default",
-        "gtk3"
-      ],
+      "source": "https://crates.io/crates/tauri-plugin-dialog/2.8.4",
+      "features": [],
       "files": [
         {
           "name": "LICENSE.spdx",
@@ -6228,9 +6104,9 @@
     },
     {
       "name": "tauri-runtime-wry",
-      "version": "2.12.3",
+      "version": "2.12.4",
       "license": "Apache-2.0 OR MIT",
-      "source": "https://crates.io/crates/tauri-runtime-wry/2.12.3",
+      "source": "https://crates.io/crates/tauri-runtime-wry/2.12.4",
       "features": [
         "common-controls-v6",
         "dbus",
@@ -6251,9 +6127,9 @@
     },
     {
       "name": "tauri-runtime",
-      "version": "2.12.2",
+      "version": "2.12.3",
       "license": "Apache-2.0 OR MIT",
-      "source": "https://crates.io/crates/tauri-runtime/2.12.2",
+      "source": "https://crates.io/crates/tauri-runtime/2.12.3",
       "features": [],
       "files": [
         {
@@ -6270,9 +6146,9 @@
     },
     {
       "name": "tauri-utils",
-      "version": "2.10.2",
+      "version": "2.10.3",
       "license": "Apache-2.0 OR MIT",
-      "source": "https://crates.io/crates/tauri-utils/2.10.2",
+      "source": "https://crates.io/crates/tauri-utils/2.10.3",
       "features": [
         "brotli",
         "build-2",
@@ -6316,9 +6192,9 @@
     },
     {
       "name": "tauri",
-      "version": "2.12.5",
+      "version": "2.12.6",
       "license": "Apache-2.0 OR MIT",
-      "source": "https://crates.io/crates/tauri/2.12.5",
+      "source": "https://crates.io/crates/tauri/2.12.6",
       "features": [
         "common-controls-v6",
         "compression",
@@ -7580,25 +7456,6 @@
       ]
     },
     {
-      "name": "windows_x86_64_msvc",
-      "version": "0.53.1",
-      "license": "MIT OR Apache-2.0",
-      "source": "https://crates.io/crates/windows_x86_64_msvc/0.53.1",
-      "features": [],
-      "files": [
-        {
-          "name": "license-apache-2.0",
-          "source": "crate",
-          "sha256": "c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b"
-        },
-        {
-          "name": "license-mit",
-          "source": "crate",
-          "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
-        }
-      ]
-    },
-    {
       "name": "windows-collections",
       "version": "0.3.2",
       "license": "MIT OR Apache-2.0",
@@ -7832,36 +7689,6 @@
     },
     {
       "name": "windows-sys",
-      "version": "0.60.2",
-      "license": "MIT OR Apache-2.0",
-      "source": "https://crates.io/crates/windows-sys/0.60.2",
-      "features": [
-        "Win32",
-        "Win32_Foundation",
-        "Win32_System",
-        "Win32_System_Com",
-        "Win32_UI",
-        "Win32_UI_Controls",
-        "Win32_UI_Shell",
-        "Win32_UI_Shell_Common",
-        "Win32_UI_WindowsAndMessaging",
-        "default"
-      ],
-      "files": [
-        {
-          "name": "license-apache-2.0",
-          "source": "crate",
-          "sha256": "c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b"
-        },
-        {
-          "name": "license-mit",
-          "source": "crate",
-          "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
-        }
-      ]
-    },
-    {
-      "name": "windows-sys",
       "version": "0.61.2",
       "license": "MIT OR Apache-2.0",
       "source": "https://crates.io/crates/windows-sys/0.61.2",
@@ -7907,6 +7734,7 @@
         "Win32_UI_Input",
         "Win32_UI_Input_KeyboardAndMouse",
         "Win32_UI_Shell",
+        "Win32_UI_Shell_Common",
         "Win32_UI_WindowsAndMessaging",
         "default"
       ],
@@ -7928,25 +7756,6 @@
       "version": "0.52.6",
       "license": "MIT OR Apache-2.0",
       "source": "https://crates.io/crates/windows-targets/0.52.6",
-      "features": [],
-      "files": [
-        {
-          "name": "license-apache-2.0",
-          "source": "crate",
-          "sha256": "c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b"
-        },
-        {
-          "name": "license-mit",
-          "source": "crate",
-          "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
-        }
-      ]
-    },
-    {
-      "name": "windows-targets",
-      "version": "0.53.5",
-      "license": "MIT OR Apache-2.0",
-      "source": "https://crates.io/crates/windows-targets/0.53.5",
       "features": [],
       "files": [
         {

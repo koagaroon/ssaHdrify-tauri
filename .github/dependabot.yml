@@ -51,14 +51,13 @@ updates:
           - "version-update:semver-minor"
           - "version-update:semver-major"
 
-      # Review the actual bundled SQLite source and temporary override before
-      # changing this line; the override carries required recovery fixes.
+      # Review the bundled SQLite source, recovery behavior, and Rust interface.
       - dependency-name: rusqlite
         update-types:
           - "version-update:semver-minor"
           - "version-update:semver-major"
 
-      # Prefer sharing the dialog plugin's rfd version and platform features.
+      # Prefer sharing the dialog plugin's rfd version and Windows features.
       # A separate version needs a concrete benefit and explicit native validation.
       - dependency-name: rfd
         update-types:

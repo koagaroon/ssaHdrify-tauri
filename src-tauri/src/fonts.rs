@@ -747,13 +747,6 @@ fn begin_font_scan(scan_id: u64) -> Result<ActiveScanGuard, String> {
 
 fn font_scan_cancelled(scan_id: u64) -> bool {
     // Acquire load pairs with the Release fetch_max in `cancel_font_scan`.
-    // On weakly-ordered ISAs (ARM64 / Apple Silicon) Relaxed gives no
-    // formal cross-thread visibility guarantee; the Acquire here + Release
-    // there bounds visibility to the next file iteration's poll. On x86
-    // both orderings compile to plain mov / lock cmpxchg, so the upgrade
-    // is free for the platform we ship on. Cost on ARM64: one barrier per
-    // file iteration in the scan worker — negligible against the actual
-    // font-parse cost.
     scan_id != NO_SCAN_ID && CANCEL_SCAN_ID.load(Ordering::Acquire) == scan_id
 }
 
@@ -3908,13 +3901,9 @@ pub fn cancel_font_scan(scan_id: u64) {
     // Mixed-ordering note: the load above is SeqCst because it reads
     // the same atomic that `begin_font_scan` writes via SeqCst CAS —
     // we want a consistent total order across all ACTIVE_SCAN_ID
-    // operations. The fetch_max below uses Release so weakly-ordered
-    // ISAs (ARM / Apple Silicon) make this write visible to the
-    // worker's poll loop on its next iteration via the paired Acquire
-    // load in `font_scan_cancelled`. The per-scan-id equality check
-    // in `font_scan_cancelled` is the actual correctness gate, not
-    // the ordering of CANCEL_SCAN_ID writes — the Release here is
-    // for prompt cancel propagation, not correctness.
+    // operations. The Release fetch_max pairs with the worker's Acquire
+    // load in `font_scan_cancelled`; keep that synchronization independent
+    // of the per-scan-id equality check.
     //
     // `fetch_max` ensures a stale cancel for an OLDER (smaller-id) scan
     // arriving after a newer cancel cannot regress CANCEL_SCAN_ID. The
@@ -4293,7 +4282,6 @@ fn path_under_dir(path: &str, dir: &str, sep: &str) -> bool {
 /// init plus the project's no-`set_var` policy instead, since adding Win32
 /// FFI for one path read is not justified at the current threat model
 /// (attacker would already need code execution to mutate env vars).
-#[cfg(windows)]
 static WINDOWS_SYSTEM_FONTS_DIR: Lazy<String> = Lazy::new(|| {
     let sys_root = std::env::var("SYSTEMROOT")
         .unwrap_or_else(|_| "C:\\Windows".to_string())
@@ -4305,7 +4293,6 @@ static WINDOWS_SYSTEM_FONTS_DIR: Lazy<String> = Lazy::new(|| {
 /// Cached, normalized per-user fonts dir (Windows 10 1809+). `None` if
 /// `LOCALAPPDATA` was unset at startup. Same caching rationale as
 /// `WINDOWS_SYSTEM_FONTS_DIR`.
-#[cfg(windows)]
 static WINDOWS_USER_FONTS_DIR: Lazy<Option<String>> = Lazy::new(|| {
     std::env::var("LOCALAPPDATA").ok().map(|p| {
         format!(
@@ -4315,145 +4302,27 @@ static WINDOWS_USER_FONTS_DIR: Lazy<Option<String>> = Lazy::new(|| {
     })
 });
 
-/// Cached, lowercase macOS per-user fonts dir. `None` if `$HOME` was
-/// unset at startup. Same caching rationale as `WINDOWS_USER_FONTS_DIR`:
-/// take an early snapshot so a runtime
-/// `set_var("HOME", ...)` can't redirect the system-fonts-dir gate.
-/// Lowercased here because the macOS arm of `is_in_system_fonts_dir`
-/// compares lowercased canonical paths (APFS is case-insensitive by
-/// default).
-#[cfg(target_os = "macos")]
-static MACOS_USER_FONTS_DIR: Lazy<Option<String>> = Lazy::new(|| {
-    std::env::var_os("HOME")
-        .map(|p| format!("{}/library/fonts", p.to_string_lossy().to_lowercase()))
-});
-
-/// Cached Linux per-user fonts dirs (`~/.fonts` + `~/.local/share/fonts`).
-/// Empty vector if `$HOME` was unset at startup. Same eager-snapshot
-/// reason as `MACOS_USER_FONTS_DIR`.
-#[cfg(all(unix, not(target_os = "macos")))]
-static LINUX_USER_FONT_DIRS: Lazy<Vec<String>> = Lazy::new(|| {
-    if let Some(home) = std::env::var_os("HOME") {
-        let home_str = home.to_string_lossy();
-        vec![
-            format!("{home_str}/.fonts"),
-            format!("{home_str}/.local/share/fonts"),
-        ]
-    } else {
-        Vec::new()
-    }
-});
-
 /// Force-initialize the cached system-fonts directory paths. Called from
 /// `lib.rs::run` at app startup so the env-var snapshot is taken before
 /// any user action could indirectly mutate the process environment.
 pub fn init_system_dirs() {
-    #[cfg(windows)]
-    {
-        Lazy::force(&WINDOWS_SYSTEM_FONTS_DIR);
-        Lazy::force(&WINDOWS_USER_FONTS_DIR);
-    }
-    #[cfg(target_os = "macos")]
-    {
-        Lazy::force(&MACOS_USER_FONTS_DIR);
-    }
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        Lazy::force(&LINUX_USER_FONT_DIRS);
-    }
+    Lazy::force(&WINDOWS_SYSTEM_FONTS_DIR);
+    Lazy::force(&WINDOWS_USER_FONTS_DIR);
 }
 
 /// Check whether a canonicalized path is under a known system fonts directory.
 fn is_in_system_fonts_dir(canonical: &Path) -> bool {
     let canonical_str = normalize_canonical_path(&canonical.to_string_lossy());
+    // Keep the same ASCII folding as the cached Windows directory paths.
+    let lower = canonical_str.to_ascii_lowercase().replace("/", "\\");
+    let under = |dir: &str| path_under_dir(&lower, dir, "\\");
 
-    if cfg!(windows) {
-        #[cfg(windows)]
-        {
-            // ASCII-fold only : NTFS uses simple case
-            // fold which diverges from Unicode case fold for a handful
-            // of non-ASCII codepoints (German ß folds to "ss" under
-            // Unicode but stays ß under NTFS; Greek final sigma ς).
-            // Mixed-case LOCALAPPDATA containing such a glyph would
-            // otherwise produce a runtime form that doesn't byte-match
-            // the eagerly-cached form.
-            let lower = canonical_str.to_ascii_lowercase().replace("/", "\\");
-            let under = |dir: &str| path_under_dir(&lower, dir, "\\");
-
-            if under(&WINDOWS_SYSTEM_FONTS_DIR) {
-                return true;
-            }
-            if let Some(user_dir) = WINDOWS_USER_FONTS_DIR.as_ref() {
-                if under(user_dir) {
-                    return true;
-                }
-            }
-            false
-        }
-        #[cfg(not(windows))]
-        {
-            let _ = canonical_str;
-            false
-        }
-    } else if cfg!(target_os = "macos") {
-        // APFS is case-insensitive by default; compare in lowercase so symlink
-        // chains that surface mixed-case paths still match canonical targets.
-        //
-        // Asymmetry with Windows arm WHY: full Unicode
-        // `to_lowercase()` here, not the Windows arm's
-        // `to_ascii_lowercase()`. APFS's case-fold IS the
-        // Unicode case-fold (single composed codepoint comparison) —
-        // German `ß` folds to `ss`, Greek final sigma `ς` folds to `σ`
-        // (per UTS #21). Using `to_ascii_lowercase` here would
-        // false-reject a `~/Library/Fonts` path on a system where the
-        // user's home dir contains those glyphs. The Windows arm uses
-        // `to_ascii_lowercase` because NTFS's simple-fold table
-        // intentionally does NOT apply UTS #21 transforms — the two
-        // OSes genuinely disagree on what's case-equivalent, and the
-        // gate must match the OS, not a shared abstraction.
-        let lower = canonical_str.to_lowercase();
-        let under = |dir: &str| path_under_dir(&lower, &dir.to_lowercase(), "/");
-        const MAC_DIRS: &[&str] = &[
-            // Alphabetized . Narrow to Adobe/Fonts — the
-            // wider /Library/Application Support tree holds every
-            // app's data, not just fonts, so allowing the whole tree
-            // weakens the "system font directory" gate.
-            "/Library/Application Support/Adobe/Fonts",
-            "/Library/Fonts",
-            "/System/Library/AssetsV2",
-            "/System/Library/Fonts",
-            "/opt/homebrew/share/fonts",
-            "/usr/local/share/fonts",
-        ];
-        if MAC_DIRS.iter().any(|d| under(d)) {
-            return true;
-        }
-        // Per-user fonts: ~/Library/Fonts/, from the eager startup snapshot.
-        // Pre-lowercased so we compare directly against `lower` without
-        // re-folding inside `under`.
-        #[cfg(target_os = "macos")]
-        if let Some(user_dir) = MACOS_USER_FONTS_DIR.as_ref() {
-            if path_under_dir(&lower, user_dir, "/") {
-                return true;
-            }
-        }
-        false
-    } else {
-        // Linux — same eager-snapshot pattern as macOS / Windows
-        // . The static is populated at startup;
-        // here we only read it.
-        let under = |dir: &str| path_under_dir(&canonical_str, dir, "/");
-        if under("/usr/share/fonts") || under("/usr/local/share/fonts") {
-            return true;
-        }
-        #[cfg(all(unix, not(target_os = "macos")))]
-        for user_dir in LINUX_USER_FONT_DIRS.iter() {
-            if under(user_dir) {
-                return true;
-            }
-        }
-        false
+    if under(&WINDOWS_SYSTEM_FONTS_DIR) {
+        return true;
     }
+    WINDOWS_USER_FONTS_DIR
+        .as_ref()
+        .is_some_and(|user_dir| under(user_dir))
 }
 
 /// Subset a font file to only include the specified codepoints.
@@ -4467,9 +4336,8 @@ fn is_in_system_fonts_dir(canonical: &Path) -> bool {
 /// Public IPC entry point + the CLI's standalone-embed callsite both
 /// invoke this function as a regular `pub fn`; the GUI reaches it through
 /// `ipc_commands::subset_font_bytes`, which runs this function on the blocking
-/// pool. Windows/Linux use a raw `tauri::ipc::Response`; Apple targets retain
-/// base64 because Tauri 2.11's eval fallback JSON-serializes raw bytes as a
-/// numeric array there. Both forms avoid the worst wire shape on their target.
+/// pool and returns a raw `tauri::ipc::Response` to avoid expanding each
+/// byte into a JSON number.
 /// CLI's chain mode marshals subsets via base64 inline (see
 /// `process_one_chain_input`); CLI's standalone embed bundles them
 /// into `engine::FontSubsetPayload` and ships through the engine's
@@ -5071,21 +4939,13 @@ mod tests {
 
     #[test]
     fn explicit_font_path_revalidates_a_canonical_target_with_bidi_control() {
-        let selected = if cfg!(windows) {
-            r"C:\selected\font.ttf"
-        } else {
-            "/selected/font.ttf"
-        };
+        let selected = r"C:\selected\font.ttf";
         // A filesystem alias can legitimately resolve a visually safe picker
         // path to an existing filename containing U+202E. Unlike a literal
         // `.` component, canonicalization does not normalize this issue shape
         // away, so the injected target models a reachable post-resolution
         // rejection without requiring symlink privileges in CI.
-        let resolved_with_bidi = if cfg!(windows) {
-            PathBuf::from("C:\\resolved\\font\u{202e}ttf.ttf")
-        } else {
-            PathBuf::from("/resolved/font\u{202e}ttf.ttf")
-        };
+        let resolved_with_bidi = PathBuf::from("C:\\resolved\\font\u{202e}ttf.ttf");
         let mut canonicalizer_called = false;
 
         let error = canonicalize_and_validate_explicit_font_path_with(selected, |received| {
@@ -5102,28 +4962,17 @@ mod tests {
 
     #[test]
     fn explicit_font_path_returns_only_a_validated_normalized_target() {
-        let selected = if cfg!(windows) {
-            r"C:\selected\font.ttf"
-        } else {
-            "/selected/font.ttf"
-        };
-        #[cfg(windows)]
+        let selected = r"C:\selected\font.ttf";
         let canonical = PathBuf::from(r"\\?\C:\resolved\font.ttf");
-        #[cfg(not(windows))]
-        let canonical = PathBuf::from("/resolved/font.ttf");
 
         let (resolved, normalized) =
             canonicalize_and_validate_explicit_font_path_with(selected, |_| Ok(canonical.clone()))
                 .expect("a safe canonical target should validate");
 
         assert_eq!(resolved, canonical);
-        #[cfg(windows)]
         assert_eq!(normalized, r"C:\resolved\font.ttf");
-        #[cfg(not(windows))]
-        assert_eq!(normalized, "/resolved/font.ttf");
     }
 
-    #[cfg(windows)]
     #[test]
     fn explicit_font_path_rejects_ads_introduced_by_resolution() {
         let error =

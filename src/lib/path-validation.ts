@@ -1,5 +1,4 @@
 import { normalizeOutputKey } from "./dedup-helpers";
-import { isWindowsRuntime } from "./platform";
 import { ASCII_CONTROL_CHARS, hasUnicodeControls, stripUnicodeControls } from "./unicode-controls";
 
 /**
@@ -79,9 +78,7 @@ export const WINDOWS_RESERVED_NAMES = new Set([
  * `validate_font_family`) rejects all of Cc; matching the same span
  * here keeps TS↔Rust parity.
  *
- * Cross-platform note: `:` is technically valid on macOS / Linux but
- * we reject it everywhere — this app's primary platform is Windows
- * and outputs cross machines, so the strictest filesystem's rules win.
+ * Windows-illegal punctuation is rejected before any output is written.
  */
 // `{` and `}` are rejected too (NTFS allows them) so that templates
 // with unrecognized tokens — e.g., `{Format}` typed instead of
@@ -127,7 +124,7 @@ export interface InputPathParts {
 export interface OutputDirectoryParts {
   /** Slash-normalized directory with trailing separators removed. */
   dir: string;
-  /** Original directory after platform-specific separator normalization. */
+  /** Original directory after separator normalization. */
   normalized: string;
   /** Whether the chosen directory used Windows-style backslashes. */
   usedBackslash: boolean;
@@ -141,7 +138,7 @@ export interface OutputDirectoryParts {
  * Accepts:
  *   - Drive-rooted Windows paths: `C:\foo\bar.ass`, `C:/foo/bar.ass`
  *   - Drive-root files: `C:\bar.ass`, `Z:/bar.ass` (dir = `C:` / `Z:`)
- *   - POSIX absolute paths: `/foo/bar.ass`
+ *   - Rooted paths using forward slashes: `/foo/bar.ass`
  *   - UNC paths: `\\server\share\bar.ass`
  *
  * Rejects:
@@ -170,15 +167,8 @@ export function decomposeInputPath(inputPath: string): InputPathParts {
   if (!inputPath) {
     throw new Error("Input path must be absolute");
   }
-  // ANY backslash → output uses backslashes — but ONLY on Windows.
-  // On POSIX, `\` is a valid filename character, not a path separator;
-  // treating it as one normalizes
-  // `/home/u/ep\01.srt` to `/home/u/ep/01.srt` and replaces output
-  // slashes with backslashes, producing `\home\u\ep\01.shifted.srt`
-  // which is a relative filename rather than a path under /home/u.
-  // Mixed-separator Windows paths (a `\\server\share/file.ass` from
-  // upstream JS normalization) still bias to native style on Windows.
-  const usedBackslash = isWindowsRuntime && inputPath.includes("\\");
+  // Mixed-separator paths retain the input's native backslash style.
+  const usedBackslash = inputPath.includes("\\");
   const normalized = usedBackslash ? inputPath.replace(/\\/g, "/") : inputPath;
 
   // Reject control / NUL chars early. Windows would silently truncate
@@ -220,8 +210,8 @@ export function decomposeInputPath(inputPath: string): InputPathParts {
   // be `..`). Callers see "must be absolute" first; absolute paths with
   // `..` segments still get caught immediately after.
 
-  // Absolute = (a) starts with `/` (POSIX root or UNC after backslash
-  // conversion), or (b) drive letter + separator. Drive-relative
+  // Accept rooted paths (including normalized UNC paths) or a drive
+  // letter + separator. Drive-relative
   // `C:foo.ass` (no separator after colon) fails this check —
   // intentional: that path shape has no defined meaning at this layer.
   const isAbsolute = normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized);
@@ -260,19 +250,8 @@ export function decomposeInputPath(inputPath: string): InputPathParts {
 }
 
 /**
- * Filesystem-aware path equality. Returns true if two paths refer to
- * the same file on the runtime's filesystem.
- *
- * Why two gates, not one:
- * - **Separator normalization** is conditional on `isWindowsRuntime`. On
- *   Windows `/` and `\` are interchangeable separators; on POSIX `\` is
- *   a valid filename character. Normalizing
- *   `EP\01.ass` to `EP/01.ass` on Linux turns a single file into a path.
- * - **Case folding** is conditional on `isCaseInsensitiveFs`. NTFS (Win)
- *   and APFS / HFS+ (macOS default) are case-insensitive; Linux ext4 /
- *   btrfs / xfs are case-sensitive. Folding case on Linux false-conflates
- *   `Episode.ass` and `episode.ass`, which legitimately are distinct
- *   files there.
+ * Windows path equality using Unicode normalization, separator folding,
+ * and case folding.
  *
  * Use this anywhere two paths need to be compared for "is this the same
  * file" semantics: cross-tab duplicate guard, self-overwrite check,
@@ -290,7 +269,7 @@ export function pathsEqualOnFs(a: string, b: string): boolean {
 }
 
 function normalizeForPathValidation(path: string): string {
-  return isWindowsRuntime ? path.replace(/\\/g, "/") : path;
+  return path.replace(/\\/g, "/");
 }
 
 function trimTrailingPathSeparators(path: string): string {
@@ -305,8 +284,6 @@ function assertNoUnsupportedWindowsOutputDirectoryComponents(
   normalizedOutput: string,
   terminalComponentIsDirectory: boolean
 ): void {
-  if (!isWindowsRuntime) return;
-
   const lower = normalizedOutput.toLowerCase();
   if (lower.startsWith("//?/") || lower.startsWith("//./")) return;
 
@@ -386,22 +363,9 @@ function assertOutputPathLength(normalizedOutput: string): void {
   // passes a > 260 check but trips ERROR_PATH_NOT_FOUND at write time.
   // Use 259 to surface the limit with a clear error here. Long-local
   // paths get the OS extended limit (32767 incl. null → 32766 usable).
-  //
-  // POSIX runtimes get PATH_MAX = 4096 (Linux's standard limit,
-  // matches Rust-side `RELOCATED_PATH_MAX_LEN` cfg-gated POSIX path)
-  // instead of the Windows 259. An earlier hard-coded 259 false-
-  // rejected legitimate Linux paths approaching ~260 chars; the
-  // per-OS branch closes the gap.
   const lower = normalizedOutput.toLowerCase();
   const isLongLocalPath = lower.startsWith("//?/") && !lower.startsWith("//?/unc/");
-  let maxPathLen: number;
-  if (isLongLocalPath) {
-    maxPathLen = 32766;
-  } else if (isWindowsRuntime) {
-    maxPathLen = 259;
-  } else {
-    maxPathLen = 4096;
-  }
+  const maxPathLen = isLongLocalPath ? 32766 : 259;
   if (normalizedOutput.length > maxPathLen) {
     throw new Error(`Output path too long (${normalizedOutput.length} chars, max ${maxPathLen})`);
   }
@@ -423,7 +387,7 @@ export function decomposeOutputDirectoryPath(outputDir: string): OutputDirectory
     throw new Error("Output directory must be absolute");
   }
 
-  const usedBackslash = isWindowsRuntime && outputDir.includes("\\");
+  const usedBackslash = outputDir.includes("\\");
   const normalized = usedBackslash ? outputDir.replace(/\\/g, "/") : outputDir;
   assertOutputPathShape(normalized, true);
 
@@ -679,11 +643,6 @@ export function assertSafeOutputPath(outputPath: string, inputPath: string): voi
 
   assertOutputPathLength(normalizedOutput);
 
-  // Self-overwrite. Filesystem-aware: case-folding only on Windows /
-  // macOS where the FS is case-insensitive. On Linux ext4 / btrfs / xfs,
-  // `Episode.ass` and `episode.ass` are distinct files so unconditional
-  // lowercase would false-reject a legitimate `episode.ass` output when
-  // the input was `Episode.ass`.
   if (pathsEqualOnFs(normalizedOutput, normalizedInput)) {
     throw new Error("Output path is the same as input (would overwrite source file)");
   }
@@ -708,9 +667,8 @@ export function assertSafeOutputPathInDirectory(
 
 /**
  * Extract the filename from a full file path and strip BiDi / zero-
- * width + ASCII control characters. Backslash is treated as a separator
- * only on Windows (POSIX-correctness gate, parity with
- * `decomposeInputPath`); on POSIX `\` is a valid filename character.
+ * width + ASCII control characters. Both Windows path separator styles
+ * are accepted, matching `decomposeInputPath`.
  *
  * Empty-result fallback: `String.prototype.split` always returns a
  * non-empty array and `pop()` returns `""` for trailing-separator
@@ -733,7 +691,7 @@ export function assertSafeOutputPathInDirectory(
  * silently dropped trailing-separator paths from the rename plan).
  */
 export function fileNameFromPath(path: string): string {
-  const normalized = isWindowsRuntime ? path.replace(/\\/g, "/") : path;
+  const normalized = path.replace(/\\/g, "/");
   const raw = normalized.split("/").pop() || path;
   return stripUnicodeControls(raw).replace(new RegExp(`[${ASCII_CONTROL_CHARS}]`, "g"), "");
 }

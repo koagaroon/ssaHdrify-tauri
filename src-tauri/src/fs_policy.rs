@@ -202,7 +202,6 @@ mod tests {
         assert!(err.contains("conflicting requireLiteralLeadingDot"));
     }
 
-    #[cfg(windows)]
     #[test]
     fn allow_all_pattern_matches_normal_drive_root_outputs() {
         let pattern = tauri::fs::Pattern::new("**").unwrap();
@@ -224,7 +223,6 @@ mod tests {
         }
     }
 
-    #[cfg(windows)]
     #[test]
     fn locked_tauri_glob_matcher_contract_is_case_insensitive_on_windows() {
         // Dependency contract audit, not an end-to-end application Scope test:

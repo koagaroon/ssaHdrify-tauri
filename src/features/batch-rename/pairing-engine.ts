@@ -26,7 +26,6 @@ import { normalizeOutputKey } from "../../lib/dedup-helpers";
 import type { BatchRenameFilesState } from "../../lib/FileContext";
 import { LANG_TAGS } from "../../lib/lang-detection";
 import { assertSafeOutputFilename, assertSafeOutputPath } from "../../lib/path-validation";
-import { isWindowsRuntime } from "../../lib/platform";
 
 // ── Bracket cleanup ──────────────────────────────────────
 
@@ -817,21 +816,8 @@ export function deriveRenameOutputPath(
     targetDir = chosenDir;
   }
 
-  // Preserve native path separator from the subtitle path. Only emit
-  // backslashes when running on Windows: on POSIX `\` is a valid
-  // filename character , and a path like
-  // `/home/u/Show\01.ass` would otherwise have every `/` rewritten to
-  // `\`, producing a relative path rooted at the cwd instead of the
-  // intended directory.
-  const usedBackslash = isWindowsRuntime && subtitlePath.includes("\\");
-  // Backslash → forward only on Windows (POSIX-correctness gate). On
-  // POSIX `\` is a valid filename character; a user-chosen directory
-  // whose name contains `\` would otherwise be split mid-segment and
-  // produce a wrong output path.
-  const normTargetDir = (isWindowsRuntime ? targetDir.replace(/\\/g, "/") : targetDir).replace(
-    /\/$/,
-    ""
-  );
+  const usedBackslash = subtitlePath.includes("\\");
+  const normTargetDir = targetDir.replace(/\\/g, "/").replace(/\/$/, "");
   const outputPath = normTargetDir ? `${normTargetDir}/${outName}` : outName;
 
   // Apply the shared path validators (Windows reserved name / path
@@ -974,31 +960,19 @@ export function assignSubtitleToRow(
  *  paired video — running rename/copy on it has no effect (or fails,
  *  for copyFile(src, src) on Windows) and must be filtered out before
  *  the overwrite-confirm dialog so the user doesn't see a spurious
- *  warning. Case folding is delegated to `normalizeOutputKey`, which
- *  is FS-aware: it gates lowercasing on `isCaseInsensitiveFs`, so
- *  Linux ext4 / btrfs / xfs preserves case distinction and `EP01.ass`
- *  vs `ep01.ass` are NOT no-op there. */
+ *  warning. Case folding is delegated to `normalizeOutputKey`. */
 export function isNoOpRename(subtitlePath: string, outputPath: string): boolean {
   return normalizeOutputKey(subtitlePath) === normalizeOutputKey(outputPath);
 }
 
 function baseName(path: string): string {
-  // Backslash → forward only on Windows (POSIX-correctness gate,
-  // parity with `dirname` below and `pathsEqualOnFs`). On POSIX a
-  // file literally named `foo\bar.ass` must return the full name;
-  // unconditional rewriting truncates it to `bar.ass`.
-  const windowsPath = isWindowsRuntime && path.includes("\\");
-  const norm = windowsPath ? path.replace(/\\/g, "/") : path;
+  const norm = path.replace(/\\/g, "/");
   const lastSlash = norm.lastIndexOf("/");
   return lastSlash >= 0 ? norm.slice(lastSlash + 1) : norm;
 }
 
 function dirname(path: string): string {
-  // Backslashes are only path separators on Windows; on POSIX they're
-  // valid filename characters. The earlier unconditional
-  // `path.replace(/\\/g, "/")` would split POSIX filenames that
-  // contain a backslash.
-  const windowsPath = isWindowsRuntime && path.includes("\\");
+  const windowsPath = path.includes("\\");
   const norm = windowsPath ? path.replace(/\\/g, "/") : path;
   const lastSlash = norm.lastIndexOf("/");
   if (lastSlash < 0) return "";

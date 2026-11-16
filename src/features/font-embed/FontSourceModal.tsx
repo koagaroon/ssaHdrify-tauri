@@ -13,7 +13,6 @@ import {
 } from "../../lib/tauri-api";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { sanitizeError, sanitizeForDialog } from "../../lib/dedup-helpers";
-import { isWindowsRuntime } from "../../lib/platform";
 import { useI18n } from "../../i18n/useI18n";
 import type { FontStyleLabels, FontUsage } from "./font-collector";
 import { fontKeyLabel } from "./font-collector";
@@ -72,10 +71,7 @@ interface Props {
 }
 
 function basename(path: string): string {
-  // Backslash → forward only on Windows (POSIX-correctness gate). On
-  // POSIX `\` is a valid filename character; a folder literally named
-  // `a\b` must display as `a\b`, not as `b`.
-  const norm = isWindowsRuntime ? path.replace(/\\/g, "/") : path;
+  const norm = path.replace(/\\/g, "/");
   return norm.split("/").filter(Boolean).pop() ?? path;
 }
 

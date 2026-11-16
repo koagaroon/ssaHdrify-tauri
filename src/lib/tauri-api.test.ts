@@ -145,7 +145,7 @@ describe("writeStyleEditOutput", () => {
 });
 
 describe("subsetFont", () => {
-  it("accepts Tauri's raw Windows/Linux byte response", async () => {
+  it("accepts Tauri's raw byte response", async () => {
     const rawBytes = new Uint8Array([0, 1, 127, 255]);
     invokeMock.mockResolvedValueOnce(rawBytes.buffer);
 
@@ -155,14 +155,6 @@ describe("subsetFont", () => {
       fontIndex: 2,
       codepoints: [65, 0x4e2d],
     });
-  });
-
-  it("accepts the compact base64 fallback used on Apple targets", async () => {
-    invokeMock.mockResolvedValueOnce("AAH//g==");
-
-    await expect(subsetFont("/Library/Fonts/example.ttf", 0, [65])).resolves.toEqual(
-      new Uint8Array([0, 1, 255, 254])
-    );
   });
 });
 

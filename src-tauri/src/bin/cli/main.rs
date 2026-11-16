@@ -100,10 +100,7 @@ struct GlobalOptions {
     no_cache: bool,
 
     /// Override the default font cache file path. Default location
-    /// follows each OS's user-data convention: `%APPDATA%/ssahdrify/`
-    /// on Windows, `$XDG_DATA_HOME/ssahdrify/` or `~/.local/share/ssahdrify/`
-    /// on Linux, `~/Library/Application Support/ssahdrify/` on macOS,
-    /// always named `cli_font_cache.sqlite3`. Useful for testing or
+    /// is `%APPDATA%/ssahdrify/cli_font_cache.sqlite3`. Useful for testing or
     /// non-default layouts. 覆盖字体缓存文件路径。
     // Global for the same shared-parser reason as no_cache. Cache-aware
     // commands validate the path before opening it; chain reports it as inert.
@@ -2003,8 +2000,8 @@ fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<ExitCode, Strin
     // the other subcommands surface as "duplicate output path in
     // planned batch".
     //
-    // set size is transitively bounded by OS argv (~32 KB
-    // on Windows, ~2 MB on Linux). One entry per `plan.input_files`
+    // Set size is transitively bounded by the Windows command-line limit.
+    // One entry per `plan.input_files`
     // element, each a path string from clap argv parsing — same
     // transitive bound that run_hdr / run_shift / run_embed rely on,
     // so no chain-local cap is added.
@@ -2397,17 +2394,10 @@ fn predict_chain_output_path(
     // — parity with TS `assertSafeOutputFilename` +
     // `util.rs::validate_ipc_path`. The
     // Trailing ASCII space/dot output names are rejected below under the
-    // shared product contract, mirroring TS filename validation on every OS.
+    // shared product contract, mirroring TS filename validation.
     // Returning None preserves predictor abstention: V8 + TS supplies the
     // authoritative user-facing rejection instead of using a guessed path.
     //
-    // Cross-platform asymmetry note : on Linux/macOS
-    // the TS-side reserved-name check still rejects `COM¹.ass` etc.,
-    // even though those names are perfectly valid on POSIX. This is
-    // a Windows-first project; the asymmetry doesn't bite today.
-    // Revisit if a future build targets POSIX as a first-class
-    // platform (gate `WINDOWS_RESERVED_NAMES` in TS on
-    // `isWindowsRuntime`).
     // rejection set tightened to match
     // TS-side `assertSafeOutputFilename`. Previously Rust rejected
     // /\\\0 + starts_with('.') + drive-letter prefix only; TS rejected
@@ -2420,7 +2410,7 @@ fn predict_chain_output_path(
     // predictor's clearer "this template will not work" gate).
     //
     // Dropped `starts_with('.')` reject — TS doesn't reject leading
-    // dots (".hidden.ass" is a legitimate POSIX dotfile shape).
+    // dots (".hidden.ass" is a legitimate filename).
     //
     // Per-char loop covers control chars + NTFS punctuation + BiDi/zw
     // in one pass; mirrors `util::validate_ipc_path` but for the
@@ -4904,7 +4894,7 @@ fn emit_font_source_summary(
     //
     // sanitize_for_display is required here because this site is a
     // stdout/println interpolation and `display_path` is a pure
-    // formatter. A crafted POSIX font-dir name containing ANSI escape
+    // formatter. A crafted font-dir name containing ANSI escape
     // sequences or U+202E would otherwise reach the terminal verbatim
     // and corrupt the verbose summary.
     let (path_suffix_en, path_suffix_zh) = match path {
@@ -5555,8 +5545,7 @@ fn group_resolved_fonts_by_face(
 ///
 /// CLI lens: `subset_font` is an in-process Rust call from this
 /// binary, not an IPC boundary. The "IPC cap" framing only applies
-/// on the GUI / Tauri path where `subset_font_bytes` uses raw bytes on
-/// Windows/Linux and a base64 fallback on Apple targets.
+/// on the GUI / Tauri path where `subset_font_bytes` returns raw bytes.
 ///
 /// Cross-language drift defense: `dedup_cap_matches_ipc_cap` in
 /// `mod tests` pins the equality with
@@ -7044,10 +7033,8 @@ fn planned_report(
 // Trust model: CLI path arguments are user-controlled. We normalize
 // them to absolute form here but DO NOT canonicalize (which
 // would resolve symlinks). On Windows, fs::canonicalize returns the
-// `\\?\C:\...` extended-path form which surprises downstream tools;
-// on POSIX it would silently follow symlinks the user may have set
-// up intentionally. The trust boundary is "the user supplied this
-// path" — any symlinks they set up are theirs to manage.
+// `\\?\C:\...` extended-path form which surprises downstream tools.
+// Filesystem safety checks resolve aliases at their own boundaries.
 fn absolute_path(path: &Path) -> Result<PathBuf, String> {
     if !path.is_absolute() && matches!(path.components().next(), Some(Component::Prefix(_))) {
         return Err(format!(
@@ -7099,23 +7086,9 @@ fn absolute_path(path: &Path) -> Result<PathBuf, String> {
     Ok(normalized)
 }
 
-// Cap on the relocated output path — Windows MAX_PATH minus one.
-// Windows-only: POSIX has PATH_MAX 4096 (Linux) / 1024 (macOS), so
-// applying 259 there over-restricts legitimate long paths
-// . Long-local paths (`\\\\?\\C:\\...`) get the extended
-// cap on Windows. UNC long paths keep the standard cap because the
-// server side may not honor the extended namespace.
-#[cfg(target_os = "windows")]
+// Keep ordinary and extended-length Windows paths within their existing limits.
 const RELOCATED_PATH_MAX_LEN: usize = 259;
-#[cfg(target_os = "windows")]
 const RELOCATED_LONG_PATH_MAX_LEN: usize = 32766;
-// POSIX: use PATH_MAX 4096 (Linux's value). macOS PATH_MAX is 1024
-// but most modern macOS filesystems tolerate paths past that —
-// matching Linux's 4096 keeps the cap permissive enough for both.
-#[cfg(not(target_os = "windows"))]
-const RELOCATED_PATH_MAX_LEN: usize = 4096;
-#[cfg(not(target_os = "windows"))]
-const RELOCATED_LONG_PATH_MAX_LEN: usize = 4096;
 
 fn relocate_output_path(path: &str, output_dir: Option<&Path>) -> Result<PathBuf, String> {
     let path = PathBuf::from(path);
@@ -7299,20 +7272,15 @@ fn display_path(path: &Path) -> String {
     // (`emit_file_report`, `format_oversized_caption_warning`, etc.)
     // via `sanitize_for_display`.
     let raw = path.to_string_lossy().into_owned();
-    if cfg!(windows) {
-        raw.replace('/', "\\")
-    } else {
-        raw
-    }
+    raw.replace('/', "\\")
 }
 
 /// Strip control + BiDi + zero-width characters from a path string
 /// for safe interpolation into human-readable output (stderr/println).
 /// The same filter set as `validate_ipc_path` rejects, but here we
 /// strip rather than refuse: argv-supplied filenames may
-/// legitimately contain these characters on POSIX (Linux filenames
-/// accept any byte except `/` and NUL), so the conservative choice is
-/// to launder them at display time rather than fail the whole batch.
+/// contain invisible Unicode characters, so filter only the display text
+/// without changing which filesystem path an operation addresses.
 ///
 /// JSON output doesn't need this helper — `serde_json` escapes control
 /// characters as `\uXXXX` automatically, so machine-parseable readers
@@ -7393,19 +7361,8 @@ fn normalize_output_key(path: &Path) -> String {
 
 fn normalize_output_key_after_strip(s: &str) -> String {
     let normalized = s.replace('\\', "/").nfc().collect::<String>();
-    // Lowercase on case-insensitive filesystems : Windows
-    // NTFS and macOS APFS / HFS+ default to case-insensitive, so
-    // `Episode.ass` and `episode.ass` collide on disk and must collapse
-    // to one dedup key. Linux ext4 / btrfs / xfs are case-sensitive and
-    // keep distinct names distinct. macOS users who opt into the
-    // case-sensitive APFS variant are <1% and have to live with the
-    // over-merge (better to over-merge than to under-merge and silently
-    // overwrite outputs).
-    if cfg!(windows) || cfg!(target_os = "macos") {
-        normalized.to_lowercase()
-    } else {
-        normalized
-    }
+    // Case aliases share one output key on Windows.
+    normalized.to_lowercase()
 }
 
 fn localize(globals: &GlobalOptions, en: String, zh: String) -> String {
@@ -7638,8 +7595,6 @@ mod tests {
         assert!(super::checked_subset_total(usize::MAX, 1).is_err());
     }
 
-    #[cfg(unix)]
-    use super::run_refresh_fonts;
     use super::{
         absolute_path, apply_effective_embedded_font_names, apply_subset_checks_to_diagnostics,
         build_font_qa_summary, check_cache_drift, classify_locale, copy_file_output,
@@ -7757,7 +7712,6 @@ mod tests {
         );
     }
 
-    #[cfg(windows)]
     #[test]
     fn absolute_path_handles_rooted_windows_paths_and_rejects_drive_relative_paths() {
         let cwd = std::env::current_dir().unwrap();
@@ -8310,29 +8264,6 @@ mod tests {
         assert_eq!(sources[0].files.len(), 1);
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn recursive_refresh_rejects_a_symlink_root_before_canonicalizing() {
-        use std::os::unix::fs::symlink;
-
-        let guard = TempFontDbDir(create_cli_font_db_dir().unwrap());
-        let target = guard.0.join("real-library");
-        let linked = guard.0.join("linked-library");
-        fs::create_dir_all(&target).unwrap();
-        symlink(&target, &linked).unwrap();
-        let mut globals = test_globals();
-        globals.cache_file = Some(guard.0.join("cache.sqlite3"));
-        let error = run_refresh_fonts(
-            &globals,
-            RefreshFontsArgs {
-                font_dirs: Vec::new(),
-                recursive_font_dirs: vec![linked],
-            },
-        )
-        .expect_err("the CLI writer path must reject a linked root");
-        assert!(error.contains("reparse-point root"));
-    }
-
     #[test]
     fn non_font_warnings_do_not_suggest_strict_embed_policy() {
         let globals = test_globals();
@@ -8671,14 +8602,7 @@ mod tests {
         ];
 
         let duplicates = duplicate_rename_output_keys(&rows);
-        // Lowercase expected on case-insensitive filesystems (Windows + macOS);
-        // matches the production normalize_output_key_after_strip logic so
-        // Linux CI sees a case-distinct key and macOS/Windows see the folded form.
-        let expected_key = if cfg!(windows) || cfg!(target_os = "macos") {
-            "c:/subs/episode.ass"
-        } else {
-            "C:/Subs/Episode.ass"
-        };
+        let expected_key = "c:/subs/episode.ass";
         assert!(
             duplicates.contains(expected_key),
             "no-op row's target should be claimed in the seen set"
@@ -8735,11 +8659,7 @@ mod tests {
         ];
 
         let duplicates = duplicate_rename_output_keys(&rows);
-        let expected_key = if cfg!(windows) || cfg!(target_os = "macos") {
-            "c:/subs/episode.sc.ass"
-        } else {
-            "C:/Subs/Episode.sc.ass"
-        };
+        let expected_key = "c:/subs/episode.sc.ass";
         assert!(
             duplicates.contains(expected_key),
             "canonical aliases that resolve to the same output must be blocked"
@@ -8777,11 +8697,7 @@ mod tests {
 
         let duplicates = duplicate_rename_output_keys(&rows);
         assert_eq!(duplicates.len(), 1);
-        let expected_key = if cfg!(windows) || cfg!(target_os = "macos") {
-            "c:/subs/episode.ass"
-        } else {
-            "C:/Subs/Episode.ass"
-        };
+        let expected_key = "c:/subs/episode.ass";
         assert!(duplicates.contains(expected_key));
     }
 
@@ -8815,9 +8731,7 @@ mod tests {
         let precomposed = normalize_output_key(Path::new("C:/Subs/Caf\u{00e9}.ass"));
         assert_eq!(decomposed, precomposed);
 
-        if cfg!(windows) || cfg!(target_os = "macos") {
-            assert_eq!(precomposed, "c:/subs/caf\u{00e9}.ass");
-        }
+        assert_eq!(precomposed, "c:/subs/caf\u{00e9}.ass");
     }
 
     #[test]
@@ -8870,7 +8784,6 @@ mod tests {
         assert_eq!(result, out_dir.join("episode.shifted.ass"));
     }
 
-    #[cfg(windows)]
     #[test]
     fn relocate_output_path_rejects_intermediate_trailing_ascii_dot() {
         let out_dir = PathBuf::from(r"D:\real-output.");
@@ -8881,7 +8794,6 @@ mod tests {
         );
     }
 
-    #[cfg(windows)]
     #[test]
     fn relocate_output_path_preserves_verbatim_intermediate_trailing_dot() {
         let out_dir = PathBuf::from(r"\\?\C:\real-output.");
@@ -9265,8 +9177,8 @@ mod tests {
         // display_path's return value is used operationally — as the
         // input to `read_text_detect_encoding_inner` and as the
         // `HdrPathRequest.input_path` field sent to the engine. If a
-        // POSIX filename legitimately contains a control char or
-        // U+202E, stripping at display_path would make the CLI open a
+        // path contains a control char or U+202E, stripping at
+        // display_path would make the CLI open a
         // DIFFERENT file (or the same name minus the special char,
         // which may also exist) — a path-confusion bug. Display-time
         // sanitization belongs in `sanitize_for_display` and is

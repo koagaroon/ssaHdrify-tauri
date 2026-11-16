@@ -388,23 +388,16 @@ fn fail_fast_blocks_a_threatened_endpoint_before_it_can_move() {
     let _ = fs::remove_dir_all(work);
 }
 
-#[cfg(any(windows, unix))]
 struct DirectoryAlias(PathBuf);
 
-#[cfg(any(windows, unix))]
 impl Drop for DirectoryAlias {
     fn drop(&mut self) {
-        #[cfg(windows)]
         let _ = fs::remove_dir(&self.0);
-        #[cfg(unix)]
-        let _ = fs::remove_file(&self.0);
     }
 }
 
-#[cfg(any(windows, unix))]
 fn directory_alias(real: &Path) -> DirectoryAlias {
     let alias = real.with_file_name("selected-alias");
-    #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         let output = Command::new("powershell.exe")
@@ -423,8 +416,6 @@ fn directory_alias(real: &Path) -> DirectoryAlias {
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(real, &alias).expect("create directory alias");
     DirectoryAlias(alias)
 }
 
@@ -438,7 +429,6 @@ fn rename_args(mode: &str, output_dir: &Path) -> Vec<String> {
     args
 }
 
-#[cfg(any(windows, unix))]
 #[test]
 fn alias_unpaired_selected_inputs_are_protected_in_every_mode_and_dry_run() {
     for mode in ["rename", "copy-to-video", "copy-to-chosen"] {
@@ -487,7 +477,6 @@ fn alias_unpaired_selected_inputs_are_protected_in_every_mode_and_dry_run() {
     }
 }
 
-#[cfg(any(windows, unix))]
 #[test]
 fn alias_conflict_blocks_its_earlier_endpoint_before_fail_fast() {
     for mode in ["rename", "copy-to-video", "copy-to-chosen"] {
@@ -520,7 +509,6 @@ fn alias_conflict_blocks_its_earlier_endpoint_before_fail_fast() {
     }
 }
 
-#[cfg(any(windows, unix))]
 #[test]
 fn alias_conflict_protects_an_executable_no_op_source_row() {
     for mode in ["rename", "copy-to-video", "copy-to-chosen"] {
@@ -560,7 +548,6 @@ fn alias_conflict_protects_an_executable_no_op_source_row() {
     }
 }
 
-#[cfg(any(windows, unix))]
 #[test]
 fn alias_of_own_source_is_a_no_op_instead_of_an_input_conflict() {
     for mode in ["rename", "copy-to-video", "copy-to-chosen"] {
