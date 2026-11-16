@@ -6,7 +6,7 @@ authors = ["koagaroon"]
 license = "GPL-3.0-or-later"
 repository = "https://github.com/koagaroon/ssaHdrify-tauri"
 edition = "2021"
-rust-version = "1.99.1"
+rust-version = "1.100.0"
 # Required because the crate now ships two bin targets (the implicit
 # `ssahdrify` GUI binary from src/main.rs + the explicit `[[bin]]`
 # entry for `ssahdrify-cli`). Without `default-run`, `cargo run` and
@@ -18,7 +18,7 @@ default-run = "ssahdrify"
 
 [lib]
 name = "app_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+crate-type = ["rlib"]
 
 # The GUI binary `ssahdrify` uses Cargo's
 # implicit `src/main.rs` discovery — no `[[bin]]` block needed (and
@@ -45,10 +45,9 @@ serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
 tauri = { version = "2.12.3", features = [] }
 tauri-plugin-log = "2.10.1"
-# Dialog 2.8.4 selects rfd 0.17.2, which lacks the GTK3 description-format
-# fix in rfd 0.16.1. Recheck that fix before advancing the shared dialog line.
-tauri-plugin-dialog = "=2.8.3"
+tauri-plugin-dialog = { version = "2.8.4", default-features = false }
 tauri-plugin-fs = "2.7.0"
+tauri-plugin-single-instance = "2.5.3"
 # Exact-pinned (not a semver-compatible range) because deno_core changes its
 # public API at most patch boundaries — V8 binding signatures
 # (`execute_script`, `JsRuntime`, scope macros) and feature-flag
@@ -67,7 +66,7 @@ clap = { version = "4.6.4", features = ["derive"] }
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "time"] }
 font-kit = "0.14"
 once_cell = "1"
-rusqlite = { version = "0.42.0", features = ["bundled"] }
+rusqlite = { version = "0.43.0", features = ["bundled"] }
 chardetng = "1.0"
 encoding_rs = "0.8"
 sha2 = "0.11.1"
@@ -79,10 +78,8 @@ fontcull-write-fonts = "0.44"
 unicode-normalization = "0.1"
 sys-locale = "0.3"
 env_logger = "0.11"
-# Used by CLI wire formats that carry pre-resolved subset payloads and by
-# the GUI's Apple fallback. JSON `[byte, byte, ...]` expands ~4-5× per byte;
-# base64 is ~1.33×. Windows/Linux GUI IPC uses Tauri's raw `ipc::Response`,
-# while Tauri 2.11's macOS/iOS eval path would serialize raw bytes as JSON.
+# CLI subset payloads use base64 to avoid JSON byte-array expansion;
+# Windows GUI IPC returns raw bytes.
 base64 = { version = "0.23", default-features = false, features = ["std"] }
 # Direct dep on rfd matches the transitive version pulled in by
 # tauri-plugin-dialog. Used at app setup to surface init failures via a
@@ -90,18 +87,8 @@ base64 = { version = "0.23", default-features = false, features = ["std"] }
 # or stderr, so the previous `eprintln!` + `process::exit` path was
 # silent — the user just saw the app fail to launch with no signal.
 #
-# Keep default features disabled. tauri-plugin-dialog supplies the shared
-# GTK3 backend and Windows common-controls feature; enabling rfd's defaults
-# would also select XDG Portal/Wayland, and rfd 0.16 rejects that
-# dual-backend combination
-# on Linux/BSD.
-rfd = { version = "0.16", default-features = false }
-
-[target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]
-tauri-plugin-single-instance = "2.5.3"
-
-[target.'cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))'.dependencies]
-rustix = { version = "1.1.5", features = ["fs"] }
+# Inherit the dialog plugin's Windows features without enabling unused backends.
+rfd = { version = "0.17", default-features = false }
 
 [dev-dependencies]
 glob = "0.3.3"

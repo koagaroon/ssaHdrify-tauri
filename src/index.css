@@ -9,7 +9,7 @@
 /* ── UI face — Inter (body + stable Latin brand) ──────────
    Variable font, weights 100–900 in a single woff2. Primary
    Latin face across both UI language modes; CJK characters
-   fall through to "Microsoft YaHei" / "PingFang SC" via the
+   fall through to "Microsoft YaHei" via the
    per-glyph fallback chain in --font-sans.
    © The Inter Project Authors (https://github.com/rsms/inter),
    SIL Open Font License 1.1.
@@ -109,16 +109,12 @@
      --font-brand   → Latin product wordmark (Inter in every locale)
      --font-display → localized display copy (Smiley Sans in ZH via :lang(zh))
      --font-mono    → numbers, timecodes, tab index chips
-     Inter covers Latin/Greek/Cyrillic; CJK fallback is the OS font.
-     Append "Noto Sans CJK SC" so Linux
-     installs without Microsoft YaHei / PingFang SC (both Windows /
-     macOS proprietary) still get a CJK-capable font before falling
-     to system-ui (which often lacks CJK on minimal Linux distros). */
-  --font-sans: "Inter", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif;
+     Inter covers Latin/Greek/Cyrillic; Microsoft YaHei is the Windows
+     CJK default, with Noto Sans CJK SC as an optional fallback. */
+  --font-sans: "Inter", "Microsoft YaHei", "Noto Sans CJK SC", system-ui, sans-serif;
   --font-brand: "Inter", system-ui, sans-serif;
-  --font-display:
-    "Inter", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", consolas, "Cascadia Mono", "Liberation Mono", monospace;
+  --font-display: "Inter", "Microsoft YaHei", "Noto Sans CJK SC", system-ui, sans-serif;
+  --font-mono: ui-monospace, consolas, "Cascadia Mono", monospace;
 
   /* Type scale */
   --text-xs: 12px;
@@ -222,7 +218,7 @@
    since the existing stack falls through to Microsoft YaHei
    for CJK characters automatically. */
 :lang(zh) {
-  --font-display: "Smiley Sans", "Microsoft YaHei", "PingFang SC", "Inter", system-ui, sans-serif;
+  --font-display: "Smiley Sans", "Microsoft YaHei", "Inter", system-ui, sans-serif;
 }
 
 /* ── Base ────────────────────────────────────────────────── */

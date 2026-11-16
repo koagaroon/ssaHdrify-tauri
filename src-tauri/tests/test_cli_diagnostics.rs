@@ -419,7 +419,6 @@ fn diagnose_fonts_subset_check_reports_skipped_for_unresolved_without_writing_ou
     let _ = fs::remove_dir_all(work);
 }
 
-#[cfg(target_os = "windows")]
 #[test]
 fn diagnose_fonts_does_not_validate_embed_output_path() {
     if let Some(reason) = engine_bundle_missing() {

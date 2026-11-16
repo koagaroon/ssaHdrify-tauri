@@ -1,4 +1,9 @@
 fn main() {
+    assert_eq!(
+        std::env::var("TARGET").as_deref(),
+        Ok("x86_64-pc-windows-msvc"),
+        "ssaHdrify supports only the Windows x64 MSVC target (x86_64-pc-windows-msvc)"
+    );
     let has_engine = copy_cli_engine_bundle();
     copy_cli_engine_notices(has_engine);
     tauri_build::build()

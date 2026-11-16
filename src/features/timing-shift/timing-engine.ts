@@ -897,7 +897,7 @@ export function deriveShiftedPath(inputPath: string): string {
     baseName = baseName.slice(0, -".shifted".length);
   }
   // after the `.shifted` strip the baseName can
-  // be empty (or whitespace-/dot-only — POSIX dotfile shapes like
+  // be empty (or whitespace-/dot-only — leading-dot filenames like
   // `.shifted.srt` whose stem is just `.`). Without this re-check
   // the output name resolves to `.shifted${ext}` — identical to the
   // input on subsequent invocations and visually weird as a filename.

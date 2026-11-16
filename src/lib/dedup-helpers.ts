@@ -11,15 +11,13 @@
  *
  * `normalizeOutputKey`: the dedup key shared by within-batch output
  * collision checks (HDR / Timing / Fonts / Rename loops). NFC + forward
- * slash + (case-insensitive-FS-only) lowercase, so the same on-disk
+ * slash + lowercase, so the same on-disk
  * file isn't seen as two distinct outputs across encodings or path-
- * separator conventions on Windows / macOS while Linux ext4/btrfs/xfs
- * keep case-distinct names distinct.
+ * separator conventions on Windows.
  */
 import type { TabId } from "./FileContext";
 import { TAB_LABEL_KEYS } from "./tab-labels";
 import { ASCII_CONTROL_CHARS, BIDI_AND_ZERO_WIDTH_GLOBAL_RE } from "./unicode-controls";
-import { isCaseInsensitiveFs, isWindowsRuntime } from "./platform";
 
 /** Translator signature used by `buildConflictMessage`. Matches the
  *  `t` callback returned from `useI18n`. */
@@ -81,26 +79,12 @@ export function buildConflictMessage(
 
 /**
  * Canonical dedup key for an output path. NFC normalization + forward
- * slashes + (on case-insensitive filesystems) lowercase so the same
+ * slashes + lowercase so the same
  * on-disk file isn't seen as two distinct outputs across encodings or
  * path-separator conventions.
- *
- * Lowercase is gated on `isCaseInsensitiveFs` so Linux ext4/btrfs/xfs
- * (case-sensitive) keeps `Episode.ass` and `episode.ass` as distinct
- * outputs while Windows NTFS / macOS APFS / HFS+ (case-insensitive by
- * default) collapses them — matches OS-level filesystem semantics so
- * the dedup catches real on-disk collisions but doesn't over-merge on
- * platforms where case-only names are legitimately distinct.
  */
 export function normalizeOutputKey(path: string): string {
-  // Backslash → forward only on Windows. On POSIX
-  // `\` is a valid filename character, so unconditional rewriting
-  // false-collapses two distinct on-disk files (`dir\foo.ass` and
-  // `dir/foo.ass`) into one dedup bucket — same gating reasoning as
-  // `pathsEqualOnFs` in path-validation.ts.
-  const nfc = path.normalize("NFC");
-  const normalized = isWindowsRuntime ? nfc.replace(/\\/g, "/") : nfc;
-  return isCaseInsensitiveFs ? normalized.toLowerCase() : normalized;
+  return path.normalize("NFC").replace(/\\/g, "/").toLowerCase();
 }
 
 /** Strip BiDi controls, line/paragraph separators, AND zero-width

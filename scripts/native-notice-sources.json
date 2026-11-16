@@ -704,17 +704,17 @@
       "note": "Submodule revisions are pinned by Rusty V8 commit 5c15a6995c9bb4bacd3e341b59fff32c909c80bf. The ICU file includes data notices; the simdutf source excerpt preserves additional BSD terms for SIMD detection. Some components are platform-specific."
     },
     {
-      "name": "Rust standard library 1.99.1",
+      "name": "Rust standard library 1.100.0",
       "files": [
         {
-          "path": "src/assets/licenses/native-sources/Rust-1.99.1-COPYRIGHT-library.html",
-          "url": "https://doc.rust-lang.org/1.99.1/COPYRIGHT-library.html",
-          "sha256": "5647be074c8edf7339fd863055923a8fc80bc5610a8d4661ec3b767b9d392c27",
+          "path": "src/assets/licenses/native-sources/Rust-1.100.0-COPYRIGHT-library.html",
+          "url": "https://static.rust-lang.org/dist/2026-11-12/rustc-1.100.0-x86_64-pc-windows-msvc.tar.xz",
+          "sha256": "626556344c12679d7cab2c1aa2ce80de01937b62c2c88c62f0650a469be18799",
           "format": "rust-library-html"
         }
       ],
-      "rust": "1.99.1",
-      "note": "Library-focused copyright inventory supplied with the pinned official Rust distribution; includes platform-specific library code. Compiler-only notices are not used as a substitute."
+      "rust": "1.100.0",
+      "note": "Library-focused copyright inventory extracted from rustc-1.100.0-x86_64-pc-windows-msvc/rustc/share/doc/rust/COPYRIGHT-library.html in the official compiler component (archive SHA-256: 4f1f70145ab94e1036b6a9fb0a1fa1393352999701699aedab4dd2724047149e); includes platform-specific library code. Compiler-only notices are not used as a substitute."
     }
   ]
 }

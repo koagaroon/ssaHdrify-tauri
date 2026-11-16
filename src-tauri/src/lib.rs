@@ -10,10 +10,8 @@ pub mod util;
 
 use tauri::Manager;
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default();
-    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
         if let Some(window) = app.get_webview_window("main") {
             let _ = window.show();
@@ -85,8 +83,7 @@ pub fn run() {
                 // a native dialog the app would exit silently and the
                 // user would have no way to know why. Block on a
                 // MessageBox so the failure is unmissable. rfd uses the
-                // OS-native chrome (Win32 MessageBox / NSAlert / GTK
-                // dialog) and works before the WebView2 window exists.
+                // Windows native dialog and works before the WebView2 window exists.
                 //
                 // Collapse \r and \n in the underlying error string
                 // before injection: rfd's `set_description` honors them

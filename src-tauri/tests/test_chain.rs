@@ -402,7 +402,6 @@ fn chain_rejects_trailing_dot_output_template_before_write() {
     let _ = fs::remove_dir_all(dir);
 }
 
-#[cfg(windows)]
 #[test]
 fn chain_rejects_intermediate_trailing_dot_output_directory_without_mutation() {
     if let Some(reason) = engine_bundle_missing() {
@@ -444,7 +443,6 @@ fn chain_rejects_intermediate_trailing_dot_output_directory_without_mutation() {
     let _ = fs::remove_dir_all(dir);
 }
 
-#[cfg(windows)]
 #[test]
 fn chain_rejects_win32_output_directory_alias_before_real_overwrite() {
     if let Some(reason) = engine_bundle_missing() {
@@ -662,7 +660,7 @@ fn chain_post_v8_failed_surfaces_oversized_warning() {
 
     // Pre-create the predicted output path as a directory. With
     // --overwrite, write_output's fs::remove_file call will fail on
-    // the directory (EISDIR on POSIX / ERROR_ACCESS_DENIED on Windows)
+    // the directory (ERROR_ACCESS_DENIED on Windows)
     // — that's the post-V8 Failed branch we want to exercise.
     //
     // Step choice: `shift` (not `hdr`). HDR's chain transform is

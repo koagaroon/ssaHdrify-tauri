@@ -79,8 +79,8 @@ export type SystemFontResolution = Pick<FontInfo, "filePath" | "fontIndex" | "er
  */
 const USER_FONT_KEY_SEP = "\u001F";
 export function userFontKey(family: string, bold: boolean, italic: boolean): string {
-  // NFC-normalize before lowercase so macOS HFS+ NFD-form filenames
-  // and NFC-form font internal names key identically. Without this,
+  // NFC-normalize before lowercase so equivalent Unicode family names
+  // key identically. Without this,
   // precomposed `é` (U+00E9) vs decomposed `e + ´` (U+0065+U+0301)
   // produce different keys for the same visual family — embedFonts
   // then silently mismatches its usage record at lookup time.
@@ -557,7 +557,7 @@ function embeddedOutputName(inputPath: string): {
     baseName = baseName.slice(0, -".embedded".length);
   }
   // Post-strip baseName empty / whitespace-or-dot-only guard mirrors
-  // deriveShiftedPath : a POSIX dotfile-shape like
+  // deriveShiftedPath: a leading-dot filename like
   // `.embedded.ass` whose stem is just `.` would otherwise resolve
   // to `.embedded.ass` unchanged on every re-run.
   if (!baseName || !baseName.replace(/^\.+/, "").trim()) {

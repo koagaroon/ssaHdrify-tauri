@@ -63,7 +63,7 @@ function hexToAssColor(htmlHex: string): string {
   return formatAssColor(r, g, b, "00");
 }
 
-// Common fonts available on most systems (cross-platform).
+// Common Windows fonts and optional subtitle-font presets.
 // Kept as a plain array for <option> rendering order, plus a Set built once
 // for O(1) membership checks in the style panel's "is this a preset?" logic.
 const COMMON_FONTS = [

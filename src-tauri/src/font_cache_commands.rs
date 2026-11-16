@@ -403,12 +403,10 @@ pub fn init_gui_font_cache(app_data_dir: &Path) -> Result<(), String> {
     reset_gui_cache_state_for_init()?;
     // `app_data_dir` here is resolved via the caller in `lib.rs`
     // which passes `font_cache::unified_app_data_dir()` — chain is
-    // `std::env::var("APPDATA")` (Windows) / `$XDG_DATA_HOME` (POSIX)
-    // / `~/Library/Application Support` (macOS) per the unified dir
-    // migration; an alternative resolution exists via Tauri's
+    // `std::env::var("APPDATA")`; an alternative resolution exists via Tauri's
     // `app.path().app_data_dir()` (the `$DATA` capability scope
     // variable resolution), used at a different layer. Both
-    // chains land inside the user's own AppData / XDG_DATA_HOME —
+    // chains land inside the user's own AppData —
     // planting a reparse-point in the parent walk requires AppData
     // write access. Same local-user class as parent-walk reparse on AppData.
     // Defending here would mean a parent-walk reparse scan on every
@@ -2073,39 +2071,6 @@ mod tests {
         assert!(
             main_path.is_dir(),
             "failed delete must not be reported as clear success"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn clear_font_cache_reparse_error_preserves_live_handle() {
-        use std::os::unix::fs::symlink;
-
-        let dir = TempCacheDir::new("clear_reparse_preserve");
-        let _state_guard = GuiCacheStateTestGuard::acquire();
-        let cache_path = dir.0.join(GUI_CACHE_FILE_NAME);
-        let cache = FontCache::open_or_create(&cache_path).expect("open cache");
-        let target = dir.0.join("wal-target");
-        fs::write(&target, b"not sqlite").unwrap();
-        let wal = {
-            let mut p = cache_path.clone().into_os_string();
-            p.push("-wal");
-            PathBuf::from(p)
-        };
-        symlink(&target, &wal).unwrap();
-
-        {
-            let mut path_slot = GUI_FONT_CACHE_PATH.lock().unwrap();
-            *path_slot = Some(cache_path.clone());
-            let mut cache_slot = GUI_FONT_CACHE.lock().unwrap();
-            *cache_slot = Some(cache);
-        }
-
-        let err = clear_font_cache().unwrap_err();
-        assert!(err.contains("reparse points"), "got: {err}");
-        assert!(
-            GUI_FONT_CACHE.lock().unwrap().is_some(),
-            "failed clear must leave the old cache handle available"
         );
     }
 

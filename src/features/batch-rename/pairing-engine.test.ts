@@ -13,7 +13,6 @@
  * "simplification" can't quietly regress the fan-sub paths.
  */
 import { describe, it, expect } from "vitest";
-import { isWindowsRuntime } from "../../lib/platform";
 import {
   parseFilename,
   bracketCleanup,
@@ -524,7 +523,6 @@ describe("findRenameInputConflictIndexes", () => {
   });
 
   it("uses canonical slash and case aliases on Windows", () => {
-    if (!isWindowsRuntime) return;
     const conflicts = findRenameInputConflictIndexes([
       { inputPath: "C:\\Subs\\A.ass", outputPath: "c:/subs/B.ass" },
       { inputPath: "C:\\SUBS\\b.ass", outputPath: "C:\\Subs\\final.ass" },
@@ -533,7 +531,7 @@ describe("findRenameInputConflictIndexes", () => {
     expect(Array.from(conflicts).sort()).toEqual([0, 1]);
   });
 
-  it("uses canonical Unicode aliases on every platform", () => {
+  it("uses canonical Unicode aliases", () => {
     const conflicts = findRenameInputConflictIndexes([
       { inputPath: "/subs/Cafe\u0301.ass", outputPath: "/subs/target.ass" },
       { inputPath: "/subs/other.ass", outputPath: "/subs/Caf\u00e9.ass" },
@@ -1039,8 +1037,8 @@ describe("buildPairings — regression guards", () => {
   });
 
   it("leading-dot subtitle filename produces output with extension preserved", () => {
-    // Crafted fan-sub pack: `.ass` filename (leading-dot Unix hidden
-    // convention). An earlier `subDot > 0` guard produced `<videoBase>`
+    // A subtitle named `.ass` has no stem. An earlier `subDot > 0`
+    // guard produced `<videoBase>`
     // with NO extension — no player loads the result. The `>= 0` form
     // keeps the full `.ass` as the extension.
     const out = deriveRenameOutputPath("C:/v/Show.mkv", "C:/v/.ass", "rename", null);

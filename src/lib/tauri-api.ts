@@ -7,7 +7,6 @@ import { invoke, Channel } from "@tauri-apps/api/core";
 import { strings } from "../i18n/strings";
 import { fileNameFromPath } from "./path-validation";
 import { VIDEO_EXTS, SUBTITLE_EXTS, RENAME_SUBTITLE_EXTS } from "./rename-extensions";
-import { decodeBase64Bytes } from "./base64-bytes";
 import { normalizeOutputKey } from "./dedup-helpers";
 
 // ── File Dialogs ──────────────────────────────────────────
@@ -340,20 +339,18 @@ export async function findSystemFont(
 
 /** Subset a font file to only include the specified codepoints.
  *
- *  Wire format: `subset_font_bytes` returns raw bytes on Windows/Linux. Tauri
- *  2.11 serializes raw responses as numeric JSON arrays on Apple WebViews, so
- *  those targets retain the smaller base64 form. */
+ *  Wire format: `subset_font_bytes` returns raw bytes through Tauri IPC. */
 export async function subsetFont(
   fontPath: string,
   fontIndex: number,
   codepoints: number[]
 ): Promise<Uint8Array> {
-  const payload = await invoke<ArrayBuffer | string>("subset_font_bytes", {
+  const payload = await invoke<ArrayBuffer>("subset_font_bytes", {
     fontPath,
     fontIndex,
     codepoints,
   });
-  return typeof payload === "string" ? decodeBase64Bytes(payload) : new Uint8Array(payload);
+  return new Uint8Array(payload);
 }
 
 /** One font face discovered in a user-picked directory or file list.

@@ -331,7 +331,7 @@ describe("Time shift — GUI ↔ CLI byte equivalence", () => {
   });
 });
 
-// Helper: extract bare filename from a Windows or POSIX path.
+// Helper: extract the filename with either Windows separator style.
 function fileNameOf(path: string): string {
   const normalized = path.replace(/\\/g, "/");
   const slash = normalized.lastIndexOf("/");

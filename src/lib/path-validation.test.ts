@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import {
   WINDOWS_RESERVED_NAMES,
@@ -8,33 +8,6 @@ import {
   decomposeInputPath,
   substituteTemplate,
 } from "./path-validation";
-
-type InjectedPlatform = {
-  isWindows: boolean;
-  isCaseInsensitiveFs: boolean;
-};
-
-async function withInjectedPlatform(
-  platform: InjectedPlatform,
-  run: (mod: typeof import("./path-validation")) => void | Promise<void>
-): Promise<void> {
-  const slot = globalThis as typeof globalThis & {
-    __ssahdrifyPlatform?: InjectedPlatform;
-  };
-  const previous = slot.__ssahdrifyPlatform;
-  slot.__ssahdrifyPlatform = platform;
-  vi.resetModules();
-  try {
-    await run(await import("./path-validation"));
-  } finally {
-    if (previous === undefined) {
-      delete slot.__ssahdrifyPlatform;
-    } else {
-      slot.__ssahdrifyPlatform = previous;
-    }
-    vi.resetModules();
-  }
-}
 
 describe("assertSafeOutputFilename", () => {
   it("accepts ordinary filenames", () => {
@@ -55,40 +28,24 @@ describe("assertSafeOutputFilename", () => {
     expect(() => assertSafeOutputFilename(".hidden.ass")).not.toThrow();
   });
 
-  it("rejects trailing ASCII spaces and dots in output leaves on every platform", async () => {
-    for (const platform of [
-      { isWindows: true, isCaseInsensitiveFs: true },
-      { isWindows: false, isCaseInsensitiveFs: false },
-      { isWindows: false, isCaseInsensitiveFs: true },
+  it("rejects trailing ASCII spaces and dots in output leaves", () => {
+    for (const filename of [
+      "episode.ass.",
+      "episode.ass ",
+      "episode.ass..",
+      "episode.ass  ",
+      "episode.ass. ",
+      "episode.ass .",
     ]) {
-      await withInjectedPlatform(platform, ({ assertSafeOutputFilename: assertInjected }) => {
-        for (const filename of [
-          "episode.ass.",
-          "episode.ass ",
-          "episode.ass..",
-          "episode.ass  ",
-          "episode.ass. ",
-          "episode.ass .",
-        ]) {
-          expect(() => assertInjected(filename)).toThrow(/cannot end with an ASCII space or dot/);
-        }
-      });
+      expect(() => assertSafeOutputFilename(filename)).toThrow(
+        /cannot end with an ASCII space or dot/
+      );
     }
   });
 
-  it("does not classify leading ASCII space or trailing non-ASCII spaces under the leaf rule", async () => {
-    // This pins only the shared product validator. It does not claim every
-    // supported filesystem can create each name unchanged.
-    for (const platform of [
-      { isWindows: true, isCaseInsensitiveFs: true },
-      { isWindows: false, isCaseInsensitiveFs: false },
-      { isWindows: false, isCaseInsensitiveFs: true },
-    ]) {
-      await withInjectedPlatform(platform, ({ assertSafeOutputFilename: assertInjected }) => {
-        for (const filename of [" episode.ass", "episode.ass\u00a0", "episode.ass\u3000"]) {
-          expect(() => assertInjected(filename)).not.toThrow();
-        }
-      });
+  it("does not classify leading ASCII space or trailing non-ASCII spaces under the leaf rule", () => {
+    for (const filename of [" episode.ass", "episode.ass\u00a0", "episode.ass\u3000"]) {
+      expect(() => assertSafeOutputFilename(filename)).not.toThrow();
     }
   });
 
@@ -234,13 +191,13 @@ describe("decomposeInputPath", () => {
     expect(parts.usedBackslash).toBe(true);
   });
 
-  it("accepts POSIX absolute paths", () => {
-    const parts = decomposeInputPath("/home/user/episode.ass");
+  it("accepts rooted paths with forward slashes", () => {
+    const parts = decomposeInputPath("/subtitles/episode.ass");
     expect(parts).toEqual({
-      dir: "/home/user",
+      dir: "/subtitles",
       baseName: "episode",
       ext: ".ass",
-      normalized: "/home/user/episode.ass",
+      normalized: "/subtitles/episode.ass",
       usedBackslash: false,
     });
   });
@@ -367,32 +324,15 @@ describe("decomposeOutputDirectoryPath", () => {
     expect(() => decomposeOutputDirectoryPath("/tmp/.../out")).not.toThrow();
   });
 
-  it("applies the exact Windows trailing-dot directory rule to the terminal component", async () => {
-    await withInjectedPlatform(
-      { isWindows: true, isCaseInsensitiveFs: true },
-      ({ decomposeOutputDirectoryPath: decomposeInjected }) => {
-        expect(() => decomposeInjected("C:\\base\\dir.")).toThrow(
-          /directory component.*ASCII dot/i
-        );
-        expect(() => decomposeInjected("C:/dir.")).toThrow(/directory component.*ASCII dot/i);
-        for (const outputDir of ["C:/", "C:\\base\\dir..", "C:\\base\\dir "]) {
-          expect(() => decomposeInjected(outputDir)).not.toThrow();
-        }
-      }
+  it("applies the exact Windows trailing-dot directory rule to the terminal component", () => {
+    expect(() => decomposeOutputDirectoryPath("C:\\base\\dir.")).toThrow(
+      /directory component.*ASCII dot/i
     );
-  });
-
-  it("does not apply the Windows trailing-dot directory rule on non-Windows platforms", async () => {
-    for (const platform of [
-      { isWindows: false, isCaseInsensitiveFs: false },
-      { isWindows: false, isCaseInsensitiveFs: true },
-    ]) {
-      await withInjectedPlatform(
-        platform,
-        ({ decomposeOutputDirectoryPath: decomposeInjected }) => {
-          expect(() => decomposeInjected("/base/dir.")).not.toThrow();
-        }
-      );
+    expect(() => decomposeOutputDirectoryPath("C:/dir.")).toThrow(
+      /directory component.*ASCII dot/i
+    );
+    for (const outputDir of ["C:/", "C:\\base\\dir..", "C:\\base\\dir "]) {
+      expect(() => decomposeOutputDirectoryPath(outputDir)).not.toThrow();
     }
   });
 });
@@ -418,63 +358,49 @@ describe("assertSafeOutputPath", () => {
     expect(() => assertSafeOutputPath("C:/subs/show..ep01.ass", inputBackslash)).not.toThrow();
   });
 
-  it("rejects only the exact unsupported Windows intermediate trailing-dot shape", async () => {
-    await withInjectedPlatform(
-      { isWindows: true, isCaseInsensitiveFs: true },
-      ({ assertSafeOutputPath: assertInjected }) => {
-        const driveInput = "C:\\base\\source.ass";
-        for (const outputPath of [
-          "C:/dir./out.ass",
-          "C:\\base\\dir.\\out.ass",
-          "C:/base\\dir.\\nested/out.ass",
-          "C:\\base\\.hidden.\\out.ass",
-          "C:\\base\\dir .\\out.ass",
-          "C:\\base\\dir. .\\out.ass",
-        ]) {
-          expect(() => assertInjected(outputPath, driveInput)).toThrow(
-            /directory component.*ASCII dot/i
-          );
-        }
-
-        for (const outputPath of [
-          "C:\\base\\dir..\\out.ass",
-          "C:\\base\\dir...\\out.ass",
-          "C:\\base\\dir \\out.ass",
-          "C:\\base\\dir. \\out.ass",
-          "C:\\base\\dir．\\out.ass",
-        ]) {
-          expect(() => assertInjected(outputPath, driveInput)).not.toThrow();
-        }
-
-        const uncInput = "\\\\server.\\share.\\base\\source.ass";
-        expect(() =>
-          assertInjected("\\\\server.\\share.\\base\\nested.\\out.ass", uncInput)
-        ).toThrow(/directory component.*ASCII dot/i);
-        expect(() => assertInjected("\\\\server.\\share.\\base\\out.ass", uncInput)).not.toThrow();
-        expect(() =>
-          assertInjected("//server.//share./base/out.ass", "//server.//share./base/source.ass")
-        ).not.toThrow();
-        expect(() =>
-          assertInjected("//server.//share./dir./out.ass", "//server.//share./base/source.ass")
-        ).toThrow(/directory component.*ASCII dot/i);
-        expect(() => assertInjected("C:/out.ass", "C:/source.ass")).not.toThrow();
-
-        expect(() =>
-          assertInjected("//?/C:/base/dir./out.ass", "//?/C:/base/source.ass")
-        ).not.toThrow();
-      }
-    );
-  });
-
-  it("allows intermediate trailing-dot directory names outside Windows", async () => {
-    for (const platform of [
-      { isWindows: false, isCaseInsensitiveFs: false },
-      { isWindows: false, isCaseInsensitiveFs: true },
+  it("rejects only the exact unsupported Windows intermediate trailing-dot shape", () => {
+    const driveInput = "C:\\base\\source.ass";
+    for (const outputPath of [
+      "C:/dir./out.ass",
+      "C:\\base\\dir.\\out.ass",
+      "C:/base\\dir.\\nested/out.ass",
+      "C:\\base\\.hidden.\\out.ass",
+      "C:\\base\\dir .\\out.ass",
+      "C:\\base\\dir. .\\out.ass",
     ]) {
-      await withInjectedPlatform(platform, ({ assertSafeOutputPath: assertInjected }) => {
-        expect(() => assertInjected("/base/dir./out.ass", "/base/source.ass")).not.toThrow();
-      });
+      expect(() => assertSafeOutputPath(outputPath, driveInput)).toThrow(
+        /directory component.*ASCII dot/i
+      );
     }
+
+    for (const outputPath of [
+      "C:\\base\\dir..\\out.ass",
+      "C:\\base\\dir...\\out.ass",
+      "C:\\base\\dir \\out.ass",
+      "C:\\base\\dir. \\out.ass",
+      "C:\\base\\dir．\\out.ass",
+    ]) {
+      expect(() => assertSafeOutputPath(outputPath, driveInput)).not.toThrow();
+    }
+
+    const uncInput = "\\\\server.\\share.\\base\\source.ass";
+    expect(() =>
+      assertSafeOutputPath("\\\\server.\\share.\\base\\nested.\\out.ass", uncInput)
+    ).toThrow(/directory component.*ASCII dot/i);
+    expect(() =>
+      assertSafeOutputPath("\\\\server.\\share.\\base\\out.ass", uncInput)
+    ).not.toThrow();
+    expect(() =>
+      assertSafeOutputPath("//server.//share./base/out.ass", "//server.//share./base/source.ass")
+    ).not.toThrow();
+    expect(() =>
+      assertSafeOutputPath("//server.//share./dir./out.ass", "//server.//share./base/source.ass")
+    ).toThrow(/directory component.*ASCII dot/i);
+    expect(() => assertSafeOutputPath("C:/out.ass", "C:/source.ass")).not.toThrow();
+
+    expect(() =>
+      assertSafeOutputPath("//?/C:/base/dir./out.ass", "//?/C:/base/source.ass")
+    ).not.toThrow();
   });
 
   it("rejects paths that escape the input directory", () => {
@@ -564,54 +490,9 @@ describe("assertSafeOutputPath", () => {
     expect(() => assertSafeOutputPath(overLimit, uncInput)).toThrow(/too long/);
   });
 
-  it("rejects case-only self-overwrite on an injected case-insensitive Windows runtime", async () => {
-    await withInjectedPlatform(
-      { isWindows: true, isCaseInsensitiveFs: true },
-      ({ assertSafeOutputPath: assertInjectedSafeOutputPath }) => {
-        expect(() => assertInjectedSafeOutputPath("C:/subs/EPISODE01.ass", inputBackslash)).toThrow(
-          /same as input/
-        );
-      }
-    );
-  });
-
-  it("keeps case-only paths distinct on an injected case-sensitive POSIX runtime", async () => {
-    await withInjectedPlatform(
-      { isWindows: false, isCaseInsensitiveFs: false },
-      ({ assertSafeOutputPath: assertInjectedSafeOutputPath }) => {
-        expect(() =>
-          assertInjectedSafeOutputPath("/subs/EPISODE01.ass", "/subs/episode01.ass")
-        ).not.toThrow();
-      }
-    );
-  });
-
-  it("preserves POSIX backslashes and applies the 4096-character path boundary", async () => {
-    await withInjectedPlatform(
-      { isWindows: false, isCaseInsensitiveFs: false },
-      ({
-        assertSafeOutputPath: assertInjectedSafeOutputPath,
-        decomposeInputPath: decomposeInjectedInputPath,
-      }) => {
-        expect(decomposeInjectedInputPath("/tmp/ep\\01.srt")).toEqual({
-          dir: "/tmp",
-          baseName: "ep\\01",
-          ext: ".srt",
-          normalized: "/tmp/ep\\01.srt",
-          usedBackslash: false,
-        });
-
-        const prefix = "/tmp/";
-        const suffix = ".ass";
-        const atLimit = `${prefix}${"a".repeat(4096 - prefix.length - suffix.length)}${suffix}`;
-        const overLimit = `${prefix}${"a".repeat(4097 - prefix.length - suffix.length)}${suffix}`;
-        expect(atLimit).toHaveLength(4096);
-        expect(overLimit).toHaveLength(4097);
-        expect(() => assertInjectedSafeOutputPath(atLimit, "/tmp/source.ass")).not.toThrow();
-        expect(() => assertInjectedSafeOutputPath(overLimit, "/tmp/source.ass")).toThrow(
-          /too long.*4096/i
-        );
-      }
+  it("rejects case-only self-overwrite", () => {
+    expect(() => assertSafeOutputPath("C:/subs/EPISODE01.ass", inputBackslash)).toThrow(
+      /same as input/
     );
   });
 });

@@ -56,7 +56,6 @@ pub async fn find_system_font(
     .await
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
 #[tauri::command]
 pub async fn subset_font_bytes(
     font_path: String,
@@ -68,22 +67,6 @@ pub async fn subset_font_bytes(
     })
     .await?;
     Ok(tauri::ipc::Response::new(bytes))
-}
-
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-#[tauri::command]
-pub async fn subset_font_bytes(
-    font_path: String,
-    font_index: u32,
-    codepoints: Vec<u32>,
-) -> Result<String, String> {
-    run_blocking_command("subset_font_bytes", move || {
-        use base64::Engine as _;
-
-        let bytes = crate::fonts::subset_font(font_path, font_index, codepoints)?;
-        Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
-    })
-    .await
 }
 
 #[tauri::command]
