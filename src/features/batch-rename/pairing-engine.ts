@@ -6,20 +6,14 @@
  *   1. bracket cleanup           strip every [..] group
  *   2. priority-ordered episode  regex set (first match wins)
  *   3. season parallel scan      (only when ep regex didn't carry it)
- *   4. pair by (season, episode) tuple
- *   5. LCS fallback              [reserved but intentionally not yet
- *                                 implemented — the
- *                                 regex set covers all documented fan-sub
- *                                 samples, so no `lcs` PairingSource is
- *                                 produced today; LCS lands only if a real
- *                                 failure surfaces in the wild]
+ *   4. pair by (season, episode) tuple, leaving unmatched rows for manual pick
+ *
+ * (`PairingSource` reserves `"lcs"` for potential future filename fallback,
+ *  which is intentionally unimplemented today.)
  *
  * Pattern coverage: validated against representative real-world
  * fan-sub naming variants (bilingual CJK titles, season-suffix
- * variants, external-sub multi-language packs). The original
- * Western-TV regex set (S\dE\d / EP\d / 第N话) hit zero of seven
- * samples; this set hits all seven via Pattern A (` - NN [...]`) and
- * Pattern B (`][NN][`), with the original set kept as fallback.
+ * variants, external-sub multi-language packs).
  */
 
 import { normalizeOutputKey } from "../../lib/dedup-helpers";
@@ -30,14 +24,10 @@ import { assertSafeOutputFilename, assertSafeOutputPath } from "../../lib/path-v
 // ── Bracket cleanup ──────────────────────────────────────
 
 const BRACKET_RE = /\[[^\]]*\]/g;
-// module-scope to match BRACKET_RE above and
-// the rest of the codebase's convention. String.prototype.replace
-// doesn't share lastIndex across calls, so inline was semantically
-// equivalent; this is purely a convention sweep.
 const WHITESPACE_RE = /\s+/g;
 
 /** Strip every `[...]` group from a filename and collapse whitespace.
- *  Used as a separate cleaning pass for season-scan / LCS regexes that
+ *  Used as a separate cleaning pass for episode and season regexes that
  *  don't depend on the bracket structure (vs. Pattern B which keys
  *  off the brackets and runs on the raw filename). */
 export function bracketCleanup(filename: string): string {
@@ -97,10 +87,8 @@ const EPISODE_PATTERNS: EpisodePattern[] = [
   // 4-digit year markers like `][2024][` in names that pack release
   // year between brackets (e.g. `[Group][2024][Show][01][1080p].mkv`
   // → first match wins → episode = 2024 instead of 1). Real fan-sub
-  // episode counts top out around 999 (anime/drama almost universally;
-  // the rare 1000+ shows typically use Pattern A's ` - NNNN` form
-  // anyway). Reject 4+ digit forms here and let Pattern A or LCS
-  // handle the long-running edge.
+  // episode counts top out around 999; the rare 1000+ shows typically
+  // use Pattern A's ` - NNNN` form or manual selection.
   {
     regex: /\]\s*\[\s*0*(\d{1,3})(?:v\d+)?\s*\]/i,
     useRaw: true,
@@ -113,10 +101,7 @@ const EPISODE_PATTERNS: EpisodePattern[] = [
   // specials / OVA files may be labelled ` - 0` or ` - 00`, and those
   // should parse as episode 0 rather than falling through.
   {
-    // `\.[a-z0-9]{1,10}$` — bounded extension to keep the regex out of
-    // catastrophic-backtracking territory per Principle #3. No real
-    // subtitle/video extension exceeds ~5 chars; cap at 10 leaves headroom
-    // for any future codec naming weirdness.
+    // `\.[a-z0-9]{1,10}$` — bounded extension to avoid catastrophic backtracking.
     regex: PATTERN_A_RE,
     useRaw: true,
     build: (m) => ({ episode: parseInt(m[1]!, 10) }),
@@ -129,11 +114,9 @@ const EPISODE_PATTERNS: EpisodePattern[] = [
     build: (m) => ({ episode: parseInt(m[1]!, 10) }),
   },
   // Western EP01 / E01 — final fallback. Bounded to 1-3 digits to match
-  // sibling Pattern B (`\d{1,3}`) and the "episode counts top out ~999"
-  // rationale above. The trailing `\b` makes an overlong run (e.g. EP1234)
-  // FAIL to match rather than prefix-truncate to a wrong episode, so it
-  // falls through to the LCS fallback instead of feeding parseInt a
-  // precision-lossy 4+ digit value.
+  // Pattern B (`\d{1,3}`). The trailing `\b` makes an overlong run (e.g. EP1234)
+  // fail to match rather than prefix-truncate to a wrong episode, leaving it
+  // unmatched for manual selection.
   {
     regex: /\bEP?(\d{1,3})(?:v\d+)?\b/i,
     useRaw: false,
@@ -239,12 +222,7 @@ export function extractSeason(rawName: string, cleanedName: string): number {
     const m = rawName.match(regex) ?? cleanedName.match(regex);
     if (m) {
       const n = build(m);
-      // !isNaN(n) reads "build returned a valid number" — `n >= 0`
-      // misled future readers into thinking we filter out negative
-      // seasons specifically, when the actual intent is just "skip
-      // when the regex caught something but build() failed to parse
-      // it" (returns NaN). 0 is accepted for shows that genuinely use
-      // "Season 0" / specials.
+      // Accept Season 0 (specials); only skip when build() failed to parse.
       if (!Number.isNaN(n)) return n;
     }
   }
@@ -335,15 +313,7 @@ function pairingKeyTuple(season: number, episode: number): string {
  */
 export function buildPairings(videos: ParsedFile[], subtitles: ParsedFile[]): PairingRow[] {
   const rows: PairingRow[] = [];
-  // previously a `makeRowId(v.path, s?.path)`
-  // helper produced `${v}|||${s}` ids that BatchRename.tsx immediately
-  // overwrote with the v|/s|/b| keying below. That double-derivation
-  // was confusing — the engine's output was discarded. Move the
-  // BatchRename-shape keying into the engine so the row arrives with
-  // its final id; BatchRename's earlier `.map(r => ({...r, id: ...}))`
-  // is gone. The id is video-centric here because buildPairings only
-  // emits rows that have a video (subtitle-only / both-null rows are
-  // intentionally not produced — see the video-centric docblock above).
+  // Video-centric stable ID: buildPairings emits one row per video.
   const newId = (v: ParsedFile) => `v|${v.path}`;
 
   // Bucket matched subs by key. Unmatched subs are intentionally
@@ -390,11 +360,8 @@ export function buildPairings(videos: ParsedFile[], subtitles: ParsedFile[]): Pa
       // user's pick order. A future migration to Object.entries-based
       // bucketing would silently break this — tests assert it.
       const sub = ambiguous ? (ss[i] ?? null) : (ss[0] ?? null);
-      // `warning` implies "debatable pairing" — only meaningful when
-      // there IS a sub to argue about. Ambiguous video with no sub
-      // is just unmatched . Old form pinned every
-      // ambiguous row to `warning` regardless, yielding yellow badges
-      // on rows where no decision was actually made.
+      // `warning` marks debatable pairings, so an ambiguous video with no
+      // matched subtitle stays `unmatched` rather than `warning`.
       const rowSource = ambiguous && sub ? "warning" : sub ? "regex" : "unmatched";
       // When the ambiguous-overflow path resolves to source="unmatched"
       // (3 videos / 2 subs → vs[2] gets no sub), also flip key to

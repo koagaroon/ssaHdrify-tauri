@@ -211,9 +211,9 @@ The editor changes only `Fontname` and `Fontsize` fields in the style table and 
 
 > **配对算法 | Pairing Algorithm**
 >
-> 处理流程：清理括号内容 → 按优先级尝试剧集号正则（`S\d+E\d+`、`][NN][`、`- NN`、`第N话`、`EP\d+`）→ 分季并行扫描 → `(season, episode)` 配对键 → LCS 回退 → 最后由手动选择兜底。规则已在多组真实字幕组命名样本上验证过，包括中日双语标题、外挂多语字幕、季后缀变体等。
+> 处理流程：清理括号内容 → 按优先级尝试剧集号正则（`S\d+E\d+`、`][NN][`、`- NN`、`第N话`、`EP\d+`）→ 分季并行扫描 → `(season, episode)` 配对键 → 最后由手动选择兜底。规则已在多组真实字幕组命名样本上验证过，包括中日双语标题、外挂多语字幕、季后缀变体等。
 >
-> Pipeline: bracket cleanup → priority-ordered episode regex (`S\d+E\d+`, `][NN][`, `- NN`, `第N话`, `EP\d+`) → parallel season-aware scan → `(season, episode)` pairing key → LCS fallback → manual selection as the final safety net. Pattern coverage has been validated against multiple real-world fan-sub naming samples, including bilingual CJK titles, external multi-language subtitles, and season-suffix variants.
+> Pipeline: bracket cleanup → priority-ordered episode regex (`S\d+E\d+`, `][NN][`, `- NN`, `第N话`, `EP\d+`) → parallel season-aware scan → `(season, episode)` pairing key → manual selection as the final safety net. Pattern coverage has been validated against multiple real-world fan-sub naming samples, including bilingual CJK titles, external multi-language subtitles, and season-suffix variants.
 
 ---
 
