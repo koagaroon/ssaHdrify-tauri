@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, useRef, useMemo } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState, useRef, useMemo } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import HdrConvert from "./features/hdr-convert/HdrConvert";
 import TimingShift from "./features/timing-shift/TimingShift";
@@ -6,7 +6,6 @@ import FontEmbed from "./features/font-embed/FontEmbed";
 import BatchRename from "./features/batch-rename/BatchRename";
 import StyleEdit from "./features/style-edit/StyleEdit";
 import FontCacheDriftModal from "./features/font-embed/FontCacheDriftModal";
-import AboutLicensesModal from "./AboutLicensesModal";
 import { useI18n } from "./i18n/useI18n";
 import AppearanceMenu from "./theme/AppearanceMenu";
 import { useStatus, type StatusTab } from "./lib/StatusContext";
@@ -20,6 +19,11 @@ import {
   type FontCacheDriftReport,
 } from "./lib/tauri-api";
 import "./shell.css";
+
+// Lazy-load the offline third-party notices modal (~5.4 MB of embedded npm +
+// native license texts) so cold GUI startup parses only the interactive shell.
+const loadAboutLicensesModal = () => import("./AboutLicensesModal");
+const AboutLicensesModal = lazy(loadAboutLicensesModal);
 
 // Tab ids also serve as StatusTab keys — single source of truth.
 type Tab = StatusTab;
@@ -52,6 +56,7 @@ function App() {
   }, []);
 
   const [licensesOpen, setLicensesOpen] = useState(false);
+  const [licensesMounted, setLicensesMounted] = useState(false);
 
   // Persistent font cache (#5): launch-time drift check. Probe the
   // cache, and if it exists with drift OR with a schema mismatch,
@@ -147,6 +152,10 @@ function App() {
     setCacheDrift({ added: [], modified: [], removed: [] });
     void refreshCacheStatus();
   }, [refreshCacheStatus]);
+
+  const handleLicensesPreload = useCallback(() => {
+    void loadAboutLicensesModal();
+  }, []);
 
   const handleLicensesClose = useCallback(() => {
     setLicensesOpen(false);
@@ -360,8 +369,13 @@ function App() {
           <button
             type="button"
             className="footer-license-button"
+            onMouseEnter={handleLicensesPreload}
+            onFocus={handleLicensesPreload}
             onClick={() => {
-              if (!showCacheModal) setLicensesOpen(true);
+              if (!showCacheModal) {
+                setLicensesMounted(true);
+                setLicensesOpen(true);
+              }
             }}
             disabled={showCacheModal}
             aria-haspopup="dialog"
@@ -381,7 +395,11 @@ function App() {
         onRescanComplete={handleCacheActionComplete}
         onClearComplete={handleCacheActionComplete}
       />
-      <AboutLicensesModal open={modalVisibility.licenses} onClose={handleLicensesClose} />
+      {(licensesMounted || modalVisibility.licenses) && (
+        <Suspense fallback={null}>
+          <AboutLicensesModal open={modalVisibility.licenses} onClose={handleLicensesClose} />
+        </Suspense>
+      )}
     </div>
   );
 }
