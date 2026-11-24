@@ -200,7 +200,7 @@ describe("extractEpisode — should NOT match", () => {
     // `\bEP?(\d{1,3})\b` bounds the Western EP fallback to 1-3 digits; the
     // trailing \b makes EP1234 FAIL to match rather than truncate to 123.
     // With no other marker present, the episode is unresolved (null) and the
-    // file falls through to the LCS fallback instead of pairing on a wrong
+    // file stays unmatched for manual selection instead of pairing on a wrong
     // episode. Pairs with the at-limit EP999 case above.
     expect(extractEpisode("Show EP1234.mkv", bracketCleanup("Show EP1234.mkv"))).toBeNull();
   });
