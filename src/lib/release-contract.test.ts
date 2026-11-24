@@ -88,4 +88,15 @@ describe("release configuration contract", () => {
       /\[\[bin\]\]\r?\nname = "ssahdrify-cli"\r?\npath = "src\/bin\/cli\/main\.rs"/u
     );
   });
+
+  it("lazy-loads the offline license modal so bundled notices stay out of the startup chunk", async () => {
+    const appSource = await readText("../App.tsx");
+    const mainSource = await readText("../main.tsx");
+
+    expect(appSource).toMatch(/import\(\s*["']\.\/AboutLicensesModal["']\s*\)/u);
+    expect(appSource).not.toMatch(
+      /^\s*import\s+[\s\S]*?from\s+["'](?:\.\/AboutLicensesModal|\.\/lib\/license-notices|virtual:frontend-notices)["']/mu
+    );
+    expect(mainSource).not.toMatch(/AboutLicensesModal|license-notices|virtual:frontend-notices/u);
+  });
 });

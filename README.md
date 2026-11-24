@@ -504,7 +504,7 @@ Due to the complexity of subtitle blending pipelines and HDR display environment
 ### 前置条件 | Prerequisites
 
 - [Node.js](https://nodejs.org/)（支持 v24.22.1 及以上的 v24 LTS / v24 LTS from v24.22.1）
-- npm 12.2.2（由 `packageManager` 声明并由 CI 强制 / declared by `packageManager` and enforced in CI）
+- npm 12.2.3（由 `packageManager` 声明并由 CI 强制 / declared by `packageManager` and enforced in CI）
 - [Rust 工具链 / Rust toolchain](https://rustup.rs/)（最低 1.100.0，与仓库锁定且经过测试的稳定工具链一致；rustup 会自动选择该版本 / 1.100.0 minimum, matching the repository-pinned tested stable toolchain; rustup selects that version automatically）
 - Windows: [Microsoft C++ Build Tools / C++ 构建工具](https://v2.tauri.app/start/prerequisites/#windows)。安装构建工具时勾选「Desktop development with C++ / 使用 C++ 的桌面开发」，并使用 MSVC Rust 工具链。运行图形界面还需要[下载部分](#下载--download)说明的 WebView2 Runtime。 / Select **Desktop development with C++** in the Build Tools installer and use the MSVC Rust toolchain. Running the GUI also requires the WebView2 Runtime described under [Download](#下载--download).
 
