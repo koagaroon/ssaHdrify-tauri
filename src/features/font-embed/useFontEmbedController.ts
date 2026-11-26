@@ -1,0 +1,1119 @@
+import { useState, useCallback, useEffect, useRef, useMemo } from "react";
+import {
+  clearFontSources,
+  fileNameFromPath,
+  textDecodingWarnings,
+  pickAssFiles,
+  pickOutputDirectory,
+  readTextDetectEncoding,
+  removeFontSource,
+  writeText,
+  type FontCacheStatus,
+} from "../../lib/tauri-api";
+import { ask } from "@tauri-apps/plugin-dialog";
+import {
+  aggregateFonts,
+  FontAnalysisBudget,
+  analyzeFonts,
+  embedFonts,
+  planEmbeddedOutputs,
+  userFontKey,
+  type FileAnalysis,
+  type FontInfo,
+  type EmbedProgress,
+  type SystemFontResolution,
+} from "./font-embedder";
+import { ensureLoaded, fontKeyLabel, type FontUsage } from "./font-collector";
+import { useI18n } from "../../i18n/useI18n";
+import { useFileContext } from "../../lib/FileContext";
+import type { Status } from "../../lib/StatusContext";
+import { useTabStatus } from "../../lib/useTabStatus";
+import { type FontSource } from "./FontSourceModal";
+import { useFolderDrop } from "../../lib/useFolderDrop";
+import { findExistingOutputKeys } from "../../lib/output-collisions";
+import { useClickOutside } from "../../lib/useClickOutside";
+import { useLogPanel } from "../../lib/useLogPanel";
+import {
+  buildConflictMessage,
+  normalizeOutputKey,
+  sanitizeError,
+  sanitizeForDialog,
+} from "../../lib/dedup-helpers";
+import { isFontCacheUnavailable } from "../../lib/font-cache-ui-state";
+
+export type FontEmbedOutputMode = "beside_input" | "chosen_dir";
+
+/** Stable selection key — survives `fonts[]` reorders (e.g. after adding a
+ *  new font source triggers a reanalyze with a different ordering). Using
+ *  array indices here was the prior bug: indices shifted on reorder and the
+ *  user embedded fonts they hadn't checked. */
+export function fontSelectionKey(info: FontInfo): string {
+  return userFontKey(info.key.family, info.key.bold, info.key.italic);
+}
+
+/** Stable keys of fonts that resolved to a file — used to pre-check them in the UI. */
+function keysOfResolvedFonts(infos: FontInfo[]): Set<string> {
+  const out = new Set<string>();
+  for (const info of infos) {
+    if (info.filePath) out.add(fontSelectionKey(info));
+  }
+  return out;
+}
+
+function missingReferencedFonts(infos: FontInfo[]): FontInfo[] {
+  return infos.filter((info) => !info.filePath);
+}
+
+function safeDisplayFileName(path: string): string {
+  try {
+    return sanitizeForDialog(fileNameFromPath(path));
+  } catch {
+    return sanitizeForDialog(path.split(/[\\/]/).pop() ?? path);
+  }
+}
+
+// Font Embed only operates on ASS / SSA — other subtitle formats don't carry
+// font references. Used by the folder-drop filter so a show folder dropped
+// here keeps videos and SRTs out of the batch.
+const ASS_EXTS = new Set(["ass", "ssa"]);
+function fileNameHasAssExt(name: string): boolean {
+  const dot = name.lastIndexOf(".");
+  if (dot < 0) return false;
+  return ASS_EXTS.has(name.slice(dot + 1).toLowerCase());
+}
+
+// Decoded text and retained glyph sets have separate batch budgets.
+const MAX_BATCH_FILES = 500;
+const MAX_BATCH_AGGREGATE_BYTES = 200 * 1024 * 1024;
+
+export interface FontEmbedProps {
+  cacheStatus: FontCacheStatus | null;
+  cacheProbeFailed: boolean;
+}
+
+export function useFontEmbedController({ cacheStatus, cacheProbeFailed }: FontEmbedProps) {
+  const { t } = useI18n();
+  const fontStyleLabels = useMemo(
+    () => ({ bold: t("font_style_bold"), italic: t("font_style_italic") }),
+    [t]
+  );
+  const { fontsFiles, setFontsFiles, clearFile, isFileInUse, findLoadedInputConflictKeys } =
+    useFileContext();
+
+  // Aggregated font state for the unified detection grid and checkbox
+  // selection. Every selected file is analyzed during ingest; single-file
+  // mode is N=1 of the same path, and batch rows are the cross-file union.
+  const [fonts, setFonts] = useState<FontInfo[]>([]);
+  const [fontUsages, setFontUsages] = useState<FontUsage[]>([]);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [analyzing, setAnalyzing] = useState(false);
+  const [embedding, setEmbedding] = useState(false);
+  // Per-font subsetting progress — only surfaced in single-file mode.
+  // Batch suppresses this to avoid a noisy progress jitter as it cycles
+  // per file; the footer N-of-M chip is the file-level signal there.
+  const [progress, setProgress] = useState<EmbedProgress | null>(null);
+  // File-level N-of-M progress for batch.
+  const [batchProgress, setBatchProgress] = useState<{ processed: number; total: number } | null>(
+    null
+  );
+  const [lastActionResult, setLastActionResult] = useState<
+    "success" | "partial" | "error" | "cancelled" | null
+  >(null);
+  // Synchronous "Cancelling…" feedback for the embed Cancel button. The abort
+  // only lands at the next per-file iteration boundary, so without this the
+  // user has no confirmation their click registered (mirrors FontSourceModal's
+  // cancelRequested). Reset by the effect below when embedding settles.
+  const [embedCancelRequested, setEmbedCancelRequested] = useState(false);
+  const { logs, addLog, clearLogs, logScrollRef } = useLogPanel();
+  const [showFileList, setShowFileList] = useState(false);
+  const [dropActive, setDropActive] = useState(false);
+  const [dropError, setDropError] = useState<string | null>(null);
+  const [outputMode, setOutputMode] = useState<FontEmbedOutputMode>("beside_input");
+  const [chosenOutputDir, setChosenOutputDir] = useState<string | null>(null);
+
+  const abortRef = useRef<AbortController | null>(null);
+  // Synchronous double-click guard — `embedding` state lags
+  // setEmbedding(true) by one render. busyRef is written synchronously
+  // at handler entry and released in the outer finally so every exit
+  // path clears it.
+  const busyRef = useRef(false);
+  const analysisBusyRef = useRef(false);
+  const sourceBusyRef = useRef(false);
+  const modalScanningRef = useRef(false);
+  // Generation counter for ingest flows. Each handlePickFiles /
+  // handleDroppedPaths / handleClearFiles bumps the counter, and the
+  // async work captured the value at entry — when it later checks
+  // `gen !== pickGenRef.current`, a stale generation means the user
+  // has since picked another batch (or cleared) and we abandon the
+  // outdated work without writing state. Standard "discard stale
+  // async results" idiom — see the same shape in BatchRename.
+  const pickGenRef = useRef(0);
+  const outputDirPickGenRef = useRef(0);
+  // Per-file analysis cache: <path → {content, infos, usages}>. Holds
+  // all batch contents in memory so the unified detection grid + the
+  // embed loop don't have to re-read or re-parse on every interaction.
+  // Source-change reanalysis runs against this map; embed reads from
+  // it directly. Ref instead of state — UI consumes the AGGREGATE
+  // (fonts / fontUsages state below), not the cache directly.
+  const perFileAnalysisRef = useRef<Map<string, FileAnalysis>>(new Map());
+  const dropZoneRef = useRef<HTMLDivElement>(null);
+  const fileContainerRef = useRef<HTMLDivElement>(null);
+
+  // App owns the authoritative launch/re-probe lifecycle and refreshes these
+  // props after modal actions. Schema mismatch has its own modal, so only a
+  // non-schema init failure or a rejected probe shows this fallback banner.
+  const cacheUnavailable = isFontCacheUnavailable(cacheStatus, cacheProbeFailed);
+
+  // ── Local font sources (persist for the tab session) ─────
+  const [fontSources, setFontSources] = useState<FontSource[]>([]);
+  const [sourceModalOpen, setSourceModalOpen] = useState(false);
+  // Transient busy flag during clear/remove font-source flows. Each
+  // handler does an IPC call followed by reanalyzeWithSources(); without
+  // a busy lock the UI shows the cleared state while the per-file
+  // analysis cache is still rebuilding, and a fast double-click could
+  // launch overlapping rebuilds. The lock disables the affected buttons
+  // for the duration so the visual state matches what the IPC layer is
+  // actually doing.
+  const [sourceBusy, setSourceBusy] = useState(false);
+  // The modal lifts its scanning state up here so the parent ✕ Clear
+  // button can join the same lock. Without this, a user with the modal
+  // mid-scan could click the parent ✕ Clear and trip Rust's
+  // `reject_during_active_scan` guard, surfacing as a generic IPC
+  // error log rather than a disabled button.
+  const [modalScanning, setModalScanning] = useState(false);
+  // Effective lock for any UI element that mutates font sources from
+  // outside the modal: own clear/remove/add operations OR the modal's
+  // active scan.
+  const sourceLocked = sourceBusy || modalScanning;
+  const canStartSourceMutation = useCallback(
+    () =>
+      !busyRef.current &&
+      !analysisBusyRef.current &&
+      !sourceBusyRef.current &&
+      !modalScanningRef.current,
+    []
+  );
+  const handleScanStateChange = useCallback((scanning: boolean) => {
+    modalScanningRef.current = scanning;
+    setModalScanning(scanning);
+  }, []);
+
+  // This is a source-entry total, not a unique-font total: one font that
+  // belongs to two sources contributes one entry to each source.
+  const fontSourceEntryCount = useMemo(
+    () => fontSources.reduce((sum, src) => sum + src.count, 0),
+    [fontSources]
+  );
+  // Identity-not-content memo by design: setFonts always rebuilds the
+  // array (analyzeFonts returns a fresh `infos`), so React's referential
+  // === check is sufficient — no need to hash the contents to avoid
+  // spurious recomputes. If a future change ever mutates `fonts` in
+  // place (it shouldn't), this would over-cache; but in-place mutation
+  // would break far more than this memo.
+  const localCoveredKeys = useMemo(() => {
+    const out = new Set<string>();
+    for (const info of fonts) {
+      if (info.source === "local") out.add(fontSelectionKey(info));
+    }
+    return out;
+  }, [fonts]);
+
+  const filePaths = useMemo(() => fontsFiles?.filePaths ?? [], [fontsFiles]);
+  const fileNames = useMemo(() => fontsFiles?.fileNames ?? [], [fontsFiles]);
+  const primaryFileName = fileNames[0] ?? "";
+  const fileCount = filePaths.length;
+  const isSingleFile = fileCount === 1;
+  const isBatch = fileCount > 1;
+
+  // Shared ingestion path. Loads + analyzes EVERY file in the selection
+  // upfront so the unified detection grid can show real coverage across
+  // the whole batch (single-file is just N=1 of this code path). Cached
+  // contents stay in memory for source-change reanalysis and the embed
+  // loop. Sequential analyze keeps findSystemFont IPC pressure bounded.
+  // Strict cross-tab dedup contract: any conflict rejects the WHOLE
+  // selection — see buildConflictMessage / FileContext for rationale.
+  const ingestPaths = useCallback(
+    async (paths: string[], gen: number) => {
+      // A font-source scan/mutation changes the resolver underneath this
+      // batch. Keep the two workflows mutually exclusive so one selection is
+      // always analyzed against a single source-index generation.
+      if (busyRef.current || sourceBusyRef.current || modalScanningRef.current) return;
+      const conflictMsg = buildConflictMessage(paths, "fonts", isFileInUse, t);
+      if (conflictMsg) {
+        setDropError(conflictMsg);
+        return;
+      }
+      // Defense-in-depth file-count cap . The drag-drop
+      // expansion on the Rust side caps at 5000 entries; the multi-file
+      // picker has no explicit cap. Reject up front so a malicious /
+      // accidental large folder doesn't even start consuming readText
+      // IPC bandwidth.
+      if (paths.length > MAX_BATCH_FILES) {
+        setDropError(t("err_batch_too_many_files", paths.length, MAX_BATCH_FILES));
+        return;
+      }
+      setDropError(null);
+
+      // The accepted selection is now authoritative. Clear both halves of
+      // the previous batch before any await so an all-read/analyze failure
+      // cannot leave an old file strip or let a later source refresh revive
+      // stale per-file analyses. Rejected conflict/count checks above keep
+      // the previous selection by design; only an accepted ingest resets it.
+      perFileAnalysisRef.current = new Map();
+      setFontsFiles(null);
+      setFonts([]);
+      setFontUsages([]);
+      setSelected(new Set());
+
+      analysisBusyRef.current = true;
+      setAnalyzing(true);
+      try {
+        await ensureLoaded();
+        if (gen !== pickGenRef.current) return;
+
+        const cache = new Map<string, FileAnalysis>();
+        // Shared system-font cache for the whole batch — without this
+        // every file repeats the same findSystemFont IPC for the same
+        // missing font names, blowing up the Rust log with N×M warnings
+        // and adding pointless latency to ingest. One cache per ingest
+        // run keeps it scoped and disposable.
+        const sysCache = new Map<string, SystemFontResolution>();
+        // Symmetric cache for the persistent font cache lookup tier
+        // (#5). Same N×M IPC concern as sysCache.
+        const cacheLookupCache = new Map<string, { path: string; index: number } | null>();
+        const analysisBudget = new FontAnalysisBudget();
+        let aggregateBytes = 0;
+        for (const path of paths) {
+          if (gen !== pickGenRef.current) return;
+          let content: string;
+          let decoding: FileAnalysis["decoding"];
+          try {
+            const read = await readTextDetectEncoding(path);
+            if (gen !== pickGenRef.current) return;
+            content = read.text;
+            decoding = {
+              encodingId: read.encodingId,
+              inferredWithoutBom: read.inferredWithoutBom,
+              lossy: read.lossy,
+            };
+            for (const warning of textDecodingWarnings(decoding, safeDisplayFileName(path), t)) {
+              addLog(warning, "warn");
+            }
+          } catch (e) {
+            // BiDi parity: read errors carry the file path
+            // (often the user-picked path including filename), and
+            // the Rust IPC error can interpolate that path again.
+            const reason = sanitizeError(e);
+            addLog(t("msg_read_error", sanitizeForDialog(fileNameFromPath(path)), reason), "error");
+            continue;
+          }
+          if (gen !== pickGenRef.current) return;
+          aggregateBytes += content.length * 2;
+          if (aggregateBytes > MAX_BATCH_AGGREGATE_BYTES) {
+            const mb = Math.round(aggregateBytes / (1024 * 1024));
+            const capMb = Math.round(MAX_BATCH_AGGREGATE_BYTES / (1024 * 1024));
+            setDropError(t("err_batch_aggregate_too_large", mb, capMb));
+            return;
+          }
+          // Production path: ask Rust's session-local source index
+          // for matches before falling back to system fonts. The
+          // legacy in-memory userFontMap is null here because the
+          // heavy index lives in Rust now.
+          const useRustUserFonts = true;
+          const analyzed = await analyzeFonts(
+            content,
+            null,
+            sysCache,
+            useRustUserFonts,
+            cacheLookupCache
+          );
+          if (gen !== pickGenRef.current) return;
+          analysisBudget.add(analyzed.usages);
+          cache.set(path, {
+            content,
+            infos: analyzed.infos,
+            usages: analyzed.usages,
+            decoding,
+          });
+        }
+
+        if (cache.size === 0) {
+          // No file made it through. The accepted-ingest reset above already
+          // cleared both the visible strip and the authoritative cache.
+          return;
+        }
+
+        perFileAnalysisRef.current = cache;
+        const { infos: aggInfos, usages: aggUsages } = aggregateFonts(cache);
+        setFontUsages(aggUsages);
+        setFonts(aggInfos);
+        setSelected(keysOfResolvedFonts(aggInfos));
+
+        // Use the first SUCCESSFUL file's content for the
+        // FontsFilesState.firstFileContent slot — the field is kept for
+        // FileContext compatibility but the cache is the authoritative
+        // store from here on.
+        // Publish exactly the cache-backed subset. Failed reads were already
+        // reported once above; keeping them in filePaths would make Embed hit
+        // an impossible cache miss and report the same failure a second time.
+        const successfulPaths = paths.filter((path) => cache.has(path));
+        const firstSuccessfulPath = successfulPaths[0]!;
+        const firstContent = cache.get(firstSuccessfulPath)!.content;
+        const names = successfulPaths.map(fileNameFromPath);
+        setFontsFiles({
+          filePaths: successfulPaths,
+          fileNames: names,
+          firstFileContent: firstContent,
+        });
+      } catch (e) {
+        if (gen !== pickGenRef.current) return;
+        addLog(t("error_prefix", sanitizeError(e)), "error");
+      } finally {
+        if (gen === pickGenRef.current) {
+          analysisBusyRef.current = false;
+          setAnalyzing(false);
+        }
+      }
+    },
+    [isFileInUse, setFontsFiles, addLog, t]
+  );
+
+  const handlePickFiles = useCallback(async () => {
+    if (
+      busyRef.current ||
+      analysisBusyRef.current ||
+      sourceBusyRef.current ||
+      modalScanningRef.current
+    )
+      return;
+    const gen = (pickGenRef.current = pickGenRef.current + 1);
+    // Match drag-and-drop: a new selection attempt must not leave the
+    // previous embed outcome visible beside a fresh picker error or batch.
+    setLastActionResult(null);
+    // catch dialog IPC failures so a click
+    // that can't open the picker doesn't read as a silent no-op. See
+    // TimingShift.handlePickFiles for the full rationale.
+    let paths: string[] | null;
+    try {
+      paths = await pickAssFiles(t);
+    } catch (e) {
+      if (gen !== pickGenRef.current) return;
+      addLog(t("error_prefix", sanitizeError(e)), "error");
+      return;
+    }
+    if (gen !== pickGenRef.current) return;
+    if (!paths || paths.length === 0) return;
+    await ingestPaths(paths, gen);
+  }, [ingestPaths, addLog, setLastActionResult, t]);
+
+  const handleDroppedPaths = useCallback(
+    async (paths: string[]) => {
+      if (
+        busyRef.current ||
+        analysisBusyRef.current ||
+        sourceBusyRef.current ||
+        modalScanningRef.current
+      )
+        return;
+      // Bump pickGenRef at function entry, symmetric with
+      // handlePickFiles. Previously the bump happened AFTER the
+      // filter — concurrent in-flight pick wouldn't see the
+      // generation jump until after the filter completed. Real-world
+      // impact negligible (early-return is just log+banner state), but
+      // the bump-at-entry pattern keeps the generation contract
+      // uniform across pick entry points.
+      const gen = (pickGenRef.current = pickGenRef.current + 1);
+      // Clear lastActionResult on every new ingest entry, not just the
+      // happy path. The `fontsFiles` useEffect that previously handled
+      // this clear doesn't fire when the drop is rejected — leaving a
+      // stale "Embed complete" footer alongside a fresh red banner.
+      setLastActionResult(null);
+      const assPaths = paths.filter((p) => fileNameHasAssExt(fileNameFromPath(p)));
+      if (assPaths.length === 0) {
+        // Surface through both the log and DropErrorBanner; users with
+        // collapsed log panels see nothing from log-only feedback.
+        const msg = t("msg_no_subtitle_in_drop");
+        addLog(msg, "error");
+        setDropError(msg);
+        return;
+      }
+      await ingestPaths(assPaths, gen);
+    },
+    [ingestPaths, addLog, setDropError, setLastActionResult, t]
+  );
+
+  useFolderDrop({
+    ref: dropZoneRef,
+    onPaths: handleDroppedPaths,
+    onActiveChange: setDropActive,
+    onError: (e) => setDropError(sanitizeError(e)),
+    // Match the Pick-Files / Pick-Folder button gates which already
+    // include `analyzing`. Drops accepted during analyze waste the
+    // first analysis pass (gen counter saves correctness but the work
+    // is thrown away) and produce a confusing "pick disabled, drop
+    // accepted" UX.
+    disabled: embedding || analyzing || sourceLocked,
+    t,
+  });
+
+  // ── Font source management ──────────────────────────────────────
+  // Adding/removing a source: Rust owns the local font-source index; re-analyze
+  // EVERY cached file's content against that fresh index so the unified
+  // detection grid + per-file embed cache both reflect the new
+  // resolution. Cached contents avoid disk re-reads.
+  const reanalyzeWithSources = useCallback(async () => {
+    const cache = perFileAnalysisRef.current;
+    if (cache.size === 0) return;
+    // snapshot the set of fonts that were ALREADY
+    // resolved before this reanalyze. Below, the selection merge
+    // distinguishes "truly new resolution" (auto-check) from "resolved
+    // both before and after" (respect the user's prior selection
+    // including manual unchecks). Without this snapshot, a font the
+    // user manually unchecked gets auto-re-checked the next time
+    // any source mutation triggers reanalyze — explicit user intent
+    // silently overridden.
+    const prevResolved = new Set<string>();
+    for (const analysis of cache.values()) {
+      for (const key of keysOfResolvedFonts(analysis.infos)) prevResolved.add(key);
+    }
+    const gen = (pickGenRef.current = pickGenRef.current + 1);
+    // set analyzing=true during the sequential
+    // per-file IPC sequence. Without this, the Embed button remains
+    // enabled while reanalyzeWithSources walks the cache against
+    // (changed) sources — clicking Embed mid-reanalyze would consume
+    // the stale `selected` set and skip fonts that the user just
+    // unlocked by adding a source. Symmetric with ingestPaths above.
+    analysisBusyRef.current = true;
+    setAnalyzing(true);
+    try {
+      const newCache = new Map<string, FileAnalysis>();
+      const analysisBudget = new FontAnalysisBudget();
+      // Same batch-shared caches as ingestPaths — one round of
+      // system / cache lookups per source change, not per (file × font).
+      const sysCache = new Map<string, SystemFontResolution>();
+      const cacheLookupCache = new Map<string, { path: string; index: number } | null>();
+      for (const [path, prev] of cache) {
+        if (gen !== pickGenRef.current) return;
+        const analyzed = await analyzeFonts(prev.content, null, sysCache, true, cacheLookupCache);
+        if (gen !== pickGenRef.current) return;
+        analysisBudget.add(analyzed.usages);
+        newCache.set(path, {
+          ...prev,
+          infos: analyzed.infos,
+          usages: analyzed.usages,
+        });
+      }
+      perFileAnalysisRef.current = newCache;
+      const { infos, usages } = aggregateFonts(newCache);
+      setFontUsages(usages);
+      setFonts(infos);
+      // Merge: keep manual unchecks; auto-check ONLY truly new resolutions.
+      // The auto-check loop gates on `!prevResolved.has(key)` so a font
+      // that was resolved before AND manually unchecked stays unchecked.
+      // The two-set diff (was-resolved vs now-resolved) is the precise
+      // definition of "newly resolved"; checking only `!prev.has(key)`
+      // would treat re-resolution identically to first-time resolution.
+      setSelected((prev) => {
+        const resolved = keysOfResolvedFonts(infos);
+        const next = new Set<string>();
+        for (const key of prev) {
+          if (resolved.has(key)) next.add(key);
+        }
+        for (const key of resolved) {
+          if (!prev.has(key) && !prevResolved.has(key)) next.add(key);
+        }
+        return next;
+      });
+    } catch (e) {
+      if (gen !== pickGenRef.current) return;
+      addLog(t("error_prefix", sanitizeError(e)), "error");
+    } finally {
+      // Generation-gated unlock (same pattern as ingestPaths): only
+      // the latest reanalyze flips analyzing back off, so an in-flight
+      // older run completing late doesn't briefly un-lock the UI
+      // while a newer reanalyze is still mid-IPC.
+      if (gen === pickGenRef.current) {
+        analysisBusyRef.current = false;
+        setAnalyzing(false);
+      }
+    }
+  }, [addLog, t]);
+
+  // Clear all font sources at once. Mirrors the file-strip ✕ pattern
+  // — sources persist across subtitle clears by design, but the
+  // separate ✕ on the source button gives the user one-click recovery
+  // without diving into the modal.
+  const handleClearFontSources = useCallback(() => {
+    if (!canStartSourceMutation()) return;
+    sourceBusyRef.current = true;
+    void (async () => {
+      setSourceBusy(true);
+      try {
+        await clearFontSources();
+        setFontSources([]);
+        await reanalyzeWithSources();
+      } catch (e) {
+        addLog(t("error_prefix", sanitizeError(e)), "error");
+      } finally {
+        sourceBusyRef.current = false;
+        setSourceBusy(false);
+      }
+    })();
+  }, [canStartSourceMutation, reanalyzeWithSources, addLog, t]);
+
+  const handleAddFontSource = useCallback(
+    (source: FontSource) => {
+      if (busyRef.current || analysisBusyRef.current || sourceBusyRef.current) return;
+      sourceBusyRef.current = true;
+      setFontSources((previous) => [...previous, source]);
+      // Wrap the reanalyze in the same sourceBusy envelope as
+      // clear/remove. Without this, a user adding a source then
+      // immediately clicking the parent ✕ Clear before the reanalyze
+      // settles can fire a clear IPC concurrent with an in-flight
+      // analyzeFonts pass against stale source state — visible Local
+      // badges in the detection grid then disagree with the actually-
+      // empty source list.
+      void (async () => {
+        setSourceBusy(true);
+        try {
+          await reanalyzeWithSources();
+        } catch (e) {
+          // parity with handleRemoveFontSource —
+          // reanalyzeWithSources can throw (font_cache_commands /
+          // analyzeFonts internal errors); without an outer catch the
+          // rejection becomes an unhandled-promise warning and the user
+          // sees no log entry explaining why the newly-added source
+          // didn't update the detection grid.
+          addLog(t("error_prefix", sanitizeError(e)), "error");
+        } finally {
+          sourceBusyRef.current = false;
+          setSourceBusy(false);
+        }
+      })();
+    },
+    [reanalyzeWithSources, addLog, t]
+  );
+
+  const handleRemoveFontSource = useCallback(
+    (id: string) => {
+      if (!canStartSourceMutation()) return;
+      sourceBusyRef.current = true;
+      void (async () => {
+        setSourceBusy(true);
+        try {
+          // Rust reads kind/root/scope from its source record. Keeping that
+          // ownership on one side prevents stale frontend state from evicting
+          // the wrong persistent-cache source.
+          await removeFontSource(id);
+          setFontSources((previous) => previous.filter((s) => s.id !== id));
+          await reanalyzeWithSources();
+        } catch (e) {
+          addLog(t("error_prefix", sanitizeError(e)), "error");
+        } finally {
+          sourceBusyRef.current = false;
+          setSourceBusy(false);
+        }
+      })();
+    },
+    [canStartSourceMutation, reanalyzeWithSources, addLog, t]
+  );
+
+  const handlePickOutputDir = useCallback(async () => {
+    if (analyzing || embedding) return;
+    const gen = ++outputDirPickGenRef.current;
+    try {
+      const dir = await pickOutputDirectory(t);
+      if (gen !== outputDirPickGenRef.current) return;
+      if (dir) setChosenOutputDir(dir);
+    } catch (e) {
+      if (gen !== outputDirPickGenRef.current) return;
+      addLog(t("error_prefix", sanitizeError(e)), "error");
+    }
+  }, [analyzing, embedding, addLog, t]);
+
+  const toggleSelect = (key: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
+
+  // Reset last-action on selection change so done/cancelled doesn't stick.
+  useEffect(() => {
+    setLastActionResult(null);
+  }, [fontsFiles]);
+
+  // Output destination changes alter what a subsequent Embed click will do,
+  // so clear stale "done" / "cancelled" status just like file changes do.
+  useEffect(() => {
+    setLastActionResult(null);
+  }, [outputMode, chosenOutputDir]);
+
+  // File-list dropdown: close on click-outside / Escape (mirrors HDR).
+  useClickOutside(showFileList, fileContainerRef, () => setShowFileList(false));
+
+  // ── Embed handler — handles both single-file and batch modes ─────
+  const handleEmbed = useCallback(async () => {
+    if (fileCount === 0) return;
+    // Synchronous double-click gate — see HdrConvert::handleConvert.
+    if (
+      busyRef.current ||
+      analysisBusyRef.current ||
+      sourceBusyRef.current ||
+      modalScanningRef.current
+    )
+      return;
+    const analysisForRun = perFileAnalysisRef.current;
+    busyRef.current = true;
+    pickGenRef.current++;
+    outputDirPickGenRef.current++;
+    abortRef.current = new AbortController();
+    setEmbedding(true);
+    try {
+      if (outputMode === "chosen_dir" && !chosenOutputDir) {
+        addLog(t("msg_rename_no_chosen_dir"), "error");
+        setLastActionResult("error");
+        return;
+      }
+
+      const planned = planEmbeddedOutputs(
+        filePaths,
+        outputMode === "chosen_dir" ? { outputDir: chosenOutputDir! } : {}
+      );
+      for (const skipped of planned.skipped) {
+        const safePath = safeDisplayFileName(skipped.inputPath);
+        if (skipped.reason === "duplicate") {
+          addLog(t("msg_skipped_duplicate", safePath), "error");
+        } else if (skipped.reason === "input_conflict") {
+          addLog(t("msg_fonts_input_conflict", safePath), "error");
+        } else {
+          // Validation messages carry path-specific details from the planner;
+          // keep them verbatim (after its sanitization) instead of pretending
+          // an arbitrary runtime error is an i18n key.
+          addLog(t("msg_fonts_error", safePath, skipped.message), "error");
+        }
+      }
+      if (planned.targets.length === 0) {
+        // Every file failed pre-flight — nothing left to process.
+        setLastActionResult("error");
+        return;
+      }
+      let existingOutputs: ReadonlySet<string> = new Set();
+      let inputConflicts: ReadonlySet<string> = new Set();
+      let targets = planned.targets;
+      let skippedCount = planned.skipped.length;
+      try {
+        inputConflicts = await findLoadedInputConflictKeys(
+          targets.map((target) => target.outputPath),
+          abortRef.current?.signal
+        );
+        if (abortRef.current?.signal.aborted) {
+          setLastActionResult("cancelled");
+          return;
+        }
+        targets = targets.filter((target) => {
+          if (!inputConflicts.has(normalizeOutputKey(target.outputPath))) return true;
+          addLog(t("msg_fonts_input_conflict", safeDisplayFileName(target.inputPath)), "error");
+          skippedCount++;
+          return false;
+        });
+        if (targets.length === 0) {
+          setLastActionResult("error");
+          return;
+        }
+        existingOutputs = await findExistingOutputKeys(targets.map((target) => target.outputPath));
+        if (abortRef.current?.signal.aborted) {
+          setLastActionResult("cancelled");
+          return;
+        }
+        const existingCount = existingOutputs.size;
+        if (existingCount > 0) {
+          const skippedSuffix =
+            skippedCount > 0 ? `\n\n${t("msg_fonts_skipped_count", skippedCount)}` : "";
+          const confirmed = await ask(
+            t("msg_overwrite_confirm", existingCount, targets.length) + skippedSuffix,
+            {
+              title: t("dialog_overwrite_title"),
+              kind: "warning",
+            }
+          );
+          if (!confirmed || abortRef.current?.signal.aborted) {
+            addLog(t("msg_fonts_cancelled"), "info");
+            setLastActionResult("cancelled");
+            return;
+          }
+        }
+      } catch (e) {
+        addLog(t("error_prefix", sanitizeError(e)), "error");
+        setLastActionResult("error");
+        return;
+      }
+
+      setBatchProgress({ processed: skippedCount, total: filePaths.length });
+
+      try {
+        addLog(t("msg_fonts_start", filePaths.length));
+
+        let successCount = 0;
+        let issueCount = skippedCount;
+        let processedCount = skippedCount;
+
+        for (const target of targets) {
+          const filePath = target.inputPath;
+          const outputPath = target.outputPath;
+
+          // Compute once at the top of each loop so every downstream
+          // log interpolation gets the same BiDi-scrubbed display name.
+          const safeFileName = safeDisplayFileName(filePath);
+
+          if (abortRef.current?.signal.aborted) {
+            addLog(t("msg_fonts_cancelled"), "info");
+            break;
+          }
+
+          // BiDi parity — fileName / outName below flow into many
+          // addLog calls. The sanitized form is computed once at
+          // source (hoisted above) so every downstream interpolation
+          // site automatically gets BiDi-scrubbed display text
+          // without each callsite having to remember to wrap.
+          addLog(t("msg_processing", safeFileName));
+
+          try {
+            // Pull from the per-file analysis cache populated at ingest.
+            // Every visible path in the grid was ingested before this
+            // loop runs (see `ingestPaths`), and ingest is the site that
+            // enforces MAX_BATCH_AGGREGATE_BYTES. The previous defensive
+            // fresh-read fallback bypassed that cap; a cache miss at
+            // this point is a real inconsistency that should surface
+            // as an error rather than silently re-read outside the
+            // ingest guards.
+            const cached = analysisForRun.get(filePath);
+            if (!cached) {
+              issueCount++;
+              addLog(
+                t("msg_fonts_error", safeFileName, t("msg_fonts_analysis_unavailable")),
+                "error"
+              );
+              continue;
+            }
+            if (abortRef.current?.signal.aborted) break;
+
+            // Filter to fonts THIS FILE references AND the user kept
+            // checked in the global aggregate grid AND that resolved to
+            // a real font file. The aggregate keys are the same shape
+            // as per-file keys, so set membership is direct.
+            //
+            // `selected` is the Set captured when the user clicked Embed
+            // (handleEmbed is a useCallback closing over the state value,
+            // not a ref). Mid-run checkbox toggles do NOT affect what the
+            // running batch embeds — that's intentional, so flipping a
+            // box mid-loop can't inject or omit a font part-way through
+            // the sequence and produce inconsistent outputs across files.
+            // Switching this to a ref would change that contract.
+            const selectedFonts = cached.infos.filter(
+              (info) => selected.has(fontSelectionKey(info)) && info.filePath
+            );
+            const missingFonts = missingReferencedFonts(cached.infos);
+            const missingWarnings =
+              missingFonts.length > 0 ? [t("msg_fonts_missing_warning", missingFonts.length)] : [];
+            const decodingWarnings = cached.decoding
+              ? textDecodingWarnings(cached.decoding, safeFileName, t)
+              : [];
+            for (const warning of decodingWarnings) addLog(warning, "warn");
+
+            if (selectedFonts.length === 0) {
+              // misattributed message correction.
+              // The outer "Embed" button is gated on `selected.size > 0`,
+              // so the global-zero case never reaches this loop body.
+              // The remaining 0-fonts case here is "this file references
+              // no fonts that the user kept checked" — a per-file,
+              // per-batch shape that needs its own message naming the
+              // file. `safeFileName` is already sanitized just above.
+              for (const warning of missingWarnings) {
+                addLog(t("msg_fonts_file_warning", safeFileName, warning), "warn");
+              }
+              // Count this file as ONE issue ("no usable fonts"). The
+              // per-missing-font warnings above are logged for detail but must
+              // not ALSO be summed here, or one file inflates the summary's
+              // issue count past the file count.
+              issueCount++;
+              addLog(t("msg_no_fonts_for_file", safeFileName), "error");
+              continue;
+            }
+
+            // Per-font subsetting progress — only in single-file. In
+            // batch we suppress to avoid a noisy progress bar that resets
+            // per file; the footer N-of-M chip is the file-level signal.
+            const onProgress = isSingleFile ? (p: EmbedProgress) => setProgress(p) : undefined;
+
+            const result = await embedFonts(
+              cached.content,
+              selectedFonts,
+              cached.usages,
+              onProgress,
+              () => abortRef.current?.signal.aborted ?? false,
+              t
+            );
+
+            if (result === null) {
+              // Cancelled mid-embed for this file — break out of batch.
+              break;
+            }
+            if (abortRef.current?.signal.aborted) break;
+
+            // outName goes through addLog twice below; sanitize once
+            // at derivation. fileNameFromPath result is from a
+            // user-derived path that may carry attacker-influenced
+            // segments.
+            const safeOutName = sanitizeForDialog(fileNameFromPath(outputPath));
+            if (result.embeddedCount === 0) {
+              const fileWarnings = [...missingWarnings, ...result.warnings];
+              // selectedFonts is non-empty and each selected font either
+              // produces an entry or a warning inside embedFonts. Therefore a
+              // zero-entry result is a failed/skipped embed, never an
+              // "already present" no-op.
+              issueCount++;
+              for (const warning of fileWarnings) {
+                addLog(t("msg_fonts_file_warning", safeFileName, warning), "warn");
+              }
+              addLog(t("msg_embed_no_change", safeOutName), "warn");
+              continue;
+            }
+            if (inputConflicts.has(normalizeOutputKey(outputPath))) {
+              throw new Error(t("msg_fonts_input_conflict", safeFileName));
+            }
+            await writeText(
+              outputPath,
+              result.content,
+              existingOutputs.has(normalizeOutputKey(outputPath))
+            );
+            const fileWarnings = [...missingWarnings, ...result.warnings];
+            const warningCount = fileWarnings.length + decodingWarnings.length;
+            if (warningCount > 0) {
+              issueCount++;
+              for (const warning of fileWarnings) {
+                addLog(t("msg_fonts_file_warning", safeFileName, warning), "warn");
+              }
+              addLog(
+                t("msg_embed_saved_partial", safeOutName, result.embeddedCount, warningCount),
+                "warn"
+              );
+            } else {
+              addLog(t("msg_embed_saved", safeOutName, result.embeddedCount), "success");
+            }
+            successCount++;
+          } catch (e) {
+            issueCount++;
+            addLog(t("msg_fonts_error", safeFileName, sanitizeError(e)), "error");
+          } finally {
+            processedCount++;
+            setBatchProgress({ processed: processedCount, total: filePaths.length });
+          }
+        }
+
+        // Match HDR/Timing post-loop pattern: gate the success log on
+        // `successCount > 0`, route 0-success batches to a distinct
+        // `msg_fonts_all_failed` line. Previously the success log
+        // fired even on all-failure batches ("Embed complete: 0/N
+        // processed" alongside a red error footer), contradicting
+        // itself. HDR + Timing already correctly split these two
+        // cases — bringing FontEmbed in line.
+        const aborted = !!abortRef.current?.signal.aborted;
+        if (aborted) {
+          setLastActionResult("cancelled");
+        } else if (successCount > 0 && issueCount > 0) {
+          addLog(
+            t("msg_fonts_complete_partial", successCount, filePaths.length, issueCount),
+            "warn"
+          );
+          setLastActionResult("partial");
+        } else if (successCount > 0) {
+          addLog(t("msg_fonts_complete", successCount, filePaths.length), "success");
+          setLastActionResult("success");
+        } else {
+          addLog(t("msg_fonts_all_failed", filePaths.length), "error");
+          setLastActionResult("error");
+        }
+      } finally {
+        setEmbedding(false);
+        setBatchProgress(null);
+        setProgress(null);
+        setEmbedCancelRequested(false);
+      }
+    } finally {
+      busyRef.current = false;
+      setEmbedding(false);
+      setBatchProgress(null);
+      setProgress(null);
+      setEmbedCancelRequested(false);
+      abortRef.current = null;
+    }
+  }, [
+    fileCount,
+    filePaths,
+    isSingleFile,
+    selected,
+    outputMode,
+    chosenOutputDir,
+    addLog,
+    t,
+    findLoadedInputConflictKeys,
+  ]);
+
+  const outputControlsDisabled = analyzing || embedding;
+  const missingChosenOutputDir = outputMode === "chosen_dir" && !chosenOutputDir;
+
+  // Footer status — busy carries N-of-M progress; cancelled is its own
+  // visible state.
+  const tabStatus = useMemo<Status>(() => {
+    if (fileCount === 0) return { kind: "idle", message: t("status_fonts_idle") };
+    if (embedding) {
+      return {
+        kind: "busy",
+        message: t("status_fonts_busy"),
+        progress: batchProgress ?? undefined,
+      };
+    }
+    if (analyzing) return { kind: "busy", message: t("status_fonts_analyzing") };
+    if (lastActionResult === "success") return { kind: "done", message: t("status_fonts_done") };
+    if (lastActionResult === "partial") {
+      return { kind: "pending", message: t("status_fonts_partial") };
+    }
+    if (lastActionResult === "error") return { kind: "error", message: t("status_fonts_error") };
+    if (lastActionResult === "cancelled") {
+      return { kind: "pending", message: t("status_fonts_cancelled") };
+    }
+    if (selected.size === 0) {
+      return { kind: "pending", message: t("status_fonts_pick") };
+    }
+    if (missingChosenOutputDir) {
+      return { kind: "pending", message: t("msg_rename_no_chosen_dir") };
+    }
+    if (isSingleFile) {
+      return { kind: "pending", message: t("status_fonts_pending", selected.size) };
+    }
+    return {
+      kind: "pending",
+      message: t("status_fonts_batch_pending", selected.size, fileCount),
+    };
+  }, [
+    fileCount,
+    isSingleFile,
+    analyzing,
+    embedding,
+    batchProgress,
+    selected,
+    lastActionResult,
+    missingChosenOutputDir,
+    t,
+  ]);
+  useTabStatus("fonts", tabStatus);
+
+  const formatFontLabel = (info: FontInfo) => fontKeyLabel(info.key, fontStyleLabels);
+
+  const handleClearFiles = useCallback(() => {
+    if (busyRef.current || sourceBusyRef.current || modalScanningRef.current) return;
+    pickGenRef.current = pickGenRef.current + 1;
+    outputDirPickGenRef.current++;
+    clearFile("fonts");
+    setFonts([]);
+    setFontUsages([]);
+    setSelected(new Set());
+    setAnalyzing(false);
+    analysisBusyRef.current = false;
+    setProgress(null);
+    setDropError(null);
+    perFileAnalysisRef.current = new Map();
+    // Explicit reset — previously relied on a downstream useEffect on
+    // fontsFiles change to clear lastActionResult, which works today
+    // but couples this clear to that effect's dep tracking. Reset here
+    // so the status pill goes neutral the moment the user hits Clear.
+    setLastActionResult(null);
+  }, [clearFile]);
+
+  // Now that the batch grid carries per-font checkboxes too, the
+  // disabled rule is uniform: 0 selected = nothing to embed, single
+  // or batch.
+  // Include `analyzing` for symmetry with the Select-Files / Pick-Folder
+  // gates below. Today the race window is closed by ingest sequencing
+  // (selected only flips after analyze completes), but a future change
+  // that publishes per-file would otherwise quietly let Embed fire on a
+  // partially-analyzed batch.
+  const isEmbedDisabled =
+    embedding ||
+    analyzing ||
+    sourceLocked ||
+    selected.size === 0 ||
+    fileCount === 0 ||
+    missingChosenOutputDir;
+
+  function embedButtonLabel(): string {
+    if (embedding) return t("btn_embedding");
+    if (selected.size > 0) return t("btn_embed", selected.size);
+    return t("btn_embed_default");
+  }
+
+  const requestEmbedCancel = useCallback(() => {
+    setEmbedCancelRequested(true);
+    abortRef.current?.abort();
+  }, []);
+
+  return {
+    t,
+    filePaths,
+    fileNames,
+    primaryFileName,
+    fileCount,
+    isSingleFile,
+    isBatch,
+    showFileList,
+    setShowFileList,
+    dropZoneRef,
+    fileContainerRef,
+    dropActive,
+    dropError,
+    setDropError,
+    cacheUnavailable,
+    outputMode,
+    setOutputMode,
+    chosenOutputDir,
+    outputControlsDisabled,
+    missingChosenOutputDir,
+    handlePickOutputDir,
+    handlePickFiles,
+    handleClearFiles,
+    analyzing,
+    embedding,
+    sourceLocked,
+    sourceBusy,
+    fontSources,
+    fontSourceEntryCount,
+    sourceModalOpen,
+    setSourceModalOpen,
+    canStartSourceMutation,
+    handleClearFontSources,
+    handleAddFontSource,
+    handleRemoveFontSource,
+    handleScanStateChange,
+    embedCancelRequested,
+    requestEmbedCancel,
+    handleEmbed,
+    isEmbedDisabled,
+    embedButtonLabel,
+    fonts,
+    fontUsages,
+    localCoveredKeys,
+    selected,
+    toggleSelect,
+    formatFontLabel,
+    progress,
+    logs,
+    clearLogs,
+    logScrollRef,
+  };
+}
