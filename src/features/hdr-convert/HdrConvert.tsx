@@ -1,51 +1,12 @@
-import { useState, useCallback, useEffect, useMemo, useRef } from "react";
-import {
-  fileNameFromPath,
-  textDecodingWarnings,
-  pickSubtitleFiles,
-  readText,
-  writeText,
-} from "../../lib/tauri-api";
-import { processAssContent, parseAssColor, formatAssColor } from "./ass-processor";
-import {
-  convertTextCueSubtitleToAss,
-  isNativeAss,
-  isConvertible,
-  DEFAULT_STYLE,
-  type StyleConfig,
-} from "./srt-converter";
-import { resolveOutputPath, OUTPUT_PRESETS, DEFAULT_TEMPLATE } from "./output-naming";
-import { DEFAULT_BRIGHTNESS, MIN_BRIGHTNESS, MAX_BRIGHTNESS, type Eotf } from "./color-engine";
-import { ask } from "@tauri-apps/plugin-dialog";
-
+import { parseAssColor, formatAssColor } from "./ass-processor";
+import { OUTPUT_PRESETS } from "./output-naming";
+import { MIN_BRIGHTNESS, MAX_BRIGHTNESS, type Eotf } from "./color-engine";
 import NumberInput from "../../lib/NumberInput";
-import { parseFiniteNumberText } from "../../lib/strict-number";
 import NitViz from "./NitViz";
-import { isHdrBrightnessInvalid, isHdrConvertDisabled } from "./hdr-ui-state";
-import {
-  hasMicroDvdInput,
-  isHdrFpsInvalid,
-  parseHdrFpsOverrideForInput,
-  parseHdrStyleNumberInput,
-  type HdrFpsMode,
-} from "./hdr-style-ui-state";
-import { useI18n } from "../../i18n/useI18n";
-import { useFileContext } from "../../lib/FileContext";
-import type { Status } from "../../lib/StatusContext";
-import { useTabStatus } from "../../lib/useTabStatus";
-import { useFolderDrop } from "../../lib/useFolderDrop";
-import { findExistingOutputKeys } from "../../lib/output-collisions";
-import { assertOutputDoesNotReplaceSelectedInput } from "../../lib/path-validation";
-import { useClickOutside } from "../../lib/useClickOutside";
-import { useLogPanel } from "../../lib/useLogPanel";
+import { parseHdrStyleNumberInput, type HdrFpsMode } from "./hdr-style-ui-state";
 import { LogPanel } from "../../lib/LogPanel";
 import { DropErrorBanner } from "../../lib/DropErrorBanner";
-import {
-  buildConflictMessage,
-  normalizeOutputKey,
-  sanitizeError,
-  sanitizeForDialog,
-} from "../../lib/dedup-helpers";
+import { useHdrConvertController } from "./useHdrConvertController";
 
 /** Convert ASS color "&H00BBGGRR" to HTML "#RRGGBB" */
 function assColorToHex(assColor: string): string {
@@ -64,8 +25,6 @@ function hexToAssColor(htmlHex: string): string {
 }
 
 // Common Windows fonts and optional subtitle-font presets.
-// Kept as a plain array for <option> rendering order, plus a Set built once
-// for O(1) membership checks in the style panel's "is this a preset?" logic.
 const COMMON_FONTS = [
   "Arial",
   "Arial Black",
@@ -93,504 +52,52 @@ const COMMON_FONTS = [
 const COMMON_FONTS_SET = new Set(COMMON_FONTS);
 
 export default function HdrConvert() {
-  const { t } = useI18n();
-  const { hdrFiles, setHdrFiles, clearFile, isFileInUse, findLoadedInputConflictKeys } =
-    useFileContext();
-  const [eotf, setEotf] = useState<Eotf>("PQ");
-  const [brightness, setBrightness] = useState(DEFAULT_BRIGHTNESS);
-  const [brightnessText, setBrightnessText] = useState(String(DEFAULT_BRIGHTNESS));
-  const [template, setTemplate] = useState<string>(DEFAULT_TEMPLATE);
-  const [customTemplate, setCustomTemplate] = useState("");
-  const [showStylePanel, setShowStylePanel] = useState(false);
-  const [style, setStyle] = useState<StyleConfig>({ ...DEFAULT_STYLE });
-  const [fpsMode, setFpsMode] = useState<HdrFpsMode>("auto");
-  const [fpsText, setFpsText] = useState("23.976");
-  const [processing, setProcessing] = useState(false);
-  const { logs, addLog, clearLogs, logScrollRef } = useLogPanel();
-  const [showFileList, setShowFileList] = useState(false);
-  // Tracks the outcome of the last convert attempt — null between
-  // selections or before any attempt; gets cleared when hdrFiles changes
-  // so "done" / "cancelled" don't linger after the user picks a new file.
-  // "cancelled" covers both pre-flight cancel (user dismissed the
-  // overwrite-confirm dialog) and mid-batch cancel (user clicked the
-  // in-flight Cancel button); both should read the same to the user.
-  const [lastActionResult, setLastActionResult] = useState<
-    "success" | "partial" | "error" | "cancelled" | null
-  >(null);
-  // N-of-M progress for the active batch, surfaced in the footer chip.
-  // Null between batches; never persists past `setProcessing(false)` in
-  // the convert finally block.
-  const [progress, setProgress] = useState<{ processed: number; total: number } | null>(null);
-  // Drag-active highlight on the file strip — toggled by useFolderDrop.
-  const [dropActive, setDropActive] = useState(false);
-  // Error banner shown above the file strip when a selection is rejected
-  // (e.g., cross-tab dedup conflict). Strict mode: any conflict rejects
-  // the entire drop, no state change, banner persists until the next
-  // selection attempt or until the user clicks Clear.
-  const [dropError, setDropError] = useState<string | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
-  // Synchronous double-click guard — `processing` state lags behind the
-  // setProcessing(true) call by one render, so a fast second click on
-  // Convert can pass the disabled gate before React paints the busy
-  // state. busyRef is written synchronously at handler entry and read
-  // by the next click before any state machinery sees it.
-  const busyRef = useRef(false);
-  // Generation counter for stale-pick guards on async file pickers.
-  // Mirrors the pattern in TimingShift / FontEmbed / BatchRename:
-  // bump on each handle*Files entry, then the handler discards results
-  // whose generation no longer matches.
-  const pickGenRef = useRef(0);
-  const fileContainerRef = useRef<HTMLDivElement>(null);
-  const dropZoneRef = useRef<HTMLDivElement>(null);
-
-  // Reset the last-convert outcome when the selection changes so the
-  // footer indicator doesn't stay green on a brand-new batch.
-  useEffect(() => {
-    setLastActionResult(null);
-  }, [hdrFiles]);
-
-  // Publish current status to the shared context — the footer reads it.
-  const tabStatus = useMemo<Status>(() => {
-    if (!hdrFiles) return { kind: "idle", message: t("status_hdr_idle") };
-    if (processing) {
-      // Pass progress only while it's a real { processed, total } object —
-      // the footer chip suppresses itself when total === 0 anyway, but
-      // keeping the field undefined (vs zeroed) avoids a brief 0/0 flash
-      // on the first render of `processing = true`.
-      return {
-        kind: "busy",
-        message: t("status_hdr_busy"),
-        progress: progress ?? undefined,
-      };
-    }
-    if (lastActionResult === "success") return { kind: "done", message: t("status_hdr_done") };
-    if (lastActionResult === "partial")
-      return { kind: "pending", message: t("status_hdr_partial") };
-    if (lastActionResult === "error") return { kind: "error", message: t("status_hdr_error") };
-    if (lastActionResult === "cancelled") {
-      // Cancellation is neither a success nor a failure — the user
-      // intentionally stepped back. Use the "pending" kind (amber dot)
-      // since files are still loaded and a fresh attempt is one click
-      // away; only the message differs from default pending.
-      return { kind: "pending", message: t("status_hdr_cancelled") };
-    }
-    return {
-      kind: "pending",
-      message: t("status_hdr_pending", hdrFiles.filePaths.length),
-    };
-  }, [hdrFiles, processing, lastActionResult, progress, t]);
-  useTabStatus("hdr", tabStatus);
-
-  // File-list dropdown: close on click outside or Escape.
-  useClickOutside(showFileList, fileContainerRef, () => setShowFileList(false));
-
-  const handleBrightnessChange = (value: string) => {
-    setBrightnessText(value);
-    const num = parseFiniteNumberText(value);
-    if (num !== null && num >= MIN_BRIGHTNESS && num <= MAX_BRIGHTNESS) {
-      setBrightness(Math.round(num));
-    }
-  };
-
-  // Derived: the visible input is not currently a finite in-range
-  // brightness. Without this, Convert can proceed against the prior
-  // valid `brightness` while the user sees a different value in the
-  // field.
-  const brightnessInvalid = isHdrBrightnessInvalid(brightnessText, MIN_BRIGHTNESS, MAX_BRIGHTNESS);
-
-  // Slider / preset paths emit a validated number — keep both state slots in sync.
-  const handleBrightnessFromNits = useCallback((nits: number) => {
-    setBrightness(nits);
-    setBrightnessText(String(nits));
-  }, []);
-
-  const activeTemplate = template === "custom" ? customTemplate : template;
-  const templateInvalid = template === "custom" && customTemplate.trim().length === 0;
-  const batchHasSub = hasMicroDvdInput(hdrFiles?.fileNames ?? []);
-  const fpsInputInvalid = isHdrFpsInvalid(fpsMode, fpsText);
-  const fpsInvalid = batchHasSub && fpsInputInvalid;
-  // Gate Convert on the same visible-input validity shown by the
-  // controls, so keyboard activation cannot commit a stale prior
-  // brightness value or start a batch with a universally invalid template.
-  const convertDisabled = isHdrConvertDisabled({
-    hasFiles: !!hdrFiles,
-    processing,
-    brightnessInvalid,
-    templateInvalid,
-    fpsInvalid,
-  });
-
-  // ── File selection (separate from conversion) ──────────
-  // Strict cross-tab dedup contract: any conflict rejects the WHOLE
-  // selection — see buildConflictMessage / FileContext for rationale.
-  const handleSelectFiles = useCallback(async () => {
-    // Stale-pick guard: if the user clicks Select again before the OS
-    // dialog returns (or clears the prior selection in another way),
-    // each open() call has its own `gen` snapshot. Once the dialog
-    // resolves, only the most recent `gen` is allowed to commit. Mirrors
-    // the pattern in TimingShift / FontEmbed / BatchRename.
-    const gen = (pickGenRef.current = pickGenRef.current + 1);
-    // catch dialog IPC failures so a click
-    // that can't open the picker surfaces an error rather than reading
-    // as a silent no-op. Same shape across all four tabs.
-    let paths: string[] | null;
-    try {
-      paths = await pickSubtitleFiles(t);
-    } catch (e) {
-      if (gen !== pickGenRef.current) return;
-      addLog(t("error_prefix", sanitizeError(e)), "error");
-      return;
-    }
-    if (gen !== pickGenRef.current) return;
-    if (!paths || paths.length === 0) return;
-
-    const conflictMsg = buildConflictMessage(paths, "hdr", isFileInUse, t);
-    if (conflictMsg) {
-      setDropError(conflictMsg);
-      return;
-    }
-    setDropError(null);
-
-    // Silent replace: see FileContext.tsx for design rationale
-    const names = paths.map(fileNameFromPath);
-    setHdrFiles({ filePaths: paths, fileNames: names });
-  }, [isFileInUse, setHdrFiles, addLog, t]);
-
-  // ── Folder drag-drop ingestion ──────────────────────────
-  // Dropped paths come back from Rust expansion already flat-listed (one
-  // level deep). HDR Convert is a subtitle-only tab, so video files in a
-  // mixed-folder drop are filtered out via the same isNativeAss /
-  // isConvertible gate the convert loop uses. This keeps "drop a show
-  // folder" working even when it contains .mkv siblings.
-  const handleDroppedPaths = useCallback(
-    (paths: string[]) => {
-      const subtitlePaths = paths.filter((p) => {
-        const name = fileNameFromPath(p);
-        return isNativeAss(name) || isConvertible(name);
-      });
-
-      if (subtitlePaths.length === 0) {
-        // Surface through both the log AND the standard DropErrorBanner.
-        // Users with collapsed log panels see nothing from log-only —
-        // banner is the always-visible feedback.
-        const msg = t("msg_no_subtitle_in_drop");
-        addLog(msg, "error");
-        setDropError(msg);
-        return;
-      }
-
-      const conflictMsg = buildConflictMessage(subtitlePaths, "hdr", isFileInUse, t);
-      if (conflictMsg) {
-        setDropError(conflictMsg);
-        return;
-      }
-      setDropError(null);
-
-      const names = subtitlePaths.map(fileNameFromPath);
-      setHdrFiles({ filePaths: subtitlePaths, fileNames: names });
-    },
-    [isFileInUse, setHdrFiles, setDropError, addLog, t]
-  );
-
-  useFolderDrop({
-    ref: dropZoneRef,
-    onPaths: handleDroppedPaths,
-    onActiveChange: setDropActive,
-    onError: (e) => setDropError(sanitizeError(e)),
-    disabled: processing,
+  const {
     t,
-  });
-
-  // ── Conversion (uses already-selected files) ───────────
-  const handleConvert = useCallback(async () => {
-    if (
-      isHdrConvertDisabled({
-        hasFiles: !!hdrFiles,
-        processing,
-        brightnessInvalid,
-        templateInvalid,
-        fpsInvalid,
-      })
-    ) {
-      return;
-    }
-    if (!hdrFiles) return;
-    // Synchronous double-click gate — `processing` state lags
-    // setProcessing(true) by one render, so a fast second click can
-    // pass the disabled gate before React paints. busyRef is written
-    // synchronously here and released in the outer finally below so
-    // every exit path (validation fail / pre-flight cancel / loop done
-    // / loop throw) clears it.
-    if (busyRef.current) return;
-    busyRef.current = true;
-    pickGenRef.current += 1;
-    const controller = new AbortController();
-    abortRef.current = controller;
-    setProcessing(true);
-    try {
-      // Validate brightness
-      if (brightness < MIN_BRIGHTNESS || brightness > MAX_BRIGHTNESS) {
-        addLog(t("msg_invalid_brightness", MIN_BRIGHTNESS, MAX_BRIGHTNESS), "error");
-        return;
-      }
-
-      const paths = hdrFiles.filePaths;
-      const selectedInputKeys = new Set(paths.map(normalizeOutputKey));
-
-      // Invalid targets are reported per file; selected sources never enter overwrite preflight.
-      const projectedOutputs: string[] = [];
-      for (const filePath of paths) {
-        try {
-          const outputPath = resolveOutputPath(filePath, activeTemplate, eotf);
-          assertOutputDoesNotReplaceSelectedInput(outputPath, selectedInputKeys);
-          projectedOutputs.push(outputPath);
-        } catch {
-          // Report this target with its input context in the processing loop.
-        }
-      }
-      let existingOutputs: ReadonlySet<string>;
-      let conflictingOutputs: ReadonlySet<string>;
-      try {
-        conflictingOutputs = await findLoadedInputConflictKeys(projectedOutputs, controller.signal);
-        if (controller.signal.aborted) {
-          setLastActionResult("cancelled");
-          return;
-        }
-        existingOutputs = await findExistingOutputKeys(
-          projectedOutputs.filter((path) => !conflictingOutputs.has(normalizeOutputKey(path)))
-        );
-        if (controller.signal.aborted) {
-          addLog(t("msg_cancelled"), "info");
-          setLastActionResult("cancelled");
-          return;
-        }
-        const existingCount = existingOutputs.size;
-        if (existingCount > 0) {
-          const confirmed = await ask(t("msg_overwrite_confirm", existingCount, paths.length), {
-            title: t("dialog_overwrite_title"),
-            kind: "warning",
-          });
-          if (!confirmed || controller.signal.aborted) {
-            addLog(t("msg_cancelled"), "info");
-            setLastActionResult("cancelled");
-            return;
-          }
-        }
-      } catch (e) {
-        addLog(t("error_prefix", sanitizeError(e)), "error");
-        setLastActionResult("error");
-        return;
-      }
-
-      setProgress({ processed: 0, total: paths.length });
-
-      try {
-        addLog(t("msg_start_conversion", paths.length, eotf, brightness));
-
-        const outputPaths = new Set<string>();
-        let successCount = 0;
-        let warnedCount = 0;
-        let processedCount = 0;
-
-        for (const filePath of paths) {
-          if (abortRef.current?.signal.aborted) {
-            addLog(t("msg_cancelled"), "info");
-            break;
-          }
-
-          // Defensive fallback: `fileNameFromPath` is currently total but
-          // a future refactor (path-validation rejection, etc.) could
-          // make it throw — and then the catch block at the bottom of
-          // the loop would lose `fileName` in a brittle TDZ shape.
-          // `let` + initial = filePath gives the catch a usable
-          // identifier in every code path.
-          //
-          // BiDi parity: fileName flows into ~8 addLog calls below;
-          // sanitize once at source so every downstream interpolation
-          // is automatically BiDi-scrubbed without each callsite
-          // remembering to wrap. Same pattern as FontEmbed.
-          // Bare-split fallback BEFORE invoking fileNameFromPath, so
-          // the catch path uses just the basename rather than the
-          // full path — logging the full sanitized path through every
-          // addLog call below would produce ~200-char × ~8 logs =
-          // ~1.6 KB log noise per failing file, within the 4 KB cap
-          // but unnecessarily bulky.
-          let fileName = sanitizeForDialog(filePath.split(/[\\/]/).pop() ?? filePath);
-          try {
-            fileName = sanitizeForDialog(fileNameFromPath(filePath));
-          } catch {
-            // Keep the basename — better than no attribution.
-          }
-          addLog(t("msg_processing", fileName));
-
-          try {
-            // Check file extension FIRST — cheap test, avoids wasted work in
-            // resolveOutputPath / readText for obviously-unsupported files.
-            if (!isNativeAss(fileName) && !isConvertible(fileName)) {
-              addLog(t("msg_unsupported", fileName), "error");
-              continue;
-            }
-
-            // Resolve output path
-            let outputPath: string;
-            try {
-              outputPath = resolveOutputPath(filePath, activeTemplate, eotf);
-              assertOutputDoesNotReplaceSelectedInput(outputPath, selectedInputKeys);
-              assertOutputDoesNotReplaceSelectedInput(outputPath, conflictingOutputs);
-            } catch (e) {
-              addLog(t("msg_skipped", fileName, sanitizeError(e)), "error");
-              continue;
-            }
-
-            // Within-batch output dedup — see normalizeOutputKey for the
-            // NFC + forward-slash + lowercase semantics.
-            const normalizedOut = normalizeOutputKey(outputPath);
-            if (outputPaths.has(normalizedOut)) {
-              addLog(t("msg_skipped_duplicate", fileName), "error");
-              continue;
-            }
-            outputPaths.add(normalizedOut);
-
-            // Read input file
-            let content: string;
-            let fileWarned = false;
-            try {
-              content = await readText(filePath, (read) => {
-                const warnings = textDecodingWarnings(read, fileName, t);
-                fileWarned = warnings.length > 0;
-                for (const warning of warnings) addLog(warning, "warn");
-              });
-            } catch (e) {
-              addLog(t("msg_read_error", fileName, sanitizeError(e)), "error");
-              continue;
-            }
-
-            // Check cancel after I/O
-            if (abortRef.current?.signal.aborted) break;
-
-            let assContent: string;
-
-            if (isNativeAss(fileName)) {
-              // Direct ASS processing
-              assContent = processAssContent(content, brightness, eotf);
-            } else if (isConvertible(fileName)) {
-              const fpsOverride = parseHdrFpsOverrideForInput(fileName, fpsMode, fpsText);
-              if (fpsOverride === null) throw new Error(t("style_fps_invalid"));
-
-              // Surface skipped-placeholder count. All text-cue parsers
-              // push `skipped: true` Captions for entries whose text
-              // exceeded MAX_CAPTION_TEXT_LEN (64 KB). Without
-              // surfacing the count, the data loss is invisible to
-              // the user (empty Dialogue lines on the ASS side; cues
-              // dropped from the captions array on the SRT/VTT side).
-              // Log via addLog so the user sees it rather than
-              // discovering it after the fact.
-              const { content: rawAss, skippedCount } = convertTextCueSubtitleToAss(
-                content,
-                style,
-                fpsOverride
-              );
-              if (skippedCount > 0) {
-                fileWarned = true;
-                addLog(t("msg_oversized_skipped", skippedCount, fileName), "warn");
-              }
-
-              // Now transform the ASS colors to HDR
-              assContent = processAssContent(rawAss, brightness, eotf);
-            } else {
-              // Unreachable — extension was validated above, but satisfies TypeScript
-              continue;
-            }
-
-            // Check cancel before writing
-            if (abortRef.current?.signal.aborted) break;
-
-            // Write output
-            await writeText(outputPath, assContent, existingOutputs.has(normalizedOut));
-            // FontEmbed and BatchRename also sanitize display names
-            // before logging. fileNameFromPath already strips
-            // C0/C1/DEL + BiDi via stripUnicodeControls, so this is
-            // defense-in-depth for sibling-feature symmetry if that
-            // helper ever loosens.
-            const outName = sanitizeForDialog(fileNameFromPath(outputPath));
-            addLog(t("msg_done", outName), fileWarned ? "warn" : "success");
-            if (fileWarned) warnedCount++;
-            successCount++;
-          } catch (e) {
-            addLog(t("msg_convert_error", fileName, sanitizeError(e)), "error");
-          } finally {
-            // Bump the N-of-M counter once per iteration regardless of
-            // outcome (success / skip / error). If cancel is seen at the
-            // top of the next loop, this block does not run for that next
-            // file; if cancel lands mid-file, the current file is counted
-            // as processed before the outer finally clears the progress chip.
-            processedCount++;
-            setProgress({ processed: processedCount, total: paths.length });
-          }
-        }
-
-        // Record outcome for the footer status. Order matters: a cancel
-        // takes precedence over partial success/error counts, because the
-        // user explicitly stepped back — surfacing "Conversion complete"
-        // when they cancelled mid-batch would be a lie. Only treat the
-        // outcome as success/error when the loop ran to completion.
-        // Avoid success-log vs error-footer contradiction
-        // : when every file failed, the previous form
-        // fired both "complete: 0/N" + red "failed" footer. Split so
-        // success-log fires only when at least one file landed;
-        // full-batch failure gets its own error line.
-        const aborted = !!abortRef.current?.signal.aborted;
-        if (aborted) {
-          setLastActionResult("cancelled");
-        } else if (successCount > 0) {
-          if (warnedCount > 0) {
-            addLog(t("msg_complete_warnings", successCount, paths.length, warnedCount), "warn");
-            setLastActionResult("partial");
-          } else {
-            addLog(t("msg_complete", successCount, paths.length), "success");
-            setLastActionResult("success");
-          }
-        } else {
-          addLog(t("msg_all_failed", paths.length), "error");
-          setLastActionResult("error");
-        }
-      } finally {
-        setProgress(null);
-      }
-    } finally {
-      setProcessing(false);
-      busyRef.current = false;
-    }
-  }, [
     hdrFiles,
-    findLoadedInputConflictKeys,
-    processing,
-    brightnessInvalid,
-    templateInvalid,
-    fpsInvalid,
-    brightness,
     eotf,
-    activeTemplate,
+    setEotf,
+    brightness,
+    brightnessText,
+    brightnessInvalid,
+    handleBrightnessChange,
+    handleBrightnessFromNits,
+    template,
+    setTemplate,
+    customTemplate,
+    setCustomTemplate,
+    templateInvalid,
+    showStylePanel,
+    setShowStylePanel,
     style,
+    setStyle,
     fpsMode,
+    setFpsMode,
     fpsText,
-    addLog,
-    t,
-  ]);
-
-  const handleClearFiles = useCallback(() => {
-    clearFile("hdr");
-    setDropError(null);
-  }, [clearFile]);
+    setFpsText,
+    fpsInputInvalid,
+    fpsInvalid,
+    processing,
+    convertDisabled,
+    showFileList,
+    setShowFileList,
+    dropActive,
+    dropError,
+    setDropError,
+    fileContainerRef,
+    dropZoneRef,
+    handleSelectFiles,
+    handleClearFiles,
+    handleConvert,
+    requestCancel,
+    logs,
+    clearLogs,
+    logScrollRef,
+  } = useHdrConvertController();
 
   return (
     <div className="space-y-4">
-      {/* ── File strip — always visible; filename + clear + Select button ──
-           When >1 file is selected, the filename area becomes a clickable
-           dropdown showing all selected files (max ~5 rows, scroll beyond).
-           The strip doubles as a drag-drop target: drop subtitle files or a
-           folder anywhere on it, video siblings inside the folder are
-           silently filtered out. */}
+      {/* ── File strip — always visible; filename + clear + Select button ── */}
       <div
         ref={dropZoneRef}
         className={`drop-zone flex items-center gap-2${dropActive ? " drop-active" : ""}`}
@@ -715,9 +222,7 @@ export default function HdrConvert() {
         </button>
         {processing && (
           <button
-            onClick={() => {
-              abortRef.current?.abort();
-            }}
+            onClick={requestCancel}
             className="flex-none px-4 rounded-lg text-sm transition-colors"
             style={{
               background: "var(--cancel-bg)",
@@ -743,14 +248,10 @@ export default function HdrConvert() {
         </button>
       </div>
 
-      {/* Selection-rejected banner. Sticky until the next selection
-           attempt or until the user clicks ✕ on the file strip. */}
+      {/* Selection-rejected banner */}
       <DropErrorBanner message={dropError} onDismiss={() => setDropError(null)} />
 
-      {/* Drop-zone discoverability hint — drag is invisible without
-           prompting; surface it inline so users don't have to read docs.
-           Visible only when the strip is empty (idle), where the hint is
-           most useful. Hidden mid-batch to avoid distraction. */}
+      {/* Drop-zone discoverability hint */}
       {!hdrFiles && !dropError && (
         <p className="text-xs ml-1" style={{ color: "var(--text-muted)" }}>
           {t("hdr_drop_hint")}
@@ -913,13 +414,6 @@ export default function HdrConvert() {
               <select
                 value={COMMON_FONTS_SET.has(style.fontName) ? style.fontName : "__custom"}
                 onChange={(e) => {
-                  // When the user picks "Custom", drop fontName to ""
-                  // so `!COMMON_FONTS_SET.has(style.fontName)` flips
-                  // true and the custom <input> below mounts. Without
-                  // this drop the select's `value=` re-derives from
-                  // the unchanged fontName ("Arial" etc.) and the
-                  // dropdown visually snaps back to the previous font
-                  // — the custom input never appears.
                   setStyle({
                     ...style,
                     fontName: e.target.value === "__custom" ? "" : e.target.value,
