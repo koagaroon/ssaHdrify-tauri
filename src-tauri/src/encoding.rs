@@ -77,6 +77,17 @@ fn decoded_result(
 /// the TS folder-drop filter routes those extensions to the
 /// "unknown" bucket.
 pub(crate) const ALLOWED_TEXT_EXTENSIONS: &[&str] = &["ass", "ssa", "srt", "vtt", "sub"];
+pub(crate) const ALLOWED_TIMING_MAP_EXTENSIONS: &[&str] = &["json", "csv"];
+pub(crate) const MAX_TIMING_MAP_SIZE: u64 = 1024 * 1024; // 1 MiB — matches CLI MAX_TIMING_MAP_BYTES
+
+fn timing_map_ext_is_allowed(path: &Path) -> bool {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    ALLOWED_TIMING_MAP_EXTENSIONS.contains(&ext.as_str())
+}
 
 /// Map a std::io::Error to a generic, path-free message for IPC. The detailed
 /// error is logged server-side so it's still reachable during debug, but never
@@ -413,6 +424,105 @@ pub fn read_text_detect_encoding(
 ) -> Result<ReadTextResult, String> {
     let scope = crate::fs_policy::app_fs_scope(&app)?;
     read_text_detect_encoding_inner(&path, move |p| scope.is_allowed(p))
+}
+
+/// Read a `.json` or `.csv` timing-map file as UTF-8 text under the same
+/// path-validation, filesystem-scope, and reparse-point guards as subtitle
+/// reads, while keeping `ALLOWED_TEXT_EXTENSIONS` (shared with `safe_io`
+/// writes/copies/renames) strictly subtitle-only.
+pub fn read_timing_map_inner(
+    path: &str,
+    is_allowed: impl Fn(&Path) -> bool,
+) -> Result<String, String> {
+    crate::util::validate_ipc_path(path, "Timing map")?;
+
+    let path_ref = Path::new(path);
+    if !timing_map_ext_is_allowed(path_ref) {
+        let ext = path_ref
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .unwrap_or_default();
+        let label = if ext.is_empty() {
+            "(no extension)".to_string()
+        } else {
+            format!(".{ext}")
+        };
+        return Err(format!("Unsupported timing map file type: {label}"));
+    }
+
+    if !is_allowed(path_ref) {
+        return Err(format!(
+            "Timing map path is denied by the application's filesystem scope policy: {}",
+            path_ref.display()
+        ));
+    }
+
+    let read_path: PathBuf = match path_ref.canonicalize() {
+        Ok(canonical) => {
+            if !timing_map_ext_is_allowed(&canonical) {
+                return Err(
+                    "Resolved path is not a timing map file (symlink to disallowed target?)"
+                        .to_string(),
+                );
+            }
+            if !is_allowed(&canonical) {
+                return Err(format!(
+                    "Resolved timing map path is denied by the application's filesystem scope policy: {}",
+                    canonical.display()
+                ));
+            }
+            canonical
+        }
+        Err(e) => {
+            if is_reparse_point(path_ref) {
+                log::warn!(
+                    "Refusing to read possible symlink / junction for timing map (canonicalize failed: {e})"
+                );
+                return Err(
+                    "Refusing to read symlink / junction when canonicalize fails".to_string(),
+                );
+            }
+            log::debug!("timing map canonicalize failed; falling back to raw path: {e}");
+            path_ref.to_path_buf()
+        }
+    };
+
+    if is_reparse_point(&read_path) {
+        log::warn!(
+            "Refusing to read possible symlink / junction for timing map at stat-time: {}",
+            read_path.display()
+        );
+        return Err("Refusing to read symlink / junction (race-time detection)".to_string());
+    }
+
+    let metadata = std::fs::metadata(&read_path).map_err(|e| sanitize_io_error(&e, "stat"))?;
+    if !metadata.file_type().is_file() {
+        return Err("Path does not point to a regular file".to_string());
+    }
+    if metadata.len() > MAX_TIMING_MAP_SIZE {
+        return Err(format!(
+            "Timing map file is too large: {} bytes (max {MAX_TIMING_MAP_SIZE})",
+            metadata.len()
+        ));
+    }
+
+    let bytes = std::fs::read(&read_path).map_err(|e| sanitize_io_error(&e, "read"))?;
+    if bytes.len() as u64 > MAX_TIMING_MAP_SIZE {
+        return Err(format!(
+            "Timing map file is too large after read: {} bytes (max {MAX_TIMING_MAP_SIZE})",
+            bytes.len()
+        ));
+    }
+
+    let text = std::str::from_utf8(&bytes)
+        .map_err(|_| "Timing map file must be valid UTF-8 text".to_string())?;
+    Ok(text.strip_prefix('\u{feff}').unwrap_or(text).to_string())
+}
+
+pub fn read_timing_map_file(app: tauri::AppHandle, path: String) -> Result<String, String> {
+    let scope = crate::fs_policy::app_fs_scope(&app)?;
+    read_timing_map_inner(&path, move |p| scope.is_allowed(p))
 }
 
 fn looks_like_subtitle_text(text: &str) -> bool {
@@ -1257,5 +1367,53 @@ mod tests {
                 "{fixture}: missing [Events]"
             );
         }
+    }
+
+    #[test]
+    fn read_timing_map_accepts_utf8_and_utf8_bom_json_and_csv() {
+        let dir =
+            std::env::temp_dir().join(format!("ssahdrify-timing-map-read-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let json_path = dir.join("rules.json");
+        std::fs::write(&json_path, b"\xEF\xBB\xBF{\"rules\":[]}").unwrap();
+        let json_text = read_timing_map_inner(&json_path.to_string_lossy(), |_| true).unwrap();
+        assert_eq!(json_text, "{\"rules\":[]}");
+
+        let csv_path = dir.join("rules.CSV");
+        std::fs::write(&csv_path, "00:00:00.000,,+500ms\n").unwrap();
+        let csv_text = read_timing_map_inner(&csv_path.to_string_lossy(), |_| true).unwrap();
+        assert_eq!(csv_text, "00:00:00.000,,+500ms\n");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_timing_map_rejects_disallowed_ext_denied_scope_and_invalid_utf8() {
+        let dir = std::env::temp_dir().join(format!(
+            "ssahdrify-timing-map-reject-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let ass_path = dir.join("episode.ass");
+        std::fs::write(&ass_path, "[Script Info]\n").unwrap();
+        let ext_err = read_timing_map_inner(&ass_path.to_string_lossy(), |_| true).unwrap_err();
+        assert!(ext_err.contains("Unsupported timing map file type: .ass"));
+
+        let json_path = dir.join("denied.json");
+        std::fs::write(&json_path, "[]").unwrap();
+        let scope_err = read_timing_map_inner(&json_path.to_string_lossy(), |_| false).unwrap_err();
+        assert!(scope_err.contains("denied by the application's filesystem scope policy"));
+
+        let bad_utf8_path = dir.join("bad.csv");
+        std::fs::write(&bad_utf8_path, [0xFF, 0xFE, 0x00, 0x31]).unwrap();
+        let utf8_err =
+            read_timing_map_inner(&bad_utf8_path.to_string_lossy(), |_| true).unwrap_err();
+        assert!(utf8_err.contains("valid UTF-8"));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

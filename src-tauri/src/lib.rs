@@ -130,6 +130,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             ipc_commands::expand_dropped_paths,
             ipc_commands::read_text_detect_encoding,
+            ipc_commands::read_timing_map_file,
             ipc_commands::find_system_font,
             ipc_commands::subset_font_bytes,
             fonts::preflight_font_directory,

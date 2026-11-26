@@ -94,7 +94,7 @@ The project supports Windows 10/11 x64 only, including source builds and release
 | 标签页 / Tab                            | 功能 / Description                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **HDR 色彩转换 / HDR Color Conversion** | 将字幕颜色转换为适配 BT.2100 PQ 或 HLG 的 HDR 色彩值 / Convert subtitle colors into HDR values suitable for BT.2100 PQ or HLG                                                                                                                                                                                                                                                                                                               |
-| **时间轴偏移 / Timing Shift**           | 批量调整字幕时间戳；可从指定时间点之后开始偏移，并实时预览效果 / Batch-adjust subtitle timestamps; optionally start after a chosen timestamp, with live preview                                                                                                                                                                                                                                                                             |
+| **时间轴偏移 / Timing Shift**           | 批量调整字幕时间戳；支持单一偏移（可限定起始时间点）或导入 `.json` / `.csv` 分段时间轴映射表，并实时预览效果 / Batch-adjust subtitle timestamps using either a single offset (optionally after a chosen timestamp) or an imported `.json` / `.csv` timing map, with live preview                                                                                                                                                            |
 | **字体嵌入 / Font Embedding**           | 自动检测字幕引用的字体，在系统字体库或本地字体来源中匹配，并把子集化后的字体嵌入 ASS 文件 / Detect fonts referenced by the subtitle, match them from system or local font sources, and embed subset fonts into the ASS file                                                                                                                                                                                                                 |
 | **批量重命名 / Batch Rename**           | 自动匹配视频和字幕，并按视频文件名重命名字幕；当同一视频匹配到多个候选字幕时，可手动选择并调整配对，也可以启用多字幕模式，为每个视频保留多种语言的外挂字幕文件。 / Automatically match videos and subtitles, then rename subtitles after the video filename; when one video has multiple subtitle candidates, manually choose and adjust pairings, or enable multi-subtitle mode to keep multiple language sidecar subtitles for each video |
 | **样式编辑 / Style Edit**               | 批量预览并修改 ASS/SSA `Style:` 行的字体族和字号。两项操作可独立启用，也可以只替换指定的原字体；行内 `\fn` / `\fs` 标签保持不变。 / Preview and batch-edit font family and size in ASS/SSA `Style:` rows. Enable either operation independently, optionally filter one source family, and leave inline `\fn` / `\fs` tags untouched.                                                                                                        |
@@ -152,11 +152,10 @@ ASS/SSA timing operations follow the `Format:` declaration in `[Events]`, includ
 
 ### 时间轴偏移 / Timing Shift
 
-1. 选择字幕文件 / Select a subtitle file
-2. 输入偏移量（毫秒），并选择「提前」或「延后」/ Enter offset amount (ms), then choose Faster or Slower
-3. 可选：只偏移指定时间点之后的字幕行 / Optionally shift only lines after a specific timestamp
-4. 实时预览调整结果 / Preview the result in real time
-5. 导出 / Export
+1. 选择字幕文件（支持多选）/ Select subtitle files (multi-select supported)
+2. 选择「单一偏移」并输入偏移量与「提前 / 延后」（可选仅偏移指定时间点之后的行），或切换到「时间轴映射表（.json / .csv）」并导入分段规则文件 / Choose **Single offset** and enter an offset plus Faster or Slower (optionally after a specific timestamp), or switch to **Timing map (.json / .csv)** and import a multi-segment rule file
+3. 实时预览已解析的规则与偏移后的时间轴效果 / Preview parsed rules and shifted caption timings in real time
+4. 导出 / Export
 
 ### 字体嵌入 / Font Embedding
 
@@ -433,7 +432,7 @@ At startup, `embed` validates each cached source's directory inventory and candi
 - 单个缓存来源最多安全写入 **32,768 个 font faces**。超过上限、用户取消、遇到读取不完整或扫描期间来源变化时，结果不会作为完整缓存写入；GUI 已成功读取的部分字体可以仅在当前会话继续使用，并会明确提示。
 - 单个字体文件的扫描/子集化读取上限为 **64 MiB**；超过会被拒绝并报告错误。
 - 递归扫描不会跟随符号链接、Windows junction 或其他 reparse point（重解析点），从而避免越过所选字体库根目录或形成目录循环。
-- GUI 和 CLI 各自使用独立缓存文件，避免 SQLite 锁竞争；同一个可执行文件同一时间只会打开一个缓存文件（默认路径或 `--cache-file` 覆盖路径）。`chain` v1 暂不读取缓存（其中的 embed 步骤始终使用显式 `--font-dir`、`--recursive-font-dir` 或系统字体）。
+- GUI 和 CLI 各自使用独立缓存文件，避免 SQLite 锁竞争；同一个可执行文件同一时间只会打开一个缓存文件（默认路径或 `--cache-file` 覆盖路径）。当 `chain` 包含 `embed` 步骤时，会以只读方式读取持久化缓存（遵循 `--no-cache` 与 `--cache-file`，检测到漂移时自动回退且不修改缓存文件）；不包含 `embed` 步骤的 `chain` 会提示缓存参数不生效。
 - 字体缓存目前使用格式版本 7，不会自动迁移旧缓存。v1.7.1 及更早版本的缓存可能包含缺少恢复标记的不完整扫描结果，因此需要明确重建一次：GUI 用户应选择「清除缓存」后重新添加字体来源；CLI 用户应删除命令报告的不兼容缓存文件，再使用自己的 `--font-dir` 或 `--recursive-font-dir` 来源运行 `refresh-fonts`。旧缓存不会被静默改写。
 
 - `--font-dir` and GUI **Add Folder** always scan one level; only `--recursive-font-dir` and **Add Font Library** recurse. The same root can be tracked independently in both scopes.
@@ -441,7 +440,7 @@ At startup, `embed` validates each cached source's directory inventory and candi
 - A single cached source can safely persist **32,768 font faces**. A ceiling hit, user cancellation, incomplete read, or source mutation prevents publication as a complete cache; successfully parsed GUI results may remain available for the current session with an explicit notice.
 - A single font file is capped at **64 MiB** for scanning/subsetting; larger files are refused with an error.
 - Recursive scans do not follow symbolic links, Windows junctions, or other reparse points, which prevents traversal outside the chosen library root and directory cycles.
-- GUI and CLI use separate cache files to avoid SQLite lock contention; a single binary opens exactly one cache at a time (default path or `--cache-file` override). `chain` v1 does not consult the cache; its embed step always uses explicit `--font-dir`, `--recursive-font-dir`, or system fonts.
+- GUI and CLI use separate cache files to avoid SQLite lock contention; a single binary opens exactly one cache at a time (default path or `--cache-file` override). When `chain` includes an `embed` step, it consults the persistent cache in read-only mode (honoring `--no-cache` and `--cache-file` and falling back on drift without mutating the cache); chains without an `embed` step report those flags as inert.
 - The font cache now uses format version 7 and does not migrate older caches automatically. Caches from v1.7.1 or earlier may contain incomplete scans without a recovery marker, so they need one explicit rebuild: GUI users should choose **Clear cache** and add their font sources again; CLI users should remove the incompatible cache file reported by the command, then run `refresh-fonts` with their own `--font-dir` or `--recursive-font-dir` sources. The old cache is not silently rewritten.
 
 ---

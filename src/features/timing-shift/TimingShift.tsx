@@ -1,96 +1,16 @@
-import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { List, type RowComponentProps } from "react-window";
-import {
-  fileNameFromPath,
-  textDecodingWarnings,
-  pickSubtitleFiles,
-  readText,
-  writeText,
-} from "../../lib/tauri-api";
-import { ask } from "@tauri-apps/plugin-dialog";
-import {
-  previewShiftSubtitles,
-  shiftSubtitlesCompact,
-  formatDisplayTime,
-  parseDisplayTime,
-  deriveShiftedPath,
-  type PreviewEntry,
-} from "./timing-engine";
-import { useI18n } from "../../i18n/useI18n";
-import { useFileContext } from "../../lib/FileContext";
-import type { Status } from "../../lib/StatusContext";
-import { useTabStatus } from "../../lib/useTabStatus";
-import { useFolderDrop } from "../../lib/useFolderDrop";
-import { findExistingOutputKeys } from "../../lib/output-collisions";
-import { assertOutputDoesNotReplaceSelectedInput } from "../../lib/path-validation";
-import { useClickOutside } from "../../lib/useClickOutside";
-import { useLogPanel } from "../../lib/useLogPanel";
 import { LogPanel } from "../../lib/LogPanel";
 import { DropErrorBanner } from "../../lib/DropErrorBanner";
 import NumberInput from "../../lib/NumberInput";
+import { sanitizeForDialog } from "../../lib/dedup-helpers";
+import { formatDisplayTime } from "./timing-engine";
+import { formatSignedOffsetMs } from "./timing-ui-state";
 import {
-  formatTimingOffsetMagnitude,
-  isTimingOffsetInvalid,
-  isTimingSaveDisabled,
-  parseTimingOffsetMagnitudeMs,
-} from "./timing-ui-state";
-import {
-  buildConflictMessage,
-  normalizeOutputKey,
-  sanitizeError,
-  sanitizeForDialog,
-} from "../../lib/dedup-helpers";
-import { categorize } from "../../lib/rename-extensions";
-
-type Unit = "ms" | "s";
-type Direction = "slower" | "faster";
-
-/** Cap to ±1 year to prevent integer precision loss for extreme inputs. */
-const MAX_OFFSET_MS = 365 * 24 * 3600 * 1000;
-
-// Preview list virtualization — the engine now retains at most 5,000 rows,
-// but rendering even that many DOM nodes eagerly would still be wasteful. A
-// naive preview.map(...) would
-// materialize one DOM node per caption regardless of scroll position,
-// freezing the WebView on large inputs even though only a few rows fit
-// in the 280px viewport at any time. react-window constrains the
-// rendered set to overscan + visible rows.
-//
-// PREVIEW_ROW_HEIGHT: derived from the .timeline-row CSS — 12px mono
-// text × 1.2 line-height + 6px top/bottom padding ≈ 26.4px; rounded up
-// to 30 for a margin so descenders don't clip. If the row CSS ever
-// changes, this constant must follow OR the preview will misalign.
-const PREVIEW_ROW_HEIGHT = 30;
-const PREVIEW_LIST_MAX_HEIGHT = 280;
-
-interface PreviewRowData {
-  preview: PreviewEntry[];
-  formatTime: (ms: number) => string;
-  origLabel: string;
-  shiftedLabel: string;
-}
-
-interface TimingPreviewState {
-  preview: PreviewEntry[];
-  captionCount: number;
-  shiftableCount: number;
-  maxCaptionStart: number;
-  detectedFormat: string;
-  previewTruncated: boolean;
-  error: string | null;
-}
-
-function emptyTimingPreviewState(error: string | null = null): TimingPreviewState {
-  return {
-    preview: [],
-    captionCount: 0,
-    shiftableCount: 0,
-    maxCaptionStart: 0,
-    detectedFormat: "",
-    previewTruncated: false,
-    error,
-  };
-}
+  PREVIEW_ROW_HEIGHT,
+  useTimingShiftController,
+  type PreviewRowData,
+  type Unit,
+} from "./useTimingShiftController";
 
 function PreviewRow({
   index,
@@ -98,14 +18,15 @@ function PreviewRow({
   ariaAttributes,
   preview,
   formatTime,
+  formatMatchedRule,
   origLabel,
   shiftedLabel,
 }: RowComponentProps<PreviewRowData>) {
   const entry = preview[index]!;
-  // Spread `ariaAttributes`: react-window 2.x supplies `role`,
-  // `aria-rowindex`, etc. via this prop and expects the row component
-  // to apply them to the root element. Without the spread, screen
-  // readers can't navigate the virtualized list as a table.
+  const matchedRuleInfo = formatMatchedRule(entry);
+  const shiftedTitle = matchedRuleInfo
+    ? `${shiftedLabel}: ${formatTime(entry.shiftedStart)} (${matchedRuleInfo})`
+    : `${shiftedLabel}: ${formatTime(entry.shiftedStart)}`;
   return (
     <div
       {...ariaAttributes}
@@ -116,7 +37,7 @@ function PreviewRow({
       <span className="t-orig" title={`${origLabel}: ${formatTime(entry.originalStart)}`}>
         {formatTime(entry.originalStart)}
       </span>
-      <span className="t-new" title={`${shiftedLabel}: ${formatTime(entry.shiftedStart)}`}>
+      <span className="t-new" title={shiftedTitle}>
         {formatTime(entry.shiftedStart)}
       </span>
       <span className="txt" title={entry.tooltipText}>
@@ -127,512 +48,60 @@ function PreviewRow({
 }
 
 export default function TimingShift() {
-  const { t } = useI18n();
-  const { timingFiles, setTimingFiles, clearFile, isFileInUse, findLoadedInputConflictKeys } =
-    useFileContext();
-
-  const [previewState, setPreviewState] = useState<TimingPreviewState>(() =>
-    emptyTimingPreviewState()
-  );
   const {
+    t,
+    mode,
+    setMode,
+    timingMap,
+    timingMapError,
+    setTimingMapError,
+    handlePickTimingMap,
+    handleClearTimingMap,
+    filePaths,
+    fileNames,
+    primaryFileName,
+    fileCount,
+    showFileList,
+    setShowFileList,
+    dropZoneRef,
+    fileContainerRef,
+    dropActive,
+    dropError,
+    setDropError,
     preview,
     captionCount,
     shiftableCount,
-    maxCaptionStart,
     detectedFormat,
     previewTruncated,
-    error: previewError,
-  } = previewState;
-  // Keep the validated value in integer milliseconds regardless of the
-  // visible unit. offsetText remains the user's exact in-progress text, while
-  // invalid text disables preview/save instead of silently using an older
-  // magnitude. The separate direction control is the only source of sign.
-  const [offsetMagnitudeMs, setOffsetMagnitudeMs] = useState(200);
-  const [offsetText, setOffsetText] = useState("200");
-  const [unit, setUnit] = useState<Unit>("ms");
-  const [direction, setDirection] = useState<Direction>("slower");
-  const [useThreshold, setUseThreshold] = useState(false);
-  const [thresholdText, setThresholdText] = useState("00:05:00.000");
-  const [busy, setBusy] = useState(false);
-  // Same shape as HdrConvert — "cancelled" is its own visible state so
-  // the footer and log can both acknowledge that the user stepped back
-  // (overwrite-confirm dismissed OR mid-batch cancel button).
-  const [lastActionResult, setLastActionResult] = useState<
-    "success" | "partial" | "error" | "cancelled" | null
-  >(null);
-  const [progress, setProgress] = useState<{ processed: number; total: number } | null>(null);
-  const [dropActive, setDropActive] = useState(false);
-  const { logs, addLog, clearLogs, logScrollRef } = useLogPanel();
-  const [showFileList, setShowFileList] = useState(false);
-  // Selection-rejection banner — see HdrConvert for the full rationale.
-  // Strict cross-tab dedup: any conflict in the new selection rejects
-  // the entire drop, leaving the prior state untouched.
-  const [dropError, setDropError] = useState<string | null>(null);
-
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const pickGenRef = useRef(0);
-  const abortRef = useRef<AbortController | null>(null);
-  // Synchronous double-click guard — `busy` state lags setBusy(true) by
-  // one render. busyRef is written synchronously at handler entry and
-  // released in the outer finally so every exit path clears it.
-  const busyRef = useRef(false);
-  const dropZoneRef = useRef<HTMLDivElement>(null);
-  const fileContainerRef = useRef<HTMLDivElement>(null);
-
-  const effectiveOffsetMs = useMemo(() => {
-    if (direction === "faster" && offsetMagnitudeMs > 0) return -offsetMagnitudeMs;
-    return offsetMagnitudeMs;
-  }, [offsetMagnitudeMs, direction]);
-
-  // Per-unit absolute bound used by NumberInput's min/max attributes and
-  // the out-of-range derived signal below. In ms-unit the cap is the full
-  // MAX_OFFSET_MS literal; in s-unit it scales down by 1000 so the same
-  // visible value range stays user-friendly.
-  const offsetMax = unit === "s" ? MAX_OFFSET_MS / 1000 : MAX_OFFSET_MS;
-
-  // Unit changes reformat the exact stored millisecond magnitude, so the
-  // number shown after the switch always describes the value the engine uses.
-  const handleUnitChange = (newUnit: Unit) => {
-    if (newUnit === unit) return;
-    setOffsetText(formatTimingOffsetMagnitude(offsetMagnitudeMs, newUnit));
-    setUnit(newUnit);
-  };
-  const handleOffsetChange = (value: string) => {
-    setOffsetText(value);
-    const magnitudeMs = parseTimingOffsetMagnitudeMs(value, unit, offsetMax);
-    if (magnitudeMs !== null) setOffsetMagnitudeMs(magnitudeMs);
-  };
-  // Derived: the visible input is not currently a finite in-range
-  // number. Without this, Save can proceed against the prior valid
-  // `offsetMagnitudeMs` while the user sees a different value in the field.
-  const offsetInvalid = isTimingOffsetInvalid(offsetText, unit, offsetMax);
-
-  const thresholdMs = useMemo(
-    () => (useThreshold ? parseDisplayTime(thresholdText) : null),
-    [useThreshold, thresholdText]
-  );
-  const thresholdInvalid = useThreshold && thresholdMs === null;
-
-  // Full-file maximum, returned by the parse-only engine even when the
-  // retained preview rows are capped. shiftSubtitle uses
-  // `c.start >= threshold`, so a threshold past the last START produces
-  // zero shifts even if it falls before the last caption's END.
-  const thresholdExceedsFile =
-    useThreshold && thresholdMs !== null && captionCount > 0 && thresholdMs > maxCaptionStart;
-
-  const filePaths = useMemo(() => timingFiles?.filePaths ?? [], [timingFiles]);
-  const fileNames = useMemo(() => timingFiles?.fileNames ?? [], [timingFiles]);
-  const firstFileContent = timingFiles?.firstFileContent ?? "";
-  const primaryFileName = fileNames[0] ?? "";
-  const fileCount = filePaths.length;
-
-  // Virtualized preview list height — shrinks with the actual row count
-  // for short previews, caps at PREVIEW_LIST_MAX_HEIGHT for long ones.
-  // Computed in a memo so the eslint inline-style rule (`no-restricted-syntax`)
-  // sees an Identifier at the call site instead of a fresh object literal.
-  const previewListStyle = useMemo(
-    () => ({
-      height: Math.min(preview.length * PREVIEW_ROW_HEIGHT, PREVIEW_LIST_MAX_HEIGHT),
-    }),
-    [preview.length]
-  );
-
-  // Memoize `rowProps` for the virtualized list. A fresh `{}` per
-  // render forced react-window's internal memo to bust every state
-  // change, costing a full PreviewRow re-render across every visible
-  // row for unrelated state updates (overflow toggles, drag active,
-  // etc.).
-  const previewRowProps = useMemo<PreviewRowData>(
-    () => ({
-      preview,
-      formatTime: formatDisplayTime,
-      origLabel: t("col_original"),
-      shiftedLabel: t("col_shifted"),
-    }),
-    [preview, t]
-  );
-
-  // Live preview is computed from the FIRST file only. The same offset
-  // applies uniformly to every file in a batch, so a sample of file #1
-  // is honest; we don't re-render the timeline as the loop runs.
-  useEffect(() => {
-    if (!firstFileContent) {
-      setPreviewState(emptyTimingPreviewState());
-      return;
-    }
-    if (offsetInvalid || thresholdInvalid) {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-      // Clear all derived preview state: leaving count/format/max/error from
-      // the prior valid input would contradict the visible invalid input.
-      setPreviewState(emptyTimingPreviewState());
-      return;
-    }
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
-      try {
-        const result = previewShiftSubtitles(firstFileContent, {
-          offsetMs: effectiveOffsetMs,
-          thresholdMs: thresholdMs ?? undefined,
-        });
-        setPreviewState({
-          preview: result.preview,
-          captionCount: result.captionCount,
-          shiftableCount: result.shiftableCount,
-          maxCaptionStart: result.maxCaptionStart,
-          detectedFormat: result.format.toUpperCase(),
-          previewTruncated: result.previewTruncated,
-          error: null,
-        });
-      } catch (error) {
-        // Publish failure atomically with cleared derived state. Keeping an
-        // independent error flag let old count/format chips survive a failed
-        // parse for one render; one object makes those states inseparable.
-        setPreviewState(emptyTimingPreviewState(t("timing_preview_error", sanitizeError(error))));
-      }
-    }, 200);
-    return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-    };
-  }, [firstFileContent, effectiveOffsetMs, offsetInvalid, thresholdMs, thresholdInvalid, t]);
-
-  // Reset last-save outcome on selection change so "done" / "cancelled"
-  // don't linger after the user picks a brand-new batch.
-  useEffect(() => {
-    setLastActionResult(null);
-  }, [timingFiles]);
-
-  // File-list dropdown: close on click-outside / Escape (mirrors HDR).
-  useClickOutside(showFileList, fileContainerRef, () => setShowFileList(false));
-
-  // Footer status. Busy carries the N-of-M progress; cancelled is its
-  // own visible footer state, separate from done/error.
-  const tabStatus = useMemo<Status>(() => {
-    if (fileCount === 0) return { kind: "idle", message: t("status_timing_idle") };
-    if (busy) {
-      return {
-        kind: "busy",
-        message: t("status_timing_busy"),
-        progress: progress ?? undefined,
-      };
-    }
-    if (lastActionResult === "success") return { kind: "done", message: t("status_timing_done") };
-    if (lastActionResult === "partial")
-      return { kind: "pending", message: t("status_timing_partial") };
-    if (lastActionResult === "error") return { kind: "error", message: t("status_timing_error") };
-    if (lastActionResult === "cancelled") {
-      return { kind: "pending", message: t("status_timing_cancelled") };
-    }
-    return { kind: "pending", message: t("status_timing_pending") };
-  }, [fileCount, busy, lastActionResult, progress, t]);
-  useTabStatus("timing", tabStatus);
-
-  // Shared ingestion path: conflict check → load first file's body for
-  // the live preview → publish to context. The rest of the batch is
-  // read on demand during the save loop, so memory stays flat even
-  // for a 24-episode drop. Strict cross-tab dedup contract: any
-  // conflict rejects the WHOLE selection — see buildConflictMessage /
-  // FileContext for the rationale.
-  const ingestPaths = useCallback(
-    async (paths: string[], gen: number) => {
-      const conflictMsg = buildConflictMessage(paths, "timing", isFileInUse, t);
-      if (conflictMsg) {
-        setDropError(conflictMsg);
-        return;
-      }
-      setDropError(null);
-
-      let firstContent: string;
-      try {
-        firstContent = await readText(paths[0]!);
-      } catch (e) {
-        // Stale-pick guard BEFORE the log emit: an earlier pick that
-        // errors after the user has already moved on would otherwise
-        // emit a confusing log line tied to the abandoned selection.
-        // Drop silently when superseded.
-        if (gen !== pickGenRef.current) return;
-        addLog(t("error_prefix", sanitizeError(e)), "error");
-        return;
-      }
-      if (gen !== pickGenRef.current) return;
-
-      const names = paths.map(fileNameFromPath);
-      setTimingFiles({
-        filePaths: paths,
-        fileNames: names,
-        firstFileContent: firstContent,
-      });
-    },
-    [isFileInUse, setTimingFiles, addLog, t]
-  );
-
-  const handlePickFiles = useCallback(async () => {
-    const gen = (pickGenRef.current = pickGenRef.current + 1);
-    // Catch dialog IPC failures explicitly — pickSubtitleFiles can
-    // reject (Tauri plugin-dialog error, plugin not loaded, OS-level
-    // dialog refused, etc.) and the bare await form let those bubble
-    // as unhandled rejection → silent console error from the user's
-    // POV ("clicked Select, nothing happened"). Surface via addLog so
-    // the user knows the click was received but the dialog couldn't
-    // open. Same shape for HDR / Embed / Rename siblings.
-    let paths: string[] | null;
-    try {
-      paths = await pickSubtitleFiles(t);
-    } catch (e) {
-      if (gen !== pickGenRef.current) return;
-      addLog(t("error_prefix", sanitizeError(e)), "error");
-      return;
-    }
-    if (gen !== pickGenRef.current) return;
-    if (!paths || paths.length === 0) return;
-    await ingestPaths(paths, gen);
-  }, [ingestPaths, addLog, t]);
-
-  const handleDroppedPaths = useCallback(
-    async (paths: string[]) => {
-      // Bump pickGenRef at function entry, not after the filter. A
-      // concurrent in-flight pick must observe the generation jump
-      // before the filter completes — otherwise stale results could
-      // still write state after the user moved on. The early-return
-      // here is only log + banner state, but bump-at-entry keeps the
-      // generation contract uniform across pick entry points (mirrors
-      // FontEmbed.handleDroppedPaths).
-      const gen = (pickGenRef.current = pickGenRef.current + 1);
-      const subtitlePaths = paths.filter((p) => categorize(fileNameFromPath(p)) === "subtitle");
-      if (subtitlePaths.length === 0) {
-        // Surface through both the log AND the standard DropErrorBanner.
-        // Users with collapsed log panels see nothing from log-only —
-        // the banner is the always-visible feedback.
-        const msg = t("msg_no_subtitle_in_drop");
-        addLog(msg, "error");
-        setDropError(msg);
-        return;
-      }
-      await ingestPaths(subtitlePaths, gen);
-    },
-    [ingestPaths, addLog, t]
-  );
-
-  useFolderDrop({
-    ref: dropZoneRef,
-    onPaths: handleDroppedPaths,
-    onActiveChange: setDropActive,
-    onError: (e) => setDropError(sanitizeError(e)),
-    disabled: busy,
-    t,
-  });
-
-  const handleClearFiles = useCallback(() => {
-    pickGenRef.current = pickGenRef.current + 1;
-    clearFile("timing");
-    setPreviewState(emptyTimingPreviewState());
-    setDropError(null);
-  }, [clearFile]);
-
-  const handleSaveAll = useCallback(async () => {
-    if (isTimingSaveDisabled({ fileCount, thresholdInvalid, offsetInvalid, busy })) return;
-    // Synchronous double-click gate — see HdrConvert::handleConvert
-    // for the same idiom. Released in the outer finally below.
-    if (busyRef.current) return;
-    busyRef.current = true;
-    pickGenRef.current += 1;
-    const controller = new AbortController();
-    abortRef.current = controller;
-    setBusy(true);
-    try {
-      const paths = filePaths;
-      const selectedInputKeys = new Set(paths.map(normalizeOutputKey));
-
-      // Invalid targets are reported per file; selected sources never enter overwrite preflight.
-      const projectedOutputs: string[] = [];
-      for (const filePath of paths) {
-        try {
-          const outputPath = deriveShiftedPath(filePath);
-          assertOutputDoesNotReplaceSelectedInput(outputPath, selectedInputKeys);
-          projectedOutputs.push(outputPath);
-        } catch {
-          // Re-thrown with per-file context inside the main loop below.
-        }
-      }
-      let existingOutputs: ReadonlySet<string>;
-      let conflictingOutputs: ReadonlySet<string>;
-      try {
-        conflictingOutputs = await findLoadedInputConflictKeys(projectedOutputs, controller.signal);
-        if (controller.signal.aborted) {
-          setLastActionResult("cancelled");
-          return;
-        }
-        existingOutputs = await findExistingOutputKeys(
-          projectedOutputs.filter((path) => !conflictingOutputs.has(normalizeOutputKey(path)))
-        );
-        if (controller.signal.aborted) {
-          addLog(t("msg_timing_cancelled"), "info");
-          setLastActionResult("cancelled");
-          return;
-        }
-        const existingCount = existingOutputs.size;
-        if (existingCount > 0) {
-          const confirmed = await ask(t("msg_overwrite_confirm", existingCount, paths.length), {
-            title: t("dialog_overwrite_title"),
-            kind: "warning",
-          });
-          if (!confirmed || controller.signal.aborted) {
-            addLog(t("msg_timing_cancelled"), "info");
-            setLastActionResult("cancelled");
-            return;
-          }
-        }
-      } catch (e) {
-        addLog(t("error_prefix", sanitizeError(e)), "error");
-        setLastActionResult("error");
-        return;
-      }
-
-      setProgress({ processed: 0, total: paths.length });
-
-      try {
-        addLog(t("msg_timing_start", paths.length, effectiveOffsetMs));
-
-        let successCount = 0;
-        let warnedCount = 0;
-        let processedCount = 0;
-        const seenOutputs = new Set<string>();
-
-        for (const filePath of paths) {
-          if (abortRef.current?.signal.aborted) {
-            addLog(t("msg_timing_cancelled"), "info");
-            break;
-          }
-
-          // Defensive fallback: see HdrConvert's matching site —
-          // `fileName` must remain bound to something usable across the
-          // entire iteration so the catch block can attribute errors
-          // even if a future `fileNameFromPath` refactor starts throwing.
-          //
-          // BiDi parity: same per-iteration sanitization as
-          // HdrConvert / FontEmbed — every addLog interpolating fileName
-          // gets BiDi-scrubbed display text from a single sanitize-at-
-          // source.
-          // bare-split fallback BEFORE invoking
-          // fileNameFromPath — basename-only fallback keeps log noise
-          // bounded when fileNameFromPath throws. Same shape adopted
-          // across HdrConvert + FontEmbed for symmetry.
-          let fileName = sanitizeForDialog(filePath.split(/[\\/]/).pop() ?? filePath);
-          try {
-            fileName = sanitizeForDialog(fileNameFromPath(filePath));
-          } catch {
-            // Keep the basename — better than no attribution.
-          }
-          addLog(t("msg_processing", fileName));
-
-          try {
-            const outputPath = deriveShiftedPath(filePath);
-            assertOutputDoesNotReplaceSelectedInput(outputPath, selectedInputKeys);
-            assertOutputDoesNotReplaceSelectedInput(outputPath, conflictingOutputs);
-
-            // Within-batch dedup. Two inputs that resolve to the same
-            // output path (different paths on disk pointing at the same
-            // file via symlink, junction, etc.) would otherwise overwrite
-            // each other. See normalizeOutputKey for the NFC + forward
-            // slash + lowercase semantics.
-            const normalizedOut = normalizeOutputKey(outputPath);
-            if (seenOutputs.has(normalizedOut)) {
-              addLog(t("msg_skipped_duplicate", fileName), "error");
-              continue;
-            }
-            seenOutputs.add(normalizedOut);
-
-            let content: string;
-            let fileWarned = false;
-            try {
-              content = await readText(filePath, (read) => {
-                const warnings = textDecodingWarnings(read, fileName, t);
-                fileWarned = warnings.length > 0;
-                for (const warning of warnings) addLog(warning, "warn");
-              });
-            } catch (e) {
-              addLog(t("msg_read_error", fileName, sanitizeError(e)), "error");
-              continue;
-            }
-
-            if (abortRef.current?.signal.aborted) break;
-
-            const result = shiftSubtitlesCompact(content, {
-              offsetMs: effectiveOffsetMs,
-              thresholdMs: thresholdMs ?? undefined,
-            });
-
-            // Surface oversized captions explicitly. Structure-preserving
-            // ASS/WebVTT writers leave them unchanged; SRT/MicroDVD writers
-            // omit them because those formats are rebuilt from parsed cues.
-            if (result.skippedCount > 0) {
-              fileWarned = true;
-              const warningKey =
-                result.format === "ass" || result.format === "vtt"
-                  ? "msg_oversized_unchanged"
-                  : "msg_oversized_skipped";
-              addLog(t(warningKey, result.skippedCount, fileName), "warn");
-            }
-
-            if (abortRef.current?.signal.aborted) break;
-
-            await writeText(outputPath, result.content, existingOutputs.has(normalizedOut));
-            // Match the sibling features: sanitize output display names
-            // before writing them into the visible log.
-            const outName = sanitizeForDialog(fileNameFromPath(outputPath));
-            addLog(t("msg_saved", outName, result.captionCount), fileWarned ? "warn" : "success");
-            if (fileWarned) warnedCount++;
-            successCount++;
-          } catch (e) {
-            addLog(t("msg_timing_error", fileName, sanitizeError(e)), "error");
-          } finally {
-            processedCount++;
-            setProgress({ processed: processedCount, total: paths.length });
-          }
-        }
-
-        // Cancel takes precedence over success/error — surfacing
-        // "complete" when the user cancelled mid-batch would lie.
-        // Avoid success-log vs error-footer contradiction
-        // : when every file failed, the previous form
-        // fired both "complete: 0/N" + red "failed" footer. Split so
-        // success-log fires only when at least one file landed.
-        const aborted = !!abortRef.current?.signal.aborted;
-        if (aborted) {
-          setLastActionResult("cancelled");
-        } else if (successCount > 0) {
-          if (warnedCount > 0) {
-            addLog(t("msg_complete_warnings", successCount, paths.length, warnedCount), "warn");
-            setLastActionResult("partial");
-          } else {
-            addLog(t("msg_timing_complete", successCount, paths.length), "success");
-            setLastActionResult("success");
-          }
-        } else {
-          addLog(t("msg_timing_all_failed", paths.length), "error");
-          setLastActionResult("error");
-        }
-      } finally {
-        setProgress(null);
-      }
-    } finally {
-      setBusy(false);
-      busyRef.current = false;
-    }
-  }, [
-    fileCount,
-    filePaths,
-    findLoadedInputConflictKeys,
-    effectiveOffsetMs,
-    thresholdMs,
-    thresholdInvalid,
+    previewError,
+    dismissPreviewError,
+    previewListStyle,
+    previewRowProps,
+    offsetText,
+    offsetMax,
     offsetInvalid,
+    handleOffsetChange,
+    unit,
+    handleUnitChange,
+    direction,
+    setDirection,
+    useThreshold,
+    setUseThreshold,
+    thresholdText,
+    setThresholdText,
+    thresholdInvalid,
+    thresholdExceedsFile,
     busy,
-    addLog,
-    t,
-  ]);
-
-  const saveDisabled = isTimingSaveDisabled({ fileCount, thresholdInvalid, offsetInvalid, busy });
-  const saveLabel = fileCount > 1 ? t("btn_save_all", fileCount) : t("btn_save");
+    saveDisabled,
+    saveLabel,
+    handlePickFiles,
+    handleClearFiles,
+    handleSaveAll,
+    requestCancel,
+    logs,
+    clearLogs,
+    logScrollRef,
+  } = useTimingShiftController();
 
   return (
     <div className="space-y-4">
@@ -790,9 +259,7 @@ export default function TimingShift() {
         </button>
         {busy && (
           <button
-            onClick={() => {
-              abortRef.current?.abort();
-            }}
+            onClick={requestCancel}
             className="flex-none px-4 rounded-lg text-sm transition-colors"
             style={{
               background: "var(--cancel-bg)",
@@ -818,14 +285,14 @@ export default function TimingShift() {
         </button>
       </div>
 
-      {/* Selection-rejected banner — same UX as HdrConvert. */}
+      {/* Selection-rejected banner */}
       <DropErrorBanner message={dropError} onDismiss={() => setDropError(null)} />
 
-      {/* Parse/cap failures must stay visible even when the log is collapsed. */}
-      <DropErrorBanner
-        message={previewError}
-        onDismiss={() => setPreviewState((state) => ({ ...state, error: null }))}
-      />
+      {/* Timing-map load/parse error banner */}
+      <DropErrorBanner message={timingMapError} onDismiss={() => setTimingMapError(null)} />
+
+      {/* Subtitle parse/cap error banner */}
+      <DropErrorBanner message={previewError} onDismiss={dismissPreviewError} />
 
       {/* Drop-zone discoverability hint — visible only when idle. */}
       {fileCount === 0 && !dropError && (
@@ -834,175 +301,329 @@ export default function TimingShift() {
         </p>
       )}
 
-      {/* Offset value + unit */}
-      <div className="flex items-end gap-3">
-        <div>
-          <label
-            htmlFor="timing-offset-input"
-            className="block text-sm font-medium mb-1"
-            style={{ color: "var(--text-primary)" }}
-          >
-            {t("offset_label")}
-          </label>
-          {/* Migrated to the shared NumberInput. The string-shadow
-              refactor (offsetText) is in place at the top of this
-              component, so this matches HdrConvert's clear-then-retype
-              semantics and inherits the invalid-border feedback for
-              out-of-range typing instead of silently clamping in
-              `effectiveOffsetMs`. */}
-          <NumberInput
-            id="timing-offset-input"
-            value={offsetText}
-            onChange={handleOffsetChange}
-            min={0}
-            max={offsetMax}
-            step={unit === "ms" ? 1 : "0.001"}
-            disabled={busy}
-            invalid={offsetInvalid}
-            className="w-28"
-          />
-        </div>
-        <select
-          id="timing-unit-select"
-          name="offset-unit"
-          aria-label={t("offset_label")}
-          value={unit}
-          onChange={(e) => handleUnitChange(e.target.value as Unit)}
-          disabled={busy}
-          className="px-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
-          style={{
-            background: "var(--bg-input)",
-            border: "1px solid var(--border)",
-            color: "var(--text-primary)",
-          }}
-        >
-          <option value="ms">{t("unit_ms")}</option>
-          <option value="s">{t("unit_seconds")}</option>
-        </select>
-      </div>
-
-      {/* Direction picker — two big buttons with arrow glyphs */}
-      <div className="dir-picker" role="radiogroup" aria-label={t("offset_label")}>
-        {/* role="radio" elements use aria-checked per the ARIA spec;
-            aria-pressed is for role="button" toggles. Carrying both
-            confused screen readers (some read "pressed" and "checked"
-            twice for the same button); dropping aria-pressed leaves
-            the spec-canonical attribute alone. */}
-        <button
-          type="button"
-          className="dir-btn"
-          role="radio"
-          aria-checked={direction === "faster"}
-          onClick={() => setDirection("faster")}
-          disabled={busy}
-        >
-          <span className="dir-arrow" aria-hidden="true">
-            ←
-          </span>
-          <span className="dir-label">{t("direction_faster")}</span>
-        </button>
-        <button
-          type="button"
-          className="dir-btn"
-          role="radio"
-          aria-checked={direction === "slower"}
-          onClick={() => setDirection("slower")}
-          disabled={busy}
-        >
-          <span className="dir-label">{t("direction_slower")}</span>
-          <span className="dir-arrow" aria-hidden="true">
-            →
-          </span>
-        </button>
-      </div>
-
-      {/* The -0.25rem / -0.5rem negative marginTop pulls these hint
-          lines tighter under their controls. Negative margins are
-          usually a footgun; pinned here as deliberate density tuning,
-          not an oversight. Switch to a parent `gap` adjustment if the
-          surrounding flex container gains explicit gap control later. */}
-      <p className="text-xs" style={{ color: "var(--text-muted)", marginTop: "-0.25rem" }}>
-        {t("offset_hint")}
-      </p>
-
-      {/* Threshold */}
-      <div className="flex items-center gap-3">
+      {/* Mode selector: Single Offset vs Timing Map (.json / .csv) */}
+      <div className="flex flex-wrap items-center gap-4">
         <label
           className="flex items-center gap-2 text-sm cursor-pointer"
           style={{ color: "var(--text-primary)" }}
         >
           <input
-            type="checkbox"
-            id="timing-threshold-checkbox"
-            name="threshold-enabled"
-            checked={useThreshold}
-            onChange={(e) => setUseThreshold(e.target.checked)}
+            type="radio"
+            name="timing-shift-mode"
+            value="offset"
+            checked={mode === "offset"}
+            onChange={() => setMode("offset")}
             disabled={busy}
-            className="rounded"
-            style={{
-              background: "var(--bg-input)",
-              borderColor: "var(--border)",
-            }}
           />
-          {t("threshold_label")}
+          <span>{t("timing_mode_offset")}</span>
         </label>
-        {useThreshold && (
-          <input
-            type="text"
-            id="timing-threshold-input"
-            name="threshold"
-            value={thresholdText}
-            onChange={(e) => setThresholdText(e.target.value)}
-            disabled={busy}
-            placeholder="00:05:00.000"
-            className="w-40 px-3 py-1.5 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
-            style={{
-              background: "var(--bg-input)",
-              border: "1px solid var(--border)",
-              color: "var(--text-primary)",
-            }}
-          />
-        )}
-        {thresholdInvalid && (
-          <span className="text-xs" style={{ color: "var(--error)" }}>
-            {t("threshold_invalid")}
-          </span>
-        )}
-        {!thresholdInvalid && thresholdExceedsFile && (
-          // threshold-exceeds-file is a
-          // warning (the shift will still run, but the threshold gate
-          // is moot), not a save-blocker — use --warning, not --error.
-          // thresholdInvalid above stays at --error because that path
-          // genuinely blocks the run (NaN / negative threshold).
-          <span className="text-xs" style={{ color: "var(--warning)" }}>
-            {t("threshold_exceeds_file")}
-          </span>
-        )}
-      </div>
-      {useThreshold && (
-        <p
-          className="text-xs"
-          style={{
-            color: "var(--text-muted)",
-            marginTop: "-0.5rem",
-            // ZH version of this hint is ~3x the English byte length and
-            // can overflow narrow viewports; allow wrapping (rather than
-            // splitting the i18n key or shortening the ZH copy) so the
-            // English layout stays compact while the ZH wraps gracefully.
-            whiteSpace: "normal",
-            overflowWrap: "anywhere",
-          }}
+        <label
+          className="flex items-center gap-2 text-sm cursor-pointer"
+          style={{ color: "var(--text-primary)" }}
         >
-          {t("threshold_format_hint")}
-        </p>
+          <input
+            type="radio"
+            name="timing-shift-mode"
+            value="map"
+            checked={mode === "map"}
+            onChange={() => setMode("map")}
+            disabled={busy}
+          />
+          <span>{t("timing_mode_map")}</span>
+        </label>
+      </div>
+
+      {mode === "offset" ? (
+        <>
+          {/* Offset value + unit */}
+          <div className="flex items-end gap-3">
+            <div>
+              <label
+                htmlFor="timing-offset-input"
+                className="block text-sm font-medium mb-1"
+                style={{ color: "var(--text-primary)" }}
+              >
+                {t("offset_label")}
+              </label>
+              <NumberInput
+                id="timing-offset-input"
+                value={offsetText}
+                onChange={handleOffsetChange}
+                min={0}
+                max={offsetMax}
+                step={unit === "ms" ? 1 : "0.001"}
+                disabled={busy}
+                invalid={offsetInvalid}
+                className="w-28"
+              />
+            </div>
+            <select
+              id="timing-unit-select"
+              name="offset-unit"
+              aria-label={t("offset_label")}
+              value={unit}
+              onChange={(e) => handleUnitChange(e.target.value as Unit)}
+              disabled={busy}
+              className="px-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+              style={{
+                background: "var(--bg-input)",
+                border: "1px solid var(--border)",
+                color: "var(--text-primary)",
+              }}
+            >
+              <option value="ms">{t("unit_ms")}</option>
+              <option value="s">{t("unit_seconds")}</option>
+            </select>
+          </div>
+
+          {/* Direction picker — two big buttons with arrow glyphs */}
+          <div className="dir-picker" role="radiogroup" aria-label={t("offset_label")}>
+            <button
+              type="button"
+              className="dir-btn"
+              role="radio"
+              aria-checked={direction === "faster"}
+              onClick={() => setDirection("faster")}
+              disabled={busy}
+            >
+              <span className="dir-arrow" aria-hidden="true">
+                ←
+              </span>
+              <span className="dir-label">{t("direction_faster")}</span>
+            </button>
+            <button
+              type="button"
+              className="dir-btn"
+              role="radio"
+              aria-checked={direction === "slower"}
+              onClick={() => setDirection("slower")}
+              disabled={busy}
+            >
+              <span className="dir-label">{t("direction_slower")}</span>
+              <span className="dir-arrow" aria-hidden="true">
+                →
+              </span>
+            </button>
+          </div>
+
+          <p className="text-xs" style={{ color: "var(--text-muted)", marginTop: "-0.25rem" }}>
+            {t("offset_hint")}
+          </p>
+
+          {/* Threshold */}
+          <div className="flex items-center gap-3">
+            <label
+              className="flex items-center gap-2 text-sm cursor-pointer"
+              style={{ color: "var(--text-primary)" }}
+            >
+              <input
+                type="checkbox"
+                id="timing-threshold-checkbox"
+                name="threshold-enabled"
+                checked={useThreshold}
+                onChange={(e) => setUseThreshold(e.target.checked)}
+                disabled={busy}
+                className="rounded"
+                style={{
+                  background: "var(--bg-input)",
+                  borderColor: "var(--border)",
+                }}
+              />
+              {t("threshold_label")}
+            </label>
+            {useThreshold && (
+              <input
+                type="text"
+                id="timing-threshold-input"
+                name="threshold"
+                value={thresholdText}
+                onChange={(e) => setThresholdText(e.target.value)}
+                disabled={busy}
+                placeholder="00:05:00.000"
+                className="w-40 px-3 py-1.5 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+                style={{
+                  background: "var(--bg-input)",
+                  border: "1px solid var(--border)",
+                  color: "var(--text-primary)",
+                }}
+              />
+            )}
+            {thresholdInvalid && (
+              <span className="text-xs" style={{ color: "var(--error)" }}>
+                {t("threshold_invalid")}
+              </span>
+            )}
+            {!thresholdInvalid && thresholdExceedsFile && (
+              <span className="text-xs" style={{ color: "var(--warning)" }}>
+                {t("threshold_exceeds_file")}
+              </span>
+            )}
+          </div>
+          {useThreshold && (
+            <p
+              className="text-xs"
+              style={{
+                color: "var(--text-muted)",
+                marginTop: "-0.5rem",
+                whiteSpace: "normal",
+                overflowWrap: "anywhere",
+              }}
+            >
+              {t("threshold_format_hint")}
+            </p>
+          )}
+        </>
+      ) : (
+        <div className="space-y-3">
+          {/* Timing-map file strip */}
+          <div className="flex items-center gap-2">
+            <div
+              className="flex-1 min-w-0 flex items-center gap-2 px-3 rounded-lg text-sm"
+              style={{
+                background: timingMap ? "var(--bg-panel)" : "var(--bg-input)",
+                border: "1px solid var(--border-light)",
+                minHeight: "38px",
+              }}
+            >
+              {timingMap ? (
+                <>
+                  <span
+                    className="truncate flex-1"
+                    style={{ color: "var(--text-primary)" }}
+                    title={sanitizeForDialog(timingMap.filePath)}
+                  >
+                    {timingMap.fileName}
+                  </span>
+                  <span
+                    className="flex-none px-2 py-0.5 rounded text-xs"
+                    style={{
+                      background: "var(--bg-input)",
+                      color: "var(--text-secondary)",
+                    }}
+                  >
+                    {t(
+                      "timing_map_rules_summary",
+                      timingMap.activeRuleCount,
+                      timingMap.rules.length
+                    )}
+                  </span>
+                </>
+              ) : (
+                <span className="italic" style={{ color: "var(--text-muted)" }}>
+                  {t("timing_map_empty")}
+                </span>
+              )}
+            </div>
+            {timingMap && (
+              <button
+                type="button"
+                onClick={handleClearTimingMap}
+                disabled={busy}
+                className="flex-none px-3 rounded-lg text-lg font-bold transition-colors"
+                style={{
+                  background: busy ? "var(--bg-input)" : "var(--cancel-bg)",
+                  color: busy ? "var(--text-muted)" : "var(--cancel-text)",
+                  height: "38px",
+                }}
+                title={t("btn_clear_timing_map")}
+              >
+                ✕
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={handlePickTimingMap}
+              disabled={busy}
+              className="flex-none px-5 rounded-lg font-medium text-sm transition-colors"
+              style={{
+                background: busy ? "var(--bg-input)" : "var(--accent)",
+                color: busy ? "var(--text-muted)" : "var(--accent-text)",
+                height: "38px",
+              }}
+            >
+              {t("btn_select_timing_map")}
+            </button>
+          </div>
+
+          <p className="text-xs ml-1" style={{ color: "var(--text-muted)" }}>
+            {t("timing_map_hint")}
+          </p>
+
+          {/* Read-only parsed rules summary */}
+          {timingMap && (
+            <div
+              className="rounded-lg overflow-hidden"
+              style={{
+                border: "1px solid var(--border)",
+                background: "var(--bg-panel)",
+              }}
+            >
+              <div className="px-3 py-2" style={{ borderBottom: "1px solid var(--border)" }}>
+                <span className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>
+                  {t("timing_map_rules_title", timingMap.activeRuleCount, timingMap.rules.length)}
+                </span>
+              </div>
+              <div
+                className="grid items-center gap-3 px-3 py-1.5 text-xs font-medium"
+                style={{
+                  gridTemplateColumns: "36px minmax(180px, 1.4fr) 110px minmax(100px, 1fr)",
+                  borderBottom: "1px solid var(--border)",
+                  color: "var(--text-muted)",
+                }}
+                aria-hidden="true"
+              >
+                <span>{t("col_index")}</span>
+                <span>{t("timing_map_col_range")}</span>
+                <span>{t("timing_map_col_offset")}</span>
+                <span>{t("timing_map_col_label")}</span>
+              </div>
+              <div className="max-h-44 overflow-y-auto">
+                {timingMap.rules.map((rule, idx) => {
+                  const enabled = rule.enabled !== false;
+                  const startLabel = formatDisplayTime(rule.startMs);
+                  const rangeLabel =
+                    rule.endMs !== undefined
+                      ? t("timing_map_range_bounded", startLabel, formatDisplayTime(rule.endMs))
+                      : t("timing_map_range_open", startLabel);
+                  const safeLabel = rule.label ? sanitizeForDialog(rule.label) : null;
+                  return (
+                    <div
+                      key={idx}
+                      className="grid items-center gap-3 px-3 py-1.5 text-xs"
+                      style={{
+                        gridTemplateColumns: "36px minmax(180px, 1.4fr) 110px minmax(100px, 1fr)",
+                        borderBottom:
+                          idx < timingMap.rules.length - 1
+                            ? "1px solid color-mix(in srgb, var(--border) 50%, transparent)"
+                            : "none",
+                        color: enabled ? "var(--text-primary)" : "var(--text-muted)",
+                      }}
+                    >
+                      <span className="font-mono">{idx + 1}</span>
+                      <span className="font-mono truncate" title={rangeLabel}>
+                        {rangeLabel}
+                      </span>
+                      <span className="font-mono">{formatSignedOffsetMs(rule.offsetMs)}</span>
+                      <span className="flex items-center gap-2 min-w-0">
+                        {safeLabel && (
+                          <span className="truncate" title={safeLabel}>
+                            {safeLabel}
+                          </span>
+                        )}
+                        <span className={enabled ? "badge badge-green" : "badge badge-mute"}>
+                          {enabled ? t("timing_map_rule_active") : t("timing_map_rule_disabled")}
+                        </span>
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
       )}
 
-      {/* Timeline preview — shows the FIRST file's captions in batch mode
-          (the same offset applies uniformly, so file #1 is a representative
-          sample). Frozen header sits outside the scroll area.
-          aria-live polite: SR users hear when the preview recomputes after
-          offset / unit / direction / threshold changes; "polite" defers to
-          the user's current speech rather than interrupting. */}
+      {/* Timeline preview — shows the FIRST file's captions in batch mode */}
       {preview.length > 0 && (
         <div className="timeline-preview" aria-live="polite">
           <div className="timeline-preview-head">
@@ -1029,10 +650,6 @@ export default function TimingShift() {
           </div>
           <List<PreviewRowData>
             className="timeline-list"
-            // previewListStyle is a useMemo identifier — passes the inline-style
-            // CSS-injection lint, which forbids object literals / call
-            // expressions at the JSX call site (those can hide user-controlled
-            // input). The computed value comes from preview.length only.
             style={previewListStyle}
             rowCount={preview.length}
             rowHeight={PREVIEW_ROW_HEIGHT}

@@ -113,6 +113,13 @@ vi.mock("@tauri-apps/api/core", () => ({
         ...state.readMetadata,
       };
     }
+    if (command === "read_timing_map_file") {
+      await state.readProbe?.(path);
+      state.onRead?.(path);
+      const text = state.files.get(path);
+      if (text === undefined) throw new Error("Missing timing map");
+      return text;
+    }
     if (command === "safe_write_text_file") {
       state.onWrite?.(path);
       state.attempts.push({ path, overwrite: args.overwrite === true });
@@ -891,4 +898,40 @@ it("ignores Timing's initial file read if saving starts before that read returns
   await pendingPick;
   expect(state.setTimingFiles).not.toHaveBeenCalled();
   expect(state.attempts).toEqual([{ path: inputPath("episode.shifted.srt"), overwrite: false }]);
+});
+
+it("loads a JSON timing map in TimingShift and exports shifted batch outputs", async () => {
+  const mapPath = inputPath("rules.json");
+  state.files.set(
+    mapPath,
+    JSON.stringify({
+      rules: [{ start: "00:00:00.000", end: "00:00:05.000", offset: "+1.5s", label: "opening" }],
+    })
+  );
+  function renderTiming() {
+    state.cursor = 0;
+    state.effects = [];
+    return elements(TimingShift());
+  }
+  function labeled(label: string) {
+    const match = renderTiming().find(
+      (entry) => entry.type === "button" && entry.props.children === label
+    );
+    expect(match, label).toBeDefined();
+    return match!.props;
+  }
+
+  renderTiming().find((entry) => entry.type === "input" && entry.props.value === "map")!.props
+    .onChange!();
+  expect(labeled("btn_save").disabled).toBe(true);
+
+  state.open.mockResolvedValueOnce(mapPath);
+  await labeled("btn_select_timing_map").onClick!();
+  expect(labeled("btn_save").disabled).toBe(false);
+
+  await labeled("btn_save").onClick!();
+  expect(state.attempts).toEqual([{ path: inputPath("episode.shifted.srt"), overwrite: false }]);
+  expect(state.files.get(inputPath("episode.shifted.srt"))).toContain(
+    "00:00:02,500 --> 00:00:03,500"
+  );
 });

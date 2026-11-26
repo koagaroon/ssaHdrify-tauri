@@ -173,6 +173,17 @@ export interface ShiftPreviewResult {
   previewTruncated: boolean;
 }
 
+/** Parse-only timing-map preview result used by the live GUI preview. */
+export interface TimingMapPreviewResult extends Omit<ShiftPreviewResult, "preview"> {
+  preview: TimingMapPreviewEntry[];
+  shiftedCount: number;
+  activeRuleCount: number;
+}
+
+export function hasEnabledTimingMapRules(rules: readonly TimingMapRule[]): boolean {
+  return rules.some((rule) => rule.enabled !== false);
+}
+
 function truncateCodepoints(text: string, max: number): string {
   let cp = 0;
   let out = "";
@@ -747,6 +758,78 @@ export function previewShiftSubtitles(content: string, options: ShiftOptions): S
     skippedCount,
     maxCaptionStart,
     previewTruncated,
+  };
+}
+
+/**
+ * Parse and calculate a bounded timing-map preview without rebuilding subtitle text.
+ */
+export function previewTimingMapSubtitles(
+  content: string,
+  options: { rules: TimingMapRule[]; fps?: number | undefined }
+): TimingMapPreviewResult {
+  const normalizedRules = normalizeTimingMapRules(options.rules);
+  if (normalizedRules.length === 0) {
+    throw new Error("Timing map contains no enabled rules");
+  }
+  const timingMap = compileTimingMapRules(normalizedRules);
+  const { format, captions } = parseSubtitle(content, options.fps);
+  const preview: TimingMapPreviewEntry[] = [];
+  let foundShiftableCaption = false;
+  let previewTruncated = false;
+  let maxCaptionStart = 0;
+  let skippedCount = 0;
+  let shiftedCount = 0;
+
+  for (let i = 0; i < captions.length; i += 1) {
+    const caption = captions[i]!;
+    if (caption.skipped) {
+      skippedCount += 1;
+      continue;
+    }
+    foundShiftableCaption = true;
+    maxCaptionStart = Math.max(maxCaptionStart, caption.start);
+
+    const matchedRule = findTimingMapRule(caption.start, timingMap);
+    const shifted = matchedRule
+      ? {
+          ...caption,
+          start: safeMs(caption.start + matchedRule.offsetMs),
+          end: safeMs(caption.end + matchedRule.offsetMs),
+        }
+      : caption;
+    if (shifted.start !== caption.start || shifted.end !== caption.end) {
+      shiftedCount += 1;
+    }
+
+    if (preview.length >= MAX_TIMING_PREVIEW_ENTRIES) {
+      previewTruncated = true;
+      continue;
+    }
+
+    const base = makePreviewEntry(caption, shifted, i);
+    preview.push({
+      ...base,
+      ruleIndex: matchedRule ? matchedRule.index : null,
+      appliedOffsetMs: matchedRule ? matchedRule.offsetMs : 0,
+      ...(matchedRule?.label !== undefined && { ruleLabel: matchedRule.label }),
+    });
+  }
+
+  if (!foundShiftableCaption) {
+    throw new Error("No shiftable subtitle cues were found");
+  }
+
+  return {
+    format,
+    preview,
+    captionCount: captions.length,
+    shiftableCount: captions.length - skippedCount,
+    shiftedCount,
+    skippedCount,
+    maxCaptionStart,
+    previewTruncated,
+    activeRuleCount: timingMap.activeRuleCount,
   };
 }
 

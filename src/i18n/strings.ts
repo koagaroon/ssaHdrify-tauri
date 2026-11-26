@@ -28,6 +28,14 @@ export const strings: Record<string, StringEntry> = {
   status_hdr_cancelled: { en: "Conversion cancelled", zh: "已取消转换" },
   status_timing_idle: { en: "No subtitles loaded", zh: "未加载字幕" },
   status_timing_pending: { en: "Adjust offset, then save", zh: "调整偏移后保存" },
+  status_timing_map_pick: {
+    en: "Select a timing map, then save",
+    zh: "选择时间轴映射文件后保存",
+  },
+  status_timing_map_pending: {
+    en: "Review timing map, then save",
+    zh: "确认时间轴映射规则后保存",
+  },
   status_timing_busy: { en: "Saving…", zh: "保存中…" },
   status_timing_done: { en: "Save complete", zh: "保存完成" },
   status_timing_partial: { en: "Saved with warnings", zh: "保存完成，但有警告" },
@@ -327,6 +335,11 @@ export const strings: Record<string, StringEntry> = {
   dialog_pick_output_directory_title: { en: "Choose output directory", zh: "选择输出文件夹" },
   dialog_pick_font_directory_title: { en: "Select font folder", zh: "选择字体文件夹" },
   dialog_pick_font_files_title: { en: "Select font files", zh: "选择字体文件" },
+  dialog_filter_timing_map_files: {
+    en: "Timing Map Files (JSON, CSV)",
+    zh: "时间轴映射文件（JSON、CSV）",
+  },
+  dialog_pick_timing_map_title: { en: "Select timing map file", zh: "选择时间轴映射文件" },
 
   // ── Time Shift ──────────────────────────────────────────
   captions_count: { en: "{0} captions", zh: "{0} 条字幕" },
@@ -387,6 +400,56 @@ export const strings: Record<string, StringEntry> = {
   timing_drop_hint: {
     en: "Tip: drag subtitle files or a folder onto the file strip above (videos in the folder are skipped automatically)",
     zh: "提示：可将字幕文件或文件夹拖到上方文件栏（文件夹内的视频会自动忽略）",
+  },
+  timing_mode_offset: { en: "Single offset", zh: "单一偏移" },
+  timing_mode_map: {
+    en: "Timing map (.json / .csv)",
+    zh: "时间轴映射表（.json / .csv）",
+  },
+  btn_select_timing_map: { en: "Select Map File", zh: "选择映射文件" },
+  btn_clear_timing_map: { en: "Clear timing map", zh: "清除时间轴映射文件" },
+  timing_map_empty: {
+    en: "No timing map loaded (.json or .csv)",
+    zh: "未加载时间轴映射文件（.json 或 .csv）",
+  },
+  timing_map_rules_summary: {
+    en: "{0} active / {1} rule(s)",
+    zh: "{0} 条启用 / 共 {1} 条规则",
+  },
+  timing_map_rules_title: {
+    en: "Timing Map Rules — {0} active of {1}",
+    zh: "时间轴映射规则 — 启用 {0} / 共 {1} 条",
+  },
+  timing_map_col_range: { en: "Time Range", zh: "时间范围" },
+  timing_map_col_offset: { en: "Offset", zh: "偏移" },
+  timing_map_col_label: { en: "Label / Status", zh: "标签 / 状态" },
+  timing_map_range_open: { en: "{0} → end", zh: "{0} → 结尾" },
+  timing_map_range_bounded: { en: "{0} → {1}", zh: "{0} → {1}" },
+  timing_map_rule_disabled: { en: "Disabled", zh: "已禁用" },
+  timing_map_rule_active: { en: "Active", zh: "启用" },
+  timing_map_no_enabled_rules: {
+    en: "Timing map contains no enabled rules",
+    zh: "时间轴映射文件中没有启用的规则",
+  },
+  timing_map_hint: {
+    en: "Start is inclusive, end is exclusive; when rules overlap, the first matching enabled rule in file order wins.",
+    zh: "起始时间为闭区间，结束时间为开区间；规则重叠时按文件顺序以首条匹配的启用规则为准。",
+  },
+  timing_map_matched_rule_tooltip: {
+    en: "Rule #{0}: {1}",
+    zh: "规则 #{0}：{1}",
+  },
+  timing_map_matched_rule_labeled_tooltip: {
+    en: "Rule #{0} ({1}): {2}",
+    zh: "规则 #{0}（{1}）：{2}",
+  },
+  msg_timing_map_loaded: {
+    en: "Loaded timing map: {0} ({1} active of {2} rule(s))",
+    zh: "已加载时间轴映射：{0}（启用 {1}/{2} 条规则）",
+  },
+  msg_timing_map_start: {
+    en: "Starting timing-map save: {0} file(s), {1} active rule(s)",
+    zh: "开始按时间轴映射保存：{0} 个文件，{1} 条启用规则",
   },
 
   // ── Font Embed ──────────────────────────────────────────
