@@ -31,6 +31,14 @@ import {
   shiftSubtitlesWithTimingMapCompact,
   type TimingMapRule,
 } from "./features/timing-shift/timing-engine";
+import { applyStyleEdit, type StyleEditOperations } from "./features/style-edit/style-editor";
+import { deriveStyledPath } from "./features/style-edit/style-output";
+import {
+  STYLE_EDIT_MAX_FONT_SIZE,
+  STYLE_EDIT_MIN_FONT_SIZE,
+  validateStyleEditOperations,
+  type FontFamilyValidationError,
+} from "./features/style-edit/style-ui-state";
 import { canonicalLanguageTag, LANG_TAGS, subtitleLanguageFromName } from "./lib/lang-detection";
 import {
   assertSafeOutputFilename,
@@ -185,6 +193,29 @@ export interface FontSubsetPayload {
 export interface FontEmbedApplyResult {
   content: string;
   embeddedCount: number;
+}
+
+export interface StyleEditCliOperationsRequest {
+  fontFamily?: string;
+  sourceFamily?: string;
+  fontSize?: string;
+}
+
+export interface StyleEditPathRequest {
+  inputPath: string;
+}
+
+export interface StyleEditCliRequest extends StyleEditCliOperationsRequest {
+  inputPath: string;
+  content: string;
+}
+
+export interface StyleEditCliResult {
+  outputPath: string;
+  content: string;
+  styleCount: number;
+  changedStyleCount: number;
+  changedFieldCount: number;
 }
 
 // The CLI engine entry is a real input boundary: `eotf` arrives as a JSON
@@ -414,6 +445,99 @@ export function applyFontEmbed(request: FontEmbedApplyRequest): FontEmbedApplyRe
   return {
     content: insertFontsSection(request.content, fontSection.build()),
     embeddedCount: fontSection.count,
+  };
+}
+
+function formatStyleFontFamilyError(fieldLabel: string, error: FontFamilyValidationError): string {
+  switch (error) {
+    case "required":
+      return `${fieldLabel} cannot be empty`;
+    case "surrounding_whitespace":
+      return `${fieldLabel} cannot start or end with whitespace`;
+    case "too_long":
+      return `${fieldLabel} cannot exceed 128 characters`;
+    case "comma":
+      return `${fieldLabel} cannot contain commas`;
+    case "control":
+      return `${fieldLabel} cannot contain control or invisible formatting characters`;
+  }
+}
+
+function parseStyleEditCliOperations(request: StyleEditCliOperationsRequest): StyleEditOperations {
+  const fontFamily = request.fontFamily ?? undefined;
+  const sourceFamily = request.sourceFamily ?? undefined;
+  const fontSize = request.fontSize ?? undefined;
+
+  if (sourceFamily !== undefined && fontFamily === undefined) {
+    throw new Error("--source-family requires --font-family");
+  }
+
+  const validation = validateStyleEditOperations({
+    fontFamilyEnabled: fontFamily !== undefined,
+    targetFontFamily: fontFamily ?? "",
+    sourceFilterEnabled: sourceFamily !== undefined,
+    sourceFontFamily: sourceFamily ?? "",
+    fontSizeEnabled: fontSize !== undefined,
+    targetFontSize: fontSize ?? "",
+  });
+
+  if (!validation.hasEnabledOperation) {
+    throw new Error("Style edit requires at least one of --font-family or --font-size");
+  }
+  if (validation.targetFontError !== null) {
+    throw new Error(formatStyleFontFamilyError("Target font family", validation.targetFontError));
+  }
+  if (validation.sourceFontError !== null) {
+    throw new Error(formatStyleFontFamilyError("Source font family", validation.sourceFontError));
+  }
+  if (validation.fontSizeInvalid) {
+    throw new Error(
+      `Target font size must be a finite number between ${STYLE_EDIT_MIN_FONT_SIZE} and ${STYLE_EDIT_MAX_FONT_SIZE}`
+    );
+  }
+
+  return {
+    ...(fontFamily !== undefined
+      ? {
+          fontFamily: {
+            enabled: true,
+            targetFamily: validation.targetFontFamily!,
+            ...(sourceFamily !== undefined ? { sourceFamily: validation.sourceFontFamily! } : {}),
+          },
+        }
+      : {}),
+    ...(fontSize !== undefined
+      ? {
+          fontSize: {
+            enabled: true,
+            targetSize: validation.targetFontSize!,
+          },
+        }
+      : {}),
+  };
+}
+
+export function validateStyleEditCliOperations(request: StyleEditCliOperationsRequest): {
+  valid: true;
+} {
+  parseStyleEditCliOperations(request);
+  return { valid: true };
+}
+
+export function resolveStyleEditOutputPath(request: StyleEditPathRequest): string {
+  return deriveStyledPath(request.inputPath);
+}
+
+export function applyCliStyleEdit(request: StyleEditCliRequest): StyleEditCliResult {
+  const operations = parseStyleEditCliOperations(request);
+  const outputPath = deriveStyledPath(request.inputPath);
+  const applied = applyStyleEdit(request.content, operations);
+  return {
+    outputPath,
+    content: applied.content,
+    styleCount: applied.plan.styleCount,
+    changedStyleCount: applied.changedStyleCount,
+    changedFieldCount: applied.changedFieldCount,
   };
 }
 

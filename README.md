@@ -194,9 +194,9 @@ Large font folders and nested libraries are supported; discovery and parsing sho
 The editor changes only `Fontname` and `Fontsize` fields in the style table and follows each file's own `Format:` column order. It does not globally replace dialogue or comment text, and it leaves inline `\fn` / `\fs` override tags untouched. Output preserves the source's supported text encoding, byte-order mark (BOM), and line endings; if a source changes after preview, the safe writer rejects the stale plan.
 
 > [!NOTE]
-> 样式编辑目前仅在 GUI 中提供，不属于 CLI 或 `chain`。每个源文件上限为 50 MiB；单次选择上限为 500 个文件、200 MiB 源文件字节、内存中保留的 200 MiB 解码文本和 2,000 个 Style 行。超过任一上限时会拒绝整个选择，以保证写入前的预览完整。
+> 样式编辑同时提供桌面端预览和独立 CLI 子命令 `ssahdrify-cli style-edit`（不属于 `chain`）。每个源文件上限为 50 MiB；桌面端单次选择上限为 500 个文件、200 MiB 源文件字节、内存中保留的 200 MiB 解码文本和 2,000 个 Style 行，超过任一上限时会拒绝整个选择，以保证写入前的预览完整。
 >
-> Style Edit is currently GUI-only and is not part of the CLI or `chain`. Each source file is capped at 50 MiB; one selection is capped at 500 files, 200 MiB of source bytes, 200 MiB of decoded text retained in memory, and 2,000 Style rows. Exceeding any limit rejects the whole selection so the pre-write preview remains complete.
+> Style Edit is available in both the desktop preview UI and the standalone `ssahdrify-cli style-edit` subcommand (outside `chain`). Each source file is capped at 50 MiB; in the desktop UI, one selection is capped at 500 files, 200 MiB of source bytes, 200 MiB of decoded text retained in memory, and 2,000 Style rows so the pre-write preview remains complete.
 
 ### 批量重命名 / Batch Rename
 
@@ -217,9 +217,9 @@ The editor changes only `Fontname` and `Fontsize` fields in the style table and 
 
 ## CLI 使用 | CLI Usage
 
-`ssahdrify-cli` 与 GUI 从同一份源代码构建，并提供 HDR 转换、时间轴偏移、字体嵌入和批量重命名。样式编辑目前仅在 GUI 中提供。CLI 另外提供 `chain`（一次调用串联多个步骤，只有最后一步写入文件）、`refresh-fonts`（构建或刷新 CLI 字体缓存）和 `diagnose-fonts`（只诊断字体解析，不写字幕）等子命令。
+`ssahdrify-cli` 与 GUI 从同一份源代码构建，并提供全部五项工作流：HDR 转换（`hdr`）、时间轴偏移（`shift`）、字体嵌入（`embed`）、批量重命名（`rename`）与样式编辑（`style-edit`）。CLI 另外提供 `chain`（一次调用串联多个流式转换步骤，只有最后一步写入文件）、`refresh-fonts`（构建或刷新 CLI 字体缓存）和 `diagnose-fonts`（只诊断字体解析，不写字幕）等子命令。
 
-`ssahdrify-cli` is built from the same source as the GUI and provides HDR Convert, Time Shift, Font Embed, and Batch Rename. Style Edit is currently GUI-only. The CLI also provides `chain` (run multiple steps with only the last step writing), `refresh-fonts` (build or refresh the CLI font cache), and `diagnose-fonts` (read-only font diagnostics).
+`ssahdrify-cli` is built from the same source as the GUI and provides all five workflows: HDR Convert (`hdr`), Time Shift (`shift`), Font Embed (`embed`), Batch Rename (`rename`), and Style Edit (`style-edit`). The CLI also provides `chain` (run multiple stream-transform steps with only the last step writing), `refresh-fonts` (build or refresh the CLI font cache), and `diagnose-fonts` (read-only font diagnostics).
 
 ### 快速示例 | Quick Examples
 
@@ -261,6 +261,9 @@ ssahdrify-cli rename --mode copy-to-chosen --output-dir "<output-folder>" "<seri
 
 # 多个外挂字幕文件：保留语言后缀 / Multiple sidecar subtitles: keep language suffixes
 ssahdrify-cli rename "<series-folder>" --langs all --dry-run
+
+# 样式编辑：批量修改 Style: 行的字体族与字号（输出 .styled.ass/.ssa 同级新文件）/ Style edit: update Style: font family and size into new sibling .styled.ass/.ssa files
+ssahdrify-cli style-edit --font-family "LXGW WenKai" --font-size 56 input.ass
 ```
 
 `rename --mode` 控制文件操作。默认的 `copy-to-video` 会把字幕复制到匹配视频所在的目录；`rename` 会在字幕原目录中直接重命名源文件；`copy-to-chosen` 会把字幕复制到 `--output-dir` 指定的目录。`copy-to-chosen` 必须同时传入 `--output-dir`，另外两种模式则不接受该参数。
@@ -299,6 +302,7 @@ ssahdrify-cli hdr            --help
 ssahdrify-cli shift          --help
 ssahdrify-cli embed          --help
 ssahdrify-cli rename         --help
+ssahdrify-cli style-edit     --help
 ssahdrify-cli diagnose-fonts --help
 ssahdrify-cli refresh-fonts  --help
 ssahdrify-cli chain          --help
@@ -322,9 +326,9 @@ ssahdrify-cli licenses       --help
 
 > **JSON 模式 | JSON Mode**
 >
-> `--json` 目前适用于 `hdr` / `shift` / `embed` / `rename` 和 `diagnose-fonts`。常规子命令会输出固定 schema 的报告，按文件列出 status (`written` / `planned` / `skipped` / `failed`)、output path、encoding、warnings 等字段；stderr 仍可输出文本形式的诊断信息。`diagnose-fonts --json` 直接输出诊断报告。`chain` v1 会明确提示不支持 JSON，并改用纯文本报告；`refresh-fonts` 使用 stderr 输出状态。
+> `--json` 适用于 `hdr` / `shift` / `embed` / `rename` / `style-edit` / `chain` 和 `diagnose-fonts`。常规子命令（含 `chain` 与 `--dry-run`）会输出固定 schema 的报告，按文件列出 status (`written` / `planned` / `skipped` / `failed`)、output path、encoding、warnings 等字段；stderr 仍可输出文本形式的诊断信息。`diagnose-fonts --json` 直接输出诊断报告；`refresh-fonts` 使用 stderr 输出状态而不提供 `--json`。
 >
-> `--json` currently applies to `hdr` / `shift` / `embed` / `rename` and `diagnose-fonts`. Normal subcommands emit a fixed-schema report listing per-file status (`written` / `planned` / `skipped` / `failed`), output path, encoding, warnings, and related fields; stderr can still print human-readable diagnostics. `diagnose-fonts --json` emits the diagnostic report directly. `chain` v1 explicitly reports that JSON output is not supported and uses a plain-text report instead; `refresh-fonts` reports status on stderr.
+> `--json` applies to `hdr` / `shift` / `embed` / `rename` / `style-edit` / `chain` and `diagnose-fonts`. Normal subcommands (including `chain` and `--dry-run`) emit a fixed-schema report listing per-file status (`written` / `planned` / `skipped` / `failed`), output path, encoding, warnings, and related fields; stderr can still print human-readable diagnostics. `diagnose-fonts --json` emits the diagnostic report directly; `refresh-fonts` reports status on stderr rather than `--json`.
 >
 > 启用 `--diagnose` 时，即使常规文本输出采用默认的 summary 模式，JSON 也会额外包含完整的 `diagnostics` 对象。未启用 `--diagnose` 时，常规 JSON schema 保持不变。
 >
@@ -338,9 +342,9 @@ ssahdrify-cli licenses       --help
 
 ### 诊断输出 | Diagnostics
 
-`hdr` / `shift` / `embed` / `rename` 支持 `--diagnose[=summary|full]`。`--diagnose` 与 `--diagnose=summary` 等价，会在命令完成后附加简要诊断；`--diagnose=full` 会列出逐文件细节，`embed` 还会列出字体解析层级（本次传入的字体来源、持久化缓存、系统字体）和缓存状态。`chain` 与 `refresh-fonts` 不支持 `--diagnose`，传入会报错而不是静默忽略。
+`hdr` / `shift` / `embed` / `rename` / `style-edit` 支持 `--diagnose[=summary|full]`。`--diagnose` 与 `--diagnose=summary` 等价，会在命令完成后附加简要诊断；`--diagnose=full` 会列出逐文件细节，`embed` 还会列出字体解析层级（本次传入的字体来源、持久化缓存、系统字体）和缓存状态。`chain` 与 `refresh-fonts` 不支持 `--diagnose`，传入会报错而不是静默忽略。
 
-`hdr` / `shift` / `embed` / `rename` support `--diagnose[=summary|full]`. `--diagnose` and `--diagnose=summary` are equivalent and attach compact diagnostics after the command finishes; `--diagnose=full` lists per-file details, and `embed` also lists font-resolution tiers (font sources passed for this run, persistent cache, system fonts) plus cache status. `chain` and `refresh-fonts` do not support `--diagnose`; passing it returns an error instead of being silently ignored.
+`hdr` / `shift` / `embed` / `rename` / `style-edit` support `--diagnose[=summary|full]`. `--diagnose` and `--diagnose=summary` are equivalent and attach compact diagnostics after the command finishes; `--diagnose=full` lists per-file details, and `embed` also lists font-resolution tiers (font sources passed for this run, persistent cache, system fonts) plus cache status. `chain` and `refresh-fonts` do not support `--diagnose`; passing it returns an error instead of being silently ignored.
 
 `diagnose-fonts` 是独立的详细诊断命令，默认输出 verbose 报告，而且只读：不写输出字幕、不刷新或修改字体缓存。它接受字幕输入和字体解析选项：`--font-dir`、`--recursive-font-dir`、`--font-file`、`--no-system-fonts`、`--no-cache`、`--cache-file`、`--lang`、`--json`。需要确认字体文件是否真的能被子集化时，可显式加入 `--subset-check`；该检查只在内存中运行，不写出字幕。
 
@@ -648,7 +652,7 @@ Before installing dependencies, run `node scripts/check-npm-install.mjs` directl
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │  Shared TypeScript modules                                                   │
 │  - GUI: HDR, Shift, Embed, Rename, and Style Edit                            │
-│  - CLI: HDR, Shift, Embed, and Rename (Style Edit is GUI-only)               │
+│  - CLI: HDR, Shift, Embed, Rename, Style Edit, and Chain                     │
 │  - Color.js (PQ/HLG color math), ass-compiler (font collection)              │
 │  - Custom subtitle parser, fan-sub regex pairing engine                      │
 └──────────────┬───────────────────────────────────────┬───────────────────────┘

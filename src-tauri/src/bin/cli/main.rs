@@ -19,6 +19,7 @@ mod cmd_embed;
 mod cmd_font_cache;
 mod cmd_hdr_shift;
 mod cmd_rename;
+mod cmd_style_edit;
 mod engine;
 mod io_support;
 mod report;
@@ -39,6 +40,8 @@ pub(crate) use cmd_font_cache::*;
 pub(crate) use cmd_hdr_shift::*;
 #[allow(unused_imports)]
 pub(crate) use cmd_rename::*;
+#[allow(unused_imports)]
+pub(crate) use cmd_style_edit::*;
 #[allow(unused_imports)]
 pub(crate) use io_support::*;
 #[allow(unused_imports)]
@@ -138,6 +141,10 @@ fn run() -> Result<ExitCode, String> {
         Command::Rename(args) => {
             emit_inert_cache_flags_notice(&globals, "rename");
             run_rename(&globals, args.args, args.diagnose.mode())
+        }
+        Command::StyleEdit(args) => {
+            emit_inert_cache_flags_notice(&globals, "style-edit");
+            run_style_edit(&globals, args.args, args.diagnose.mode())
         }
         Command::DiagnoseFonts(args) => run_diagnose_fonts(&globals, args),
         Command::Chain(args) => run_chain(&globals, args),
