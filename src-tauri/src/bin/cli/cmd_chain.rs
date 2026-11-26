@@ -34,9 +34,8 @@ pub(super) fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<Exit
     // dry-run hint, NO interactive prompt (preserves the no-prompt
     // principle in `命令设计 § Cross-cutting 行为`). Users wanting
     // safety run with --dry-run; users wanting a different name
-    // pass --output-template. --quiet suppresses (consistent with
-    // every other informational stderr line in the CLI).
-    if !user_supplied_template && !globals.quiet {
+    // pass --output-template. --quiet and --json suppress chatter.
+    if !user_supplied_template && !globals.quiet && !globals.json {
         let tmpl = &plan.output_template;
         eprintln!(
             "{}",
@@ -86,7 +85,7 @@ pub(super) fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<Exit
     } else {
         if !globals.no_cache {
             validate_cache_file_arg(globals)?;
-        } else if globals.dry_run && !globals.quiet {
+        } else if globals.dry_run && !globals.quiet && !globals.json {
             eprintln!(
                 "{}",
                 localize(
@@ -99,25 +98,10 @@ pub(super) fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<Exit
         }
     }
 
-    // chain v1 doesn't implement the --json output shape
-    // that hdr / shift / embed / rename support; reporting loop below
-    // emits the plain-text ✓ / ⊘ / ✗ summary regardless of globals.json.
-    // Surface this explicitly per the no-silent-action principle —
-    // a user piping `chain --json | jq` would otherwise see plain
-    // text and silently get parse errors. Same shape as the
-    // --no-cache informational line above.
-    if globals.json && !globals.quiet {
-        eprintln!(
-            "{}",
-            localize(
-                globals,
-                "ℹ chain v1 does not implement --json output; reporting in plain text.".to_string(),
-                "ℹ chain v1 不支持 --json 输出，按纯文本报告。".to_string(),
-            )
-        );
-    }
-
     if globals.dry_run {
+        if globals.json {
+            return emit_chain_dry_run_json(&plan, globals);
+        }
         emit_chain_dry_run(&plan, globals)?;
         return Ok(ExitCode::SUCCESS);
     }
@@ -158,36 +142,21 @@ pub(super) fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<Exit
     let cache = prepared_cache.as_ref().and_then(|p| p.cache.as_ref());
 
     let mut engine = engine::CliEngine::new()?;
+    let mut report = CommandReport::new("chain");
     let mut written = 0usize;
     let mut failed = 0usize;
     let mut skipped = 0usize;
     let mut written_with_warnings = 0usize;
     let mut written_warning_count = 0usize;
-    // First-input-wins dedup, mirroring run_hdr / run_shift / run_embed
-    // . Without this, `chain hdr ... cat.ass cat.ass`
-    // runs the chain twice and `--overwrite=true` silently clobbers
-    // the first output. Chain prediction is best-effort (None on
-    // path shapes V8 will reject), but the common case of repeated
-    // input → repeated predicted output catches the user-error class
-    // the other subcommands surface as "duplicate output path in
-    // planned batch".
-    //
-    // Set size is transitively bounded by the Windows command-line limit.
-    // One entry per `plan.input_files`
-    // element, each a path string from clap argv parsing — same
-    // transitive bound that run_hdr / run_shift / run_embed rely on,
-    // so no chain-local cap is added.
     let mut seen_outputs: HashSet<String> = HashSet::new();
     let selected_inputs = selected_input_keys(&plan.input_files);
-    // Named `chain_aborted` instead of the CommandReport field name
-    // `aborted_by_fail_fast` so the chain-local flag and the per-
-    // CommandReport struct field don't collide on grep.
-    // Chain has no CommandReport (its summary path is bespoke); the two
-    // never appear in the same scope but reusing the identifier made
-    // "where does this flag flow" harder to answer at a glance.
     let mut chain_aborted = false;
     for (idx, input) in plan.input_files.iter().enumerate() {
         let mut failed_this_input = false;
+        let input_report = absolute_path(input)
+            .as_deref()
+            .map(display_path)
+            .unwrap_or_else(|_| input.to_string_lossy().into_owned());
         match process_one_chain_input(
             &mut engine,
             &plan,
@@ -198,42 +167,75 @@ pub(super) fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<Exit
             &mut seen_outputs,
             &selected_inputs,
         ) {
-            ChainFileOutcome::Written(out, warnings) => {
+            ChainFileOutcome::Written {
+                output_path: out,
+                encoding,
+                warnings,
+            } => {
                 if !warnings.is_empty() {
                     written_with_warnings += 1;
                 }
                 written_warning_count += warnings.len();
-                if !globals.quiet {
-                    // `input` / `out` are raw PathBufs from clap
-                    // argv + Rust shell output resolution. Sanitize
-                    // before terminal interpolation.
+                if !globals.json && !globals.quiet {
                     let input_disp = sanitize_for_display(&input.to_string_lossy());
                     let out_disp = sanitize_for_display(&out.to_string_lossy());
                     println!("✓ {input_disp} → {out_disp}");
                     emit_chain_warnings(globals, &warnings);
                 }
+                report.push(FileReport {
+                    input: input_report,
+                    output: Some(display_path(&out)),
+                    encoding,
+                    status: FileStatus::Written,
+                    error: None,
+                    warnings: (!warnings.is_empty()).then_some(warnings),
+                });
                 written += 1;
             }
-            ChainFileOutcome::Skipped(reason, warnings) => {
-                if !globals.quiet {
+            ChainFileOutcome::Skipped {
+                output_path,
+                encoding,
+                reason,
+                warnings,
+            } => {
+                if !globals.json && !globals.quiet {
                     let input_disp = sanitize_for_display(&input.to_string_lossy());
                     let reason_disp = sanitize_for_display(&reason);
                     println!("⊘ {input_disp}: {reason_disp}");
                     emit_chain_warnings(globals, &warnings);
                 }
+                report.push(FileReport {
+                    input: input_report,
+                    output: output_path.as_deref().map(display_path),
+                    encoding,
+                    status: FileStatus::Skipped,
+                    error: Some(reason),
+                    warnings: (!warnings.is_empty()).then_some(warnings),
+                });
                 skipped += 1;
             }
-            ChainFileOutcome::Failed(err, warnings) => {
-                let input_disp = sanitize_for_display(&input.to_string_lossy());
-                let err_disp = sanitize_for_display(&err);
-                eprintln!("✗ {input_disp}: {err_disp}");
-                // Error line surfaces unconditionally (matches
-                // emit_file_report); warnings respect --quiet because
-                // they're informational and the user explicitly silenced
-                // output (errors are the only exception to that rule).
-                if !globals.quiet {
-                    emit_chain_warnings(globals, &warnings);
+            ChainFileOutcome::Failed {
+                output_path,
+                encoding,
+                error: err,
+                warnings,
+            } => {
+                if !globals.json {
+                    let input_disp = sanitize_for_display(&input.to_string_lossy());
+                    let err_disp = sanitize_for_display(&err);
+                    eprintln!("✗ {input_disp}: {err_disp}");
+                    if !globals.quiet {
+                        emit_chain_warnings(globals, &warnings);
+                    }
                 }
+                report.push(FileReport {
+                    input: input_report,
+                    output: output_path.as_deref().map(display_path),
+                    encoding,
+                    status: FileStatus::Failed,
+                    error: Some(err),
+                    warnings: (!warnings.is_empty()).then_some(warnings),
+                });
                 failed += 1;
                 failed_this_input = true;
             }
@@ -241,14 +243,14 @@ pub(super) fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<Exit
         if globals.fail_fast && failed_this_input {
             let remaining = plan.input_files.len().saturating_sub(idx + 1);
             emit_fail_fast_abort_notice(globals, remaining);
+            report.mark_fail_fast_abort();
             chain_aborted = true;
             break;
         }
     }
-    if !globals.quiet {
-        // chain Summary line + fail-fast suffix go through `localize`,
-        // for sibling-parity with the refresh-fonts sweep and the
-        // standalone subcommands' `emit_report_summary`.
+    if globals.json {
+        emit_report_summary(globals, &report)?;
+    } else if !globals.quiet {
         let warning_suffix_en = if written_with_warnings > 0 {
             format!(
                 ", {written_with_warnings} written with warnings / incomplete ({written_warning_count} warning(s))"
@@ -286,57 +288,50 @@ pub(super) fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<Exit
         };
         println!("{summary}");
     }
-    // partial-failure (1) vs complete-failure (2) exit-code split,
-    // matching `CommandReport::exit_code`'s semantics for HDR / Shift
-    // / Embed / Rename. A flat exit code 1 for any
-    // failure would prevent CI / pipeline scripts from distinguishing
-    // "everything failed" (likely config / argv mistake) from "some
-    // files failed" (likely per-file content issue).
-    let exit_code = if failed == 0 {
-        ExitCode::SUCCESS
-    } else if (written + skipped) > 0 {
-        ExitCode::from(1)
-    } else {
-        ExitCode::from(2)
-    };
-    Ok(exit_code)
+    Ok(report.exit_code())
 }
 
 pub(super) enum ChainFileOutcome {
-    /// Written(output_path, warnings) — warnings are non-fatal
-    /// diagnostics propagated from the embed pre-resolution path
-    /// (missing fonts, subset failures) so chain output matches
-    /// standalone embed's `FileReport.warnings` semantics.
-    Written(PathBuf, Vec<String>),
-    /// Skipped / Failed also carry warnings so post-V8 early-return
-    /// paths don't silently lose embed pre-resolution + oversized-
-    /// skipped diagnostics. Without the warnings field, a chain whose
-    /// V8 step skipped oversized captions AND then took the post-V8
-    /// `output_path.exists()` Skipped branch (or any post-V8 Failed
-    /// branch) would emit only the status line, the `⚠ ...` warnings
-    /// dropped. Empty vec at sites that fire before warnings accumulate
-    /// is intentional — uniform call shape, costless move.
-    Skipped(String, Vec<String>),
-    Failed(String, Vec<String>),
+    Written {
+        output_path: PathBuf,
+        encoding: Option<String>,
+        warnings: Vec<String>,
+    },
+    Skipped {
+        output_path: Option<PathBuf>,
+        encoding: Option<String>,
+        reason: String,
+        warnings: Vec<String>,
+    },
+    Failed {
+        output_path: Option<PathBuf>,
+        encoding: Option<String>,
+        error: String,
+        warnings: Vec<String>,
+    },
 }
 
-/// single funnel for `ChainFileOutcome` construction within
-/// `process_one_chain_input`. Owns the `warnings: Vec<String>` vec
-/// accumulated across the 11 early-return sites; each `into_*` method
-/// consumes the builder by move, so the compiler enforces single-use
-/// and a future early-return site cannot accidentally substitute
-/// `Vec::new()` in the warnings slot. Eviction of stale
-/// `seen_outputs` keys stays at the call site — this builder owns
-/// warnings, not the dedup-set membership.
 pub(super) struct ChainOutcomeBuilder {
     pub(super) warnings: Vec<String>,
+    pub(super) output_path: Option<PathBuf>,
+    pub(super) encoding: Option<String>,
 }
 
 impl ChainOutcomeBuilder {
     pub(super) fn new() -> Self {
         Self {
             warnings: Vec::new(),
+            output_path: None,
+            encoding: None,
         }
+    }
+
+    pub(super) fn set_output_path(&mut self, output_path: PathBuf) {
+        self.output_path = Some(output_path);
+    }
+
+    pub(super) fn set_encoding(&mut self, encoding: String) {
+        self.encoding = Some(encoding);
     }
 
     pub(super) fn extend_warnings<I: IntoIterator<Item = String>>(&mut self, iter: I) {
@@ -344,15 +339,29 @@ impl ChainOutcomeBuilder {
     }
 
     pub(super) fn into_failed(self, err: String) -> ChainFileOutcome {
-        ChainFileOutcome::Failed(err, self.warnings)
+        ChainFileOutcome::Failed {
+            output_path: self.output_path,
+            encoding: self.encoding,
+            error: err,
+            warnings: self.warnings,
+        }
     }
 
     pub(super) fn into_skipped(self, reason: String) -> ChainFileOutcome {
-        ChainFileOutcome::Skipped(reason, self.warnings)
+        ChainFileOutcome::Skipped {
+            output_path: self.output_path,
+            encoding: self.encoding,
+            reason,
+            warnings: self.warnings,
+        }
     }
 
     pub(super) fn into_written(self, output_path: PathBuf) -> ChainFileOutcome {
-        ChainFileOutcome::Written(output_path, self.warnings)
+        ChainFileOutcome::Written {
+            output_path,
+            encoding: self.encoding,
+            warnings: self.warnings,
+        }
     }
 }
 
@@ -738,6 +747,7 @@ pub(super) fn process_one_chain_input(
         &plan.output_template,
         globals.output_dir.as_deref(),
     ) {
+        builder.set_output_path(predicted.clone());
         let key = normalize_output_key(&predicted);
         let input_key = normalize_output_key(&input_abs);
         if key == input_key {
@@ -821,6 +831,7 @@ pub(super) fn process_one_chain_input(
             return builder.into_failed(err);
         }
     };
+    builder.set_encoding(read_result.encoding.clone());
     if let Some(warnings) = format_decode_warnings(globals, &read_result) {
         builder.extend_warnings(warnings);
     }
@@ -934,6 +945,7 @@ pub(super) fn process_one_chain_input(
             return builder.into_failed(err);
         }
     };
+    builder.set_output_path(output_path.clone());
 
     // Post-V8 dedup reconcile. If the actual output path differs from
     // the prediction, REMOVE the stale predicted_key from seen_outputs
@@ -1023,20 +1035,108 @@ pub(super) fn process_one_chain_input(
         return builder.into_failed(err);
     }
 
-    if globals.verbose {
+    if globals.verbose && !globals.json && !globals.quiet {
         for note in &result.notes {
-            // Today's chain-runtime.ts produces notes from static
-            // strings + numeric counts (safe). Sanitizing here defends
-            // a future note-source addition that might include parsed
-            // ASS content from bypassing laundering invisibly. The
-            // sibling Written outcome's ✓-line already sanitizes
-            // input/out, so this completes the print-site coverage.
             let n_disp = sanitize_for_display(note);
             println!("  {n_disp}");
         }
     }
 
     builder.into_written(output_path)
+}
+
+pub(super) fn emit_chain_dry_run_json(
+    plan: &chain::ChainPlan,
+    globals: &GlobalOptions,
+) -> Result<ExitCode, String> {
+    let selected_inputs = selected_input_keys(&plan.input_files);
+    for input in &plan.input_files {
+        if let Ok(absolute) = absolute_path(input) {
+            if let Some(predicted) =
+                predict_chain_output_path(&absolute, &plan.output_template, None)
+            {
+                let output = relocate_output_path(
+                    &predicted.to_string_lossy(),
+                    globals.output_dir.as_deref(),
+                )?;
+                if output_matches_selected_input(&output, &selected_inputs) {
+                    return Err("output path matches a selected input file; choose a different --output-template or --output-dir".to_string());
+                }
+            }
+        }
+    }
+
+    let mut report = CommandReport::new("chain");
+    let mut seen_outputs: HashSet<String> = HashSet::new();
+    for (idx, input) in plan.input_files.iter().enumerate() {
+        let result = match absolute_path(input) {
+            Ok(abs) => {
+                if let Some(out_path) = predict_chain_output_path(
+                    &abs,
+                    &plan.output_template,
+                    globals.output_dir.as_deref(),
+                ) {
+                    let out_disp = display_path(&out_path);
+                    let key = normalize_output_key(&out_path);
+                    let input_key = normalize_output_key(&abs);
+                    if key == input_key {
+                        failed_report(
+                            &abs,
+                            Some(out_disp),
+                            None,
+                            format!(
+                                "refusing self-overwrite: predicted output path {} is the input file; choose a different --output-template or --output-dir",
+                                out_path.display()
+                            ),
+                        )
+                    } else if output_matches_selected_input(&out_path, &selected_inputs) {
+                        failed_report(
+                            &abs,
+                            Some(out_disp),
+                            None,
+                            "output path matches a selected input file; choose a different --output-template or --output-dir".to_string(),
+                        )
+                    } else if !seen_outputs.insert(key.clone()) {
+                        failed_report(
+                            &abs,
+                            Some(out_disp),
+                            None,
+                            format!(
+                                "{} duplicate output path in planned batch",
+                                out_path.display()
+                            ),
+                        )
+                    } else if !globals.overwrite && output_path_exists(globals, &out_path) {
+                        seen_outputs.remove(&key);
+                        skipped_report(
+                            &abs,
+                            Some(out_disp),
+                            None,
+                            format!(
+                                "{} already exists (use --overwrite to replace)",
+                                out_path.display()
+                            ),
+                        )
+                    } else {
+                        planned_report(&abs, Some(out_disp), None)
+                    }
+                } else {
+                    planned_report(&abs, None, None)
+                }
+            }
+            Err(err) => failed_report(input, None, None, err),
+        };
+        let failed = result.status == FileStatus::Failed;
+        report.push(result);
+        if globals.fail_fast && failed {
+            report.mark_fail_fast_abort();
+            let _ = idx;
+            break;
+        }
+    }
+
+    emit_report_summary(globals, &report)?;
+    Ok(report.exit_code())
 }
 
 pub(super) fn emit_chain_dry_run(

@@ -125,7 +125,15 @@ pub(super) struct OutputReservation<'a> {
     keep: bool,
 }
 
-impl OutputReservation<'_> {
+impl<'a> OutputReservation<'a> {
+    pub(super) fn new(seen_outputs: &'a mut HashSet<String>, key: String) -> Self {
+        Self {
+            seen_outputs,
+            key,
+            keep: false,
+        }
+    }
+
     pub(super) fn keep(&mut self) {
         self.keep = true;
     }

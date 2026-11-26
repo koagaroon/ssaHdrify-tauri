@@ -225,6 +225,49 @@ pub struct FontEmbedApplyResult {
     pub embedded_count: usize,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StyleEditOperationsRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_family: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_family: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_size: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StyleEditOperationsAck {
+    pub valid: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StyleEditPathRequest {
+    pub input_path: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StyleEditCliRequest {
+    pub input_path: String,
+    pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_family: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_family: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_size: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StyleEditCliResult {
+    pub content: String,
+    pub changed_style_count: usize,
+}
+
 /// Result returned from the TS-side `runChain`. Single source of
 /// truth for the chain output: `content` is what gets written,
 /// `output_path` is where, `notes` is the per-step diagnostic
@@ -331,7 +374,10 @@ impl CliEngine {
                  typeof globalThis.ssaHdrifyCliEngine.runChain === 'function' && \
                  typeof globalThis.ssaHdrifyCliEngine.resolveHdrOutputPath === 'function' && \
                  typeof globalThis.ssaHdrifyCliEngine.resolveShiftOutputPath === 'function' && \
-                 typeof globalThis.ssaHdrifyCliEngine.resolveEmbedOutputPath === 'function'",
+                 typeof globalThis.ssaHdrifyCliEngine.resolveEmbedOutputPath === 'function' && \
+                 typeof globalThis.ssaHdrifyCliEngine.validateStyleEditCliOperations === 'function' && \
+                 typeof globalThis.ssaHdrifyCliEngine.resolveStyleEditOutputPath === 'function' && \
+                 typeof globalThis.ssaHdrifyCliEngine.applyCliStyleEdit === 'function'",
             )
             .map_err(|err| format!("failed to probe CLI engine global: {err}"))?;
         let probe_ok = {
@@ -481,6 +527,49 @@ impl CliEngine {
             "runChain",
             "ssahdrify-cli-run-chain.js",
             "Chain",
+            "execution",
+            request,
+        )
+    }
+
+    pub fn validate_style_edit_operations(
+        &mut self,
+        request: &StyleEditOperationsRequest,
+    ) -> Result<(), String> {
+        let ack: StyleEditOperationsAck = self.call_engine(
+            "validateStyleEditCliOperations",
+            "ssahdrify-cli-validate-style-edit-ops.js",
+            "Style Edit",
+            "validation",
+            request,
+        )?;
+        if !ack.valid {
+            return Err("Style Edit operation validation did not pass".to_string());
+        }
+        Ok(())
+    }
+
+    pub fn resolve_style_edit_output_path(
+        &mut self,
+        request: &StyleEditPathRequest,
+    ) -> Result<String, String> {
+        self.call_engine(
+            "resolveStyleEditOutputPath",
+            "ssahdrify-cli-resolve-style-edit-output-path.js",
+            "Style Edit",
+            "path resolution",
+            request,
+        )
+    }
+
+    pub fn apply_style_edit(
+        &mut self,
+        request: &StyleEditCliRequest,
+    ) -> Result<StyleEditCliResult, String> {
+        self.call_engine(
+            "applyCliStyleEdit",
+            "ssahdrify-cli-apply-style-edit.js",
+            "Style Edit",
             "execution",
             request,
         )

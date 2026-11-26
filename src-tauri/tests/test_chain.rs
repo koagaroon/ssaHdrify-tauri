@@ -959,3 +959,96 @@ fn chain_rejects_unknown_template_before_engine() {
 
     let _ = fs::remove_dir_all(dir);
 }
+
+#[test]
+fn chain_json_emits_valid_command_report_for_written_skipped_and_failed() {
+    if let Some(reason) = engine_bundle_missing() {
+        panic!("engine bundle missing — run `npm run build:engine` first ({reason})");
+    }
+
+    let dir = temp_dir("chain_json_report");
+    let to_write = write_fixture(&dir, "ep1.ass");
+    let to_skip = write_fixture(&dir, "ep2.ass");
+    fs::write(dir.join("ep2.hdr.shifted.ass"), "PRE_EXISTING").unwrap();
+    let missing = dir.join("missing.ass");
+
+    let output = Command::new(cli_path())
+        .args([
+            "--lang",
+            "en",
+            "--json",
+            "--verbose",
+            "chain",
+            "hdr",
+            "--eotf",
+            "pq",
+            "+",
+            "shift",
+            "--offset",
+            "+1s",
+        ])
+        .arg(&to_write)
+        .arg(&to_skip)
+        .arg(&missing)
+        .output()
+        .expect("failed to execute chain --json");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "partial failure should return exit code 1: stdout={}, stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .expect("chain --json --verbose stdout must be pure valid JSON");
+    assert_eq!(report["command"], "chain");
+    assert_eq!(report["written"], 1);
+    assert_eq!(report["planned"], 0);
+    assert_eq!(report["skipped"], 1);
+    assert_eq!(report["failed"], 1);
+    assert_eq!(report["results"][0]["status"], "written");
+    assert_eq!(report["results"][0]["encoding"], "UTF-8");
+    assert_eq!(report["results"][1]["status"], "skipped");
+    assert_eq!(report["results"][2]["status"], "failed");
+    assert!(dir.join("ep1.hdr.shifted.ass").exists());
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn chain_dry_run_json_emits_planned_command_report_without_writing() {
+    let dir = temp_dir("chain_dry_run_json");
+    let input = write_fixture(&dir, "ep1.ass");
+
+    let output = Command::new(cli_path())
+        .args([
+            "--lang",
+            "en",
+            "--json",
+            "--dry-run",
+            "chain",
+            "hdr",
+            "--eotf",
+            "pq",
+            "+",
+            "shift",
+            "--offset",
+            "+2s",
+        ])
+        .arg(&input)
+        .output()
+        .expect("failed to execute chain --dry-run --json");
+
+    assert!(output.status.success());
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("chain --dry-run --json must be pure JSON");
+    assert_eq!(report["command"], "chain");
+    assert_eq!(report["written"], 0);
+    assert_eq!(report["planned"], 1);
+    assert_eq!(report["results"][0]["status"], "planned");
+    assert!(!dir.join("ep1.hdr.shifted.ass").exists());
+
+    let _ = fs::remove_dir_all(dir);
+}

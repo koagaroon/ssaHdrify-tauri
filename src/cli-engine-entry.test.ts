@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  applyCliStyleEdit,
   applyFontEmbed,
   convertHdr,
   convertShift,
   parseTimingMap,
   planFontEmbed,
   planRename,
+  resolveStyleEditOutputPath,
+  validateStyleEditCliOperations,
 } from "./cli-engine-entry";
 
 const SIMPLE_ASS = `[Script Info]
@@ -708,5 +711,42 @@ abc==
     expect(result.embeddedCount).toBe(1);
     expect(result.content).toContain("fontname: arial.ttf");
     expect(result.content).not.toContain("fontname: stale.ttf");
+  });
+});
+
+describe("CLI Style Edit entry", () => {
+  it("validates operations, derives .styled sibling path, and updates Style: rows", () => {
+    expect(
+      validateStyleEditCliOperations({
+        fontFamily: "LXGW WenKai",
+        sourceFamily: "arial",
+        fontSize: "52.5",
+      })
+    ).toEqual({ valid: true });
+
+    expect(resolveStyleEditOutputPath({ inputPath: "C:\\subs\\ep01.ass" })).toBe(
+      "C:\\subs\\ep01.styled.ass"
+    );
+
+    const applied = applyCliStyleEdit({
+      inputPath: "C:\\subs\\ep01.ass",
+      content: SIMPLE_ASS,
+      fontFamily: "LXGW WenKai",
+      fontSize: "52.5",
+    });
+
+    expect(applied.outputPath).toBe("C:\\subs\\ep01.styled.ass");
+    expect(applied.changedStyleCount).toBe(1);
+    expect(applied.changedFieldCount).toBe(2);
+    expect(applied.content).toContain("Style: Default,LXGW WenKai,52.5,0,0");
+  });
+
+  it("rejects missing or invalid style edit parameters and non-ASS extensions", () => {
+    expect(() => validateStyleEditCliOperations({})).toThrow(/at least one/);
+    expect(() => validateStyleEditCliOperations({ fontFamily: "Bad,Name" })).toThrow(/comma/);
+    expect(() => validateStyleEditCliOperations({ fontSize: "250" })).toThrow(/between 1 and 200/);
+    expect(() => resolveStyleEditOutputPath({ inputPath: "C:\\subs\\ep01.srt" })).toThrow(
+      /\.ass or \.ssa/
+    );
   });
 });

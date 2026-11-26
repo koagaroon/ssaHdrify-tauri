@@ -149,6 +149,10 @@ pub(super) enum Command {
     /// Pair subtitles with videos and rename subtitles to match. 配对视频和字幕，按视频名重命名字幕。
     Rename(RenameCommandArgs),
 
+    /// Batch-edit ASS/SSA Style: font family and/or font size into new .styled.ass/.ssa sibling files.
+    /// 批量修改 ASS/SSA 的 Style: 行字体族与/或字号，并输出为同目录下的 .styled.ass/.ssa 新文件。
+    StyleEdit(StyleEditCommandArgs),
+
     /// Diagnose ASS/SSA font resolution without writing subtitle files.
     /// 诊断 ASS/SSA 字体解析，不写出字幕文件。
     DiagnoseFonts(DiagnoseFontsArgs),
@@ -444,6 +448,45 @@ impl RenameMode {
     pub(super) fn is_copy(self) -> bool {
         matches!(self, RenameMode::CopyToVideo | RenameMode::CopyToChosen)
     }
+}
+
+#[derive(Args, Debug)]
+#[command(group(
+    clap::ArgGroup::new("style_operation")
+        .args(["font_family", "font_size"])
+        .required(true)
+        .multiple(true)
+))]
+pub(super) struct StyleEditArgs {
+    /// Target font family name for ASS/SSA `Style:` rows. 要写入 ASS/SSA `Style:` 行的目标字体族名称。
+    #[arg(long = "font-family", value_name = "FAMILY")]
+    pub(super) font_family: Option<String>,
+
+    /// Optional existing font family filter (case-insensitive); requires `--font-family`.
+    /// 可选的原字体族过滤条件（不区分大小写）；需搭配 `--font-family` 使用。
+    #[arg(
+        long = "source-family",
+        value_name = "FAMILY",
+        requires = "font_family"
+    )]
+    pub(super) source_family: Option<String>,
+
+    /// Target font size (`1`–`200`, supports decimals such as `52.5`) for ASS/SSA `Style:` rows.
+    /// 要写入 ASS/SSA `Style:` 行的目标字号（`1`–`200`，支持如 `52.5` 的小数）。
+    #[arg(long = "font-size", value_name = "SIZE")]
+    pub(super) font_size: Option<String>,
+
+    /// ASS/SSA subtitle files to edit (`*.ass` / `*.ssa`). 要编辑的 ASS/SSA 字幕文件。
+    #[arg(required = true)]
+    pub(super) files: Vec<PathBuf>,
+}
+
+#[derive(Args, Debug)]
+pub(super) struct StyleEditCommandArgs {
+    #[command(flatten)]
+    pub(super) args: StyleEditArgs,
+    #[command(flatten)]
+    pub(super) diagnose: DiagnoseOptions,
 }
 
 #[derive(Args, Debug)]
