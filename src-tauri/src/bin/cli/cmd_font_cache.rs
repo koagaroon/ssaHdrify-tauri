@@ -693,7 +693,7 @@ pub(super) fn prepare_font_cache_for_resolution(
 /// `Some(cache)` if usable for this run, or `None` to fall back to
 /// no-cache mode.
 ///
-/// `read_only` is true for `diagnose-fonts`, which must inspect an
+/// `read_only` is true for `diagnose-fonts` and `chain`, which inspect an
 /// existing cache without creating schema or changing SQLite journal
 /// mode. `embed` uses the normal opener, matching the historical cache
 /// behavior. Cache content writes remain exclusive to `refresh-fonts`.

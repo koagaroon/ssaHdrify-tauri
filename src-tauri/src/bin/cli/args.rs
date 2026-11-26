@@ -61,7 +61,8 @@ pub(super) struct GlobalOptions {
     /// is `%APPDATA%/ssahdrify/cli_font_cache.sqlite3`. Useful for testing or
     /// non-default layouts. 覆盖字体缓存文件路径。
     // Global for the same shared-parser reason as no_cache. Cache-aware
-    // commands validate the path before opening it; chain reports it as inert.
+    // commands (including chain with an embed step) validate the path before
+    // opening it; non-embed commands and non-embed chains report it as inert.
     #[arg(long, global = true, value_name = "PATH")]
     pub(super) cache_file: Option<PathBuf>,
 
@@ -177,8 +178,12 @@ pub(super) enum Command {
     /// Step separator is `+`. The chain-global `--output-dir` and
     /// `--output-template` apply at the terminal step only; passing
     /// `--output-template` inside any step segment is a parse-time error.
+    /// When an `embed` step is present, the persistent font cache is consulted
+    /// in read-only mode (honoring `--no-cache` and `--cache-file`).
     /// 步骤分隔符为 `+`。链全局 `--output-dir` 与 `--output-template` 仅
     /// 在终端步骤应用；将 `--output-template` 放在步骤内部为 parse-time 错误。
+    /// 当包含 `embed` 步骤时，将以只读方式读取持久化字体缓存（遵循 `--no-cache`
+    /// 与 `--cache-file`）。
     ///
     /// Example / 示例:
     ///   ssahdrify-cli chain hdr --eotf pq + shift --offset +2s + embed --font-dir ./fonts cat.ass

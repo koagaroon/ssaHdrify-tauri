@@ -57,40 +57,46 @@ pub(super) fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<Exit
     }
 
     let embed_step_index = find_embed_step_index(&plan);
-    // Inform user when --no-cache is meaningless in chain — chain v1
-    // doesn't consult the persistent cache regardless of step
-    // composition (`resolve_chain_embed_subsets` always passes None per
-    // the locked design; non-embed chains never reach a cache-aware
-    // path either). Without this, --no-cache looks silently ignored.
-    // Mirror prepare_embed_cache's posture: stderr informational line,
-    // gated on --quiet. Hoisted ABOVE the dry-run early-return so
-    // `--dry-run --no-cache` users also see the diagnostic.
-    //
-    // dropped the `embed_step_index.is_some()`
-    // gate. Chain v1 never consults the cache at ALL — gating only on
-    // embed presence meant `chain hdr ... --no-cache cat.ass` silently
-    // ignored the flag, violating no-silent-action. Surfacing the info
-    // line whenever --no-cache is set in chain keeps the signal
-    // consistent across step compositions.
-    if globals.no_cache && !globals.quiet {
-        eprintln!(
-            "{}",
-            localize(
-                globals,
-                "ℹ --no-cache has no effect in chain mode; chain v1 doesn't use the persistent cache.".to_string(),
-                "ℹ chain 模式下 --no-cache 不生效；chain v1 不读取持久缓存。".to_string(),
-            )
-        );
-    }
-    if globals.cache_file.is_some() && !globals.quiet {
-        eprintln!(
-            "{}",
-            localize(
-                globals,
-                "ℹ --cache-file has no effect in chain mode; chain v1 doesn't use the persistent cache.".to_string(),
-                "ℹ chain 模式下 --cache-file 不生效；chain v1 不读取持久缓存。".to_string(),
-            )
-        );
+    // Non-embed chains never reach font resolution, so --no-cache and
+    // --cache-file have no effect there; surface that explicitly per
+    // no-silent-action. When an embed step IS present, validate --cache-file
+    // upfront (including under --dry-run) and consult the persistent font
+    // cache in read-only mode below.
+    if embed_step_index.is_none() {
+        if globals.no_cache && !globals.quiet {
+            eprintln!(
+                "{}",
+                localize(
+                    globals,
+                    "ℹ --no-cache has no effect when chain has no embed step.".to_string(),
+                    "ℹ 当 chain 不包含 embed 步骤时，--no-cache 不生效。".to_string(),
+                )
+            );
+        }
+        if globals.cache_file.is_some() && !globals.quiet {
+            eprintln!(
+                "{}",
+                localize(
+                    globals,
+                    "ℹ --cache-file has no effect when chain has no embed step.".to_string(),
+                    "ℹ 当 chain 不包含 embed 步骤时，--cache-file 不生效。".to_string(),
+                )
+            );
+        }
+    } else {
+        if !globals.no_cache {
+            validate_cache_file_arg(globals)?;
+        } else if globals.dry_run && !globals.quiet {
+            eprintln!(
+                "{}",
+                localize(
+                    globals,
+                    "ℹ Cache disabled (--no-cache). Using explicit font sources / system fonts only."
+                        .to_string(),
+                    "ℹ 已禁用缓存（--no-cache）。仅使用显式字体源 / 系统字体。".to_string(),
+                )
+            );
+        }
     }
 
     // chain v1 doesn't implement the --json output shape
@@ -128,7 +134,7 @@ pub(super) fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<Exit
     // via the `emit_chain_dry_run` early return above before this code
     // runs, so the standalone-embed guard pattern is already satisfied
     // structurally.
-    let _font_db_guard = match embed_step_index {
+    let (_font_db_guard, prepared_cache) = match embed_step_index {
         Some(idx) => {
             let chain::ParsedStep::Embed(embed_args) = &plan.steps[idx] else {
                 // find_embed_step_index returns Some only for Embed
@@ -136,14 +142,20 @@ pub(super) fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<Exit
                 unreachable!("find_embed_step_index returned a non-Embed index");
             };
             let use_user_fonts = embed_args.has_user_font_sources();
-            if use_user_fonts {
+            let guard = if use_user_fonts {
                 Some(init_cli_font_sources(globals, embed_args)?)
             } else {
                 None
-            }
+            };
+            // Consult the persistent font cache in read-only mode so chain never
+            // creates schema or alters SQLite journal files while still reusing
+            // cached font metadata and falling back cleanly on drift.
+            let cache = prepare_font_cache_for_resolution(globals, embed_args, true, true)?;
+            (guard, Some(cache))
         }
-        None => None,
+        None => (None, None),
     };
+    let cache = prepared_cache.as_ref().and_then(|p| p.cache.as_ref());
 
     let mut engine = engine::CliEngine::new()?;
     let mut written = 0usize;
@@ -180,6 +192,7 @@ pub(super) fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<Exit
             &mut engine,
             &plan,
             embed_step_index,
+            cache,
             input,
             globals,
             &mut seen_outputs,
@@ -673,10 +686,12 @@ pub(super) fn predict_chain_output_path(
     relocate_output_path(&predicted.to_string_lossy(), output_dir).ok()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn process_one_chain_input(
     engine: &mut engine::CliEngine,
     plan: &chain::ChainPlan,
     embed_step_index: Option<usize>,
+    cache: Option<&app_lib::font_cache::FontCache>,
     input: &Path,
     globals: &GlobalOptions,
     seen_outputs: &mut HashSet<String>,
@@ -829,6 +844,7 @@ pub(super) fn process_one_chain_input(
             engine,
             globals,
             embed_args,
+            cache,
             &input_str,
             &read_result.text,
         ) {

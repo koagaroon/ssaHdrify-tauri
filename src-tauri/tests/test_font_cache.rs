@@ -665,3 +665,225 @@ fn embed_reports_drift_when_folder_mtime_changes() {
 
     let _ = fs::remove_dir_all(work);
 }
+
+fn write_fixture_ass_for_entry(
+    dir: &Path,
+    name: &str,
+    entry: &app_lib::fonts::LocalFontEntry,
+) -> PathBuf {
+    let family = entry
+        .families
+        .first()
+        .expect("copied OS font must expose at least one family name");
+    let bold_flag = if entry.bold { "-1" } else { "0" };
+    let italic_flag = if entry.italic { "-1" } else { "0" };
+    let content = FIXTURE_ASS.replace(
+        "Style: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,",
+        &format!(
+            "Style: Default,{family},20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,{bold_flag},{italic_flag},"
+        ),
+    );
+    let path = dir.join(name);
+    fs::write(&path, content).expect("failed to write custom-family fixture ASS");
+    path
+}
+
+fn first_indexed_entry(font_dir: &Path) -> app_lib::fonts::LocalFontEntry {
+    let entries =
+        app_lib::fonts::scan_directory_collecting(font_dir).expect("scan test font directory");
+    entries
+        .into_iter()
+        .find(|entry| !entry.families.is_empty())
+        .expect("copied OS font must expose at least one family name")
+}
+
+#[test]
+fn chain_embed_uses_persistent_cache_read_only() {
+    if let Some(reason) = engine_bundle_missing() {
+        panic!("engine bundle missing — run `npm run build:engine` first ({reason})");
+    }
+    let work = temp_dir("chain_cache_readonly");
+    let font_dir = make_font_dir(&work);
+    let entry = first_indexed_entry(&font_dir);
+    let cache = cache_path(&work);
+
+    let refresh = run_cli(&[
+        "--cache-file",
+        cache.to_str().unwrap(),
+        "refresh-fonts",
+        "--font-dir",
+        font_dir.to_str().unwrap(),
+    ]);
+    assert!(
+        refresh.status.success(),
+        "refresh-fonts failed: stderr={}",
+        String::from_utf8_lossy(&refresh.stderr)
+    );
+
+    let before = fs::metadata(&cache)
+        .and_then(|m| m.modified())
+        .expect("stat cache before chain");
+    thread::sleep(Duration::from_millis(2100));
+
+    let subtitle = write_fixture_ass_for_entry(&work, "ep01.ass", &entry);
+    let chain = run_cli(&[
+        "--cache-file",
+        cache.to_str().unwrap(),
+        "chain",
+        "hdr",
+        "--eotf",
+        "pq",
+        "+",
+        "embed",
+        "--no-system-fonts",
+        "--on-missing",
+        "fail",
+        subtitle.to_str().unwrap(),
+    ]);
+    let stderr = String::from_utf8_lossy(&chain.stderr);
+    assert!(
+        chain.status.success(),
+        "chain + embed should resolve font from persistent cache: stderr={stderr}"
+    );
+    let output_ass = work.join("ep01.hdr.embed.ass");
+    let written = fs::read_to_string(&output_ass).expect("read chained output ASS");
+    assert!(
+        written.contains("[Fonts]"),
+        "chained output should contain embedded [Fonts] section"
+    );
+
+    let after = fs::metadata(&cache)
+        .and_then(|m| m.modified())
+        .expect("stat cache after chain");
+    assert_eq!(
+        before, after,
+        "read-only chain cache open must not modify the cache file"
+    );
+
+    let _ = fs::remove_dir_all(work);
+}
+
+#[test]
+fn chain_embed_with_no_cache_skips_and_preserves_cache_file() {
+    if let Some(reason) = engine_bundle_missing() {
+        panic!("engine bundle missing — run `npm run build:engine` first ({reason})");
+    }
+    let work = temp_dir("chain_nocache");
+    let font_dir = make_font_dir(&work);
+    let entry = first_indexed_entry(&font_dir);
+    let cache = cache_path(&work);
+
+    let refresh = run_cli(&[
+        "--cache-file",
+        cache.to_str().unwrap(),
+        "refresh-fonts",
+        "--font-dir",
+        font_dir.to_str().unwrap(),
+    ]);
+    assert!(refresh.status.success(), "refresh-fonts failed");
+
+    let before = fs::metadata(&cache)
+        .and_then(|m| m.modified())
+        .expect("stat cache before chain --no-cache");
+    thread::sleep(Duration::from_millis(2100));
+
+    let subtitle = write_fixture_ass_for_entry(&work, "ep01.ass", &entry);
+    let chain = run_cli(&[
+        "--no-cache",
+        "--cache-file",
+        cache.to_str().unwrap(),
+        "chain",
+        "hdr",
+        "--eotf",
+        "pq",
+        "+",
+        "embed",
+        "--no-system-fonts",
+        "--on-missing",
+        "fail",
+        subtitle.to_str().unwrap(),
+    ]);
+    let stderr = String::from_utf8_lossy(&chain.stderr);
+    assert!(
+        !chain.status.success(),
+        "chain + embed with --no-cache and --no-system-fonts --on-missing fail must fail when no explicit font source is given; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("--no-cache"),
+        "stderr should report --no-cache disabled notice: {stderr}"
+    );
+
+    let after = fs::metadata(&cache)
+        .and_then(|m| m.modified())
+        .expect("stat cache after chain --no-cache");
+    assert_eq!(
+        before, after,
+        "chain --no-cache must not modify the cache file"
+    );
+
+    let _ = fs::remove_dir_all(work);
+}
+
+#[test]
+fn chain_embed_reports_drift_and_falls_back_without_mutating_cache() {
+    if let Some(reason) = engine_bundle_missing() {
+        panic!("engine bundle missing — run `npm run build:engine` first ({reason})");
+    }
+    let work = temp_dir("chain_drift");
+    let font_dir = make_font_dir(&work);
+    let cache = cache_path(&work);
+
+    let refresh = run_cli(&[
+        "--cache-file",
+        cache.to_str().unwrap(),
+        "refresh-fonts",
+        "--font-dir",
+        font_dir.to_str().unwrap(),
+    ]);
+    assert!(refresh.status.success(), "refresh-fonts failed");
+
+    thread::sleep(Duration::from_millis(2100));
+    fs::write(font_dir.join("added-after-cache.ttf"), b"")
+        .expect("failed to add placeholder font for drift");
+
+    let before_drift_run = fs::metadata(&cache)
+        .and_then(|m| m.modified())
+        .expect("stat cache before chain drift run");
+
+    let subtitle = write_fixture_ass(&work, "ep01.ass");
+    let chain = run_cli(&[
+        "--cache-file",
+        cache.to_str().unwrap(),
+        "chain",
+        "hdr",
+        "--eotf",
+        "pq",
+        "+",
+        "embed",
+        subtitle.to_str().unwrap(),
+    ]);
+    let stderr = String::from_utf8_lossy(&chain.stderr);
+    assert!(
+        stderr.contains("Cache drift detected") || stderr.contains("检测到字体缓存漂移"),
+        "expected drift warning in chain stderr, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("refresh-fonts"),
+        "chain drift fallback should suggest refresh-fonts: {stderr}"
+    );
+    assert!(
+        chain.status.success(),
+        "chain drift fallback should continue using system fonts (exit code = {:?}, stderr = {stderr})",
+        chain.status.code()
+    );
+
+    let after_drift_run = fs::metadata(&cache)
+        .and_then(|m| m.modified())
+        .expect("stat cache after chain drift run");
+    assert_eq!(
+        before_drift_run, after_drift_run,
+        "chain drift fallback must not mutate the cache file"
+    );
+
+    let _ = fs::remove_dir_all(work);
+}
