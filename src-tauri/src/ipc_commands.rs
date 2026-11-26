@@ -45,6 +45,14 @@ pub async fn read_text_detect_encoding(
 }
 
 #[tauri::command]
+pub async fn read_timing_map_file(app: tauri::AppHandle, path: String) -> Result<String, String> {
+    run_blocking_command("read_timing_map_file", move || {
+        crate::encoding::read_timing_map_file(app, path)
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn find_system_font(
     family: String,
     bold: bool,

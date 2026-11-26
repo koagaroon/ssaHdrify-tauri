@@ -1,11 +1,20 @@
+export type TimingShiftMode = "offset" | "map";
+
 export interface TimingSaveDisabledState {
   fileCount: number;
   thresholdInvalid: boolean;
   offsetInvalid: boolean;
   busy: boolean;
+  mode?: TimingShiftMode | undefined;
+  timingMapReady?: boolean | undefined;
 }
 
 export type TimingOffsetUnit = "ms" | "s";
+
+export function formatSignedOffsetMs(offsetMs: number): string {
+  if (offsetMs > 0) return `+${offsetMs} ms`;
+  return `${offsetMs} ms`;
+}
 
 /** Parse a nonnegative displayed magnitude into exact integer milliseconds.
  * The direction control owns the sign. Millisecond input is integer-only;
@@ -48,5 +57,7 @@ export function isTimingOffsetInvalid(
 }
 
 export function isTimingSaveDisabled(state: TimingSaveDisabledState): boolean {
-  return state.fileCount === 0 || state.thresholdInvalid || state.offsetInvalid || state.busy;
+  if (state.fileCount === 0 || state.busy) return true;
+  if (state.mode === "map") return !state.timingMapReady;
+  return state.thresholdInvalid || state.offsetInvalid;
 }

@@ -54,6 +54,10 @@ function fontFilters(t?: DialogTranslator): FileFilter[] {
   ];
 }
 
+function timingMapFilters(t?: DialogTranslator): FileFilter[] {
+  return [{ name: dt(t, "dialog_filter_timing_map_files"), extensions: ["json", "csv"] }];
+}
+
 // open() returns string | string[] | null. These helpers normalize each shape.
 function toSinglePath(result: string | string[] | null): string | null {
   if (!result) return null;
@@ -159,6 +163,17 @@ export async function pickFontFiles(t?: DialogTranslator): Promise<string[] | nu
   );
 }
 
+/** Open a single-file picker for a `.json` or `.csv` timing-map file. */
+export async function pickTimingMapFile(t?: DialogTranslator): Promise<string | null> {
+  return toSinglePath(
+    await open({
+      multiple: false,
+      filters: timingMapFilters(t),
+      title: dt(t, "dialog_pick_timing_map_title"),
+    })
+  );
+}
+
 // ── File I/O ──────────────────────────────────────────────
 
 /** Result from encoding-aware file reading. */
@@ -220,6 +235,11 @@ export async function readText(
  */
 export async function readTextDetectEncoding(path: string): Promise<ReadTextResult> {
   return invoke<ReadTextResult>("read_text_detect_encoding", { path });
+}
+
+/** Read a `.json` or `.csv` timing-map file as UTF-8 text via the scoped Rust reader. */
+export async function readTimingMapFile(path: string): Promise<string> {
+  return invoke<string>("read_timing_map_file", { path });
 }
 
 /** Check whether a subtitle output path already exists before overwrite preflight.

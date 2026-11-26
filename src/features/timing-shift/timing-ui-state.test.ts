@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  formatSignedOffsetMs,
   formatTimingOffsetMagnitude,
   isTimingOffsetInvalid,
   isTimingSaveDisabled,
@@ -53,5 +54,31 @@ describe("timing UI state guards", () => {
         busy: false,
       })
     ).toBe(false);
+  });
+
+  it("gates Save on timingMapReady rather than offset inputs in map mode", () => {
+    expect(
+      isTimingSaveDisabled({
+        fileCount: 1,
+        thresholdInvalid: true,
+        offsetInvalid: true,
+        busy: false,
+        mode: "map",
+        timingMapReady: false,
+      })
+    ).toBe(true);
+    expect(
+      isTimingSaveDisabled({
+        fileCount: 1,
+        thresholdInvalid: true,
+        offsetInvalid: true,
+        busy: false,
+        mode: "map",
+        timingMapReady: true,
+      })
+    ).toBe(false);
+    expect(formatSignedOffsetMs(1500)).toBe("+1500 ms");
+    expect(formatSignedOffsetMs(-500)).toBe("-500 ms");
+    expect(formatSignedOffsetMs(0)).toBe("0 ms");
   });
 });

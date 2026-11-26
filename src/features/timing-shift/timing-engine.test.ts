@@ -6,9 +6,11 @@ import {
   MAX_TIMING_OFFSET_MS,
   compileTimingMapRules,
   findTimingMapRule,
+  hasEnabledTimingMapRules,
   normalizeTimingMapRules,
   parseTimingMapText,
   previewShiftSubtitles,
+  previewTimingMapSubtitles,
   shiftSubtitles,
   shiftSubtitlesCompact,
   shiftSubtitlesWithTimingMap,
@@ -313,6 +315,62 @@ describe("normalizeTimingMapRules", () => {
     );
     expect(normalizeTimingMapRules([{ startMs: 0, offsetMs: -MAX_TIMING_OFFSET_MS }])).toHaveLength(
       1
+    );
+  });
+});
+
+describe("previewTimingMapSubtitles", () => {
+  it("computes per-rule shifted preview entries without serializing output text", () => {
+    const rules = [
+      { startMs: 0, endMs: 3000, offsetMs: 500, label: "intro" },
+      { startMs: 0, endMs: 9000, offsetMs: 9999, enabled: false, label: "disabled" },
+      { startMs: 8000, offsetMs: -1000, label: "ending" },
+    ];
+    expect(hasEnabledTimingMapRules(rules)).toBe(true);
+    const result = previewTimingMapSubtitles(SRT_SAMPLE, { rules });
+    expect(result.format).toBe("srt");
+    expect(result.captionCount).toBe(3);
+    expect(result.shiftableCount).toBe(3);
+    expect(result.shiftedCount).toBe(2);
+    expect(result.activeRuleCount).toBe(2);
+    expect(
+      result.preview.map((row) => ({
+        shiftedStart: row.shiftedStart,
+        ruleIndex: row.ruleIndex,
+        appliedOffsetMs: row.appliedOffsetMs,
+        ruleLabel: row.ruleLabel,
+        wasShifted: row.wasShifted,
+      }))
+    ).toEqual([
+      {
+        shiftedStart: 1500,
+        ruleIndex: 0,
+        appliedOffsetMs: 500,
+        ruleLabel: "intro",
+        wasShifted: true,
+      },
+      {
+        shiftedStart: 5000,
+        ruleIndex: null,
+        appliedOffsetMs: 0,
+        ruleLabel: undefined,
+        wasShifted: false,
+      },
+      {
+        shiftedStart: 8000,
+        ruleIndex: 2,
+        appliedOffsetMs: -1000,
+        ruleLabel: "ending",
+        wasShifted: true,
+      },
+    ]);
+  });
+
+  it("rejects maps that contain zero enabled rules", () => {
+    const disabledOnly = [{ startMs: 0, offsetMs: 500, enabled: false }];
+    expect(hasEnabledTimingMapRules(disabledOnly)).toBe(false);
+    expect(() => previewTimingMapSubtitles(SRT_SAMPLE, { rules: disabledOnly })).toThrow(
+      /no enabled rules/i
     );
   });
 });

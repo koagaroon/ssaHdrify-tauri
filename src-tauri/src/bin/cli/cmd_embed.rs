@@ -761,6 +761,7 @@ pub(super) fn resolve_chain_embed_subsets(
     engine: &mut engine::CliEngine,
     globals: &GlobalOptions,
     embed_args: &EmbedArgs,
+    cache: Option<&app_lib::font_cache::FontCache>,
     input_path: &str,
     content: &str,
 ) -> ChainEmbedSubsetsResult {
@@ -787,10 +788,9 @@ pub(super) fn resolve_chain_embed_subsets(
         .plan_font_embed(&plan_request)
         .map_err(|e| (e, Vec::new()))?;
 
-    // Chain's embed step doesn't use the persistent cache (yet) — chain
-    // pre-resolution runs against the input content with whatever
-    // explicit font sources the embed step itself was given. Cache integration
-    // for chain is a future expansion; for now, pass None.
+    // Chain's embed step consults the read-only persistent font cache prepared
+    // once at chain startup (when available and drift-free), merging with any
+    // explicit font sources passed to the embed step.
     //
     // Propagate both warning lists to the caller so chain mode and
     // standalone embed produce equivalent diagnostics. Standalone embed
@@ -800,7 +800,7 @@ pub(super) fn resolve_chain_embed_subsets(
         globals,
         embed_args,
         use_user_fonts,
-        None,
+        cache,
         false,
         &plan_result.fonts,
     )
