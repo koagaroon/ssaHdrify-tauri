@@ -22,8 +22,6 @@ This is a Tauri rewrite of the original Python [gky99/ssaHdrify](https://github.
 
 ### 界面预览 | Screenshots
 
-以下截图展示较早版本的配色。/ These screenshots show an earlier version's colors.
-
 |                                      深色主题（英文）/ Dark Theme (English)                                      |                                浅色主题（中文）/ Light Theme (Chinese)                                 |
 | :--------------------------------------------------------------------------------------------------------------: | :----------------------------------------------------------------------------------------------------: |
 | <img src="docs/screenshots/hdr-convert-dark-en.jpg" alt="HDR conversion in the English dark theme" width="450"/> | <img src="docs/screenshots/hdr-convert-light-zh.jpg" alt="中文浅色主题下的 HDR 转换界面" width="450"/> |
@@ -36,6 +34,7 @@ This is a Tauri rewrite of the original Python [gky99/ssaHdrify](https://github.
 | <img src="docs/screenshots/timing-shift-dark-en.jpg" alt="Timing shift in the English dark theme" width="450"/> | <img src="docs/screenshots/timing-shift-light-zh.jpg" alt="中文浅色主题下的时间轴偏移界面" width="450"/> |
 | <img src="docs/screenshots/font-embed-dark-en.jpg" alt="Font embedding in the English dark theme" width="450"/> |   <img src="docs/screenshots/font-embed-light-zh.jpg" alt="中文浅色主题下的字体嵌入界面" width="450"/>   |
 | <img src="docs/screenshots/batch-rename-dark-en.jpg" alt="Batch rename in the English dark theme" width="450"/> | <img src="docs/screenshots/batch-rename-light-zh.jpg" alt="中文浅色主题下的批量重命名界面" width="450"/> |
+|   <img src="docs/screenshots/style-edit-dark-en.jpg" alt="Style edit in the English dark theme" width="450"/>   |   <img src="docs/screenshots/style-edit-light-zh.jpg" alt="中文浅色主题下的样式编辑界面" width="450"/>   |
 
 </details>
 
