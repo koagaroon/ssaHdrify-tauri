@@ -22,8 +22,12 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
  * sanitization allowlist + fallback ladder.
  */
 const APP_VERSION = resolveAppVersion(__dirname);
-const frontendNotices = buildFrontendNotices(__dirname);
 const noticesModule = "virtual:frontend-notices";
+let cachedFrontendNotices: string | null = null;
+function getFrontendNotices(): string {
+  cachedFrontendNotices ??= buildFrontendNotices(__dirname);
+  return cachedFrontendNotices;
+}
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -36,13 +40,15 @@ export default defineConfig({
         if (id === noticesModule) return "\0" + noticesModule;
       },
       load(id) {
-        if (id === "\0" + noticesModule) return `export default ${JSON.stringify(frontendNotices)}`;
+        if (id === "\0" + noticesModule) {
+          return `export default ${JSON.stringify(getFrontendNotices())}`;
+        }
       },
       generateBundle() {
         this.emitFile({
           type: "asset",
           fileName: "third-party-notices.txt",
-          source: frontendNotices,
+          source: getFrontendNotices(),
         });
       },
     },

@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "vitest";
-import { buildFrontendNotices, collectNpmNotices } from "./frontend-notices.mjs";
+import {
+  buildFrontendNotices,
+  collectNpmNotices,
+  resolveUnicodeNormalizationVersion,
+} from "./frontend-notices.mjs";
 
 /** @type {import("./frontend-notices.mjs").NoticeLockfile} */
 const lockfile = {
@@ -276,5 +280,30 @@ describe("frontend runtime notice inventory", () => {
       assert.ok(output.includes(`Source: https://www.npmjs.com/package/${name}/v/`));
     }
     assert.ok(!output.includes(root));
+  });
+
+  it("derives unicode-normalization crate URL dynamically and rejects Cargo.lock drift", () => {
+    const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
+    const version = resolveUnicodeNormalizationVersion(repoRoot);
+    assert.match(version, /^\d+\.\d+\.\d+$/u);
+
+    const root = mkdtempSync(join(tmpdir(), "unicode-norm-drift-"));
+    try {
+      mkdirSync(join(root, "src/assets/licenses"), { recursive: true });
+      mkdirSync(join(root, "src-tauri"), { recursive: true });
+      writeFileSync(
+        join(root, "src/assets/licenses/native-notices.json"),
+        JSON.stringify({ packages: [{ name: "unicode-normalization", version: "0.1.26" }] }),
+        "utf8"
+      );
+      writeFileSync(
+        join(root, "src-tauri/Cargo.lock"),
+        '[[package]]\nname = "unicode-normalization"\nversion = "0.1.99"\n',
+        "utf8"
+      );
+      assert.throws(() => resolveUnicodeNormalizationVersion(root), /version mismatch/u);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

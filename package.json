@@ -22,7 +22,7 @@
     "lint": "npm run lint:js && npm run lint:css && npm run lint:rs",
     "lint:js": "eslint . && prettier --check .",
     "lint:css": "stylelint --config .stylelintrc.json \"src/**/*.css\"",
-    "lint:rs": "cargo fmt --manifest-path src-tauri/Cargo.toml --check && cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings",
+    "lint:rs": "cargo fmt --manifest-path src-tauri/Cargo.toml --check && cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings",
     "lint:fix": "eslint . --fix && prettier --write . && stylelint --config .stylelintrc.json \"src/**/*.css\" --fix && cargo fmt --manifest-path src-tauri/Cargo.toml",
     "preview": "vite preview",
     "tauri": "tauri",

@@ -56,7 +56,14 @@ impl AsRef<OsStr> for TestTempDir {
 
 impl Drop for TestTempDir {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
+        for attempt in 0..6 {
+            if fs::remove_dir_all(&self.0).is_ok() || !self.0.exists() {
+                return;
+            }
+            if attempt < 5 {
+                std::thread::sleep(Duration::from_millis(15));
+            }
+        }
     }
 }
 

@@ -147,8 +147,6 @@ fn refresh_fonts_creates_cache_with_one_folder_row() {
         stored, &canonical_str,
         "cached folder path mismatch: stored={stored}, canonical={canonical_str}"
     );
-
-    let _ = fs::remove_dir_all(work);
 }
 
 #[test]
@@ -179,8 +177,6 @@ fn refresh_fonts_idempotent_no_duplicate_folder_rows() {
         1,
         "two consecutive refreshes must yield exactly 1 row, got {sources:?}"
     );
-
-    let _ = fs::remove_dir_all(work);
 }
 
 #[test]
@@ -213,8 +209,6 @@ fn refresh_fonts_recursive_source_reaches_nested_font_and_persists_scope() {
     let expected = cache_source_key(&library_root, FontDirectoryScope::Recursive)
         .expect("derive recursive cache source key");
     assert_eq!(sources[0].key(), expected);
-
-    let _ = fs::remove_dir_all(work);
 }
 
 #[test]
@@ -236,8 +230,6 @@ fn refresh_fonts_with_no_cache_errors() {
         stderr.contains("--no-cache"),
         "stderr should mention --no-cache: {stderr}"
     );
-
-    let _ = fs::remove_dir_all(work);
 }
 
 #[test]
@@ -270,8 +262,6 @@ fn refresh_fonts_rejects_json_even_when_quiet() {
         !cache.exists(),
         "flag rejection must happen before cache I/O"
     );
-
-    let _ = fs::remove_dir_all(work);
 }
 
 #[test]
@@ -301,8 +291,6 @@ fn refresh_fonts_reports_verbose_as_inert() {
         stderr.contains("--verbose") && stderr.contains("no effect here"),
         "refresh-fonts must not silently ignore --verbose: {stderr}"
     );
-
-    let _ = fs::remove_dir_all(work);
 }
 
 #[test]
@@ -352,8 +340,6 @@ fn refresh_fonts_corrupt_cache_names_path_and_offers_targeted_rebuild_in_both_op
         original,
         "the CLI must not delete a corrupt cache automatically"
     );
-
-    let _ = fs::remove_dir_all(work);
 }
 
 #[test]
@@ -385,8 +371,6 @@ fn refresh_fonts_ordinary_open_error_does_not_recommend_deletion() {
             && !stderr.contains("rerun the same `refresh-fonts` command"),
         "permission/open failures must not receive destructive corruption guidance: {stderr}"
     );
-
-    let _ = fs::remove_dir_all(work);
 }
 
 #[test]
@@ -438,8 +422,6 @@ fn refresh_fonts_schema_mismatch_names_path_and_rerun_action() {
             "schema guidance must not end in the old dangling half-command in {mode}: {stderr}"
         );
     }
-
-    let _ = fs::remove_dir_all(work);
 }
 
 #[test]
@@ -475,8 +457,6 @@ fn refresh_fonts_errors_when_every_source_is_skipped() {
         !stderr.contains("Cache updated"),
         "all-skipped refresh must not print a success summary: {stderr}"
     );
-
-    let _ = fs::remove_dir_all(work);
 }
 
 #[test]
@@ -519,8 +499,6 @@ fn refresh_fonts_rejects_folder_count_over_cache_cap() {
         !stderr.contains("Cache updated"),
         "over-cap refresh must not print a success summary: {stderr}"
     );
-
-    let _ = fs::remove_dir_all(work);
 }
 
 #[test]
@@ -574,8 +552,6 @@ fn embed_with_no_cache_does_not_touch_cache_file() {
         before, after,
         "embed --no-cache must not modify the cache file"
     );
-
-    let _ = fs::remove_dir_all(work);
 }
 
 #[test]
@@ -646,8 +622,6 @@ fn embed_reports_drift_when_folder_mtime_changes() {
         "drift fallback should let embed continue (exit code = {:?}, stderr = {stderr})",
         embed.status.code()
     );
-
-    let _ = fs::remove_dir_all(work);
 }
 
 fn write_fixture_ass_for_entry(
@@ -743,8 +717,6 @@ fn chain_embed_uses_persistent_cache_read_only() {
         before, after,
         "read-only chain cache open must not modify the cache file"
     );
-
-    let _ = fs::remove_dir_all(work);
 }
 
 #[test]
@@ -804,8 +776,6 @@ fn chain_embed_with_no_cache_skips_and_preserves_cache_file() {
         before, after,
         "chain --no-cache must not modify the cache file"
     );
-
-    let _ = fs::remove_dir_all(work);
 }
 
 #[test]
@@ -869,6 +839,4 @@ fn chain_embed_reports_drift_and_falls_back_without_mutating_cache() {
         before_drift_run, after_drift_run,
         "chain drift fallback must not mutate the cache file"
     );
-
-    let _ = fs::remove_dir_all(work);
 }
