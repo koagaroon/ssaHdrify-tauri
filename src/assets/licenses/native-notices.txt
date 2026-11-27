@@ -7167,9 +7167,9 @@ LICENSE.txt
 
 ========================================================================
 
-clap_builder 4.6.7
+clap_builder 4.6.10
 License: MIT OR Apache-2.0
-Source: https://crates.io/crates/clap_builder/4.6.7
+Source: https://crates.io/crates/clap_builder/4.6.10
 
 LICENSE-APACHE
 
@@ -7872,9 +7872,9 @@ SOFTWARE.
 
 ========================================================================
 
-clap 4.6.9
+clap 4.6.10
 License: MIT OR Apache-2.0
-Source: https://crates.io/crates/clap/4.6.9
+Source: https://crates.io/crates/clap/4.6.10
 
 LICENSE-APACHE
 
@@ -45439,9 +45439,9 @@ DEALINGS IN THE SOFTWARE.
 
 ========================================================================
 
-sha2 0.11.1
+sha2 0.11.2
 License: MIT OR Apache-2.0
-Source: https://crates.io/crates/sha2/0.11.1
+Source: https://crates.io/crates/sha2/0.11.2
 
 LICENSE-APACHE
 
