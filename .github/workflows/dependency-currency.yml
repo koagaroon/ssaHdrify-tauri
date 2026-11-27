@@ -40,7 +40,11 @@ jobs:
             ~/.cargo/registry/src
           key: dependency-watch-cargo-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}
 
+      - name: Install the pinned Rust minimal toolchain
+        run: rustup toolchain install --profile minimal --no-self-update
+
       - name: Check ordinary dependency versions
         run: npm run check:dependency-currency
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          RUSTUP_AUTO_INSTALL: "0"

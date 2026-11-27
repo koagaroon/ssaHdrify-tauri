@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "target": "x86_64-pc-windows-msvc",
   "inputs": {
-    "src-tauri/Cargo.lock": "ad39a6b5875ec31d9ad40784904a618b25d69539fd637039b3a37dcbfc46e6fa",
+    "src-tauri/Cargo.lock": "320362bd9533cba6de207edf1b4c3a5fe3a0c4732ef569db9de412b1ac88e9c4",
     "src-tauri/Cargo.toml": "9acfc567013d8e6015edac2c5efa47606efc708950e6350b2483cad26049444c",
     "rust-toolchain.toml": "d4580150cd6aec323fffc3d1b193cbbf262855081a3e1fb330c18b7ba8a98dff",
     "src-tauri/sqlite-bundle.json": "cc61c4d9ef6400df620a0040a0332b1ffb30220d44f9e2d6c72837e4f3842967",
@@ -12,7 +12,7 @@
     "src-tauri/.cargo/config": null,
     "src-tauri/.cargo/config.toml": null
   },
-  "sha256": "55ff18f58f6d793c5ff0a5ced32f05ef5eb942b822942355c696c81ab8b368cf",
+  "sha256": "b9113c423d65582d09b755ac22e0ef647c3aa263026795b70e351c3a964778ed",
   "packages": [
     {
       "name": "adler2",
@@ -5805,9 +5805,9 @@
     },
     {
       "name": "tao",
-      "version": "0.37.1",
+      "version": "0.37.3",
       "license": "Apache-2.0",
-      "source": "https://crates.io/crates/tao/0.37.1",
+      "source": "https://crates.io/crates/tao/0.37.3",
       "features": [
         "dbus",
         "rwh_06",
@@ -7901,9 +7901,9 @@
     },
     {
       "name": "wry",
-      "version": "0.57.0",
+      "version": "0.57.4",
       "license": "Apache-2.0 OR MIT",
-      "source": "https://crates.io/crates/wry/0.57.0",
+      "source": "https://crates.io/crates/wry/0.57.4",
       "features": [
         "gdkx11",
         "javascriptcore-rs",

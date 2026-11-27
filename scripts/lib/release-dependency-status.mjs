@@ -14,6 +14,7 @@ const MAX_LOCAL_BYTES = 16 * 1024 * 1024;
 const MAX_CHANGED_PATHS = 256;
 const MAX_TAG_DEPTH = 8;
 const SHA_PATTERN = /^[0-9a-f]{40}$/u;
+
 const GRAPH_INPUTS = [
   "package.json",
   "package-lock.json",
@@ -22,8 +23,8 @@ const GRAPH_INPUTS = [
   "src-tauri/sqlite-bundle.json",
   "src-tauri/vendor",
 ];
-const BUILD_INPUTS = [
-  "rust-toolchain.toml",
+const COMPILER_INPUTS = ["rust-toolchain.toml"];
+const DEV_ENV_INPUTS = [
   ".npmrc",
   ".nvmrc",
   ".node-version",
@@ -34,11 +35,20 @@ const BUILD_INPUTS = [
   ".github/workflows",
   ".github/actions",
 ];
-const INPUTS = [...GRAPH_INPUTS, ...BUILD_INPUTS];
+const INPUTS = [...GRAPH_INPUTS, ...COMPILER_INPUTS, ...DEV_ENV_INPUTS];
+
+const NPM_BUNDLER_ROOTS = new Set([
+  "vite",
+  "@vitejs/plugin-react",
+  "@tailwindcss/vite",
+  "tailwindcss",
+  "esbuild",
+]);
 
 /** @typedef {{code: number, stdout: string}} GitResult */
 /** @typedef {(args: string[]) => Promise<GitResult>} GitReader */
 /** @typedef {(path: string) => Promise<string>} FileReader */
+/** @typedef {"runtime" | "bundler" | "build"} InputImpactBucket */
 /**
  * @typedef {object} ReleaseDependencyStatus
  * @property {"compared" | "no-release" | "error"} status
@@ -49,7 +59,7 @@ const INPUTS = [...GRAPH_INPUTS, ...BUILD_INPUTS];
  * @property {string | null} releaseTagObject
  * @property {string | null} releaseCommit
  * @property {"same" | "source-ahead" | "source-behind" | "diverged" | null} relationship
- * @property {{graph: string[], build: string[]}} changes
+ * @property {{runtime: string[], bundler: string[], build: string[]}} changes
  * @property {string} reason
  */
 
@@ -211,23 +221,8 @@ function changedPaths(text) {
   return paths;
 }
 
-/** @param {string} text @param {string} path */
-function withoutBuildMetadata(text, path) {
-  if (path === "src-tauri/Cargo.toml") {
-    let inPackage = false;
-    let found = false;
-    const lines = text.replace(/\r\n/gu, "\n").split("\n");
-    const remaining = lines.filter((line) => {
-      if (/^\s*\[/u.test(line)) inPackage = /^\s*\[package\]\s*(?:#.*)?$/u.test(line);
-      if (inPackage && /^\s*rust-version\s*=\s*"\d+\.\d+(?:\.\d+)?"\s*(?:#.*)?$/u.test(line)) {
-        if (found) throw new MonitorDataError("Cargo.toml repeats its Rust build requirement.");
-        found = true;
-        return false;
-      }
-      return true;
-    });
-    return found ? remaining.join("\n") : text.replace(/\r\n/gu, "\n");
-  }
+/** @param {string} text */
+function parseComparedJson(text) {
   let value;
   try {
     value = JSON.parse(text);
@@ -235,32 +230,371 @@ function withoutBuildMetadata(text, path) {
     throw new MonitorDataError("A compared npm manifest or lockfile contains invalid JSON.");
   }
   if (!isRecord(value)) throw new MonitorDataError("A compared npm input is not a JSON object.");
-  if (path === "package.json") {
-    delete value.engines;
-    delete value.packageManager;
-    delete value.devEngines;
-  } else if (isRecord(value.packages) && isRecord(value.packages[""])) {
-    delete value.packages[""].engines;
-    delete value.packages[""].devEngines;
-  }
   return value;
 }
 
 /**
- * @param {string} path
- * @param {string} releaseCommit
- * @param {string} projectRoot
- * @param {GitReader} runGit
- * @param {FileReader} readFileImpl
+ * @param {string} previousText
+ * @param {string} currentText
+ * @returns {InputImpactBucket}
  */
-async function isBuildMetadataOnly(path, releaseCommit, projectRoot, runGit, readFileImpl) {
-  if (!["package.json", "package-lock.json", "src-tauri/Cargo.toml"].includes(path)) return false;
+function classifyPackageJsonImpact(previousText, currentText) {
+  const prev = parseComparedJson(previousText);
+  const curr = parseComparedJson(currentText);
+  const prevDeps = isRecord(prev.dependencies) ? prev.dependencies : {};
+  const currDeps = isRecord(curr.dependencies) ? curr.dependencies : {};
+  if (!isDeepStrictEqual(prevDeps, currDeps)) return "runtime";
+
+  const prevDev = isRecord(prev.devDependencies) ? prev.devDependencies : {};
+  const currDev = isRecord(curr.devDependencies) ? curr.devDependencies : {};
+  for (const bundlerName of NPM_BUNDLER_ROOTS) {
+    if (prevDev[bundlerName] !== currDev[bundlerName]) return "bundler";
+  }
+  return "build";
+}
+
+/**
+ * Resolves a package key inside an npm v3 lockfile `packages` map using nested
+ * `node_modules` hoisting rules.
+ * @param {Record<string, unknown>} packages
+ * @param {string} parentKey
+ * @param {string} depName
+ */
+function resolveLockPackageKey(packages, parentKey, depName) {
+  let scope = parentKey;
+  while (scope !== "") {
+    const candidate = `${scope}/node_modules/${depName}`;
+    if (isRecord(packages[candidate])) return candidate;
+    const nestedIndex = scope.lastIndexOf("/node_modules/");
+    scope = nestedIndex >= 0 ? scope.slice(0, nestedIndex) : "";
+  }
+  const topCandidate = `node_modules/${depName}`;
+  return isRecord(packages[topCandidate]) ? topCandidate : null;
+}
+
+/**
+ * @param {Record<string, unknown>} packages
+ * @param {Iterable<string>} rootNames
+ */
+function collectNpmLockClosure(packages, rootNames) {
+  /** @type {Set<string>} */
+  const visited = new Set();
+  /** @type {string[]} */
+  const queue = [];
+  for (const rootName of rootNames) {
+    const resolved = resolveLockPackageKey(packages, "", rootName);
+    if (resolved !== null && !visited.has(resolved)) {
+      visited.add(resolved);
+      queue.push(resolved);
+    }
+  }
+  while (queue.length > 0) {
+    const pkgKey = queue.pop();
+    if (pkgKey === undefined) continue;
+    const entry = packages[pkgKey];
+    if (!isRecord(entry)) continue;
+    for (const section of ["dependencies", "optionalDependencies"]) {
+      const deps = entry[section];
+      if (!isRecord(deps)) continue;
+      for (const depName of Object.keys(deps)) {
+        const nextKey = resolveLockPackageKey(packages, pkgKey, depName);
+        if (nextKey !== null && !visited.has(nextKey)) {
+          visited.add(nextKey);
+          queue.push(nextKey);
+        }
+      }
+    }
+  }
+  return visited;
+}
+
+/**
+ * @param {string} previousText
+ * @param {string} currentText
+ * @returns {InputImpactBucket}
+ */
+function classifyPackageLockImpact(previousText, currentText) {
+  const prev = parseComparedJson(previousText);
+  const curr = parseComparedJson(currentText);
+  if (!isRecord(prev.packages) || !isRecord(curr.packages)) {
+    throw new MonitorDataError("A compared package-lock.json has no packages map.");
+  }
+  const prevPkgs = prev.packages;
+  const currPkgs = curr.packages;
+  const prevBundlerKeys = collectNpmLockClosure(prevPkgs, NPM_BUNDLER_ROOTS);
+  const currBundlerKeys = collectNpmLockClosure(currPkgs, NPM_BUNDLER_ROOTS);
+
+  const allKeys = new Set([...Object.keys(prevPkgs), ...Object.keys(currPkgs)]);
+  let hasBundlerChange = false;
+  for (const key of allKeys) {
+    if (key === "") continue;
+    const prevEntry = prevPkgs[key];
+    const currEntry = currPkgs[key];
+    if (isDeepStrictEqual(prevEntry, currEntry)) continue;
+    if (prevEntry !== undefined && !isRecord(prevEntry)) {
+      throw new MonitorDataError("A compared package-lock.json entry is invalid.");
+    }
+    if (currEntry !== undefined && !isRecord(currEntry)) {
+      throw new MonitorDataError("A compared package-lock.json entry is invalid.");
+    }
+    const prevDevOnly =
+      prevEntry === undefined || prevEntry.dev === true || prevEntry.devOptional === true;
+    const currDevOnly =
+      currEntry === undefined || currEntry.dev === true || currEntry.devOptional === true;
+    if (!prevDevOnly || !currDevOnly) {
+      return "runtime";
+    }
+    if (prevBundlerKeys.has(key) || currBundlerKeys.has(key)) {
+      hasBundlerChange = true;
+    }
+  }
+
+  const prevRoot = isRecord(prevPkgs[""]) ? prevPkgs[""] : {};
+  const currRoot = isRecord(currPkgs[""]) ? currPkgs[""] : {};
+  const prevRootDeps = isRecord(prevRoot.dependencies) ? prevRoot.dependencies : {};
+  const currRootDeps = isRecord(currRoot.dependencies) ? currRoot.dependencies : {};
+  if (!isDeepStrictEqual(prevRootDeps, currRootDeps)) return "runtime";
+
+  return hasBundlerChange ? "bundler" : "build";
+}
+
+/** @param {string} text */
+function parseCargoTomlSections(text) {
+  /** @type {Map<string, string[]>} */
+  const sections = new Map();
+  let currentHeader = "";
+  let foundRustVersion = false;
+  for (const rawLine of text.replace(/\r\n/gu, "\n").split("\n")) {
+    const trimmed = rawLine.trim();
+    if (trimmed === "" || trimmed.startsWith("#")) continue;
+    const headerMatch = /^(?:\[\[([^\]]+)\]\]|\[([^\]]+)\])\s*(?:#.*)?$/u.exec(trimmed);
+    if (headerMatch !== null) {
+      currentHeader = headerMatch[1]
+        ? `[[${headerMatch[1].trim()}]]`
+        : `[${headerMatch[2].trim()}]`;
+      if (!sections.has(currentHeader)) sections.set(currentHeader, []);
+      continue;
+    }
+    if (currentHeader === "[package]") {
+      if (/^rust-version\s*=\s*"\d+\.\d+(?:\.\d+)?"\s*(?:#.*)?$/u.test(trimmed)) {
+        if (foundRustVersion) {
+          throw new MonitorDataError("Cargo.toml repeats its Rust build requirement.");
+        }
+        foundRustVersion = true;
+        continue;
+      }
+      if (/^version\s*=\s*"[^"]+"\s*(?:#.*)?$/u.test(trimmed)) {
+        continue;
+      }
+    }
+    const bucket = sections.get(currentHeader) ?? [];
+    bucket.push(trimmed);
+    sections.set(currentHeader, bucket);
+  }
+  return sections;
+}
+
+/**
+ * @param {string} previousText
+ * @param {string} currentText
+ * @returns {InputImpactBucket}
+ */
+function classifyCargoTomlImpact(previousText, currentText) {
+  const prev = parseCargoTomlSections(previousText);
+  const curr = parseCargoTomlSections(currentText);
+  const headers = new Set([...prev.keys(), ...curr.keys()]);
+  let hasBundlerChange = false;
+  for (const header of headers) {
+    const prevLines = prev.get(header) ?? [];
+    const currLines = curr.get(header) ?? [];
+    if (isDeepStrictEqual(prevLines, currLines)) continue;
+    if (header === "[dev-dependencies]" || header.startsWith("[dev-dependencies.")) {
+      continue;
+    }
+    if (header === "[build-dependencies]" || header.startsWith("[build-dependencies.")) {
+      hasBundlerChange = true;
+      continue;
+    }
+    return "runtime";
+  }
+  return hasBundlerChange ? "bundler" : "build";
+}
+
+/** @param {string} cargoTomlText */
+function extractCargoManifestEdges(cargoTomlText) {
+  let currentHeader = "";
+  let packageName = null;
+  /** @type {Set<string>} */
+  const runtimeDeps = new Set();
+  /** @type {Set<string>} */
+  const buildDeps = new Set();
+
+  /**
+   * @param {Set<string>} targetSet
+   * @param {string} rawKey
+   * @param {string} rawRhs
+   */
+  const recordDepName = (targetSet, rawKey, rawRhs) => {
+    const packageOverride = /\bpackage\s*=\s*"([A-Za-z0-9_-]+)"/u.exec(rawRhs);
+    targetSet.add(packageOverride ? packageOverride[1] : rawKey);
+  };
+
+  for (const rawLine of cargoTomlText.replace(/\r\n/gu, "\n").split("\n")) {
+    const trimmed = rawLine.trim();
+    if (trimmed === "" || trimmed.startsWith("#")) continue;
+    const tableMatch = /^\[(build-dependencies|dependencies)\.([A-Za-z0-9_-]+)\]\s*(?:#.*)?$/u.exec(
+      trimmed
+    );
+    if (tableMatch !== null) {
+      currentHeader = `table:${tableMatch[1]}:${tableMatch[2]}`;
+      (tableMatch[1] === "dependencies" ? runtimeDeps : buildDeps).add(tableMatch[2]);
+      continue;
+    }
+    const headerMatch = /^\[([^\]]+)\]\s*(?:#.*)?$/u.exec(trimmed);
+    if (headerMatch !== null) {
+      currentHeader = `[${headerMatch[1].trim()}]`;
+      continue;
+    }
+    if (currentHeader === "[package]") {
+      const nameMatch = /^name\s*=\s*"([A-Za-z0-9_-]+)"/u.exec(trimmed);
+      if (nameMatch !== null) packageName = nameMatch[1];
+      continue;
+    }
+    if (currentHeader.startsWith("table:")) {
+      const [, kind, keyName] = currentHeader.split(":");
+      const pkgMatch = /^package\s*=\s*"([A-Za-z0-9_-]+)"/u.exec(trimmed);
+      if (pkgMatch !== null) {
+        const set = kind === "dependencies" ? runtimeDeps : buildDeps;
+        set.delete(keyName);
+        set.add(pkgMatch[1]);
+      }
+      continue;
+    }
+    if (currentHeader === "[dependencies]" || currentHeader === "[build-dependencies]") {
+      const kvMatch = /^([A-Za-z0-9_-]+)\s*=\s*(.+)$/u.exec(trimmed);
+      if (kvMatch !== null) {
+        recordDepName(
+          currentHeader === "[dependencies]" ? runtimeDeps : buildDeps,
+          kvMatch[1],
+          kvMatch[2]
+        );
+      }
+    }
+  }
+  return packageName === null ? null : { packageName, runtimeDeps, buildDeps };
+}
+
+/** @param {string} lockText */
+function parseCargoLockPackages(lockText) {
+  const blocks = lockText.replace(/\r\n/gu, "\n").split(/\n\[\[package\]\]\n/u);
+  /** @type {Array<{name: string, version: string, source: string | null, checksum: string | null, deps: string[]}>} */
+  const packages = [];
+  for (const [index, block] of blocks.entries()) {
+    if (index === 0 && !block.trimStart().startsWith("[[package]]")) continue;
+    const cleanBlock = block.replace(/^\s*\[\[package\]\]\s*\n/u, "");
+    const name = /^name\s*=\s*"([^"]+)"$/mu.exec(cleanBlock)?.[1] ?? null;
+    const version = /^version\s*=\s*"([^"]+)"$/mu.exec(cleanBlock)?.[1] ?? null;
+    if (name === null || version === null) {
+      throw new MonitorDataError("A compared Cargo.lock contains an invalid [[package]] block.");
+    }
+    const source = /^source\s*=\s*"([^"]+)"$/mu.exec(cleanBlock)?.[1] ?? null;
+    const checksum = /^checksum\s*=\s*"([^"]+)"$/mu.exec(cleanBlock)?.[1] ?? null;
+    const depsMatch = /^dependencies\s*=\s*\[([\s\S]*?)^\]/mu.exec(cleanBlock);
+    const deps = depsMatch
+      ? [...depsMatch[1].matchAll(/"([^"]+)"/gu)].map((match) => match[1])
+      : [];
+    packages.push({ name, version, source, checksum, deps });
+  }
+  if (packages.length === 0) {
+    throw new MonitorDataError("A compared Cargo.lock contains no [[package]] entries.");
+  }
+  return packages;
+}
+
+/**
+ * @param {ReturnType<typeof parseCargoLockPackages>} packages
+ * @param {string} workspaceName
+ * @param {Set<string>} rootDepNames
+ */
+function collectCargoLockClosure(packages, workspaceName, rootDepNames) {
+  const rootPkg = packages.find((pkg) => pkg.name === workspaceName && pkg.source === null);
+  if (rootPkg === undefined) return null;
+
+  /** @param {string} spec */
+  const resolveSpec = (spec) => {
+    const parts = spec.split(" ");
+    const depName = parts[0];
+    const depVer = parts[1] ?? null;
+    return packages.filter(
+      (pkg) => pkg.name === depName && (depVer === null || pkg.version === depVer)
+    );
+  };
+
+  /** @type {Map<string, {version: string, source: string | null, checksum: string | null}>} */
+  const closure = new Map();
+  /** @type {typeof packages} */
+  const queue = [];
+  for (const depSpec of rootPkg.deps) {
+    const depName = depSpec.split(" ")[0];
+    if (!rootDepNames.has(depName)) continue;
+    for (const target of resolveSpec(depSpec)) {
+      const id = `${target.name}@${target.version}`;
+      if (!closure.has(id)) {
+        closure.set(id, {
+          version: target.version,
+          source: target.source,
+          checksum: target.checksum,
+        });
+        queue.push(target);
+      }
+    }
+  }
+  while (queue.length > 0) {
+    const current = queue.pop();
+    if (current === undefined) continue;
+    for (const depSpec of current.deps) {
+      for (const target of resolveSpec(depSpec)) {
+        const id = `${target.name}@${target.version}`;
+        if (!closure.has(id)) {
+          closure.set(id, {
+            version: target.version,
+            source: target.source,
+            checksum: target.checksum,
+          });
+          queue.push(target);
+        }
+      }
+    }
+  }
+  return Object.fromEntries([...closure.entries()].sort(([a], [b]) => a.localeCompare(b)));
+}
+
+/**
+ * @param {object} options
+ * @param {string} options.path
+ * @param {string} options.releaseCommit
+ * @param {string} options.projectRoot
+ * @param {GitReader} options.runGit
+ * @param {FileReader} options.readFileImpl
+ * @returns {Promise<InputImpactBucket>}
+ */
+async function classifyChangedInput({ path, releaseCommit, projectRoot, runGit, readFileImpl }) {
+  if (COMPILER_INPUTS.some((input) => path === input || path.startsWith(`${input}/`))) {
+    return "bundler";
+  }
+  if (DEV_ENV_INPUTS.some((input) => path === input || path.startsWith(`${input}/`))) {
+    return "build";
+  }
+  if (path === "src-tauri/sqlite-bundle.json" || path.startsWith("src-tauri/vendor/")) {
+    return "runtime";
+  }
+
   const entry = await gitText(
     runGit,
     ["ls-tree", "-z", releaseCommit, "--", path],
     "The release input tree could not be inspected."
   );
-  if (entry === "") return false;
+  if (entry === "") return "runtime";
   const previous = await gitText(
     runGit,
     ["show", `${releaseCommit}:${path}`],
@@ -270,16 +604,71 @@ async function isBuildMetadataOnly(path, releaseCommit, projectRoot, runGit, rea
   try {
     current = await readFileImpl(resolve(projectRoot, path));
   } catch (error) {
-    if (isRecord(error) && error.code === "ENOENT") return false;
+    if (isRecord(error) && error.code === "ENOENT") return "runtime";
     throw new MonitorDataError("A current dependency input could not be read safely.");
   }
   if (typeof current !== "string" || Buffer.byteLength(current, "utf8") > MAX_LOCAL_BYTES) {
     throw new MonitorDataError("A current dependency input exceeds its size limit.");
   }
-  return isDeepStrictEqual(
-    withoutBuildMetadata(previous, path),
-    withoutBuildMetadata(current, path)
-  );
+
+  if (path === "package.json") return classifyPackageJsonImpact(previous, current);
+  if (path === "package-lock.json") return classifyPackageLockImpact(previous, current);
+  if (path === "src-tauri/Cargo.toml") return classifyCargoTomlImpact(previous, current);
+  if (path === "src-tauri/Cargo.lock") {
+    const prevPackages = parseCargoLockPackages(previous);
+    const currPackages = parseCargoLockPackages(current);
+    let prevCargoToml = null;
+    let currCargoToml;
+    try {
+      const tomlTree = await gitText(
+        runGit,
+        ["ls-tree", "-z", releaseCommit, "--", "src-tauri/Cargo.toml"],
+        "The release Cargo.toml tree could not be inspected."
+      );
+      if (tomlTree !== "") {
+        prevCargoToml = await gitText(
+          runGit,
+          ["show", `${releaseCommit}:src-tauri/Cargo.toml`],
+          "Released Cargo.toml could not be read."
+        );
+      }
+      currCargoToml = await readFileImpl(resolve(projectRoot, "src-tauri/Cargo.toml"));
+    } catch {
+      return "runtime";
+    }
+    if (prevCargoToml === null || typeof currCargoToml !== "string") return "runtime";
+    const prevEdges = extractCargoManifestEdges(prevCargoToml);
+    const currEdges = extractCargoManifestEdges(currCargoToml);
+    if (prevEdges === null || currEdges === null) return "runtime";
+
+    const prevRuntime = collectCargoLockClosure(
+      prevPackages,
+      prevEdges.packageName,
+      prevEdges.runtimeDeps
+    );
+    const currRuntime = collectCargoLockClosure(
+      currPackages,
+      currEdges.packageName,
+      currEdges.runtimeDeps
+    );
+    if (prevRuntime === null || currRuntime === null) return "runtime";
+    if (!isDeepStrictEqual(prevRuntime, currRuntime)) return "runtime";
+
+    const prevBuild = collectCargoLockClosure(
+      prevPackages,
+      prevEdges.packageName,
+      prevEdges.buildDeps
+    );
+    const currBuild = collectCargoLockClosure(
+      currPackages,
+      currEdges.packageName,
+      currEdges.buildDeps
+    );
+    if (prevBuild === null || currBuild === null) return "runtime";
+    return isDeepStrictEqual(prevBuild, currBuild) ? "build" : "bundler";
+  }
+
+  return "runtime";
 }
 
 /**
@@ -311,7 +700,7 @@ export async function inspectReleaseDependencyStatus({
     releaseTagObject: null,
     releaseCommit: null,
     relationship: null,
-    changes: { graph: [], build: [] },
+    changes: { runtime: [], bundler: [], build: [] },
     reason: "The published-release comparison could not be completed.",
   };
   try {
@@ -469,10 +858,20 @@ export async function inspectReleaseDependencyStatus({
         "The changed dependency inputs exceed the 256-file inspection limit."
       );
     for (const path of paths) {
-      const buildOnly =
-        BUILD_INPUTS.some((input) => path === input || path.startsWith(`${input}/`)) ||
-        (await isBuildMetadataOnly(path, object.sha, projectRoot, runGit, readFileImpl));
-      result.changes[buildOnly ? "build" : "graph"].push(path);
+      const bucket = untracked.includes(path)
+        ? COMPILER_INPUTS.some((input) => path === input || path.startsWith(`${input}/`))
+          ? "bundler"
+          : DEV_ENV_INPUTS.some((input) => path === input || path.startsWith(`${input}/`))
+            ? "build"
+            : "runtime"
+        : await classifyChangedInput({
+            path,
+            releaseCommit: object.sha,
+            projectRoot,
+            runGit,
+            readFileImpl,
+          });
+      result.changes[bucket].push(path);
     }
     const endHead = await gitText(
       runGit,
@@ -490,10 +889,18 @@ export async function inspectReleaseDependencyStatus({
       );
     }
     result.status = "compared";
-    result.reason =
-      paths.length === 0
-        ? "Selected dependency and build inputs match the released source."
-        : "Selected source inputs differ from the released source; the differences are informational.";
+    if (paths.length === 0) {
+      result.reason = "Selected dependency and build inputs match the released source.";
+    } else if (result.changes.runtime.length === 0 && result.changes.bundler.length === 0) {
+      result.reason =
+        "Only dev/CI or build-environment inputs differ from the released source; resolved shipped runtime dependencies match.";
+    } else if (result.changes.runtime.length === 0) {
+      result.reason =
+        "Bundler/compiler or dev/CI inputs differ from the released source; resolved shipped runtime package versions match.";
+    } else {
+      result.reason =
+        "Shipped runtime dependency inputs differ from the released source; the differences are informational.";
+    }
     return result;
   } catch (error) {
     result.reason =
@@ -516,7 +923,7 @@ function reportField(value) {
 
 /** @param {ReleaseDependencyStatus} result */
 export function renderReleaseDependencyReport(result) {
-  const changed = [...result.changes.graph, ...result.changes.build];
+  const changed = [...result.changes.runtime, ...result.changes.bundler, ...result.changes.build];
   if (changed.length > MAX_CHANGED_PATHS)
     throw new MonitorDataError("The release comparison report exceeds its file limit.");
   const relationship = {
@@ -545,14 +952,15 @@ export function renderReleaseDependencyReport(result) {
   ];
   if (result.status === "compared") {
     lines.push(
-      `Changed mixed dependency inputs: ${result.changes.graph.length}. Changed build-only inputs: ${result.changes.build.length}.`,
+      `Shipped runtime inputs changed: ${result.changes.runtime.length}. Build-output/compiler inputs changed: ${result.changes.bundler.length}. Dev/CI-only inputs changed: ${result.changes.build.length}.`,
       ""
     );
     if (changed.length > 0) {
-      lines.push("| Input group | Changed file |", "| --- | --- |");
+      lines.push("| Binary impact | Changed file |", "| --- | --- |");
       for (const [group, paths] of [
-        ["Mixed runtime/build dependency inputs", result.changes.graph],
-        ["Build environment / workflows", result.changes.build],
+        ["Shipped in exe (runtime)", result.changes.runtime],
+        ["Build output / compiler", result.changes.bundler],
+        ["Dev / CI / workflow only", result.changes.build],
       ]) {
         for (const path of paths) lines.push(`| ${group} | ${reportField(path)} |`);
       }
@@ -560,7 +968,7 @@ export function renderReleaseDependencyReport(result) {
     }
   }
   lines.push(
-    "Scope: npm and Cargo manifests/lockfiles, SQLite bundle provenance, historical vendored source, build-tool configuration, and GitHub workflows/actions. Engine/package-manager metadata alone and Cargo's package rust-version alone are classified as build inputs. Other manifest/lockfile differences remain mixed inputs and do not prove a runtime dependency changed.",
+    "Scope: npm and Cargo manifests/lockfiles, SQLite bundle provenance, historical vendored source, build-tool configuration, and GitHub workflows/actions. Lockfile comparisons walk resolved runtime vs. bundler vs. dev-only package closures so dev-tool updates are separated from shipped `.exe` dependency updates.",
     "",
     "This compares selected source inputs, including visible uncommitted and untracked inputs. It does not inspect release binaries, establish shipped security status or release readiness, or decide whether to publish. Application source outside this scope is not compared. Input differences alone do not make this monitor fail.",
     ""

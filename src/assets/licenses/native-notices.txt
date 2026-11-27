@@ -48779,9 +48779,9 @@ SOFTWARE.
 
 ========================================================================
 
-tao 0.37.1
+tao 0.37.3
 License: Apache-2.0
-Source: https://crates.io/crates/tao/0.37.1
+Source: https://crates.io/crates/tao/0.37.3
 
 LICENSE
 
@@ -66089,9 +66089,9 @@ ICU 1.8.1 to ICU 57.1 © 1995-2016 International Business Machines Corporation a
 
 ========================================================================
 
-wry 0.57.0
+wry 0.57.4
 License: Apache-2.0 OR MIT
-Source: https://crates.io/crates/wry/0.57.0
+Source: https://crates.io/crates/wry/0.57.4
 
 LICENSE-APACHE
 
