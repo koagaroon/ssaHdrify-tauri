@@ -218,6 +218,7 @@ export function decomposeInputPath(inputPath: string): InputPathParts {
   if (!isAbsolute) {
     throw new Error("Input path must be absolute");
   }
+  assertValidUncRootComponents(normalized, "Input path", true);
   assertNoCurrentDirectorySegments(normalized, "Input path");
 
   const hasDotDotSegment = normalized.split("/").some((seg) => seg === "..");
@@ -345,6 +346,32 @@ function assertOutputPathShape(
   );
 }
 
+function assertValidUncRootComponents(
+  normalizedPath: string,
+  label: string,
+  requiresLeafFile: boolean
+): void {
+  if (!normalizedPath.startsWith("//")) return;
+  const lower = normalizedPath.toLowerCase();
+  const nonEmptySegments = normalizedPath.split("/").filter(Boolean);
+  if (lower.startsWith("//?/unc/")) {
+    // Expect `?`, `UNC`, `<server>`, `<share>` (+ `<file>` for file paths).
+    const minSegments = requiresLeafFile ? 5 : 4;
+    if (nonEmptySegments.length < minSegments) {
+      throw new Error(`${label} is an incomplete UNC path: ${normalizedPath}`);
+    }
+    return;
+  }
+  if (lower.startsWith("//?/") || lower.startsWith("//./")) {
+    return;
+  }
+  // Standard UNC `//server/share[/file]` requires server + share (+ leaf file).
+  const minSegments = requiresLeafFile ? 3 : 2;
+  if (nonEmptySegments.length < minSegments) {
+    throw new Error(`${label} is an incomplete UNC path: ${normalizedPath}`);
+  }
+}
+
 function assertNoCurrentDirectorySegments(normalizedPath: string, label: string): void {
   if (/(^|\/)\.($|\/)/.test(normalizedPath)) {
     throw new Error(`${label} contains current-directory segments: ${normalizedPath}`);
@@ -395,6 +422,7 @@ export function decomposeOutputDirectoryPath(outputDir: string): OutputDirectory
   if (!isAbsolute) {
     throw new Error("Output directory must be absolute");
   }
+  assertValidUncRootComponents(normalized, "Output directory", false);
   assertNoCurrentDirectorySegments(normalized, "Output directory");
 
   const dir = trimTrailingPathSeparators(normalized);
@@ -507,14 +535,16 @@ export function substituteTemplate(template: string, vars: Record<string, string
   // check). Internal value dots stay verbatim.
   let out = "";
   let prevEmptyValue = false;
-  for (const seg of segments) {
+  for (let i = 0; i < segments.length; i += 1) {
+    const seg = segments[i]!;
     let chunk = seg.text;
+    const isFinalExtensionOnly =
+      out === "" && i === segments.length - 1 && chunk.startsWith(".") && chunk.indexOf(".", 1) < 0;
     // Drop a boundary dot when the left side already ended with one, OR when
-    // the immediately-preceding segment was an EMPTY-valued token. The latter
-    // catches a leading empty token (`{lang}.{name}` with lang="") whose
-    // separator dot would otherwise lead the filename → a hidden-file output
-    // (`.name`). Internal value dots stay verbatim.
-    if (chunk.startsWith(".") && (out.endsWith(".") || prevEmptyValue)) {
+    // the immediately-preceding segment was an EMPTY-valued token (unless doing
+    // so on an empty output prefix would strip the final file extension dot,
+    // turning e.g. `{lang}.ass` with `lang=""` into bare `ass`).
+    if (chunk.startsWith(".") && (out.endsWith(".") || (prevEmptyValue && !isFinalExtensionOnly))) {
       chunk = chunk.slice(1);
     }
     out += chunk;

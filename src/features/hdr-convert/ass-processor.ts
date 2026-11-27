@@ -64,32 +64,41 @@ const EVENT_TEXT_INDEX_FALLBACK = 9;
 // Color fields are at fixed indices: Primary=3, Secondary=4, Outline=5, Back=6
 const STYLE_COLOR_INDICES_FALLBACK = [3, 4, 5, 6];
 
-/** Names of the color fields in the ASS style format line */
+/** Names of the color fields in the ASS/SSA style format line */
 const STYLE_COLOR_FIELDS = new Set([
   "primarycolour",
   "secondarycolour",
+  "tertiarycolour",
   "outlinecolour",
   "backcolour",
 ]);
 
 /**
- * Parse a Format line in [V4+ Styles] section and return indices of color fields.
- * Returns null if parsing fails (caller should use fallback).
+ * Parse a Format line in [V4+ Styles] / [V4 Styles] section and return indices of color fields.
+ * Returns `[]` when a valid Format line declares no color columns so subsequent Style lines
+ * leave non-color numeric fields untouched instead of corrupting indices `[3, 4, 5, 6]`.
+ * Returns `null` only when the Format line itself has no fields after `:`.
  */
 function parseStyleFormatLine(formatLine: string): number[] | null {
   const colonIdx = formatLine.indexOf(":");
   if (colonIdx < 0) return null;
   const fields = formatLine
     .slice(colonIdx + 1)
-    .split(",")
+    .split(",", MAX_STYLE_FIELDS + 1)
     .map((f) => f.trim().toLowerCase());
+  if (fields.length > MAX_STYLE_FIELDS) {
+    throw new Error(
+      `Style Format line has too many fields: ${fields.length} (max ${MAX_STYLE_FIELDS})`
+    );
+  }
+  if (fields.every((f) => !f)) return null;
   const indices: number[] = [];
   for (let i = 0; i < fields.length; i++) {
     if (STYLE_COLOR_FIELDS.has(fields[i]!)) {
       indices.push(i);
     }
   }
-  return indices.length > 0 ? indices : null;
+  return indices;
 }
 
 /**
@@ -297,7 +306,10 @@ export type AssSection = "info" | "styles" | "fonts" | "events" | "other";
 export const SECTION_HEADER_RE = /^\[(?=[a-z0-9+ ]*[a-z ])[a-z0-9+ ]{1,50}\]$/;
 
 export function detectSection(line: string): AssSection | null {
-  const trimmed = line.trim().toLowerCase();
+  const trimmed = line
+    .replace(/^\uFEFF/, "")
+    .trim()
+    .toLowerCase();
   if (trimmed === "[script info]") return "info";
   if (trimmed === "[v4+ styles]" || trimmed === "[v4 styles]") return "styles";
   if (trimmed === "[fonts]") return "fonts";
@@ -379,7 +391,7 @@ export function processAssContent(
       const trimmedLeading = line.trimStart();
       if (/^format:/i.test(trimmedLeading)) {
         const parsed = parseStyleFormatLine(line);
-        if (parsed) {
+        if (parsed !== null) {
           styleColorIndices = parsed;
         }
       } else {

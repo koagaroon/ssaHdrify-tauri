@@ -1251,3 +1251,47 @@ describe("aggregateFonts — cross-file union + cap", () => {
     expect(aggregate.has(MAX_AGGREGATE_CODEPOINTS_PER_KEY)).toBe(false);
   });
 });
+
+describe("buildFontFileName & analyzeFonts/embedFonts hardening", () => {
+  it("disambiguates mixed CJK + ASCII family names while keeping pure ASCII clean", async () => {
+    const { buildFontFileName } = await import("./font-embedder");
+    expect(buildFontFileName({ family: "Arial", bold: false, italic: false })).toBe("arial.ttf");
+    const cnHei = buildFontFileName({ family: "思源黑体 CN", bold: false, italic: false });
+    const cnSong = buildFontFileName({ family: "思源宋体 CN", bold: false, italic: false });
+    expect(cnHei).toMatch(/^cn_[0-9a-f]{8}\.ttf$/);
+    expect(cnSong).toMatch(/^cn_[0-9a-f]{8}\.ttf$/);
+    expect(cnHei).not.toBe(cnSong);
+  });
+
+  it("deduplicates Rust session-local font lookups across batch calls via localFontCache", async () => {
+    resolveUserFontMock.mockReset();
+    resolveUserFontMock.mockResolvedValue({ path: "C:/fonts/fz.ttf", index: 0 });
+    const sharedLocalCache = new Map<string, { path: string; index: number } | null>();
+
+    await analyzeFonts(MINIMAL_ASS, null, undefined, true, undefined, sharedLocalCache);
+    await analyzeFonts(MINIMAL_ASS, null, undefined, true, undefined, sharedLocalCache);
+
+    expect(resolveUserFontMock).toHaveBeenCalledTimes(2); // once for FZLanTingHei, once for Arial Bold
+  });
+
+  it("rejects malformed ASS before invoking subsetFont IPCs", async () => {
+    const tauriApi = await import("../../lib/tauri-api");
+    const subsetFontMock = vi.mocked(tauriApi.subsetFont);
+    subsetFontMock.mockReset();
+
+    const info: FontInfo = {
+      key: { family: "Arial", bold: false, italic: false },
+      glyphCount: 1,
+      filePath: "C:/Windows/Fonts/arial.ttf",
+      fontIndex: 0,
+      error: null,
+      source: "system",
+    };
+    const usages: FontUsage[] = [{ key: info.key, codepoints: new Set([0x41]) }];
+
+    await expect(
+      embedFonts("[Events]\nDialogue: 0,0:00:00.00,0:00:01.00,Default,A\n", [info], usages)
+    ).rejects.toThrow(/\[Script Info\]/);
+    expect(subsetFontMock).not.toHaveBeenCalled();
+  });
+});

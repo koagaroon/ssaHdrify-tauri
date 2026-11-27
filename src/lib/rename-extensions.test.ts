@@ -11,4 +11,10 @@ describe("rename extension classification", () => {
     expect(categorizeForRename("episode.sup")).toBe("subtitle");
     expect(categorizeForRename("episode.SUP")).toBe("subtitle");
   });
+
+  it("rejects stemless dotfiles from video and subtitle buckets", () => {
+    expect(categorize(".ass")).toBe("unknown");
+    expect(categorizeForRename(".ass")).toBe("unknown");
+    expect(categorizeForRename(".mkv")).toBe("unknown");
+  });
 });

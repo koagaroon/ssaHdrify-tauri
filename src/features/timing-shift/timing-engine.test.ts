@@ -373,4 +373,36 @@ describe("previewTimingMapSubtitles", () => {
       /no enabled rules/i
     );
   });
+
+  it("validates disabled rules' numeric bounds, scrubs rule labels, and rejects NaN preview shifts", async () => {
+    const {
+      previewShiftSubtitles,
+      shiftSubtitlesCompact,
+      shiftSubtitlesWithTimingMap,
+      shiftSubtitlesWithTimingMapCompact,
+    } = await import("./timing-engine");
+
+    expect(() =>
+      normalizeTimingMapRules([{ startMs: 0, offsetMs: Number.NaN, enabled: false }])
+    ).toThrow(/offsetMs/);
+
+    const normalized = normalizeTimingMapRules([
+      { startMs: 0, offsetMs: 100, label: `intro\u202e${"😀".repeat(85)}` },
+    ]);
+    expect(normalized[0]!.label).not.toContain("\u202e");
+    expect(Array.from(normalized[0]!.label!).length).toBe(80);
+
+    expect(() => previewShiftSubtitles(SRT_SAMPLE, { offsetMs: Number.NaN })).toThrow(
+      /Invalid offsetMs/
+    );
+
+    const rules = [{ startMs: 0, endMs: 3000, offsetMs: 500, label: "intro" }];
+    const fullMap = shiftSubtitlesWithTimingMap(SRT_SAMPLE, { rules });
+    const compactMap = shiftSubtitlesWithTimingMapCompact(SRT_SAMPLE, { rules });
+    expect(compactMap.content).toBe(fullMap.content);
+    expect(compactMap.shiftedCount).toBe(fullMap.shiftedCount);
+
+    const compactSimple = shiftSubtitlesCompact(SRT_SAMPLE, { offsetMs: 250 });
+    expect(compactSimple.shiftedCount).toBe(3);
+  });
 });

@@ -71,8 +71,9 @@ export const ASCII_CONTROL_CHARS = "\\x00-\\x1f\\x7f-\\x9f";
 // character-class fragment instead.
 const BIDI_AND_ZERO_WIDTH_RE = new RegExp(`[${BIDI_AND_ZERO_WIDTH_PATTERN}]`, "u");
 
-/** Global matcher; use with `.replace(GLOBAL_RE, "")` for scrubbing. */
-export const BIDI_AND_ZERO_WIDTH_GLOBAL_RE = new RegExp(`[${BIDI_AND_ZERO_WIDTH_PATTERN}]`, "gu");
+// Internal global matcher consumed only by `stripUnicodeControls` so external
+// callers cannot observe or mutate shared RegExp `.lastIndex` state.
+const BIDI_AND_ZERO_WIDTH_GLOBAL_RE = new RegExp(`[${BIDI_AND_ZERO_WIDTH_PATTERN}]`, "gu");
 
 /** True if `s` contains any character in the rejection set. */
 export function hasUnicodeControls(s: string): boolean {

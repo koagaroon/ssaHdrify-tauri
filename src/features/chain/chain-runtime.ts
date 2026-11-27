@@ -12,7 +12,7 @@
 
 import { processAssContent } from "../hdr-convert/ass-processor";
 import { assertFiniteShiftMs, shiftSubtitlesCompact } from "../timing-shift/timing-engine";
-import { FontSectionBuilder } from "../font-embed/ass-uuencode";
+import { decodeSubsetBase64, FontSectionBuilder } from "../font-embed/ass-uuencode";
 import { assertAssShape, insertFontsSection } from "../font-embed/ass-font-section";
 import {
   assertSafeOutputFilename,
@@ -21,8 +21,6 @@ import {
   substituteTemplate,
 } from "../../lib/path-validation";
 import { sanitizeError } from "../../lib/dedup-helpers";
-import { stripUnicodeControls } from "../../lib/unicode-controls";
-import { decodeBase64Bytes } from "../../lib/base64-bytes";
 import type {
   ChainResult,
   ChainRunRequest,
@@ -107,7 +105,10 @@ function hdrTransform(ctx: TransformContext, params: HdrStepParams): TransformRe
   // the embed preflight's `assertAssShape` contract: an otherwise
   // header-looking line with leading or inner whitespace is malformed,
   // not sufficient evidence that this is ASS / SSA content.
-  if (!/^\[(Script Info|V4\+? Styles)\][ \t]*$/im.test(ctx.content)) {
+  if (params.eotf !== "PQ" && params.eotf !== "HLG") {
+    throw new Error(`Invalid eotf '${String(params.eotf)}': expected one of PQ, HLG`);
+  }
+  if (!/^(?:\uFEFF)?\[(Script Info|V4\+? Styles)\][ \t]*$/im.test(ctx.content)) {
     throw new Error(
       "hdr step requires ASS / SSA content (no [Script Info] or " +
         "[V4+ Styles] header found). Run `hdr` standalone first to " +
@@ -187,52 +188,11 @@ function embedTransform(ctx: TransformContext, params: EmbedStepParams): Transfo
 
   const fontSection = new FontSectionBuilder();
   for (const subset of params.subsets) {
-    fontSection.add(subset.fontName, decodeBase64(subset.dataB64, subset.fontName));
+    fontSection.add(subset.fontName, decodeSubsetBase64(subset.dataB64, subset.fontName));
   }
   const content = insertFontsSection(ctx.content, fontSection.build());
   const note = `embed: ${fontSection.count} font(s) embedded`;
   return { content, note };
-}
-
-/**
- * Decode the Rust shell's base64-encoded subset bytes into a
- * Uint8Array. Pairs with the `dataB64` field on `ChainFontSubsetPayload`;
- * the previous JSON-array form (`Uint8Array.from(number[])`) expanded
- * the V8 source ~4-5× per byte and pressured the heap on the worst-
- * case CUMULATIVE_FALLBACK_BYTES path.
- *
- * Uses a local decoder instead of global `atob()`: the CLI runs on a
- * bare `deno_core::JsRuntime` with `extensions: vec![]`, which does
- * NOT provide Web APIs. It also avoids js-base64's large-string
- * split/map path, which can overflow the stack on large CJK subsets.
- *
- * `name` annotates errors: a corrupt subset payload from a future
- * Rust-side encoder bug surfaces as `"base64 decode failed for font
- * subset 'XYZ': ..."` rather than a bare error with no font / step
- * attribution.
- */
-function decodeBase64(b64: string, name: string): Uint8Array {
-  try {
-    return decodeBase64Bytes(b64);
-  } catch (e) {
-    // `message` is BiDi-scrubbed via sanitizeError (catch-arm sweep):
-    // even though decodeBase64Bytes' error message is local today, the
-    // message ends up in a re-thrown Error that surfaces in the chain log
-    // panel. Scrubbing at the extraction site keeps the catch-arm contract
-    // uniform with the rest of the project.
-    //
-    // wrap `name` in stripUnicodeControls
-    // too. The buildFontFileName helper already strips everything but
-    // [a-z0-9_-] on the current call path, but a future refactor that
-    // lets the original name flow through unsanitized would re-open
-    // the leak — the cheap wrap closes the door instead of leaving a
-    // "if you ever do X, do Y" reminder.
-    const message = sanitizeError(e);
-    const safeName = stripUnicodeControls(name);
-    throw new Error(`base64 decode failed for font subset '${safeName}': ${message}`, {
-      cause: e,
-    });
-  }
 }
 
 /**
@@ -250,6 +210,9 @@ function decodeBase64(b64: string, name: string): Uint8Array {
  */
 export function runChain(request: ChainRunRequest): ChainResult {
   const { plan, inputPath, content } = request;
+  if (!Array.isArray(plan?.steps) || plan.steps.length === 0) {
+    throw new Error("Chain plan must contain at least one step");
+  }
   const notes: string[] = [];
   // Keep the largest per-step count rather than summing. A preserved
   // oversized ASS/WebVTT cue is encountered again by every later shift;

@@ -14,6 +14,7 @@ describe("Style Edit UI state", () => {
       filterAndDedupeStyleEditPaths([
         "C:\\subs\\episode.ass",
         "C:\\subs\\episode.ass",
+        "C:\\subs\\.ass",
         "C:\\subs\\notes.txt",
         "C:\\subs\\legacy.SSA",
       ])

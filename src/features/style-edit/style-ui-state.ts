@@ -14,7 +14,7 @@ export function filterAndDedupeStyleEditPaths(paths: readonly string[]): string[
   for (const path of paths) {
     const name = path.split(/[\\/]/).pop() ?? path;
     const dot = name.lastIndexOf(".");
-    const extension = dot >= 0 ? name.slice(dot + 1).toLowerCase() : "";
+    const extension = dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
     if (extension !== "ass" && extension !== "ssa") continue;
     const key = normalizeOutputKey(path);
     if (!unique.has(key)) unique.set(key, path);
