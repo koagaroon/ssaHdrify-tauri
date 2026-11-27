@@ -16,15 +16,19 @@ fn cli_path() -> PathBuf {
 }
 
 fn temp_dir(label: &str) -> PathBuf {
+    static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let dir = std::env::temp_dir().join(format!(
-        "ssahdrify-cli-shift-{label}-{}-{stamp}",
+    let seq = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let base = std::env::temp_dir();
+    fs::create_dir_all(&base).unwrap();
+    let dir = base.join(format!(
+        "ssahdrify-cli-shift-{label}-{}-{stamp}-{seq}",
         std::process::id()
     ));
-    fs::create_dir_all(&dir).unwrap();
+    fs::create_dir(&dir).unwrap();
     dir
 }
 

@@ -52,35 +52,31 @@ impl Drop for GuiCacheStateTestGuard {
 /// consolidation hasn't landed.
 ///
 /// Same posture, NOT identical: this version takes a `name:
-/// &str` argument (the lib-side one is no-args) and the seed
-/// uses `subsec_nanos` (the lib-side uses `as_nanos`, which is
-/// wider entropy). The difference hasn't surfaced as a collision
-/// in practice. Keep this struct in sync with its sibling for
-/// Drop semantics / suffix shape; if the seed-strength gap ever
-/// becomes a parallel-test issue, port the `as_nanos` form here
-/// rather than the other way around.
+/// &str` argument (the lib-side one is no-args). Both combine
+/// `PID + UNIX nanos + AtomicU64` and `fs::create_dir` so parallel
+/// test threads never share a directory even when spawned on the
+/// same OS clock tick.
 struct TempCacheDir(std::path::PathBuf);
+
+fn next_cmds_test_id() -> u64 {
+    static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
 
 impl TempCacheDir {
     fn new(name: &str) -> Self {
-        // PID + nanos — `font_cache.rs`'s
-        // equivalent TempCacheDir uses the same shape. PID alone
-        // collides when two tests with the same `name` argument
-        // run in the same process (parallel test threads or a
-        // future test that reuses the same fixture name).
-        let nanos = std::time::SystemTime::now()
+        let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.subsec_nanos())
+            .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let mut dir = std::env::temp_dir();
-        dir.push(format!(
-            "ssahdrify_font_cache_cmds_test_{}_{}_{}",
-            name,
+        let seq = next_cmds_test_id();
+        let base = std::env::temp_dir();
+        fs::create_dir_all(&base).unwrap();
+        let dir = base.join(format!(
+            "ssahdrify_font_cache_cmds_test_{name}_{}_{stamp}_{seq}",
             std::process::id(),
-            nanos
         ));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
+        fs::create_dir(&dir).unwrap();
         Self(dir)
     }
 }
@@ -340,8 +336,9 @@ fn try_modified_at_returns_none_for_missing_path() {
     // produce "not statable" (None) across every site.
     let mut dir = std::env::temp_dir();
     dir.push(format!(
-        "ssahdrify_try_modified_missing_{}",
-        std::process::id()
+        "ssahdrify_try_modified_missing_{}_{}",
+        std::process::id(),
+        next_cmds_test_id()
     ));
     // Don't create dir — we want a definitely-absent path.
     assert!(try_modified_at(&dir).is_none());
@@ -350,16 +347,9 @@ fn try_modified_at_returns_none_for_missing_path() {
 #[test]
 fn try_modified_at_returns_some_for_existing_folder() {
     let (_guard, _) = temp_cache("try_modified_exists");
-    let mut dir = std::env::temp_dir();
-    dir.push(format!(
-        "ssahdrify_try_modified_present_{}",
-        std::process::id()
-    ));
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).unwrap();
-    let mtime = try_modified_at(&dir);
+    let present = TempCacheDir::new("try_modified_present");
+    let mtime = try_modified_at(&present.0);
     assert!(mtime.is_some(), "existing folder should yield a Some mtime");
-    let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]

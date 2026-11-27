@@ -175,11 +175,16 @@ fn take_done(done: &Arc<Mutex<Option<DoneStats>>>) -> DoneStats {
 }
 
 fn init_scan_test_db(name: &str) {
+    static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let seq = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!(
-        "ssahdrify-scan-test-db-{}-{name}",
+        "ssahdrify-scan-test-db-{}-{stamp}-{seq}-{name}",
         std::process::id()
     ));
-    let _ = std::fs::remove_dir_all(&dir);
     init_user_font_db(&dir).expect("scan test DB should initialize");
 }
 

@@ -8,15 +8,19 @@ const ASS: &str = include_str!("fixtures/utf8.ass");
 const NO_FONT_ASS: &str = "[Script Info]\nScriptType: v4.00+\n\n[V4+ Styles]\nFormat: Name, Fontname\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n";
 
 fn temp_dir(label: &str) -> PathBuf {
+    static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let root = std::env::temp_dir().join(format!(
-        "ssahdrify-cli-decode-{label}-{}-{stamp}",
+    let seq = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let base = std::env::temp_dir();
+    fs::create_dir_all(&base).unwrap();
+    let root = base.join(format!(
+        "ssahdrify-cli-decode-{label}-{}-{stamp}-{seq}",
         std::process::id()
     ));
-    fs::create_dir_all(&root).unwrap();
+    fs::create_dir(&root).unwrap();
     root
 }
 
