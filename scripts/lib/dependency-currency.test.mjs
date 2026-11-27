@@ -7,7 +7,10 @@ import {
   MonitorDataError,
   classifyActionCurrency,
   classifyCargoCurrency,
+  classifyCargoImpact,
+  classifyNodeToolchainCurrency,
   classifyNpmCurrency,
+  classifyNpmImpact,
   classifyRustToolchainCurrency,
   classifySqliteSourceCurrency,
   collectCargoTargets,
@@ -15,11 +18,13 @@ import {
   cratesIndexPath,
   dependencyWatchExitCode,
   fetchTextWithPolicy,
+  getNodeToolchainFloor,
   getNodeTypesPolicy,
   getNpmToolchainPin,
   getRustToolchainPin,
   getSqliteSourcePin,
   inspectGitHubReleases,
+  inspectNodeReleases,
   inspectNpmMetadata,
   inspectResolvedCommitSha,
   inspectSqliteDownloads,
@@ -242,15 +247,79 @@ describe("Node typing build policy", () => {
     ).not.toThrow();
   });
 
-  test("checks the manifest-derived minimum and latest Node builds in CI", async () => {
+  test("checks the manifest-derived Node LTS build line on Windows in CI", async () => {
     const workflow = await readFile(new URL(".github/workflows/ci.yml", repositoryRoot), "utf8");
-    expect(workflow).toContain("node: [minimum, latest]");
-    expect(workflow).toContain("$manifest = Get-Content -Raw package.json | ConvertFrom-Json");
-    expect(workflow).toContain('$nodeVersion = if ("${{ matrix.node }}" -eq "minimum") {');
-    expect(workflow).toMatch(/\$Matches.floor\s*\}\s*else\s*\{\s*\$manifest.engines.node/u);
-    expect(workflow).toContain('"version=$nodeVersion" | Out-File -FilePath $env:GITHUB_OUTPUT');
-    expect(workflow).toContain("node-version: ${{ steps.node.outputs.version }}");
-    expect(workflow).toContain("check-latest: ${{ matrix.node == 'latest' }}");
+    expect(workflow).not.toContain("node: [minimum, latest]");
+    expect(workflow).toContain("name: Frontend quality (Windows)");
+    expect(workflow).toContain("node-version-file: package.json");
+    expect(workflow).toContain("check-latest: true");
+  });
+});
+
+describe("Node.js LTS build-tool currency", () => {
+  const sampleIndex = [
+    { version: "v27.1.0", lts: false },
+    { version: "v26.13.1", lts: "Lithium" },
+    { version: "v26.13.0", lts: "Lithium" },
+    { version: "v24.22.3", lts: "Krypton" },
+    { version: "v24.22.1", lts: "Krypton" },
+  ];
+
+  test("extracts the single caret Node LTS floor from package.json", () => {
+    expect(getNodeToolchainFloor({ engines: { node: "^26.13.1" } })).toMatchObject({
+      raw: "26.13.1",
+      major: 26,
+      minor: 13,
+      patch: 1,
+    });
+    for (const invalid of ["^24.22.1 || ^26.13.1", ">=26.13.1", "26.13.1", "^0.13.1"]) {
+      expect(() => getNodeToolchainFloor({ engines: { node: invalid } })).toThrow(MonitorDataError);
+    }
+  });
+
+  test("tracks active LTS updates, newer LTS majors, and non-LTS majors safely", () => {
+    const releases = inspectNodeReleases(sampleIndex);
+    expect(classifyNodeToolchainCurrency({ floor: "26.13.1", releases })).toEqual({
+      latest: "26.13.1",
+      status: "current",
+      reason: "The declared Node Lithium LTS build floor is current.",
+    });
+    expect(classifyNodeToolchainCurrency({ floor: "24.22.1", releases })).toMatchObject({
+      latest: "24.22.3",
+      status: "update",
+      reason: expect.stringContaining("26.13.1 (Lithium)"),
+    });
+    expect(classifyNodeToolchainCurrency({ floor: "24.22.3", releases })).toMatchObject({
+      latest: "26.13.1",
+      status: "review",
+      reason: expect.stringContaining("Newer Node LTS major 26.13.1 (Lithium)"),
+    });
+    expect(classifyNodeToolchainCurrency({ floor: "25.0.0", releases })).toMatchObject({
+      latest: "26.13.1",
+      status: "review",
+      reason: expect.stringContaining("not an active LTS line"),
+    });
+    expect(classifyNodeToolchainCurrency({ floor: "26.14.0", releases })).toMatchObject({
+      latest: "26.13.1",
+      status: "review",
+      reason: expect.stringContaining("do not downgrade automatically"),
+    });
+  });
+
+  test("fails closed on malformed Node release index payloads", () => {
+    for (const bad of [
+      null,
+      [],
+      [{ version: "26.13.1", lts: "Lithium" }],
+      [{ version: "v26.13.1", lts: true }],
+      [{ version: "v27.0.0", lts: false }],
+      [
+        { version: "v26.13.1", lts: "Lithium" },
+        { version: "v26.13.1", lts: "Other" },
+      ],
+    ]) {
+      expect(() => inspectNodeReleases(bad)).toThrow(MonitorDataError);
+    }
   });
 });
 
@@ -803,6 +872,60 @@ describe("Cargo direct dependencies", () => {
       targets: [{ name: "base64", locked: "0.23.1", kinds: ["normal"] }],
     });
   });
+
+  test("collects monitored runtime transitive crates while ignoring dev-only transitive edges", () => {
+    const source = "registry+https://github.com/rust-lang/crates.io-index";
+    const metadata = {
+      version: 1,
+      workspace_members: ["root"],
+      packages: [
+        {
+          id: "root",
+          rust_version: "1.100.0",
+          dependencies: [
+            { name: "tauri", source, optional: false },
+            { name: "insta", kind: "dev", source, optional: false },
+          ],
+        },
+        { id: "tauri-pkg", name: "tauri", version: "2.12.7", source },
+        { id: "wry-pkg", name: "wry", version: "0.57.4", source },
+        { id: "dev-only-pkg", name: "insta", version: "1.40.0", source },
+        { id: "dev-helper-pkg", name: "dev-helper", version: "0.1.0", source },
+      ],
+      resolve: {
+        nodes: [
+          {
+            id: "root",
+            deps: [
+              { name: "tauri", pkg: "tauri-pkg", dep_kinds: [{ kind: null }] },
+              { name: "insta", pkg: "dev-only-pkg", dep_kinds: [{ kind: "dev" }] },
+            ],
+          },
+          {
+            id: "tauri-pkg",
+            deps: [{ name: "wry", pkg: "wry-pkg", dep_kinds: [{ kind: null }] }],
+          },
+          { id: "wry-pkg", deps: [] },
+          {
+            id: "dev-only-pkg",
+            deps: [{ name: "dev_helper", pkg: "dev-helper-pkg", dep_kinds: [{ kind: null }] }],
+          },
+          { id: "dev-helper-pkg", deps: [] },
+        ],
+      },
+    };
+    expect(collectCargoTargets(metadata, { transitiveNames: ["wry"] })).toEqual({
+      msrv: "1.100.0",
+      targets: [
+        { name: "insta", locked: "1.40.0", kinds: ["dev"] },
+        { name: "tauri", locked: "2.12.7", kinds: ["normal"] },
+        { name: "wry", locked: "0.57.4", kinds: ["transitive"] },
+      ],
+    });
+    expect(() => collectCargoTargets(metadata, { transitiveNames: ["dev-helper"] })).toThrow(
+      "no locked runtime edge"
+    );
+  });
 });
 
 describe("GitHub Actions pins", () => {
@@ -1033,11 +1156,20 @@ describe("safe reporting and network failures", () => {
     expect(dependencyWatchExitCode([{ ...row, status: "error" }])).toBe(2);
   });
 
-  test("renders the security and no-branch boundary in every report", () => {
+  test("renders the security, binary-impact, and no-branch boundaries in every report", () => {
+    expect(classifyNpmImpact("react", "dependency")).toBe("runtime");
+    expect(classifyNpmImpact("vite", "development")).toBe("bundler");
+    expect(classifyNpmImpact("vitest", "development")).toBe("dev-ci");
+    expect(classifyCargoImpact(["normal"])).toBe("runtime");
+    expect(classifyCargoImpact(["transitive"])).toBe("runtime");
+    expect(classifyCargoImpact(["build"])).toBe("bundler");
+    expect(classifyCargoImpact(["dev"])).toBe("dev-ci");
+
     const report = renderDependencyReport([
       {
         ecosystem: "npm",
         dependency: "demo",
+        impact: "dev-ci",
         locked: "1.0.0",
         latest: "1.0.0",
         status: "current",
@@ -1046,17 +1178,21 @@ describe("safe reporting and network failures", () => {
     ]);
     expect(report).toContain("Dependabot Alerts");
     expect(report).toContain("cannot push, create branches, or open pull requests");
-    expect(report).toContain("pinned npm and Rust build tools");
+    expect(report).toContain("Node.js LTS, npm, and Rust build tools");
+    expect(report).toContain("selected Windows runtime transitive crates");
     expect(report).toContain("bundled SQLite source");
     expect(report).toContain("resolved sys crate");
     expect(report).toContain("Other transitive-only lockfile updates are outside its scope");
+    expect(report).toContain("Actionable by binary impact — Shipped in exe: 0");
+    expect(report).toContain("| demo | dev / CI only |");
   });
 
-  test("puts actionable rows before current rows", () => {
+  test("puts actionable rows before current rows and runtime updates before dev-only updates", () => {
     const report = renderDependencyReport([
       {
         ecosystem: "Cargo",
         dependency: "current-demo",
+        impact: "runtime",
         locked: "1.0.0",
         latest: "1.0.0",
         status: "current",
@@ -1064,14 +1200,28 @@ describe("safe reporting and network failures", () => {
       },
       {
         ecosystem: "npm",
-        dependency: "update-demo",
+        dependency: "dev-update",
+        impact: "dev-ci",
         locked: "1.0.0",
         latest: "1.0.1",
         status: "update",
-        reason: "Update.",
+        reason: "Dev update.",
+      },
+      {
+        ecosystem: "Cargo",
+        dependency: "exe-update",
+        impact: "runtime",
+        locked: "1.0.0",
+        latest: "1.0.1",
+        status: "update",
+        reason: "Runtime update.",
       },
     ]);
-    expect(report.indexOf("update-demo")).toBeLessThan(report.indexOf("current-demo"));
+    expect(report.indexOf("exe-update")).toBeLessThan(report.indexOf("dev-update"));
+    expect(report.indexOf("dev-update")).toBeLessThan(report.indexOf("current-demo"));
+    expect(report).toContain(
+      "Actionable by binary impact — Shipped in exe: 1 · Build output: 0 · Dev / CI only: 1"
+    );
   });
 
   test("retries a bounded transient failure without printing its body", async () => {
@@ -1148,6 +1298,7 @@ describe("repository no-branch contract", () => {
     expect(workflowText.match(/^[\t ]*permissions:/gmu)).toEqual(["permissions:"]);
     expect(permissionLines).toEqual(["  contents: read"]);
     expect(workflowText).toContain("persist-credentials: false");
+    expect(workflowText).toContain("rustup toolchain install --profile minimal --no-self-update");
     expect(workflowText).not.toMatch(/permissions:\s*write-all/u);
     expect(dependabotText.match(/open-pull-requests-limit:\s*0/gu)).toHaveLength(3);
     expect(dependabotText).not.toMatch(/open-pull-requests-limit:\s*[1-9]/u);

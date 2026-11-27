@@ -16,6 +16,15 @@ const CRATES_IO_SOURCE_IDS = new Set([
 ]);
 
 /** @typedef {"current" | "update" | "review" | "held" | "error"} CurrencyStatus */
+/** @typedef {"runtime" | "bundler" | "dev-ci"} BinaryImpact */
+
+const NPM_BUNDLER_PACKAGES = new Set([
+  "vite",
+  "@vitejs/plugin-react",
+  "@tailwindcss/vite",
+  "tailwindcss",
+  "esbuild",
+]);
 
 /**
  * @typedef {object} ParsedSemver
@@ -30,6 +39,7 @@ const CRATES_IO_SOURCE_IDS = new Set([
  * @typedef {object} CurrencyRow
  * @property {string} ecosystem
  * @property {string} dependency
+ * @property {BinaryImpact} [impact]
  * @property {string} locked
  * @property {string} latest
  * @property {CurrencyStatus} status
@@ -163,6 +173,189 @@ export function compareRustVersions(left, right) {
     if (left[key] !== right[key]) return left[key] < right[key] ? -1 : 1;
   }
   return 0;
+}
+
+/**
+ * @param {string} name
+ * @param {"dependency" | "development"} kind
+ * @returns {BinaryImpact}
+ */
+export function classifyNpmImpact(name, kind) {
+  if (kind === "dependency") return "runtime";
+  if (NPM_BUNDLER_PACKAGES.has(name)) return "bundler";
+  return "dev-ci";
+}
+
+/**
+ * @param {string[]} kinds
+ * @returns {BinaryImpact}
+ */
+export function classifyCargoImpact(kinds) {
+  if (kinds.includes("normal") || kinds.includes("bundled") || kinds.includes("transitive")) {
+    return "runtime";
+  }
+  if (kinds.includes("build")) return "bundler";
+  return "dev-ci";
+}
+
+/** @param {CurrencyRow} row @returns {BinaryImpact} */
+function inferRowImpact(row) {
+  if (row.ecosystem === "Bundled source" || row.ecosystem === "Cargo (transitive)") {
+    return "runtime";
+  }
+  if (row.ecosystem === "Cargo") return "runtime";
+  if (row.ecosystem === "Build tools" && row.dependency === "Rust compiler") return "bundler";
+  if (row.ecosystem === "npm" && NPM_BUNDLER_PACKAGES.has(row.dependency)) return "bundler";
+  return "dev-ci";
+}
+
+/** @param {unknown} packageJson */
+export function getNodeToolchainFloor(packageJson) {
+  if (
+    !isRecord(packageJson) ||
+    !isRecord(packageJson.engines) ||
+    typeof packageJson.engines.node !== "string"
+  ) {
+    throw new MonitorDataError("package.json must declare the supported Node build version");
+  }
+  const range = packageJson.engines.node;
+  const version = /^\^\d+\.\d+\.\d+$/u.test(range) ? parseStableVersion(range.slice(1)) : null;
+  if (version === null || version.major === 0) {
+    throw new MonitorDataError(
+      "package.json engines.node must declare one stable ^MAJOR.MINOR.PATCH LTS floor"
+    );
+  }
+  return version;
+}
+
+/**
+ * @param {unknown} entries
+ * @returns {{version: ParsedSemver, lts: string}[]}
+ */
+export function inspectNodeReleases(entries) {
+  if (!Array.isArray(entries) || entries.length === 0 || entries.length > 10_000) {
+    throw new MonitorDataError("Node.js release index is missing or exceeds its safety cap");
+  }
+
+  /** @type {Map<string, {version: ParsedSemver, lts: string}>} */
+  const ltsReleases = new Map();
+  for (const entry of entries) {
+    if (
+      !isRecord(entry) ||
+      typeof entry.version !== "string" ||
+      !entry.version.startsWith("v") ||
+      parseSemver(entry.version.slice(1)) === null
+    ) {
+      throw new MonitorDataError("Node.js release index contains an invalid version entry");
+    }
+    const ltsField = entry.lts;
+    if (
+      ltsField !== false &&
+      (typeof ltsField !== "string" ||
+        ltsField.trim() === "" ||
+        !/^[A-Za-z][A-Za-z0-9 _-]{0,31}$/u.test(ltsField))
+    ) {
+      throw new MonitorDataError("Node.js release index contains an invalid LTS tag");
+    }
+    if (ltsField === false) continue;
+    const stable = parseStableVersion(entry.version.slice(1));
+    if (stable === null) continue;
+    const codename = ltsField.trim();
+    const existing = ltsReleases.get(stable.raw);
+    if (existing !== undefined && existing.lts !== codename) {
+      throw new MonitorDataError("Node.js release index contains conflicting LTS metadata");
+    }
+    ltsReleases.set(stable.raw, { version: stable, lts: codename });
+  }
+
+  if (ltsReleases.size === 0) {
+    throw new MonitorDataError("Node.js release index contains no stable LTS releases");
+  }
+  return [...ltsReleases.values()].sort((left, right) =>
+    compareStableVersions(left.version, right.version)
+  );
+}
+
+/**
+ * @param {{floor: string, releases: {version: ParsedSemver, lts: string}[]}} input
+ */
+export function classifyNodeToolchainCurrency({ floor, releases }) {
+  const floorVersion = parseStableVersion(floor);
+  if (floorVersion === null || floorVersion.major === 0) {
+    throw new MonitorDataError("Declared Node.js floor must be a stable MAJOR.MINOR.PATCH version");
+  }
+  if (!Array.isArray(releases) || releases.length === 0) {
+    throw new MonitorDataError("Node.js LTS release list is empty");
+  }
+
+  /** @type {{version: ParsedSemver, lts: string} | null} */
+  let trackedLts = null;
+  /** @type {{version: ParsedSemver, lts: string} | null} */
+  let globalLts = null;
+  for (const release of releases) {
+    if (
+      !isRecord(release) ||
+      !isRecord(release.version) ||
+      typeof release.lts !== "string" ||
+      release.lts.trim() === ""
+    ) {
+      throw new MonitorDataError("Invalid inspected Node.js LTS record");
+    }
+    const parsed = parseStableVersion(release.version.raw);
+    if (parsed === null) throw new MonitorDataError("Invalid Node.js LTS version");
+    const normalized = { version: parsed, lts: release.lts };
+    if (globalLts === null || compareStableVersions(parsed, globalLts.version) > 0) {
+      globalLts = normalized;
+    }
+    if (
+      parsed.major === floorVersion.major &&
+      (trackedLts === null || compareStableVersions(parsed, trackedLts.version) > 0)
+    ) {
+      trackedLts = normalized;
+    }
+  }
+
+  if (globalLts === null) throw new MonitorDataError("No global Node.js LTS version found");
+  if (trackedLts === null) {
+    return {
+      latest: globalLts.version.raw,
+      status: /** @type {const} */ ("review"),
+      reason: `Node ${floorVersion.major}.x is not an active LTS line (latest LTS: ${globalLts.version.raw} ${globalLts.lts}). Review engines.node, @types/node, and CI.`,
+    };
+  }
+
+  const comparison = compareStableVersions(floorVersion, trackedLts.version);
+  if (comparison > 0) {
+    return {
+      latest: trackedLts.version.raw,
+      status: /** @type {const} */ ("review"),
+      reason:
+        "The declared Node LTS floor is newer than the official LTS release index; do not downgrade automatically.",
+    };
+  }
+  if (comparison < 0) {
+    const newerMajorNote =
+      compareStableVersions(globalLts.version, trackedLts.version) > 0
+        ? ` Newer LTS major ${globalLts.version.raw} (${globalLts.lts}) is also available.`
+        : "";
+    return {
+      latest: trackedLts.version.raw,
+      status: /** @type {const} */ ("update"),
+      reason: `A newer Node ${trackedLts.lts} LTS release is available; binary users do not need Node.js installed.${newerMajorNote}`,
+    };
+  }
+  if (compareStableVersions(globalLts.version, trackedLts.version) > 0) {
+    return {
+      latest: globalLts.version.raw,
+      status: /** @type {const} */ ("review"),
+      reason: `Newer Node LTS major ${globalLts.version.raw} (${globalLts.lts}) is available. Review engines.node, @types/node, and CI before advancing the build line; binary users do not need Node.js installed.`,
+    };
+  }
+  return {
+    latest: trackedLts.version.raw,
+    status: /** @type {const} */ ("current"),
+    reason: `The declared Node ${trackedLts.lts} LTS build floor is current.`,
+  };
 }
 
 /** @param {unknown} packageJson */
@@ -979,8 +1172,11 @@ export function classifyCargoCurrency({
   };
 }
 
-/** @param {unknown} metadata */
-export function collectCargoTargets(metadata) {
+/**
+ * @param {unknown} metadata
+ * @param {{transitiveNames?: string[]}} [options]
+ */
+export function collectCargoTargets(metadata, options = {}) {
   if (
     !isRecord(metadata) ||
     metadata.version !== 1 ||
@@ -990,6 +1186,13 @@ export function collectCargoTargets(metadata) {
     !Array.isArray(metadata.resolve.nodes)
   ) {
     throw new MonitorDataError("cargo metadata returned an invalid format-version 1 document");
+  }
+  const transitiveNames = options.transitiveNames ?? [];
+  if (
+    !Array.isArray(transitiveNames) ||
+    transitiveNames.some((name) => typeof name !== "string" || !CRATE_NAME_PATTERN.test(name))
+  ) {
+    throw new MonitorDataError("Invalid monitored transitive crate list");
   }
 
   const packageById = new Map();
@@ -1113,6 +1316,69 @@ export function collectCargoTargets(metadata) {
   if (projectMsrv === null) {
     throw new MonitorDataError("cargo metadata returned no workspace Rust version");
   }
+
+  if (transitiveNames.length > 0) {
+    /** @type {Set<string>} */
+    const reachableIds = new Set();
+    const queue = [...metadata.workspace_members];
+    while (queue.length > 0) {
+      const currentId = queue.pop();
+      if (typeof currentId !== "string" || reachableIds.has(currentId)) continue;
+      reachableIds.add(currentId);
+      const node = nodeById.get(currentId);
+      if (node === undefined) continue;
+      for (const edge of node.deps) {
+        if (!isRecord(edge) || typeof edge.pkg !== "string") continue;
+        const depKinds = Array.isArray(edge.dep_kinds) ? edge.dep_kinds : [];
+        const isRuntimeEdge =
+          depKinds.length === 0 ||
+          depKinds.some((kind) => isRecord(kind) && (kind.kind === null || kind.kind === "normal"));
+        if (isRuntimeEdge && !reachableIds.has(edge.pkg)) {
+          queue.push(edge.pkg);
+        }
+      }
+    }
+
+    for (const transitiveName of transitiveNames) {
+      if (targets.has(transitiveName)) continue;
+      /** @type {Set<string>} */
+      const matchedVersions = new Set();
+      for (const pkgId of reachableIds) {
+        const pkg = packageById.get(pkgId);
+        if (!isRecord(pkg) || pkg.name !== transitiveName || typeof pkg.source !== "string") {
+          continue;
+        }
+        if (!CRATES_IO_SOURCE_IDS.has(pkg.source)) {
+          throw new MonitorDataError(
+            `Non-crates.io transitive dependency ${transitiveName} is not supported`
+          );
+        }
+        if (parseStableVersion(pkg.version) === null) {
+          throw new MonitorDataError(
+            `cargo metadata returned an invalid locked version for ${transitiveName}`
+          );
+        }
+        matchedVersions.add(String(pkg.version));
+      }
+      if (matchedVersions.size === 0) {
+        throw new MonitorDataError(
+          `Monitored transitive Cargo crate ${transitiveName} has no locked runtime edge`
+        );
+      }
+      if (matchedVersions.size > 1) {
+        throw new MonitorDataError(
+          `Monitored transitive crate ${transitiveName} resolves to multiple versions`
+        );
+      }
+      const [lockedVersion] = matchedVersions;
+      targets.set(transitiveName, {
+        name: transitiveName,
+        locked: lockedVersion,
+        kinds: ["transitive"],
+      });
+    }
+  }
+
   return {
     targets: [...targets.values()].sort((left, right) => left.name.localeCompare(right.name)),
     msrv: projectMsrv.raw,
@@ -1482,10 +1748,24 @@ export function renderDependencyReport(rows) {
     held: "held by policy",
     error: "monitor error",
   };
+  const impactLabels = {
+    runtime: "shipped in exe",
+    bundler: "build output",
+    "dev-ci": "dev / CI only",
+  };
   const statusOrder = { error: 0, review: 1, update: 2, held: 3, current: 4 };
-  const sortedRows = [...rows].sort((left, right) => {
+  const impactOrder = { runtime: 0, bundler: 1, "dev-ci": 2 };
+  const normalizedRows = rows.map((row) => {
+    const impact = row.impact ?? inferRowImpact(row);
+    if (!Object.hasOwn(impactLabels, impact)) {
+      throw new MonitorDataError(`Invalid binary impact classification: ${String(impact)}`);
+    }
+    return { ...row, impact };
+  });
+  const sortedRows = [...normalizedRows].sort((left, right) => {
     return (
       statusOrder[left.status] - statusOrder[right.status] ||
+      impactOrder[left.impact] - impactOrder[right.impact] ||
       left.ecosystem.localeCompare(right.ecosystem) ||
       left.dependency.localeCompare(right.dependency)
     );
@@ -1496,20 +1776,29 @@ export function renderDependencyReport(rows) {
       sortedRows.filter((row) => row.status === status).length,
     ])
   );
+  const actionableRows = sortedRows.filter(
+    (row) => row.status === "update" || row.status === "review"
+  );
+  const actionableImpact = {
+    runtime: actionableRows.filter((row) => row.impact === "runtime").length,
+    bundler: actionableRows.filter((row) => row.impact === "bundler").length,
+    "dev-ci": actionableRows.filter((row) => row.impact === "dev-ci").length,
+  };
 
   const lines = [
     "# Dependency Watch",
     "",
-    "This read-only check monitors direct dependencies, pinned npm and Rust build tools, the TypeScript aliases, GitHub Actions, and the bundled SQLite source and resolved sys crate. Other transitive-only lockfile updates are outside its scope. A red workflow run means maintenance is available; it does not mean the product build is broken.",
+    "This read-only check monitors direct npm and Cargo dependencies, selected Windows runtime transitive crates, pinned Node.js LTS, npm, and Rust build tools, the TypeScript aliases, GitHub Actions, and the bundled SQLite source and resolved sys crate. Other transitive-only lockfile updates are outside its scope. Each row labels whether updates affect code shipped in the `.exe` binaries, build/compiler output, or dev/CI tooling only. A red workflow run means maintenance is available; it does not mean the product build is broken.",
     "",
     "Security vulnerabilities remain a separate GitHub Dependabot Alerts responsibility. This workflow cannot push, create branches, or open pull requests.",
     "",
     `Current: ${counts.current} · Updates: ${counts.update} · Manual review: ${counts.review} · Held: ${counts.held} · Monitor errors: ${counts.error}`,
+    `Actionable by binary impact — Shipped in exe: ${actionableImpact.runtime} · Build output: ${actionableImpact.bundler} · Dev / CI only: ${actionableImpact["dev-ci"]}`,
     "",
-    "| Ecosystem | Dependency | Locked | Latest observed | Status | Notes |",
-    "| --- | --- | --- | --- | --- | --- |",
+    "| Ecosystem | Dependency | Impact | Locked | Latest observed | Status | Notes |",
+    "| --- | --- | --- | --- | --- | --- | --- |",
     ...sortedRows.map((row) => {
-      return `| ${sanitizeReportField(row.ecosystem)} | ${sanitizeReportField(row.dependency)} | ${sanitizeReportField(row.locked)} | ${sanitizeReportField(row.latest)} | ${statusLabels[row.status]} | ${sanitizeReportField(row.reason)} |`;
+      return `| ${sanitizeReportField(row.ecosystem)} | ${sanitizeReportField(row.dependency)} | ${impactLabels[row.impact]} | ${sanitizeReportField(row.locked)} | ${sanitizeReportField(row.latest)} | ${statusLabels[row.status]} | ${sanitizeReportField(row.reason)} |`;
     }),
     "",
   ];
@@ -1576,7 +1865,7 @@ export async function fetchTextWithPolicy(
   {
     headers = {},
     maxBytes = 32 * 1024 * 1024,
-    attempts = 2,
+    attempts = 3,
     fetchImpl = fetch,
     sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
   }
@@ -1588,7 +1877,7 @@ export async function fetchTextWithPolicy(
       const response = await fetchImpl(url, {
         headers,
         redirect: "manual",
-        signal: AbortSignal.timeout(15_000),
+        signal: AbortSignal.timeout(60_000),
       });
       if (response.ok) return await readBoundedResponse(response, maxBytes);
 

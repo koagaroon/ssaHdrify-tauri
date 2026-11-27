@@ -125,7 +125,7 @@ describe("published stable-release baseline", () => {
       sourceCommit: SOURCE,
       sourceDirty: false,
       relationship: "source-ahead",
-      changes: { graph: [], build: [] },
+      changes: { runtime: [], bundler: [], build: [] },
     });
     expect(releaseDependencyExitCode(result)).toBe(0);
     expect(context.fetchImpl.mock.calls.map(([url]) => url)).toEqual([
@@ -333,79 +333,135 @@ describe("source history and dependency/build input classification", () => {
     }
   );
 
-  test("keeps workflow and compiler-only differences in the build group", async () => {
+  test("separates workflow/dev differences from compiler-pin differences", async () => {
     const context = fixture();
     context.state.changes = [".github/workflows/ci.yml", "rust-toolchain.toml"];
     const result = await inspectReleaseDependencyStatus(context.options);
     expect(result.changes).toEqual({
-      graph: [],
-      build: [".github/workflows/ci.yml", "rust-toolchain.toml"],
+      runtime: [],
+      bundler: ["rust-toolchain.toml"],
+      build: [".github/workflows/ci.yml"],
     });
     expect(releaseDependencyExitCode(result)).toBe(0);
   });
 
-  test("recognizes Node/npm and Rust build-requirement changes without a dependency-graph change", async () => {
+  test("recognizes Node/npm, dev-only npm, and Rust build-requirement changes without a runtime change", async () => {
     const context = fixture();
     context.change(
       "package.json",
       JSON.stringify({
-        engines: { node: "^24.21.0" },
+        engines: { node: "^24.22.1" },
         packageManager: "npm@12.2.0",
         dependencies: { react: "19.3.0" },
+        devDependencies: { vitest: "^5.1.1" },
       }),
       JSON.stringify({
         dependencies: { react: "19.3.0" },
-        engines: { node: "^24.22.1" },
-        packageManager: "npm@12.2.1",
+        devDependencies: { vitest: "^5.1.2" },
+        engines: { node: "^26.13.1" },
+        packageManager: "npm@12.2.3",
       })
     );
     context.change(
       "package-lock.json",
       JSON.stringify({
         packages: {
-          "": { engines: { node: "^24.21.0" }, dependencies: { react: "19.3.0" } },
+          "": {
+            engines: { node: "^24.22.1" },
+            dependencies: { react: "19.3.0" },
+            devDependencies: { vitest: "^5.1.1" },
+          },
           "node_modules/react": { version: "19.3.0" },
+          "node_modules/vitest": { version: "5.1.1", dev: true },
         },
       }),
       JSON.stringify({
         packages: {
-          "": { engines: { node: "^24.22.1" }, dependencies: { react: "19.3.0" } },
+          "": {
+            engines: { node: "^26.13.1" },
+            dependencies: { react: "19.3.0" },
+            devDependencies: { vitest: "^5.1.2" },
+          },
           "node_modules/react": { version: "19.3.0" },
+          "node_modules/vitest": { version: "5.1.2", dev: true },
         },
       })
     );
     context.change(
       "src-tauri/Cargo.toml",
-      '[package]\nname = "app"\nrust-version = "1.91"\n[dependencies]\na = "1.0"\n',
-      '[package]\nname = "app"\nrust-version = "1.99.1"\n[dependencies]\na = "1.0"\n'
+      '[package]\nname = "app"\nversion = "1.8.0"\nrust-version = "1.99.1"\n[dependencies]\na = "1.0"\n[dev-dependencies]\nglob = "0.3.3"\n',
+      '[package]\nname = "app"\nversion = "1.9.0"\nrust-version = "1.100.0"\n[dependencies]\na = "1.0"\n[dev-dependencies]\nglob = "0.3.4"\n'
+    );
+    context.change(
+      "src-tauri/Cargo.lock",
+      '[[package]]\nname = "a"\nversion = "1.0.0"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\n\n[[package]]\nname = "app"\nversion = "1.8.0"\ndependencies = [\n "a",\n "glob",\n]\n\n[[package]]\nname = "glob"\nversion = "0.3.3"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\n',
+      '[[package]]\nname = "a"\nversion = "1.0.0"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\n\n[[package]]\nname = "app"\nversion = "1.9.0"\ndependencies = [\n "a",\n "glob",\n]\n\n[[package]]\nname = "glob"\nversion = "0.3.4"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\n'
     );
     const result = await inspectReleaseDependencyStatus(context.options);
     expect(result.changes).toEqual({
-      graph: [],
-      build: ["package-lock.json", "package.json", "src-tauri/Cargo.toml"],
+      runtime: [],
+      bundler: [],
+      build: ["package-lock.json", "package.json", "src-tauri/Cargo.lock", "src-tauri/Cargo.toml"],
+    });
+    expect(result.reason).toContain("resolved shipped runtime dependencies match");
+  });
+
+  test("classifies bundler closure changes separately from shipped runtime changes", async () => {
+    const context = fixture();
+    context.change(
+      "package-lock.json",
+      JSON.stringify({
+        packages: {
+          "": { dependencies: { react: "19.3.0" }, devDependencies: { vite: "^8.3.2" } },
+          "node_modules/react": { version: "19.3.0" },
+          "node_modules/vite": {
+            version: "8.3.8",
+            dev: true,
+            dependencies: { rolldown: "1.2.18" },
+          },
+          "node_modules/rolldown": { version: "1.2.18", dev: true },
+        },
+      }),
+      JSON.stringify({
+        packages: {
+          "": { dependencies: { react: "19.3.0" }, devDependencies: { vite: "^8.3.2" } },
+          "node_modules/react": { version: "19.3.0" },
+          "node_modules/vite": {
+            version: "8.4.0",
+            dev: true,
+            dependencies: { rolldown: "1.3.4" },
+          },
+          "node_modules/rolldown": { version: "1.3.4", dev: true },
+        },
+      })
+    );
+    const result = await inspectReleaseDependencyStatus(context.options);
+    expect(result.changes).toEqual({
+      runtime: [],
+      bundler: ["package-lock.json"],
+      build: [],
     });
   });
 
-  test("retains dependency, reviewed bundle, and historical vendored-source changes as mixed graph inputs", async () => {
+  test("retains shipped runtime, reviewed bundle, and vendored-source changes in the runtime bucket", async () => {
     const context = fixture();
     context.change(
       "package.json",
       '{"engines":{"node":"^24.21.0"},"dependencies":{"react":"19.2.0"}}',
-      '{"engines":{"node":"^24.22.1"},"dependencies":{"react":"19.3.0"}}'
+      '{"engines":{"node":"^26.13.1"},"dependencies":{"react":"19.3.0"}}'
     );
     context.change(
       "package-lock.json",
       '{"packages":{"":{"engines":{"node":"^24.21.0"}},"node_modules/react":{"version":"19.2.0"}}}',
-      '{"packages":{"":{"engines":{"node":"^24.22.1"}},"node_modules/react":{"version":"19.3.0"}}}'
+      '{"packages":{"":{"engines":{"node":"^26.13.1"}},"node_modules/react":{"version":"19.3.0"}}}'
     );
     context.state.changes.push("src-tauri/vendor/libsqlite3-sys/sqlite3/sqlite3.c");
     context.state.changes.push("src-tauri/sqlite-bundle.json");
     const result = await inspectReleaseDependencyStatus(context.options);
-    expect(result.changes.graph).toHaveLength(4);
+    expect(result.changes.runtime).toHaveLength(4);
+    expect(result.changes.bundler).toEqual([]);
     expect(result.changes.build).toEqual([]);
-    expect(renderReleaseDependencyReport(result)).toContain(
-      "do not prove a runtime dependency changed"
-    );
+    expect(renderReleaseDependencyReport(result)).toContain("Shipped in exe (runtime)");
   });
 
   test("distinguishes dirty current inputs and untracked workflows from source HEAD", async () => {
@@ -420,16 +476,16 @@ describe("source history and dependency/build input classification", () => {
       status: "compared",
       relationship: "same",
       sourceDirty: true,
-      changes: { graph: [], build: [".github/workflows/new.yml"] },
+      changes: { runtime: [], bundler: [], build: [".github/workflows/new.yml"] },
     });
     expect(renderReleaseDependencyReport(result)).toContain("current files include local changes");
   });
 
-  test("treats a newly added manifest as a mixed input", async () => {
+  test("treats a newly added manifest conservatively as a runtime input", async () => {
     const context = fixture();
     context.state.untracked = ["package.json"];
     const result = await inspectReleaseDependencyStatus(context.options);
-    expect(result.changes.graph).toEqual(["package.json"]);
+    expect(result.changes.runtime).toEqual(["package.json"]);
     expect(context.readFileImpl).not.toHaveBeenCalled();
   });
 

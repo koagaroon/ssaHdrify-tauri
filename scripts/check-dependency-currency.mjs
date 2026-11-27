@@ -7,7 +7,10 @@ import {
   MonitorDataError,
   classifyActionCurrency,
   classifyCargoCurrency,
+  classifyCargoImpact,
+  classifyNodeToolchainCurrency,
   classifyNpmCurrency,
+  classifyNpmImpact,
   classifyRustToolchainCurrency,
   classifySqliteSourceCurrency,
   collectCargoTargets,
@@ -15,11 +18,13 @@ import {
   cratesIndexPath,
   dependencyWatchExitCode,
   fetchTextWithPolicy,
+  getNodeToolchainFloor,
   getNodeTypesPolicy,
   getNpmToolchainPin,
   getRustToolchainPin,
   getSqliteSourcePin,
   inspectGitHubReleases,
+  inspectNodeReleases,
   inspectNpmMetadata,
   inspectResolvedCommitSha,
   inspectSqliteDownloads,
@@ -124,8 +129,24 @@ const cargoPolicies = {
       "Review the selected stable rfd source and Windows dialog behavior before advancing the shared dialog line.",
     reviewedVersions: [],
   },
+  tao: {
+    mode: /** @type {const} */ ("hold-line"),
+    reason: "Track Windows windowing and event-loop fixes within Tauri's selected tao minor line.",
+  },
+  "webview2-com": {
+    mode: /** @type {const} */ ("hold-line"),
+    reason:
+      "Track Windows WebView2 COM binding fixes within Tauri's selected webview2-com minor line.",
+  },
+  wry: {
+    mode: /** @type {const} */ ("hold-line"),
+    reason: "Track Windows WebView2 runtime fixes within Tauri's selected wry minor line.",
+  },
 };
 
+const MONITORED_TRANSITIVE_CRATES = ["tao", "webview2-com", "wry"];
+
+/** @typedef {import("./lib/dependency-currency.mjs").BinaryImpact} BinaryImpact */
 /** @typedef {import("./lib/dependency-currency.mjs").CurrencyRow} CurrencyRow */
 
 /** @param {string} path */
@@ -159,17 +180,46 @@ function safeErrorReason(error) {
  * @param {string} dependency
  * @param {string} locked
  * @param {unknown} error
+ * @param {BinaryImpact} [impact]
  * @returns {CurrencyRow}
  */
-function errorRow(ecosystem, dependency, locked, error) {
+function errorRow(ecosystem, dependency, locked, error, impact = "dev-ci") {
   return {
     ecosystem,
     dependency,
+    impact,
     locked,
     latest: "unknown",
     status: "error",
     reason: safeErrorReason(error),
   };
+}
+
+const MAX_CONCURRENT_FETCHES = 3;
+let activeFetches = 0;
+/** @type {Array<() => void>} */
+const pendingFetchQueue = [];
+
+/**
+ * @template T
+ * @param {() => Promise<T>} task
+ * @returns {Promise<T>}
+ */
+async function withFetchSlot(task) {
+  if (activeFetches >= MAX_CONCURRENT_FETCHES) {
+    await /** @type {Promise<void>} */ (
+      new Promise((resolveSlot) => {
+        pendingFetchQueue.push(resolveSlot);
+      })
+    );
+  }
+  activeFetches += 1;
+  try {
+    return await task();
+  } finally {
+    activeFetches -= 1;
+    pendingFetchQueue.shift()?.();
+  }
 }
 
 const responseCache = new Map();
@@ -183,7 +233,7 @@ function cachedFetchText(url, headers, maxBytes) {
   const key = `${headers.Accept ?? ""}\n${url}`;
   const existing = responseCache.get(key);
   if (existing !== undefined) return existing;
-  const request = fetchTextWithPolicy(url, { headers, maxBytes });
+  const request = withFetchSlot(() => fetchTextWithPolicy(url, { headers, maxBytes }));
   responseCache.set(key, request);
   return request;
 }
@@ -250,7 +300,8 @@ async function checkNpmDependencies() {
     }
   }
 
-  const genericRows = await mapWithConcurrency(targets, 6, async (target) => {
+  const genericRows = await mapWithConcurrency(targets, 4, async (target) => {
+    const impact = classifyNpmImpact(target.name, target.kind);
     try {
       const metadata = await fetchNpmMetadata(target.name);
       const nodeTypesPolicy =
@@ -268,11 +319,12 @@ async function checkNpmDependencies() {
       return {
         ecosystem: "npm",
         dependency: target.name,
+        impact,
         locked: target.locked,
         ...result,
       };
     } catch (error) {
-      return errorRow("npm", target.name, target.locked, error);
+      return errorRow("npm", target.name, target.locked, error, impact);
     }
   });
   rows.push(...genericRows);
@@ -317,15 +369,47 @@ async function checkNpmDependencies() {
       return {
         ecosystem: "npm / toolchain",
         dependency: target.dependency,
+        impact: /** @type {const} */ ("dev-ci"),
         locked,
         ...result,
       };
     } catch (error) {
-      return errorRow("npm / toolchain", target.dependency, locked, error);
+      return errorRow("npm / toolchain", target.dependency, locked, error, "dev-ci");
     }
   });
   rows.push(...toolchainRows);
   return rows;
+}
+
+/** @returns {Promise<CurrencyRow>} */
+async function checkNodeToolchain() {
+  let locked = "unknown";
+  try {
+    const floor = getNodeToolchainFloor(await readJson(packageJsonPath));
+    locked = floor.raw;
+    const text = await cachedFetchText(
+      "https://nodejs.org/dist/index.json",
+      { Accept: "application/json", "User-Agent": userAgent },
+      8 * 1024 * 1024
+    );
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      throw new MonitorDataError("Node.js returned malformed JSON for dist/index.json");
+    }
+    const releases = inspectNodeReleases(parsed);
+    const result = classifyNodeToolchainCurrency({ floor: locked, releases });
+    return {
+      ecosystem: "Build tools",
+      dependency: "Node.js LTS",
+      impact: "dev-ci",
+      locked,
+      ...result,
+    };
+  } catch (error) {
+    return errorRow("Build tools", "Node.js LTS", locked, error, "dev-ci");
+  }
 }
 
 /** @returns {Promise<CurrencyRow>} */
@@ -338,12 +422,13 @@ async function checkNpmToolchain() {
     return {
       ecosystem: "Build tools",
       dependency: "npm package manager",
+      impact: "dev-ci",
       locked,
       ...result,
       reason: `${result.reason} Pinned build tool; validate installation and lockfile behavior before changing it.`,
     };
   } catch (error) {
-    return errorRow("Build tools", "npm package manager", locked, error);
+    return errorRow("Build tools", "npm package manager", locked, error, "dev-ci");
   }
 }
 
@@ -358,11 +443,12 @@ async function checkRustToolchain() {
     return {
       ecosystem: "Build tools",
       dependency: "Rust compiler",
+      impact: "bundler",
       locked,
       ...classifyRustToolchainCurrency({ locked, release }),
     };
   } catch (error) {
-    return errorRow("Build tools", "Rust compiler", locked, error);
+    return errorRow("Build tools", "Rust compiler", locked, error, "bundler");
   }
 }
 
@@ -380,6 +466,7 @@ async function checkSqliteSource() {
     return {
       ecosystem: "Bundled source",
       dependency: "SQLite amalgamation",
+      impact: "runtime",
       locked,
       ...classifySqliteSourceCurrency({
         bundled,
@@ -387,7 +474,7 @@ async function checkSqliteSource() {
       }),
     };
   } catch (error) {
-    return errorRow("Bundled source", "SQLite amalgamation", locked, error);
+    return errorRow("Bundled source", "SQLite amalgamation", locked, error, "runtime");
   }
 }
 
@@ -396,7 +483,16 @@ function runCargoMetadata() {
   return new Promise((resolvePromise, rejectPromise) => {
     execFile(
       "cargo",
-      ["metadata", "--format-version", "1", "--locked", "--manifest-path", cargoManifestPath],
+      [
+        "metadata",
+        "--format-version",
+        "1",
+        "--locked",
+        "--filter-platform",
+        "x86_64-pc-windows-msvc",
+        "--manifest-path",
+        cargoManifestPath,
+      ],
       {
         cwd: projectRoot,
         encoding: "utf8",
@@ -457,7 +553,9 @@ async function checkCargoDependencies() {
 
   let cargoScope;
   try {
-    cargoScope = collectCargoTargets(metadata);
+    cargoScope = collectCargoTargets(metadata, {
+      transitiveNames: MONITORED_TRANSITIVE_CRATES,
+    });
     const verified = await getVerifiedSqliteBundle();
     cargoScope.targets = cargoScope.targets.filter((target) => target.name !== "libsqlite3-sys");
     cargoScope.targets.push({
@@ -466,10 +564,12 @@ async function checkCargoDependencies() {
       kinds: ["bundled"],
     });
   } catch (error) {
-    return [errorRow("Cargo", "direct dependency graph", "unknown", error)];
+    return [errorRow("Cargo", "direct dependency graph", "unknown", error, "runtime")];
   }
 
-  return await mapWithConcurrency(cargoScope.targets, 6, async (target) => {
+  return await mapWithConcurrency(cargoScope.targets, 4, async (target) => {
+    const ecosystem = target.kinds.includes("transitive") ? "Cargo (transitive)" : "Cargo";
+    const impact = classifyCargoImpact(target.kinds);
     try {
       const indexPath = cratesIndexPath(target.name);
       const text = await cachedFetchText(
@@ -492,13 +592,14 @@ async function checkCargoDependencies() {
         reviewedVersions: policy.reviewedVersions ?? [],
       });
       return {
-        ecosystem: "Cargo",
+        ecosystem,
         dependency: target.name,
+        impact,
         locked: target.locked,
         ...result,
       };
     } catch (error) {
-      return errorRow("Cargo", target.name, target.locked, error);
+      return errorRow(ecosystem, target.name, target.locked, error, impact);
     }
   });
 }
@@ -614,11 +715,12 @@ async function checkGitHubActions() {
       return {
         ecosystem: "GitHub Actions",
         dependency: action.repository,
+        impact: /** @type {const} */ ("dev-ci"),
         locked: action.declaredTag,
         ...result,
       };
     } catch (error) {
-      return errorRow("GitHub Actions", action.repository, action.declaredTag, error);
+      return errorRow("GitHub Actions", action.repository, action.declaredTag, error, "dev-ci");
     }
   });
   rows.push(...actionRows);
@@ -639,6 +741,7 @@ async function main() {
         checkNpmDependencies(),
         checkCargoDependencies(),
         checkGitHubActions(),
+        checkNodeToolchain(),
         checkNpmToolchain(),
         checkRustToolchain(),
         checkSqliteSource(),
