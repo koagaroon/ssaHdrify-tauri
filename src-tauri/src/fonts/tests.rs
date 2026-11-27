@@ -672,14 +672,30 @@ fn decode_legacy_name_record_rejects_oversized_raw_records() {
     assert!(decode_legacy_name_record(3, 1, 0x0409, &raw).is_none());
 }
 
+fn next_fonts_test_suffix() -> String {
+    static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let seq = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{}-{stamp}-{seq}", std::process::id())
+}
+
+fn make_fonts_test_dir(label: &str) -> PathBuf {
+    let base = std::env::temp_dir();
+    fs::create_dir_all(&base).unwrap();
+    let dir = base.join(format!(
+        "ssahdrify-fonts-test-{label}-{}",
+        next_fonts_test_suffix()
+    ));
+    fs::create_dir(&dir).unwrap();
+    dir
+}
+
 #[test]
 fn font_file_skip_reason_distinguishes_missing_over_limit_and_malformed_files() {
-    let root = std::env::temp_dir().join(format!(
-        "ssahdrify-font-skip-reasons-{}",
-        std::process::id()
-    ));
-    let _ = fs::remove_dir_all(&root);
-    fs::create_dir_all(&root).unwrap();
+    let root = make_fonts_test_dir("skip-reasons");
 
     let missing = root.join("missing.ttf");
     assert_eq!(
@@ -850,11 +866,7 @@ fn subset_with_index_handles_ttc_face_zero_and_one() {
 }
 
 fn init_test_user_font_db(name: &str) {
-    let dir = std::env::temp_dir().join(format!(
-        "ssahdrify-user-font-db-test-{}-{name}",
-        std::process::id()
-    ));
-    let _ = fs::remove_dir_all(&dir);
+    let dir = make_fonts_test_dir(&format!("user-font-db-{name}"));
     init_user_font_db(&dir).expect("test DB should initialize");
     clear_font_sources().expect("test DB should clear");
 }
@@ -1449,7 +1461,7 @@ fn cache_metadata_conversion_fails_if_a_scanned_face_disappears() {
     let _guard = SCAN_TEST_LOCK.lock().unwrap();
     let missing_path = std::env::temp_dir().join(format!(
         "ssahdrify-missing-cache-face-{}.ttf",
-        std::process::id()
+        next_fonts_test_suffix()
     ));
     let _ = fs::remove_file(&missing_path);
     let missing_path_text = missing_path.to_string_lossy().into_owned();
@@ -1463,12 +1475,7 @@ fn cache_metadata_conversion_fails_if_a_scanned_face_disappears() {
 fn full_face_names_match_without_weakening_family_style_matching() {
     let _guard = SCAN_TEST_LOCK.lock().unwrap();
     init_test_user_font_db("face-name-alias");
-    let temp_font_dir = std::env::temp_dir().join(format!(
-        "ssahdrify-face-name-alias-test-{}",
-        std::process::id()
-    ));
-    let _ = fs::remove_dir_all(&temp_font_dir);
-    fs::create_dir_all(&temp_font_dir).expect("test font dir should be created");
+    let temp_font_dir = make_fonts_test_dir("face-name-alias");
     let temp_font_path = temp_font_dir.join("DreamHanSerif-W22.ttc");
     fs::write(&temp_font_path, b"fake Dream Han cache metadata fixture")
         .expect("test font file should be written");
@@ -1843,11 +1850,7 @@ fn overlapping_rescan_refreshes_shared_face_metadata_and_keys() {
 #[test]
 fn recursive_discovery_is_opt_in_and_deterministic() {
     use std::io::Write as _;
-    let root = std::env::temp_dir().join(format!(
-        "ssahdrify-recursive-discovery-{}",
-        std::process::id()
-    ));
-    let _ = fs::remove_dir_all(&root);
+    let root = make_fonts_test_dir("recursive-discovery");
     let nested = root.join("b").join("deeper");
     fs::create_dir_all(&nested).unwrap();
     fs::create_dir_all(root.join("a")).unwrap();
@@ -1889,11 +1892,7 @@ fn recursive_discovery_is_opt_in_and_deterministic() {
 
 #[test]
 fn collecting_scan_returns_its_full_recursive_snapshot_when_no_face_parses() {
-    let root = std::env::temp_dir().join(format!(
-        "ssahdrify-collecting-snapshot-{}",
-        std::process::id()
-    ));
-    let _ = fs::remove_dir_all(&root);
+    let root = make_fonts_test_dir("collecting-snapshot");
     let nested = root.join("nested");
     fs::create_dir_all(&nested).unwrap();
     fs::write(nested.join("broken.ttf"), b"not a font").unwrap();
@@ -1913,15 +1912,7 @@ struct ReadFailureFixtures(PathBuf);
 
 impl ReadFailureFixtures {
     fn new(label: &str) -> Self {
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!(
-            "ssahdrify-font-read-{label}-{}-{stamp}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&root).unwrap();
+        let root = make_fonts_test_dir(&format!("font-read-{label}"));
         for basename in ["a.ttf", "b.ttf", "c.ttf"] {
             let font = font_with_name_records(&[(
                 1,
@@ -2190,10 +2181,7 @@ fn directory_inner_rejects_missing_dir() {
 #[test]
 fn directory_inner_skips_non_font_files_without_emitting() {
     use std::io::Write as _;
-    let mut dir = std::env::temp_dir();
-    dir.push("ssahdrify_fonts_test_non_font_skip");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = make_fonts_test_dir("non-font-skip");
     for n in [
         "a.txt",
         "b.png",

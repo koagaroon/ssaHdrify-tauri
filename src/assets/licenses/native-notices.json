@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "target": "x86_64-pc-windows-msvc",
   "inputs": {
-    "src-tauri/Cargo.lock": "f22c933b8cd9ae3f081d06bd4c8f220da646aa37cbd75150b0b1fa5b3ec36888",
+    "src-tauri/Cargo.lock": "ad39a6b5875ec31d9ad40784904a618b25d69539fd637039b3a37dcbfc46e6fa",
     "src-tauri/Cargo.toml": "9acfc567013d8e6015edac2c5efa47606efc708950e6350b2483cad26049444c",
     "rust-toolchain.toml": "d4580150cd6aec323fffc3d1b193cbbf262855081a3e1fb330c18b7ba8a98dff",
     "src-tauri/sqlite-bundle.json": "cc61c4d9ef6400df620a0040a0332b1ffb30220d44f9e2d6c72837e4f3842967",
@@ -12,7 +12,7 @@
     "src-tauri/.cargo/config": null,
     "src-tauri/.cargo/config.toml": null
   },
-  "sha256": "2e2665f5768f6d5bc6f201a8c180e66589eab79f2e1d4e3506569cd47c5910da",
+  "sha256": "55ff18f58f6d793c5ff0a5ced32f05ef5eb942b822942355c696c81ab8b368cf",
   "packages": [
     {
       "name": "adler2",
@@ -962,9 +962,9 @@
     },
     {
       "name": "clap_builder",
-      "version": "4.6.7",
+      "version": "4.6.10",
       "license": "MIT OR Apache-2.0",
-      "source": "https://crates.io/crates/clap_builder/4.6.7",
+      "source": "https://crates.io/crates/clap_builder/4.6.10",
       "features": [
         "color",
         "error-context",
@@ -1028,9 +1028,9 @@
     },
     {
       "name": "clap",
-      "version": "4.6.9",
+      "version": "4.6.10",
       "license": "MIT OR Apache-2.0",
-      "source": "https://crates.io/crates/clap/4.6.9",
+      "source": "https://crates.io/crates/clap/4.6.10",
       "features": [
         "color",
         "default",
@@ -5259,9 +5259,9 @@
     },
     {
       "name": "sha2",
-      "version": "0.11.1",
+      "version": "0.11.2",
       "license": "MIT OR Apache-2.0",
-      "source": "https://crates.io/crates/sha2/0.11.1",
+      "source": "https://crates.io/crates/sha2/0.11.2",
       "features": [
         "alloc",
         "default",
@@ -7572,6 +7572,7 @@
         "Wdk_System_SystemInformation",
         "Win32",
         "Win32_Foundation",
+        "Win32_Globalization",
         "Win32_Media",
         "Win32_NetworkManagement",
         "Win32_NetworkManagement_IpHelper",
@@ -7581,12 +7582,15 @@
         "Win32_Storage",
         "Win32_Storage_FileSystem",
         "Win32_System",
+        "Win32_System_Com",
+        "Win32_System_Console",
         "Win32_System_Diagnostics",
         "Win32_System_Diagnostics_Debug",
         "Win32_System_IO",
         "Win32_System_Kernel",
         "Win32_System_Pipes",
         "Win32_System_Registry",
+        "Win32_System_SystemInformation",
         "Win32_System_Threading",
         "Win32_System_Time",
         "Win32_System_WindowsProgramming",
@@ -7637,8 +7641,6 @@
         "Win32_System_Com",
         "Win32_System_Console",
         "Win32_System_DataExchange",
-        "Win32_System_Diagnostics",
-        "Win32_System_Diagnostics_Debug",
         "Win32_System_IO",
         "Win32_System_LibraryLoader",
         "Win32_System_Memory",

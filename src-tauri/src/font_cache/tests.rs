@@ -10,13 +10,11 @@ use std::{fs, path::Path};
 /// Cross-reference: a sibling `TempCacheDir` lives at
 /// `font_cache_commands.rs::tests::TempCacheDir` for the GUI-side
 /// IPC tests. Same posture, NOT identical: the commands-side
-/// version takes a `name: &str` constructor arg, this one takes
-/// no args; the seed-strength forms also diverge (`subsec_nanos`
-/// in commands-side vs `as_nanos` here — the latter is wider
-/// entropy and is the better default for parallel-test collision
-/// avoidance, but the difference hasn't surfaced as a real
-/// collision yet). Don't conflate the two when reading either
-/// side's WHY block.
+/// version takes a `name: &str` constructor arg, whereas this one
+/// takes no args. Both combine `PID + UNIX nanos + AtomicU64` and
+/// `fs::create_dir` so parallel test threads on coarse-tick clocks
+/// (e.g. 100ns Windows ticks) can never share a directory. Don't
+/// conflate the two when reading either side's WHY block.
 ///
 /// Other test modules (`dropzone.rs::tests`,
 /// `safe_io.rs::tests::temp_dir`, `fonts.rs::tests`) use inline
@@ -31,16 +29,19 @@ struct TempCacheDir(std::path::PathBuf);
 
 impl TempCacheDir {
     fn new() -> Self {
+        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let dir = std::env::temp_dir().join(format!(
-            "ssahdrify-font-cache-test-{}-{}",
+        let seq = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let base = std::env::temp_dir();
+        fs::create_dir_all(&base).expect("ensure OS temp dir");
+        let dir = base.join(format!(
+            "ssahdrify-font-cache-test-{}-{stamp}-{seq}",
             std::process::id(),
-            stamp
         ));
-        fs::create_dir_all(&dir).expect("create test temp dir");
+        fs::create_dir(&dir).expect("create unique test temp dir");
         Self(dir)
     }
 

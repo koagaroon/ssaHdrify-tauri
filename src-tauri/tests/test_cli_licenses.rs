@@ -6,15 +6,19 @@ use std::process::Command;
 
 #[test]
 fn licenses_prints_complete_embedded_notices_without_touching_cache_or_output_paths() {
+    static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let root = std::env::temp_dir().join(format!(
-        "ssahdrify-cli-licenses-{}-{stamp}",
+    let seq = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let base = std::env::temp_dir();
+    fs::create_dir_all(&base).unwrap();
+    let root = base.join(format!(
+        "ssahdrify-cli-licenses-{}-{stamp}-{seq}",
         std::process::id()
     ));
-    fs::create_dir_all(&root).unwrap();
+    fs::create_dir(&root).unwrap();
     let cache_path = root.join("missing-cache-directory/cache.sqlite3");
     let output_path = root.join("missing-output-directory");
     let output = Command::new(env!("CARGO_BIN_EXE_ssahdrify-cli"))

@@ -42,13 +42,19 @@ fn cli_path() -> PathBuf {
 }
 
 fn temp_dir(label: &str) -> PathBuf {
+    static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let pid = std::process::id();
     let nano = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let dir = std::env::temp_dir().join(format!("ssahdrify-cli-diagnostics-{label}-{pid}-{nano}"));
-    fs::create_dir_all(&dir).expect("failed to create test temp dir");
+    let seq = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let base = std::env::temp_dir();
+    fs::create_dir_all(&base).expect("failed to ensure OS temp dir");
+    let dir = base.join(format!(
+        "ssahdrify-cli-diagnostics-{label}-{pid}-{nano}-{seq}"
+    ));
+    fs::create_dir(&dir).expect("failed to create unique test temp dir");
     dir
 }
 

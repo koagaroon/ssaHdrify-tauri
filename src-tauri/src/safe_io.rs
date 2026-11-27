@@ -1109,14 +1109,19 @@ mod tests {
     }
 
     fn temp_dir(name: &str) -> std::path::PathBuf {
-        let mut dir = std::env::temp_dir();
-        dir.push(format!(
-            "ssahdrify_safe_io_test_{}_{}",
-            name,
+        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let seq = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let base = std::env::temp_dir();
+        fs::create_dir_all(&base).unwrap();
+        let dir = base.join(format!(
+            "ssahdrify_safe_io_test_{name}_{}_{stamp}_{seq}",
             std::process::id()
         ));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
+        fs::create_dir(&dir).unwrap();
         dir
     }
 

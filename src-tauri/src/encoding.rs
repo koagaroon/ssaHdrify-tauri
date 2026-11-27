@@ -927,19 +927,35 @@ mod tests {
         decode_bytes(&bytes).unwrap_or_else(|e| panic!("Cannot decode fixture {name}: {e}"))
     }
 
-    fn temp_file_path(name: &str, ext: &str) -> std::path::PathBuf {
+    fn next_encoding_test_suffix() -> String {
+        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_nanos();
+        let seq = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        format!("{}_{stamp}_{seq}", std::process::id())
+    }
+
+    fn temp_file_path(name: &str, ext: &str) -> std::path::PathBuf {
         let mut path = std::env::temp_dir();
         path.push(format!(
-            "ssahdrify_encoding_{name}_{}_{}.{}",
-            std::process::id(),
-            stamp,
+            "ssahdrify_encoding_{name}_{}.{}",
+            next_encoding_test_suffix(),
             ext
         ));
         path
+    }
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let base = std::env::temp_dir();
+        std::fs::create_dir_all(&base).unwrap();
+        let dir = base.join(format!(
+            "ssahdrify-encoding-dir-{name}-{}",
+            next_encoding_test_suffix()
+        ));
+        std::fs::create_dir(&dir).unwrap();
+        dir
     }
 
     fn encode_utf16_without_bom(text: &str, little_endian: bool) -> Vec<u8> {
@@ -1371,10 +1387,7 @@ mod tests {
 
     #[test]
     fn read_timing_map_accepts_utf8_and_utf8_bom_json_and_csv() {
-        let dir =
-            std::env::temp_dir().join(format!("ssahdrify-timing-map-read-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = temp_dir("timing-map-read");
 
         let json_path = dir.join("rules.json");
         std::fs::write(&json_path, b"\xEF\xBB\xBF{\"rules\":[]}").unwrap();
@@ -1391,12 +1404,7 @@ mod tests {
 
     #[test]
     fn read_timing_map_rejects_disallowed_ext_denied_scope_and_invalid_utf8() {
-        let dir = std::env::temp_dir().join(format!(
-            "ssahdrify-timing-map-reject-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = temp_dir("timing-map-reject");
 
         let ass_path = dir.join("episode.ass");
         std::fs::write(&ass_path, "[Script Info]\n").unwrap();

@@ -5,15 +5,19 @@ use std::process::Command;
 const ASS: &str = include_str!("fixtures/utf8.ass");
 
 fn temp_dir(label: &str) -> PathBuf {
+    static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let path = std::env::temp_dir().join(format!(
-        "ssahdrify-input-protection-{label}-{}-{stamp}",
+    let seq = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let base = std::env::temp_dir();
+    fs::create_dir_all(&base).unwrap();
+    let path = base.join(format!(
+        "ssahdrify-input-protection-{label}-{}-{stamp}-{seq}",
         std::process::id()
     ));
-    fs::create_dir_all(&path).unwrap();
+    fs::create_dir(&path).unwrap();
     path
 }
 
