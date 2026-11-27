@@ -65,8 +65,23 @@ pub fn expand_dropped_paths_inner<F>(
 where
     F: Fn(&Path) -> bool,
 {
+    expand_dropped_paths_inner_with_cap(paths, is_allowed, MAX_RESULT_FILES)
+}
+
+fn expand_dropped_paths_inner_with_cap<F>(
+    paths: Vec<String>,
+    is_allowed: F,
+    max_result_files: usize,
+) -> Result<ExpandedPaths, String>
+where
+    F: Fn(&Path) -> bool,
+{
     if paths.is_empty() {
-        return Ok(ExpandedPaths::default());
+        return Ok(ExpandedPaths {
+            files: Vec::new(),
+            truncated: false,
+            max_files: max_result_files,
+        });
     }
     if paths.len() > MAX_INPUT_PATHS {
         return Err(format!(
@@ -80,19 +95,11 @@ where
     let mut rejected = 0usize;
     let total_inputs = paths.len();
     for (idx, raw) in paths.iter().enumerate() {
-        // Skip silently rather than fail — native drag-drop shouldn't
-        // produce empty / oversize / control-char paths, but the IPC
-        // boundary trusts no caller, and dropping ONE bad path should
-        // not abort the whole batch the user just dropped.
         if crate::util::validate_ipc_path(raw, "Dropped").is_err() {
             rejected += 1;
             continue;
         }
         let p = Path::new(raw);
-        // Scope-gate before stat/read_dir so a compromised WebView cannot
-        // use this command to probe or enumerate a deny-listed path. Keep
-        // the warning path-free: the aggregate count below is sufficient,
-        // and denied child names must never become a disclosure channel.
         if !is_allowed(p) {
             log::warn!("dropzone: skipping path denied by filesystem scope");
             rejected += 1;
@@ -106,8 +113,6 @@ where
                 continue;
             }
         };
-        // Skip top-level reparse points so a junction → /etc style trick
-        // can't expand into a protected location.
         if is_reparse_point(p) {
             log::warn!("dropzone: skipping reparse point at {raw}");
             rejected += 1;
@@ -115,38 +120,19 @@ where
         }
         if meta.file_type().is_file() {
             result.push(raw.clone());
-        } else if meta.file_type().is_dir() {
-            // walk_one_level returns true only when it stopped
-            // mid-folder with more entries pending — that's the
-            // intra-folder truncation signal.
-            if walk_one_level(p, &mut result, &is_allowed) {
-                truncated = true;
-            }
+        } else if meta.file_type().is_dir()
+            && walk_one_level(p, &mut result, &is_allowed, max_result_files)
+        {
+            truncated = true;
         }
-        if result.len() >= MAX_RESULT_FILES {
-            // Already-added entries pass through unchanged; the rest
-            // of the drop is silently dropped on the floor from the
-            // path-walk perspective. Set `truncated` for the
-            // cross-input case (`idx + 1 < total_inputs`) — exactly
-            // hitting the cap with no
-            // remainder ("exactly 5000 files in one folder, no more
-            // inputs") would otherwise produce a false-positive
-            // banner / stderr warning. Intra-folder mid-walk
-            // truncation is signaled by walk_one_level's return
-            // value above.
-            log::warn!("dropzone: result cap {MAX_RESULT_FILES} reached, dropping remainder");
+        if result.len() >= max_result_files {
+            log::warn!("dropzone: result cap {max_result_files} reached, dropping remainder");
             if idx + 1 < total_inputs {
                 truncated = true;
             }
             break;
         }
     }
-    // surface the per-path rejection count at WARN, not INFO.
-    // This aggregate IS the user-visible consequence (N drops of M dropped);
-    // the per-failure warnings above are the function-name-leak class.
-    // Release builds default to LevelFilter::Warn (see lib.rs), so
-    // previously the per-failure noise was visible but the synthesis that
-    // explains the noise was not.
     if rejected > 0 {
         log::warn!(
             "dropzone: dropped {rejected} of {} input path(s) — see warnings above",
@@ -156,7 +142,7 @@ where
     Ok(ExpandedPaths {
         files: result,
         truncated,
-        max_files: MAX_RESULT_FILES,
+        max_files: max_result_files,
     })
 }
 
@@ -188,7 +174,12 @@ pub fn expand_dropped_paths(
 /// latter case we report `false` because no remainder existed in
 /// this folder. The caller still independently checks `idx + 1 <
 /// total_inputs` for the cross-input case.
-fn walk_one_level<F>(dir: &Path, out: &mut Vec<String>, is_allowed: &F) -> bool
+fn walk_one_level<F>(
+    dir: &Path,
+    out: &mut Vec<String>,
+    is_allowed: &F,
+    max_result_files: usize,
+) -> bool
 where
     F: Fn(&Path) -> bool,
 {
@@ -203,7 +194,7 @@ where
     // (`entries.flatten()` would silently swallow them, hiding broken
     // permissions or stale-NFS-handle situations).
     for entry_result in entries {
-        if out.len() >= MAX_RESULT_FILES {
+        if out.len() >= max_result_files {
             // Shared cap with `expand_dropped_paths` outer loop
             // : both layers read the same constant so
             // the per-folder check here participates in the same total
@@ -290,21 +281,8 @@ mod tests {
     use std::fs;
     use std::io::Write;
 
-    fn make_tempdir(suffix: &str) -> std::path::PathBuf {
-        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let seq = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let base = std::env::temp_dir();
-        fs::create_dir_all(&base).unwrap();
-        let dir = base.join(format!(
-            "ssahdrify_dropzone_test_{suffix}_{}_{stamp}_{seq}",
-            std::process::id()
-        ));
-        fs::create_dir(&dir).unwrap();
-        dir
+    fn make_tempdir(suffix: &str) -> crate::test_support::TestTempDir {
+        crate::test_support::TestTempDir::new("ssahdrify_dropzone_test", suffix)
     }
 
     fn allow_all(_: &std::path::Path) -> bool {
@@ -386,7 +364,7 @@ mod tests {
 
         // Deny only the root while allowing its child. If the root gate is
         // ever dropped, the walk will expose must-not-leak.ass and fail.
-        let denied_root = dir.clone();
+        let denied_root = dir.to_path_buf();
         let result =
             expand_dropped_paths_inner(vec![dir.to_str().unwrap().to_string()], move |path| {
                 path != denied_root.as_path()
@@ -517,51 +495,72 @@ mod tests {
     }
 
     #[test]
+    fn max_result_files_constant_remains_5000() {
+        assert_eq!(MAX_RESULT_FILES, 5000);
+    }
+
+    #[test]
     fn caps_result_at_max_result_files_and_sets_truncated_flag() {
         let dir = make_tempdir("cap");
-        // Create MAX_RESULT_FILES + 100 files in one folder; expanding the
-        // folder must stop at the cap AND set `truncated=true` so the
-        // frontend can surface a banner.
-        let count = MAX_RESULT_FILES + 100;
+        let cap = 25usize;
+        let count = cap + 5;
         for i in 0..count {
             fs::File::create(dir.join(format!("f{i}.ass")))
                 .unwrap()
                 .write_all(b"x")
                 .unwrap();
         }
-        let result =
-            expand_dropped_paths_inner(vec![dir.to_str().unwrap().to_string()], allow_all).unwrap();
+        let result = expand_dropped_paths_inner_with_cap(
+            vec![dir.to_str().unwrap().to_string()],
+            allow_all,
+            cap,
+        )
+        .unwrap();
         assert_eq!(
             result.files.len(),
-            MAX_RESULT_FILES,
-            "expected cap at MAX_RESULT_FILES, got {}",
+            cap,
+            "expected cap at {cap}, got {}",
             result.files.len()
         );
+        assert_eq!(result.max_files, cap);
         assert!(result.truncated, "truncated flag must be set when cap hits");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn exact_cap_with_no_remainder_does_not_set_truncated() {
-        // Regression case: a single folder containing
-        // EXACTLY MAX_RESULT_FILES regular files, no more inputs to
-        // process — nothing was dropped on the floor, so `truncated`
-        // must stay false. Pre-fix, the `>= cap` check fired on
-        // every cap-hit regardless of remainder presence.
         let dir = make_tempdir("exact_cap");
-        for i in 0..MAX_RESULT_FILES {
+        let cap = 25usize;
+        for i in 0..cap {
             fs::File::create(dir.join(format!("f{i}.ass")))
                 .unwrap()
                 .write_all(b"x")
                 .unwrap();
         }
-        let result =
-            expand_dropped_paths_inner(vec![dir.to_str().unwrap().to_string()], allow_all).unwrap();
-        assert_eq!(result.files.len(), MAX_RESULT_FILES);
+        let result = expand_dropped_paths_inner_with_cap(
+            vec![dir.to_str().unwrap().to_string()],
+            allow_all,
+            cap,
+        )
+        .unwrap();
+        assert_eq!(result.files.len(), cap);
         assert!(
             !result.truncated,
             "truncated must NOT be set when exact cap was reached with no remainder"
         );
-        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cross_input_truncation_sets_flag_when_later_paths_remain() {
+        let dir = make_tempdir("cross_cap");
+        let cap = 10usize;
+        let mut inputs = Vec::with_capacity(cap + 2);
+        for i in 0..(cap + 2) {
+            let p = dir.join(format!("item_{i}.ass"));
+            fs::File::create(&p).unwrap().write_all(b"x").unwrap();
+            inputs.push(p.to_str().unwrap().to_string());
+        }
+        let result = expand_dropped_paths_inner_with_cap(inputs, allow_all, cap).unwrap();
+        assert_eq!(result.files.len(), cap);
+        assert!(result.truncated);
     }
 }

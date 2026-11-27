@@ -1919,6 +1919,101 @@ fn transactional_clear_success_leaves_no_cached_sources() {
 }
 
 #[test]
+fn lookup_family_rejects_ntfs_case_renamed_font_and_falls_back_cleanly() {
+    let (guard, path) = temp_cache_path();
+    let mut cache = FontCache::open_or_create(&path).unwrap();
+    let font_dir = guard.0.join("case-font");
+    let font = real_font_metadata(
+        &font_dir,
+        "UpperCase.ttf",
+        0,
+        vec![family_key("Case Sans", false, false)],
+        Vec::new(),
+    );
+    cache
+        .replace_folder(
+            &real_folder_path(&font_dir),
+            100,
+            std::slice::from_ref(&font),
+        )
+        .unwrap();
+
+    // Rename only casing on NTFS (file mtime & size stay identical!).
+    let lower_path = font_dir.join("uppercase.ttf");
+    fs::rename(font_dir.join("UpperCase.ttf"), &lower_path).unwrap();
+
+    let err = cache
+        .lookup_family("Case Sans", false, false)
+        .expect_err("stale-cased font_path must be rejected at lookup so subset_font cannot fail");
+    assert!(
+        err.to_string().contains("canonical spelling changed"),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn ntfs_case_renamed_root_is_classified_as_modified_and_replaced_atomically() {
+    let (guard, path) = temp_cache_path();
+    let mut cache = FontCache::open_or_create(&path).unwrap();
+    let upper_root = guard.0.join("MyFontPack");
+    let font = real_font_metadata(
+        &upper_root,
+        "demo.ttf",
+        0,
+        vec![family_key("Pack Sans", false, false)],
+        Vec::new(),
+    );
+    let initial_snapshot =
+        snapshot_source_directories(&upper_root, FontDirectoryScope::Shallow).unwrap();
+    cache
+        .replace_source(&initial_snapshot, std::slice::from_ref(&font))
+        .unwrap();
+    let original_order = cache.list_sources().unwrap()[0].source_order;
+
+    // Case-only rename on NTFS.
+    let lower_root = guard.0.join("myfontpack");
+    fs::rename(&upper_root, &lower_root).unwrap();
+
+    let sources = cache.list_sources().unwrap();
+    let inspection = inspect_cached_sources_live(&sources);
+    let mut report = cache.diff_sources(&inspection.snapshots).unwrap();
+    apply_live_source_inspection(&mut report, &inspection);
+    assert!(
+        report.added.is_empty(),
+        "case-only rename must never push into added: {report:?}"
+    );
+    assert!(
+        report.removed.is_empty(),
+        "case-only rename must not leave an un-evictable removed entry: {report:?}"
+    );
+    assert_eq!(report.modified, vec![initial_snapshot.key()]);
+
+    let live_snapshot =
+        snapshot_source_directories(&lower_root, FontDirectoryScope::Shallow).unwrap();
+    let refreshed_font = FontMetadata {
+        file_path: canonical_path_string(&lower_root.join("demo.ttf")),
+        ..font
+    };
+    cache
+        .replace_source_from(
+            Some(&initial_snapshot.source_root),
+            &live_snapshot,
+            std::slice::from_ref(&refreshed_font),
+        )
+        .unwrap();
+
+    let updated = cache.list_sources().unwrap();
+    assert_eq!(updated.len(), 1);
+    assert_eq!(updated[0].source_root, live_snapshot.source_root);
+    assert_eq!(updated[0].source_order, original_order);
+    let hit = cache
+        .lookup_family("Pack Sans", false, false)
+        .unwrap()
+        .unwrap();
+    assert_eq!(hit.font_path, refreshed_font.file_path);
+}
+
+#[test]
 fn lookup_prefers_shallow_then_newest_source() {
     let (guard, path) = temp_cache_path();
     let mut cache = FontCache::open_or_create(&path).unwrap();

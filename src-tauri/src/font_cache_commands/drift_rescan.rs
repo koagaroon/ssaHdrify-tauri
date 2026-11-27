@@ -2,40 +2,33 @@ use std::path::Path;
 use std::sync::atomic::Ordering;
 
 use crate::font_cache::{
-    snapshot_source_directories, validate_cache_source_stability, CacheError, CacheSourceKey,
-    CacheSourceSnapshot, FontCache, FontDirectoryScope, FontMetadata,
+    apply_live_source_inspection, inspect_cached_sources_live, snapshot_source_directories,
+    validate_cache_source_stability, CacheError, CacheSourceKey, CacheSourceSnapshot, FontCache,
+    FontDirectoryScope, FontMetadata,
 };
 use crate::fonts::entries_to_cache_metadata;
 
 use super::*;
 
+#[derive(Debug, Clone)]
+pub(super) struct ScannedRescanSource {
+    pub(super) requested_root: String,
+    pub(super) snapshot: CacheSourceSnapshot,
+    pub(super) metadata: Vec<FontMetadata>,
+}
+
 pub(super) fn collect_live_source_snapshots(
     cached_sources: &[crate::font_cache::CacheSourceRecord],
 ) -> (Vec<CacheSourceSnapshot>, Vec<CacheSourceKey>) {
-    let mut snapshots = Vec::with_capacity(cached_sources.len());
-    let mut unreadable_existing = Vec::new();
-    for source in cached_sources {
-        match snapshot_source_directories(Path::new(&source.source_root), source.scope) {
-            Ok(snapshot) => snapshots.push(snapshot),
-            Err(_) => {
-                let root = Path::new(&source.source_root);
-                let is_clean_real_directory =
-                    matches!(crate::util::try_is_reparse_point(root), Ok(false))
-                        && std::fs::symlink_metadata(root).is_ok_and(|metadata| metadata.is_dir());
-                if is_clean_real_directory {
-                    unreadable_existing.push(source.key());
-                }
-            }
-        }
-    }
-    (snapshots, unreadable_existing)
+    let inspection = inspect_cached_sources_live(cached_sources);
+    (inspection.snapshots, inspection.force_modified)
 }
 
 pub(super) fn classify_unreadable_existing_as_modified(
     report: &mut DriftReport,
-    unreadable_existing: &[CacheSourceKey],
+    force_modified: &[CacheSourceKey],
 ) {
-    for key in unreadable_existing {
+    for key in force_modified {
         report.removed.retain(|removed| removed != key);
         if !report.modified.contains(key) {
             report.modified.push(key.clone());
@@ -198,7 +191,7 @@ pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
     };
     // Phase 1b — recursive metadata walks run outside the slot, so cache
     // lookups do not wait behind a 20k-file library traversal.
-    let (snapshots, unreadable_existing) = collect_live_source_snapshots(&cached_sources);
+    let inspection = inspect_cached_sources_live(&cached_sources);
     let mut report = {
         let slot = GUI_FONT_CACHE
             .lock()
@@ -207,31 +200,17 @@ pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
             "Cache became unavailable while computing drift; retry the operation".to_string()
         })?;
         cache
-            .diff_sources(&snapshots)
+            .diff_sources(&inspection.snapshots)
             .map_err(|e| format!("compute drift: {e}"))?
     };
-    let mut report = DriftReport {
-        added: std::mem::take(&mut report.added),
-        modified: std::mem::take(&mut report.modified),
-        removed: std::mem::take(&mut report.removed),
+    apply_live_source_inspection(&mut report, &inspection);
+    let report = DriftReport {
+        added: report.added,
+        modified: report.modified,
+        removed: report.removed,
     };
-    classify_unreadable_existing_as_modified(&mut report, &unreadable_existing);
 
-    // Phase 2 — outside lock: scan each modified source. This is the
-    // long step (full directory walk + name-table reads); concurrent
-    // lookup_font_family calls run in
-    // parallel instead of waiting on a multi-second to multi-minute
-    // scan that used to be inside the lock.
-    //
-    // Per-source error catch (mirrors `run_refresh_fonts` in
-    // `bin/cli/main.rs`): one source hitting MAX_CACHE_POPULATE_FACES
-    // or a transient I/O error must not abort the whole rescan — that
-    // would let one oversized font pack DoS the user's entire cache
-    // refresh. Log WARN with source context, push to `skipped`, continue.
-    // Phase 3's eviction of skipped sources' stale rows closes the
-    // silent-stale-cache shortcut.
-    let mut scanned: Vec<(CacheSourceSnapshot, Vec<FontMetadata>)> =
-        Vec::with_capacity(report.modified.len());
+    let mut scanned: Vec<ScannedRescanSource> = Vec::with_capacity(report.modified.len());
     let mut skipped: Vec<SkippedFolder> = Vec::new();
     for source in &report.modified {
         let folder_path = Path::new(&source.source_root);
@@ -249,7 +228,11 @@ pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
                         continue;
                     }
                 };
-                scanned.push((snapshot, metadata));
+                scanned.push(ScannedRescanSource {
+                    requested_root: source.source_root.clone(),
+                    snapshot,
+                    metadata,
+                });
             }
             Err(err) => {
                 log::warn!("rescan: skipping {} — {err}", source.source_root);
@@ -305,16 +288,18 @@ pub fn rescan_font_cache_drift() -> Result<RescanResult, String> {
 }
 
 pub(super) fn validate_scanned_sources_before_apply(
-    scanned: Vec<(CacheSourceSnapshot, Vec<FontMetadata>)>,
+    scanned: Vec<ScannedRescanSource>,
     skipped: &mut Vec<SkippedFolder>,
-) -> Vec<(CacheSourceSnapshot, Vec<FontMetadata>)> {
+) -> Vec<ScannedRescanSource> {
     let mut validated = Vec::with_capacity(scanned.len());
-    for (snapshot, metadata) in scanned {
-        match validate_cache_source_stability(&snapshot, &metadata) {
-            Ok(()) => validated.push((snapshot, metadata)),
+    for entry in scanned {
+        match validate_cache_source_stability(&entry.snapshot, &entry.metadata) {
+            Ok(()) => validated.push(entry),
             Err(error) => skipped.push(SkippedFolder {
-                folder: snapshot.source_root,
-                scope: snapshot.scope,
+                // Use `requested_root` so Phase 3 evicts the persisted cache key
+                // even when the source underwent an NTFS case-only rename.
+                folder: entry.requested_root,
+                scope: entry.snapshot.scope,
                 reason: format!("source changed before cache apply: {error}"),
                 kind: SkipKind::ScanFailed,
             }),
@@ -329,7 +314,13 @@ pub(super) fn confirm_removed_sources_before_apply(
     removed
         .iter()
         .filter_map(|source| {
-            if snapshot_source_directories(Path::new(&source.source_root), source.scope).is_ok() {
+            // Only preserve the row when a live directory reappeared under the
+            // exact persisted canonical spelling; an NTFS case-only rename would
+            // otherwise satisfy `.is_ok()` while leaving the stale-cased key
+            // unresolvable across future drift checks.
+            if snapshot_source_directories(Path::new(&source.source_root), source.scope)
+                .is_ok_and(|live| live.source_root == source.source_root)
+            {
                 log::info!(
                     "Skipping cache eviction for {}: source reappeared between drift detect and apply",
                     source.source_root
@@ -343,8 +334,9 @@ pub(super) fn confirm_removed_sources_before_apply(
 }
 
 pub(super) trait RescanCacheWriter {
-    fn replace_source(
+    fn replace_source_from(
         &mut self,
+        previous_root: Option<&str>,
         snapshot: &CacheSourceSnapshot,
         fonts: &[FontMetadata],
     ) -> Result<(), CacheError>;
@@ -357,12 +349,13 @@ pub(super) trait RescanCacheWriter {
 }
 
 impl RescanCacheWriter for FontCache {
-    fn replace_source(
+    fn replace_source_from(
         &mut self,
+        previous_root: Option<&str>,
         snapshot: &CacheSourceSnapshot,
         fonts: &[FontMetadata],
     ) -> Result<(), CacheError> {
-        FontCache::replace_source(self, snapshot, fonts)
+        FontCache::replace_source_from(self, previous_root, snapshot, fonts)
     }
 
     fn remove_source(
@@ -416,23 +409,24 @@ impl RescanCacheWriter for FontCache {
 /// user-facing failure report.
 pub(super) fn apply_rescan_to_cache<C: RescanCacheWriter>(
     cache: &mut C,
-    scanned: &[(CacheSourceSnapshot, Vec<FontMetadata>)],
+    scanned: &[ScannedRescanSource],
     removed: &[CacheSourceKey],
     skipped: &mut Vec<SkippedFolder>,
 ) -> (usize, usize) {
     let mut modified_rescanned = 0usize;
     let mut removed_evicted = 0usize;
 
-    for (snapshot, metadata) in scanned {
-        match cache.replace_source(snapshot, metadata) {
+    for entry in scanned {
+        let previous_root = (entry.requested_root != entry.snapshot.source_root)
+            .then_some(entry.requested_root.as_str());
+        match cache.replace_source_from(previous_root, &entry.snapshot, &entry.metadata) {
             Ok(()) => modified_rescanned += 1,
             Err(e) => {
                 let mut reason = format!("replace_source failed: {e}");
-                log::warn!("apply_rescan_to_cache {} — {reason}", snapshot.source_root);
-                // A failed replacement transaction leaves the old source rows
-                // intact. Evict them immediately so the cache cannot keep
-                // serving stale lookups after the UI reports partial success.
-                match cache.remove_source(&snapshot.source_root, snapshot.scope) {
+                log::warn!("apply_rescan_to_cache {} — {reason}", entry.requested_root);
+                // Evict the persisted `requested_root` (plus `snapshot.source_root`
+                // if distinct) so stale rows cannot survive a failed replacement.
+                match cache.remove_source(&entry.requested_root, entry.snapshot.scope) {
                     Ok(()) => removed_evicted += 1,
                     Err(remove_error) => {
                         reason.push_str(&format!(
@@ -440,9 +434,12 @@ pub(super) fn apply_rescan_to_cache<C: RescanCacheWriter>(
                         ));
                     }
                 }
+                if entry.requested_root != entry.snapshot.source_root {
+                    let _ = cache.remove_source(&entry.snapshot.source_root, entry.snapshot.scope);
+                }
                 skipped.push(SkippedFolder {
-                    folder: snapshot.source_root.clone(),
-                    scope: snapshot.scope,
+                    folder: entry.requested_root.clone(),
+                    scope: entry.snapshot.scope,
                     reason,
                     kind: SkipKind::ApplyFailed,
                 });

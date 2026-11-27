@@ -6,6 +6,8 @@ pub mod fonts;
 pub mod fs_policy;
 mod ipc_commands;
 pub mod safe_io;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod util;
 
 use tauri::Manager;
@@ -104,9 +106,9 @@ pub fn run() {
                 // possible on locale-mangled Windows profiles or
                 // OS-resolved env-var rewrites) could otherwise sneak
                 // wide line breaks through the path slot.
-                use crate::util::strip_visual_line_breaks;
-                let error_one_line = strip_visual_line_breaks(&e);
-                let path_one_line = strip_visual_line_breaks(&app_data_dir.display().to_string());
+                use crate::util::sanitize_for_dialog;
+                let error_one_line = sanitize_for_dialog(&e, 1_024);
+                let path_one_line = sanitize_for_dialog(&app_data_dir.display().to_string(), 1_024);
                 rfd::MessageDialog::new()
                     .set_level(rfd::MessageLevel::Error)
                     .set_title("SSA HDRify — startup failure")
@@ -133,10 +135,10 @@ pub fn run() {
             ipc_commands::read_timing_map_file,
             ipc_commands::find_system_font,
             ipc_commands::subset_font_bytes,
-            fonts::preflight_font_directory,
-            fonts::preflight_font_files,
-            fonts::scan_font_directory,
-            fonts::scan_font_files,
+            ipc_commands::preflight_font_directory,
+            ipc_commands::preflight_font_files,
+            ipc_commands::scan_font_directory,
+            ipc_commands::scan_font_files,
             // Atomic-only control path: keep cancellation immediately available
             // even when Tauri's blocking pool is busy with font or file work.
             fonts::cancel_font_scan,
@@ -158,15 +160,11 @@ pub fn run() {
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {
             // runtime-start failure parity with
-            // the setup-time rfd MessageBox above (line ~95). Windows
-            // GUI subsystem has no visible stderr — the prior eprintln
-            // was effectively silent when WebView2 init / IPC bootstrap
-            // failed post-setup. Same strip_visual_line_breaks scrub
-            // applied to the error body for the same dialog-line-break
-            // reason. exit(1) preserved so the OS-level "process exited
-            // abnormally" surfaces stay intact.
-            use crate::util::strip_visual_line_breaks;
-            let error_one_line = strip_visual_line_breaks(&e.to_string());
+            // the setup-time rfd MessageBox above. Windows GUI subsystem
+            // has no visible stderr — sanitize control/BiDi characters and
+            // bound message length before displaying.
+            use crate::util::sanitize_for_dialog;
+            let error_one_line = sanitize_for_dialog(&e.to_string(), 1_024);
             rfd::MessageDialog::new()
                 .set_level(rfd::MessageLevel::Error)
                 .set_title("SSA HDRify — runtime failure")

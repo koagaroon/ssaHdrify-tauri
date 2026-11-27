@@ -7,14 +7,20 @@
 //! Run with:
 //!     cargo test --manifest-path src-tauri/Cargo.toml --test test_scan
 
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+use app_lib::font_cache::FontDirectoryScope;
 use app_lib::fonts::{
-    cancel_font_scan, clear_font_sources, init_user_font_db, scan_font_directory, scan_font_files,
-    ScanProgress,
+    cancel_font_scan, clear_font_sources, clear_user_font_db_path, init_user_font_db,
+    preflight_font_directory_with_policy, preflight_font_files_with_policy, scan_font_directory,
+    scan_font_directory_with_policy, scan_font_files, scan_font_files_with_policy, ScanProgress,
 };
 use tauri::ipc::{Channel, InvokeResponseBody};
+
+mod common;
 
 // Type aliases for the test channel return shapes — keep clippy happy and
 // give the test bodies a more meaningful name than the raw tuple.
@@ -174,26 +180,91 @@ fn take_done(done: &Arc<Mutex<Option<DoneStats>>>) -> DoneStats {
         .expect("scan should emit Done on the Ok path")
 }
 
-fn init_scan_test_db(name: &str) {
-    static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let seq = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!(
-        "ssahdrify-scan-test-db-{}-{stamp}-{seq}-{name}",
-        std::process::id()
-    ));
-    init_user_font_db(&dir).expect("scan test DB should initialize");
+struct ScanTempDir(PathBuf);
+
+impl ScanTempDir {
+    fn new(label: &str) -> Self {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let seq = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "ssahdrify-scan-test-{}-{stamp}-{seq}-{label}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).expect("create scan temp dir");
+        Self(dir)
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for ScanTempDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+struct ScanTestDbGuard {
+    _dir: ScanTempDir,
+}
+
+impl Drop for ScanTestDbGuard {
+    fn drop(&mut self) {
+        clear_user_font_db_path();
+    }
+}
+
+fn init_scan_test_db(name: &str) -> ScanTestDbGuard {
+    let dir = ScanTempDir::new(&format!("db-{name}"));
+    init_user_font_db(dir.path()).expect("scan test DB should initialize");
+    ScanTestDbGuard { _dir: dir }
+}
+
+/// Build a fast, deterministic multi-batch directory containing `count` copies
+/// of a real OS font (`count > 40` triggers multi-batch streaming without
+/// reading gigabytes of CJK collections from `C:\Windows\Fonts` four times).
+fn make_multi_batch_font_dir(label: &str, count: usize) -> ScanTempDir {
+    let holder = ScanTempDir::new(label);
+    let seed_dir = common::make_real_font_dir(holder.path());
+    let seed_file = fs::read_dir(&seed_dir)
+        .expect("read seed font dir")
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .find(|p| p.is_file())
+        .expect("seed font file must exist");
+    let ext = seed_file
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("ttf");
+    let font_bytes = fs::read(&seed_file).expect("read seed font bytes");
+    let batch_dir = holder.path().join("batch_fonts");
+    fs::create_dir_all(&batch_dir).expect("create batch_fonts dir");
+    for idx in 0..count {
+        fs::write(batch_dir.join(format!("font_{idx:03}.{ext}")), &font_bytes)
+            .expect("write copied OS font");
+    }
+    let _ = fs::remove_dir_all(&seed_dir);
+    holder
 }
 
 #[test]
 fn scans_os_font_directory_streams_progress_and_registers_source() {
-    let _guard = SCAN_TEST_LOCK.lock().unwrap();
-    init_scan_test_db("stream");
+    let _guard = SCAN_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _db = init_scan_test_db("stream");
     clear_font_sources().unwrap();
-    let dir = os_font_dir();
+    let fixture = make_multi_batch_font_dir("stream-fixture", 60);
+    let dir = fixture
+        .path()
+        .join("batch_fonts")
+        .to_string_lossy()
+        .into_owned();
     let (channel, totals, done) = collecting_channel();
     if let Err(e) = tauri::async_runtime::block_on(scan_font_directory(
         dir.clone(),
@@ -208,31 +279,18 @@ fn scans_os_font_directory_streams_progress_and_registers_source() {
     let done = take_done(&done);
 
     assert!(
-        done.added > 0,
-        "expected at least one font in {dir}, got zero"
+        done.added >= 60,
+        "expected at least 60 faces in {dir}, got {}",
+        done.added
     );
     assert_eq!(done.reason, REASON_NATURAL);
     assert_eq!(done.duplicated, 0);
     assert_eq!(totals.last().copied(), Some(done.added));
-
-    // Streaming-actually-streamed assertion. SCAN_BATCH_SIZE = 40 (see
-    // fonts.rs), so any directory with > 40 faces should produce ≥ 2
-    // batches. A regression to a single end-of-scan emit would silently
-    // pass without this check.
-    if done.added > 40 {
-        assert!(
-            totals.len() >= 2,
-            "expected ≥ 2 batches for {} entries, got {}",
-            done.added,
-            totals.len()
-        );
-    }
-
-    println!(
-        "Scanned '{}' → {} added faces in {} progress batches",
-        dir,
+    assert!(
+        totals.len() >= 2,
+        "expected >= 2 batches for {} entries, got {}",
         done.added,
-        totals.len(),
+        totals.len()
     );
 }
 
@@ -270,17 +328,14 @@ fn os_font_file_sample(max: usize) -> Vec<String> {
 
 #[test]
 fn scans_user_picked_file_list_streams_progress_and_registers_source() {
-    let _guard = SCAN_TEST_LOCK.lock().unwrap();
-    init_scan_test_db("files");
+    let _guard = SCAN_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _db = init_scan_test_db("files");
     clear_font_sources().unwrap();
 
-    let paths = os_font_file_sample(20);
+    let paths = os_font_file_sample(8);
     if paths.len() < 2 {
-        // Portability tradeoff: stripped-down CI containers may not have
-        // a populated OS font directory. We accept the silent skip
-        // rather than a hard fail because a real dev workstation always
-        // has fonts; CI without them is intentional minimalism, not a
-        // bug. If this ever needs to gate releases, swap to assert!.
         println!(
             "Skipping scan_font_files test: only {} fonts available in OS dir",
             paths.len()
@@ -302,9 +357,6 @@ fn scans_user_picked_file_list_streams_progress_and_registers_source() {
 
     assert!(done.added > 0, "expected at least one face from {paths:?}");
     assert_eq!(done.reason, REASON_NATURAL);
-    // Final batch total must equal added when the scan reports no
-    // duplicates — both numbers come from the same source-of-truth
-    // (the SQLite import outcome).
     if done.duplicated == 0 {
         assert_eq!(totals.last().copied(), Some(done.added));
     }
@@ -312,15 +364,12 @@ fn scans_user_picked_file_list_streams_progress_and_registers_source() {
 
 #[test]
 fn scan_font_files_rejects_oversize_path_list() {
-    let _guard = SCAN_TEST_LOCK.lock().unwrap();
-    init_scan_test_db("files-oversize");
+    let _guard = SCAN_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _db = init_scan_test_db("files-oversize");
     clear_font_sources().unwrap();
 
-    // MAX_INPUT_PATHS is 1000 in fonts.rs — supply 1001 paths so the
-    // command rejects the call before any worker thread spins up.
-    // Absolute paths anchored at the OS temp dir — relative `dummy-N.ttf`
-    // would resolve against cargo's working directory, which is
-    // non-hermetic across `cargo test` invocation modes.
     let temp_root = std::env::temp_dir();
     let oversize: Vec<String> = (0..1001)
         .map(|i| {
@@ -338,8 +387,6 @@ fn scan_font_files_rejects_oversize_path_list() {
     ));
     let err =
         result.expect_err("scan_font_files should reject path lists exceeding MAX_INPUT_PATHS");
-    // Anchor on the contract-bearing prefix so unrelated future
-    // failures (e.g., DB open) don't masquerade as the cap firing.
     assert!(
         err.starts_with("Too many file paths"),
         "expected MAX_INPUT_PATHS error, got: {err}"
@@ -348,18 +395,12 @@ fn scan_font_files_rejects_oversize_path_list() {
 
 #[test]
 fn scan_font_files_accepts_max_input_paths_boundary() {
-    let _guard = SCAN_TEST_LOCK.lock().unwrap();
-    init_scan_test_db("files-boundary");
+    let _guard = SCAN_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _db = init_scan_test_db("files-boundary");
     clear_font_sources().unwrap();
 
-    // Boundary partner of `scan_font_files_rejects_oversize_path_list`.
-    // Exactly MAX_INPUT_PATHS (1000) paths must pass length validation
-    // and reach the worker — even though every path is a non-existent
-    // dummy that fails canonicalize and contributes zero faces, the
-    // command must NOT reject before spawning the worker. The worker
-    // reports incomplete I/O because a selected path is unreadable.
-    // Catches a future `> ↔ >=` flip in the validation.
-    // Absolute paths anchored at the OS temp dir; see oversize test.
     let temp_root = std::env::temp_dir();
     let boundary: Vec<String> = (0..1000)
         .map(|i| {
@@ -385,16 +426,12 @@ fn scan_font_files_accepts_max_input_paths_boundary() {
     assert_eq!(done.reason, "incompleteIo");
 }
 
-// The three rejection paths are distinct contracts.
-// Splitting per case + pinning the message lets a future refactor that
-// accidentally collapses them (e.g. early-bailing all three to
-// "invalid directory") get caught by name in the failing case rather
-// than the generic `.is_err()` always passing for any error.
-
 #[test]
 fn rejects_empty_directory_path() {
-    let _guard = SCAN_TEST_LOCK.lock().unwrap();
-    init_scan_test_db("invalid-empty");
+    let _guard = SCAN_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _db = init_scan_test_db("invalid-empty");
     let err = tauri::async_runtime::block_on(scan_font_directory(
         String::new(),
         early_error_channel(),
@@ -411,8 +448,10 @@ fn rejects_empty_directory_path() {
 
 #[test]
 fn rejects_directory_path_with_control_characters() {
-    let _guard = SCAN_TEST_LOCK.lock().unwrap();
-    init_scan_test_db("invalid-control");
+    let _guard = SCAN_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _db = init_scan_test_db("invalid-control");
     let err = tauri::async_runtime::block_on(scan_font_directory(
         "\0path\0with\0nulls".to_string(),
         early_error_channel(),
@@ -429,8 +468,10 @@ fn rejects_directory_path_with_control_characters() {
 
 #[test]
 fn rejects_nonexistent_directory_path() {
-    let _guard = SCAN_TEST_LOCK.lock().unwrap();
-    init_scan_test_db("invalid-missing");
+    let _guard = SCAN_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _db = init_scan_test_db("invalid-missing");
     let err = tauri::async_runtime::block_on(scan_font_directory(
         "Z:\\definitely\\does\\not\\exist".to_string(),
         early_error_channel(),
@@ -445,22 +486,22 @@ fn rejects_nonexistent_directory_path() {
     );
 }
 
-/// Pre-arm cancel for an inactive scan id must not affect a subsequent
-/// fresh scan. Exercises the no-active-scan branch in `cancel_font_scan`
-/// (active == NO_SCAN_ID short-circuits without writing CANCEL_SCAN_ID),
-/// not the stale-cancel-during-live-scan race — that race is structurally
-/// closed by `begin_font_scan`'s post-CAS equality check on
-/// CANCEL_SCAN_ID, separately covered by
-/// `cancel_command_records_scan_id_monotonically` at the unit-test layer.
 #[test]
 fn prerun_cancel_for_old_id_does_not_affect_subsequent_scan() {
-    let _guard = SCAN_TEST_LOCK.lock().unwrap();
-    init_scan_test_db("stale");
+    let _guard = SCAN_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _db = init_scan_test_db("stale");
     clear_font_sources().unwrap();
     let old_scan_id = next_test_scan_id();
     let fresh_scan_id = next_test_scan_id();
     cancel_font_scan(old_scan_id);
-    let dir = os_font_dir();
+    let fixture = make_multi_batch_font_dir("stale-fixture", 8);
+    let dir = fixture
+        .path()
+        .join("batch_fonts")
+        .to_string_lossy()
+        .into_owned();
     let (channel, _totals, done) = collecting_channel();
     if let Err(e) = tauri::async_runtime::block_on(scan_font_directory(
         dir.clone(),
@@ -473,7 +514,7 @@ fn prerun_cancel_for_old_id_does_not_affect_subsequent_scan() {
     }
     let done = take_done(&done);
     assert!(
-        done.added > 0,
+        done.added >= 8,
         "stale cancel id should not affect a fresh scan"
     );
     assert_eq!(done.reason, REASON_NATURAL);
@@ -481,10 +522,17 @@ fn prerun_cancel_for_old_id_does_not_affect_subsequent_scan() {
 
 #[test]
 fn mid_scan_cancel_keeps_partial_results_when_directory_is_large_enough() {
-    let _guard = SCAN_TEST_LOCK.lock().unwrap();
-    init_scan_test_db("cancel");
+    let _guard = SCAN_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _db = init_scan_test_db("cancel");
     clear_font_sources().unwrap();
-    let dir = os_font_dir();
+    let fixture = make_multi_batch_font_dir("cancel-fixture", 80);
+    let dir = fixture
+        .path()
+        .join("batch_fonts")
+        .to_string_lossy()
+        .into_owned();
 
     let (full_channel, _full_totals, full_done) = collecting_channel();
     if let Err(e) = tauri::async_runtime::block_on(scan_font_directory(
@@ -497,14 +545,7 @@ fn mid_scan_cancel_keeps_partial_results_when_directory_is_large_enough() {
         panic!("baseline scan_font_directory failed for '{dir}': {e}");
     }
     let full_done = take_done(&full_done);
-
-    if full_done.added <= 40 {
-        println!(
-            "Skipping mid-scan cancel strength assertion: only {} faces in '{}'",
-            full_done.added, dir
-        );
-        return;
-    }
+    assert!(full_done.added >= 80);
 
     clear_font_sources().unwrap();
     let scan_id = next_test_scan_id();
@@ -524,8 +565,6 @@ fn mid_scan_cancel_keeps_partial_results_when_directory_is_large_enough() {
         cancel_done.added > 0,
         "mid-scan cancel should preserve the first emitted batch"
     );
-    // User cancel — single-variant assertion replaces the previous
-    // (cancelled, ceiling_hit) flag pair.
     assert_eq!(cancel_done.reason, REASON_USER_CANCEL);
     assert!(
         cancel_done.added < full_done.added,
@@ -537,4 +576,104 @@ fn mid_scan_cancel_keeps_partial_results_when_directory_is_large_enough() {
         cancel_batches.load(Ordering::Relaxed) >= 1,
         "expected at least one streamed batch before cancellation"
     );
+}
+
+#[test]
+fn font_preflight_and_scan_commands_enforce_app_filesystem_scope_policy() {
+    let _guard = SCAN_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _db = init_scan_test_db("fs-scope");
+    clear_font_sources().unwrap();
+
+    let holder = ScanTempDir::new("scope-fixture");
+    let allowed_dir = common::make_real_font_dir(&holder.path().join("allowed"));
+    let denied_dir = common::make_real_font_dir(&holder.path().join("denied"));
+    let denied_dir_canonical = denied_dir.canonicalize().unwrap();
+    let denied_file = fs::read_dir(&denied_dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .find(|p| p.is_file())
+        .unwrap();
+    let allowed_file = fs::read_dir(&allowed_dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .find(|p| p.is_file())
+        .unwrap();
+
+    // 1. Denied root directory is rejected by both preflight and scan.
+    let preflight_err = match tauri::async_runtime::block_on(preflight_font_directory_with_policy(
+        denied_dir.to_string_lossy().into_owned(),
+        Some(FontDirectoryScope::Shallow),
+        next_test_scan_id(),
+        |_| false,
+    )) {
+        Ok(_) => panic!("denied preflight directory must error"),
+        Err(err) => err,
+    };
+    assert!(
+        preflight_err.contains("filesystem scope policy"),
+        "got: {preflight_err}"
+    );
+
+    let scan_err = tauri::async_runtime::block_on(scan_font_directory_with_policy(
+        denied_dir.to_string_lossy().into_owned(),
+        early_error_channel(),
+        next_test_scan_id(),
+        "scope-denied-root".to_string(),
+        Some(FontDirectoryScope::Shallow),
+        |_| false,
+    ))
+    .unwrap_err();
+    assert!(
+        scan_err.contains("filesystem scope policy"),
+        "got: {scan_err}"
+    );
+
+    // 2. Recursive scan of parent skips a scope-denied child subtree while importing allowed siblings.
+    let deny_subtree = denied_dir.clone();
+    let deny_subtree_canon = denied_dir_canonical.clone();
+    let (channel, _totals, done) = collecting_channel();
+    tauri::async_runtime::block_on(scan_font_directory_with_policy(
+        holder.path().to_string_lossy().into_owned(),
+        channel,
+        next_test_scan_id(),
+        "scope-partial-recursive".to_string(),
+        Some(FontDirectoryScope::Recursive),
+        move |p| !p.starts_with(&deny_subtree) && !p.starts_with(&deny_subtree_canon),
+    ))
+    .expect("allowed parent with denied child subtree should scan allowed subtree");
+    let done = take_done(&done);
+    assert!(done.added >= 1);
+
+    // 3. Explicit file preflight and scan skip scope-denied files while keeping allowed files.
+    let deny_file_raw = denied_file.clone();
+    let deny_file_canon = denied_file.canonicalize().unwrap();
+    let preflight = tauri::async_runtime::block_on(preflight_font_files_with_policy(
+        vec![
+            denied_file.to_string_lossy().into_owned(),
+            allowed_file.to_string_lossy().into_owned(),
+        ],
+        move |p| p != deny_file_raw && p != deny_file_canon,
+    ))
+    .unwrap();
+    let preflight_json = serde_json::to_value(&preflight).unwrap();
+    assert_eq!(preflight_json["fontFiles"], 1);
+
+    clear_font_sources().unwrap();
+    let deny_file_raw = denied_file.clone();
+    let deny_file_canon = denied_file.canonicalize().unwrap();
+    let (file_channel, _file_totals, file_done) = collecting_channel();
+    tauri::async_runtime::block_on(scan_font_files_with_policy(
+        vec![denied_file.to_string_lossy().into_owned()],
+        file_channel,
+        next_test_scan_id(),
+        "scope-denied-files".to_string(),
+        move |p| p != deny_file_raw && p != deny_file_canon,
+    ))
+    .unwrap();
+    let file_done = take_done(&file_done);
+    assert_eq!(file_done.added, 0);
 }

@@ -3,6 +3,7 @@ use crate::font_cache::{
     snapshot_source_directories, try_modified_at, CacheError, CacheSourceSnapshot, FontMetadata,
 };
 use std::fs;
+use std::path::Path;
 
 static GUI_CACHE_STATE_TEST_LOCK: Mutex<()> = Mutex::new(());
 
@@ -171,8 +172,9 @@ struct FakeRescanCache {
 }
 
 impl RescanCacheWriter for FakeRescanCache {
-    fn replace_source(
+    fn replace_source_from(
         &mut self,
+        _previous_root: Option<&str>,
         snapshot: &CacheSourceSnapshot,
         _fonts: &[FontMetadata],
     ) -> Result<(), CacheError> {
@@ -202,6 +204,14 @@ impl RescanCacheWriter for FakeRescanCache {
             return Err(CacheError::Io("injected remove failure".to_string()));
         }
         Ok(())
+    }
+}
+
+fn scanned_shallow(root: &str, mtime: i64) -> ScannedRescanSource {
+    ScannedRescanSource {
+        requested_root: root.to_string(),
+        snapshot: shallow_snapshot(root, mtime),
+        metadata: Vec::new(),
     }
 }
 
@@ -289,7 +299,7 @@ fn apply_rescan_evicts_skipped_folder_rows() {
 #[test]
 fn apply_rescan_replaces_modified_and_leaves_others() {
     let mut cache = FakeRescanCache::default();
-    let scanned = vec![(shallow_snapshot("/folder/a", 999), vec![])];
+    let scanned = vec![scanned_shallow("/folder/a", 999)];
     let mut skipped: Vec<SkippedFolder> = Vec::new();
     let (modified, evicted) = apply_rescan_to_cache(&mut cache, &scanned, &[], &mut skipped);
     assert_eq!(modified, 1);
@@ -302,12 +312,9 @@ fn apply_rescan_replaces_modified_and_leaves_others() {
 
 #[test]
 fn apply_rescan_does_not_evict_removed_that_reappeared() {
-    // Existing re-walk dance: a source reported as removed in
-    // Phase 1 may have been re-populated by a concurrent command
-    // by the time Phase 3 runs. Eviction must skip when the
-    // source is back on disk.
     let (guard, mut cache) = temp_cache("removed_reappeared");
-    let real_path = guard.0.to_string_lossy().to_string();
+    let real_path =
+        crate::fonts::normalize_canonical_path(guard.0.canonicalize().unwrap().to_str().unwrap());
     cache.replace_folder(&real_path, 100, &[]).unwrap();
 
     let removed = confirm_removed_sources_before_apply(&[shallow_key(&real_path)]);
@@ -409,13 +416,9 @@ fn apply_rescan_evicts_removed_that_no_longer_resolves() {
 
 #[test]
 fn apply_rescan_preserves_pre_existing_failed_entry_alongside_success() {
-    // Pins the input-preservation side of ApplyFailed handling:
-    // a pre-existing `SkippedFolder { kind: ApplyFailed }`
-    // survives alongside successful operations instead of being
-    // wiped or rewritten.
     let mut cache = FakeRescanCache::default();
 
-    let scanned = vec![(shallow_snapshot("/folder/x", 999), vec![])];
+    let scanned = vec![scanned_shallow("/folder/x", 999)];
     let mut skipped = vec![SkippedFolder {
         folder: "/already/failed".to_string(),
         scope: FontDirectoryScope::Shallow,
@@ -439,9 +442,9 @@ fn apply_rescan_continues_after_replace_apply_failed() {
     let failing = missing_child_path(&guard, "failing");
     let third = missing_child_path(&guard, "third");
     let scanned = vec![
-        (shallow_snapshot(&first, 100), Vec::new()),
-        (shallow_snapshot(&failing, 200), Vec::new()),
-        (shallow_snapshot(&third, 300), Vec::new()),
+        scanned_shallow(&first, 100),
+        scanned_shallow(&failing, 200),
+        scanned_shallow(&third, 300),
     ];
     let mut fake = FakeRescanCache {
         fail_replace_for: vec![failing.clone()],
@@ -474,8 +477,14 @@ fn changed_between_scan_and_apply_is_evicted_fail_closed() {
 
     fs::write(&candidate, b"second, visibly longer candidate state").unwrap();
     let mut skipped = Vec::new();
-    let validated =
-        validate_scanned_sources_before_apply(vec![(snapshot.clone(), vec![])], &mut skipped);
+    let validated = validate_scanned_sources_before_apply(
+        vec![ScannedRescanSource {
+            requested_root: snapshot.source_root.clone(),
+            snapshot: snapshot.clone(),
+            metadata: vec![],
+        }],
+        &mut skipped,
+    );
     assert!(validated.is_empty());
     assert_eq!(skipped.len(), 1);
     assert_eq!(skipped[0].kind, SkipKind::ScanFailed);
@@ -483,6 +492,66 @@ fn changed_between_scan_and_apply_is_evicted_fail_closed() {
     let (_, evicted) = apply_rescan_to_cache(&mut cache, &validated, &[], &mut skipped);
     assert_eq!(evicted, 1);
     assert!(cache.list_sources().unwrap().is_empty());
+}
+
+#[test]
+fn gui_cache_open_failure_redacts_both_cache_path_and_parent_directory() {
+    let parent = Path::new(r"C:\Users\secret_user\AppData\Roaming\ssahdrify");
+    let cache_path = parent.join(GUI_CACHE_FILE_NAME);
+    let err = CacheError::Io(format!(
+        "creating parent directory {}: permission denied",
+        parent.display()
+    ));
+    let formatted = gui_cache_open_failure_for_ipc(&cache_path, &err);
+    assert!(!formatted.contains("secret_user"), "got: {formatted}");
+    assert!(
+        formatted.contains("<font-cache directory>"),
+        "got: {formatted}"
+    );
+}
+
+#[test]
+fn gui_drift_rescan_converges_after_ntfs_case_only_root_rename() {
+    let guard = TempCacheDir::new("ntfs_case_rescan");
+    let _state_guard = GuiCacheStateTestGuard::acquire();
+    let app_data = guard.0.join("appdata");
+    init_gui_font_cache(&app_data).unwrap();
+
+    let upper = guard.0.join("FansubFonts");
+    fs::create_dir_all(&upper).unwrap();
+    let initial_snapshot =
+        snapshot_source_directories(&upper, FontDirectoryScope::Shallow).unwrap();
+    {
+        let mut slot = GUI_FONT_CACHE.lock().unwrap();
+        slot.as_mut()
+            .unwrap()
+            .replace_source(&initial_snapshot, &[])
+            .unwrap();
+        finish_gui_cache_mutation();
+    }
+
+    let lower = guard.0.join("fansubfonts");
+    fs::rename(&upper, &lower).unwrap();
+
+    let drift = detect_font_cache_drift().unwrap();
+    assert!(drift.added.is_empty(), "added must stay empty: {drift:?}");
+    assert!(
+        drift.removed.is_empty(),
+        "removed must stay empty: {drift:?}"
+    );
+    assert_eq!(drift.modified, vec![initial_snapshot.key()]);
+
+    let rescan = rescan_font_cache_drift().unwrap();
+    assert_eq!(rescan.modified_rescanned, 1);
+    assert!(rescan.skipped.is_empty(), "skipped: {:?}", rescan.skipped);
+
+    let post_drift = detect_font_cache_drift().unwrap();
+    assert!(
+        post_drift.added.is_empty()
+            && post_drift.modified.is_empty()
+            && post_drift.removed.is_empty(),
+        "second drift check must be completely clean instead of looping: {post_drift:?}"
+    );
 }
 
 #[test]

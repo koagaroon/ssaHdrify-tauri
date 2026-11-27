@@ -176,6 +176,13 @@ pub(super) fn sfnt_face_offsets(
     offsets
 }
 
+struct Cmap12SubtablePlan {
+    subtable_offset: usize,
+    group_count: usize,
+    skip_indices: Vec<usize>,
+    clamp_indices: Vec<usize>,
+}
+
 pub(super) fn sanitize_cmap12_invalid_groups(
     font_data: &[u8],
     index: u32,
@@ -218,8 +225,8 @@ pub(super) fn sanitize_cmap12_invalid_groups(
     }
     let mut scanned_subtables = HashSet::new();
     let mut scanned_cmap12_groups = 0usize;
-    let mut skip_group_offsets = HashSet::new();
-    let mut clamp_end_offsets = HashSet::new();
+    let mut total_rewrites = 0usize;
+    let mut plans: Vec<Cmap12SubtablePlan> = Vec::new();
     for record_index in 0..record_count {
         let Some(record_rel) = 4usize.checked_add(record_index.saturating_mul(8)) else {
             break;
@@ -293,6 +300,8 @@ pub(super) fn sanitize_cmap12_invalid_groups(
             ));
         }
         let groups_offset = subtable_offset + 16;
+        let mut skip_indices = Vec::new();
+        let mut clamp_indices = Vec::new();
         for group_index in 0..group_count {
             let Some(group_offset) = groups_offset.checked_add(group_index.saturating_mul(12))
             else {
@@ -308,54 +317,72 @@ pub(super) fn sanitize_cmap12_invalid_groups(
                 break;
             };
             if start > end || start > UNICODE_SCALAR_MAX {
-                if skip_group_offsets.insert(group_offset)
-                    && skip_group_offsets.len() + clamp_end_offsets.len()
-                        > MAX_CMAP12_REWRITE_OFFSETS_PER_FACE
-                {
+                skip_indices.push(group_index);
+                total_rewrites += 1;
+                if total_rewrites > MAX_CMAP12_REWRITE_OFFSETS_PER_FACE {
                     return Err(format!(
                         "cmap format-12 rewrite count exceeds max {MAX_CMAP12_REWRITE_OFFSETS_PER_FACE}"
                     ));
                 }
-            } else if end > UNICODE_SCALAR_MAX
-                && clamp_end_offsets.insert(group_offset + 4)
-                && skip_group_offsets.len() + clamp_end_offsets.len()
-                    > MAX_CMAP12_REWRITE_OFFSETS_PER_FACE
-            {
-                return Err(format!(
-                    "cmap format-12 rewrite count exceeds max {MAX_CMAP12_REWRITE_OFFSETS_PER_FACE}"
-                ));
+            } else if end > UNICODE_SCALAR_MAX {
+                clamp_indices.push(group_index);
+                total_rewrites += 1;
+                if total_rewrites > MAX_CMAP12_REWRITE_OFFSETS_PER_FACE {
+                    return Err(format!(
+                        "cmap format-12 rewrite count exceeds max {MAX_CMAP12_REWRITE_OFFSETS_PER_FACE}"
+                    ));
+                }
             }
+        }
+        if !skip_indices.is_empty() || !clamp_indices.is_empty() {
+            plans.push(Cmap12SubtablePlan {
+                subtable_offset,
+                group_count,
+                skip_indices,
+                clamp_indices,
+            });
         }
     }
 
-    if skip_group_offsets.is_empty() && clamp_end_offsets.is_empty() {
+    if total_rewrites == 0 {
         return Ok((Cow::Borrowed(font_data), 0));
     }
 
     let mut sanitized = font_data.to_vec();
-
-    let mut skip_group_offsets: Vec<_> = skip_group_offsets.into_iter().collect();
-    skip_group_offsets.sort_unstable();
-    for group_offset in &skip_group_offsets {
-        let _ = write_be_u32(&mut sanitized, *group_offset, UNICODE_SCALAR_MAX);
-        let _ = write_be_u32(&mut sanitized, *group_offset + 4, UNICODE_SCALAR_MAX);
-        let _ = write_be_u32(
-            &mut sanitized,
-            *group_offset + 8,
-            SKIP_CMAP12_GROUP_GLYPH_ID,
-        );
+    for plan in plans {
+        let groups_base = plan.subtable_offset + 16;
+        for &idx in &plan.clamp_indices {
+            let end_offset = groups_base + idx * 12 + 4;
+            let _ = write_be_u32(&mut sanitized, end_offset, UNICODE_SCALAR_MAX);
+        }
+        if !plan.skip_indices.is_empty() {
+            let mut write_idx = 0usize;
+            let mut skip_iter = plan.skip_indices.iter().copied().peekable();
+            for read_idx in 0..plan.group_count {
+                if skip_iter.peek() == Some(&read_idx) {
+                    skip_iter.next();
+                    continue;
+                }
+                if write_idx != read_idx {
+                    let src = groups_base + read_idx * 12;
+                    let dst = groups_base + write_idx * 12;
+                    sanitized.copy_within(src..src + 12, dst);
+                }
+                write_idx += 1;
+            }
+            let vacated_start = groups_base + write_idx * 12;
+            let vacated_end = groups_base + plan.group_count * 12;
+            if let Some(tail) = sanitized.get_mut(vacated_start..vacated_end) {
+                tail.fill(0);
+            }
+            let kept_u32 = u32::try_from(write_idx).unwrap_or(0);
+            let new_length = 16u32.saturating_add(kept_u32.saturating_mul(12));
+            let _ = write_be_u32(&mut sanitized, plan.subtable_offset + 4, new_length);
+            let _ = write_be_u32(&mut sanitized, plan.subtable_offset + 12, kept_u32);
+        }
     }
 
-    let mut clamp_end_offsets: Vec<_> = clamp_end_offsets.into_iter().collect();
-    clamp_end_offsets.sort_unstable();
-    for end_offset in &clamp_end_offsets {
-        let _ = write_be_u32(&mut sanitized, *end_offset, UNICODE_SCALAR_MAX);
-    }
-
-    Ok((
-        Cow::Owned(sanitized),
-        skip_group_offsets.len() + clamp_end_offsets.len(),
-    ))
+    Ok((Cow::Owned(sanitized), total_rewrites))
 }
 
 pub(super) fn decode_utf16be_name(raw: &[u8]) -> Option<String> {
@@ -456,6 +483,7 @@ pub(super) fn legacy_face_style(data: &[u8], face_offset: usize) -> (bool, bool)
     (weight_bold || mac_bold, mac_italic)
 }
 
+#[cfg(test)]
 pub(super) fn parse_legacy_name_table_entries(
     data: &[u8],
     canonical_string: &str,
@@ -464,11 +492,32 @@ pub(super) fn parse_legacy_name_table_entries(
     max_faces: u32,
     scan_id: u64,
 ) -> Vec<LocalFontEntry> {
+    parse_legacy_name_table_entries_skipping_skrifa(
+        data,
+        canonical_string,
+        size_bytes,
+        is_collection,
+        max_faces,
+        scan_id,
+        &HashSet::new(),
+    )
+}
+
+pub(super) fn parse_legacy_name_table_entries_skipping_skrifa(
+    data: &[u8],
+    canonical_string: &str,
+    size_bytes: u64,
+    is_collection: bool,
+    max_faces: u32,
+    scan_id: u64,
+    skrifa_parsed_faces: &HashSet<u32>,
+) -> Vec<LocalFontEntry> {
     let mut entries = Vec::new();
     for (face_index, face_offset) in sfnt_face_offsets(data, is_collection, max_faces) {
         if font_scan_cancelled(scan_id) {
             break;
         }
+        let already_decoded_unicode = skrifa_parsed_faces.contains(&face_index);
         let Some((name_offset, name_len)) = table_range(data, face_offset, b"name") else {
             continue;
         };
@@ -526,6 +575,11 @@ pub(super) fn parse_legacy_name_table_entries(
                 continue;
             };
             if !matches!(name_id, 1 | 4 | 6 | 16) {
+                continue;
+            }
+            if already_decoded_unicode
+                && (platform == 0 || matches!((platform, encoding), (3, 0 | 1 | 10)))
+            {
                 continue;
             }
             let target_full = match name_id {
@@ -625,24 +679,38 @@ pub(super) fn merge_legacy_name_table_entries(
             entries.push(legacy_entry);
             continue;
         };
+        let primary = existing.families.first().cloned();
+        let mut added_family = false;
         for family in legacy_entry.families {
             if existing.families.len() >= MAX_FAMILY_VARIANTS_PER_FACE {
                 break;
             }
             if !existing.families.contains(&family) {
                 existing.families.push(family);
+                added_family = true;
             }
         }
+        let mut added_face_name = false;
         for face_name in legacy_entry.face_names {
             if existing.face_names.len() >= MAX_FACE_NAME_VARIANTS_PER_FACE {
                 break;
             }
             if !existing.face_names.contains(&face_name) {
                 existing.face_names.push(face_name);
+                added_face_name = true;
             }
         }
-        existing.families.sort();
-        existing.face_names.sort();
+        if added_family {
+            existing.families.sort();
+            if let Some(ref preferred) = primary {
+                if let Some(pos) = existing.families.iter().position(|v| v == preferred) {
+                    existing.families[..=pos].rotate_right(1);
+                }
+            }
+        }
+        if added_face_name {
+            existing.face_names.sort();
+        }
     }
 }
 
@@ -1177,13 +1245,15 @@ pub(super) fn try_parse_local_font_file(
     if font_scan_cancelled(scan_id) {
         return Ok(entries);
     }
-    let legacy_entries = parse_legacy_name_table_entries(
+    let skrifa_parsed_faces: HashSet<u32> = entries.iter().map(|e| e.index).collect();
+    let legacy_entries = parse_legacy_name_table_entries_skipping_skrifa(
         &data,
         &canonical_string,
         size_bytes,
         is_collection,
         max_faces,
         scan_id,
+        &skrifa_parsed_faces,
     );
     if !legacy_entries.is_empty() {
         merge_legacy_name_table_entries(&mut entries, legacy_entries);

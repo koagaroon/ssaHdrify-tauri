@@ -157,7 +157,6 @@ const MAX_TTC_FACES: u32 = 16;
 /// 60 MiB.
 const MAX_FONT_DATA_SIZE: u64 = 64 * 1024 * 1024;
 const UNICODE_SCALAR_MAX: u32 = 0x10FFFF;
-const SKIP_CMAP12_GROUP_GLYPH_ID: u32 = u32::MAX;
 
 /// Cap on each in-memory font-provenance cache (`ALLOWED_FONT_PATHS`
 /// and `ALLOWED_CACHE_FONT_PATHS`), as a defense against a pathological
@@ -407,21 +406,40 @@ pub(crate) fn has_allowed_font_extension(path: &Path) -> bool {
     ALLOWED_FONT_EXTENSIONS.contains(&ext.as_str())
 }
 
-#[tauri::command]
 pub async fn preflight_font_directory(
     dir: String,
     scope: Option<FontDirectoryScope>,
     scan_id: u64,
 ) -> Result<FontDirectoryScanPreflight, String> {
-    scan::preflight_font_directory_cmd(dir, scope, scan_id).await
+    scan::preflight_font_directory_cmd(dir, scope, scan_id, |_| true).await
 }
 
-#[tauri::command]
+pub async fn preflight_font_directory_with_policy<P>(
+    dir: String,
+    scope: Option<FontDirectoryScope>,
+    scan_id: u64,
+    is_allowed: P,
+) -> Result<FontDirectoryScanPreflight, String>
+where
+    P: Fn(&Path) -> bool + Send + Sync + 'static,
+{
+    scan::preflight_font_directory_cmd(dir, scope, scan_id, is_allowed).await
+}
+
 pub async fn preflight_font_files(paths: Vec<String>) -> Result<FontScanPreflight, String> {
-    scan::preflight_font_files_cmd(paths).await
+    scan::preflight_font_files_cmd(paths, |_| true).await
 }
 
-#[tauri::command]
+pub async fn preflight_font_files_with_policy<P>(
+    paths: Vec<String>,
+    is_allowed: P,
+) -> Result<FontScanPreflight, String>
+where
+    P: Fn(&Path) -> bool + Send + Sync + 'static,
+{
+    scan::preflight_font_files_cmd(paths, is_allowed).await
+}
+
 pub async fn scan_font_directory(
     dir: String,
     progress: tauri::ipc::Channel<ScanProgress>,
@@ -429,17 +447,43 @@ pub async fn scan_font_directory(
     source_id: String,
     scope: Option<FontDirectoryScope>,
 ) -> Result<FontDirectoryScanCommandResult, String> {
-    scan::scan_font_directory_cmd(dir, progress, scan_id, source_id, scope).await
+    scan::scan_font_directory_cmd(dir, progress, scan_id, source_id, scope, |_| true).await
 }
 
-#[tauri::command]
+pub async fn scan_font_directory_with_policy<P>(
+    dir: String,
+    progress: tauri::ipc::Channel<ScanProgress>,
+    scan_id: u64,
+    source_id: String,
+    scope: Option<FontDirectoryScope>,
+    is_allowed: P,
+) -> Result<FontDirectoryScanCommandResult, String>
+where
+    P: Fn(&Path) -> bool + Send + Sync + 'static,
+{
+    scan::scan_font_directory_cmd(dir, progress, scan_id, source_id, scope, is_allowed).await
+}
+
 pub async fn scan_font_files(
     paths: Vec<String>,
     progress: tauri::ipc::Channel<ScanProgress>,
     scan_id: u64,
     source_id: String,
 ) -> Result<(), String> {
-    scan::scan_font_files_cmd(paths, progress, scan_id, source_id).await
+    scan::scan_font_files_cmd(paths, progress, scan_id, source_id, |_| true).await
+}
+
+pub async fn scan_font_files_with_policy<P>(
+    paths: Vec<String>,
+    progress: tauri::ipc::Channel<ScanProgress>,
+    scan_id: u64,
+    source_id: String,
+    is_allowed: P,
+) -> Result<(), String>
+where
+    P: Fn(&Path) -> bool + Send + Sync + 'static,
+{
+    scan::scan_font_files_cmd(paths, progress, scan_id, source_id, is_allowed).await
 }
 
 /// Cooperative cancel for an active font scan. Targeted by scan id so stale

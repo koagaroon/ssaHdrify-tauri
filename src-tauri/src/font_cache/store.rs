@@ -182,14 +182,39 @@ impl FontCache {
         snapshot: &CacheSourceSnapshot,
         fonts: &[FontMetadata],
     ) -> Result<(), CacheError> {
+        self.replace_source_from(None, snapshot, fonts)
+    }
+
+    /// Atomically replace one source, optionally retiring `previous_root` under
+    /// the same `scope` in the same `IMMEDIATE` transaction when an existing
+    /// source underwent an NTFS case-only rename on disk.
+    pub fn replace_source_from(
+        &mut self,
+        previous_root: Option<&str>,
+        snapshot: &CacheSourceSnapshot,
+        fonts: &[FontMetadata],
+    ) -> Result<(), CacheError> {
         validate_source_snapshot_shape(snapshot, fonts)?;
+        if let Some(prev) = previous_root {
+            reject_unsupported_cached_folder_path(prev)?;
+        }
+        let stale_root = previous_root.unwrap_or(snapshot.source_root.as_str());
         let scope = snapshot.scope.db_value();
-        let other_source_count: i64 = self
+        let incoming_path_bytes = snapshot_retained_path_bytes(snapshot)?;
+        let now = current_unix_seconds().ok_or_else(|| {
+            CacheError::Io("system clock is before Unix epoch (1970-01-01)".to_string())
+        })?;
+
+        let tx = self
             .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|e| CacheError::Io(format!("begin transaction: {e}")))?;
+
+        let other_source_count: i64 = tx
             .query_row(
                 "SELECT COUNT(*) FROM cached_sources \
-                 WHERE NOT (source_root = ?1 AND scope = ?2)",
-                params![snapshot.source_root, scope],
+                 WHERE NOT ((source_root = ?1 OR source_root = ?2) AND scope = ?3)",
+                params![snapshot.source_root, stale_root, scope],
                 |row| row.get(0),
             )
             .map_err(|e| CacheError::Io(format!("count cached_sources: {e}")))?;
@@ -198,12 +223,11 @@ impl FontCache {
                 "cached_sources is at the {MAX_CACHED_SOURCES}-source sanity cap"
             )));
         }
-        let other_directory_count: i64 = self
-            .conn
+        let other_directory_count: i64 = tx
             .query_row(
                 "SELECT COUNT(*) FROM cached_directories \
-                 WHERE NOT (source_root = ?1 AND scope = ?2)",
-                params![snapshot.source_root, scope],
+                 WHERE NOT ((source_root = ?1 OR source_root = ?2) AND scope = ?3)",
+                params![snapshot.source_root, stale_root, scope],
                 |row| row.get(0),
             )
             .map_err(|e| CacheError::Io(format!("count cached_directories: {e}")))?;
@@ -213,12 +237,11 @@ impl FontCache {
             MAX_CACHED_DIRECTORIES,
             "cached_directories",
         )?;
-        let other_file_count: i64 = self
-            .conn
+        let other_file_count: i64 = tx
             .query_row(
                 "SELECT COUNT(*) FROM cached_source_files \
-                 WHERE NOT (source_root = ?1 AND scope = ?2)",
-                params![snapshot.source_root, scope],
+                 WHERE NOT ((source_root = ?1 OR source_root = ?2) AND scope = ?3)",
+                params![snapshot.source_root, stale_root, scope],
                 |row| row.get(0),
             )
             .map_err(|e| CacheError::Io(format!("count cached_source_files: {e}")))?;
@@ -228,48 +251,42 @@ impl FontCache {
             crate::fonts::MAX_PREFLIGHT_ENTRIES,
             "cached_source_files",
         )?;
-        let other_path_bytes: i64 = self
-            .conn
+        let other_path_bytes: i64 = tx
             .query_row(
                 "SELECT \
                    COALESCE((SELECT SUM(length(CAST(source_root AS BLOB))) \
                              FROM cached_sources \
-                             WHERE NOT (source_root = ?1 AND scope = ?2)), 0) + \
+                             WHERE NOT ((source_root = ?1 OR source_root = ?2) AND scope = ?3)), 0) + \
                    COALESCE((SELECT SUM(length(CAST(directory_path AS BLOB))) \
                              FROM cached_directories \
-                             WHERE NOT (source_root = ?1 AND scope = ?2)), 0) + \
+                             WHERE NOT ((source_root = ?1 OR source_root = ?2) AND scope = ?3)), 0) + \
                    COALESCE((SELECT SUM(length(CAST(file_path AS BLOB))) \
                              FROM cached_source_files \
-                             WHERE NOT (source_root = ?1 AND scope = ?2)), 0)",
-                params![snapshot.source_root, scope],
+                             WHERE NOT ((source_root = ?1 OR source_root = ?2) AND scope = ?3)), 0)",
+                params![snapshot.source_root, stale_root, scope],
                 |row| row.get(0),
             )
             .map_err(|e| CacheError::Io(format!("count cached snapshot path bytes: {e}")))?;
-        checked_projected_path_bytes(other_path_bytes, snapshot_retained_path_bytes(snapshot)?)?;
+        checked_projected_path_bytes(other_path_bytes, incoming_path_bytes)?;
 
-        let now = current_unix_seconds().ok_or_else(|| {
-            CacheError::Io("system clock is before Unix epoch (1970-01-01)".to_string())
-        })?;
-        let source_order: i64 = self
-            .conn
+        let source_order: i64 = tx
             .query_row(
                 "SELECT COALESCE(\
                     (SELECT source_order FROM cached_sources \
-                     WHERE source_root = ?1 AND scope = ?2), \
+                     WHERE source_root = ?1 AND scope = ?3), \
+                    (SELECT source_order FROM cached_sources \
+                     WHERE source_root = ?2 AND scope = ?3), \
                     (SELECT COALESCE(MAX(source_order), 0) + 1 FROM cached_sources)\
                  )",
-                params![snapshot.source_root, scope],
+                params![snapshot.source_root, stale_root, scope],
                 |row| row.get(0),
             )
             .map_err(|e| CacheError::Io(format!("compute source order: {e}")))?;
 
-        let tx = self
-            .conn
-            .transaction()
-            .map_err(|e| CacheError::Io(format!("begin transaction: {e}")))?;
         tx.execute(
-            "DELETE FROM cached_sources WHERE source_root = ?1 AND scope = ?2",
-            params![snapshot.source_root, scope],
+            "DELETE FROM cached_sources \
+             WHERE (source_root = ?1 OR source_root = ?2) AND scope = ?3",
+            params![snapshot.source_root, stale_root, scope],
         )
         .map_err(|e| CacheError::Io(format!("delete previous source: {e}")))?;
         tx.execute(
@@ -279,88 +296,102 @@ impl FontCache {
         )
         .map_err(|e| CacheError::Io(format!("insert source: {e}")))?;
 
-        for directory in &snapshot.directories {
-            tx.execute(
-                "INSERT INTO cached_directories(\
-                    source_root, scope, directory_path, directory_mtime\
-                 ) VALUES(?1, ?2, ?3, ?4)",
-                params![
-                    snapshot.source_root,
-                    scope,
-                    directory.folder_path,
-                    directory.folder_mtime
-                ],
-            )
-            .map_err(|e| CacheError::Io(format!("insert tracked directory: {e}")))?;
-        }
-        for file in &snapshot.files {
-            tx.execute(
-                "INSERT INTO cached_source_files(\
-                    source_root, scope, file_path, file_size, file_mtime\
-                 ) VALUES(?1, ?2, ?3, ?4, ?5)",
-                params![
-                    snapshot.source_root,
-                    scope,
-                    file.file_path,
-                    file.file_size,
-                    file.file_mtime
-                ],
-            )
-            .map_err(|e| CacheError::Io(format!("insert candidate file: {e}")))?;
-        }
-        for font in fonts {
-            tx.execute(
-                "INSERT INTO cached_fonts(\
-                    source_root, scope, font_path, face_index, file_size, file_mtime\
-                 ) VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
-                params![
-                    snapshot.source_root,
-                    scope,
-                    font.file_path,
-                    font.face_index,
-                    font.file_size,
-                    font.file_mtime,
-                ],
-            )
-            .map_err(|e| CacheError::Io(format!("insert font {}: {e}", font.file_path)))?;
+        {
+            let mut insert_dir = tx
+                .prepare(
+                    "INSERT INTO cached_directories(\
+                        source_root, scope, directory_path, directory_mtime\
+                     ) VALUES(?1, ?2, ?3, ?4)",
+                )
+                .map_err(|e| CacheError::Io(format!("prepare directory insert: {e}")))?;
+            for directory in &snapshot.directories {
+                insert_dir
+                    .execute(params![
+                        snapshot.source_root,
+                        scope,
+                        directory.folder_path,
+                        directory.folder_mtime
+                    ])
+                    .map_err(|e| CacheError::Io(format!("insert tracked directory: {e}")))?;
+            }
 
-            for key in &font.family_keys {
-                tx.execute(
+            let mut insert_file = tx
+                .prepare(
+                    "INSERT INTO cached_source_files(\
+                        source_root, scope, file_path, file_size, file_mtime\
+                     ) VALUES(?1, ?2, ?3, ?4, ?5)",
+                )
+                .map_err(|e| CacheError::Io(format!("prepare candidate-file insert: {e}")))?;
+            for file in &snapshot.files {
+                insert_file
+                    .execute(params![
+                        snapshot.source_root,
+                        scope,
+                        file.file_path,
+                        file.file_size,
+                        file.file_mtime
+                    ])
+                    .map_err(|e| CacheError::Io(format!("insert candidate file: {e}")))?;
+            }
+
+            let mut insert_font = tx
+                .prepare(
+                    "INSERT INTO cached_fonts(\
+                        source_root, scope, font_path, face_index, file_size, file_mtime\
+                     ) VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+                )
+                .map_err(|e| CacheError::Io(format!("prepare font insert: {e}")))?;
+            let mut insert_key = tx
+                .prepare(
                     "INSERT OR IGNORE INTO cached_family_keys(\
                         source_root, scope, font_path, face_index, family_name, \
                         family_name_key, key_kind, bold, italic\
                      ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                    params![
+                )
+                .map_err(|e| CacheError::Io(format!("prepare family-key insert: {e}")))?;
+
+            for font in fonts {
+                insert_font
+                    .execute(params![
                         snapshot.source_root,
                         scope,
                         font.file_path,
                         font.face_index,
-                        key.family_name,
-                        family_lookup_key(&key.family_name),
-                        KEY_KIND_FAMILY,
-                        i32::from(key.bold),
-                        i32::from(key.italic),
-                    ],
-                )
-                .map_err(|e| CacheError::Io(format!("insert family key: {e}")))?;
-            }
-            for alias in &font.face_name_aliases {
-                tx.execute(
-                    "INSERT OR IGNORE INTO cached_family_keys(\
-                        source_root, scope, font_path, face_index, family_name, \
-                        family_name_key, key_kind, bold, italic\
-                     ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, 0)",
-                    params![
-                        snapshot.source_root,
-                        scope,
-                        font.file_path,
-                        font.face_index,
-                        alias,
-                        family_lookup_key(alias),
-                        KEY_KIND_FACE_ALIAS,
-                    ],
-                )
-                .map_err(|e| CacheError::Io(format!("insert face-name alias: {e}")))?;
+                        font.file_size,
+                        font.file_mtime,
+                    ])
+                    .map_err(|e| CacheError::Io(format!("insert font {}: {e}", font.file_path)))?;
+
+                for key in &font.family_keys {
+                    insert_key
+                        .execute(params![
+                            snapshot.source_root,
+                            scope,
+                            font.file_path,
+                            font.face_index,
+                            key.family_name,
+                            family_lookup_key(&key.family_name),
+                            KEY_KIND_FAMILY,
+                            i32::from(key.bold),
+                            i32::from(key.italic),
+                        ])
+                        .map_err(|e| CacheError::Io(format!("insert family key: {e}")))?;
+                }
+                for alias in &font.face_name_aliases {
+                    insert_key
+                        .execute(params![
+                            snapshot.source_root,
+                            scope,
+                            font.file_path,
+                            font.face_index,
+                            alias,
+                            family_lookup_key(alias),
+                            KEY_KIND_FACE_ALIAS,
+                            0,
+                            0,
+                        ])
+                        .map_err(|e| CacheError::Io(format!("insert face-name alias: {e}")))?;
+                }
             }
         }
         tx.commit()
@@ -377,7 +408,7 @@ impl FontCache {
         reject_unsupported_cached_folder_path(source_root)?;
         let tx = self
             .conn
-            .transaction()
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(|e| CacheError::Io(format!("begin transaction: {e}")))?;
         tx.execute(
             "DELETE FROM cached_sources WHERE source_root = ?1 AND scope = ?2",
@@ -392,7 +423,7 @@ impl FontCache {
     pub fn clear_sources(&mut self) -> Result<usize, CacheError> {
         let tx = self
             .conn
-            .transaction()
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(|e| CacheError::Io(format!("begin transaction: {e}")))?;
         let removed = tx
             .execute("DELETE FROM cached_sources", [])
@@ -557,7 +588,7 @@ impl FontCache {
         let lookup_key = family_lookup_key(family_name);
         let mut statement = self
             .conn
-            .prepare(FAMILY_LOOKUP_SQL)
+            .prepare_cached(FAMILY_LOOKUP_SQL)
             .map_err(|error| CacheError::Io(format!("prepare lookup_family: {error}")))?;
         let candidate_limit = i64::try_from(MAX_CACHE_LOOKUP_CANDIDATES + 1)
             .expect("cache lookup candidate limit fits i64");
@@ -642,11 +673,25 @@ impl FontCache {
     pub fn list_sources(&self) -> Result<Vec<CacheSourceRecord>, CacheError> {
         let mut stmt = self
             .conn
-            .prepare(
+            .prepare_cached(
                 "SELECT source_root, scope, source_order, last_scanned_at \
                  FROM cached_sources ORDER BY source_root, scope",
             )
             .map_err(|e| CacheError::Io(format!("prepare list_sources: {e}")))?;
+        let mut directory_stmt = self
+            .conn
+            .prepare_cached(
+                "SELECT directory_path, directory_mtime FROM cached_directories \
+                 WHERE source_root = ?1 AND scope = ?2 ORDER BY directory_path",
+            )
+            .map_err(|e| CacheError::Io(format!("prepare source directories: {e}")))?;
+        let mut file_stmt = self
+            .conn
+            .prepare_cached(
+                "SELECT file_path, file_size, file_mtime FROM cached_source_files \
+                 WHERE source_root = ?1 AND scope = ?2 ORDER BY file_path",
+            )
+            .map_err(|e| CacheError::Io(format!("prepare source files: {e}")))?;
         let rows = stmt
             .query_map([], |row| {
                 Ok((
@@ -671,13 +716,6 @@ impl FontCache {
                 .ok_or_else(|| CacheError::Io("cached path-byte count overflowed".to_string()))?;
             enforce_cached_path_byte_budgets(source_path_bytes, total_path_bytes)?;
             let scope = FontDirectoryScope::from_db(scope_value)?;
-            let mut directory_stmt = self
-                .conn
-                .prepare(
-                    "SELECT directory_path, directory_mtime FROM cached_directories \
-                     WHERE source_root = ?1 AND scope = ?2 ORDER BY directory_path",
-                )
-                .map_err(|e| CacheError::Io(format!("prepare source directories: {e}")))?;
             let directory_rows = directory_stmt
                 .query_map(params![source_root, scope_value], |row| {
                     Ok(FolderSnapshot {
@@ -716,13 +754,6 @@ impl FontCache {
                     )));
                 }
             }
-            let mut file_stmt = self
-                .conn
-                .prepare(
-                    "SELECT file_path, file_size, file_mtime FROM cached_source_files \
-                     WHERE source_root = ?1 AND scope = ?2 ORDER BY file_path",
-                )
-                .map_err(|e| CacheError::Io(format!("prepare source files: {e}")))?;
             let file_rows = file_stmt
                 .query_map(params![source_root, scope_value], |row| {
                     Ok(FileSnapshot {

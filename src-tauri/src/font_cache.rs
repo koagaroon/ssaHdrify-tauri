@@ -15,7 +15,8 @@ mod types;
 use std::path::{Path, PathBuf};
 
 pub use snapshot::{
-    cache_source_key, snapshot_source_directories, validate_cache_source_stability,
+    apply_live_source_inspection, cache_source_key, inspect_cached_sources_live,
+    snapshot_source_directories, validate_cache_source_stability, LiveSourceInspection,
 };
 pub use store::FontCache;
 #[cfg(test)]
@@ -325,11 +326,26 @@ fn validate_cached_font_hit(
     cached_file_size: i64,
     cached_file_mtime: i64,
 ) -> Result<(), CacheError> {
+    if !matches!(
+        crate::util::try_is_reparse_point(Path::new(folder_path)),
+        Ok(false)
+    ) {
+        return Err(CacheError::Io(
+            "cached_sources.source_root is a symlink, junction, or unreadable; rebuild required"
+                .to_string(),
+        ));
+    }
     let folder_canonical = Path::new(folder_path).canonicalize().map_err(|e| {
         CacheError::Io(format!(
             "cached_sources.source_root no longer points at a readable folder; rebuild required: {e}"
         ))
     })?;
+    if crate::util::is_reparse_point(&folder_canonical) {
+        return Err(CacheError::Io(
+            "cached_sources.source_root resolved to a symlink or junction; rebuild required"
+                .to_string(),
+        ));
+    }
     let folder_metadata = std::fs::metadata(&folder_canonical).map_err(|e| {
         CacheError::Io(format!(
             "cached_sources.source_root no longer points at a readable folder; rebuild required: {e}"
@@ -340,16 +356,47 @@ fn validate_cached_font_hit(
             "cached_sources.source_root no longer points at a folder; rebuild required".to_string(),
         ));
     }
+    let live_folder_normalized =
+        crate::fonts::normalize_canonical_path(&folder_canonical.to_string_lossy());
+    if live_folder_normalized != folder_path {
+        return Err(CacheError::Io(
+            "cached_sources.source_root canonical spelling changed on disk; rebuild required"
+                .to_string(),
+        ));
+    }
 
+    if !matches!(
+        crate::util::try_is_reparse_point(Path::new(font_path)),
+        Ok(false)
+    ) {
+        return Err(CacheError::Io(
+            "cached_fonts.font_path is a symlink, junction, or unreadable; rebuild required"
+                .to_string(),
+        ));
+    }
     let font_canonical = Path::new(font_path).canonicalize().map_err(|e| {
         CacheError::Io(format!(
             "cached_fonts.font_path no longer points at a readable file; rebuild required: {e}"
         ))
     })?;
+    if crate::util::is_reparse_point(&font_canonical) {
+        return Err(CacheError::Io(
+            "cached_fonts.font_path resolved to a symlink or junction; rebuild required"
+                .to_string(),
+        ));
+    }
     if !font_canonical.starts_with(&folder_canonical) {
         return Err(CacheError::Io(
             "cached_fonts.font_path is outside cached_sources.source_root; \
              cache file appears corrupted or hostile — rebuild required"
+                .to_string(),
+        ));
+    }
+    let live_font_normalized =
+        crate::fonts::normalize_canonical_path(&font_canonical.to_string_lossy());
+    if live_font_normalized != font_path {
+        return Err(CacheError::Io(
+            "cached_fonts.font_path canonical spelling changed on disk; rebuild required"
                 .to_string(),
         ));
     }

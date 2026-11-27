@@ -462,6 +462,45 @@ pub fn strip_visual_line_breaks(s: &str) -> String {
     )
 }
 
+/// Sanitize an untrusted error or path string for single-block UI / native
+/// dialog rendering. Replaces C0/C1 controls, Unicode line/paragraph
+/// separators, zero-width formatting characters, and BiDi overrides/isolates
+/// with single ASCII spaces, and bounds total length to `max_chars` codepoints
+/// (appending `…` when truncated).
+pub fn sanitize_for_dialog(s: &str, max_chars: usize) -> String {
+    let mut sanitized = String::with_capacity(s.len().min(max_chars));
+    let mut chars = s.chars();
+    for _ in 0..max_chars {
+        let Some(ch) = chars.next() else {
+            return sanitized;
+        };
+        if ch.is_control()
+            || matches!(
+                ch,
+                '\u{2028}'
+                    | '\u{2029}'
+                    | '\u{200B}'..='\u{200D}'
+                    | '\u{2060}'
+                    | '\u{180E}'
+                    | '\u{FEFF}'
+                    | '\u{061C}'
+                    | '\u{200E}'
+                    | '\u{200F}'
+                    | '\u{202A}'..='\u{202E}'
+                    | '\u{2066}'..='\u{2069}'
+            )
+        {
+            sanitized.push(' ');
+        } else {
+            sanitized.push(ch);
+        }
+    }
+    if chars.next().is_some() {
+        sanitized.push('…');
+    }
+    sanitized
+}
+
 /// Detect symlinks AND Windows junctions / OneDrive placeholders.
 ///
 /// On Windows, Rust's `is_symlink()` returns `false` for junctions
@@ -856,6 +895,18 @@ mod tests {
     fn strip_passes_through_normal_text() {
         let input = "C:\\Users\\me\\subtitle.ass";
         assert_eq!(strip_visual_line_breaks(input), input);
+    }
+
+    #[test]
+    fn sanitize_for_dialog_replaces_bidi_zero_width_and_truncates() {
+        let raw = format!("err\u{202E}\u{061C}\u{200B}\n{}", "a".repeat(32));
+        let out = sanitize_for_dialog(&raw, 16);
+        assert!(!out.contains('\u{202E}'));
+        assert!(!out.contains('\u{061C}'));
+        assert!(!out.contains('\u{200B}'));
+        assert!(!out.contains('\n'));
+        assert_eq!(out.chars().count(), 17);
+        assert!(out.ends_with('…'));
     }
 
     // ── validate_font_family ──

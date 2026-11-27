@@ -54,7 +54,10 @@
 //! future safe_io fixes auto-propagate to both binaries
 //! instead of needing parallel fixes in each.
 
-use crate::encoding::{read_text_detect_encoding_inner, ALLOWED_TEXT_EXTENSIONS, MAX_TEXT_SIZE};
+use crate::encoding::{
+    read_subtitle_source_revision_inner, read_text_detect_encoding_inner, ALLOWED_TEXT_EXTENSIONS,
+    MAX_TEXT_SIZE,
+};
 use crate::util::{is_reparse_point, validate_ipc_path, validate_output_path};
 use std::collections::HashSet;
 use std::fs;
@@ -482,14 +485,27 @@ fn reject_same_canonical_path(src: &Path, dst: &Path) -> Result<(), String> {
 /// re-checking the scope — the create_new gate ABOVE is load-bearing
 /// against symlink races; a naive `fs::write` to a tmp path would
 /// need the same gate transplanted onto the tmp file.
-fn create_new_and_write_bytes(path: &Path, content: &[u8]) -> Result<(), String> {
+fn write_new_file_bytes(path: &Path, content: &[u8], sync: bool) -> Result<(), String> {
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(path)
         .map_err(|e| format!("Failed to create destination: {e}"))?;
+
+    // Keep a partial create-new file if write_all fails. Deleting by pathname
+    // after closing would race with another process replacing that pathname,
+    // which could make error cleanup delete a file we did not create.
     file.write_all(content)
-        .map_err(|error| partial_output_error("write destination", &error))
+        .map_err(|error| partial_output_error("write destination", &error))?;
+    if sync {
+        file.sync_all()
+            .map_err(|error| partial_output_error("flush destination", &error))?;
+    }
+    Ok(())
+}
+
+fn create_new_and_write_bytes(path: &Path, content: &[u8]) -> Result<(), String> {
+    write_new_file_bytes(path, content, false)
 }
 
 fn partial_output_error(action: &str, error: &std::io::Error) -> String {
@@ -504,19 +520,7 @@ fn check_plain_text_size(content_len: usize) -> Result<(), String> {
 }
 
 fn create_new_and_write_bytes_exclusive(path: &Path, content: &[u8]) -> Result<(), String> {
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map_err(|e| format!("Failed to create destination: {e}"))?;
-
-    // Keep a partial create-new file if write_all fails. Deleting by pathname
-    // after closing would race with another process replacing that pathname,
-    // which could make error cleanup delete a file we did not create.
-    file.write_all(content)
-        .map_err(|error| partial_output_error("write destination", &error))?;
-    file.sync_all()
-        .map_err(|error| partial_output_error("flush destination", &error))
+    write_new_file_bytes(path, content, true)
 }
 
 fn encode_text_preserving_source(
@@ -780,8 +784,8 @@ pub fn safe_write_style_edit_output_inner(
     }
 
     let bytes = encode_text_preserving_source(content, &source.encoding_id, source.had_bom)?;
-    let final_source = read_text_detect_encoding_inner(source_path, &is_allowed)?;
-    if final_source.source_revision != expected_revision.to_ascii_lowercase() {
+    let final_revision = read_subtitle_source_revision_inner(source_path, &is_allowed)?;
+    if final_revision != expected_revision.to_ascii_lowercase() {
         return Err(
             "Source changed after preview; review the file again before writing".to_string(),
         );
@@ -1108,24 +1112,14 @@ mod tests {
         false
     }
 
-    fn temp_dir(name: &str) -> std::path::PathBuf {
-        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let seq = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let base = std::env::temp_dir();
-        fs::create_dir_all(&base).unwrap();
-        let dir = base.join(format!(
-            "ssahdrify_safe_io_test_{name}_{}_{stamp}_{seq}",
-            std::process::id()
-        ));
-        fs::create_dir(&dir).unwrap();
-        dir
+    fn temp_dir(name: &str) -> crate::test_support::TestTempDir {
+        crate::test_support::TestTempDir::new("ssahdrify_safe_io_test", name)
     }
 
-    fn scope_alias_paths(name: &str, file_name: &str) -> (PathBuf, PathBuf, PathBuf) {
+    fn scope_alias_paths(
+        name: &str,
+        file_name: &str,
+    ) -> (crate::test_support::TestTempDir, PathBuf, PathBuf) {
         let real_dir = temp_dir(name);
         let resolved = real_dir.canonicalize().unwrap().join(file_name);
 
@@ -1216,23 +1210,18 @@ mod tests {
         let real = dir.join("real");
         fs::create_dir(&real).unwrap();
         let junction = dir.join("picked_alias");
-        let result = std::process::Command::new("powershell.exe")
-            .args([
-                "-NoLogo",
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                "$ErrorActionPreference = 'Stop'; New-Item -ItemType Junction -Path $env:SSAHDRIFY_TEST_JUNCTION_PATH -Target $env:SSAHDRIFY_TEST_JUNCTION_TARGET | Out-Null",
-            ])
-            .env("SSAHDRIFY_TEST_JUNCTION_PATH", &junction)
-            .env("SSAHDRIFY_TEST_JUNCTION_TARGET", &real)
+        let result = std::process::Command::new("cmd.exe")
+            .args(["/d", "/c", "mklink", "/J"])
+            .arg(&junction)
+            .arg(&real)
             .creation_flags(0x08000000)
             .output()
             .expect("run Windows junction fixture setup");
         let _cleanup = JunctionGuard(junction.clone());
         assert!(
             result.status.success(),
-            "junction creation failed: {}",
+            "junction creation failed: {}{}",
+            String::from_utf8_lossy(&result.stdout),
             String::from_utf8_lossy(&result.stderr)
         );
 
@@ -1489,7 +1478,7 @@ mod tests {
 
         for alias_name in ["episode.ass.", "episode.ass "] {
             let alias = dir.join(alias_name);
-            let raw_root = dir.clone();
+            let raw_root = dir.to_path_buf();
             let resolved_root = canonical_dir.clone();
             let err = safe_write_text_file_inner(
                 &alias.to_string_lossy(),
@@ -1506,8 +1495,6 @@ mod tests {
                 "rejected alias {alias_name:?} must not change the original"
             );
         }
-
-        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -1521,7 +1508,7 @@ mod tests {
         fs::write(&sentinel, ORIGINAL_BYTES).unwrap();
 
         let alias_output = dir.join("real-output.").join("episode.ass");
-        let raw_root = dir.clone();
+        let raw_root = dir.to_path_buf();
         let resolved_root = canonical_dir;
         let err = safe_write_text_file_inner(
             &alias_output.to_string_lossy(),
@@ -1533,7 +1520,6 @@ mod tests {
 
         assert!(err.contains("unsupported ASCII dot"), "got: {err}");
         assert_eq!(fs::read(&sentinel).unwrap(), ORIGINAL_BYTES);
-        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -2041,7 +2027,8 @@ mod tests {
 
     #[test]
     fn rename_no_overwrite_supports_windows_paths_beyond_max_path() {
-        let mut dir = temp_dir("rename_long_path");
+        let root = temp_dir("rename_long_path");
+        let mut dir = root.to_path_buf();
         while dir.to_string_lossy().encode_utf16().count() < 280 {
             dir = dir.join("nested_directory_component");
         }

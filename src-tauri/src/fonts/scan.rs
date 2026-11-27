@@ -14,17 +14,17 @@ use std::time::Instant;
 /// Rust side distinguish "no active/cancelled scan" from real work.
 pub(super) const NO_SCAN_ID: u64 = 0;
 
-/// Scan id currently owned by the blocking scan worker. The UI only starts
-/// one scan at a time, but this guard also prevents a compromised frontend
-/// from launching overlapping scans that would race the shared provenance
-/// cache and cancellation state.
-pub(super) static ACTIVE_SCAN_ID: AtomicU64 = AtomicU64::new(NO_SCAN_ID);
+/// High bit reserved inside [`SCAN_STATE`] to mark the currently active scan as
+/// cancelled. Frontend scan IDs come from JS `Date.now()` / safe integers
+/// (`< 2^53`), so bit 63 is structurally unused by legitimate callers.
+pub(super) const CANCELLED_BIT: u64 = 1 << 63;
+pub(super) const SCAN_ID_MASK: u64 = !CANCELLED_BIT;
 
-/// Highest scan id that has received a cancel request. Cancel requests are
-/// targeted by id instead of using a process-wide boolean, so a late cancel
-/// from an older scan cannot abort a fresh one. `fetch_max` also preserves a
-/// real current cancel if an older stale command arrives afterward.
-pub(super) static CANCEL_SCAN_ID: AtomicU64 = AtomicU64::new(NO_SCAN_ID);
+/// Single packed atomic word owning both active-scan reservation (bits 0..62)
+/// and targeted cancellation (bit 63). Packing both pieces into one `AtomicU64`
+/// eliminates split-variable TOCTOU windows and prevents a stale lower-ID
+/// `cancel_font_scan` call during an uncancelled scan from poisoning future runs.
+pub(super) static SCAN_STATE: AtomicU64 = AtomicU64::new(NO_SCAN_ID);
 
 /// Streaming progress event for the font scan commands. The `Batch` variant
 /// carries only a cumulative parsed-face count; `Done` is the end-of-stream
@@ -134,30 +134,30 @@ pub(super) struct ActiveScanGuard {
     scan_id: u64,
 }
 
+pub(super) fn validate_scan_id(scan_id: u64) -> Result<(), String> {
+    if scan_id == NO_SCAN_ID {
+        return Err("Scan id must be non-zero".to_string());
+    }
+    if (scan_id & CANCELLED_BIT) != 0 {
+        return Err("Scan id exceeds supported 63-bit range".to_string());
+    }
+    Ok(())
+}
+
 impl Drop for ActiveScanGuard {
     fn drop(&mut self) {
-        let _ = ACTIVE_SCAN_ID.compare_exchange(
-            self.scan_id,
-            NO_SCAN_ID,
-            Ordering::SeqCst,
-            Ordering::SeqCst,
-        );
-        // Release CANCEL_SCAN_ID's claim on this scan's id, if any.
-        // CANCEL_SCAN_ID is a monotonic high-water
-        // mark via fetch_max, so a finished scan whose id was the
-        // current max would leave the cancel state "poisoned" — every
-        // subsequent scan with a lower id (Date.now()-seeded ids are
-        // ~1.7e12, far below u64::MAX) would silently fail to cancel
-        // because fetch_max(lower) cannot reduce CANCEL_SCAN_ID. Reset
-        // back to NO_SCAN_ID atomically when this scan was the high
-        // mark; any newer scan that won the slot will reset it again
-        // on its own Drop, so the eventual-state invariant holds.
-        let _ = CANCEL_SCAN_ID.compare_exchange(
-            self.scan_id,
-            NO_SCAN_ID,
-            Ordering::SeqCst,
-            Ordering::SeqCst,
-        );
+        let mut current = SCAN_STATE.load(Ordering::SeqCst);
+        while (current & SCAN_ID_MASK) == self.scan_id {
+            match SCAN_STATE.compare_exchange(
+                current,
+                NO_SCAN_ID,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => break,
+                Err(observed) => current = observed,
+            }
+        }
     }
 }
 
@@ -165,55 +165,22 @@ impl Drop for ActiveScanGuard {
 /// that releases it on exit. Called BEFORE `spawn_blocking` so that:
 /// (a) the IPC command can fail synchronously with "Another font scan is
 /// already running" instead of spawning a thread that immediately exits,
-/// and (b) the guard's Drop (clearing ACTIVE_SCAN_ID via
-/// `compare_exchange(scan_id, NO_SCAN_ID)`) runs on whichever thread
-/// owns the guard at exit time, regardless of whether the closure in
-/// `spawn_blocking` returned Ok or Err.
-///
-/// SeqCst on the CAS pairs with the SeqCst load in `cancel_font_scan`
-/// to give a total order across all ACTIVE_SCAN_ID accesses — needed
-/// so cancel_font_scan's range check can never see a stale NO_SCAN_ID
-/// while a fresh scan has already won the slot.
+/// and (b) the guard's Drop clears `SCAN_STATE` (whether uncancelled or
+/// marked with `CANCELLED_BIT`) on whichever thread owns the guard at exit.
 pub(super) fn begin_font_scan(scan_id: u64) -> Result<ActiveScanGuard, String> {
-    // Public IPC commands now validate scan_id != NO_SCAN_ID at the
-    // boundary; debug_assert catches any future internal caller that
-    // bypasses that gate. Release builds skip the check entirely so
-    // we don't pay for it on the spawn path of every legitimate scan.
-    debug_assert!(
-        scan_id != NO_SCAN_ID,
-        "begin_font_scan called with NO_SCAN_ID"
-    );
+    validate_scan_id(scan_id)?;
 
-    ACTIVE_SCAN_ID
+    SCAN_STATE
         .compare_exchange(NO_SCAN_ID, scan_id, Ordering::SeqCst, Ordering::SeqCst)
         .map_err(|_| "Another font scan is already running".to_string())?;
 
-    let guard = ActiveScanGuard { scan_id };
-
-    // After winning the slot, the only legitimate way `CANCEL_SCAN_ID
-    // == scan_id` is that this scan's owner already issued a cancel for
-    // it — either pre-armed (frontend wrote CANCEL_SCAN_ID before
-    // begin_font_scan ran) or post-CAS-pre-load (cancel_font_scan
-    // raced past our CAS, observed ACTIVE_SCAN_ID == scan_id, and
-    // wrote CANCEL_SCAN_ID = scan_id before this load fired). Both
-    // shapes mean "user wants this scan cancelled"; bail.
-    //
-    // The previous design unconditionally cleared CANCEL_SCAN_ID here,
-    // which closed the pre-arm case but silently overwrote the post-
-    // CAS race — a real cancel click arriving in that window was lost.
-    // Check-and-bail closes both at once. Drop the guard explicitly so
-    // ACTIVE_SCAN_ID is released before the caller sees the error.
-    if CANCEL_SCAN_ID.load(Ordering::SeqCst) == scan_id {
-        drop(guard);
-        return Err("Font scan was cancelled".to_string());
-    }
-
-    Ok(guard)
+    Ok(ActiveScanGuard { scan_id })
 }
 
 pub(super) fn font_scan_cancelled(scan_id: u64) -> bool {
-    // Acquire load pairs with the Release fetch_max in `cancel_font_scan`.
-    scan_id != NO_SCAN_ID && CANCEL_SCAN_ID.load(Ordering::Acquire) == scan_id
+    scan_id != NO_SCAN_ID
+        && (scan_id & CANCELLED_BIT) == 0
+        && SCAN_STATE.load(Ordering::Acquire) == (scan_id | CANCELLED_BIT)
 }
 
 #[derive(serde::Serialize)]
@@ -279,11 +246,24 @@ pub(super) fn checked_canonical_path(path: &Path, root: &Path) -> Result<PathBuf
 /// preflight and parsing. It never follows symlinks/junctions/reparse points,
 /// applies global budgets across the selected root, and polls cancellation
 /// during metadata walking rather than waiting for font parsing to begin.
+#[cfg(test)]
 pub(super) fn discover_font_files(
     canonical_root: &Path,
     scope: FontDirectoryScope,
     scan_id: u64,
 ) -> Result<DirectoryDiscovery, String> {
+    discover_font_files_with_policy(canonical_root, scope, scan_id, &|_| true)
+}
+
+pub(super) fn discover_font_files_with_policy<P>(
+    canonical_root: &Path,
+    scope: FontDirectoryScope,
+    scan_id: u64,
+    is_allowed: &P,
+) -> Result<DirectoryDiscovery, String>
+where
+    P: Fn(&Path) -> bool,
+{
     match crate::util::try_is_reparse_point(canonical_root) {
         Ok(false) => {}
         Ok(true) => return Err("Font library root cannot be a symlink or junction".to_string()),
@@ -389,6 +369,9 @@ pub(super) fn discover_font_files(
             if font_scan_cancelled(scan_id) {
                 return Ok(discovery_result!(ScanStopReason::UserCancel));
             }
+            if !is_allowed(&path) {
+                continue;
+            }
             match crate::util::try_is_reparse_point(&path) {
                 Ok(true) => continue,
                 Err(_) => {
@@ -407,7 +390,11 @@ pub(super) fn discover_font_files(
             if metadata.is_dir() {
                 if scope == FontDirectoryScope::Recursive {
                     match checked_canonical_path(&path, canonical_root) {
-                        Ok(canonical) => nested.push(canonical),
+                        Ok(canonical) => {
+                            if is_allowed(&canonical) {
+                                nested.push(canonical);
+                            }
+                        }
                         Err(_) => incomplete_io = true,
                     }
                 }
@@ -426,6 +413,9 @@ pub(super) fn discover_font_files(
                     continue;
                 }
             };
+            if !is_allowed(&canonical) {
+                continue;
+            }
             let dedup_key = normalize_canonical_path(&canonical.to_string_lossy());
             if !seen_font_paths.insert(dedup_key) {
                 continue;
@@ -515,16 +505,29 @@ impl std::fmt::Display for ExplicitFontPathError {
 /// rejects. Return the normalized canonical string alongside the `PathBuf` so
 /// callers cannot accidentally deduplicate or publish the path before that
 /// post-canonicalization check.
-pub(super) fn canonicalize_and_validate_explicit_font_path_with<F>(
+pub(super) fn canonicalize_and_validate_explicit_font_path_with_policy<F, A>(
     path: &str,
     canonicalize: F,
+    is_allowed: &A,
 ) -> Result<(PathBuf, String), ExplicitFontPathError>
 where
     F: FnOnce(&Path) -> std::io::Result<PathBuf>,
+    A: Fn(&Path) -> bool,
 {
     validate_ipc_path(path, "File").map_err(ExplicitFontPathError::Rejected)?;
-    let canonical =
-        canonicalize(Path::new(path)).map_err(|_| ExplicitFontPathError::IncompleteIo)?;
+    let raw_ref = Path::new(path);
+    if !is_allowed(raw_ref) {
+        return Err(ExplicitFontPathError::Rejected(
+            "Font file path is denied by the application's filesystem scope policy".to_string(),
+        ));
+    }
+    let canonical = canonicalize(raw_ref).map_err(|_| ExplicitFontPathError::IncompleteIo)?;
+    if !is_allowed(&canonical) {
+        return Err(ExplicitFontPathError::Rejected(
+            "Resolved font file path is denied by the application's filesystem scope policy"
+                .to_string(),
+        ));
+    }
     let canonical_text = canonical.to_str().ok_or_else(|| {
         ExplicitFontPathError::Rejected("A selected font path is not valid UTF-8".to_string())
     })?;
@@ -533,12 +536,38 @@ where
     Ok((canonical, normalized))
 }
 
-pub(super) fn canonicalize_and_validate_explicit_font_path(
+#[cfg(test)]
+pub(super) fn canonicalize_and_validate_explicit_font_path_with<F>(
     path: &str,
-) -> Result<(PathBuf, String), ExplicitFontPathError> {
-    canonicalize_and_validate_explicit_font_path_with(path, Path::canonicalize)
+    canonicalize: F,
+) -> Result<(PathBuf, String), ExplicitFontPathError>
+where
+    F: FnOnce(&Path) -> std::io::Result<PathBuf>,
+{
+    canonicalize_and_validate_explicit_font_path_with_policy(path, canonicalize, &|_| true)
 }
 
+pub(super) fn resolve_explicit_font_file_with_policy<C, M, A>(
+    path: &str,
+    canonicalize: C,
+    metadata: M,
+    is_allowed: &A,
+) -> Result<Option<(PathBuf, String)>, ExplicitFontPathError>
+where
+    C: FnOnce(&Path) -> std::io::Result<PathBuf>,
+    M: FnOnce(&Path) -> std::io::Result<fs::Metadata>,
+    A: Fn(&Path) -> bool,
+{
+    let resolved =
+        canonicalize_and_validate_explicit_font_path_with_policy(path, canonicalize, is_allowed)?;
+    if !has_allowed_font_extension(&resolved.0) {
+        return Ok(None);
+    }
+    let metadata = metadata(&resolved.0).map_err(|_| ExplicitFontPathError::IncompleteIo)?;
+    Ok(metadata.is_file().then_some(resolved))
+}
+
+#[cfg(test)]
 pub(super) fn resolve_explicit_font_file_with<C, M>(
     path: &str,
     canonicalize: C,
@@ -548,37 +577,27 @@ where
     C: FnOnce(&Path) -> std::io::Result<PathBuf>,
     M: FnOnce(&Path) -> std::io::Result<fs::Metadata>,
 {
-    let resolved = canonicalize_and_validate_explicit_font_path_with(path, canonicalize)?;
-    if !has_allowed_font_extension(&resolved.0) {
-        return Ok(None);
-    }
-    let metadata = metadata(&resolved.0).map_err(|_| ExplicitFontPathError::IncompleteIo)?;
-    Ok(metadata.is_file().then_some(resolved))
+    resolve_explicit_font_file_with_policy(path, canonicalize, metadata, &|_| true)
 }
 
 pub(super) fn resolve_explicit_font_file(
     path: &str,
 ) -> Result<Option<(PathBuf, String)>, ExplicitFontPathError> {
-    resolve_explicit_font_file_with(path, Path::canonicalize, |canonical| {
-        fs::metadata(canonical)
-    })
+    resolve_explicit_font_file_with_policy(
+        path,
+        Path::canonicalize,
+        |canonical| fs::metadata(canonical),
+        &|_| true,
+    )
 }
 
-pub(super) fn preflight_files_inner(paths: Vec<String>) -> FontScanPreflight {
-    // The public command enforces MAX_INPUT_PATHS, but the inner
-    // helper has no caller-side check. Debug-mode assertion catches
-    // any future internal caller that bypasses the public command.
-    //
-    // (seen-HashSet bound documentation): the
-    // assert below also bounds the `seen: HashSet` allocation
-    // implicitly — `seen` grows at most one entry per loop iteration,
-    // and the loop runs `paths.len()` times. With MAX_INPUT_PATHS =
-    // 1000, the worst-case allocation is ~1000 normalized-path
-    // strings (much less than the parallel MAX_PREFLIGHT_ENTRIES =
-    // 200_000 ceiling that applies to directory scans). If a future
-    // change raises MAX_INPUT_PATHS substantially OR removes the IPC
-    // gate, this debug_assert is the structural reminder that `seen`
-    // needs its own cap.
+pub(super) fn preflight_files_inner_with_policy<A>(
+    paths: Vec<String>,
+    is_allowed: &A,
+) -> FontScanPreflight
+where
+    A: Fn(&Path) -> bool,
+{
     debug_assert!(
         paths.len() <= MAX_INPUT_PATHS,
         "preflight_files_inner: paths.len()={} exceeds MAX_INPUT_PATHS={}",
@@ -590,15 +609,15 @@ pub(super) fn preflight_files_inner(paths: Vec<String>) -> FontScanPreflight {
         total_bytes: 0,
     };
     let mut seen = HashSet::new();
-    // mirror dropzone.rs's aggregate-count pattern.
-    // Per-path validate / canonicalize failures `continue` silently inside
-    // the loop; a single `log::info!` post-loop tells anyone reading the
-    // log why the resolved count differs from the input count ("I dragged
-    // 50 files but only 30 are in the preflight" used to leave no trail).
     let total_inputs = paths.len();
     let mut rejected = 0usize;
     for p in paths {
-        let Ok((canonical, canonical_key)) = canonicalize_and_validate_explicit_font_path(&p)
+        let Ok((canonical, canonical_key)) =
+            canonicalize_and_validate_explicit_font_path_with_policy(
+                &p,
+                Path::canonicalize,
+                is_allowed,
+            )
         else {
             rejected += 1;
             continue;
@@ -610,38 +629,54 @@ pub(super) fn preflight_files_inner(paths: Vec<String>) -> FontScanPreflight {
     }
     if rejected > 0 {
         log::info!(
-            "preflight_files: dropped {rejected} of {total_inputs} input path(s) (validate / canonicalize failure)"
+            "preflight_files: dropped {rejected} of {total_inputs} input path(s) (validate / scope / canonicalize failure)"
         );
     }
     out
 }
 
-pub(super) async fn preflight_font_directory_cmd(
+pub(super) async fn preflight_font_directory_cmd<P>(
     dir: String,
     scope: Option<FontDirectoryScope>,
     scan_id: u64,
-) -> Result<FontDirectoryScanPreflight, String> {
-    if scan_id == NO_SCAN_ID {
-        return Err("Scan id must be non-zero".to_string());
-    }
+    is_allowed: P,
+) -> Result<FontDirectoryScanPreflight, String>
+where
+    P: Fn(&Path) -> bool + Send + Sync + 'static,
+{
+    validate_scan_id(scan_id)?;
     validate_ipc_path(&dir, "Directory")?;
     let scope = scope.unwrap_or(FontDirectoryScope::Shallow);
     let active_scan = begin_font_scan(scan_id)?;
     tauri::async_runtime::spawn_blocking(move || {
         let _active_scan = active_scan;
-        match crate::util::try_is_reparse_point(Path::new(&dir)) {
+        let dir_path = Path::new(&dir);
+        if !is_allowed(dir_path) {
+            return Err(format!(
+                "Font directory path is denied by the application's filesystem scope policy: {}",
+                dir_path.display()
+            ));
+        }
+        match crate::util::try_is_reparse_point(dir_path) {
             Ok(false) => {}
             Ok(true) => return Err("Font library root cannot be a symlink or junction".to_string()),
             Err(_) => return Err("Cannot inspect font library root".to_string()),
         }
-        let canonical_dir = Path::new(&dir).canonicalize().map_err(|e| {
+        let canonical_dir = dir_path.canonicalize().map_err(|e| {
             log::warn!("preflight canonicalize directory failed: {e}");
             "Cannot resolve directory path".to_string()
         })?;
+        if !is_allowed(&canonical_dir) {
+            return Err(format!(
+                "Resolved font directory path is denied by the application's filesystem scope policy: {}",
+                canonical_dir.display()
+            ));
+        }
         if !canonical_dir.is_dir() {
             return Err("Not a directory".to_string());
         }
-        let discovery = discover_font_files(&canonical_dir, scope, scan_id)?;
+        let discovery =
+            discover_font_files_with_policy(&canonical_dir, scope, scan_id, &is_allowed)?;
         match discovery.reason {
             ScanStopReason::CeilingHit => {
                 return Err("Font library is too large to inspect safely".to_string())
@@ -667,18 +702,24 @@ pub(super) async fn preflight_font_directory_cmd(
     .map_err(|e| format!("Font preflight worker failed: {e}"))?
 }
 
-pub(super) async fn preflight_font_files_cmd(
+pub(super) async fn preflight_font_files_cmd<P>(
     paths: Vec<String>,
-) -> Result<FontScanPreflight, String> {
+    is_allowed: P,
+) -> Result<FontScanPreflight, String>
+where
+    P: Fn(&Path) -> bool + Send + Sync + 'static,
+{
     if paths.len() > MAX_INPUT_PATHS {
         return Err(format!(
             "Too many file paths ({}, max {MAX_INPUT_PATHS})",
             paths.len()
         ));
     }
-    tauri::async_runtime::spawn_blocking(move || Ok(preflight_files_inner(paths)))
-        .await
-        .map_err(|e| format!("Font preflight worker failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        Ok(preflight_files_inner_with_policy(paths, &is_allowed))
+    })
+    .await
+    .map_err(|e| format!("Font preflight worker failed: {e}"))?
 }
 
 /// Scope-aware directory scanner used by the new library surface. Discovery
@@ -694,11 +735,34 @@ pub(super) fn scan_directory_with_scope_inner<
     captured_snapshot: Option<&mut Option<crate::font_cache::CacheSourceSnapshot>>,
     emit_batch: F,
 ) -> Result<ScanOutcome, String> {
-    scan_directory_with_scope_inner_with_parser(
+    scan_directory_with_scope_inner_with_policy(
         canonical_dir,
         scope,
         scan_id,
         captured_snapshot,
+        &|_| true,
+        emit_batch,
+    )
+}
+
+pub(super) fn scan_directory_with_scope_inner_with_policy<F, A>(
+    canonical_dir: &Path,
+    scope: FontDirectoryScope,
+    scan_id: u64,
+    captured_snapshot: Option<&mut Option<crate::font_cache::CacheSourceSnapshot>>,
+    is_allowed: &A,
+    emit_batch: F,
+) -> Result<ScanOutcome, String>
+where
+    F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>,
+    A: Fn(&Path) -> bool,
+{
+    scan_directory_with_scope_inner_with_parser_and_policy(
+        canonical_dir,
+        scope,
+        scan_id,
+        captured_snapshot,
+        is_allowed,
         parse_local_font_file,
         emit_batch,
     )
@@ -708,15 +772,40 @@ pub(super) fn scan_directory_with_scope_inner_with_parser<F, P>(
     canonical_dir: &Path,
     scope: FontDirectoryScope,
     scan_id: u64,
+    captured_snapshot: Option<&mut Option<crate::font_cache::CacheSourceSnapshot>>,
+    parse_font: P,
+    emit_batch: F,
+) -> Result<ScanOutcome, String>
+where
+    F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>,
+    P: FnMut(&Path, u64) -> Result<Vec<LocalFontEntry>, FontFileSkipReason>,
+{
+    scan_directory_with_scope_inner_with_parser_and_policy(
+        canonical_dir,
+        scope,
+        scan_id,
+        captured_snapshot,
+        &|_| true,
+        parse_font,
+        emit_batch,
+    )
+}
+
+pub(super) fn scan_directory_with_scope_inner_with_parser_and_policy<F, P, A>(
+    canonical_dir: &Path,
+    scope: FontDirectoryScope,
+    scan_id: u64,
     mut captured_snapshot: Option<&mut Option<crate::font_cache::CacheSourceSnapshot>>,
+    is_allowed: &A,
     mut parse_font: P,
     mut emit_batch: F,
 ) -> Result<ScanOutcome, String>
 where
     F: FnMut(Vec<LocalFontEntry>) -> Result<(), String>,
     P: FnMut(&Path, u64) -> Result<Vec<LocalFontEntry>, FontFileSkipReason>,
+    A: Fn(&Path) -> bool,
 {
-    let mut discovery = discover_font_files(canonical_dir, scope, scan_id)?;
+    let mut discovery = discover_font_files_with_policy(canonical_dir, scope, scan_id, is_allowed)?;
     if discovery.reason == ScanStopReason::UserCancel {
         return Ok(ScanOutcome {
             total: 0,
@@ -891,7 +980,7 @@ where
 {
     let mut conn = open_user_font_db()?;
     let tx = conn
-        .transaction()
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|e| db_error("transaction start failed", e))?;
     create_user_font_source_tx(&tx, source.source_id, source.source_kind, source.root_path)?;
     let mut import = ImportOutcome::default();
@@ -1037,7 +1126,7 @@ where
     validate_font_source_id(source_id)?;
     let mut conn = open_user_font_db()?;
     let tx = conn
-        .transaction()
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|e| db_error("transaction start failed", e))?;
     create_user_font_source_tx(&tx, source_id, source_kind, root_path)?;
     let mut import = ImportOutcome::default();
@@ -1231,16 +1320,18 @@ pub fn import_font_files_for_cli(
 /// Tauri command wrapping `scan_directory_inner` with a typed progress
 /// channel. Frontend creates a `Channel<ScanProgress>`, passes it as
 /// `progress`, and receives `Batch` events as faces are parsed.
-pub(super) async fn scan_font_directory_cmd(
+pub(super) async fn scan_font_directory_cmd<P>(
     dir: String,
     progress: tauri::ipc::Channel<ScanProgress>,
     scan_id: u64,
     source_id: String,
     scope: Option<FontDirectoryScope>,
-) -> Result<FontDirectoryScanCommandResult, String> {
-    if scan_id == NO_SCAN_ID {
-        return Err("Scan id must be non-zero".to_string());
-    }
+    is_allowed: P,
+) -> Result<FontDirectoryScanCommandResult, String>
+where
+    P: Fn(&Path) -> bool + Send + Sync + 'static,
+{
+    validate_scan_id(scan_id)?;
     validate_ipc_path(&dir, "Directory")?;
     validate_font_source_id(&source_id)?;
     let scope = scope.unwrap_or(FontDirectoryScope::Shallow);
@@ -1251,35 +1342,33 @@ pub(super) async fn scan_font_directory_cmd(
         })?;
     let active_scan = begin_font_scan(scan_id)?;
     tauri::async_runtime::spawn_blocking(move || {
-        // The guard's only job is to clear ACTIVE_SCAN_ID on Drop when
-        // the worker thread exits — Ok or Err. Bind it into the
-        // closure's scope (the move at the spawn_blocking boundary
-        // already transferred ownership; this just keeps it alive
-        // through every return path inside).
         let _active_scan = active_scan;
         let cache_mutation = cache_mutation;
-        match crate::util::try_is_reparse_point(Path::new(&dir)) {
+        let dir_path = Path::new(&dir);
+        if !is_allowed(dir_path) {
+            return Err(format!(
+                "Font directory path is denied by the application's filesystem scope policy: {}",
+                dir_path.display()
+            ));
+        }
+        match crate::util::try_is_reparse_point(dir_path) {
             Ok(false) => {}
             Ok(true) => return Err("Font library root cannot be a symlink or junction".to_string()),
             Err(_) => return Err("Cannot inspect font library root".to_string()),
         }
-        let canonical_dir = Path::new(&dir).canonicalize().map_err(|e| {
+        let canonical_dir = dir_path.canonicalize().map_err(|e| {
             log::warn!("canonicalize directory failed: {e}");
             "Cannot resolve directory path".to_string()
         })?;
+        if !is_allowed(&canonical_dir) {
+            return Err(format!(
+                "Resolved font directory path is denied by the application's filesystem scope policy: {}",
+                canonical_dir.display()
+            ));
+        }
         if !canonical_dir.is_dir() {
             return Err("Not a directory".to_string());
         }
-        // WHY full path in log_label (vs sanitized / truncated):
-        // log::info! is INTERNAL telemetry consumed by
-        // `RUST_LOG=info` dev runs and tauri-plugin-log files written
-        // under app-data-dir (user-local, no cross-user reach). The
-        // path is provided BY the user via picker / drag-drop, so it
-        // is content the user already saw. local-user (single-user desktop)
-        // does not consider local-file disclosure a leak. If this
-        // app later ships a remote-log shipper or a public crash
-        // reporter, sanitize at the shipper boundary, not here — the
-        // local INFO line is the right diagnostic granularity.
         let log_label = format!("Scanned font directory '{}'", canonical_dir.display());
         let mut entries_for_cache: Vec<LocalFontEntry> = Vec::new();
         let mut cache_snapshot = None;
@@ -1306,9 +1395,6 @@ pub(super) async fn scan_font_directory_cmd(
         if existing_source {
             return Err("That font source is already loaded".to_string());
         }
-        // Invalidate an older persistent snapshot before importing this
-        // source. A cancelled or incomplete replacement must not leave the
-        // old complete cache silently active behind the partial session view.
         crate::font_cache_commands::remove_source_from_gui_cache_locked(
             &cache_mutation,
             &root_path,
@@ -1325,11 +1411,12 @@ pub(super) async fn scan_font_directory_cmd(
             progress,
             Some(&mut entries_for_cache),
             |scan_id, emit_batch| {
-                scan_directory_with_scope_inner(
+                scan_directory_with_scope_inner_with_policy(
                     &canonical_dir,
                     scope,
                     scan_id,
                     Some(&mut cache_snapshot),
+                    &is_allowed,
                     emit_batch,
                 )
             },
@@ -1558,15 +1645,17 @@ where
 /// Tauri command wrapping `scan_files_inner` with a typed progress channel.
 /// Same shape as `scan_font_directory` — frontend supplies the list of
 /// paths and a `Channel<ScanProgress>` for incremental delivery.
-pub(super) async fn scan_font_files_cmd(
+pub(super) async fn scan_font_files_cmd<P>(
     paths: Vec<String>,
     progress: tauri::ipc::Channel<ScanProgress>,
     scan_id: u64,
     source_id: String,
-) -> Result<(), String> {
-    if scan_id == NO_SCAN_ID {
-        return Err("Scan id must be non-zero".to_string());
-    }
+    is_allowed: P,
+) -> Result<(), String>
+where
+    P: Fn(&Path) -> bool + Send + Sync + 'static,
+{
+    validate_scan_id(scan_id)?;
     if paths.len() > MAX_INPUT_PATHS {
         return Err(format!(
             "Too many file paths ({}, max {MAX_INPUT_PATHS})",
@@ -1577,7 +1666,7 @@ pub(super) async fn scan_font_files_cmd(
 
     let active_scan = begin_font_scan(scan_id)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let _active_scan = active_scan; // see scan_font_directory for the WHY
+        let _active_scan = active_scan;
         run_streaming_scan_command(
             scan_id,
             StreamingScanSource {
@@ -1587,97 +1676,49 @@ pub(super) async fn scan_font_files_cmd(
                 log_label: "Scanned local font files",
             },
             progress,
-            // No GUI cache populate for file-list scans: the cache's
-            // drift model is folder-anchored (folder mtime vs cached
-            // mtime), and an arbitrary file list has no single folder
-            // to anchor against. Files-mode sources stay session-only.
             None,
-            |scan_id, emit_batch| scan_files_inner(paths, scan_id, emit_batch),
+            |scan_id, emit_batch| {
+                scan_files_inner_with_operations(
+                    paths,
+                    scan_id,
+                    |p| {
+                        resolve_explicit_font_file_with_policy(
+                            p,
+                            Path::canonicalize,
+                            |canonical| fs::metadata(canonical),
+                            &is_allowed,
+                        )
+                    },
+                    parse_local_font_file,
+                    emit_batch,
+                )
+            },
         )
-        // File-list scans are intentionally session-only; discard the
-        // directory-cache publication details.
         .map(|_| ())
     })
     .await
     .map_err(|e| format!("Font scan worker failed: {e}"))?
 }
 
-/// Cooperative cancel for an active font scan. The request is targeted by
-/// scan id; stale commands from older scans cannot cancel newer work. The
-/// running scan checks between files and returns early with all
-/// already-emitted batches retained on the frontend.
+/// Cooperative cancel for an active font scan. Atomically transitions
+/// `SCAN_STATE` from `scan_id` to `scan_id | CANCELLED_BIT` iff `scan_id` is
+/// the currently active uncancelled scan. Stale lower IDs, future IDs, and
+/// calls while idle fail the single-word CAS harmlessly with zero side effects.
 pub(super) fn cancel_font_scan_cmd(scan_id: u64) {
-    if scan_id == NO_SCAN_ID {
+    if scan_id == NO_SCAN_ID || (scan_id & CANCELLED_BIT) != 0 {
         return;
     }
-    // Range-check against the currently-active scan id. Three cases:
-    //
-    //   - `scan_id < active` (stale-low): a cancel arriving for an old
-    //     scan id while a newer one runs. fetch_max below is a no-op
-    //     because CANCEL_SCAN_ID has already been bumped past it (or
-    //     stays at its current value). Accepted-but-harmless.
-    //   - `scan_id == active` (legitimate): cancel the currently-
-    //     running scan. fetch_max writes CANCEL_SCAN_ID = scan_id; the
-    //     scan worker's `font_scan_cancelled` poll observes equality
-    //     and bails. This is the normal cancel path.
-    //   - `scan_id > active` (out-of-band): rejected. Without this
-    //     guard, a misbehaving frontend calling `cancel_font_scan(
-    //     u64::MAX)` once would permanently set CANCEL_SCAN_ID to MAX
-    //     and silently disable cancellation for the rest of the
-    //     session — every legitimate future scan id would compare
-    //     unequal in `font_scan_cancelled` and the cancel button would
-    //     stop working with no log signal.
-    //
-    // `active == NO_SCAN_ID` collapses with the out-of-band case (any
-    // scan_id > 0 is "future" relative to no scan) — same rejection
-    // path. Don't touch CANCEL_SCAN_ID even with fetch_max in that
-    // case; the invariant "we only write CANCEL_SCAN_ID while an
-    // active scan exists" is easier to reason about.
-    //
-    // Project is trust-the-frontend, so this guard is defense-in-depth
-    // matching the IPC-validation discipline in `validate_font_source_id`
-    // and `validate_ipc_path`.
-    let active = ACTIVE_SCAN_ID.load(Ordering::SeqCst);
-    if active == NO_SCAN_ID || scan_id > active {
-        return;
-    }
-    // Mixed-ordering note: the load above is SeqCst because it reads
-    // the same atomic that `begin_font_scan` writes via SeqCst CAS —
-    // we want a consistent total order across all ACTIVE_SCAN_ID
-    // operations. The Release fetch_max pairs with the worker's Acquire
-    // load in `font_scan_cancelled`; keep that synchronization independent
-    // of the per-scan-id equality check.
-    //
-    // `fetch_max` ensures a stale cancel for an OLDER (smaller-id) scan
-    // arriving after a newer cancel cannot regress CANCEL_SCAN_ID. The
-    // returned prior max is intentionally discarded — caller has no
-    // useful action either way.
-    CANCEL_SCAN_ID.fetch_max(scan_id, Ordering::Release);
+    let _ = SCAN_STATE.compare_exchange(
+        scan_id,
+        scan_id | CANCELLED_BIT,
+        Ordering::SeqCst,
+        Ordering::SeqCst,
+    );
 }
 
-/// Refuse a mutation when a font scan is mid-flight. The PRIMARY guard
-/// is the modal scrim UX — `clear_font_sources` and friends only fire
-/// when the FontSourceModal is open, and the modal disables those
-/// buttons during scan. This server-side check is defense-in-depth
-/// against a misbehaving frontend AND against the degraded-WAL
-/// scenario flagged in `set_user_font_db_journal_mode_once` (network /
-/// tmpfs / read-only mounts where SQLite silently keeps DELETE
-/// journaling — busy_timeout still applies but contention windows are
-/// wider).
-///
-/// Functional rationale: a `DELETE FROM font_sources` issued mid-scan
-/// would block until the scan's transaction commits and then
-/// immediately delete everything just inserted — surprising the user
-/// who probably wanted "clear before the scan starts" or "after it
-/// completes".
-///
-/// `Acquire` ordering pairs with the SeqCst CAS inside `begin_font_
-/// scan`. SeqCst there is stronger than Release-Acquire, so the
-/// pairing holds. Do NOT downgrade `begin_font_scan`'s CAS to Release:
-/// `cancel_font_scan`'s SeqCst load on ACTIVE_SCAN_ID requires a total
-/// order across all accesses to that atomic.
+/// Refuse a mutation when a font scan is mid-flight.
 pub(super) fn reject_during_active_scan(message: &str) -> Result<(), String> {
-    if ACTIVE_SCAN_ID.load(Ordering::Acquire) != NO_SCAN_ID {
+    if (SCAN_STATE.load(Ordering::Acquire) & SCAN_ID_MASK) != NO_SCAN_ID {
         return Err(message.to_string());
     }
     Ok(())

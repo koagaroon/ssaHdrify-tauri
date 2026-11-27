@@ -1089,35 +1089,11 @@ pub(super) fn check_cache_drift(
     let cached_sources = cache
         .list_sources()
         .map_err(|e| format!("list cached font sources: {e}"))?;
-    let mut snapshots = Vec::with_capacity(cached_sources.len());
-    let mut unreadable_existing = Vec::new();
-    for source in &cached_sources {
-        match app_lib::font_cache::snapshot_source_directories(
-            Path::new(&source.source_root),
-            source.scope,
-        ) {
-            Ok(snapshot) => snapshots.push(snapshot),
-            Err(_) => {
-                let root = Path::new(&source.source_root);
-                let is_clean_real_directory =
-                    matches!(app_lib::util::try_is_reparse_point(root), Ok(false))
-                        && fs::symlink_metadata(root).is_ok_and(|metadata| metadata.is_dir());
-                if is_clean_real_directory {
-                    unreadable_existing.push(source.key());
-                }
-            }
-        }
-    }
+    let inspection = app_lib::font_cache::inspect_cached_sources_live(&cached_sources);
     let mut report = cache
-        .diff_sources(&snapshots)
+        .diff_sources(&inspection.snapshots)
         .map_err(|e| format!("compute source drift: {e}"))?;
-    for key in unreadable_existing {
-        report.removed.retain(|removed| removed != &key);
-        if !report.modified.contains(&key) {
-            report.modified.push(key);
-        }
-    }
-    report.modified.sort();
+    app_lib::font_cache::apply_live_source_inspection(&mut report, &inspection);
     Ok(report)
 }
 
