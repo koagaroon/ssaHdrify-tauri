@@ -24,6 +24,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod common;
+use common::TestTempDir;
+
 const FIXTURE_ASS: &str = concat!(
     "[Script Info]\n",
     "ScriptType: v4.00+\n",
@@ -46,21 +49,8 @@ fn cli_path() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_ssahdrify-cli"))
 }
 
-fn temp_dir(label: &str) -> PathBuf {
-    static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let pid = std::process::id();
-    let nano = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let seq = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let base = std::env::temp_dir();
-    fs::create_dir_all(&base).expect("failed to ensure OS temp dir");
-    let dir = base.join(format!(
-        "ssahdrify-cli-chain-test-{label}-{pid}-{nano}-{seq}"
-    ));
-    fs::create_dir(&dir).expect("failed to create unique test temp dir");
-    dir
+fn temp_dir(label: &str) -> TestTempDir {
+    TestTempDir::new("ssahdrify-cli-chain-test", label)
 }
 
 fn write_fixture(dir: &Path, name: &str) -> PathBuf {
@@ -1057,4 +1047,77 @@ fn chain_dry_run_json_emits_planned_command_report_without_writing() {
     assert!(!dir.join("ep1.hdr.shifted.ass").exists());
 
     let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn chain_dry_run_json_and_human_report_collisions_with_accurate_exit_codes() {
+    let dir = temp_dir("chain_dry_run_collisions");
+    let a = write_fixture(&dir, "a.ass");
+    let b = write_fixture(&dir, "b.ass");
+
+    // 1. Selected-input collision under --dry-run --json emits pure JSON CommandReport (not empty stdout)
+    let selected_json_out = Command::new(cli_path())
+        .args([
+            "--lang",
+            "en",
+            "--json",
+            "--dry-run",
+            "chain",
+            "--output-template",
+            "b.ass",
+            "shift",
+            "--offset",
+            "+1s",
+        ])
+        .arg(&a)
+        .arg(&b)
+        .output()
+        .unwrap();
+    assert_eq!(selected_json_out.status.code(), Some(2));
+    let selected_report: serde_json::Value = serde_json::from_slice(&selected_json_out.stdout)
+        .expect("--dry-run --json must emit valid JSON even when outputs collide with inputs");
+    assert_eq!(selected_report["command"], "chain");
+    assert_eq!(selected_report["failed"], 2);
+    assert!(selected_report["results"][0]["error"]
+        .as_str()
+        .unwrap()
+        .contains("selected input file"));
+    assert!(selected_report["results"][1]["error"]
+        .as_str()
+        .unwrap()
+        .contains("refusing self-overwrite"));
+
+    // 2. Duplicate output batch (1 planned + 1 failed) exits 1 in BOTH --json and human --dry-run
+    for json_mode in [false, true] {
+        let mut cmd = Command::new(cli_path());
+        cmd.args(["--lang", "en", "--dry-run"]);
+        if json_mode {
+            cmd.arg("--json");
+        }
+        let out = cmd
+            .args([
+                "chain",
+                "--output-template",
+                "shared_out.ass",
+                "shift",
+                "--offset",
+                "+1s",
+            ])
+            .arg(&a)
+            .arg(&b)
+            .output()
+            .unwrap();
+        assert_eq!(
+            out.status.code(),
+            Some(1),
+            "partial collision in chain --dry-run (json={json_mode}) must exit 1: stdout={}, stderr={}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        if json_mode {
+            let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+            assert_eq!(report["planned"], 1);
+            assert_eq!(report["failed"], 1);
+        }
+    }
 }

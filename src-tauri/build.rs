@@ -120,6 +120,9 @@ fn missing_engine_stub() -> String {
         "resolveEmbedOutputPath",
         "applyFontEmbed",
         "runChain",
+        "validateStyleEditCliOperations",
+        "resolveStyleEditOutputPath",
+        "applyCliStyleEdit",
         // resolveChainOutputPath is currently unused — chain output
         // prediction lives Rust-side in `predict_chain_output_path`.
         // Kept here in case a future refactor delegates back to JS

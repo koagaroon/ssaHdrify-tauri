@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 mod common;
-use common::make_real_font_dir;
+use common::{make_real_font_dir, TestTempDir};
 
 const VALID_SRT: &str = "1\n00:00:01,000 --> 00:00:02,000\nhello\n";
 const VALID_VTT: &str = "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nhello\n";
@@ -15,21 +15,8 @@ fn cli_path() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_ssahdrify-cli"))
 }
 
-fn temp_dir(label: &str) -> PathBuf {
-    static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let seq = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let base = std::env::temp_dir();
-    fs::create_dir_all(&base).unwrap();
-    let dir = base.join(format!(
-        "ssahdrify-cli-shift-{label}-{}-{stamp}-{seq}",
-        std::process::id()
-    ));
-    fs::create_dir(&dir).unwrap();
-    dir
+fn temp_dir(label: &str) -> TestTempDir {
+    TestTempDir::new("ssahdrify-cli-shift", label)
 }
 
 fn write_file(parent: &Path, name: &str, content: &str) -> PathBuf {

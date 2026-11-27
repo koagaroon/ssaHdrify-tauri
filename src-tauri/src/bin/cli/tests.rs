@@ -2043,3 +2043,30 @@ fn merged_codepoints_over_cap_signals_fallback() {
         );
     }
 }
+
+#[test]
+fn build_rs_missing_engine_stub_covers_all_probed_engine_methods() {
+    let build_rs = include_str!("../../../build.rs");
+    for method in engine::REQUIRED_ENGINE_METHODS {
+        let needle = format!("\"{method}\"");
+        assert!(
+            build_rs.contains(&needle),
+            "build.rs missing_engine_stub FUNCTIONS must include {needle} to match engine.rs probe"
+        );
+    }
+}
+
+#[test]
+fn parse_timestamp_ms_rejects_trailing_decimal_or_comma_separator() {
+    assert_eq!(parse_timestamp_ms("00:01:02").unwrap(), 62_000);
+    assert_eq!(parse_timestamp_ms("00:01:02.5").unwrap(), 62_500);
+    assert_eq!(parse_timestamp_ms("00:01:02,05").unwrap(), 62_050);
+    assert!(
+        parse_timestamp_ms("00:01:02.").is_err(),
+        "trailing dot with empty fractional part must be rejected"
+    );
+    assert!(
+        parse_timestamp_ms("00:01:02,").is_err(),
+        "trailing comma with empty fractional part must be rejected"
+    );
+}

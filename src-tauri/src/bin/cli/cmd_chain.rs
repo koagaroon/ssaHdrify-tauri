@@ -62,25 +62,25 @@ pub(super) fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<Exit
     // upfront (including under --dry-run) and consult the persistent font
     // cache in read-only mode below.
     if embed_step_index.is_none() {
-        if globals.no_cache && !globals.quiet {
-            eprintln!(
-                "{}",
-                localize(
-                    globals,
-                    "ℹ --no-cache has no effect when chain has no embed step.".to_string(),
-                    "ℹ 当 chain 不包含 embed 步骤时，--no-cache 不生效。".to_string(),
-                )
-            );
-        }
-        if globals.cache_file.is_some() && !globals.quiet {
-            eprintln!(
-                "{}",
-                localize(
-                    globals,
-                    "ℹ --cache-file has no effect when chain has no embed step.".to_string(),
-                    "ℹ 当 chain 不包含 embed 步骤时，--cache-file 不生效。".to_string(),
-                )
-            );
+        if !globals.quiet {
+            let mut inert = Vec::new();
+            if globals.no_cache {
+                inert.push("--no-cache");
+            }
+            if globals.cache_file.is_some() {
+                inert.push("--cache-file");
+            }
+            if !inert.is_empty() {
+                let flags = inert.join(", ");
+                eprintln!(
+                    "{}",
+                    localize(
+                        globals,
+                        format!("ℹ {flags} has no effect when chain has no embed step."),
+                        format!("ℹ 当 chain 不包含 embed 步骤时，{flags} 不生效。"),
+                    )
+                );
+            }
         }
     } else {
         if !globals.no_cache {
@@ -102,8 +102,7 @@ pub(super) fn run_chain(globals: &GlobalOptions, args: ChainArgs) -> Result<Exit
         if globals.json {
             return emit_chain_dry_run_json(&plan, globals);
         }
-        emit_chain_dry_run(&plan, globals)?;
-        return Ok(ExitCode::SUCCESS);
+        return emit_chain_dry_run(&plan, globals);
     }
 
     // HDR / Shift / Embed all work in chain. Embed steps get their
@@ -1045,83 +1044,97 @@ pub(super) fn process_one_chain_input(
     builder.into_written(output_path)
 }
 
+fn resolve_chain_dry_run_output(
+    abs: &Path,
+    output_template: &str,
+    output_dir: Option<&Path>,
+) -> Result<Option<PathBuf>, String> {
+    let Some(unrelocated) = predict_chain_output_path(abs, output_template, None) else {
+        let stem = abs.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+        let ext = abs
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| format!(".{e}"))
+            .unwrap_or_default();
+        if let Some(candidate_name) =
+            substitute_template(output_template, &[("name", stem), ("ext", &ext)])
+        {
+            if let Some(parent) = abs.parent() {
+                app_lib::util::validate_output_path_shape(&parent.join(&candidate_name), "Output")?;
+            }
+            return Err(format!(
+                "output template produced an invalid output filename: {}",
+                sanitize_for_display(&candidate_name)
+            ));
+        }
+        return Ok(None);
+    };
+    relocate_output_path(&unrelocated.to_string_lossy(), output_dir).map(Some)
+}
+
 pub(super) fn emit_chain_dry_run_json(
     plan: &chain::ChainPlan,
     globals: &GlobalOptions,
 ) -> Result<ExitCode, String> {
     let selected_inputs = selected_input_keys(&plan.input_files);
-    for input in &plan.input_files {
-        if let Ok(absolute) = absolute_path(input) {
-            if let Some(predicted) =
-                predict_chain_output_path(&absolute, &plan.output_template, None)
-            {
-                let output = relocate_output_path(
-                    &predicted.to_string_lossy(),
-                    globals.output_dir.as_deref(),
-                )?;
-                if output_matches_selected_input(&output, &selected_inputs) {
-                    return Err("output path matches a selected input file; choose a different --output-template or --output-dir".to_string());
-                }
-            }
-        }
-    }
-
     let mut report = CommandReport::new("chain");
     let mut seen_outputs: HashSet<String> = HashSet::new();
     for (idx, input) in plan.input_files.iter().enumerate() {
         let result = match absolute_path(input) {
             Ok(abs) => {
-                if let Some(out_path) = predict_chain_output_path(
+                match resolve_chain_dry_run_output(
                     &abs,
                     &plan.output_template,
                     globals.output_dir.as_deref(),
                 ) {
-                    let out_disp = display_path(&out_path);
-                    let key = normalize_output_key(&out_path);
-                    let input_key = normalize_output_key(&abs);
-                    if key == input_key {
-                        failed_report(
-                            &abs,
-                            Some(out_disp),
-                            None,
-                            format!(
-                                "refusing self-overwrite: predicted output path {} is the input file; choose a different --output-template or --output-dir",
-                                out_path.display()
-                            ),
-                        )
-                    } else if output_matches_selected_input(&out_path, &selected_inputs) {
-                        failed_report(
-                            &abs,
-                            Some(out_disp),
-                            None,
-                            "output path matches a selected input file; choose a different --output-template or --output-dir".to_string(),
-                        )
-                    } else if !seen_outputs.insert(key.clone()) {
-                        failed_report(
-                            &abs,
-                            Some(out_disp),
-                            None,
-                            format!(
-                                "{} duplicate output path in planned batch",
-                                out_path.display()
-                            ),
-                        )
-                    } else if !globals.overwrite && output_path_exists(globals, &out_path) {
-                        seen_outputs.remove(&key);
-                        skipped_report(
-                            &abs,
-                            Some(out_disp),
-                            None,
-                            format!(
-                                "{} already exists (use --overwrite to replace)",
-                                out_path.display()
-                            ),
-                        )
-                    } else {
-                        planned_report(&abs, Some(out_disp), None)
+                    Ok(Some(out_path)) => {
+                        let out_disp = display_path(&out_path);
+                        let key = normalize_output_key(&out_path);
+                        let input_key = normalize_output_key(&abs);
+                        if key == input_key {
+                            failed_report(
+                                &abs,
+                                Some(out_disp),
+                                None,
+                                format!(
+                                    "refusing self-overwrite: predicted output path {} is the input file; choose a different --output-template or --output-dir",
+                                    out_path.display()
+                                ),
+                            )
+                        } else if output_matches_selected_input(&out_path, &selected_inputs) {
+                            failed_report(
+                                &abs,
+                                Some(out_disp),
+                                None,
+                                "output path matches a selected input file; choose a different --output-template or --output-dir".to_string(),
+                            )
+                        } else if !seen_outputs.insert(key.clone()) {
+                            failed_report(
+                                &abs,
+                                Some(out_disp),
+                                None,
+                                format!(
+                                    "{} duplicate output path in planned batch",
+                                    out_path.display()
+                                ),
+                            )
+                        } else if !globals.overwrite && output_path_exists(globals, &out_path) {
+                            seen_outputs.remove(&key);
+                            skipped_report(
+                                &abs,
+                                Some(out_disp),
+                                None,
+                                format!(
+                                    "{} already exists (use --overwrite to replace)",
+                                    out_path.display()
+                                ),
+                            )
+                        } else {
+                            planned_report(&abs, Some(out_disp), None)
+                        }
                     }
-                } else {
-                    planned_report(&abs, None, None)
+                    Ok(None) => planned_report(&abs, None, None),
+                    Err(err) => failed_report(&abs, None, None, err),
                 }
             }
             Err(err) => failed_report(input, None, None, err),
@@ -1142,105 +1155,108 @@ pub(super) fn emit_chain_dry_run_json(
 pub(super) fn emit_chain_dry_run(
     plan: &chain::ChainPlan,
     globals: &GlobalOptions,
-) -> Result<(), String> {
+) -> Result<ExitCode, String> {
     let selected_inputs = selected_input_keys(&plan.input_files);
-    // Dry-run normally treats predictor abstention as non-fatal, but a concrete
-    // predicted filename plus an invalid relocation is not abstention. Validate
-    // that final relocated path before printing a plan so output-directory
-    // errors cannot be collapsed to None by predict_chain_output_path's `.ok()`.
-    for input in &plan.input_files {
-        if let Ok(absolute) = absolute_path(input) {
-            if let Some(predicted) =
-                predict_chain_output_path(&absolute, &plan.output_template, None)
-            {
-                let output = relocate_output_path(
-                    &predicted.to_string_lossy(),
-                    globals.output_dir.as_deref(),
-                )?;
-                if output_matches_selected_input(&output, &selected_inputs) {
-                    return Err("output path matches a selected input file; choose a different --output-template or --output-dir".to_string());
-                }
-            }
-        }
+    if !globals.quiet {
+        println!("Plan (no files written):");
+        println!();
+        let template_disp = sanitize_for_display(&plan.output_template);
+        println!("Output template: {template_disp}");
+        println!();
     }
 
-    if globals.quiet {
-        return Ok(());
-    }
-    println!("Plan (no files written):");
-    println!();
-    // Every emit_chain_dry_run print site sanitizes interpolated
-    // strings. `plan.output_template` is user-supplied argv (untrusted-input);
-    // `input` is
-    // also argv; `out_str` derives from input + template via
-    // predict_chain_output_path, so any input control char leaks into
-    // the predicted path string. dry-run runs in a context where the
-    // user pipes / scripts the output, so terminal corruption is the
-    // same risk class as the per-file run-time sites.
-    let template_disp = sanitize_for_display(&plan.output_template);
-    println!("Output template: {template_disp}");
-    println!();
-    // track predicted outputs across inputs to surface
-    // duplicate-output collisions in dry-run output. The real run
-    // catches these via `seen_outputs.insert` returning false (HDR /
-    // Shift / Embed in chain). Without this tracking, dry-run would
-    // silently print both rows pointing at the same output, hiding the
-    // future failure from the user.
-    //
-    // Fidelity caveat: chain parsing currently limits templates to
-    // {name} and {ext}, and this predictor mirrors those tokens byte
-    // for byte. If a future template feature adds a token, that work
-    // must update both the parser and this predictor; otherwise dry-run
-    // would omit the `→ outpath` line and miss duplicate-output
-    // detection for that input.
     let mut seen_outputs: HashSet<String> = HashSet::new();
-    for input in &plan.input_files {
+    let mut non_failed = 0usize;
+    let mut failed = 0usize;
+
+    for (idx, input) in plan.input_files.iter().enumerate() {
         let input_disp = sanitize_for_display(&input.display().to_string());
-        println!("  {input_disp}");
-        // Show the resolved output path for parity with per-feature
-        // dry-run output, so users can verify the template + output_dir
-        // combination produces what they expect before they remove
-        // --dry-run.
-        //
-        // Make `absolute_path` failure explicit rather than collapsing
-        // into `None` via `.ok().and_then(...)`. Otherwise an
-        // unresolvable input (e.g., current-dir lookup fails under
-        // restrictive ACLs) would silently drop the `→ <out>` line
-        // with no diagnostic — the user couldn't tell whether
-        // prediction abstained (template uses tokens the Rust port
-        // doesn't model) or whether `absolute_path` outright failed.
-        // Per no-silent-action, surface the failure with a stderr
-        // line; per-feature real-run paths surface the same failure
-        // via Failed outcome.
+        if !globals.quiet {
+            println!("  {input_disp}");
+        }
+
+        let mut file_error: Option<String> = None;
         match absolute_path(input) {
             Ok(abs) => {
-                let resolved_path = predict_chain_output_path(
+                match resolve_chain_dry_run_output(
                     &abs,
                     &plan.output_template,
                     globals.output_dir.as_deref(),
-                );
-                if let Some(out_path) = resolved_path.as_ref() {
-                    let out_str = sanitize_for_display(&out_path.display().to_string());
-                    // Same dedup key as real-run seen_outputs (case-
-                    // folded / separator-normalized via
-                    // normalize_output_key) so the dry-run preview
-                    // matches what the real run will skip.
-                    let key = normalize_output_key(out_path);
-                    if !seen_outputs.insert(key) {
-                        println!("    → {out_str}  ⚠ duplicate output (real run will fail)");
-                    } else {
-                        println!("    → {out_str}");
+                ) {
+                    Ok(Some(out_path)) => {
+                        let out_str = sanitize_for_display(&out_path.display().to_string());
+                        let key = normalize_output_key(&out_path);
+                        let input_key = normalize_output_key(&abs);
+                        if key == input_key {
+                            file_error = Some(format!(
+                                "refusing self-overwrite: predicted output path {out_str} is the input file; choose a different --output-template or --output-dir"
+                            ));
+                        } else if output_matches_selected_input(&out_path, &selected_inputs) {
+                            file_error = Some(
+                                "output path matches a selected input file; choose a different --output-template or --output-dir".to_string(),
+                            );
+                        } else if !seen_outputs.insert(key.clone()) {
+                            file_error =
+                                Some(format!("{out_str} duplicate output path in planned batch"));
+                        } else if !globals.overwrite && output_path_exists(globals, &out_path) {
+                            seen_outputs.remove(&key);
+                            non_failed += 1;
+                            if !globals.quiet {
+                                println!(
+                                    "    → {out_str}  (already exists; use --overwrite to replace)"
+                                );
+                            }
+                        } else {
+                            non_failed += 1;
+                            if !globals.quiet {
+                                println!("    → {out_str}");
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        non_failed += 1;
+                    }
+                    Err(err) => {
+                        file_error = Some(err);
                     }
                 }
             }
             Err(err) => {
-                let err_disp = sanitize_for_display(&err);
-                println!("    → (output unresolved: {err_disp})");
+                file_error = Some(err);
             }
         }
-        for (i, step) in plan.steps.iter().enumerate() {
-            println!("    {}. {}", i + 1, step.kind_name());
+
+        if let Some(err) = file_error {
+            failed += 1;
+            let err_disp = sanitize_for_display(&err);
+            if !globals.quiet {
+                println!("    → (failed: {err_disp})");
+            }
+            eprintln!(
+                "{}",
+                localize(
+                    globals,
+                    format!("✗ {input_disp}: {err_disp}"),
+                    format!("✗ {input_disp}：{err_disp}"),
+                )
+            );
+            if globals.fail_fast {
+                let remaining = plan.input_files.len().saturating_sub(idx + 1);
+                emit_fail_fast_abort_notice(globals, remaining);
+                break;
+            }
+        } else if !globals.quiet {
+            for (i, step) in plan.steps.iter().enumerate() {
+                println!("    {}. {}", i + 1, step.kind_name());
+            }
         }
     }
-    Ok(())
+
+    if failed == 0 {
+        Ok(ExitCode::SUCCESS)
+    } else if non_failed > 0 {
+        Ok(ExitCode::from(1))
+    } else {
+        Ok(ExitCode::from(2))
+    }
 }

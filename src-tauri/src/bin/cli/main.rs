@@ -123,6 +123,12 @@ fn run() -> Result<ExitCode, String> {
 
     match command {
         Command::Licenses => {
+            if globals.json {
+                return Err("licenses does not implement --json output".to_string());
+            }
+            if globals.dry_run {
+                return Err("licenses does not support --dry-run".to_string());
+            }
             print!(
                 "{}",
                 include_str!(concat!(env!("OUT_DIR"), "/cli-third-party-notices.txt"))

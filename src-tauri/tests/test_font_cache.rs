@@ -38,13 +38,11 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::thread;
-use std::time::Duration;
 
 use app_lib::font_cache::{cache_source_key, FontCache, FontDirectoryScope, MAX_CACHED_FOLDERS};
 
 mod common;
-use common::make_real_font_dir as make_font_dir;
+use common::{backdate_modified_seconds, make_real_font_dir as make_font_dir, TestTempDir};
 
 const FIXTURE_ASS: &str = concat!(
     "[Script Info]\n",
@@ -63,21 +61,8 @@ fn cli_path() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_ssahdrify-cli"))
 }
 
-fn temp_dir(label: &str) -> PathBuf {
-    static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let pid = std::process::id();
-    let nano = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let seq = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let base = std::env::temp_dir();
-    fs::create_dir_all(&base).expect("failed to ensure OS temp dir");
-    let dir = base.join(format!(
-        "ssahdrify-cli-cache-test-{label}-{pid}-{nano}-{seq}"
-    ));
-    fs::create_dir(&dir).expect("failed to create unique test temp dir");
-    dir
+fn temp_dir(label: &str) -> TestTempDir {
+    TestTempDir::new("ssahdrify-cli-cache-test", label)
 }
 
 fn write_fixture_ass(dir: &Path, name: &str) -> PathBuf {
@@ -560,17 +545,12 @@ fn embed_with_no_cache_does_not_touch_cache_file() {
     ]);
     assert!(refresh.status.success(), "refresh-fonts failed");
 
-    // Snapshot cache file mtime, then run embed --no-cache.
+    // Backdate cache mtime by 10s so any accidental touch advances mtime
+    // past `before` across all filesystems without sleeping.
+    backdate_modified_seconds(&cache, 10);
     let before = fs::metadata(&cache)
         .and_then(|m| m.modified())
         .expect("stat cache before");
-
-    // Sleep longer than the worst-case mtime granularity (FAT/SUBST/
-    // network drives can be 1-2 s; NTFS is sub-second). 2100 ms covers
-    // both branches symmetrically with the drift test below — without
-    // this, a no-op write on a 2-second-resolution volume would tie
-    // before/after and false-pass.
-    thread::sleep(Duration::from_millis(2100));
 
     let subtitle = write_fixture_ass(&work, "input.ass");
     let embed = run_cli(&[
@@ -609,6 +589,7 @@ fn embed_reports_drift_when_folder_mtime_changes() {
     let work = temp_dir("drift");
     let font_dir = make_font_dir(&work);
     let cache = cache_path(&work);
+    backdate_modified_seconds(&font_dir, 10);
 
     // Populate cache.
     let refresh = run_cli(&[
@@ -620,11 +601,8 @@ fn embed_reports_drift_when_folder_mtime_changes() {
     ]);
     assert!(refresh.status.success(), "refresh-fonts failed");
 
-    // Mutate folder: add a file. mtime resolution gates this — sleep
-    // longer than the worst-case granularity (NTFS is fine, FAT/SUBST
-    // can be 1-2 s) before touching, so the post-touch mtime is
-    // strictly greater than what's in cache.
-    thread::sleep(Duration::from_millis(2100));
+    // Mutate folder: adding a file sets folder mtime to `now` (+10s ahead
+    // of the backdated snapshot stored in `cache.sqlite3`).
     fs::write(font_dir.join("added-after-cache.ttf"), b"")
         .expect("failed to add second placeholder");
 
@@ -726,10 +704,10 @@ fn chain_embed_uses_persistent_cache_read_only() {
         String::from_utf8_lossy(&refresh.stderr)
     );
 
+    backdate_modified_seconds(&cache, 10);
     let before = fs::metadata(&cache)
         .and_then(|m| m.modified())
         .expect("stat cache before chain");
-    thread::sleep(Duration::from_millis(2100));
 
     let subtitle = write_fixture_ass_for_entry(&work, "ep01.ass", &entry);
     let chain = run_cli(&[
@@ -788,10 +766,10 @@ fn chain_embed_with_no_cache_skips_and_preserves_cache_file() {
     ]);
     assert!(refresh.status.success(), "refresh-fonts failed");
 
+    backdate_modified_seconds(&cache, 10);
     let before = fs::metadata(&cache)
         .and_then(|m| m.modified())
         .expect("stat cache before chain --no-cache");
-    thread::sleep(Duration::from_millis(2100));
 
     let subtitle = write_fixture_ass_for_entry(&work, "ep01.ass", &entry);
     let chain = run_cli(&[
@@ -838,6 +816,7 @@ fn chain_embed_reports_drift_and_falls_back_without_mutating_cache() {
     let work = temp_dir("chain_drift");
     let font_dir = make_font_dir(&work);
     let cache = cache_path(&work);
+    backdate_modified_seconds(&font_dir, 10);
 
     let refresh = run_cli(&[
         "--cache-file",
@@ -848,10 +827,10 @@ fn chain_embed_reports_drift_and_falls_back_without_mutating_cache() {
     ]);
     assert!(refresh.status.success(), "refresh-fonts failed");
 
-    thread::sleep(Duration::from_millis(2100));
     fs::write(font_dir.join("added-after-cache.ttf"), b"")
         .expect("failed to add placeholder font for drift");
 
+    backdate_modified_seconds(&cache, 10);
     let before_drift_run = fs::metadata(&cache)
         .and_then(|m| m.modified())
         .expect("stat cache before chain drift run");
