@@ -1063,6 +1063,12 @@ export function useFontEmbedController({ cacheStatus, cacheProbeFailed }: FontEm
     abortRef.current?.abort();
   }, []);
 
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
+
   return {
     t,
     filePaths,

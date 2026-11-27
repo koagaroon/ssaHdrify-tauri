@@ -85,29 +85,40 @@ export function PreviewTable<T>({
   const rootClass = ["preview-table", className].filter(Boolean).join(" ");
 
   return (
-    <div className={rootClass}>
+    <div className={rootClass} role="table">
       {title && <div className="preview-table-title">{title}</div>}
-      {/* gridTemplate is built from columns[].width props from call-site components, never user input. */}
-      {/* eslint-disable-next-line no-restricted-syntax */}
-      <div className="preview-table-head" style={{ gridTemplateColumns: gridTemplate }}>
-        {columns.map((col) => {
-          const cellClass = ["preview-table-cell", col.className].filter(Boolean).join(" ");
-          return (
-            <span
-              key={col.key}
-              className={cellClass}
-              style={col.align ? { justifySelf: col.align } : undefined}
-            >
-              {col.header}
-            </span>
-          );
-        })}
+      <div role="rowgroup">
+        <div
+          className="preview-table-head"
+          role="row"
+          style={{
+            // gridTemplate is built from columns[].width props from call-site components, never user input.
+            // eslint-disable-next-line no-restricted-syntax
+            gridTemplateColumns: gridTemplate,
+          }}
+        >
+          {columns.map((col) => {
+            const cellClass = ["preview-table-cell", col.className].filter(Boolean).join(" ");
+            return (
+              <span
+                key={col.key}
+                role="columnheader"
+                className={cellClass}
+                style={col.align ? { justifySelf: col.align } : undefined}
+              >
+                {col.header}
+              </span>
+            );
+          })}
+        </div>
       </div>
       {/* maxHeight is a CSS-shape prop (string/number) controlled by the call-site, never user input. */}
       {/* eslint-disable-next-line no-restricted-syntax */}
-      <div className="preview-table-body" style={{ maxHeight }}>
+      <div className="preview-table-body" role="rowgroup" style={{ maxHeight }}>
         {rows.length === 0 ? (
-          <div className="preview-table-empty">{emptyMessage}</div>
+          <div className="preview-table-empty" role="row">
+            <span role="cell">{emptyMessage}</span>
+          </div>
         ) : (
           rows.map((row, rowIndex) => {
             const extraClass = rowClassName?.(row, rowIndex);
@@ -117,6 +128,7 @@ export function PreviewTable<T>({
               <div
                 {...extraProps}
                 key={rowKey(row, rowIndex)}
+                role="row"
                 className={rowClass}
                 style={{
                   // gridTemplate is column-config-derived from the
@@ -131,6 +143,7 @@ export function PreviewTable<T>({
                   return (
                     <span
                       key={col.key}
+                      role="cell"
                       className={cellClass}
                       style={col.align ? { justifySelf: col.align } : undefined}
                     >

@@ -294,7 +294,13 @@ export function useTimingShiftController() {
 
   useEffect(() => {
     setLastActionResult(null);
-  }, [timingFiles, mode, timingMap]);
+  }, [timingFiles, mode, timingMap, effectiveOffsetMs, useThreshold, thresholdMs]);
+
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
 
   useClickOutside(showFileList, fileContainerRef, () => setShowFileList(false));
 
@@ -354,6 +360,7 @@ export function useTimingShiftController() {
   );
 
   const handlePickFiles = useCallback(async () => {
+    if (busy || busyRef.current) return;
     const gen = (pickGenRef.current = pickGenRef.current + 1);
     let paths: string[] | null;
     try {
@@ -366,10 +373,11 @@ export function useTimingShiftController() {
     if (gen !== pickGenRef.current) return;
     if (!paths || paths.length === 0) return;
     await ingestPaths(paths, gen);
-  }, [ingestPaths, addLog, t]);
+  }, [busy, ingestPaths, addLog, t]);
 
   const handleDroppedPaths = useCallback(
     async (paths: string[]) => {
+      if (busy || busyRef.current) return;
       const gen = (pickGenRef.current = pickGenRef.current + 1);
       const subtitlePaths = paths.filter((p) => categorize(fileNameFromPath(p)) === "subtitle");
       if (subtitlePaths.length === 0) {
@@ -380,7 +388,7 @@ export function useTimingShiftController() {
       }
       await ingestPaths(subtitlePaths, gen);
     },
-    [ingestPaths, addLog, t]
+    [busy, ingestPaths, addLog, t]
   );
 
   useFolderDrop({
@@ -393,11 +401,13 @@ export function useTimingShiftController() {
   });
 
   const handleClearFiles = useCallback(() => {
+    if (busy || busyRef.current) return;
     pickGenRef.current = pickGenRef.current + 1;
     clearFile("timing");
     setPreviewState(emptyTimingPreviewState());
     setDropError(null);
-  }, [clearFile]);
+    setLastActionResult(null);
+  }, [busy, clearFile]);
 
   const handlePickTimingMap = useCallback(async () => {
     if (busy || busyRef.current) return;
@@ -541,6 +551,7 @@ export function useTimingShiftController() {
 
         let successCount = 0;
         let warnedCount = 0;
+        let failedCount = 0;
         let processedCount = 0;
         const seenOutputs = new Set<string>();
 
@@ -565,6 +576,7 @@ export function useTimingShiftController() {
 
             const normalizedOut = normalizeOutputKey(outputPath);
             if (seenOutputs.has(normalizedOut)) {
+              failedCount++;
               addLog(t("msg_skipped_duplicate", fileName), "error");
               continue;
             }
@@ -579,6 +591,7 @@ export function useTimingShiftController() {
                 for (const warning of warnings) addLog(warning, "warn");
               });
             } catch (e) {
+              failedCount++;
               addLog(t("msg_read_error", fileName, sanitizeError(e)), "error");
               continue;
             }
@@ -609,6 +622,7 @@ export function useTimingShiftController() {
             if (fileWarned) warnedCount++;
             successCount++;
           } catch (e) {
+            failedCount++;
             addLog(t("msg_timing_error", fileName, sanitizeError(e)), "error");
           } finally {
             processedCount++;
@@ -617,11 +631,12 @@ export function useTimingShiftController() {
         }
 
         const aborted = !!abortRef.current?.signal.aborted;
+        const issueCount = warnedCount + failedCount;
         if (aborted) {
           setLastActionResult("cancelled");
         } else if (successCount > 0) {
-          if (warnedCount > 0) {
-            addLog(t("msg_complete_warnings", successCount, paths.length, warnedCount), "warn");
+          if (issueCount > 0) {
+            addLog(t("msg_complete_warnings", successCount, paths.length, issueCount), "warn");
             setLastActionResult("partial");
           } else {
             addLog(t("msg_timing_complete", successCount, paths.length), "success");
@@ -635,6 +650,7 @@ export function useTimingShiftController() {
         setProgress(null);
       }
     } finally {
+      abortRef.current = null;
       setBusy(false);
       busyRef.current = false;
     }

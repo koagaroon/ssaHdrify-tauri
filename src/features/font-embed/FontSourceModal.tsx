@@ -13,6 +13,7 @@ import {
 } from "../../lib/tauri-api";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { sanitizeError, sanitizeForDialog } from "../../lib/dedup-helpers";
+import { useModalFocusTrap } from "../../lib/useModalFocusTrap";
 import { useI18n } from "../../i18n/useI18n";
 import type { FontStyleLabels, FontUsage } from "./font-collector";
 import { fontKeyLabel } from "./font-collector";
@@ -211,11 +212,7 @@ export default function FontSourceModal(props: Props) {
   // a11y: stable id to wire `aria-labelledby` from the dialog div to the
   // visible title element. useId is React-stable across renders.
   const titleId = useId();
-  // a11y: initial-focus target on open. The close button is a safe default —
-  // it's always present, doesn't trigger a destructive action on Enter, and
-  // gives keyboard users an obvious starting point. Full focus-trap is not
-  // implemented; the modal is short enough that Tab cycling out is a known
-  // limitation rather than a usability blocker.
+  const dialogRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
 
   const requestClose = useCallback(() => {
@@ -265,30 +262,12 @@ export default function FontSourceModal(props: Props) {
     onClose();
   }, [onClose, t]);
 
-  // Close on Escape. stopPropagation prevents the same Esc from also
-  // dismissing any background dropdown / outer-scope listener that
-  // captures Escape (e.g., a future picker overlay or future
-  // command-palette key handler) — the modal is the topmost surface
-  // when open and should consume the key exclusively.
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        requestClose();
-      }
-    };
-    document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
-  }, [open, requestClose]);
-
-  // Move keyboard focus into the modal on open so screen readers and
-  // keyboard-only users land on a sensible starting point. Without this,
-  // Tab would still address the focused element behind the scrim.
-  useEffect(() => {
-    if (!open) return;
-    closeButtonRef.current?.focus();
-  }, [open]);
+  useModalFocusTrap({
+    open,
+    dialogRef,
+    initialFocusRef: closeButtonRef,
+    onEscape: requestClose,
+  });
 
   // Reset transient messages whenever the modal reopens.
   useEffect(() => {
@@ -695,13 +674,11 @@ export default function FontSourceModal(props: Props) {
       }}
     >
       <div
+        ref={dialogRef}
         className="modal"
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        // The dialog itself is keyboard-focusable so the initial-focus
-        // useEffect lands somewhere predictable even before the close
-        // button mounts on slow renders.
         tabIndex={-1}
       >
         {/* ── Header — title + subtitle + close ──── */}

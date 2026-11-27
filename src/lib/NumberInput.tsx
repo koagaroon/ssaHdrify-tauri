@@ -86,6 +86,7 @@ export default function NumberInput({
         }}
       />
       <div
+        aria-hidden="true"
         className="absolute right-0 top-0 bottom-0 flex flex-col w-6 rounded-r-lg overflow-hidden"
         style={{ borderLeft: "1px solid var(--border)" }}
       >

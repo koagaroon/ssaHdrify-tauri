@@ -24,6 +24,7 @@ import {
   hasMicroDvdInput,
   isHdrFpsInvalid,
   parseHdrFpsOverrideForInput,
+  parseHdrStyleNumberInput,
   type HdrFpsMode,
 } from "./hdr-style-ui-state";
 import { useI18n } from "../../i18n/useI18n";
@@ -42,6 +43,33 @@ import {
   sanitizeForDialog,
 } from "../../lib/dedup-helpers";
 
+// Common Windows fonts and optional subtitle-font presets.
+export const COMMON_FONTS = [
+  "Arial",
+  "Arial Black",
+  "Calibri",
+  "Cambria",
+  "Comic Sans MS",
+  "Consolas",
+  "Courier New",
+  "Georgia",
+  "Impact",
+  "Lucida Console",
+  "Microsoft YaHei",
+  "PingFang SC",
+  "Segoe UI",
+  "Tahoma",
+  "Times New Roman",
+  "Trebuchet MS",
+  "Verdana",
+  "Noto Sans",
+  "Noto Sans CJK SC",
+  "Noto Serif",
+  "Source Han Sans",
+  "Source Han Serif",
+] as const;
+const COMMON_FONTS_SET = new Set<string>(COMMON_FONTS);
+
 export function useHdrConvertController() {
   const { t } = useI18n();
   const { hdrFiles, setHdrFiles, clearFile, isFileInUse, findLoadedInputConflictKeys } =
@@ -53,6 +81,10 @@ export function useHdrConvertController() {
   const [customTemplate, setCustomTemplate] = useState("");
   const [showStylePanel, setShowStylePanel] = useState(false);
   const [style, setStyle] = useState<StyleConfig>({ ...DEFAULT_STYLE });
+  const [isCustomFont, setIsCustomFont] = useState(!COMMON_FONTS_SET.has(DEFAULT_STYLE.fontName));
+  const [fontSizeText, setFontSizeText] = useState(String(DEFAULT_STYLE.fontSize));
+  const [outlineWidthText, setOutlineWidthText] = useState(String(DEFAULT_STYLE.outlineWidth));
+  const [shadowDepthText, setShadowDepthText] = useState(String(DEFAULT_STYLE.shadowDepth));
   const [fpsMode, setFpsMode] = useState<HdrFpsMode>("auto");
   const [fpsText, setFpsText] = useState("23.976");
   const [processing, setProcessing] = useState(false);
@@ -72,7 +104,13 @@ export function useHdrConvertController() {
 
   useEffect(() => {
     setLastActionResult(null);
-  }, [hdrFiles]);
+  }, [hdrFiles, eotf, brightness, template, customTemplate, style, fpsMode, fpsText]);
+
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
 
   const tabStatus = useMemo<Status>(() => {
     if (!hdrFiles) return { kind: "idle", message: t("status_hdr_idle") };
@@ -114,6 +152,52 @@ export function useHdrConvertController() {
     setBrightnessText(String(nits));
   }, []);
 
+  const handleFontSelectChange = useCallback((selectedFont: string) => {
+    if (selectedFont === "__custom") {
+      setIsCustomFont(true);
+      setStyle((current) => ({
+        ...current,
+        fontName: COMMON_FONTS_SET.has(current.fontName) ? "" : current.fontName,
+      }));
+    } else {
+      setIsCustomFont(false);
+      setStyle((current) => ({ ...current, fontName: selectedFont }));
+    }
+  }, []);
+
+  const handleCustomFontNameChange = useCallback((fontName: string) => {
+    setStyle((current) => ({ ...current, fontName }));
+  }, []);
+
+  const handleFontSizeChange = useCallback((value: string) => {
+    setFontSizeText(value);
+    const parsed = parseHdrStyleNumberInput(value, 1, 200);
+    if (parsed !== null) {
+      setStyle((current) => ({ ...current, fontSize: parsed }));
+    }
+  }, []);
+
+  const handleOutlineWidthChange = useCallback((value: string) => {
+    setOutlineWidthText(value);
+    const parsed = parseHdrStyleNumberInput(value, 0, 20);
+    if (parsed !== null) {
+      setStyle((current) => ({ ...current, outlineWidth: parsed }));
+    }
+  }, []);
+
+  const handleShadowDepthChange = useCallback((value: string) => {
+    setShadowDepthText(value);
+    const parsed = parseHdrStyleNumberInput(value, 0, 20);
+    if (parsed !== null) {
+      setStyle((current) => ({ ...current, shadowDepth: parsed }));
+    }
+  }, []);
+
+  const fontSizeInvalid = parseHdrStyleNumberInput(fontSizeText, 1, 200) === null;
+  const outlineWidthInvalid = parseHdrStyleNumberInput(outlineWidthText, 0, 20) === null;
+  const shadowDepthInvalid = parseHdrStyleNumberInput(shadowDepthText, 0, 20) === null;
+  const styleNumberInvalid = fontSizeInvalid || outlineWidthInvalid || shadowDepthInvalid;
+
   const activeTemplate = template === "custom" ? customTemplate : template;
   const templateInvalid = template === "custom" && customTemplate.trim().length === 0;
   const batchHasSub = hasMicroDvdInput(hdrFiles?.fileNames ?? []);
@@ -122,12 +206,13 @@ export function useHdrConvertController() {
   const convertDisabled = isHdrConvertDisabled({
     hasFiles: !!hdrFiles,
     processing,
-    brightnessInvalid,
+    brightnessInvalid: brightnessInvalid || styleNumberInvalid,
     templateInvalid,
     fpsInvalid,
   });
 
   const handleSelectFiles = useCallback(async () => {
+    if (busyRef.current || processing) return;
     const gen = (pickGenRef.current = pickGenRef.current + 1);
     let paths: string[] | null;
     try {
@@ -149,10 +234,11 @@ export function useHdrConvertController() {
 
     const names = paths.map(fileNameFromPath);
     setHdrFiles({ filePaths: paths, fileNames: names });
-  }, [isFileInUse, setHdrFiles, addLog, t]);
+  }, [processing, isFileInUse, setHdrFiles, addLog, t]);
 
   const handleDroppedPaths = useCallback(
     (paths: string[]) => {
+      if (busyRef.current || processing) return;
       const subtitlePaths = paths.filter((p) => {
         const name = fileNameFromPath(p);
         return isNativeAss(name) || isConvertible(name);
@@ -175,7 +261,7 @@ export function useHdrConvertController() {
       const names = subtitlePaths.map(fileNameFromPath);
       setHdrFiles({ filePaths: subtitlePaths, fileNames: names });
     },
-    [isFileInUse, setHdrFiles, setDropError, addLog, t]
+    [processing, isFileInUse, setHdrFiles, setDropError, addLog, t]
   );
 
   useFolderDrop({
@@ -192,7 +278,7 @@ export function useHdrConvertController() {
       isHdrConvertDisabled({
         hasFiles: !!hdrFiles,
         processing,
-        brightnessInvalid,
+        brightnessInvalid: brightnessInvalid || styleNumberInvalid,
         templateInvalid,
         fpsInvalid,
       })
@@ -267,6 +353,7 @@ export function useHdrConvertController() {
         const outputPaths = new Set<string>();
         let successCount = 0;
         let warnedCount = 0;
+        let failedCount = 0;
         let processedCount = 0;
 
         for (const filePath of paths) {
@@ -285,6 +372,7 @@ export function useHdrConvertController() {
 
           try {
             if (!isNativeAss(fileName) && !isConvertible(fileName)) {
+              failedCount++;
               addLog(t("msg_unsupported", fileName), "error");
               continue;
             }
@@ -295,12 +383,14 @@ export function useHdrConvertController() {
               assertOutputDoesNotReplaceSelectedInput(outputPath, selectedInputKeys);
               assertOutputDoesNotReplaceSelectedInput(outputPath, conflictingOutputs);
             } catch (e) {
+              failedCount++;
               addLog(t("msg_skipped", fileName, sanitizeError(e)), "error");
               continue;
             }
 
             const normalizedOut = normalizeOutputKey(outputPath);
             if (outputPaths.has(normalizedOut)) {
+              failedCount++;
               addLog(t("msg_skipped_duplicate", fileName), "error");
               continue;
             }
@@ -315,6 +405,7 @@ export function useHdrConvertController() {
                 for (const warning of warnings) addLog(warning, "warn");
               });
             } catch (e) {
+              failedCount++;
               addLog(t("msg_read_error", fileName, sanitizeError(e)), "error");
               continue;
             }
@@ -352,6 +443,7 @@ export function useHdrConvertController() {
             if (fileWarned) warnedCount++;
             successCount++;
           } catch (e) {
+            failedCount++;
             addLog(t("msg_convert_error", fileName, sanitizeError(e)), "error");
           } finally {
             processedCount++;
@@ -360,11 +452,12 @@ export function useHdrConvertController() {
         }
 
         const aborted = !!abortRef.current?.signal.aborted;
+        const issueCount = warnedCount + failedCount;
         if (aborted) {
           setLastActionResult("cancelled");
         } else if (successCount > 0) {
-          if (warnedCount > 0) {
-            addLog(t("msg_complete_warnings", successCount, paths.length, warnedCount), "warn");
+          if (issueCount > 0) {
+            addLog(t("msg_complete_warnings", successCount, paths.length, issueCount), "warn");
             setLastActionResult("partial");
           } else {
             addLog(t("msg_complete", successCount, paths.length), "success");
@@ -378,6 +471,7 @@ export function useHdrConvertController() {
         setProgress(null);
       }
     } finally {
+      abortRef.current = null;
       setProcessing(false);
       busyRef.current = false;
     }
@@ -386,6 +480,7 @@ export function useHdrConvertController() {
     findLoadedInputConflictKeys,
     processing,
     brightnessInvalid,
+    styleNumberInvalid,
     templateInvalid,
     fpsInvalid,
     brightness,
@@ -399,9 +494,12 @@ export function useHdrConvertController() {
   ]);
 
   const handleClearFiles = useCallback(() => {
+    if (busyRef.current || processing) return;
+    pickGenRef.current += 1;
     clearFile("hdr");
     setDropError(null);
-  }, [clearFile]);
+    setLastActionResult(null);
+  }, [processing, clearFile]);
 
   const requestCancel = useCallback(() => {
     abortRef.current?.abort();
@@ -426,6 +524,18 @@ export function useHdrConvertController() {
     setShowStylePanel,
     style,
     setStyle,
+    isCustomFont,
+    handleFontSelectChange,
+    handleCustomFontNameChange,
+    fontSizeText,
+    fontSizeInvalid,
+    handleFontSizeChange,
+    outlineWidthText,
+    outlineWidthInvalid,
+    handleOutlineWidthChange,
+    shadowDepthText,
+    shadowDepthInvalid,
+    handleShadowDepthChange,
     fpsMode,
     setFpsMode,
     fpsText,

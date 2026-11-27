@@ -6,7 +6,7 @@
  *   t("msg_done", fileName)  →  "Done: subtitle.ass"
  */
 import { createContext, useCallback, useContext } from "react";
-import { strings, type Lang } from "./strings";
+import { strings, type Lang, type StringKey } from "./strings";
 
 export interface I18nContextValue {
   lang: Lang;
@@ -31,7 +31,7 @@ const PLACEHOLDER_RE = /\{(\d+)\}/g;
 // without spinning up the React hook plumbing. The hook below is the
 // React-friendly wrapper; production callers use the hook.
 export function translate(lang: Lang, key: string, ...args: (string | number)[]): string {
-  const entry = strings[key];
+  const entry = Object.hasOwn(strings, key) ? strings[key as StringKey] : undefined;
   if (!entry) return key; // fallback: show key name
 
   const text = entry[lang] ?? entry.en ?? key;

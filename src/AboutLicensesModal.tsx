@@ -1,6 +1,7 @@
-import { useEffect, useId, useRef } from "react";
+import { useId, useRef } from "react";
 import { useI18n } from "./i18n/useI18n";
 import { LICENSE_NOTICES, type LicenseNoticeId } from "./lib/license-notices";
+import { useModalFocusTrap } from "./lib/useModalFocusTrap";
 import LicenseText from "./LicenseText";
 
 interface Props {
@@ -16,21 +17,6 @@ const SUMMARY_KEYS: Record<LicenseNoticeId, string> = {
   feather: "licenses_feather_summary",
 };
 
-const FOCUSABLE_SELECTOR = [
-  "button:not([disabled])",
-  "select:not([disabled])",
-  "a[href]",
-  "summary",
-  "[tabindex]:not([tabindex='-1'])",
-].join(",");
-
-function isRenderedFocusable(element: HTMLElement): boolean {
-  const closedDetails = element.closest("details:not([open])");
-  // Closed disclosures can report child geometry even though only their summary is focusable.
-  if (closedDetails && closedDetails.querySelector(":scope > summary") !== element) return false;
-  return element.getClientRects().length > 0;
-}
-
 export default function AboutLicensesModal({ open, onClose }: Props): React.ReactElement | null {
   const { t } = useI18n();
   const titleId = useId();
@@ -38,50 +24,12 @@ export default function AboutLicensesModal({ open, onClose }: Props): React.Reac
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
 
-  useEffect(() => {
-    if (!open) return;
-
-    const previouslyFocused = document.activeElement;
-    closeButtonRef.current?.focus();
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        event.stopPropagation();
-        onClose();
-        return;
-      }
-
-      if (event.key !== "Tab") return;
-      const focusable = Array.from(
-        dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR) ?? []
-      ).filter(isRenderedFocusable);
-      if (focusable.length === 0) {
-        event.preventDefault();
-        return;
-      }
-
-      const first = focusable[0]!;
-      const last = focusable[focusable.length - 1]!;
-      const activeElement = document.activeElement;
-      if (!dialogRef.current?.contains(activeElement)) {
-        event.preventDefault();
-        (event.shiftKey ? last : first).focus();
-      } else if (event.shiftKey && activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown, true);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown, true);
-      if (previouslyFocused instanceof HTMLElement) previouslyFocused.focus();
-    };
-  }, [open, onClose]);
+  useModalFocusTrap({
+    open,
+    dialogRef,
+    initialFocusRef: closeButtonRef,
+    onEscape: onClose,
+  });
 
   if (!open) return null;
 

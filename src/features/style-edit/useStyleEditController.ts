@@ -40,6 +40,7 @@ import {
 } from "./style-ui-state";
 
 const ASS_EXTENSIONS = new Set(["ass", "ssa"]);
+const MAX_CONCURRENT_STYLE_PROBES = 16;
 
 interface LoadedStyleFile {
   path: string;
@@ -82,7 +83,8 @@ export function safeFileName(path: string): string {
 
 export function useStyleEditController() {
   const { t } = useI18n();
-  const { styleFiles, setStyleFiles, clearFile, isFileInUse } = useFileContext();
+  const { styleFiles, setStyleFiles, clearFile, isFileInUse, findLoadedInputConflictKeys } =
+    useFileContext();
   const { logs, addLog, clearLogs, logScrollRef } = useLogPanel();
 
   const [loadedFiles, setLoadedFiles] = useState<LoadedStyleFile[]>([]);
@@ -219,6 +221,12 @@ export function useStyleEditController() {
 
   useClickOutside(showFileList, fileContainerRef, () => setShowFileList(false));
 
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
+
   const ingestPaths = useCallback(
     async (paths: string[], generation: number) => {
       setLastActionResult(null);
@@ -303,6 +311,7 @@ export function useStyleEditController() {
   );
 
   const handlePickFiles = useCallback(async () => {
+    if (busyRef.current || analyzing || writing) return;
     const generation = (pickGenerationRef.current += 1);
     setLastActionResult(null);
     try {
@@ -313,10 +322,11 @@ export function useStyleEditController() {
       if (generation !== pickGenerationRef.current) return;
       addLog(t("error_prefix", sanitizeError(error)), "error");
     }
-  }, [ingestPaths, addLog, t]);
+  }, [analyzing, writing, ingestPaths, addLog, t]);
 
   const handleDroppedPaths = useCallback(
     async (paths: string[]) => {
+      if (busyRef.current || analyzing || writing) return;
       const generation = (pickGenerationRef.current += 1);
       setLastActionResult(null);
       const assPaths = paths.filter(hasAssExtension);
@@ -328,12 +338,12 @@ export function useStyleEditController() {
       }
       await ingestPaths(assPaths, generation);
     },
-    [ingestPaths, addLog, t]
+    [analyzing, writing, ingestPaths, addLog, t]
   );
 
   useFolderDrop({
     ref: dropZoneRef,
-    onPaths: (paths) => void handleDroppedPaths(paths),
+    onPaths: handleDroppedPaths,
     onActiveChange: setDropActive,
     onError: (error) => {
       const message = sanitizeError(error);
@@ -345,6 +355,7 @@ export function useStyleEditController() {
   });
 
   const handleClearFiles = useCallback(() => {
+    if (busyRef.current || analyzing || writing) return;
     pickGenerationRef.current += 1;
     abortRef.current?.abort();
     clearFile("style");
@@ -357,11 +368,12 @@ export function useStyleEditController() {
     setProgress(null);
     setDropError(null);
     setLastActionResult(null);
-  }, [clearFile]);
+  }, [analyzing, writing, clearFile]);
 
   const handleWrite = useCallback(async () => {
     if (writeDisabled || busyRef.current) return;
     busyRef.current = true;
+    pickGenerationRef.current += 1;
     const abort = new AbortController();
     abortRef.current = abort;
     setWriting(true);
@@ -405,26 +417,62 @@ export function useStyleEditController() {
         return;
       }
 
+      const inputConflicts = await findLoadedInputConflictKeys(
+        writableTargets.map((target) => target.outputPath),
+        abort.signal
+      );
+      if (abort.signal.aborted) {
+        addLog(t("msg_style_cancelled"), "warn");
+        setLastActionResult("cancelled");
+        return;
+      }
+      if (inputConflicts.size > 0) {
+        const conflicting = writableTargets.find((target) =>
+          inputConflicts.has(normalizeOutputKey(target.outputPath))
+        );
+        const message = t("msg_style_input_conflict", conflicting?.file.name ?? "");
+        setDropError(message);
+        addLog(message, "error");
+        setLastActionResult("error");
+        return;
+      }
+
       let existingCount = 0;
-      for (const target of writableTargets) {
-        if (abort.signal.aborted) {
-          addLog(t("msg_style_cancelled"), "warn");
-          setLastActionResult("cancelled");
-          return;
-        }
-        try {
-          if (await outputPathExists(target.outputPath)) existingCount += 1;
-        } catch (error) {
-          const message = t(
-            "msg_style_output_probe_error",
-            safeFileName(target.outputPath),
-            sanitizeError(error)
-          );
-          setDropError(message);
-          addLog(message, "error");
-          setLastActionResult("error");
-          return;
-        }
+      let probeFailure: string | null = null;
+      let cursor = 0;
+      const workerCount = Math.min(MAX_CONCURRENT_STYLE_PROBES, writableTargets.length);
+      await Promise.all(
+        Array.from({ length: workerCount }, async () => {
+          while (true) {
+            if (abort.signal.aborted || probeFailure !== null) return;
+            const idx = cursor++;
+            if (idx >= writableTargets.length) return;
+            const target = writableTargets[idx]!;
+            try {
+              if (await outputPathExists(target.outputPath)) existingCount += 1;
+            } catch (error) {
+              if (probeFailure === null) {
+                probeFailure = t(
+                  "msg_style_output_probe_error",
+                  safeFileName(target.outputPath),
+                  sanitizeError(error)
+                );
+              }
+              return;
+            }
+          }
+        })
+      );
+      if (abort.signal.aborted) {
+        addLog(t("msg_style_cancelled"), "warn");
+        setLastActionResult("cancelled");
+        return;
+      }
+      if (probeFailure !== null) {
+        setDropError(probeFailure);
+        addLog(probeFailure, "error");
+        setLastActionResult("error");
+        return;
       }
       if (existingCount > 0) {
         const message = t("msg_style_outputs_exist", existingCount);
@@ -500,6 +548,7 @@ export function useStyleEditController() {
     selectedRows,
     operations,
     effectiveSelectedCount,
+    findLoadedInputConflictKeys,
     addLog,
     t,
   ]);

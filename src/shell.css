@@ -136,6 +136,11 @@
   color: #fff;
 }
 
+.titlebar-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 /* ── App header — logo + tabs + controls ─────────────────── */
 
 /* z-index 10 is deliberate: the theme popover lives inside this header
@@ -229,6 +234,21 @@
   background: var(--bg-hover);
   color: var(--text-primary);
   border-color: var(--border);
+}
+
+.icon-btn:focus-visible,
+.tab:focus-visible,
+.dir-btn:focus-visible,
+.nit-preset:focus-visible,
+.rename-row-picker:focus-visible,
+.rename-reset-button:focus-visible,
+.style-text-input:focus-visible,
+.style-preview-action:focus-visible,
+.modal-close:focus-visible,
+.modal-opt:focus-visible,
+.btn-cancel-pill:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .icon-btn.lang {
@@ -989,7 +1009,7 @@
 
 /* Keep labels readable while disabling interaction with the track. */
 .nit-viz.is-disabled {
-  border-color: var(--border-muted, var(--border-light));
+  border-color: var(--border-light);
 }
 
 .nit-viz.is-disabled .nit-track {

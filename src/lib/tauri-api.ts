@@ -4,7 +4,7 @@
  */
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke, Channel } from "@tauri-apps/api/core";
-import { strings } from "../i18n/strings";
+import { strings, type StringKey } from "../i18n/strings";
 import { fileNameFromPath } from "./path-validation";
 import { VIDEO_EXTS, SUBTITLE_EXTS, RENAME_SUBTITLE_EXTS } from "./rename-extensions";
 import { normalizeOutputKey } from "./dedup-helpers";
@@ -23,7 +23,8 @@ export type DialogTranslator = (key: string, ...args: (string | number)[]) => st
 // . Previously a hardcoded shadow copy of strings.ts
 // entries lived here; any strings.ts edit silently left stale fallbacks.
 function dt(t: DialogTranslator | undefined, key: string): string {
-  return t ? t(key) : (strings[key]?.en ?? key);
+  if (t) return t(key);
+  return Object.hasOwn(strings, key) ? strings[key as StringKey].en : key;
 }
 
 function subtitleFilters(t?: DialogTranslator): FileFilter[] {

@@ -2,6 +2,7 @@ import { List, type RowComponentProps } from "react-window";
 import { LogPanel } from "../../lib/LogPanel";
 import { DropErrorBanner } from "../../lib/DropErrorBanner";
 import NumberInput from "../../lib/NumberInput";
+import { renderSubtitleFileStrip } from "../../lib/subtitle-file-strip";
 import { sanitizeForDialog } from "../../lib/dedup-helpers";
 import { formatDisplayTime } from "./timing-engine";
 import { formatSignedOffsetMs } from "./timing-ui-state";
@@ -106,184 +107,86 @@ export default function TimingShift() {
   return (
     <div className="space-y-4">
       {/* File strip — drop zone + filename(s) + clear + Select + Cancel + Save */}
-      <div
-        ref={dropZoneRef}
-        className={`drop-zone flex items-center gap-2${dropActive ? " drop-active" : ""}`}
-      >
-        <div ref={fileContainerRef} className="flex-1 min-w-0" style={{ position: "relative" }}>
-          {fileCount > 1 ? (
+      {renderSubtitleFileStrip({
+        dropZoneRef,
+        fileContainerRef,
+        dropActive,
+        filePaths,
+        fileNames,
+        showFileList,
+        onToggleFileList: () => setShowFileList((v) => !v),
+        emptyLabel: t("file_empty"),
+        selectedTitle: t("files_selected_title", fileCount),
+        clearTitle: t("btn_clear_file"),
+        selectLabel: t("btn_select_files"),
+        clearDisabled: busy,
+        selectDisabled: busy,
+        onClearFiles: handleClearFiles,
+        onSelectFiles: handlePickFiles,
+        multiFileBadge: detectedFormat ? (
+          <span
+            className="flex-none px-2 py-0.5 rounded text-xs"
+            style={{
+              background: "var(--bg-input)",
+              color: "var(--text-muted)",
+            }}
+          >
+            {detectedFormat}
+          </span>
+        ) : null,
+        singleFileMeta: (
+          <>
+            {detectedFormat && (
+              <span
+                className="flex-none px-2 py-0.5 rounded text-xs"
+                style={{
+                  background: "var(--bg-input)",
+                  color: "var(--text-muted)",
+                }}
+              >
+                {detectedFormat}
+              </span>
+            )}
+            {captionCount > 0 && (
+              <span className="flex-none text-xs" style={{ color: "var(--text-muted)" }}>
+                {t("captions_count", captionCount)}
+              </span>
+            )}
+          </>
+        ),
+        trailingActions: (
+          <>
+            {busy && (
+              <button
+                type="button"
+                onClick={requestCancel}
+                className="flex-none px-4 rounded-lg text-sm transition-colors"
+                style={{
+                  background: "var(--cancel-bg)",
+                  color: "var(--cancel-text)",
+                  height: "38px",
+                }}
+              >
+                {t("btn_cancel")}
+              </button>
+            )}
             <button
               type="button"
-              onClick={() => setShowFileList((v) => !v)}
-              className="w-full flex items-center gap-2 px-3 rounded-lg text-sm"
+              onClick={handleSaveAll}
+              disabled={saveDisabled}
+              className="flex-none px-6 rounded-lg font-medium text-sm transition-colors"
               style={{
-                background: "var(--bg-panel)",
-                border: "1px solid var(--border-light)",
-                minHeight: "38px",
-                color: "var(--text-primary)",
-                textAlign: "left",
-                cursor: "pointer",
+                background: saveDisabled ? "var(--bg-input)" : "var(--accent)",
+                color: saveDisabled ? "var(--text-muted)" : "var(--accent-text)",
+                height: "38px",
+                minWidth: "120px",
               }}
-              aria-expanded={showFileList}
-              aria-haspopup="listbox"
             >
-              <span className="truncate flex-1">{fileNames.join(", ")}</span>
-              {detectedFormat && (
-                <span
-                  className="flex-none px-2 py-0.5 rounded text-xs"
-                  style={{
-                    background: "var(--bg-input)",
-                    color: "var(--text-muted)",
-                  }}
-                >
-                  {detectedFormat}
-                </span>
-              )}
-              <span className="flex-none text-xs" style={{ color: "var(--text-muted)" }}>
-                ({fileCount})
-              </span>
-              <span className="flex-none text-xs" style={{ color: "var(--text-muted)" }}>
-                {showFileList ? "▲" : "▼"}
-              </span>
+              {saveLabel}
             </button>
-          ) : (
-            <div
-              className="flex items-center gap-2 px-3 rounded-lg text-sm"
-              style={{
-                background: fileCount > 0 ? "var(--bg-panel)" : "var(--bg-input)",
-                border: "1px solid var(--border-light)",
-                minHeight: "38px",
-              }}
-            >
-              {fileCount > 0 ? (
-                <>
-                  <span className="truncate flex-1" style={{ color: "var(--text-primary)" }}>
-                    {primaryFileName}
-                  </span>
-                  {detectedFormat && (
-                    <span
-                      className="flex-none px-2 py-0.5 rounded text-xs"
-                      style={{
-                        background: "var(--bg-input)",
-                        color: "var(--text-muted)",
-                      }}
-                    >
-                      {detectedFormat}
-                    </span>
-                  )}
-                  {captionCount > 0 && (
-                    <span className="flex-none text-xs" style={{ color: "var(--text-muted)" }}>
-                      {t("captions_count", captionCount)}
-                    </span>
-                  )}
-                </>
-              ) : (
-                <span className="italic" style={{ color: "var(--text-muted)" }}>
-                  {t("file_empty")}
-                </span>
-              )}
-            </div>
-          )}
-
-          {showFileList && fileCount > 1 && (
-            <div
-              className="absolute rounded-lg overflow-hidden flex flex-col"
-              style={{
-                top: "100%",
-                left: 0,
-                right: 0,
-                marginTop: "4px",
-                background: "var(--bg-panel)",
-                border: "1px solid var(--border)",
-                boxShadow: "var(--shadow-popover)",
-                maxHeight: "190px",
-                zIndex: 20,
-              }}
-              role="listbox"
-            >
-              <div
-                className="px-3 py-2 flex-none"
-                style={{ borderBottom: "1px solid var(--border)" }}
-              >
-                <span className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>
-                  {t("files_selected_title", fileCount)}
-                </span>
-              </div>
-              <div className="overflow-y-auto flex-1">
-                {fileNames.map((name, idx) => (
-                  <div
-                    key={idx}
-                    className="px-3 py-2 text-sm truncate"
-                    style={{
-                      color: "var(--text-primary)",
-                      borderBottom:
-                        idx < fileNames.length - 1
-                          ? "1px solid color-mix(in srgb, var(--border) 50%, transparent)"
-                          : "none",
-                    }}
-                    title={filePaths[idx]}
-                  >
-                    {name}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-        {fileCount > 0 && (
-          <button
-            onClick={handleClearFiles}
-            disabled={busy}
-            className="flex-none px-3 rounded-lg text-lg font-bold transition-colors"
-            style={{
-              background: busy ? "var(--bg-input)" : "var(--cancel-bg)",
-              color: busy ? "var(--text-muted)" : "var(--cancel-text)",
-              height: "38px",
-            }}
-            title={t("btn_clear_file")}
-          >
-            ✕
-          </button>
-        )}
-        <button
-          onClick={handlePickFiles}
-          disabled={busy}
-          className="flex-none px-5 rounded-lg font-medium text-sm transition-colors"
-          style={{
-            background: busy ? "var(--bg-input)" : "var(--accent)",
-            color: busy ? "var(--text-muted)" : "var(--accent-text)",
-            height: "38px",
-          }}
-        >
-          {t("btn_select_files")}
-        </button>
-        {busy && (
-          <button
-            onClick={requestCancel}
-            className="flex-none px-4 rounded-lg text-sm transition-colors"
-            style={{
-              background: "var(--cancel-bg)",
-              color: "var(--cancel-text)",
-              height: "38px",
-            }}
-          >
-            {t("btn_cancel")}
-          </button>
-        )}
-        <button
-          onClick={handleSaveAll}
-          disabled={saveDisabled}
-          className="flex-none px-6 rounded-lg font-medium text-sm transition-colors"
-          style={{
-            background: saveDisabled ? "var(--bg-input)" : "var(--accent)",
-            color: saveDisabled ? "var(--text-muted)" : "var(--accent-text)",
-            height: "38px",
-            minWidth: "120px",
-          }}
-        >
-          {saveLabel}
-        </button>
-      </div>
+          </>
+        ),
+      })}
 
       {/* Selection-rejected banner */}
       <DropErrorBanner message={dropError} onDismiss={() => setDropError(null)} />
@@ -302,7 +205,11 @@ export default function TimingShift() {
       )}
 
       {/* Mode selector: Single Offset vs Timing Map (.json / .csv) */}
-      <div className="flex flex-wrap items-center gap-4">
+      <div
+        className="flex flex-wrap items-center gap-4"
+        role="radiogroup"
+        aria-label={t("tab_timing")}
+      >
         <label
           className="flex items-center gap-2 text-sm cursor-pointer"
           style={{ color: "var(--text-primary)" }}
@@ -439,17 +346,26 @@ export default function TimingShift() {
                 value={thresholdText}
                 onChange={(e) => setThresholdText(e.target.value)}
                 disabled={busy}
+                aria-invalid={thresholdInvalid || undefined}
+                aria-describedby={
+                  thresholdInvalid ? "timing-threshold-error" : "timing-threshold-hint"
+                }
                 placeholder="00:05:00.000"
                 className="w-40 px-3 py-1.5 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
                 style={{
                   background: "var(--bg-input)",
-                  border: "1px solid var(--border)",
+                  border: thresholdInvalid ? "1px solid var(--error)" : "1px solid var(--border)",
                   color: "var(--text-primary)",
                 }}
               />
             )}
             {thresholdInvalid && (
-              <span className="text-xs" style={{ color: "var(--error)" }}>
+              <span
+                id="timing-threshold-error"
+                role="alert"
+                className="text-xs"
+                style={{ color: "var(--error)" }}
+              >
                 {t("threshold_invalid")}
               </span>
             )}
@@ -461,6 +377,7 @@ export default function TimingShift() {
           </div>
           {useThreshold && (
             <p
+              id="timing-threshold-hint"
               className="text-xs"
               style={{
                 color: "var(--text-muted)",
@@ -625,7 +542,11 @@ export default function TimingShift() {
 
       {/* Timeline preview — shows the FIRST file's captions in batch mode */}
       {preview.length > 0 && (
-        <div className="timeline-preview" aria-live="polite">
+        <div
+          className="timeline-preview"
+          role="region"
+          aria-label={t("preview_title", shiftableCount)}
+        >
           <div className="timeline-preview-head">
             <span>
               {previewTruncated

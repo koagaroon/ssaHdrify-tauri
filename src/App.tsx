@@ -38,6 +38,7 @@ const TAB_IDS: { id: Tab; labelKey: string }[] = (Object.keys(TAB_LABEL_KEYS) as
 
 function App() {
   const [activeTab, setActiveTab] = useState<Tab>("hdr");
+  const tabButtonRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const { t, lang, setLang } = useI18n();
   const { statuses } = useStatus();
   const currentStatus = statuses[activeTab];
@@ -161,6 +162,27 @@ function App() {
     setLicensesOpen(false);
   }, []);
 
+  const handleTabKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
+      let nextIndex: number | null = null;
+      if (event.key === "ArrowRight") {
+        nextIndex = (index + 1) % TAB_IDS.length;
+      } else if (event.key === "ArrowLeft") {
+        nextIndex = (index - 1 + TAB_IDS.length) % TAB_IDS.length;
+      } else if (event.key === "Home") {
+        nextIndex = 0;
+      } else if (event.key === "End") {
+        nextIndex = TAB_IDS.length - 1;
+      }
+      if (nextIndex === null) return;
+      event.preventDefault();
+      const targetTab = TAB_IDS[nextIndex]!;
+      setActiveTab(targetTab.id);
+      tabButtonRefs.current[nextIndex]?.focus();
+    },
+    []
+  );
+
   const modalVisibility = resolveAppModalVisibility(showCacheModal, licensesOpen);
 
   return (
@@ -276,9 +298,11 @@ function App() {
 
             <div className="header-controls">
               <button
+                type="button"
                 className="icon-btn lang"
                 onClick={() => setLang(lang === "en" ? "zh" : "en")}
                 title={lang === "en" ? t("lang_switch_to_zh") : t("lang_switch_to_en")}
+                aria-label={lang === "en" ? t("lang_switch_to_zh") : t("lang_switch_to_en")}
               >
                 {lang === "en" ? "中" : "EN"}
               </button>
@@ -288,15 +312,21 @@ function App() {
           </div>
 
           {/* Tabs */}
-          <nav className="tabs" role="tablist">
+          <nav className="tabs" role="tablist" aria-label={t("app_title")}>
             {TAB_IDS.map((tab, i) => (
               <button
                 key={tab.id}
+                ref={(el) => {
+                  tabButtonRefs.current[i] = el;
+                }}
+                type="button"
                 id={`tab-${tab.id}`}
                 role="tab"
+                tabIndex={activeTab === tab.id ? 0 : -1}
                 aria-selected={activeTab === tab.id}
                 aria-controls={`panel-${tab.id}`}
                 onClick={() => setActiveTab(tab.id)}
+                onKeyDown={(event) => handleTabKeyDown(event, i)}
                 className="tab"
                 data-active={activeTab === tab.id}
               >
