@@ -15,6 +15,9 @@ function decodeBase64Char(code: number): number {
 }
 
 export function decodeBase64Bytes(input: string): Uint8Array {
+  if (/=[\t\n\f\r ]+=/.test(input)) {
+    throw new Error("malformed base64 padding");
+  }
   const clean = input.replace(/[\t\n\f\r ]+/g, "");
   if (clean.length === 0) return new Uint8Array(0);
   if (clean.length % 4 !== 0) {
@@ -52,6 +55,12 @@ export function decodeBase64Bytes(input: string): Uint8Array {
 
     const c2 = pad2 ? 0 : decodeBase64Char(clean.charCodeAt(i + 2));
     const c3 = pad3 ? 0 : decodeBase64Char(clean.charCodeAt(i + 3));
+    if (pad2 && pad3 && (c1 & 0x0f) !== 0) {
+      throw new Error("non-canonical base64 padding bits");
+    }
+    if (!pad2 && pad3 && (c2 & 0x03) !== 0) {
+      throw new Error("non-canonical base64 padding bits");
+    }
     const combined = (c0 << 18) | (c1 << 12) | (c2 << 6) | c3;
 
     output[outputIndex] = (combined >> 16) & 0xff;

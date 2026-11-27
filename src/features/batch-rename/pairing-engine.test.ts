@@ -1045,4 +1045,89 @@ describe("buildPairings — regression guards", () => {
     expect(out.endsWith(".ass")).toBe(true);
     expect(out).not.toBe("C:/v/Show");
   });
+
+  it("rejects stemless video names, traversal/BiDi paths, and invalid chosenDir in deriveRenameOutputPath", () => {
+    expect(() => deriveRenameOutputPath("C:/v/.mkv", "C:/v/sub.ass", "rename", null)).toThrow(
+      /no valid stem/
+    );
+    expect(() =>
+      deriveRenameOutputPath("C:/v/../Show.mkv", "C:/v/sub.ass", "rename", null)
+    ).toThrow(/relative directory segments/);
+    expect(() =>
+      deriveRenameOutputPath("C:/v/Show\u202e.mkv", "C:/v/sub.ass", "rename", null)
+    ).toThrow(/invisible or bidi/i);
+    expect(() =>
+      deriveRenameOutputPath("C:/v/Show.mkv", "C:/v/sub.ass", "copy_to_chosen", "relative/dir")
+    ).toThrow(/must be absolute/);
+  });
+
+  it("unpairs slash- and case-equivalent subtitle paths on manual assignment and covers batch summary helpers", async () => {
+    const {
+      assignSubtitleToRow,
+      buildMultiSubtitlePairings,
+      countUnpairedSubtitlePaths,
+      findDuplicateRenameOutputKeys,
+      findRenameInputConflictIndexes,
+      findRenameOutputOwnershipConflictIndexes,
+      refreshPairingRowsAfterSuccessfulInPlaceRenames,
+      refreshRenameFilesAfterSuccessfulInPlaceRenames,
+      summarizeRenameRun,
+    } = await import("./pairing-engine");
+
+    const videos = [
+      parseFilename("C:\\v\\Show - 01.mkv", "Show - 01.mkv"),
+      parseFilename("C:\\v\\Show - 02.mkv", "Show - 02.mkv"),
+    ];
+    const subs = [
+      parseFilename("C:\\s\\Show - 01.sc.ass", "Show - 01.sc.ass"),
+      parseFilename("C:\\s\\Show - 01.tc.ass", "Show - 01.tc.ass"),
+    ];
+
+    const multiRows = buildMultiSubtitlePairings(videos, subs);
+    expect(multiRows.filter((r) => r.selected)).toHaveLength(2);
+
+    const singleRows = buildPairings(videos, [subs[0]!]);
+    const reassigned = assignSubtitleToRow(singleRows, singleRows[1]!.id, {
+      path: "c:/s/show - 01.sc.ass",
+      name: "Show - 01.sc.ass",
+    });
+    expect(reassigned[0]!.subtitle).toBeNull();
+    expect(reassigned[1]!.subtitle?.path).toBe("c:/s/show - 01.sc.ass");
+
+    expect(
+      countUnpairedSubtitlePaths(["C:\\s\\Show - 01.sc.ass", "C:\\s\\orphan.ass"], singleRows)
+    ).toBe(1);
+    expect(findDuplicateRenameOutputKeys(["C:\\v\\Show.ass", "c:/v/show.ass"]).size).toBe(1);
+    expect(summarizeRenameRun(2, 2, 1)).toEqual({ kind: "partial", totalPlanned: 3 });
+    expect(summarizeRenameRun(0, 2, 0)).toEqual({ kind: "error", totalPlanned: 2 });
+    expect(summarizeRenameRun(2, 2, 0)).toEqual({ kind: "success", totalPlanned: 2 });
+
+    const ownership = findRenameOutputOwnershipConflictIndexes(
+      [{ outputPath: "C:\\v\\a.ass" }, { outputPath: "C:\\v\\b.ass" }],
+      (p) => p.endsWith("b.ass")
+    );
+    expect([...ownership]).toEqual([1]);
+
+    const chainConflicts = findRenameInputConflictIndexes([
+      { inputPath: "C:\\s\\a.ass", outputPath: "C:\\s\\b.ass" },
+      { inputPath: "C:\\s\\b.ass", outputPath: "C:\\s\\c.ass" },
+    ]);
+    expect([...chainConflicts].sort()).toEqual([0, 1]);
+
+    const refreshedState = refreshRenameFilesAfterSuccessfulInPlaceRenames(
+      {
+        videoPaths: ["C:\\v\\Show - 01.mkv"],
+        videoNames: ["Show - 01.mkv"],
+        subtitlePaths: ["C:\\s\\Show - 01.sc.ass", "C:\\s\\untouched.ass"],
+        subtitleNames: ["Show - 01.sc.ass", "untouched.ass"],
+      },
+      [{ inputPath: "c:/s/show - 01.sc.ass", outputPath: "C:\\s\\Show - 01.ass" }]
+    );
+    expect(refreshedState?.subtitlePaths).toEqual(["C:\\s\\Show - 01.ass", "C:\\s\\untouched.ass"]);
+
+    const refreshedRows = refreshPairingRowsAfterSuccessfulInPlaceRenames(singleRows, [
+      { inputPath: "c:/s/show - 01.sc.ass", outputPath: "C:\\s\\Show - 01.ass" },
+    ]);
+    expect(refreshedRows[0]!.subtitle?.path).toBe("C:\\s\\Show - 01.ass");
+  });
 });

@@ -7,6 +7,7 @@ import {
   type FontCacheStatus,
 } from "../../lib/tauri-api";
 import { sanitizeError, sanitizeForDialog } from "../../lib/dedup-helpers";
+import { useModalFocusTrap } from "../../lib/useModalFocusTrap";
 import { useI18n } from "../../i18n/useI18n";
 
 interface Props {
@@ -47,6 +48,7 @@ export default function FontCacheDriftModal({
 }: Props): React.ReactElement | null {
   const { t } = useI18n();
   const titleId = useId();
+  const dialogRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
 
   // Single mutex across both async actions. Either both buttons are
@@ -68,53 +70,20 @@ export default function FontCacheDriftModal({
   // an eviction failure is included in the row's reason).
   const [skippedFolders, setSkippedFolders] = useState<FontCacheSkippedFolder[]>([]);
 
-  // Esc closes only when not working — closing mid-rescan would orphan
-  // the in-flight Tauri command. The close button's disabled state
-  // matches.
-  //
-  // Read the synchronous gate inside the stable handler so working-state
-  // flips do not tear down and re-attach the global keydown listener.
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      // Intercept Escape on every press while this modal is open.
-      // When idle, close; when a rescan/clear is in flight, swallow
-      // silently so a future global Esc handler (popover dismissal,
-      // etc.) can't mis-fire and break the working state. The
-      // disabled close button at the top mirrors this — no path
-      // closes mid-op.
-      e.stopPropagation();
-      if (!busyRef.current) {
-        onClose();
-      }
-    };
-    window.addEventListener("keydown", handler, true);
-    return () => window.removeEventListener("keydown", handler, true);
-  }, [open, onClose]);
-
-  // Land focus on the close button on mount so keyboard users can
-  // tab from a known anchor. Predictable initial focus matches
-  // FontSourceModal's pattern.
-  useEffect(() => {
-    if (open) closeButtonRef.current?.focus();
-  }, [open]);
-
   // INVARIANT: `requestClose` MUST NOT call onClose while an operation is
-  // in flight. The component's open=false→true effect
-  // (further down) resets transient state on mount/unmount, but
-  // App.tsx currently mounts/unmounts the modal — so a future
-  // refactor that keeps it mounted would expose stale state on next
-  // open ONLY IF `requestClose` permits mid-op close. This single
-  // gate is the contract; the Esc handler and disabled close button
-  // mirror the same gate. Test coverage
-  // for this invariant is deferred until the repo adds React Testing
-  // Library + happy-dom — no existing infrastructure to render the
-  // modal in vitest.
+  // in flight. When idle, close; when a rescan/clear is in flight, swallow
+  // Escape / scrim / close clicks so an active Tauri command is never orphaned.
   const requestClose = useCallback(() => {
     if (busyRef.current) return;
     onClose();
   }, [onClose]);
+
+  useModalFocusTrap({
+    open,
+    dialogRef,
+    initialFocusRef: closeButtonRef,
+    onEscape: requestClose,
+  });
 
   const handleRescan = useCallback(async () => {
     if (busyRef.current) return;
@@ -201,6 +170,7 @@ export default function FontCacheDriftModal({
       }}
     >
       <div
+        ref={dialogRef}
         className="modal"
         role="dialog"
         aria-modal="true"
@@ -462,7 +432,7 @@ export default function FontCacheDriftModal({
             style={{
               background: "var(--cancel-bg)",
               color: "var(--cancel-text)",
-              border: "1px solid var(--cancel-border, var(--border-light))",
+              border: "1px solid var(--border-light)",
               cursor: working !== null ? "not-allowed" : "pointer",
               filter: working !== null ? "grayscale(1)" : "none",
             }}

@@ -14,6 +14,8 @@ import {
   type FontKey,
 } from "./font-collector";
 import { FontSectionBuilder } from "./ass-uuencode";
+import { buildFontFileName, familyStableHash } from "./font-naming";
+export { buildFontFileName, familyStableHash };
 import {
   findSystemFont,
   lookupFontFamily,
@@ -196,12 +198,16 @@ export async function analyzeFonts(
   userFontMap?: Map<string, LocalFontEntry> | null,
   systemFontCache?: Map<string, SystemFontResolution>,
   useRustUserFonts = false,
-  cacheLookupCache?: Map<string, { path: string; index: number } | null>
+  cacheLookupCache?: Map<string, { path: string; index: number } | null>,
+  localFontCache?: Map<string, { path: string; index: number } | null>
 ): Promise<{ infos: FontInfo[]; usages: FontUsage[] }> {
   await ensureCollectorLoaded();
 
   const usages = collectFonts(assContent);
   const infos: FontInfo[] = [];
+  const effectiveLocalCache = useRustUserFonts
+    ? (localFontCache ?? new Map<string, { path: string; index: number } | null>())
+    : undefined;
 
   // Development diagnostic: when a user reports "font X doesn't match", the
   // only way to confirm from logs is to see both the lookup key and every
@@ -242,24 +248,21 @@ export async function analyzeFonts(
     }
 
     if (useRustUserFonts) {
-      let localResult: Awaited<ReturnType<typeof resolveUserFont>>;
-      try {
-        localResult = await resolveUserFont(usage.key.family, usage.key.bold, usage.key.italic);
-      } catch (error) {
-        // A session-index failure belongs to this font, not the whole
-        // subtitle batch. Fail this priority tier closed: silently using a
-        // lower-priority cache/system face after an explicitly supplied local
-        // source malfunctioned could embed the wrong font. This mirrors the
-        // CLI resolver's local-tier error policy while allowing later font
-        // families/files to continue analyzing.
-        infos.push({
-          ...base,
-          filePath: null,
-          fontIndex: 0,
-          error: sanitizeError(error),
-          source: null,
-        });
-        continue;
+      let localResult = effectiveLocalCache?.get(key);
+      if (localResult === undefined) {
+        try {
+          localResult = await resolveUserFont(usage.key.family, usage.key.bold, usage.key.italic);
+        } catch (error) {
+          infos.push({
+            ...base,
+            filePath: null,
+            fontIndex: 0,
+            error: sanitizeError(error),
+            source: null,
+          });
+          continue;
+        }
+        effectiveLocalCache?.set(key, localResult);
       }
       if (localResult) {
         if (isDev) console.debug(`[ssaHdrify] '${usage.key.family}' → LOCAL ${localResult.path}`);
@@ -346,68 +349,6 @@ export async function analyzeFonts(
   }
 
   return { infos, usages };
-}
-
-/**
- * FNV-1a 32-bit hash, rendered as 8 lowercase hex chars. Used only as a
- * filename suffix for fonts whose family name is entirely non-ASCII (typical
- * for CJK fonts like "思源黑体"). Without the hash two different CJK fonts
- * would both collapse to `font.ttf` and collide inside the embedded [Fonts]
- * section — the renderer would then load whichever face hit the parser
- * first, producing visual corruption that looks like a random font swap.
- *
- * Iterates over full codepoints (via `for...of`) rather than UTF-16 code
- * units so that astral-plane CJK (Extension-B+) and emoji don't hash their
- * surrogate halves independently — two fonts that differ only in the
- * astral half could otherwise collide.
- */
-// FNV-1a-INSPIRED, not FNV-1a: standard FNV-1a runs on a byte stream,
-// typically the UTF-8 encoding of the input. This
-// variant iterates over Unicode codepoints and mixes each one as three
-// 8-bit chunks (low / mid / high) — a stable, deterministic hash with
-// the same shape but distinct outputs from a textbook FNV-1a on the
-// UTF-8 bytes of the same string. The function's only contract is
-// "stable, distinct outputs for distinct inputs"; the name is
-// `familyStableHash` to avoid promising a wire-compatible FNV-1a.
-export function familyStableHash(family: string): string {
-  let h = 0x811c9dc5;
-  for (const ch of family) {
-    const cp = ch.codePointAt(0) ?? 0;
-    h ^= cp & 0xff;
-    h = Math.imul(h, 0x01000193);
-    h ^= (cp >>> 8) & 0xff;
-    h = Math.imul(h, 0x01000193);
-    h ^= (cp >>> 16) & 0xff;
-    h = Math.imul(h, 0x01000193);
-  }
-  return (h >>> 0).toString(16).padStart(8, "0");
-}
-
-/**
- * Build the font name for the [Fonts] section entry.
- * Convention: family_bold_italic.ttf (all lowercase)
- *
- * The `.ttf` suffix is unconditional even for OTF/TTC/OTC sources. The
- * extension inside the [Fonts] header is cosmetic — ASS renderers
- * (libass, VSFilter) identify embedded faces by the `fontname:` header,
- * not the filename extension, and accept TTF/OTF/CFF face data
- * regardless of the suffix. Keeping a single suffix avoids per-source
- * branching and a future maintainer "fixing" the literal to track the
- * source extension would produce noise for zero behavior change.
- */
-export function buildFontFileName(key: FontKey): string {
-  let name = key.family
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]/g, "_") // strip everything except safe chars
-    .replace(/_+/g, "_") // collapse consecutive underscores
-    .replace(/^_|_$/g, ""); // trim leading/trailing underscores
-  // When the ASCII-only strip empties the name — common for pure-CJK family
-  // names — append a stable hash of the original so distinct CJK fonts don't
-  // collide on the same `font.ttf` filename inside the [Fonts] section.
-  if (!name) name = `font_${familyStableHash(key.family)}`;
-  if (key.bold) name += "_bold";
-  if (key.italic) name += "_italic";
-  return `${name}.ttf`;
 }
 
 /** Per-file analysis cache entry — content stays in memory so the
@@ -698,6 +639,12 @@ export async function embedFonts(
   isCancelled?: () => boolean,
   t?: (key: string, ...args: (string | number)[]) => string
 ): Promise<EmbedFontsResult | null> {
+  if (isCancelled?.()) return null;
+  // Validate ASS shape before running expensive `subsetFont` IPCs so malformed
+  // inputs fail immediately without wasted native work.
+  assertAssShape(assContent);
+
+  const isDev = import.meta.env.DEV;
   const fontSection = new FontSectionBuilder();
   const warnings: string[] = [];
   const fontStyleLabels = t
@@ -785,7 +732,9 @@ export async function embedFonts(
       // stripUnicodeControls wrap mirrors the subset-failure
       // sanitizeError(...) posture for the same single-source
       // completion reason.
-      console.warn(`[ssaHdrify] embedFonts: no usage entry for ${stripUnicodeControls(label)}`);
+      if (isDev) {
+        console.warn(`[ssaHdrify] embedFonts: no usage entry for ${stripUnicodeControls(label)}`);
+      }
       // Wrap info.key.family in stripUnicodeControls for the t?.()
       // args + English fallback,
       // mirroring the subset-failure sibling below. Upstream
@@ -914,9 +863,11 @@ export async function embedFonts(
           if (isCancelled?.()) return null;
         } catch (subsetErr) {
           const safeErr = sanitizeError(subsetErr);
-          console.warn(
-            `Font subsetting failed for ${stripUnicodeControls(alias.info.key.family)}, skipping: ${safeErr}`
-          );
+          if (isDev) {
+            console.warn(
+              `Font subsetting failed for ${stripUnicodeControls(alias.info.key.family)}, skipping: ${safeErr}`
+            );
+          }
           const familyDisplay = stripUnicodeControls(alias.info.key.family);
           const warning =
             t?.("msg_font_skipped", familyDisplay, safeErr) ??
@@ -975,9 +926,11 @@ export async function embedFonts(
       // that discipline argument applies here too. Cheap defensive
       // wrap keeps the output sites consistent if upstream sanitizeFamily
       // ever loosens.
-      console.warn(
-        `Font subsetting failed for ${stripUnicodeControls(template.key.family)}, skipping: ${safeErr}`
-      );
+      if (isDev) {
+        console.warn(
+          `Font subsetting failed for ${stripUnicodeControls(template.key.family)}, skipping: ${safeErr}`
+        );
+      }
       // Wrap template.key.family for t?.() args + English fallback;
       // same sibling-output reasoning as the no-usage-entry path above.
       const familyDisplay = stripUnicodeControls(template.key.family);

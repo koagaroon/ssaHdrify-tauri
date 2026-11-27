@@ -834,6 +834,12 @@ export function useBatchRenameController() {
     abortRef.current?.abort();
   }, []);
 
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
+
   return {
     t,
     busy,

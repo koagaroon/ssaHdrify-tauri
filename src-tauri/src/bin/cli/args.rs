@@ -821,10 +821,13 @@ pub(crate) fn parse_timestamp_ms(input: &str) -> Result<i64, String> {
         ));
     }
     let minutes = parse_timestamp_part(parts[1], "minutes")?;
-    let (seconds_text, millis_text) = parts[2]
+    let (seconds_text, millis_opt) = match parts[2]
         .split_once('.')
         .or_else(|| parts[2].split_once(','))
-        .unwrap_or((parts[2], ""));
+    {
+        Some((sec, frac)) => (sec, Some(frac)),
+        None => (parts[2], None),
+    };
     let seconds = parse_timestamp_part(seconds_text, "seconds")?;
 
     if minutes > 59 || seconds > 59 {
@@ -833,18 +836,24 @@ pub(crate) fn parse_timestamp_ms(input: &str) -> Result<i64, String> {
         ));
     }
 
-    let millis = if millis_text.is_empty() {
-        0
-    } else if millis_text.len() <= 3 && millis_text.chars().all(|ch| ch.is_ascii_digit()) {
-        millis_text
-            .chars()
-            .chain(std::iter::repeat('0'))
-            .take(3)
-            .collect::<String>()
-            .parse::<i64>()
-            .map_err(|_| format!("invalid millisecond part in timestamp '{trimmed}'"))?
-    } else {
-        return Err(format!("invalid millisecond part in timestamp '{trimmed}'"));
+    let millis = match millis_opt {
+        None => 0,
+        Some(millis_text)
+            if !millis_text.is_empty()
+                && millis_text.len() <= 3
+                && millis_text.chars().all(|ch| ch.is_ascii_digit()) =>
+        {
+            millis_text
+                .chars()
+                .chain(std::iter::repeat('0'))
+                .take(3)
+                .collect::<String>()
+                .parse::<i64>()
+                .map_err(|_| format!("invalid millisecond part in timestamp '{trimmed}'"))?
+        }
+        Some(_) => {
+            return Err(format!("invalid millisecond part in timestamp '{trimmed}'"));
+        }
     };
 
     Ok(hours * 3_600_000 + minutes * 60_000 + seconds * 1000 + millis)

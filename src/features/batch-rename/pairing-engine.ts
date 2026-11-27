@@ -19,7 +19,13 @@
 import { normalizeOutputKey } from "../../lib/dedup-helpers";
 import type { BatchRenameFilesState } from "../../lib/FileContext";
 import { LANG_TAGS } from "../../lib/lang-detection";
-import { assertSafeOutputFilename, assertSafeOutputPath } from "../../lib/path-validation";
+import {
+  assertSafeOutputFilename,
+  assertSafeOutputPath,
+  assertSafeOutputPathInDirectory,
+  decomposeOutputDirectoryPath,
+} from "../../lib/path-validation";
+import { ASCII_CONTROL_CHARS, hasUnicodeControls } from "../../lib/unicode-controls";
 
 // ── Bracket cleanup ──────────────────────────────────────
 
@@ -65,7 +71,7 @@ const LANGUAGE_TAG_ALTERNATION = [...LANG_TAGS]
   .map(escapeRegexLiteral)
   .join("|");
 const PATTERN_A_RE = new RegExp(
-  String.raw`\s-\s*0*(\d+)(?:v\d+)?\s*(?:\[|\.(?:(?:${LANGUAGE_TAG_ALTERNATION})\.)?[a-z0-9]{1,10}$)`,
+  String.raw`\s-\s*0*(\d{1,4})(?:v\d{1,3})?\s*(?:\[|\.(?:(?:${LANGUAGE_TAG_ALTERNATION})\.)?[a-z0-9]{1,10}$)`,
   "i"
 );
 
@@ -73,7 +79,7 @@ const EPISODE_PATTERNS: EpisodePattern[] = [
   // Western S01E01 — both season and episode, highest confidence.
   // Matches on either raw or cleaned (no bracket dependency).
   {
-    regex: /\bS(\d+)E(\d+)(?:v\d+)?\b/i,
+    regex: /\bS(\d{1,4})E(\d{1,4})(?:v\d{1,3})?\b/i,
     useRaw: true,
     build: (m) => ({
       episode: parseInt(m[2]!, 10),
@@ -82,43 +88,28 @@ const EPISODE_PATTERNS: EpisodePattern[] = [
   },
   // Pattern B — `][NN][` — must run on raw (brackets are the cue).
   // Common in adjacent-bracket fan-sub naming styles.
-  //
-  // Episode digits capped at 1-3. An unbounded `\d+` would match
-  // 4-digit year markers like `][2024][` in names that pack release
-  // year between brackets (e.g. `[Group][2024][Show][01][1080p].mkv`
-  // → first match wins → episode = 2024 instead of 1). Real fan-sub
-  // episode counts top out around 999; the rare 1000+ shows typically
-  // use Pattern A's ` - NNNN` form or manual selection.
   {
-    regex: /\]\s*\[\s*0*(\d{1,3})(?:v\d+)?\s*\]/i,
+    regex: /\]\s*\[\s*0*(\d{1,3})(?:v\d{1,3})?\s*\]/i,
     useRaw: true,
     build: (m) => ({ episode: parseInt(m[1]!, 10) }),
   },
   // Pattern A — ` - NN [` or ` - NN.ext` — runs on raw because the
-  // trailing bracket / extension boundary is the right anchor. Most
-  // common format across the documented sample set, including bilingual
-  // CJK titles and joint-release naming styles. The `0*` is intentional:
-  // specials / OVA files may be labelled ` - 0` or ` - 00`, and those
-  // should parse as episode 0 rather than falling through.
+  // trailing bracket / extension boundary is the right anchor.
   {
-    // `\.[a-z0-9]{1,10}$` — bounded extension to avoid catastrophic backtracking.
     regex: PATTERN_A_RE,
     useRaw: true,
     build: (m) => ({ episode: parseInt(m[1]!, 10) }),
   },
-  // 第N话 / 第N集 — Chinese marker, fallback. Doesn't appear in the
-  // documented corpus but worth keeping for older naming styles.
+  // 第N话 / 第N集 — Chinese marker, fallback.
   {
-    regex: /第\s*(\d+)(?:v\d+)?\s*[话集]/i,
+    regex: /第\s*0*(\d{1,4})(?:v\d{1,3})?\s*[话集]/i,
     useRaw: false,
     build: (m) => ({ episode: parseInt(m[1]!, 10) }),
   },
   // Western EP01 / E01 — final fallback. Bounded to 1-3 digits to match
-  // Pattern B (`\d{1,3}`). The trailing `\b` makes an overlong run (e.g. EP1234)
-  // fail to match rather than prefix-truncate to a wrong episode, leaving it
-  // unmatched for manual selection.
+  // Pattern B (`\d{1,3}`).
   {
-    regex: /\bEP?(\d{1,3})(?:v\d+)?\b/i,
+    regex: /\bEP?(\d{1,3})(?:v\d{1,3})?\b/i,
     useRaw: false,
     build: (m) => ({ episode: parseInt(m[1]!, 10) }),
   },
@@ -187,30 +178,26 @@ interface SeasonPattern {
 const SEASON_PATTERNS: SeasonPattern[] = [
   // "Nnd Season" / "Nrd Season" / "Nth Season" — anime fan-sub style.
   {
-    regex: /(\d+)(?:st|nd|rd|th)\s+Season/i,
+    regex: /(\d{1,4})(?:st|nd|rd|th)\s+Season/i,
     build: (m) => parseInt(m[1]!, 10),
   },
   // "Season N"
   {
-    regex: /Season\s+(\d+)/i,
+    regex: /Season\s+(\d{1,4})/i,
     build: (m) => parseInt(m[1]!, 10),
   },
   // 第N季 — Chinese ordinal + numeric or 一二三...
   {
-    regex: /第\s*([一二三四五六七八九十\d]+)\s*季/,
+    regex: /第\s*([一二三四五六七八九十\d]{1,4})\s*季/,
     build: (m) => {
       const raw = m[1]!;
-      // Pure ASCII digits parse directly. A MIXED digit+numeral capture
-      // (e.g. "1十") is not pure-digit, so it routes to the validator and is
-      // rejected as malformed → default season 1 (rather than the old
-      // `parseInt("1十") === 1` accidental prefix parse).
       if (/^\d+$/.test(raw)) return parseInt(raw, 10);
       return chineseNumeralToInt(raw) ?? 1;
     },
   },
   // Standalone S\d (negative lookahead so "S01E01" doesn't double-count).
   {
-    regex: /\bS(\d+)(?!E\d+)\b/i,
+    regex: /\bS(\d{1,4})(?!E\d)\b/i,
     build: (m) => parseInt(m[1]!, 10),
   },
 ];
@@ -744,6 +731,28 @@ function normalizeLanguageSuffix(suffix: string | undefined): string {
  * (the canonical "source" for the file we're operating on). Mixing
  * `/` and `\` confuses Win32 APIs and shell-integration tools.
  */
+const RENAME_INPUT_CONTROL_RE = new RegExp(`[${ASCII_CONTROL_CHARS}]`);
+
+function assertValidRenameSourcePath(path: string, label: string): void {
+  if (!path) {
+    throw new Error(`${label} must be absolute`);
+  }
+  const normalized = path.replace(/\\/g, "/");
+  if (RENAME_INPUT_CONTROL_RE.test(normalized)) {
+    throw new Error(`${label} contains illegal control characters`);
+  }
+  if (hasUnicodeControls(normalized)) {
+    throw new Error(`${label} contains invisible or bidi-control characters`);
+  }
+  if (!(normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized))) {
+    throw new Error(`${label} must be absolute`);
+  }
+  const segments = normalized.split("/");
+  if (segments.some((seg) => seg === "." || seg === "..")) {
+    throw new Error(`${label} contains relative directory segments`);
+  }
+}
+
 export function deriveRenameOutputPath(
   videoPath: string,
   subtitlePath: string,
@@ -751,107 +760,47 @@ export function deriveRenameOutputPath(
   chosenDir: string | null,
   options: RenameOutputOptions = {}
 ): string {
-  // Video basename (without extension)
-  const videoBaseFull = baseName(videoPath);
-  const videoBase = stripExtension(videoBaseFull);
+  assertValidRenameSourcePath(videoPath, "Video path");
+  assertValidRenameSourcePath(subtitlePath, "Subtitle path");
 
-  // Keep only the subtitle's file extension. The subtitle stem is not
-  // copied verbatim; default mode uses the video basename exactly, while
-  // multi-subtitle mode re-inserts a validated canonical language suffix.
-  // `subDot >= 0` (not `> 0`) intentionally accepts the leading-dot
-  // edge case `.ass`: a fan-sub pack can deliver a leading-dot
-  // filename and the old `> 0` guard would produce `<videoBase>` with
-  // NO extension — no player loads the result. With `>= 0` the whole
-  // `.ass` becomes the extension and the output is `<videoBase>.ass`.
+  // Video basename (without extension). Reject stemless dotfiles like `.mkv`
+  // where `stripExtension` would otherwise preserve `.mkv` as the stem.
+  const videoBaseFull = baseName(videoPath);
+  if (videoBaseFull.startsWith(".") && videoBaseFull.indexOf(".", 1) < 0) {
+    throw new Error("Video filename has no valid stem");
+  }
+  const videoBase = stripExtension(videoBaseFull);
+  if (!videoBase || !videoBase.replace(/^\.+/, "").trim()) {
+    throw new Error("Video filename has no valid stem");
+  }
+
+  // Keep only the subtitle's file extension (`subDot >= 0` preserves `.ass`
+  // when a leading-dot subtitle sidecar is renamed to `<videoBase>.ass`).
   const subFull = baseName(subtitlePath);
   const subDot = subFull.lastIndexOf(".");
-  const subExt = subDot >= 0 ? subFull.slice(subDot) : ""; // ".ass" / ".srt" / etc.
+  const subExt = subDot >= 0 ? subFull.slice(subDot) : "";
 
   const langSuffix = normalizeLanguageSuffix(options.languageSuffix);
   const outName = langSuffix ? `${videoBase}.${langSuffix}${subExt}` : `${videoBase}${subExt}`;
+  assertSafeOutputFilename(outName, { allowBraces: true });
 
-  // Pick target directory per mode
-  let targetDir: string;
-  if (mode === "rename") {
-    targetDir = dirname(subtitlePath);
-  } else if (mode === "copy_to_video") {
-    targetDir = dirname(videoPath);
-  } else {
+  if (mode === "copy_to_chosen") {
     if (!chosenDir) {
       throw new Error("deriveRenameOutputPath: chosenDir required for copy_to_chosen");
     }
-    targetDir = chosenDir;
+    const chosenParts = decomposeOutputDirectoryPath(chosenDir);
+    const outputPath = `${chosenParts.dir}/${outName}`;
+    assertSafeOutputPathInDirectory(outputPath, chosenDir);
+    const usedBackslash = subtitlePath.includes("\\") || chosenParts.usedBackslash;
+    return usedBackslash ? outputPath.replace(/\//g, "\\") : outputPath;
   }
 
+  const targetDir = mode === "rename" ? dirname(subtitlePath) : dirname(videoPath);
   const usedBackslash = subtitlePath.includes("\\");
   const normTargetDir = targetDir.replace(/\\/g, "/").replace(/\/$/, "");
   const outputPath = normTargetDir ? `${normTargetDir}/${outName}` : outName;
+  const validatorRef = mode === "rename" ? subtitlePath : videoPath;
 
-  // Apply the shared path validators (Windows reserved name / path
-  // traversal / MAX_PATH / self-overwrite). Reference for the
-  // dir-escape and self-overwrite checks is mode-dependent: rename
-  // keeps output in the subtitle's dir, copy-to-video puts it in the
-  // video's dir, copy-to-chosen uses the chosen dir.
-  //
-  // Trade-off: the self-overwrite check (assertSafeOutputPath's
-  // case-insensitive lower === inputLower comparison) is structurally
-  // weakened in copy modes — `videoPath` and `chosenDir/__validator_ref__`
-  // never equal `outputPath`, so the check never fires. The ACTUAL
-  // self-overwrite risk in copy modes is "would copying the input
-  // subtitle to the output overwrite the input subtitle?" — that is
-  // closed by `process_rename_pair`'s `no_op` skip in the Rust shell
-  // (a no-op row's output path equals its input, and no_op rows
-  // return Skipped before any write attempt). Splitting
-  // assertSafeOutputPath into a directory-taking variant would let
-  // these checks be perfectly mode-appropriate, but is
-  // disproportionate to the closed-by-no_op risk.
-  let validatorRef: string;
-  if (mode === "rename") {
-    validatorRef = subtitlePath;
-  } else if (mode === "copy_to_video") {
-    validatorRef = videoPath;
-  } else {
-    // copy_to_chosen — `normTargetDir` (computed above) already holds
-    // the slash-normalized, trailing-slash-stripped form of targetDir,
-    // which IS chosenDir at this point. Reuse it directly to avoid a
-    // duplicate normalization that could drift if rules change. Guard
-    // against a chosenDir that resolves to empty after normalization
-    // (degenerate input — clap's PathBuf parse rejects empty strings,
-    // but defense-in-depth).
-    if (!normTargetDir) {
-      throw new Error("chosenDir is empty after normalization");
-    }
-    validatorRef = `${normTargetDir}/__validator_ref__`;
-  }
-  // BatchRename's outName is `${videoBase}${optionalLangSuffix}${subExt}`,
-  // i.e., the user's verbatim video filename with the subtitle's
-  // extension. Brace characters in legitimate fan-sub video names
-  // (`[Group] Show {1080p}.mkv`) must pass — they're not template
-  // tokens here, and the OS allows them. Other illegal-char gates
-  // (control / NTFS-reserved / separators) still apply.
-  assertSafeOutputFilename(outName, { allowBraces: true });
-  // Rename mode's legitimate no-op (subtitle already matches the
-  // video name) makes outputPath === subtitlePath, which would trip
-  // assertSafeOutputPath's self-overwrite-guards-against-source-loss
-  // check.
-  //
-  // The bypass skips assertSafeOutputPath's FOUR checks:
-  //   1. Self-overwrite — trivially OK because output === source by
-  //      definition of isNoOpRename.
-  //   2. Path traversal (`..` segments) — outputPath equals
-  //      subtitlePath which was validated by decomposeInputPath
-  //      upstream; if it lacked `..` then, it lacks `..` now.
-  //   3. Dir escape (output outside validatorRef's dir) — same
-  //      reasoning: output equals input, which is inside its own dir.
-  //   4. MAX_PATH overflow — input passed length checks; output is
-  //      byte-equal to input, same length.
-  //
-  // The rename loop later treats noOp rows as Skipped before any I/O
-  // attempt, so even the partial check elided here would have no
-  // effect on what reaches the filesystem. Other modes are validated
-  // normally; copy_to_video can also be a harmless no-op, but its
-  // validator reference is the video path rather than the subtitle
-  // source, so it does not need this rename-specific bypass.
   if (!(mode === "rename" && isNoOpRename(subtitlePath, outputPath))) {
     assertSafeOutputPath(outputPath, validatorRef);
   }
@@ -894,11 +843,11 @@ export function assignSubtitleToRow(
   const target = rows.find((r) => r.id === targetRowId);
   if (!target) return rows;
 
-  // No-op when the row already has exactly this subtitle (or both
-  // null). Compare by path because object identity may differ.
-  const currentPath = target.subtitle?.path ?? null;
-  const newPath = sub?.path ?? null;
-  if (currentPath === newPath) return rows;
+  // No-op when the row already has this subtitle identity (or both null).
+  // Compare via normalizeOutputKey so slash/case/NFC aliases stay uniquely owned.
+  const currentKey = target.subtitle ? normalizeOutputKey(target.subtitle.path) : null;
+  const newKey = sub ? normalizeOutputKey(sub.path) : null;
+  if (currentKey === newKey) return rows;
 
   return rows.map((r) => {
     if (r.id === targetRowId) {
@@ -910,7 +859,7 @@ export function assignSubtitleToRow(
         selected: sub ? true : r.selected,
       };
     }
-    if (sub && r.subtitle?.path === sub.path) {
+    if (newKey !== null && r.subtitle && normalizeOutputKey(r.subtitle.path) === newKey) {
       // Same sub was paired with another row — unpair it there so
       // the sub stays uniquely owned.
       return { ...r, subtitle: null, source: "manual" as PairingSource };

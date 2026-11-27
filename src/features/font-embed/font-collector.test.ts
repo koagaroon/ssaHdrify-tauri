@@ -959,3 +959,40 @@ describe("font collection of literal brace escapes", () => {
     expect([...usage[0]!.codepoints]).toEqual([123, 0x6f22, 125]);
   });
 });
+
+describe("native streaming ASS font collector edge cases", () => {
+  it("preserves leading U+3000 ideographic spaces, bare-CR Mac lines, [V4 Styles], and *Style prefixes", () => {
+    const macSsa = [
+      "\uFEFF[Script Info]",
+      "ScriptType: v4.00",
+      "",
+      "[V4 Styles]",
+      "Format: Name, Fontname, Fontsize, Bold, Italic",
+      "Style: *Main,Noto Sans CJK SC,-1,0,0",
+      "",
+      "[Events]",
+      "Format: Marked, Start, End, Style, Text",
+      "Dialogue: Marked=0,0:00:01.00,0:00:02.00,Main,\u3000漢,字",
+    ].join("\r");
+
+    // Works synchronously without calling ensureLoaded().
+    const usage = collectFonts(macSsa);
+    expect(usage).toHaveLength(1);
+    expect(usage[0]!.key).toEqual({ family: "Noto Sans CJK SC", bold: false, italic: false });
+    expect([...usage[0]!.codepoints].sort((a, b) => a - b)).toEqual([0x2c, 0x3000, 0x5b57, 0x6f22]);
+  });
+
+  it("treats non-numeric Style Bold/Italic fields as false rather than NaN-truthy", () => {
+    const ass = [
+      "[Script Info]",
+      "[V4+ Styles]",
+      "Format: Name, Fontname, Bold, Italic",
+      "Style: Default,Arial,garbage,-1",
+      "[Events]",
+      "Format: Start, End, Style, Text",
+      "Dialogue: 0:00:00.00,0:00:01.00,Default,A",
+    ].join("\n");
+    const usage = collectFonts(ass);
+    expect(usage[0]!.key).toEqual({ family: "Arial", bold: false, italic: true });
+  });
+});

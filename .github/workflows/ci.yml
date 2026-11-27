@@ -33,8 +33,12 @@ jobs:
       - name: Use the declared npm version
         shell: pwsh
         run: |
-          $npmVersion = node -p "require('./package.json').packageManager.split('@').at(-1)"
-          npm install --global "npm@$npmVersion"
+          $pkgManager = node -p "require('./package.json').packageManager"
+          if ($pkgManager -notmatch '^npm@(\d+\.\d+\.\d+)$') {
+            throw "Invalid packageManager field: $pkgManager"
+          }
+          $npmVersion = $Matches[1]
+          npm install --global --ignore-scripts "npm@$npmVersion"
           if ((npm --version) -ne $npmVersion) {
             throw "Expected npm $npmVersion, got $(npm --version)"
           }
@@ -63,6 +67,16 @@ jobs:
       - name: Build the production frontend
         run: npm run build
 
+      - name: Build the embedded TypeScript engine and verify third-party notice parity
+        shell: pwsh
+        run: |
+          npm run build:engine
+          $guiHash = (Get-FileHash dist/third-party-notices.txt -Algorithm SHA256).Hash
+          $cliHash = (Get-FileHash dist-engine/third-party-notices.txt -Algorithm SHA256).Hash
+          if ($guiHash -ne $cliHash) {
+            throw "Third-party notice parity mismatch: GUI=$guiHash CLI=$cliHash"
+          }
+
   rust:
     name: Rust quality (Windows)
     runs-on: windows-2025
@@ -85,8 +99,12 @@ jobs:
       - name: Use the declared npm version
         shell: pwsh
         run: |
-          $npmVersion = node -p "require('./package.json').packageManager.split('@').at(-1)"
-          npm install --global "npm@$npmVersion"
+          $pkgManager = node -p "require('./package.json').packageManager"
+          if ($pkgManager -notmatch '^npm@(\d+\.\d+\.\d+)$') {
+            throw "Invalid packageManager field: $pkgManager"
+          }
+          $npmVersion = $Matches[1]
+          npm install --global --ignore-scripts "npm@$npmVersion"
           if ((npm --version) -ne $npmVersion) {
             throw "Expected npm $npmVersion, got $(npm --version)"
           }
@@ -137,6 +155,9 @@ jobs:
 
       - name: Run the locked Rust test suite
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+
+      - name: Smoke-test the standalone CLI binary
+        run: cargo build --manifest-path src-tauri/Cargo.toml --locked --bin ssahdrify-cli
 
       - name: Smoke-test the Tauri build entry point
         run: npm run tauri build -- --debug --no-bundle --ci

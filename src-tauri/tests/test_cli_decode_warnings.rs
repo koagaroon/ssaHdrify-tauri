@@ -4,24 +4,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+mod common;
+use common::TestTempDir;
+
 const ASS: &str = include_str!("fixtures/utf8.ass");
 const NO_FONT_ASS: &str = "[Script Info]\nScriptType: v4.00+\n\n[V4+ Styles]\nFormat: Name, Fontname\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n";
 
-fn temp_dir(label: &str) -> PathBuf {
-    static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let seq = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let base = std::env::temp_dir();
-    fs::create_dir_all(&base).unwrap();
-    let root = base.join(format!(
-        "ssahdrify-cli-decode-{label}-{}-{stamp}-{seq}",
-        std::process::id()
-    ));
-    fs::create_dir(&root).unwrap();
-    root
+fn temp_dir(label: &str) -> TestTempDir {
+    TestTempDir::new("ssahdrify-cli-decode", label)
 }
 
 fn write_ass(root: &Path, content: &str, malformed: bool) -> (PathBuf, Vec<u8>) {

@@ -11,6 +11,8 @@
  */
 
 import type { ParsedASS } from "ass-compiler";
+import { iterateSourceLines } from "../../lib/source-lines";
+import { MAX_PARSED_ENTRIES } from "../../lib/subtitle-parser";
 import { ASCII_CONTROL_CHARS, BIDI_AND_ZERO_WIDTH_CHARS } from "../../lib/unicode-controls";
 
 // libass parses a non-parenthesized override argument through the next
@@ -44,13 +46,21 @@ const B_TAG_RE = /\\b(?!lur|ord|e)([^\\(]*)/g;
 const I_TAG_RE = /\\i(?!clip)([^\\(]*)/g;
 const P_TAG_RE = /\\p(?!bo|os)([^\\(]*)/g;
 
-// Lazy dynamic import — only triggers when ensureLoaded() is first called.
-// Previously this ran at module load time, which blocked startup after the
-// CSS visibility refactor made all tabs mount immediately.
 export type AssParseFunction = (text: string) => ParsedASS;
 
-let parseFn: AssParseFunction | null = null;
-let assCompilerReady: Promise<void> | null = null;
+const MAX_ASS_CONTENT_LENGTH = 100_000_000;
+const ASS_HEADER_LINE_BUDGET = 1024;
+const MAX_COLLECT_LINES = MAX_PARSED_ENTRIES + ASS_HEADER_LINE_BUDGET;
+const MAX_COLLECT_FIELDS = 1024;
+const RAW_SECTION_HEADER_RE = /^\[(?=[A-Za-z0-9+ ]*[a-z ])[A-Za-z0-9+ ]{1,50}\]$/;
+const KNOWN_UPPER_SECTIONS = new Set([
+  "[script info]",
+  "[v4+ styles]",
+  "[v4 styles]",
+  "[fonts]",
+  "[events]",
+  "[graphics]",
+]);
 
 /**
  * Defense-in-depth caps against crafted ASS input. See `collectFonts` for how
@@ -183,59 +193,104 @@ export function sanitizeFamily(raw: string): string {
 }
 
 /**
- * Ensure ass-compiler is loaded. Call before using collector functions.
+ * Retain async readiness entrypoint for API compatibility.
+ * `collectFonts` now uses the native bounded ASS reader directly, so no
+ * dynamic `ass-compiler` chunk needs to be fetched at runtime.
  */
 export async function ensureLoaded(): Promise<void> {
-  if (!assCompilerReady) {
-    assCompilerReady = import("ass-compiler")
-      .then((m) => {
-        parseFn = m.parse;
-      })
-      .catch((e) => {
-        assCompilerReady = null; // allow retry on next call
-        throw e;
-      });
-  }
-  await assCompilerReady;
+  return;
 }
 
-/**
- * Collect font usage from an ASS file.
- *
- * @param assContent - Full ASS file content as string
- * @returns Array of FontUsage entries (unique per font family+style combo)
- */
-export function collectFonts(assContent: string): FontUsage[] {
-  if (!parseFn) {
-    throw new Error("ASS compiler not loaded yet");
-  }
-  return collectFontsWithParser(assContent, parseFn);
+type CollectorSection = "styles" | "events" | "other";
+
+function detectCollectorSection(rawLine: string, isFirstLine: boolean): CollectorSection | null {
+  const line = isFirstLine && rawLine.startsWith("\uFEFF") ? rawLine.slice(1) : rawLine;
+  const trimmed = line.trim();
+  if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) return null;
+  const lower = trimmed.toLowerCase();
+  if (lower === "[v4+ styles]" || lower === "[v4 styles]") return "styles";
+  if (lower === "[events]") return "events";
+  if (KNOWN_UPPER_SECTIONS.has(lower) || RAW_SECTION_HEADER_RE.test(trimmed)) return "other";
+  return null;
 }
 
-export function collectFontsWithParser(assContent: string, parser: AssParseFunction): FontUsage[] {
-  // Parse ASS file
-  const parsed = parser(assContent);
-  if (!parsed) {
-    throw new Error("Failed to parse ASS file");
+interface StyleColumnMap {
+  nameIdx: number;
+  fontnameIdx: number;
+  boldIdx: number;
+  italicIdx: number;
+}
+
+const DEFAULT_STYLE_COLUMNS: StyleColumnMap = {
+  nameIdx: 0,
+  fontnameIdx: 1,
+  boldIdx: 7,
+  italicIdx: 8,
+};
+
+function parseStyleColumns(line: string): StyleColumnMap {
+  const fields = line
+    .slice(line.indexOf(":") + 1)
+    .split(",", MAX_COLLECT_FIELDS + 1)
+    .map((f) => f.trim().toLowerCase());
+  if (fields.length > MAX_COLLECT_FIELDS) {
+    throw new Error(`ASS/SSA style Format has too many fields (max ${MAX_COLLECT_FIELDS})`);
   }
+  return {
+    nameIdx: fields.indexOf("name"),
+    fontnameIdx: fields.indexOf("fontname"),
+    boldIdx: fields.indexOf("bold"),
+    italicIdx: fields.indexOf("italic"),
+  };
+}
 
-  // Build style → font map from [V4+ Styles]
-  const styleMap = new Map<string, { family: string; bold: boolean; italic: boolean }>();
+interface EventColumnMap {
+  styleIdx: number;
+  textIdx: number;
+}
 
-  if (parsed.styles?.style) {
-    for (const style of parsed.styles.style) {
-      // Drop the ASS `@` vertical-writing prefix (collapses vertical and
-      // horizontal uses into one entry), then strip control chars and cap length.
-      const family = sanitizeFamily(normalizeFamily(style.Fontname || "Arial"));
-      styleMap.set(style.Name, {
-        family: family || "Arial",
-        bold: parseInt(style.Bold || "0", 10) !== 0,
-        italic: parseInt(style.Italic || "0", 10) !== 0,
-      });
+const DEFAULT_EVENT_COLUMNS: EventColumnMap = {
+  styleIdx: 3,
+  textIdx: 9,
+};
+
+function parseEventColumns(line: string): EventColumnMap {
+  const fields = line
+    .slice(line.indexOf(":") + 1)
+    .split(",", MAX_COLLECT_FIELDS + 1)
+    .map((f) => f.trim().toLowerCase());
+  if (fields.length > MAX_COLLECT_FIELDS) {
+    throw new Error(`ASS/SSA event Format has too many fields (max ${MAX_COLLECT_FIELDS})`);
+  }
+  if (fields.filter((f) => f === "text").length !== 1 || fields.at(-1) !== "text") {
+    throw new Error("ASS/SSA event Format must contain one final Text field");
+  }
+  return {
+    styleIdx: fields.indexOf("style"),
+    textIdx: fields.length - 1,
+  };
+}
+
+function extractDialogueStyleAndText(
+  line: string,
+  columns: EventColumnMap
+): { rawStyle: string; rawText: string } | null {
+  let cursor = line.indexOf(":") + 1;
+  let rawStyle = "";
+  for (let fieldIdx = 0; fieldIdx < columns.textIdx; fieldIdx += 1) {
+    const comma = line.indexOf(",", cursor);
+    if (comma < 0) return null;
+    if (fieldIdx === columns.styleIdx) {
+      rawStyle = line.slice(cursor, comma).trim();
     }
+    cursor = comma + 1;
   }
+  // Slice Text verbatim without `.trim()` so leading U+3000 fullwidth spaces
+  // and trailing glyphs remain visible to glyph subsetting.
+  return { rawStyle, rawText: line.slice(cursor) };
+}
 
-  // Accumulate: fontKeyString → { key, codepoints }
+function createUsageAccumulator() {
   const usageMap = new Map<string, FontUsage>();
   let totalCodepoints = 0;
 
@@ -251,15 +306,6 @@ export function collectFontsWithParser(assContent: string, parser: AssParseFunct
     }
     for (const char of text) {
       const cp = char.codePointAt(0);
-      // Skip control chars (incl. U+007F DEL), ASCII space, and invalid
-      // codepoints. Space is dropped here because the Rust subset always
-      // pads the full ASCII printable range (0x20–0x7E), so counting it
-      // would double-bill what the subset already includes for free.
-      // C1 controls (U+0080..U+009F) and other Unicode control characters
-      // pass through this filter — Rust's subset_font emits `.notdef`
-      // for them harmlessly, so the leak (1 extra codepoint per C1 char
-      // in MAX_CODEPOINTS_PER_VARIANT accounting) is bounded and benign
-      // .
       if (cp === undefined || cp <= 32 || cp === 0x7f || cp > 0x10ffff) {
         continue;
       }
@@ -267,8 +313,6 @@ export function collectFontsWithParser(assContent: string, parser: AssParseFunct
         continue;
       }
       if (usage.codepoints.size >= MAX_CODEPOINTS_PER_VARIANT) {
-        // Throw only for a NEW glyph beyond the cap. Duplicates and
-        // skipped characters remain harmless at the boundary.
         throw new Error(
           `Too many codepoints for one font variant: ${usage.codepoints.size}+ (max ${MAX_CODEPOINTS_PER_VARIANT})`
         );
@@ -283,24 +327,129 @@ export function collectFontsWithParser(assContent: string, parser: AssParseFunct
     }
   }
 
+  return { usageMap, recordChars };
+}
+
+function resolveDialogueBaseStyle(
+  rawStyleName: string,
+  styleMap: ReadonlyMap<string, FontKey>
+): FontKey {
+  const effectiveRaw = rawStyleName || "Default";
+  const unstarredStyleName = effectiveRaw.replace(/^\*+/u, "");
+  const styleName = unstarredStyleName.toLowerCase() === "default" ? "Default" : unstarredStyleName;
+  return (
+    styleMap.get(styleName) ??
+    styleMap.get("Default") ?? {
+      family: "Arial",
+      bold: false,
+      italic: false,
+    }
+  );
+}
+
+/**
+ * Collect font usage from an ASS/SSA file using a bounded streaming line reader.
+ *
+ * Preserves bare-`\r` Mac line endings, `[V4 Styles]` SSA headers, `*`-prefixed
+ * style definitions, and leading `U+3000` ideographic spaces in dialogue text
+ * without materializing a full-document AST.
+ */
+export function collectFonts(assContent: string): FontUsage[] {
+  if (assContent.length > MAX_ASS_CONTENT_LENGTH) {
+    throw new Error(
+      `File too large: ${(assContent.length / 1_000_000).toFixed(1)} MB (max 100 MB)`
+    );
+  }
+
+  const styleMap = new Map<string, FontKey>();
+  const { usageMap, recordChars } = createUsageAccumulator();
+
+  let section: CollectorSection = "other";
+  let styleColumns: StyleColumnMap = DEFAULT_STYLE_COLUMNS;
+  let eventColumns: EventColumnMap = DEFAULT_EVENT_COLUMNS;
+  let lineCount = 1;
+
+  for (const sourceLine of iterateSourceLines(assContent)) {
+    const rawLine = sourceLine.body;
+    if (rawLine.length > MAX_DIALOGUE_TEXT_LEN + 4096) {
+      throw new Error(`Dialogue text too long: ${rawLine.length}+ (max ${MAX_DIALOGUE_TEXT_LEN})`);
+    }
+    if (sourceLine.ending && ++lineCount > MAX_COLLECT_LINES) {
+      throw new Error(`File too large: >${MAX_COLLECT_LINES} lines`);
+    }
+
+    const detected = detectCollectorSection(rawLine, sourceLine.start === 0);
+    if (detected !== null) {
+      section = detected;
+      continue;
+    }
+
+    if (section === "styles") {
+      if (/^\s*format:/i.test(rawLine)) {
+        styleColumns = parseStyleColumns(rawLine);
+      } else if (/^\s*style:/i.test(rawLine)) {
+        const fields = rawLine.slice(rawLine.indexOf(":") + 1).split(",", MAX_COLLECT_FIELDS + 1);
+        if (fields.length > MAX_COLLECT_FIELDS) {
+          throw new Error(
+            `ASS/SSA Style line has too many fields: ${fields.length} (max ${MAX_COLLECT_FIELDS})`
+          );
+        }
+        const rawName =
+          styleColumns.nameIdx >= 0 ? (fields[styleColumns.nameIdx]?.trim() ?? "") : "";
+        const styleName = rawName.replace(/^\*+/u, "");
+        if (!styleName) continue;
+        const rawFont =
+          styleColumns.fontnameIdx >= 0 ? (fields[styleColumns.fontnameIdx]?.trim() ?? "") : "";
+        const family = sanitizeFamily(normalizeFamily(rawFont || "Arial")) || "Arial";
+        const rawBold =
+          styleColumns.boldIdx >= 0 ? (fields[styleColumns.boldIdx]?.trim() ?? "0") : "0";
+        const rawItalic =
+          styleColumns.italicIdx >= 0 ? (fields[styleColumns.italicIdx]?.trim() ?? "0") : "0";
+        styleMap.set(styleName, {
+          family,
+          bold: (Number.parseInt(rawBold, 10) || 0) !== 0,
+          italic: (Number.parseInt(rawItalic, 10) || 0) !== 0,
+        });
+      }
+    } else if (section === "events") {
+      if (/^\s*format:/i.test(rawLine)) {
+        eventColumns = parseEventColumns(rawLine);
+      } else if (/^\s*dialogue:/i.test(rawLine)) {
+        const extracted = extractDialogueStyleAndText(rawLine, eventColumns);
+        if (!extracted) continue;
+        const baseStyle = resolveDialogueBaseStyle(extracted.rawStyle, styleMap);
+        processDialogueText(extracted.rawText, baseStyle, styleMap, recordChars);
+      }
+    }
+  }
+
+  return Array.from(usageMap.values());
+}
+
+export function collectFontsWithParser(assContent: string, parser: AssParseFunction): FontUsage[] {
+  const parsed = parser(assContent);
+  if (!parsed) {
+    throw new Error("Failed to parse ASS file");
+  }
+
+  const styleMap = new Map<string, FontKey>();
+  if (parsed.styles?.style) {
+    for (const style of parsed.styles.style) {
+      const family = sanitizeFamily(normalizeFamily(style.Fontname || "Arial"));
+      const styleName = (style.Name ?? "").replace(/^\*+/u, "");
+      if (!styleName) continue;
+      styleMap.set(styleName, {
+        family: family || "Arial",
+        bold: (Number.parseInt(style.Bold || "0", 10) || 0) !== 0,
+        italic: (Number.parseInt(style.Italic || "0", 10) || 0) !== 0,
+      });
+    }
+  }
+
+  const { usageMap, recordChars } = createUsageAccumulator();
   if (parsed.events?.dialogue) {
     for (const dialogue of parsed.events.dialogue) {
-      const rawStyleName = dialogue.Style || "Default";
-      // Event styles use libass's common lookup: leading `*` characters are ignored,
-      // and every case variant of "default" resolves to exact `Default`.
-      // `\rNamed` deliberately uses the strict lookup in applyOverrideTags.
-      const unstarredStyleName = rawStyleName.replace(/^\*+/u, "");
-      const styleName =
-        unstarredStyleName.toLowerCase() === "default" ? "Default" : unstarredStyleName;
-      // libass resolves an event's missing/unknown style to the track's exact
-      // `Default` style. Arial is only a synthetic last resort for malformed
-      // tracks that define neither the requested style nor `Default`.
-      const baseStyle: FontKey = styleMap.get(styleName) ??
-        styleMap.get("Default") ?? {
-          family: "Arial",
-          bold: false,
-          italic: false,
-        };
+      const baseStyle = resolveDialogueBaseStyle(dialogue.Style || "Default", styleMap);
       const rawText: string = dialogue.Text?.raw ?? "";
       processDialogueText(rawText, baseStyle, styleMap, recordChars);
     }

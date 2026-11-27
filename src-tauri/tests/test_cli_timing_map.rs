@@ -9,6 +9,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod common;
+use common::TestTempDir;
+
 const FIXTURE_SRT: &str = concat!(
     "1\n",
     "00:00:01,000 --> 00:00:02,000\n",
@@ -24,21 +27,8 @@ fn cli_path() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_ssahdrify-cli"))
 }
 
-fn temp_dir(label: &str) -> PathBuf {
-    static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let pid = std::process::id();
-    let nano = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let seq = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let base = std::env::temp_dir();
-    fs::create_dir_all(&base).expect("failed to ensure OS temp dir");
-    let dir = base.join(format!(
-        "ssahdrify-cli-timing-map-{label}-{pid}-{nano}-{seq}"
-    ));
-    fs::create_dir(&dir).expect("failed to create unique test temp dir");
-    dir
+fn temp_dir(label: &str) -> TestTempDir {
+    TestTempDir::new("ssahdrify-cli-timing-map", label)
 }
 
 fn write_fixture(dir: &Path, name: &str) -> PathBuf {

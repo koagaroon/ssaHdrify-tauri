@@ -3,10 +3,11 @@ import { OUTPUT_PRESETS } from "./output-naming";
 import { MIN_BRIGHTNESS, MAX_BRIGHTNESS, type Eotf } from "./color-engine";
 import NumberInput from "../../lib/NumberInput";
 import NitViz from "./NitViz";
-import { parseHdrStyleNumberInput, type HdrFpsMode } from "./hdr-style-ui-state";
+import { type HdrFpsMode } from "./hdr-style-ui-state";
 import { LogPanel } from "../../lib/LogPanel";
 import { DropErrorBanner } from "../../lib/DropErrorBanner";
-import { useHdrConvertController } from "./useHdrConvertController";
+import { renderSubtitleFileStrip } from "../../lib/subtitle-file-strip";
+import { COMMON_FONTS, useHdrConvertController } from "./useHdrConvertController";
 
 /** Convert ASS color "&H00BBGGRR" to HTML "#RRGGBB" */
 function assColorToHex(assColor: string): string {
@@ -23,33 +24,6 @@ function hexToAssColor(htmlHex: string): string {
   const b = parseInt(hex.slice(4, 6), 16);
   return formatAssColor(r, g, b, "00");
 }
-
-// Common Windows fonts and optional subtitle-font presets.
-const COMMON_FONTS = [
-  "Arial",
-  "Arial Black",
-  "Calibri",
-  "Cambria",
-  "Comic Sans MS",
-  "Consolas",
-  "Courier New",
-  "Georgia",
-  "Impact",
-  "Lucida Console",
-  "Microsoft YaHei",
-  "PingFang SC",
-  "Segoe UI",
-  "Tahoma",
-  "Times New Roman",
-  "Trebuchet MS",
-  "Verdana",
-  "Noto Sans",
-  "Noto Sans CJK SC",
-  "Noto Serif",
-  "Source Han Sans",
-  "Source Han Serif",
-];
-const COMMON_FONTS_SET = new Set(COMMON_FONTS);
 
 export default function HdrConvert() {
   const {
@@ -71,6 +45,18 @@ export default function HdrConvert() {
     setShowStylePanel,
     style,
     setStyle,
+    isCustomFont,
+    handleFontSelectChange,
+    handleCustomFontNameChange,
+    fontSizeText,
+    fontSizeInvalid,
+    handleFontSizeChange,
+    outlineWidthText,
+    outlineWidthInvalid,
+    handleOutlineWidthChange,
+    shadowDepthText,
+    shadowDepthInvalid,
+    handleShadowDepthChange,
     fpsMode,
     setFpsMode,
     fpsText,
@@ -98,155 +84,55 @@ export default function HdrConvert() {
   return (
     <div className="space-y-4">
       {/* ── File strip — always visible; filename + clear + Select button ── */}
-      <div
-        ref={dropZoneRef}
-        className={`drop-zone flex items-center gap-2${dropActive ? " drop-active" : ""}`}
-      >
-        <div ref={fileContainerRef} className="flex-1 min-w-0" style={{ position: "relative" }}>
-          {hdrFiles && hdrFiles.filePaths.length > 1 ? (
+      {renderSubtitleFileStrip({
+        dropZoneRef,
+        fileContainerRef,
+        dropActive,
+        filePaths: hdrFiles?.filePaths ?? [],
+        fileNames: hdrFiles?.fileNames ?? [],
+        showFileList,
+        onToggleFileList: () => setShowFileList((v) => !v),
+        emptyLabel: t("file_empty"),
+        selectedTitle: t("files_selected_title", hdrFiles?.filePaths.length ?? 0),
+        clearTitle: t("btn_clear_file"),
+        selectLabel: t("btn_select_files"),
+        clearDisabled: processing,
+        selectDisabled: processing,
+        onClearFiles: handleClearFiles,
+        onSelectFiles: handleSelectFiles,
+        trailingActions: (
+          <>
+            {processing && (
+              <button
+                type="button"
+                onClick={requestCancel}
+                className="flex-none px-4 rounded-lg text-sm transition-colors"
+                style={{
+                  background: "var(--cancel-bg)",
+                  color: "var(--cancel-text)",
+                  height: "38px",
+                }}
+              >
+                {t("btn_cancel")}
+              </button>
+            )}
             <button
               type="button"
-              onClick={() => setShowFileList((v) => !v)}
-              className="w-full flex items-center gap-2 px-3 rounded-lg text-sm"
+              onClick={handleConvert}
+              disabled={convertDisabled}
+              className="flex-none px-6 rounded-lg font-medium text-sm transition-colors"
               style={{
-                background: "var(--bg-panel)",
-                border: "1px solid var(--border-light)",
-                minHeight: "38px",
-                color: "var(--text-primary)",
-                textAlign: "left",
-                cursor: "pointer",
+                background: convertDisabled ? "var(--bg-input)" : "var(--accent)",
+                color: convertDisabled ? "var(--text-muted)" : "var(--accent-text)",
+                height: "38px",
+                minWidth: "120px",
               }}
-              aria-expanded={showFileList}
-              aria-haspopup="listbox"
             >
-              <span className="truncate flex-1">{hdrFiles.fileNames.join(", ")}</span>
-              <span className="flex-none text-xs" style={{ color: "var(--text-muted)" }}>
-                ({hdrFiles.filePaths.length})
-              </span>
-              <span className="flex-none text-xs" style={{ color: "var(--text-muted)" }}>
-                {showFileList ? "▲" : "▼"}
-              </span>
+              {processing ? t("btn_converting") : t("btn_convert")}
             </button>
-          ) : (
-            <div
-              className="flex items-center gap-2 px-3 rounded-lg text-sm"
-              style={{
-                background: hdrFiles ? "var(--bg-panel)" : "var(--bg-input)",
-                border: "1px solid var(--border-light)",
-                minHeight: "38px",
-              }}
-            >
-              {hdrFiles ? (
-                <span className="truncate flex-1" style={{ color: "var(--text-primary)" }}>
-                  {hdrFiles.fileNames[0]}
-                </span>
-              ) : (
-                <span className="italic" style={{ color: "var(--text-muted)" }}>
-                  {t("file_empty")}
-                </span>
-              )}
-            </div>
-          )}
-
-          {showFileList && hdrFiles && hdrFiles.filePaths.length > 1 && (
-            <div
-              className="absolute rounded-lg overflow-hidden flex flex-col"
-              style={{
-                top: "100%",
-                left: 0,
-                right: 0,
-                marginTop: "4px",
-                background: "var(--bg-panel)",
-                border: "1px solid var(--border)",
-                boxShadow: "var(--shadow-popover)",
-                maxHeight: "190px",
-                zIndex: 20,
-              }}
-              role="listbox"
-            >
-              <div
-                className="px-3 py-2 flex-none"
-                style={{ borderBottom: "1px solid var(--border)" }}
-              >
-                <span className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>
-                  {t("files_selected_title", hdrFiles.filePaths.length)}
-                </span>
-              </div>
-              <div className="overflow-y-auto flex-1">
-                {hdrFiles.fileNames.map((name, idx) => (
-                  <div
-                    key={idx}
-                    className="px-3 py-2 text-sm truncate"
-                    style={{
-                      color: "var(--text-primary)",
-                      borderBottom:
-                        idx < hdrFiles.fileNames.length - 1
-                          ? "1px solid color-mix(in srgb, var(--border) 50%, transparent)"
-                          : "none",
-                    }}
-                    title={hdrFiles.filePaths[idx]}
-                  >
-                    {name}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-        {hdrFiles && (
-          <button
-            onClick={handleClearFiles}
-            disabled={processing}
-            className="flex-none px-3 rounded-lg text-lg font-bold transition-colors"
-            style={{
-              background: processing ? "var(--bg-input)" : "var(--cancel-bg)",
-              color: processing ? "var(--text-muted)" : "var(--cancel-text)",
-              height: "38px",
-            }}
-            title={t("btn_clear_file")}
-          >
-            ✕
-          </button>
-        )}
-        <button
-          onClick={handleSelectFiles}
-          disabled={processing}
-          className="flex-none px-5 rounded-lg font-medium text-sm transition-colors"
-          style={{
-            background: processing ? "var(--bg-input)" : "var(--accent)",
-            color: processing ? "var(--text-muted)" : "var(--accent-text)",
-            height: "38px",
-          }}
-        >
-          {t("btn_select_files")}
-        </button>
-        {processing && (
-          <button
-            onClick={requestCancel}
-            className="flex-none px-4 rounded-lg text-sm transition-colors"
-            style={{
-              background: "var(--cancel-bg)",
-              color: "var(--cancel-text)",
-              height: "38px",
-            }}
-          >
-            {t("btn_cancel")}
-          </button>
-        )}
-        <button
-          onClick={handleConvert}
-          disabled={convertDisabled}
-          className="flex-none px-6 rounded-lg font-medium text-sm transition-colors"
-          style={{
-            background: convertDisabled ? "var(--bg-input)" : "var(--accent)",
-            color: convertDisabled ? "var(--text-muted)" : "var(--accent-text)",
-            height: "38px",
-            minWidth: "120px",
-          }}
-        >
-          {processing ? t("btn_converting") : t("btn_convert")}
-        </button>
-      </div>
+          </>
+        ),
+      })}
 
       {/* Selection-rejected banner */}
       <DropErrorBanner message={dropError} onDismiss={() => setDropError(null)} />
@@ -408,19 +294,19 @@ export default function HdrConvert() {
         {showStylePanel && (
           <div className="px-4 pb-4 grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs mb-1" style={{ color: "var(--text-muted)" }}>
+              <label
+                htmlFor="hdr-style-font"
+                className="block text-xs mb-1"
+                style={{ color: "var(--text-muted)" }}
+              >
                 {t("style_font")}
               </label>
               <select
-                value={COMMON_FONTS_SET.has(style.fontName) ? style.fontName : "__custom"}
-                onChange={(e) => {
-                  setStyle({
-                    ...style,
-                    fontName: e.target.value === "__custom" ? "" : e.target.value,
-                  });
-                }}
+                id="hdr-style-font"
+                value={isCustomFont ? "__custom" : style.fontName}
+                onChange={(e) => handleFontSelectChange(e.target.value)}
                 disabled={processing}
-                className="w-full px-2 py-1.5 rounded text-sm"
+                className="w-full px-2 py-1.5 rounded text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
                 style={{
                   background: "var(--bg-input)",
                   border: "1px solid var(--border)",
@@ -434,14 +320,16 @@ export default function HdrConvert() {
                 ))}
                 <option value="__custom">{t("style_font_custom")}</option>
               </select>
-              {!COMMON_FONTS_SET.has(style.fontName) && (
+              {isCustomFont && (
                 <input
+                  id="hdr-style-custom-font"
                   type="text"
                   value={style.fontName}
-                  onChange={(e) => setStyle({ ...style, fontName: e.target.value })}
+                  onChange={(e) => handleCustomFontNameChange(e.target.value)}
                   placeholder={t("style_font_placeholder")}
+                  aria-label={t("style_font_placeholder")}
                   disabled={processing}
-                  className="w-full mt-1.5 px-2 py-1.5 rounded text-sm"
+                  className="w-full mt-1.5 px-2 py-1.5 rounded text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
                   style={{
                     background: "var(--bg-input)",
                     border: "1px solid var(--border)",
@@ -451,32 +339,40 @@ export default function HdrConvert() {
               )}
             </div>
             <div>
-              <label className="block text-xs mb-1" style={{ color: "var(--text-muted)" }}>
+              <label
+                htmlFor="hdr-style-size"
+                className="block text-xs mb-1"
+                style={{ color: "var(--text-muted)" }}
+              >
                 {t("style_size")}
               </label>
               <NumberInput
-                value={style.fontSize}
-                onChange={(v) => {
-                  const n = parseHdrStyleNumberInput(v, 1, 200);
-                  if (n !== null) setStyle({ ...style, fontSize: n });
-                }}
+                id="hdr-style-size"
+                value={fontSizeText}
+                onChange={handleFontSizeChange}
                 min={1}
                 max={200}
                 disabled={processing}
+                invalid={fontSizeInvalid}
               />
             </div>
             <div>
-              <label className="block text-xs mb-1" style={{ color: "var(--text-muted)" }}>
+              <label
+                htmlFor="hdr-style-primary-color"
+                className="block text-xs mb-1"
+                style={{ color: "var(--text-muted)" }}
+              >
                 {t("style_primary_color")}
               </label>
               <input
+                id="hdr-style-primary-color"
                 type="color"
                 value={assColorToHex(style.primaryColor)}
                 onChange={(e) =>
                   setStyle({ ...style, primaryColor: hexToAssColor(e.target.value) })
                 }
                 disabled={processing}
-                className="w-full h-8 rounded cursor-pointer"
+                className="w-full h-8 rounded cursor-pointer focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
                 style={{
                   background: "var(--bg-input)",
                   border: "1px solid var(--border)",
@@ -484,17 +380,22 @@ export default function HdrConvert() {
               />
             </div>
             <div>
-              <label className="block text-xs mb-1" style={{ color: "var(--text-muted)" }}>
+              <label
+                htmlFor="hdr-style-outline-color"
+                className="block text-xs mb-1"
+                style={{ color: "var(--text-muted)" }}
+              >
                 {t("style_outline_color")}
               </label>
               <input
+                id="hdr-style-outline-color"
                 type="color"
                 value={assColorToHex(style.outlineColor)}
                 onChange={(e) =>
                   setStyle({ ...style, outlineColor: hexToAssColor(e.target.value) })
                 }
                 disabled={processing}
-                className="w-full h-8 rounded cursor-pointer"
+                className="w-full h-8 rounded cursor-pointer focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
                 style={{
                   background: "var(--bg-input)",
                   border: "1px solid var(--border)",
@@ -502,35 +403,41 @@ export default function HdrConvert() {
               />
             </div>
             <div>
-              <label className="block text-xs mb-1" style={{ color: "var(--text-muted)" }}>
+              <label
+                htmlFor="hdr-style-outline-width"
+                className="block text-xs mb-1"
+                style={{ color: "var(--text-muted)" }}
+              >
                 {t("style_outline_width")}
               </label>
               <NumberInput
-                value={style.outlineWidth}
-                onChange={(v) => {
-                  const n = parseHdrStyleNumberInput(v, 0, 20);
-                  if (n !== null) setStyle({ ...style, outlineWidth: n });
-                }}
+                id="hdr-style-outline-width"
+                value={outlineWidthText}
+                onChange={handleOutlineWidthChange}
                 min={0}
                 max={20}
                 step="0.5"
                 disabled={processing}
+                invalid={outlineWidthInvalid}
               />
             </div>
             <div>
-              <label className="block text-xs mb-1" style={{ color: "var(--text-muted)" }}>
+              <label
+                htmlFor="hdr-style-shadow-depth"
+                className="block text-xs mb-1"
+                style={{ color: "var(--text-muted)" }}
+              >
                 {t("style_shadow_depth")}
               </label>
               <NumberInput
-                value={style.shadowDepth}
-                onChange={(v) => {
-                  const n = parseHdrStyleNumberInput(v, 0, 20);
-                  if (n !== null) setStyle({ ...style, shadowDepth: n });
-                }}
+                id="hdr-style-shadow-depth"
+                value={shadowDepthText}
+                onChange={handleShadowDepthChange}
                 min={0}
                 max={20}
                 step="0.5"
                 disabled={processing}
+                invalid={shadowDepthInvalid}
               />
             </div>
             <div>

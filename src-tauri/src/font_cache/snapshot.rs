@@ -424,6 +424,56 @@ pub(super) fn validate_source_snapshot_shape(
     Ok(())
 }
 
+/// Live metadata inspection across persisted cache sources. Shared by the GUI's
+/// three-phase drift check/rescan and the CLI's read-only drift check.
+#[derive(Debug, Clone, Default)]
+pub struct LiveSourceInspection {
+    pub snapshots: Vec<CacheSourceSnapshot>,
+    /// Sources that still exist as real directories on disk (either with an
+    /// unreadable nested entry OR under a different NTFS canonical case
+    /// spelling) and must therefore be reported as `modified`, never `added`
+    /// or `removed`.
+    pub force_modified: Vec<CacheSourceKey>,
+}
+
+pub fn inspect_cached_sources_live(cached_sources: &[CacheSourceRecord]) -> LiveSourceInspection {
+    let mut snapshots = Vec::with_capacity(cached_sources.len());
+    let mut force_modified = Vec::new();
+    for source in cached_sources {
+        match snapshot_source_directories(Path::new(&source.source_root), source.scope) {
+            Ok(snapshot) if snapshot.source_root == source.source_root => {
+                snapshots.push(snapshot);
+            }
+            Ok(_renamed_snapshot) => {
+                force_modified.push(source.key());
+            }
+            Err(_) => {
+                let root = Path::new(&source.source_root);
+                let is_clean_real_directory =
+                    matches!(crate::util::try_is_reparse_point(root), Ok(false))
+                        && std::fs::symlink_metadata(root).is_ok_and(|metadata| metadata.is_dir());
+                if is_clean_real_directory {
+                    force_modified.push(source.key());
+                }
+            }
+        }
+    }
+    LiveSourceInspection {
+        snapshots,
+        force_modified,
+    }
+}
+
+pub fn apply_live_source_inspection(report: &mut DriftReport, inspection: &LiveSourceInspection) {
+    for key in &inspection.force_modified {
+        report.removed.retain(|removed| removed != key);
+        if !report.modified.contains(key) {
+            report.modified.push(key.clone());
+        }
+    }
+    report.modified.sort();
+}
+
 /// Re-stat a completed scan before publication. This closes the window where
 /// files or nested directories change between traversal and the SQLite write;
 /// partial or already-stale scan output is never promoted into the cache.

@@ -7,11 +7,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::thread;
-use std::time::Duration;
 
 mod common;
-use common::make_real_font_dir as make_font_dir;
+use common::{backdate_modified_seconds, make_real_font_dir as make_font_dir, TestTempDir};
 
 const MISSING_FONT_ASS: &str = concat!(
     "[Script Info]\n",
@@ -41,21 +39,8 @@ fn cli_path() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_ssahdrify-cli"))
 }
 
-fn temp_dir(label: &str) -> PathBuf {
-    static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let pid = std::process::id();
-    let nano = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let seq = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let base = std::env::temp_dir();
-    fs::create_dir_all(&base).expect("failed to ensure OS temp dir");
-    let dir = base.join(format!(
-        "ssahdrify-cli-diagnostics-{label}-{pid}-{nano}-{seq}"
-    ));
-    fs::create_dir(&dir).expect("failed to create unique test temp dir");
-    dir
+fn temp_dir(label: &str) -> TestTempDir {
+    TestTempDir::new("ssahdrify-cli-diagnostics", label)
 }
 
 fn write_missing_font_ass(dir: &Path) -> PathBuf {
@@ -502,6 +487,7 @@ fn diagnose_fonts_does_not_mutate_cache_file() {
         "refresh-fonts should create cache: stderr={}",
         String::from_utf8_lossy(&refresh.stderr)
     );
+    backdate_modified_seconds(&cache, 10);
     let before = fs::metadata(&cache)
         .expect("cache metadata before diagnose")
         .modified()
@@ -510,9 +496,6 @@ fn diagnose_fonts_does_not_mutate_cache_file() {
     let before_shm = sqlite_sidecar_path(&cache, "-shm");
     let before_wal_modified = optional_modified(&before_wal);
     let before_shm_modified = optional_modified(&before_shm);
-    // Some supported filesystems expose only 1-2 second mtime resolution.
-    // Match the cache integration suite's stable cross-filesystem interval.
-    thread::sleep(Duration::from_millis(2100));
 
     let diagnose = run_cli(&[
         "--lang",

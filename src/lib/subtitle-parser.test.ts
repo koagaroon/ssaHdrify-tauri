@@ -968,4 +968,28 @@ describe("ASS declared event formats", () => {
     fields.splice(2, 0, "Extra");
     expect(() => parseSubtitle(header + `Format: ${fields.join(",")}`)).toThrow(/too many fields/);
   });
+
+  it("does not misclassify SRT or MicroDVD cues containing a mid-file WEBVTT line", () => {
+    const srtWithWebvttCue = "1\n00:00:01,000 --> 00:00:02,000\nWEBVTT in dialogue\n";
+    const shifted = shiftSubtitle(srtWithWebvttCue, 1000);
+    expect(shifted.format).toBe("srt");
+    expect(shifted.shifted[0]!.start).toBe(2000);
+  });
+
+  it("round-trips WebVTT files without a blank line after WEBVTT and with UTF-8 BOM", () => {
+    const compactVtt = "\uFEFFWEBVTT\r\n00:00:01.000 --> 00:00:02.000\r\nHello\r\n";
+    const shifted = shiftSubtitle(compactVtt, 500);
+    expect(shifted.format).toBe("vtt");
+    // parseSubtitle strips leading BOM at outer entry; shiftSubtitle rebuilds from `content`.
+    expect(shifted.output).toBe("\uFEFFWEBVTT\r\n00:00:01.500 --> 00:00:02.500\r\nHello\r\n");
+  });
+
+  it("preserves exact byte offsets when shifting BOM-prefixed ASS directly", () => {
+    const bomAss =
+      "\uFEFF[Script Info]\n[Events]\nFormat: Layer, Start, End, Text\nDialogue: 0,0:00:01.00,0:00:02.00,Hi\n";
+    const shifted = shiftSubtitle(bomAss, 1000);
+    expect(shifted.output).toBe(
+      "\uFEFF[Script Info]\n[Events]\nFormat: Layer, Start, End, Text\nDialogue: 0,0:00:02.00,0:00:03.00,Hi\n"
+    );
+  });
 });

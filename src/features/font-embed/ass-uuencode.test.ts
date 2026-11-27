@@ -20,6 +20,7 @@ import { describe, it, expect, vi } from "vitest";
 import {
   assUuencode,
   buildFontEntry,
+  decodeSubsetBase64,
   MAX_FONT_DATA_SIZE,
   FontSectionBuilder,
   fontEntryByteLength,
@@ -245,6 +246,23 @@ describe("cumulative encoded font output budget", () => {
     } as unknown as Uint8Array;
     expect(() => new FontSectionBuilder().add("large.ttf", unreadable)).toThrow(
       /encoded output limit/
+    );
+  });
+
+  it("disambiguates colliding fontname: headers case-insensitively within a [Fonts] section", () => {
+    const builder = new FontSectionBuilder();
+    builder.add("cn.ttf", makeData(3));
+    builder.add("CN.TTF", makeData(3));
+    builder.add("cn.ttf", makeData(3));
+    const built = builder.build();
+    expect(built).toContain("fontname: cn.ttf\n");
+    expect(built).toContain("fontname: CN_2.TTF\n");
+    expect(built).toContain("fontname: cn_3.ttf\n");
+  });
+
+  it("decodeSubsetBase64 scrubs BiDi controls from font names in error messages", () => {
+    expect(() => decodeSubsetBase64("not-valid!", "evil\u202ename.ttf")).toThrow(
+      /font subset 'evilname\.ttf'/
     );
   });
 });

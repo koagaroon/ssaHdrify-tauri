@@ -4,6 +4,7 @@ import { DropErrorBanner } from "../../lib/DropErrorBanner";
 import { LogPanel } from "../../lib/LogPanel";
 import NumberInput from "../../lib/NumberInput";
 import { PreviewTable, type PreviewTableColumn } from "../../lib/PreviewTable";
+import { renderSubtitleFileStrip } from "../../lib/subtitle-file-strip";
 import { STYLE_EDIT_MAX_FONT_SIZE, STYLE_EDIT_MIN_FONT_SIZE } from "./style-ui-state";
 import {
   familyErrorKey,
@@ -137,142 +138,57 @@ export default function StyleEdit() {
 
   return (
     <div className="space-y-4">
-      <div
-        ref={dropZoneRef}
-        className={`drop-zone flex items-center gap-2${dropActive ? " drop-active" : ""}`}
-      >
-        <div ref={fileContainerRef} className="flex-1 min-w-0" style={{ position: "relative" }}>
-          {fileCount > 1 ? (
+      {renderSubtitleFileStrip({
+        dropZoneRef,
+        fileContainerRef,
+        dropActive,
+        filePaths,
+        fileNames,
+        showFileList,
+        onToggleFileList: () => setShowFileList((open) => !open),
+        emptyLabel: t("file_empty"),
+        selectedTitle: t("files_selected_title", fileCount),
+        clearTitle: t("btn_clear_file"),
+        selectLabel: analyzing ? t("btn_analyzing") : t("btn_select_files"),
+        clearDisabled: analyzing || writing,
+        selectDisabled: analyzing || writing,
+        onClearFiles: handleClearFiles,
+        onSelectFiles: handlePickFiles,
+        trailingActions: (
+          <>
+            {writing && (
+              <button
+                type="button"
+                onClick={requestCancel}
+                className="flex-none px-4 rounded-lg text-sm"
+                style={{
+                  background: "var(--cancel-bg)",
+                  color: "var(--cancel-text)",
+                  height: "38px",
+                }}
+              >
+                {t("btn_cancel")}
+              </button>
+            )}
             <button
               type="button"
-              onClick={() => setShowFileList((open) => !open)}
-              className="w-full flex items-center gap-2 px-3 rounded-lg text-sm"
+              onClick={handleWrite}
+              disabled={writeDisabled}
+              className="flex-none px-6 rounded-lg font-medium text-sm transition-colors"
               style={{
-                background: "var(--bg-panel)",
-                border: "1px solid var(--border-light)",
-                minHeight: "38px",
-                color: "var(--text-primary)",
-                textAlign: "left",
+                background: writeDisabled ? "var(--accent-disabled-bg)" : "var(--accent)",
+                color: writeDisabled ? "var(--accent-disabled-text)" : "var(--accent-text)",
+                height: "38px",
+                minWidth: "120px",
               }}
-              aria-expanded={showFileList}
-              aria-haspopup="listbox"
             >
-              <span className="truncate flex-1">{fileNames.join(", ")}</span>
-              <span className="flex-none text-xs" style={{ color: "var(--text-muted)" }}>
-                ({fileCount}) {showFileList ? "▲" : "▼"}
-              </span>
+              {writing
+                ? t("btn_writing_style_edits")
+                : t("btn_write_style_edits", effectiveSelectedCount)}
             </button>
-          ) : (
-            <div
-              className="flex items-center gap-2 px-3 rounded-lg text-sm"
-              style={{
-                background: fileCount ? "var(--bg-panel)" : "var(--bg-input)",
-                border: "1px solid var(--border-light)",
-                minHeight: "38px",
-              }}
-            >
-              <span
-                className={`${fileCount ? "truncate" : "italic"} flex-1`}
-                style={{ color: fileCount ? "var(--text-primary)" : "var(--text-muted)" }}
-              >
-                {fileNames[0] ?? t("file_empty")}
-              </span>
-            </div>
-          )}
-
-          {showFileList && fileCount > 1 && (
-            <div
-              className="absolute rounded-lg overflow-hidden flex flex-col"
-              style={{
-                top: "100%",
-                left: 0,
-                right: 0,
-                marginTop: "4px",
-                background: "var(--bg-panel)",
-                border: "1px solid var(--border)",
-                boxShadow: "var(--shadow-popover)",
-                maxHeight: "190px",
-                zIndex: 20,
-              }}
-              role="listbox"
-            >
-              <div className="px-3 py-2" style={{ borderBottom: "1px solid var(--border)" }}>
-                <span className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>
-                  {t("files_selected_title", fileCount)}
-                </span>
-              </div>
-              <div className="overflow-y-auto">
-                {fileNames.map((name, index) => (
-                  <div
-                    key={filePaths[index] ?? name}
-                    className="px-3 py-2 text-sm truncate"
-                    style={{ color: "var(--text-primary)" }}
-                    title={filePaths[index]}
-                  >
-                    {name}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {fileCount > 0 && (
-          <button
-            type="button"
-            onClick={handleClearFiles}
-            disabled={analyzing || writing}
-            className="flex-none px-3 rounded-lg text-lg font-bold transition-colors"
-            style={{
-              background: analyzing || writing ? "var(--bg-input)" : "var(--cancel-bg)",
-              color: analyzing || writing ? "var(--text-muted)" : "var(--cancel-text)",
-              height: "38px",
-            }}
-            title={t("btn_clear_file")}
-          >
-            ✕
-          </button>
-        )}
-        <button
-          type="button"
-          onClick={handlePickFiles}
-          disabled={analyzing || writing}
-          className="flex-none px-5 rounded-lg font-medium text-sm transition-colors"
-          style={{
-            background: analyzing || writing ? "var(--bg-input)" : "var(--accent)",
-            color: analyzing || writing ? "var(--text-muted)" : "var(--accent-text)",
-            height: "38px",
-          }}
-        >
-          {analyzing ? t("btn_analyzing") : t("btn_select_files")}
-        </button>
-        {writing && (
-          <button
-            type="button"
-            onClick={requestCancel}
-            className="flex-none px-4 rounded-lg text-sm"
-            style={{ background: "var(--cancel-bg)", color: "var(--cancel-text)", height: "38px" }}
-          >
-            {t("btn_cancel")}
-          </button>
-        )}
-        <button
-          type="button"
-          onClick={() => void handleWrite()}
-          disabled={writeDisabled}
-          className="flex-none px-6 rounded-lg font-medium text-sm transition-colors"
-          style={{
-            background: writeDisabled ? "var(--accent-disabled-bg)" : "var(--accent)",
-            color: writeDisabled ? "var(--accent-disabled-text)" : "var(--accent-text)",
-            height: "38px",
-            minWidth: "120px",
-          }}
-        >
-          {writing
-            ? t("btn_writing_style_edits")
-            : t("btn_write_style_edits", effectiveSelectedCount)}
-        </button>
-      </div>
+          </>
+        ),
+      })}
 
       <DropErrorBanner message={dropError} onDismiss={() => setDropError(null)} />
       {fileCount === 0 && !dropError && (

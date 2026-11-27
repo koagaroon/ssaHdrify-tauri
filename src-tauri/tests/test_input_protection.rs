@@ -1,24 +1,13 @@
 use std::fs;
-use std::path::PathBuf;
 use std::process::Command;
+
+mod common;
+use common::TestTempDir;
 
 const ASS: &str = include_str!("fixtures/utf8.ass");
 
-fn temp_dir(label: &str) -> PathBuf {
-    static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let seq = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let base = std::env::temp_dir();
-    fs::create_dir_all(&base).unwrap();
-    let path = base.join(format!(
-        "ssahdrify-input-protection-{label}-{}-{stamp}-{seq}",
-        std::process::id()
-    ));
-    fs::create_dir(&path).unwrap();
-    path
+fn temp_dir(label: &str) -> TestTempDir {
+    TestTempDir::new("ssahdrify-input-protection", label)
 }
 
 #[test]

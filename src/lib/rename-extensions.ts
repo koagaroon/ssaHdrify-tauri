@@ -99,7 +99,7 @@ function categorizeWithSubtitleSet(
   subtitleExts: ReadonlySet<string>
 ): RenameCategory {
   const dot = name.lastIndexOf(".");
-  if (dot < 0) return "unknown";
+  if (dot <= 0) return "unknown";
   const ext = name.slice(dot + 1).toLowerCase();
   if (VIDEO_EXTS.has(ext)) return "video";
   if (subtitleExts.has(ext)) return "subtitle";

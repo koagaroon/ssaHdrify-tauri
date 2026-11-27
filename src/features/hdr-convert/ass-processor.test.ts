@@ -340,7 +340,7 @@ describe("equivalent color representations", () => {
       "ScriptType: v4.00",
       "[V4 Styles]",
       "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, TertiaryColour, BackColour, Bold, Italic, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, AlphaLevel, Encoding",
-      `Style: Default,Arial,20,${color},${color},0,${color},0,0,1,2,0,2,10,10,10,0,1`,
+      `Style: Default,Arial,20,${color},${color},${color},${color},0,0,1,2,0,2,10,10,10,0,1`,
       "[Events]",
       "Format: Marked, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
       "Dialogue: Marked=0,0:00:01.00,0:00:02.00,Default,,0,0,0,,text",
@@ -367,5 +367,27 @@ describe("equivalent color representations", () => {
       const tag = `{\\c&H${hex}&}text`;
       expect(processAssContent(makeAss(tag))).toContain(tag);
     }
+  });
+
+  it("leaves non-color Style fields untouched when Format declares zero color columns", () => {
+    const minimal = [
+      "\uFEFF[Script Info]",
+      "ScriptType: v4.00+",
+      "[V4+ Styles]",
+      "Format: Name, Fontname, Fontsize, Bold, Italic",
+      "Style: Default,Arial,48,1,0",
+      "[Events]",
+      "Format: Layer, Start, End, Style, Text",
+      "Dialogue: 0,0:00:01.00,0:00:02.00,Default,Hi",
+    ].join("\n");
+    expect(processAssContent(minimal, 203, "PQ")).toBe(minimal);
+  });
+
+  it("rejects Style Format lines exceeding MAX_STYLE_FIELDS", () => {
+    const hugeFormat = `Format: ${Array.from({ length: 1025 }, (_, i) => `F${i}`).join(",")}`;
+    const bad = `[Script Info]\n[V4+ Styles]\n${hugeFormat}\n`;
+    expect(() => processAssContent(bad, 203, "PQ")).toThrow(
+      /Style Format line has too many fields/
+    );
   });
 });

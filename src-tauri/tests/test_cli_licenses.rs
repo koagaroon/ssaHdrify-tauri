@@ -4,21 +4,12 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::process::Command;
 
+mod common;
+use common::TestTempDir;
+
 #[test]
 fn licenses_prints_complete_embedded_notices_without_touching_cache_or_output_paths() {
-    static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let seq = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let base = std::env::temp_dir();
-    fs::create_dir_all(&base).unwrap();
-    let root = base.join(format!(
-        "ssahdrify-cli-licenses-{}-{stamp}-{seq}",
-        std::process::id()
-    ));
-    fs::create_dir(&root).unwrap();
+    let root = TestTempDir::new("ssahdrify-cli-licenses", "notices");
     let cache_path = root.join("missing-cache-directory/cache.sqlite3");
     let output_path = root.join("missing-output-directory");
     let output = Command::new(env!("CARGO_BIN_EXE_ssahdrify-cli"))
@@ -102,5 +93,28 @@ fn licenses_prints_complete_embedded_notices_without_touching_cache_or_output_pa
     assert!(!cache_path.exists());
     assert!(!output_path.exists());
     assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
-    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn licenses_rejects_json_and_dry_run_without_polluting_stdout() {
+    for (flag, expected) in [
+        ("--json", "licenses does not implement --json output"),
+        ("--dry-run", "licenses does not support --dry-run"),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_ssahdrify-cli"))
+            .args([flag, "licenses"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "flag={flag}");
+        assert!(
+            output.stdout.is_empty(),
+            "licenses {flag} must keep stdout empty: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(expected),
+            "expected '{expected}' in stderr, got: {stderr}"
+        );
+    }
 }

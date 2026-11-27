@@ -9,8 +9,12 @@
 
 use crate::dropzone::ExpandedPaths;
 use crate::encoding::ReadTextResult;
+use crate::font_cache::FontDirectoryScope;
 use crate::font_cache_commands::{CacheStatus, DriftReport, RescanResult};
-use crate::fonts::FontLookupResult;
+use crate::fonts::{
+    FontDirectoryScanCommandResult, FontDirectoryScanPreflight, FontLookupResult,
+    FontScanPreflight, ScanProgress,
+};
 
 async fn run_blocking_command<T, F>(command: &'static str, operation: F) -> Result<T, String>
 where
@@ -75,6 +79,65 @@ pub async fn subset_font_bytes(
     })
     .await?;
     Ok(tauri::ipc::Response::new(bytes))
+}
+
+#[tauri::command]
+pub async fn preflight_font_directory(
+    app: tauri::AppHandle,
+    dir: String,
+    scope: Option<FontDirectoryScope>,
+    scan_id: u64,
+) -> Result<FontDirectoryScanPreflight, String> {
+    let fs_scope = crate::fs_policy::app_fs_scope(&app)?;
+    crate::fonts::preflight_font_directory_with_policy(dir, scope, scan_id, move |p| {
+        fs_scope.is_allowed(p)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn preflight_font_files(
+    app: tauri::AppHandle,
+    paths: Vec<String>,
+) -> Result<FontScanPreflight, String> {
+    let fs_scope = crate::fs_policy::app_fs_scope(&app)?;
+    crate::fonts::preflight_font_files_with_policy(paths, move |p| fs_scope.is_allowed(p)).await
+}
+
+#[tauri::command]
+pub async fn scan_font_directory(
+    app: tauri::AppHandle,
+    dir: String,
+    progress: tauri::ipc::Channel<ScanProgress>,
+    scan_id: u64,
+    source_id: String,
+    scope: Option<FontDirectoryScope>,
+) -> Result<FontDirectoryScanCommandResult, String> {
+    let fs_scope = crate::fs_policy::app_fs_scope(&app)?;
+    crate::fonts::scan_font_directory_with_policy(
+        dir,
+        progress,
+        scan_id,
+        source_id,
+        scope,
+        move |p| fs_scope.is_allowed(p),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn scan_font_files(
+    app: tauri::AppHandle,
+    paths: Vec<String>,
+    progress: tauri::ipc::Channel<ScanProgress>,
+    scan_id: u64,
+    source_id: String,
+) -> Result<(), String> {
+    let fs_scope = crate::fs_policy::app_fs_scope(&app)?;
+    crate::fonts::scan_font_files_with_policy(paths, progress, scan_id, source_id, move |p| {
+        fs_scope.is_allowed(p)
+    })
+    .await
 }
 
 #[tauri::command]

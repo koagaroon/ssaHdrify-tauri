@@ -31,5 +31,7 @@ describe("parseFiniteNumberText", () => {
     expect(parseFiniteNumberText("1.")).toBe(1);
     expect(parseFiniteNumberText("1e3")).toBe(1000);
     expect(parseFiniteNumberText("-1.5e-2")).toBe(-0.015);
+    expect(Object.is(parseFiniteNumberText("-0"), 0)).toBe(true);
+    expect(Object.is(parseFiniteNumberText("-0.0"), 0)).toBe(true);
   });
 });

@@ -310,22 +310,30 @@ pub(super) fn path_under_dir(path: &str, dir: &str, sep: &str) -> bool {
 /// init plus the project's no-`set_var` policy instead, since adding Win32
 /// FFI for one path read is not justified at the current threat model
 /// (attacker would already need code execution to mutate env vars).
+pub(super) fn normalize_system_font_dir_path(base: &Path, suffix: &[&str]) -> String {
+    let joined = suffix
+        .iter()
+        .fold(base.to_path_buf(), |acc, component| acc.join(component));
+    let resolved = joined.canonicalize().unwrap_or(joined);
+    normalize_canonical_path(&resolved.to_string_lossy())
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_lowercase()
+}
+
 pub(super) static WINDOWS_SYSTEM_FONTS_DIR: Lazy<String> = Lazy::new(|| {
-    let sys_root = std::env::var("SYSTEMROOT")
-        .unwrap_or_else(|_| "C:\\Windows".to_string())
-        .to_ascii_lowercase()
-        .replace("/", "\\");
-    format!("{sys_root}\\fonts")
+    let sys_root = std::env::var("SYSTEMROOT").unwrap_or_else(|_| "C:\\Windows".to_string());
+    normalize_system_font_dir_path(Path::new(&sys_root), &["Fonts"])
 });
 
 /// Cached, normalized per-user fonts dir (Windows 10 1809+). `None` if
 /// `LOCALAPPDATA` was unset at startup. Same caching rationale as
 /// `WINDOWS_SYSTEM_FONTS_DIR`.
 pub(super) static WINDOWS_USER_FONTS_DIR: Lazy<Option<String>> = Lazy::new(|| {
-    std::env::var("LOCALAPPDATA").ok().map(|p| {
-        format!(
-            "{}\\microsoft\\windows\\fonts",
-            p.to_ascii_lowercase().replace("/", "\\")
+    std::env::var("LOCALAPPDATA").ok().map(|local_app_data| {
+        normalize_system_font_dir_path(
+            Path::new(&local_app_data),
+            &["Microsoft", "Windows", "Fonts"],
         )
     })
 });
@@ -341,8 +349,9 @@ pub fn init_system_dirs() {
 /// Check whether a canonicalized path is under a known system fonts directory.
 pub(super) fn is_in_system_fonts_dir(canonical: &Path) -> bool {
     let canonical_str = normalize_canonical_path(&canonical.to_string_lossy());
-    // Keep the same ASCII folding as the cached Windows directory paths.
-    let lower = canonical_str.to_ascii_lowercase().replace("/", "\\");
+    // Full Unicode lowercase matches `normalize_system_font_dir_path` so non-ASCII
+    // Windows user profile folders fold identically on both sides.
+    let lower = canonical_str.replace('/', "\\").to_lowercase();
     let under = |dir: &str| path_under_dir(&lower, dir, "\\");
 
     if under(&WINDOWS_SYSTEM_FONTS_DIR) {

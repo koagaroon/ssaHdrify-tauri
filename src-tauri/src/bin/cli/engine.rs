@@ -310,6 +310,23 @@ pub struct CliEngine {
     _task_runtime: tokio::runtime::Runtime,
 }
 
+pub(super) const REQUIRED_ENGINE_METHODS: &[&str] = &[
+    "convertHdr",
+    "convertShift",
+    "parseTimingMap",
+    "planFontEmbed",
+    "planFontDiagnostics",
+    "applyFontEmbed",
+    "planRename",
+    "runChain",
+    "resolveHdrOutputPath",
+    "resolveShiftOutputPath",
+    "resolveEmbedOutputPath",
+    "validateStyleEditCliOperations",
+    "resolveStyleEditOutputPath",
+    "applyCliStyleEdit",
+];
+
 impl CliEngine {
     pub fn new() -> Result<Self, String> {
         let task_runtime = tokio::runtime::Builder::new_multi_thread()
@@ -331,7 +348,7 @@ impl CliEngine {
         // become available here. Re-audit `RuntimeOptions`'s field
         // list on every deno_core bump alongside the API-binding
         // audit pinned in Cargo.toml's deno_core pin WHY.
-        // In 0.411, both residual lazy-source tables default to empty,
+        // In 0.413, both residual lazy-source tables default to empty,
         // and the default module loader remains capability-free.
         let mut runtime = JsRuntime::new(RuntimeOptions {
             extensions: vec![],
@@ -339,46 +356,42 @@ impl CliEngine {
         });
         drop(task_runtime_guard);
 
+        // Silence V8's default console binding so shared TS library
+        // calls (`console.debug` / `console.warn` / `console.log`) can
+        // never write directly to stdout (corrupting `--json`) or
+        // bypass `--quiet` on stderr. Structured diagnostics return as
+        // typed `warnings` / `notes` fields instead.
+        runtime
+            .execute_script(
+                "ssahdrify-cli-console-guard.js",
+                "if (typeof globalThis.console === 'object' && globalThis.console !== null) {\
+                    const noop = () => {};\
+                    globalThis.console.log = noop;\
+                    globalThis.console.info = noop;\
+                    globalThis.console.debug = noop;\
+                    globalThis.console.warn = noop;\
+                    globalThis.console.error = noop;\
+                 }",
+            )
+            .map_err(|err| format!("failed to configure CLI engine console guard: {err}"))?;
+
         runtime
             .execute_script("ssahdrify-cli-engine.js", ENGINE_SOURCE)
             .map_err(|err| format!("failed to initialize CLI engine: {err}"))?;
 
-        // Probe that the bundle wired up the expected global. A
-        // 0-byte or syntactically-valid-but-empty engine.js executes
-        // without error but leaves the global undefined; per-method
-        // calls then fail with the unhelpful "Cannot read properties
-        // of undefined (reading 'convertHdr')". Surfacing a build-step
-        // pointer here is more useful.
-        //
-        // The probe verifies all wired engine methods, not just
-        // `convertHdr`. An earlier bare object-non-null check passed
-        // an empty `globalThis.ssaHdrifyCliEngine = {}`; a
-        // single-method check ruled out the empty-object case; the
-        // current full-method probe ensures a bundle that defines
-        // `convertHdr` but is missing (e.g.) `runChain` due to a
-        // build-script regression surfaces at engine startup instead
-        // of mid-run inside the chain loop. Cost: a handful of `typeof`
-        // checks at process start, each O(1) global property lookup.
+        // Probe that the bundle wired up every expected engine method.
+        let mut probe_checks = vec![
+            "typeof globalThis.ssaHdrifyCliEngine === 'object'".to_string(),
+            "globalThis.ssaHdrifyCliEngine !== null".to_string(),
+        ];
+        for method in REQUIRED_ENGINE_METHODS {
+            probe_checks.push(format!(
+                "typeof globalThis.ssaHdrifyCliEngine.{method} === 'function'"
+            ));
+        }
+        let probe_source = probe_checks.join(" && ");
         let probe = runtime
-            .execute_script(
-                "ssahdrify-cli-engine-probe.js",
-                "typeof globalThis.ssaHdrifyCliEngine === 'object' && \
-                 globalThis.ssaHdrifyCliEngine !== null && \
-                 typeof globalThis.ssaHdrifyCliEngine.convertHdr === 'function' && \
-                 typeof globalThis.ssaHdrifyCliEngine.convertShift === 'function' && \
-                 typeof globalThis.ssaHdrifyCliEngine.parseTimingMap === 'function' && \
-                 typeof globalThis.ssaHdrifyCliEngine.planFontEmbed === 'function' && \
-                 typeof globalThis.ssaHdrifyCliEngine.planFontDiagnostics === 'function' && \
-                 typeof globalThis.ssaHdrifyCliEngine.applyFontEmbed === 'function' && \
-                 typeof globalThis.ssaHdrifyCliEngine.planRename === 'function' && \
-                 typeof globalThis.ssaHdrifyCliEngine.runChain === 'function' && \
-                 typeof globalThis.ssaHdrifyCliEngine.resolveHdrOutputPath === 'function' && \
-                 typeof globalThis.ssaHdrifyCliEngine.resolveShiftOutputPath === 'function' && \
-                 typeof globalThis.ssaHdrifyCliEngine.resolveEmbedOutputPath === 'function' && \
-                 typeof globalThis.ssaHdrifyCliEngine.validateStyleEditCliOperations === 'function' && \
-                 typeof globalThis.ssaHdrifyCliEngine.resolveStyleEditOutputPath === 'function' && \
-                 typeof globalThis.ssaHdrifyCliEngine.applyCliStyleEdit === 'function'",
-            )
+            .execute_script("ssahdrify-cli-engine-probe.js", probe_source)
             .map_err(|err| format!("failed to probe CLI engine global: {err}"))?;
         let probe_ok = {
             deno_core::scope!(scope, &mut runtime);
@@ -402,23 +415,11 @@ impl CliEngine {
         &mut self,
         request: &HdrConversionRequest,
     ) -> Result<HdrConversionResult, String> {
-        self.call_engine(
-            "convertHdr",
-            "ssahdrify-cli-convert-hdr.js",
-            "HDR",
-            "conversion",
-            request,
-        )
+        self.call_engine("convertHdr", "HDR", "conversion", request)
     }
 
     pub fn resolve_hdr_output_path(&mut self, request: &HdrPathRequest) -> Result<String, String> {
-        self.call_engine(
-            "resolveHdrOutputPath",
-            "ssahdrify-cli-resolve-hdr-output-path.js",
-            "HDR",
-            "path resolution",
-            request,
-        )
+        self.call_engine("resolveHdrOutputPath", "HDR", "path resolution", request)
     }
 
     pub fn resolve_shift_output_path(
@@ -427,7 +428,6 @@ impl CliEngine {
     ) -> Result<String, String> {
         self.call_engine(
             "resolveShiftOutputPath",
-            "ssahdrify-cli-resolve-shift-output-path.js",
             "Time Shift",
             "path resolution",
             request,
@@ -440,7 +440,6 @@ impl CliEngine {
     ) -> Result<String, String> {
         self.call_engine(
             "resolveEmbedOutputPath",
-            "ssahdrify-cli-resolve-embed-output-path.js",
             "Font Embed",
             "path resolution",
             request,
@@ -451,85 +450,43 @@ impl CliEngine {
         &mut self,
         request: &ShiftConversionRequest,
     ) -> Result<ShiftConversionResult, String> {
-        self.call_engine(
-            "convertShift",
-            "ssahdrify-cli-convert-shift.js",
-            "Time Shift",
-            "conversion",
-            request,
-        )
+        self.call_engine("convertShift", "Time Shift", "conversion", request)
     }
 
     pub fn parse_timing_map(
         &mut self,
         request: &TimingMapParseRequest,
     ) -> Result<TimingMapParseResult, String> {
-        self.call_engine(
-            "parseTimingMap",
-            "ssahdrify-cli-parse-timing-map.js",
-            "Timing map",
-            "parse",
-            request,
-        )
+        self.call_engine("parseTimingMap", "Timing map", "parse", request)
     }
 
     pub fn plan_rename(&mut self, request: &RenamePlanRequest) -> Result<RenamePlanResult, String> {
-        self.call_engine(
-            "planRename",
-            "ssahdrify-cli-plan-rename.js",
-            "Batch Rename",
-            "plan",
-            request,
-        )
+        self.call_engine("planRename", "Batch Rename", "plan", request)
     }
 
     pub fn plan_font_embed(
         &mut self,
         request: &FontEmbedPlanRequest,
     ) -> Result<FontEmbedPlanResult, String> {
-        self.call_engine(
-            "planFontEmbed",
-            "ssahdrify-cli-plan-font-embed.js",
-            "Font Embed",
-            "plan",
-            request,
-        )
+        self.call_engine("planFontEmbed", "Font Embed", "plan", request)
     }
 
     pub fn plan_font_diagnostics(
         &mut self,
         request: &FontDiagnosticsPlanRequest,
     ) -> Result<FontEmbedPlanResult, String> {
-        self.call_engine(
-            "planFontDiagnostics",
-            "ssahdrify-cli-plan-font-diagnostics.js",
-            "Font Diagnostics",
-            "plan",
-            request,
-        )
+        self.call_engine("planFontDiagnostics", "Font Diagnostics", "plan", request)
     }
 
     pub fn apply_font_embed(
         &mut self,
         request: &FontEmbedApplyRequest,
     ) -> Result<FontEmbedApplyResult, String> {
-        self.call_engine(
-            "applyFontEmbed",
-            "ssahdrify-cli-apply-font-embed.js",
-            "Font Embed",
-            "embed",
-            request,
-        )
+        self.call_engine("applyFontEmbed", "Font Embed", "embed", request)
     }
 
     pub fn run_chain(&mut self, request: &ChainRunRequest) -> Result<ChainRunResult, String> {
-        self.call_engine(
-            "runChain",
-            "ssahdrify-cli-run-chain.js",
-            "Chain",
-            "execution",
-            request,
-        )
+        self.call_engine("runChain", "Chain", "execution", request)
     }
 
     pub fn validate_style_edit_operations(
@@ -538,7 +495,6 @@ impl CliEngine {
     ) -> Result<(), String> {
         let ack: StyleEditOperationsAck = self.call_engine(
             "validateStyleEditCliOperations",
-            "ssahdrify-cli-validate-style-edit-ops.js",
             "Style Edit",
             "validation",
             request,
@@ -555,7 +511,6 @@ impl CliEngine {
     ) -> Result<String, String> {
         self.call_engine(
             "resolveStyleEditOutputPath",
-            "ssahdrify-cli-resolve-style-edit-output-path.js",
             "Style Edit",
             "path resolution",
             request,
@@ -566,19 +521,12 @@ impl CliEngine {
         &mut self,
         request: &StyleEditCliRequest,
     ) -> Result<StyleEditCliResult, String> {
-        self.call_engine(
-            "applyCliStyleEdit",
-            "ssahdrify-cli-apply-style-edit.js",
-            "Style Edit",
-            "execution",
-            request,
-        )
+        self.call_engine("applyCliStyleEdit", "Style Edit", "execution", request)
     }
 
     fn call_engine<Request, Response>(
         &mut self,
         function_name: &'static str,
-        script_name: &'static str,
         label: &str,
         step: &str,
         request: &Request,
@@ -587,59 +535,48 @@ impl CliEngine {
         Request: Serialize,
         Response: DeserializeOwned,
     {
+        // Serialize via serde_json and parse with V8's C++ RFC 8259 JSON
+        // parser (`v8::json::parse`), then invoke the target method directly
+        // via `v8::Function::call`. This preserves 100% identical wire
+        // semantics (`#[serde(flatten)]`, `skip_serializing_if`, base64
+        // custom serializers) while avoiding per-file JS script compilation,
+        // source-line echo hazards, and `globalThis` state mutation.
         let request_json = serde_json::to_string(request)
             .map_err(|err| format!("failed to encode {label} request: {err}"))?;
-        // Stash payload on globalThis instead of inlining it into the
-        // call script. V8's stack-trace formatter echoes the source
-        // line verbatim in JsError display — inlining a 10 MB ASS body
-        // into the call script would flood stderr (potentially MB) on
-        // any JS-side exception. A short call referencing
-        // `globalThis.__ssahdrifyCliPayload` keeps stack traces readable.
-        //
-        // Three load-bearing invariants for the JSON-into-source
-        // construction below:
-        //   1. serde_json::to_string emits RFC 8259 JSON, a strict
-        //      subset of valid JS expression syntax (escapes ", \, and
-        //      control chars; emits U+2028/U+2029 as literal bytes,
-        //      legal inside JS string literals since ES2019).
-        //   2. V8 15.0 (deno_core 0.411) is well past ES2019.
-        //   3. function_name comes from a hardcoded &'static str at
-        //      every call site — never user-controlled.
-        // If any invariant shifts, move to a v8 function-call path
-        // that takes the argument as a v8::Value instead.
-        //
-        // Future-field hazard: any new request struct field with f64
-        // (NaN/∞ surface as serialization errors — fail-safe), i128 /
-        // u128 (silent truncate to JS Number), or i64 / u64 outside
-        // ±2^53 (silent precision loss to JS Number) requires
-        // re-evaluating this path. Today's fields (i64 offsets bounded
-        // by MAX_SHIFT_OFFSET_MS, u16 brightness, bool, String) are
-        // all within JS Number range. Audit before adding new fields.
-        let payload_setup = format!("globalThis.__ssahdrifyCliPayload = {request_json};");
-        self.runtime
-            .execute_script("ssahdrify-cli-payload.js", payload_setup)
-            .map_err(|err| format!("{label} {step} failed: {err}"))?;
-
-        let script = format!(
-            "globalThis.ssaHdrifyCliEngine.{function_name}(globalThis.__ssahdrifyCliPayload)"
-        );
-        let call_result = self.runtime.execute_script(script_name, script);
-
-        // Clear the global UNCONDITIONALLY (whether the call succeeded
-        // or threw). Running cleanup only on the success path leaves
-        // the previous payload accessible in V8's heap if the engine
-        // bundle ever holds a reference to globalThis.__ssahdrifyCliPayload.
-        // Best-effort: cleanup failures aren't surfaced to the user.
-        let _ = self.runtime.execute_script(
-            "ssahdrify-cli-payload-cleanup.js",
-            "globalThis.__ssahdrifyCliPayload = undefined;",
-        );
-
-        let result = call_result.map_err(|err| format!("{label} {step} failed: {err}"))?;
 
         deno_core::scope!(scope, &mut self.runtime);
-        let local = v8::Local::new(scope, result);
-        serde_v8::from_v8(scope, local)
+        let json_v8_str = v8::String::new(scope, &request_json)
+            .ok_or_else(|| format!("failed to allocate V8 string for {label} request"))?;
+        let arg_val = v8::json::parse(scope, json_v8_str)
+            .ok_or_else(|| format!("failed to parse {label} JSON request in V8"))?;
+
+        let global = scope.get_current_context().global(scope);
+        let engine_key = v8::String::new(scope, "ssaHdrifyCliEngine")
+            .ok_or_else(|| "failed to allocate engine key".to_string())?;
+        let engine_val = global
+            .get(scope, engine_key.into())
+            .ok_or_else(|| "globalThis.ssaHdrifyCliEngine is unavailable".to_string())?;
+        let engine_obj = v8::Local::<v8::Object>::try_from(engine_val)
+            .map_err(|_| "globalThis.ssaHdrifyCliEngine is not an object".to_string())?;
+
+        let fn_key = v8::String::new(scope, function_name)
+            .ok_or_else(|| format!("failed to allocate method key '{function_name}'"))?;
+        let fn_val = engine_obj
+            .get(scope, fn_key.into())
+            .ok_or_else(|| format!("ssaHdrifyCliEngine.{function_name} is unavailable"))?;
+        let func = v8::Local::<v8::Function>::try_from(fn_val)
+            .map_err(|_| format!("ssaHdrifyCliEngine.{function_name} is not a function"))?;
+
+        v8::tc_scope!(let tc_scope, scope);
+        let Some(result) = func.call(tc_scope, engine_obj.into(), &[arg_val]) else {
+            let err_msg = tc_scope
+                .exception()
+                .map(|exc| deno_core::error::JsError::from_v8_exception(tc_scope, exc).to_string())
+                .unwrap_or_else(|| "unknown JavaScript exception".to_string());
+            return Err(format!("{label} {step} failed: {err_msg}"));
+        };
+
+        serde_v8::from_v8(tc_scope, result)
             .map_err(|err| format!("failed to decode {label} {step} result: {err}"))
     }
 }

@@ -19,11 +19,13 @@ import {
   type Caption,
   type SubtitleFormat,
 } from "../../lib/subtitle-parser";
+import { sanitizeForDialog } from "../../lib/dedup-helpers";
 import {
   assertSafeOutputFilename,
   assertSafeOutputPath,
   decomposeInputPath,
 } from "../../lib/path-validation";
+import { iterateSourceLines } from "../../lib/source-lines";
 
 export type { Caption, SubtitleFormat };
 export { formatDisplayTime, parseDisplayTime };
@@ -388,22 +390,31 @@ function coerceTimingMapRule(raw: unknown, index: number): TimingMapRule {
   return out;
 }
 
+const MAX_TIMING_MAP_CSV_LINES = 100_000;
+
 function parseCsvTimingMap(content: string): TimingMapRule[] {
   const rules: TimingMapRule[] = [];
-  const lines = content.split(/\r\n|\n|\r/);
-  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
-    const rawLine = lines[lineIndex]!;
+  let lineIndex = 0;
+  for (const sourceLine of iterateSourceLines(content)) {
+    lineIndex += 1;
+    if (lineIndex > MAX_TIMING_MAP_CSV_LINES) {
+      throw new Error(`Timing map has too many lines; max ${MAX_TIMING_MAP_CSV_LINES}`);
+    }
+    const rawLine =
+      sourceLine.start === 0 && sourceLine.body.startsWith("\uFEFF")
+        ? sourceLine.body.slice(1)
+        : sourceLine.body;
     const line = rawLine.trim();
     if (!line || line.startsWith("#")) continue;
 
-    const fields = rawLine.split(",").map((field) => field.trim());
+    const fields = rawLine.split(",", 6).map((field) => field.trim());
     const lowerFields = fields.map((field) => field.toLowerCase());
     if (lowerFields[0] === "start" && lowerFields.includes("offset")) {
       continue;
     }
     if (fields.length < 3 || fields.length > 5) {
       throw new Error(
-        `Invalid timing map line ${lineIndex + 1}: expected start,end,offset[,label[,enabled]]`
+        `Invalid timing map line ${lineIndex}: expected start,end,offset[,label[,enabled]]`
       );
     }
 
@@ -467,7 +478,6 @@ export function normalizeTimingMapRules(rules: TimingMapRule[]): NormalizedTimin
     if (!rule) {
       throw new Error(`Invalid timing map rule ${i + 1}: missing rule`);
     }
-    if (rule.enabled === false) continue;
 
     assertFiniteTimingMapMs(rule.startMs, `rule ${i + 1} startMs`);
     assertFiniteTimingMapMs(rule.offsetMs, `rule ${i + 1} offsetMs`);
@@ -482,12 +492,6 @@ export function normalizeTimingMapRules(rules: TimingMapRule[]): NormalizedTimin
         `Invalid timing map rule ${i + 1}: offsetMs exceeds +/-${MAX_TIMING_OFFSET_MS} ms`
       );
     }
-
-    const out: NormalizedTimingMapRule = {
-      index: i,
-      startMs: rule.startMs,
-      offsetMs: rule.offsetMs,
-    };
     if (rule.endMs !== undefined) {
       assertFiniteTimingMapMs(rule.endMs, `rule ${i + 1} endMs`);
       if (rule.endMs < 0) {
@@ -499,10 +503,23 @@ export function normalizeTimingMapRules(rules: TimingMapRule[]): NormalizedTimin
       if (rule.endMs <= rule.startMs) {
         throw new Error(`Invalid timing map rule ${i + 1}: endMs must be greater than startMs`);
       }
+    }
+
+    if (rule.enabled === false) continue;
+
+    const out: NormalizedTimingMapRule = {
+      index: i,
+      startMs: rule.startMs,
+      offsetMs: rule.offsetMs,
+    };
+    if (rule.endMs !== undefined) {
       out.endMs = rule.endMs;
     }
-    if (rule.label !== undefined && rule.label.trim()) {
-      out.label = rule.label.trim().slice(0, 80);
+    if (rule.label !== undefined) {
+      const safeLabel = truncateCodepoints(sanitizeForDialog(rule.label).trim(), 80);
+      if (safeLabel) {
+        out.label = safeLabel;
+      }
     }
     normalized.push(out);
   }
@@ -715,6 +732,7 @@ function buildPreview(
  */
 export function previewShiftSubtitles(content: string, options: ShiftOptions): ShiftPreviewResult {
   const { offsetMs, thresholdMs, fps } = options;
+  assertFiniteShiftMs(offsetMs, thresholdMs);
   const { format, captions } = parseSubtitle(content, fps);
   const preview: PreviewEntry[] = [];
   let foundShiftableCaption = false;

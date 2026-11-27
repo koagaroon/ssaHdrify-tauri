@@ -75,4 +75,11 @@ describe("translate runtime substitution", () => {
     expect(out).toContain("C:\\$RECYCLE.BIN");
     expect(out).toContain("$&-glob");
   });
+
+  it("ignores Object.prototype keys like toString and constructor", () => {
+    expect(translate("en", "toString")).toBe("toString");
+    expect(translate("zh", "constructor")).toBe("constructor");
+    expect(translate("en", "__proto__")).toBe("__proto__");
+    expect(translate("en", "valueOf", "arg")).toBe("valueOf");
+  });
 });

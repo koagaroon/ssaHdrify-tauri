@@ -12,5 +12,6 @@ export function parseFiniteNumberText(text: string): number | null {
   }
 
   const value = Number(trimmed);
-  return Number.isFinite(value) ? value : null;
+  if (!Number.isFinite(value)) return null;
+  return Object.is(value, -0) ? 0 : value;
 }

@@ -48,33 +48,55 @@ export type CaptionTimingTransform = (caption: Caption, index: number) => Captio
 
 // ── Format Detection ──────────────────────────────────────
 
-const VTT_HEADER = /^WEBVTT/m;
+const VTT_HEADER = /^\uFEFF?WEBVTT(?:[ \t].*)?(?:\n|$)/;
 // SRT hours use variable digit width in practice — many tools emit
 // `0:00:01,234` or `1:02:03,456`. Hours bounded at `{1,12}` to match
 // `parseSrtTime` / `parseAssTime` / `parseDisplayTime`'s extraction
-// regexes. Earlier detection used \d+ while extraction caps at
-// {1,12}; a future caller piping the detection match into parseInt
-// would have re-introduced the unbounded surface.
-//
-// Line-anchored check — matches `parseSrt`'s line-anchored
-// `timingRe`. Without the anchor, prose like `Caption text
-// 12:00:00,000 --> 12:00:01,000 in prose` matches detection but
-// `parseSrt`'s `timingRe.test(line)` finds zero hits → captions=[]
-// returns silently. Sibling regex coherence with ASS_HEADER /
-// VTT_HEADER / SUB_LINE_SINGLE which all require line starts.
+// regexes.
 const SRT_TIMING_LINE = /^\d{1,12}:\d{2}:\d{2},\d{3}\s*-->\s*\d{1,12}:\d{2}:\d{2},\d{3}/;
 const SRT_CUE_INDEX = /^\d{1,12}$/;
-const ASS_HEADER = /^\[Script Info\]/im;
+const ASS_HEADER = /^(?:\uFEFF)?\[Script Info\]/im;
 const SUB_LINE_SINGLE = /^\{\d{1,12}\}\{\d{1,12}\}(.*)$/;
 
 function normalizeLineEndings(content: string): string {
   return content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 }
 
-function splitCueBlocks(content: string): string[] {
-  return normalizeLineEndings(content)
-    .split(/\n[ \t]*\n/)
-    .filter((b) => b.trim());
+function splitCueBlocks(content: string, maxRawBlocks = MAX_RAW_BLOCKS): string[] {
+  const normalized = normalizeLineEndings(content);
+  const blocks: string[] = [];
+  let blockStart = 0;
+
+  while (blockStart < normalized.length) {
+    while (blockStart < normalized.length) {
+      const lineEnd = lineEndAt(normalized, blockStart);
+      if (!isBlankLine(normalized.slice(blockStart, lineEnd))) break;
+      blockStart = lineEnd >= normalized.length ? normalized.length : lineEnd + 1;
+    }
+    if (blockStart >= normalized.length) break;
+
+    let blockEnd = blockStart;
+    while (blockEnd < normalized.length) {
+      const lineEnd = lineEndAt(normalized, blockEnd);
+      if (isBlankLine(normalized.slice(blockEnd, lineEnd))) break;
+      blockEnd = lineEnd >= normalized.length ? normalized.length : lineEnd + 1;
+    }
+
+    const block = normalized.slice(blockStart, blockEnd);
+    if (block.trim()) {
+      if (blocks.length >= maxRawBlocks) {
+        throw new Error(
+          `Too many subtitle blocks: ${blocks.length + 1}+ (max ${maxRawBlocks}). ` +
+            `Per-caption parse cap is ${MAX_PARSED_ENTRIES}; raw-block ceiling guards iteration cost.`
+        );
+      }
+      blocks.push(block);
+    }
+
+    blockStart = blockEnd >= normalized.length ? normalized.length : blockEnd + 1;
+  }
+
+  return blocks;
 }
 
 type CueCandidate = {
@@ -334,7 +356,7 @@ function formatVttTime(ms: number): string {
 }
 
 /** Format ms → "H:MM:SS.cc" (ASS centiseconds) */
-function formatAssTime(ms: number): string {
+export function formatAssTime(ms: number): string {
   ms = safeMs(ms);
   const totalCs = Math.round(ms / 10);
   const cs = totalCs % 100;
@@ -549,16 +571,9 @@ function findVttCueTiming(lines: string[]): VttCueTiming | undefined {
 
 function parseVtt(content: string): Caption[] {
   const captions: Caption[] = [];
-  const body = normalizeLineEndings(content).replace(/^WEBVTT[^\n]*\n/, "");
-  // Normalize first so mixed CRLF/LF files still split into cue blocks.
+  const body = normalizeLineEndings(content).replace(/^\uFEFF?WEBVTT[^\n]*(?:\n|$)/, "");
+  // splitCueBlocks enforces MAX_RAW_BLOCKS incrementally before allocating past the cap.
   const blocks = splitCueBlocks(body);
-  // Raw-block ceiling — same junk-flood rationale as parseSrt.
-  if (blocks.length > MAX_RAW_BLOCKS) {
-    throw new Error(
-      `Too many subtitle blocks: ${blocks.length} (max ${MAX_RAW_BLOCKS}). ` +
-        `Per-caption parse cap is ${MAX_PARSED_ENTRIES}; raw-block ceiling guards iteration cost.`
-    );
-  }
   // Per-entry cap — see parseSrt for the
   // block-vs-entry rationale.
   for (const block of blocks) {
@@ -603,13 +618,17 @@ function parseVtt(content: string): Caption[] {
 }
 
 function buildVtt(content: string, captions: Caption[]): string {
-  const parts = content.split(/((?:\r\n|\r|\n)(?:[ \t]*(?:\r\n|\r|\n))+)/);
+  // Split off the WEBVTT signature line (plus any immediately following blank
+  // lines) using the same boundary as `parseVtt`, preserving BOM and original
+  // line terminators verbatim even when a file has metadata headers or omits
+  // the blank line after `WEBVTT`.
+  const headerPrefix =
+    /^\uFEFF?WEBVTT[^\r\n]*(?:(?:\r\n|\r|\n)[ \t]*)*(?:\r\n|\r|\n|$)/.exec(content)?.[0] ?? "";
+  const rest = content.slice(headerPrefix.length);
+  const parts = rest.length > 0 ? rest.split(/((?:\r\n|\r|\n)(?:[ \t]*(?:\r\n|\r|\n))+)/) : [];
   let captionIndex = 0;
 
-  // parts[0] is the WEBVTT header block, including header metadata such
-  // as X-TIMESTAMP-MAP. Every even part after it is a cue or metadata
-  // block; odd parts are the original blank-line separators.
-  for (let partIndex = 2; partIndex < parts.length; partIndex += 2) {
+  for (let partIndex = 0; partIndex < parts.length; partIndex += 2) {
     const block = parts[partIndex]!;
     const spans = lineSpans(block);
     const timing = findVttCueTiming(spans.map((span) => span.text));
@@ -619,9 +638,6 @@ function buildVtt(content: string, captions: Caption[]): string {
     if (!caption) {
       throw new Error("WebVTT parse/rebuild drift: output contains an unparsed cue");
     }
-    // Oversized placeholders remain byte-for-byte structurally present.
-    // Their text was intentionally not retained in Caption, so rewriting
-    // only other cues avoids turning a partial warning into data loss.
     if (caption.skipped) continue;
 
     const { timingIdx, match } = timing;
@@ -633,7 +649,7 @@ function buildVtt(content: string, captions: Caption[]): string {
   if (captionIndex !== captions.length) {
     throw new Error("WebVTT parse/rebuild drift: not every parsed cue was rebuilt");
   }
-  return parts.join("");
+  return headerPrefix + parts.join("");
 }
 
 // ── ASS/SSA Parser (timing only) ─────────────────────────
@@ -658,7 +674,9 @@ function* assDialogues(content: string): Generator<AssDialogue> {
   let startIndex = 1;
   let endIndex = 2;
   for (const sourceLine of iterateSourceLines(content)) {
-    const line = sourceLine.body;
+    const hasBom = sourceLine.start === 0 && sourceLine.body.startsWith("\uFEFF");
+    const bomOffset = hasBom ? 1 : 0;
+    const line = hasBom ? sourceLine.body.slice(1) : sourceLine.body;
     const section = /^[\t ]*\[([^\]]+)\][\t ]*$/.exec(line);
     if (section) {
       inEvents = section[1]!.toLowerCase() === "events";
@@ -709,7 +727,13 @@ function* assDialogues(content: string): Generator<AssDialogue> {
     const start = timingField(startIndex);
     const end = timingField(endIndex);
     if (!start || !end) continue;
-    yield { raw: line, offset: sourceLine.start, start, end, text: line.slice(offsets.at(-1)!) };
+    yield {
+      raw: line,
+      offset: sourceLine.start + bomOffset,
+      start,
+      end,
+      text: line.slice(offsets.at(-1)!),
+    };
   }
 }
 
@@ -964,8 +988,8 @@ function buildSub(content: string, captions: Caption[], fpsOverride?: number): s
     // file, so Auto mode changes only cue timing fields.
     const start = Number.isFinite(caption.start) ? Math.max(0, caption.start) : 0;
     const end = Number.isFinite(caption.end) ? Math.max(0, caption.end) : 0;
-    const startFrame = Math.round((start / 1000) * fps);
-    const endFrame = Math.round((end / 1000) * fps);
+    const startFrame = Math.min(999_999_999_999, Math.round((start / 1000) * fps));
+    const endFrame = Math.min(999_999_999_999, Math.round((end / 1000) * fps));
     output += `${bom}{${startFrame}}{${endFrame}}${caption.text.replace(/\n/g, "|")}${line.ending}`;
   }
 

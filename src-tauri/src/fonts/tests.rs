@@ -336,25 +336,67 @@ fn sanitize_cmap12_invalid_groups_makes_non_unicode_ranges_unselectable() {
         sanitize_cmap12_invalid_groups(&font, 0).expect("test font should sanitize");
     assert_eq!(count, 2);
     let sanitized = sanitized.as_ref();
-    let valid_group = cmap_offset as usize + subtable_offset as usize + 16;
+    let subtable_abs = cmap_offset as usize + subtable_offset as usize;
+    assert_eq!(read_be_u32(sanitized, subtable_abs + 4), Some(16 + 12));
+    assert_eq!(read_be_u32(sanitized, subtable_abs + 12), Some(1));
+    let valid_group = subtable_abs + 16;
     assert_eq!(read_be_u32(sanitized, valid_group), Some(0x20));
     assert_eq!(read_be_u32(sanitized, valid_group + 4), Some(0x7E));
     assert_eq!(read_be_u32(sanitized, valid_group + 8), Some(1));
 
-    for group_offset in [valid_group + 12, valid_group + 24] {
-        assert_eq!(
-            read_be_u32(sanitized, group_offset),
-            Some(UNICODE_SCALAR_MAX)
-        );
-        assert_eq!(
-            read_be_u32(sanitized, group_offset + 4),
-            Some(UNICODE_SCALAR_MAX)
-        );
-        assert_eq!(
-            read_be_u32(sanitized, group_offset + 8),
-            Some(SKIP_CMAP12_GROUP_GLYPH_ID)
-        );
+    let font_ref = fontcull_skrifa::FontRef::from_index(sanitized, 0).unwrap();
+    let charmap = fontcull_skrifa::MetadataProvider::charmap(&font_ref);
+    assert_eq!(charmap.map(0x20u32), Some(fontcull_skrifa::GlyphId::new(1)));
+    assert_eq!(charmap.map(UNICODE_SCALAR_MAX), None);
+}
+
+#[test]
+fn sanitize_cmap12_compacts_mid_table_invalid_group_preserving_binary_search_for_later_cjk() {
+    let cmap_offset = 28u32;
+    let subtable_offset = 12u32;
+    let groups = [
+        (0x20u32, 0x7Eu32, 1u32),
+        (0x500u32, 0x4FFu32, 9u32),
+        (0x4E00u32, 0x9FFFu32, 100u32),
+    ];
+    let subtable_length = 16 + groups.len() as u32 * 12;
+    let cmap_length = subtable_offset + subtable_length;
+
+    let mut font = Vec::new();
+    font.extend_from_slice(b"\0\x01\0\0");
+    font.extend_from_slice(&1u16.to_be_bytes());
+    font.extend_from_slice(&[0; 6]);
+    font.extend_from_slice(b"cmap");
+    font.extend_from_slice(&0u32.to_be_bytes());
+    font.extend_from_slice(&cmap_offset.to_be_bytes());
+    font.extend_from_slice(&cmap_length.to_be_bytes());
+    font.extend_from_slice(&0u16.to_be_bytes());
+    font.extend_from_slice(&1u16.to_be_bytes());
+    font.extend_from_slice(&0u16.to_be_bytes());
+    font.extend_from_slice(&4u16.to_be_bytes());
+    font.extend_from_slice(&subtable_offset.to_be_bytes());
+    font.extend_from_slice(&12u16.to_be_bytes());
+    font.extend_from_slice(&0u16.to_be_bytes());
+    font.extend_from_slice(&subtable_length.to_be_bytes());
+    font.extend_from_slice(&0u32.to_be_bytes());
+    font.extend_from_slice(&(groups.len() as u32).to_be_bytes());
+    for (start, end, gid) in groups {
+        font.extend_from_slice(&start.to_be_bytes());
+        font.extend_from_slice(&end.to_be_bytes());
+        font.extend_from_slice(&gid.to_be_bytes());
     }
+
+    let (sanitized, count) =
+        sanitize_cmap12_invalid_groups(&font, 0).expect("test font should sanitize");
+    assert_eq!(count, 1);
+    let font_ref = fontcull_skrifa::FontRef::from_index(sanitized.as_ref(), 0).unwrap();
+    let charmap = fontcull_skrifa::MetadataProvider::charmap(&font_ref);
+    assert_eq!(
+        charmap.map(0x4E2Du32),
+        Some(fontcull_skrifa::GlyphId::new(100 + (0x4E2D - 0x4E00))),
+        "valid CJK group after a compacted invalid group must remain reachable via binary search"
+    );
+    assert_eq!(charmap.map(UNICODE_SCALAR_MAX), None);
 }
 
 #[test]
@@ -512,19 +554,9 @@ fn sanitize_cmap12_invalid_groups_ignores_bogus_early_offset_before_later_record
 
     assert_eq!(count, 1);
     let sanitized = sanitized.as_ref();
-    let group_offset = 28usize + real_subtable_rel as usize + 16;
-    assert_eq!(
-        read_be_u32(sanitized, group_offset),
-        Some(UNICODE_SCALAR_MAX)
-    );
-    assert_eq!(
-        read_be_u32(sanitized, group_offset + 4),
-        Some(UNICODE_SCALAR_MAX)
-    );
-    assert_eq!(
-        read_be_u32(sanitized, group_offset + 8),
-        Some(SKIP_CMAP12_GROUP_GLYPH_ID)
-    );
+    let subtable_abs = 28usize + real_subtable_rel as usize;
+    assert_eq!(read_be_u32(sanitized, subtable_abs + 4), Some(16));
+    assert_eq!(read_be_u32(sanitized, subtable_abs + 12), Some(0));
 }
 
 #[test]
@@ -604,19 +636,9 @@ fn sanitize_cmap12_invalid_groups_ignores_records_overlapping_first_subtable() {
     let sanitized = sanitized.as_ref();
 
     let table_offset = 28usize;
-    let first_group = table_offset + first_subtable_rel as usize + 16;
-    assert_eq!(
-        read_be_u32(sanitized, first_group),
-        Some(UNICODE_SCALAR_MAX)
-    );
-    assert_eq!(
-        read_be_u32(sanitized, first_group + 4),
-        Some(UNICODE_SCALAR_MAX)
-    );
-    assert_eq!(
-        read_be_u32(sanitized, first_group + 8),
-        Some(SKIP_CMAP12_GROUP_GLYPH_ID)
-    );
+    let first_subtable = table_offset + first_subtable_rel as usize;
+    assert_eq!(read_be_u32(sanitized, first_subtable + 4), Some(16));
+    assert_eq!(read_be_u32(sanitized, first_subtable + 12), Some(0));
 
     let ghost_group = table_offset + ghost_subtable_rel as usize + 16;
     assert_eq!(read_be_u32(sanitized, ghost_group), Some(ghost_invalid[0]));
@@ -682,15 +704,69 @@ fn next_fonts_test_suffix() -> String {
     format!("{}-{stamp}-{seq}", std::process::id())
 }
 
-fn make_fonts_test_dir(label: &str) -> PathBuf {
-    let base = std::env::temp_dir();
-    fs::create_dir_all(&base).unwrap();
-    let dir = base.join(format!(
-        "ssahdrify-fonts-test-{label}-{}",
-        next_fonts_test_suffix()
-    ));
-    fs::create_dir(&dir).unwrap();
-    dir
+fn make_fonts_test_dir(label: &str) -> crate::test_support::TestTempDir {
+    crate::test_support::TestTempDir::new("ssahdrify-fonts-test", label)
+}
+
+#[test]
+fn legacy_name_merge_preserves_skrifa_english_primary_family_at_index_zero() {
+    let mut entries = vec![LocalFontEntry {
+        path: "C:\\Fonts\\Zeta.ttf".to_string(),
+        index: 0,
+        families: vec!["Zeta Sans".to_string(), "Alpha Sans".to_string()],
+        face_names: Vec::new(),
+        bold: false,
+        italic: false,
+        size_bytes: 100,
+    }];
+    // Case 1: legacy duplicates already-decoded names -> order unchanged.
+    merge_legacy_name_table_entries(
+        &mut entries,
+        vec![LocalFontEntry {
+            path: "C:\\Fonts\\Zeta.ttf".to_string(),
+            index: 0,
+            families: vec!["Alpha Sans".to_string(), "Zeta Sans".to_string()],
+            face_names: Vec::new(),
+            bold: false,
+            italic: false,
+            size_bytes: 100,
+        }],
+    );
+    assert_eq!(entries[0].families, vec!["Zeta Sans", "Alpha Sans"]);
+
+    // Case 2: legacy adds a DBCS name that sorts before "Zeta Sans" -> "Zeta Sans" stays at [0].
+    merge_legacy_name_table_entries(
+        &mut entries,
+        vec![LocalFontEntry {
+            path: "C:\\Fonts\\Zeta.ttf".to_string(),
+            index: 0,
+            families: vec!["00 Legacy CJK".to_string()],
+            face_names: Vec::new(),
+            bold: false,
+            italic: false,
+            size_bytes: 100,
+        }],
+    );
+    assert_eq!(
+        entries[0].families,
+        vec!["Zeta Sans", "00 Legacy CJK", "Alpha Sans"]
+    );
+}
+
+#[test]
+fn system_font_dir_normalizer_handles_trailing_slash_and_unicode_case() {
+    assert_eq!(
+        normalize_system_font_dir_path(Path::new("C:\\Windows\\"), &["Fonts"]),
+        normalize_system_font_dir_path(Path::new("C:/WINDOWS"), &["fonts"])
+    );
+    let non_ascii = normalize_system_font_dir_path(
+        Path::new("C:\\Users\\Ünsal\\AppData\\Local\\"),
+        &["Microsoft", "Windows", "Fonts"],
+    );
+    assert!(
+        non_ascii.contains("ünsal") && !non_ascii.contains("\\\\fonts"),
+        "expected Unicode case-folding and clean path joining, got: {non_ascii}"
+    );
 }
 
 #[test]
@@ -865,10 +941,21 @@ fn subset_with_index_handles_ttc_face_zero_and_one() {
     );
 }
 
-fn init_test_user_font_db(name: &str) {
+struct UserFontDbTestGuard {
+    _dir: crate::test_support::TestTempDir,
+}
+
+impl Drop for UserFontDbTestGuard {
+    fn drop(&mut self) {
+        clear_user_font_db_path();
+    }
+}
+
+fn init_test_user_font_db(name: &str) -> UserFontDbTestGuard {
     let dir = make_fonts_test_dir(&format!("user-font-db-{name}"));
     init_user_font_db(&dir).expect("test DB should initialize");
     clear_font_sources().expect("test DB should clear");
+    UserFontDbTestGuard { _dir: dir }
 }
 
 /// replaces the previous `tests/test_subset.rs` integration
@@ -1326,7 +1413,9 @@ fn parse_local_dream_han_serif_w22_keeps_duplicate_full_name_alias() {
 
 fn commit_entries(source_id: &str, entries: Vec<LocalFontEntry>) -> ImportOutcome {
     let mut conn = open_user_font_db().expect("test DB should open");
-    let tx = conn.transaction().expect("transaction should start");
+    let tx = conn
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .expect("transaction should start");
     create_user_font_source_tx(&tx, source_id, FontSourceKind::Files, None)
         .expect("source should insert");
     let outcome = import_user_font_batch_tx(&tx, source_id, entries).expect("batch should import");
@@ -1418,8 +1507,8 @@ fn user_font_lookup_returns_expected_rows_without_repeated_repreparing() {
 
 #[test]
 fn db_schema_indexes_family_keys_for_cascade_delete() {
-    let _guard = SCAN_TEST_LOCK.lock().unwrap();
-    init_test_user_font_db("schema-index");
+    let _guard = lock_font_state_for_test();
+    let _db = init_test_user_font_db("schema-index");
     let conn = open_user_font_db().expect("test DB should open");
     let index_count: i64 = conn
         .query_row(
@@ -1433,8 +1522,8 @@ fn db_schema_indexes_family_keys_for_cascade_delete() {
 
 #[test]
 fn db_import_dedupes_faces_and_resolves_family() {
-    let _guard = SCAN_TEST_LOCK.lock().unwrap();
-    init_test_user_font_db("dedupe");
+    let _guard = lock_font_state_for_test();
+    let _db = init_test_user_font_db("dedupe");
     let outcome = commit_entries(
         "source-a",
         vec![
@@ -1450,15 +1539,12 @@ fn db_import_dedupes_faces_and_resolves_family() {
         .expect("family should resolve");
     assert_eq!(resolved.path, "C:\\Fonts\\A.ttf");
     assert!(is_user_font_face_registered("C:\\Fonts\\A.ttf", 0).unwrap());
-    // Un-scanned face of the same TTC must fail provenance: protects
-    // the subset_font gate against face-index forgery on TTC files
-    // where only one face was actually scanned.
     assert!(!is_user_font_face_registered("C:\\Fonts\\A.ttf", 1).unwrap());
 }
 
 #[test]
 fn cache_metadata_conversion_fails_if_a_scanned_face_disappears() {
-    let _guard = SCAN_TEST_LOCK.lock().unwrap();
+    let _guard = lock_font_state_for_test();
     let missing_path = std::env::temp_dir().join(format!(
         "ssahdrify-missing-cache-face-{}.ttf",
         next_fonts_test_suffix()
@@ -1473,8 +1559,8 @@ fn cache_metadata_conversion_fails_if_a_scanned_face_disappears() {
 
 #[test]
 fn full_face_names_match_without_weakening_family_style_matching() {
-    let _guard = SCAN_TEST_LOCK.lock().unwrap();
-    init_test_user_font_db("face-name-alias");
+    let _guard = lock_font_state_for_test();
+    let _db = init_test_user_font_db("face-name-alias");
     let temp_font_dir = make_fonts_test_dir("face-name-alias");
     let temp_font_path = temp_font_dir.join("DreamHanSerif-W22.ttc");
     fs::write(&temp_font_path, b"fake Dream Han cache metadata fixture")
@@ -1549,8 +1635,8 @@ fn full_face_names_match_without_weakening_family_style_matching() {
 
 #[test]
 fn full_face_aliases_do_not_override_exact_family_matches() {
-    let _guard = SCAN_TEST_LOCK.lock().unwrap();
-    init_test_user_font_db("face-name-priority");
+    let _guard = lock_font_state_for_test();
+    let _db = init_test_user_font_db("face-name-priority");
     let exact = LocalFontEntry {
         path: "C:\\Fonts\\ExactSharedSans-Regular.otf".to_string(),
         index: 0,
@@ -1620,13 +1706,33 @@ fn provenance_overflow_messages_match_each_set_recovery_path() {
     );
 }
 
+struct CacheProvenanceSnapshotGuard {
+    snapshot: HashSet<(String, u32)>,
+}
+
+impl CacheProvenanceSnapshotGuard {
+    fn acquire() -> Self {
+        let mut set = ALLOWED_CACHE_FONT_PATHS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let snapshot = set.clone();
+        set.clear();
+        Self { snapshot }
+    }
+}
+
+impl Drop for CacheProvenanceSnapshotGuard {
+    fn drop(&mut self) {
+        *ALLOWED_CACHE_FONT_PATHS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = std::mem::take(&mut self.snapshot);
+    }
+}
+
 #[test]
 fn cache_provenance_gate_rejects_unregistered_path() {
-    let _guard = SCAN_TEST_LOCK.lock().unwrap();
-    // Snapshot the set so we restore it post-test (other tests
-    // in the same binary process may have registered paths).
-    let snapshot: HashSet<(String, u32)> = ALLOWED_CACHE_FONT_PATHS.lock().unwrap().clone();
-    ALLOWED_CACHE_FONT_PATHS.lock().unwrap().clear();
+    let _guard = lock_font_state_for_test();
+    let _prov = CacheProvenanceSnapshotGuard::acquire();
 
     let path = "C:\\Fonts\\NotRegistered.ttf".to_string();
     let key = (path, 0);
@@ -1634,20 +1740,14 @@ fn cache_provenance_gate_rejects_unregistered_path() {
         !ALLOWED_CACHE_FONT_PATHS.lock().unwrap().contains(&key),
         "unregistered cache path must NOT be in the provenance set"
     );
-
-    *ALLOWED_CACHE_FONT_PATHS.lock().unwrap() = snapshot;
 }
 
 #[test]
 fn cache_provenance_gate_accepts_registered_path() {
-    let _guard = SCAN_TEST_LOCK.lock().unwrap();
-    let snapshot: HashSet<(String, u32)> = ALLOWED_CACHE_FONT_PATHS.lock().unwrap().clone();
-    ALLOWED_CACHE_FONT_PATHS.lock().unwrap().clear();
+    let _guard = lock_font_state_for_test();
+    let _prov = CacheProvenanceSnapshotGuard::acquire();
 
     let path = "C:\\Fonts\\Registered.ttf";
-    // register_cache_provenance now takes
-    // `&FontLookupResult`. Tests in this module are in-crate, so
-    // pub(crate) construction is permitted.
     let hit = crate::font_cache::FontLookupResult {
         font_path: path.to_string(),
         face_index: 2,
@@ -1658,8 +1758,6 @@ fn cache_provenance_gate_accepts_registered_path() {
         ALLOWED_CACHE_FONT_PATHS.lock().unwrap().contains(&key),
         "registered (path, face_index) must be in the provenance set"
     );
-    // Different face_index for the same path must NOT pass — the
-    // pair-keying defends against face-index injection on TTC files.
     let wrong_face = (path.to_string(), 5);
     assert!(
         !ALLOWED_CACHE_FONT_PATHS
@@ -1668,15 +1766,12 @@ fn cache_provenance_gate_accepts_registered_path() {
             .contains(&wrong_face),
         "different face_index on same path must not slip through pair-keyed gate"
     );
-
-    *ALLOWED_CACHE_FONT_PATHS.lock().unwrap() = snapshot;
 }
 
 #[test]
 fn cache_mutation_invalidation_clears_registered_lookup_provenance() {
-    let _guard = SCAN_TEST_LOCK.lock().unwrap();
-    let snapshot: HashSet<(String, u32)> = ALLOWED_CACHE_FONT_PATHS.lock().unwrap().clone();
-    ALLOWED_CACHE_FONT_PATHS.lock().unwrap().clear();
+    let _guard = lock_font_state_for_test();
+    let _prov = CacheProvenanceSnapshotGuard::acquire();
     let path = "C:\\Fonts\\ReplacedAfterLookup.ttf";
     let hit = crate::font_cache::FontLookupResult {
         font_path: path.to_string(),
@@ -1690,22 +1785,14 @@ fn cache_mutation_invalidation_clears_registered_lookup_provenance() {
         !cache_provenance_contains(path, 0),
         "a cache replacement or eviction must revoke earlier lookup trust"
     );
-    *ALLOWED_CACHE_FONT_PATHS.lock().unwrap() = snapshot;
 }
 
 #[test]
 fn cache_provenance_gate_is_capped_at_max_provenance() {
-    let _guard = SCAN_TEST_LOCK.lock().unwrap();
-    let snapshot: HashSet<(String, u32)> = ALLOWED_CACHE_FONT_PATHS.lock().unwrap().clone();
-    ALLOWED_CACHE_FONT_PATHS.lock().unwrap().clear();
+    let _guard = lock_font_state_for_test();
+    let _prov = CacheProvenanceSnapshotGuard::acquire();
 
-    // Fill to the cap, then attempt one more insert. Using
-    // distinct paths so HashSet doesn't dedup. The cap check
-    // happens inside insert_with_cap after the speculative
-    // insert + rollback; a successful pre-cap insert + a
-    // failing past-cap insert pin the contract.
     for i in 0..MAX_PROVENANCE_CACHE_SIZE {
-        // Format path with index so each insert is unique.
         let hit = crate::font_cache::FontLookupResult {
             font_path: format!("C:\\Fonts\\Cap{i}.ttf"),
             face_index: 0,
@@ -1730,21 +1817,17 @@ fn cache_provenance_gate_is_capped_at_max_provenance() {
         err_msg.contains("Clear font sources or clear the font cache, then retry."),
         "cache-set overflow must name a reachable recovery action, got: {err_msg}"
     );
-    // The speculative insert must have been rolled back — set
-    // size unchanged.
     assert_eq!(
         ALLOWED_CACHE_FONT_PATHS.lock().unwrap().len(),
         MAX_PROVENANCE_CACHE_SIZE,
         "rollback should leave the set at exactly the cap, not cap+1"
     );
-
-    *ALLOWED_CACHE_FONT_PATHS.lock().unwrap() = snapshot;
 }
 
 #[test]
 fn db_lookup_prefers_newer_source_for_same_family_key() {
-    let _guard = SCAN_TEST_LOCK.lock().unwrap();
-    init_test_user_font_db("source-order");
+    let _guard = lock_font_state_for_test();
+    let _db = init_test_user_font_db("source-order");
     commit_entries(
         "source-a",
         vec![sample_entry("C:\\Fonts\\Old.ttf", "Demo Sans", 0)],
@@ -1762,8 +1845,8 @@ fn db_lookup_prefers_newer_source_for_same_family_key() {
 
 #[test]
 fn db_remove_and_clear_update_lookup_and_provenance() {
-    let _guard = SCAN_TEST_LOCK.lock().unwrap();
-    init_test_user_font_db("remove-clear");
+    let _guard = lock_font_state_for_test();
+    let _db = init_test_user_font_db("remove-clear");
     commit_entries(
         "source-a",
         vec![sample_entry("C:\\Fonts\\A.ttf", "Demo Sans", 0)],
@@ -1789,8 +1872,8 @@ fn db_remove_and_clear_update_lookup_and_provenance() {
 
 #[test]
 fn db_overlapping_sources_keep_independent_face_ownership() {
-    let _guard = SCAN_TEST_LOCK.lock().unwrap();
-    init_test_user_font_db("overlapping-ownership");
+    let _guard = lock_font_state_for_test();
+    let _db = init_test_user_font_db("overlapping-ownership");
     let shared = sample_entry("C:\\Fonts\\Shared.ttf", "Shared Sans", 0);
     commit_entries("source-parent", vec![shared.clone()]);
     commit_entries("source-child", vec![shared]);
@@ -1823,8 +1906,8 @@ fn db_overlapping_sources_keep_independent_face_ownership() {
 
 #[test]
 fn overlapping_rescan_refreshes_shared_face_metadata_and_keys() {
-    let _guard = SCAN_TEST_LOCK.lock().unwrap();
-    init_test_user_font_db("overlapping-refresh");
+    let _guard = lock_font_state_for_test();
+    let _db = init_test_user_font_db("overlapping-refresh");
     let path = "C:\\Fonts\\Replaced.ttf";
     commit_entries("source-parent", vec![sample_entry(path, "Old Family", 0)]);
 
@@ -1908,7 +1991,10 @@ fn collecting_scan_returns_its_full_recursive_snapshot_when_no_face_parses() {
     let _ = fs::remove_dir_all(&root);
 }
 
-struct ReadFailureFixtures(PathBuf);
+struct ReadFailureFixtures(
+    PathBuf,
+    #[allow(dead_code)] crate::test_support::TestTempDir,
+);
 
 impl ReadFailureFixtures {
     fn new(label: &str) -> Self {
@@ -1921,19 +2007,14 @@ impl ReadFailureFixtures {
             )]);
             fs::write(root.join(basename), font).unwrap();
         }
-        Self(root.canonicalize().unwrap())
+        let canonical = root.canonicalize().unwrap();
+        Self(canonical, root)
     }
 
     fn paths(&self) -> Vec<String> {
         ["a.ttf", "b.ttf", "c.ttf"]
             .map(|name| normalize_canonical_path(&self.0.join(name).to_string_lossy()))
             .to_vec()
-    }
-}
-
-impl Drop for ReadFailureFixtures {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
     }
 }
 
@@ -2249,10 +2330,10 @@ fn files_inner_skips_invalid_paths_without_emitting() {
 /// on real font files. Buffer is empty so no batch is emitted.
 #[test]
 fn files_inner_honors_targeted_cancel_before_first_file() {
-    let _guard = SCAN_TEST_LOCK.lock().unwrap();
-    let prior_cancel_id = CANCEL_SCAN_ID.load(Ordering::Relaxed);
-    let scan_id = prior_cancel_id.saturating_add(1);
-    CANCEL_SCAN_ID.fetch_max(scan_id, Ordering::Relaxed);
+    let _guard = lock_font_state_for_test();
+    let scan_id = 42u64;
+    let _active = begin_font_scan(scan_id).expect("begin scan");
+    cancel_font_scan(scan_id);
     let mut emitted: Vec<Vec<LocalFontEntry>> = Vec::new();
     let outcome = scan_files_inner(vec!["irrelevant.ttf".to_string()], scan_id, |batch| {
         emitted.push(batch);
@@ -2262,54 +2343,106 @@ fn files_inner_honors_targeted_cancel_before_first_file() {
     assert_eq!(outcome.total, 0);
     assert_eq!(outcome.reason, ScanStopReason::UserCancel);
     assert!(emitted.is_empty());
-    // reset CANCEL_SCAN_ID via
-    // `compare_exchange` to its pre-test value so subsequent tests
-    // sharing the binary process don't inherit the elevated cancel
-    // id. SCAN_TEST_LOCK serializes the tests but `CANCEL_SCAN_ID`
-    // is a process-global AtomicU64 — without explicit cleanup,
-    // a later test that does `CANCEL_SCAN_ID.load() + 1` and then
-    // expects a fresh scan to NOT be cancelled would see the prior
-    // value and silently regress to UserCancel. The compare_exchange
-    // is no-op if some other path raised the field between our
-    // fetch_max and the reset (extremely unlikely under SCAN_TEST_LOCK,
-    // but the fail-safe pattern is cheap).
-    let _ = CANCEL_SCAN_ID.compare_exchange(
-        scan_id,
-        prior_cancel_id,
-        Ordering::Relaxed,
-        Ordering::Relaxed,
-    );
 }
 
-/// `cancel_font_scan` records the requested id and stale lower ids do not
-/// overwrite a newer cancel request. Requires an active scan guard so
-/// the new range check (must target the currently-active id) lets the
-/// cancel through.
 #[test]
 fn cancel_command_records_scan_id_monotonically() {
-    let _lock = SCAN_TEST_LOCK.lock().unwrap();
-    let scan_id = CANCEL_SCAN_ID.load(Ordering::Relaxed).saturating_add(10);
+    let _lock = lock_font_state_for_test();
+    let scan_id = 500u64;
     let _guard = begin_font_scan(scan_id).expect("begin scan");
     cancel_font_scan(scan_id);
-    assert_eq!(CANCEL_SCAN_ID.load(Ordering::Relaxed), scan_id);
-    // A stale lower id (scan_id - 1 < active) is NOT rejected by the
-    // range check — it satisfies `scan_id <= active`, so it reaches
-    // `fetch_max`. But `fetch_max` is a no-op because CANCEL_SCAN_ID
-    // is already at the higher value (scan_id), so the lower id can't
-    // regress the field. Net effect: stale lower-id cancels are
-    // accepted-but-harmless.
+    assert!(font_scan_cancelled(scan_id));
     cancel_font_scan(scan_id - 1);
-    assert_eq!(CANCEL_SCAN_ID.load(Ordering::Relaxed), scan_id);
+    assert!(font_scan_cancelled(scan_id));
 }
 
-/// `cancel_font_scan` rejects ids that don't belong to a current or
-/// past active scan — defense-in-depth against a misbehaving frontend
-/// that could otherwise permanently disable cancellation by calling
-/// with a u64::MAX id.
+#[test]
+fn stale_lower_id_cancel_during_uncancelled_scan_does_not_poison_future_scan() {
+    let _lock = lock_font_state_for_test();
+    {
+        let _active_200 = begin_font_scan(200).expect("begin scan 200");
+        // Stale lower-id cancel arrives while scan 200 is running uncancelled.
+        cancel_font_scan(100);
+        assert!(!font_scan_cancelled(200));
+        assert!(!font_scan_cancelled(100));
+    }
+    assert_eq!(SCAN_STATE.load(Ordering::SeqCst), NO_SCAN_ID);
+    // Starting scan 100 afterward must NOT see a poisoned stale cancel!
+    let _active_100 = begin_font_scan(100).expect("scan 100 should start cleanly");
+    assert!(!font_scan_cancelled(100));
+}
+
 #[test]
 fn cancel_command_rejects_future_id_when_no_active_scan() {
-    let _guard = SCAN_TEST_LOCK.lock().unwrap();
-    let baseline = CANCEL_SCAN_ID.load(Ordering::Relaxed);
+    let _guard = lock_font_state_for_test();
+    assert_eq!(SCAN_STATE.load(Ordering::SeqCst), NO_SCAN_ID);
     cancel_font_scan(u64::MAX);
-    assert_eq!(CANCEL_SCAN_ID.load(Ordering::Relaxed), baseline);
+    cancel_font_scan(999);
+    assert_eq!(SCAN_STATE.load(Ordering::SeqCst), NO_SCAN_ID);
+    assert!(begin_font_scan(CANCELLED_BIT).is_err());
+}
+
+#[test]
+fn subset_font_enforces_ipc_bounds_provenance_magic_and_system_dir_gates() {
+    let _guard = lock_font_state_for_test();
+    let _db = init_test_user_font_db("subset-gates");
+    let _cache_prov = CacheProvenanceSnapshotGuard::acquire();
+    let dir = make_fonts_test_dir("subset-gates");
+
+    let valid_path = dir.join("sample.ttf");
+    fs::write(&valid_path, b"not-font-magic").unwrap();
+    let valid_path_str =
+        normalize_canonical_path(&valid_path.canonicalize().unwrap().to_string_lossy());
+
+    // 1. Face-index cap
+    let err = subset_font(
+        valid_path_str.clone(),
+        MAX_SUBSET_FONT_INDEX + 1,
+        vec![0x41],
+    )
+    .unwrap_err();
+    assert!(err.contains("Invalid font face index"), "got: {err}");
+
+    // 2. Codepoint count cap
+    let too_many = vec![0x41u32; MAX_SUBSET_CODEPOINTS + 1];
+    let err = subset_font(valid_path_str.clone(), 0, too_many).unwrap_err();
+    assert!(err.contains("Too many codepoints"), "got: {err}");
+
+    // 3. Out-of-range Unicode scalar
+    let err = subset_font(valid_path_str.clone(), 0, vec![0x11_0000]).unwrap_err();
+    assert!(err.contains("Invalid codepoint"), "got: {err}");
+
+    // 4. Disallowed extension
+    let bad_ext = dir.join("sample.txt");
+    fs::write(&bad_ext, b"text").unwrap();
+    let err = subset_font(bad_ext.to_string_lossy().into_owned(), 0, vec![0x41]).unwrap_err();
+    assert!(err.contains("Invalid font file type"), "got: {err}");
+
+    // 5. Unregistered provenance rejection
+    let err = subset_font(valid_path_str.clone(), 0, vec![0x41]).unwrap_err();
+    assert!(
+        err.contains("not discovered by a scan command"),
+        "got: {err}"
+    );
+
+    // 6. Registered user font with non-OpenType header fails magic-byte sniff
+    commit_entries(
+        "source-magic",
+        vec![sample_entry(&valid_path_str, "Magic Sans", 0)],
+    );
+    let err = subset_font(valid_path_str.clone(), 0, vec![0x41]).unwrap_err();
+    assert!(err.contains("no recognized font signature"), "got: {err}");
+
+    // 7. System-font provenance outside WINDOWS_SYSTEM_FONTS_DIR is rejected
+    let sys_snapshot = ALLOWED_FONT_PATHS.lock().unwrap().clone();
+    ALLOWED_FONT_PATHS
+        .lock()
+        .unwrap()
+        .insert((valid_path_str.clone(), 0));
+    let sys_err = subset_font(valid_path_str, 0, vec![0x41]).unwrap_err();
+    *ALLOWED_FONT_PATHS.lock().unwrap() = sys_snapshot;
+    assert!(
+        sys_err.contains("not in a system fonts directory"),
+        "got: {sys_err}"
+    );
 }

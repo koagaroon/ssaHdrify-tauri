@@ -113,6 +113,7 @@ pub(super) fn init_user_font_schema(conn: &Connection) -> Result<(), String> {
             italic INTEGER NOT NULL,
             key_kind INTEGER NOT NULL CHECK(key_kind IN (0, 1)),
             face_id INTEGER NOT NULL,
+            UNIQUE(face_id, family_name_key, key_kind, bold, italic),
             FOREIGN KEY(face_id) REFERENCES font_faces(face_id) ON DELETE CASCADE
         );
         CREATE INDEX IF NOT EXISTS idx_font_family_lookup
@@ -381,6 +382,9 @@ pub(super) fn import_user_font_batch_tx(
             ",
         )
         .map_err(|e| db_error("face insert prepare failed", e))?;
+    let mut select_face_id = tx
+        .prepare("SELECT face_id FROM font_faces WHERE path = ?1 AND face_index = ?2")
+        .map_err(|e| db_error("existing face lookup prepare failed", e))?;
     let mut insert_membership = tx
         .prepare("INSERT OR IGNORE INTO font_source_faces(source_id, face_id) VALUES (?1, ?2)")
         .map_err(|e| db_error("source-face insert prepare failed", e))?;
@@ -405,7 +409,7 @@ pub(super) fn import_user_font_batch_tx(
     let mut insert_key = tx
         .prepare(
             "
-            INSERT INTO font_family_keys(
+            INSERT OR IGNORE INTO font_family_keys(
                 family_name_key, bold, italic, key_kind, face_id
             ) VALUES (?1, ?2, ?3, ?4, ?5)
             ",
@@ -413,14 +417,6 @@ pub(super) fn import_user_font_batch_tx(
         .map_err(|e| db_error("family-key insert prepare failed", e))?;
 
     for entry in entries {
-        // saturate u64→i64 instead of aborting the
-        // batch. Companion `entries_to_cache_metadata` saturates via
-        // `unwrap_or(i64::MAX)`: same conversion, two opposite failure
-        // modes. u64 values above
-        // i64::MAX (8.4 EB) are mathematically impossible for a real
-        // font file size, but a hostile cache row crafted with a
-        // numeric overflow shouldn't have the power to abort an
-        // entire session's font batch import.
         let size_bytes = i64::try_from(entry.size_bytes).unwrap_or(i64::MAX);
         let changed = insert_face
             .execute(params![
@@ -434,12 +430,8 @@ pub(super) fn import_user_font_batch_tx(
         let face_id = if changed > 0 {
             tx.last_insert_rowid()
         } else {
-            let face_id = tx
-                .query_row(
-                    "SELECT face_id FROM font_faces WHERE path = ?1 AND face_index = ?2",
-                    params![&entry.path, entry.index],
-                    |row| row.get(0),
-                )
+            let face_id = select_face_id
+                .query_row(params![&entry.path, entry.index], |row| row.get(0))
                 .map_err(|e| db_error("existing face lookup failed", e))?;
             let already_owned: bool = membership_exists
                 .query_row(params![source_id, face_id], |row| row.get(0))
@@ -563,49 +555,28 @@ pub(super) fn is_user_font_face_registered(
     face_index: u32,
 ) -> Result<bool, String> {
     let conn = open_user_font_db()?;
-    // Face-index narrowed: TTC files carry multiple faces under one
-    // path (e.g. Source Han Serif Regular = face 0, Bold = face 1).
-    // BOTH `path` AND `face_index` must be present in `font_faces`;
-    // an attacker-chosen face index that was never observed by a
-    // scan fails the gate even if the path itself was scanned.
-    // UNIQUE(path, face_index) makes this lookup a single index probe.
-    conn.query_row(
-        "SELECT 1 FROM font_faces WHERE path = ?1 AND face_index = ?2 LIMIT 1",
-        params![canonical_path, face_index as i64],
-        |_| Ok(()),
-    )
-    .optional()
-    .map(|v| v.is_some())
-    .map_err(|e| db_error("path lookup failed", e))
+    let mut stmt = conn
+        .prepare_cached("SELECT 1 FROM font_faces WHERE path = ?1 AND face_index = ?2 LIMIT 1")
+        .map_err(|e| db_error("path lookup prepare failed", e))?;
+    stmt.query_row(params![canonical_path, face_index as i64], |_| Ok(()))
+        .optional()
+        .map(|v| v.is_some())
+        .map_err(|e| db_error("path lookup failed", e))
 }
 
-/// Look up a font face in the user's local source index by family plus the
-/// bold and italic flags. Returns `None` if no match — callers fall back to
-/// system fonts.
-///
-/// Stale-path note: a path returned here is one that was on disk at
-/// the time of the most-recent scan that produced this row. If the
-/// file was deleted or moved between then and now, the caller's
-/// downstream `subset_font` will fail at the actual fs::read step
-/// and surface a normal IO error. Acceptable by design — the
-/// alternative (stat-validating every row at lookup) would multiply
-/// embed-pass IO without changing the outcome (subset_font would
-/// fail the same way half a second later). The scan-then-resolve
-/// model assumes the user doesn't shuffle font files mid-embed.
 pub fn resolve_user_font(
     family: String,
     bold: bool,
     italic: bool,
 ) -> Result<Option<FontLookupResult>, String> {
-    // Shared `validate_font_family` mirrors find_system_font and
-    // parse_local_font_file; codepoint-counted so CJK family names
-    // (3 bytes/char) fit the 256-codepoint intent.
     crate::util::validate_font_family(&family)?;
 
     let family_name_key = crate::font_cache::family_lookup_key(&family);
     let conn = open_user_font_db()?;
-    conn.query_row(
-        USER_FONT_LOOKUP_SQL,
+    let mut stmt = conn
+        .prepare_cached(USER_FONT_LOOKUP_SQL)
+        .map_err(|e| db_error("lookup prepare failed", e))?;
+    stmt.query_row(
         params![
             family_name_key,
             USER_FONT_KEY_KIND_FAMILY,
@@ -633,7 +604,7 @@ pub fn remove_font_source(source_id: String, kind: Option<String>) -> Result<(),
         })?;
     let mut conn = open_user_font_db()?;
     let tx = conn
-        .transaction()
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|e| db_error("transaction start failed", e))?;
     // Acquire-load on ACTIVE_SCAN_ID pairs with begin_font_scan's
     // SeqCst CAS publish: any concurrent begin_font_scan either
@@ -699,7 +670,7 @@ pub fn clear_font_sources() -> Result<(), String> {
         })?;
     let mut conn = open_user_font_db()?;
     let tx = conn
-        .transaction()
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|e| db_error("transaction start failed", e))?;
     // Same in-transaction guard as remove_font_source — see WHY there.
     reject_during_active_scan("Cannot clear font sources while a scan is running")?;

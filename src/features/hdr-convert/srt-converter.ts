@@ -11,7 +11,7 @@
 
 import { decodeHTML } from "entities/decode";
 import { ASCII_CONTROL_CHARS, BIDI_AND_ZERO_WIDTH_CHARS } from "../../lib/unicode-controls";
-import { parseSubtitle, safeMs } from "../../lib/subtitle-parser";
+import { formatAssTime, parseSubtitle } from "../../lib/subtitle-parser";
 
 // hoisted to module scope so the regex
 // compiles once instead of per buildAssFromSrtBlocks invocation.
@@ -314,8 +314,8 @@ export function buildAssDocument(
   lines.push("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text");
 
   for (const entry of entries) {
-    const startTime = msToAssTime(entry.start);
-    const endTime = msToAssTime(entry.end);
+    const startTime = formatAssTime(entry.start);
+    const endTime = formatAssTime(entry.end);
     lines.push(`Dialogue: 0,${startTime},${endTime},Default,,0,0,0,,${entry.text}`);
   }
 
@@ -372,22 +372,6 @@ export function convertTextCueSubtitleToAss(
       : { ...caption, text: processTextCueUserText(caption.text, format === "vtt") }
   );
   return buildAssDocumentFromCaptions(processedCaptions, style);
-}
-
-/**
- * Convert milliseconds to ASS timestamp format: H:MM:SS.cc (centiseconds)
- */
-function msToAssTime(ms: number): string {
-  ms = safeMs(ms);
-  const totalCs = Math.round(ms / 10);
-  const cs = totalCs % 100;
-  const totalSec = Math.floor(totalCs / 100);
-  const sec = totalSec % 60;
-  const totalMin = Math.floor(totalSec / 60);
-  const min = totalMin % 60;
-  const hr = Math.floor(totalMin / 60);
-
-  return `${hr}:${String(min).padStart(2, "0")}:${String(sec).padStart(2, "0")}.${String(cs).padStart(2, "0")}`;
 }
 
 // ── Format Support ────────────────────────────────────────

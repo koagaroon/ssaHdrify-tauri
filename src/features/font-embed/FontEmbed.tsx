@@ -1,6 +1,7 @@
 import FontSourceModal from "./FontSourceModal";
 import { LogPanel } from "../../lib/LogPanel";
 import { DropErrorBanner } from "../../lib/DropErrorBanner";
+import { renderSubtitleFileStrip } from "../../lib/subtitle-file-strip";
 import { sanitizeForDialog } from "../../lib/dedup-helpers";
 import {
   fontSelectionKey,
@@ -13,7 +14,6 @@ export default function FontEmbed(props: FontEmbedProps) {
     t,
     filePaths,
     fileNames,
-    primaryFileName,
     fileCount,
     isSingleFile,
     isBatch,
@@ -66,131 +66,23 @@ export default function FontEmbed(props: FontEmbedProps) {
   return (
     <div className="space-y-4">
       {/* File strip — drop zone + filename(s) + clear + Select */}
-      <div
-        ref={dropZoneRef}
-        className={`drop-zone flex items-center gap-2${dropActive ? " drop-active" : ""}`}
-      >
-        <div ref={fileContainerRef} className="flex-1 min-w-0" style={{ position: "relative" }}>
-          {fileCount > 1 ? (
-            <button
-              type="button"
-              onClick={() => setShowFileList((v) => !v)}
-              className="w-full flex items-center gap-2 px-3 rounded-lg text-sm"
-              style={{
-                background: "var(--bg-panel)",
-                border: "1px solid var(--border-light)",
-                minHeight: "38px",
-                color: "var(--text-primary)",
-                textAlign: "left",
-                cursor: "pointer",
-              }}
-              aria-expanded={showFileList}
-              aria-haspopup="listbox"
-            >
-              <span className="truncate flex-1">{fileNames.join(", ")}</span>
-              <span className="flex-none text-xs" style={{ color: "var(--text-muted)" }}>
-                ({fileCount})
-              </span>
-              <span className="flex-none text-xs" style={{ color: "var(--text-muted)" }}>
-                {showFileList ? "▲" : "▼"}
-              </span>
-            </button>
-          ) : (
-            <div
-              className="flex items-center gap-2 px-3 rounded-lg text-sm"
-              style={{
-                background: fileCount > 0 ? "var(--bg-panel)" : "var(--bg-input)",
-                border: "1px solid var(--border-light)",
-                minHeight: "38px",
-              }}
-            >
-              {fileCount > 0 ? (
-                <span className="truncate flex-1" style={{ color: "var(--text-primary)" }}>
-                  {primaryFileName}
-                </span>
-              ) : (
-                <span className="italic" style={{ color: "var(--text-muted)" }}>
-                  {t("file_empty")}
-                </span>
-              )}
-            </div>
-          )}
-
-          {showFileList && fileCount > 1 && (
-            <div
-              className="absolute rounded-lg overflow-hidden flex flex-col"
-              style={{
-                top: "100%",
-                left: 0,
-                right: 0,
-                marginTop: "4px",
-                background: "var(--bg-panel)",
-                border: "1px solid var(--border)",
-                boxShadow: "var(--shadow-popover)",
-                maxHeight: "190px",
-                zIndex: 20,
-              }}
-              role="listbox"
-            >
-              <div
-                className="px-3 py-2 flex-none"
-                style={{ borderBottom: "1px solid var(--border)" }}
-              >
-                <span className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>
-                  {t("files_selected_title", fileCount)}
-                </span>
-              </div>
-              <div className="overflow-y-auto flex-1">
-                {fileNames.map((name, idx) => (
-                  <div
-                    key={idx}
-                    className="px-3 py-2 text-sm truncate"
-                    style={{
-                      color: "var(--text-primary)",
-                      borderBottom:
-                        idx < fileNames.length - 1
-                          ? "1px solid color-mix(in srgb, var(--border) 50%, transparent)"
-                          : "none",
-                    }}
-                    title={filePaths[idx]}
-                  >
-                    {name}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-        {fileCount > 0 && (
-          <button
-            onClick={handleClearFiles}
-            disabled={analyzing || embedding}
-            className="flex-none px-3 rounded-lg text-lg font-bold transition-colors"
-            style={{
-              background: analyzing || embedding ? "var(--bg-input)" : "var(--cancel-bg)",
-              color: analyzing || embedding ? "var(--text-muted)" : "var(--cancel-text)",
-              height: "38px",
-            }}
-            title={t("btn_clear_file")}
-          >
-            ✕
-          </button>
-        )}
-        <button
-          onClick={handlePickFiles}
-          disabled={analyzing || embedding || sourceLocked}
-          className="flex-none px-5 rounded-lg font-medium text-sm transition-colors"
-          style={{
-            background:
-              analyzing || embedding || sourceLocked ? "var(--bg-input)" : "var(--accent)",
-            color:
-              analyzing || embedding || sourceLocked ? "var(--text-muted)" : "var(--accent-text)",
-            height: "38px",
-          }}
-        >
-          {analyzing ? t("btn_analyzing") : t("btn_select_files")}
-        </button>
-      </div>
+      {renderSubtitleFileStrip({
+        dropZoneRef,
+        fileContainerRef,
+        dropActive,
+        filePaths,
+        fileNames,
+        showFileList,
+        onToggleFileList: () => setShowFileList((v) => !v),
+        emptyLabel: t("file_empty"),
+        selectedTitle: t("files_selected_title", fileCount),
+        clearTitle: t("btn_clear_file"),
+        selectLabel: analyzing ? t("btn_analyzing") : t("btn_select_files"),
+        clearDisabled: analyzing || embedding,
+        selectDisabled: analyzing || embedding || sourceLocked,
+        onClearFiles: handleClearFiles,
+        onSelectFiles: handlePickFiles,
+      })}
 
       {/* Selection-rejected banner */}
       <DropErrorBanner message={dropError} onDismiss={() => setDropError(null)} />

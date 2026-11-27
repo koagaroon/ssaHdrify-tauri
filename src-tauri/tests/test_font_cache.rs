@@ -38,13 +38,11 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::thread;
-use std::time::Duration;
 
 use app_lib::font_cache::{cache_source_key, FontCache, FontDirectoryScope, MAX_CACHED_FOLDERS};
 
 mod common;
-use common::make_real_font_dir as make_font_dir;
+use common::{backdate_modified_seconds, make_real_font_dir as make_font_dir, TestTempDir};
 
 const FIXTURE_ASS: &str = concat!(
     "[Script Info]\n",
@@ -63,21 +61,8 @@ fn cli_path() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_ssahdrify-cli"))
 }
 
-fn temp_dir(label: &str) -> PathBuf {
-    static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let pid = std::process::id();
-    let nano = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let seq = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let base = std::env::temp_dir();
-    fs::create_dir_all(&base).expect("failed to ensure OS temp dir");
-    let dir = base.join(format!(
-        "ssahdrify-cli-cache-test-{label}-{pid}-{nano}-{seq}"
-    ));
-    fs::create_dir(&dir).expect("failed to create unique test temp dir");
-    dir
+fn temp_dir(label: &str) -> TestTempDir {
+    TestTempDir::new("ssahdrify-cli-cache-test", label)
 }
 
 fn write_fixture_ass(dir: &Path, name: &str) -> PathBuf {
@@ -162,8 +147,6 @@ fn refresh_fonts_creates_cache_with_one_folder_row() {
         stored, &canonical_str,
         "cached folder path mismatch: stored={stored}, canonical={canonical_str}"
     );
-
-    let _ = fs::remove_dir_all(work);
 }
 
 #[test]
@@ -194,8 +177,6 @@ fn refresh_fonts_idempotent_no_duplicate_folder_rows() {
         1,
         "two consecutive refreshes must yield exactly 1 row, got {sources:?}"
     );
-
-    let _ = fs::remove_dir_all(work);
 }
 
 #[test]
@@ -228,8 +209,6 @@ fn refresh_fonts_recursive_source_reaches_nested_font_and_persists_scope() {
     let expected = cache_source_key(&library_root, FontDirectoryScope::Recursive)
         .expect("derive recursive cache source key");
     assert_eq!(sources[0].key(), expected);
-
-    let _ = fs::remove_dir_all(work);
 }
 
 #[test]
@@ -251,8 +230,6 @@ fn refresh_fonts_with_no_cache_errors() {
         stderr.contains("--no-cache"),
         "stderr should mention --no-cache: {stderr}"
     );
-
-    let _ = fs::remove_dir_all(work);
 }
 
 #[test]
@@ -285,8 +262,6 @@ fn refresh_fonts_rejects_json_even_when_quiet() {
         !cache.exists(),
         "flag rejection must happen before cache I/O"
     );
-
-    let _ = fs::remove_dir_all(work);
 }
 
 #[test]
@@ -316,8 +291,6 @@ fn refresh_fonts_reports_verbose_as_inert() {
         stderr.contains("--verbose") && stderr.contains("no effect here"),
         "refresh-fonts must not silently ignore --verbose: {stderr}"
     );
-
-    let _ = fs::remove_dir_all(work);
 }
 
 #[test]
@@ -367,8 +340,6 @@ fn refresh_fonts_corrupt_cache_names_path_and_offers_targeted_rebuild_in_both_op
         original,
         "the CLI must not delete a corrupt cache automatically"
     );
-
-    let _ = fs::remove_dir_all(work);
 }
 
 #[test]
@@ -400,8 +371,6 @@ fn refresh_fonts_ordinary_open_error_does_not_recommend_deletion() {
             && !stderr.contains("rerun the same `refresh-fonts` command"),
         "permission/open failures must not receive destructive corruption guidance: {stderr}"
     );
-
-    let _ = fs::remove_dir_all(work);
 }
 
 #[test]
@@ -453,8 +422,6 @@ fn refresh_fonts_schema_mismatch_names_path_and_rerun_action() {
             "schema guidance must not end in the old dangling half-command in {mode}: {stderr}"
         );
     }
-
-    let _ = fs::remove_dir_all(work);
 }
 
 #[test]
@@ -490,8 +457,6 @@ fn refresh_fonts_errors_when_every_source_is_skipped() {
         !stderr.contains("Cache updated"),
         "all-skipped refresh must not print a success summary: {stderr}"
     );
-
-    let _ = fs::remove_dir_all(work);
 }
 
 #[test]
@@ -534,8 +499,6 @@ fn refresh_fonts_rejects_folder_count_over_cache_cap() {
         !stderr.contains("Cache updated"),
         "over-cap refresh must not print a success summary: {stderr}"
     );
-
-    let _ = fs::remove_dir_all(work);
 }
 
 #[test]
@@ -560,17 +523,12 @@ fn embed_with_no_cache_does_not_touch_cache_file() {
     ]);
     assert!(refresh.status.success(), "refresh-fonts failed");
 
-    // Snapshot cache file mtime, then run embed --no-cache.
+    // Backdate cache mtime by 10s so any accidental touch advances mtime
+    // past `before` across all filesystems without sleeping.
+    backdate_modified_seconds(&cache, 10);
     let before = fs::metadata(&cache)
         .and_then(|m| m.modified())
         .expect("stat cache before");
-
-    // Sleep longer than the worst-case mtime granularity (FAT/SUBST/
-    // network drives can be 1-2 s; NTFS is sub-second). 2100 ms covers
-    // both branches symmetrically with the drift test below — without
-    // this, a no-op write on a 2-second-resolution volume would tie
-    // before/after and false-pass.
-    thread::sleep(Duration::from_millis(2100));
 
     let subtitle = write_fixture_ass(&work, "input.ass");
     let embed = run_cli(&[
@@ -594,8 +552,6 @@ fn embed_with_no_cache_does_not_touch_cache_file() {
         before, after,
         "embed --no-cache must not modify the cache file"
     );
-
-    let _ = fs::remove_dir_all(work);
 }
 
 #[test]
@@ -609,6 +565,7 @@ fn embed_reports_drift_when_folder_mtime_changes() {
     let work = temp_dir("drift");
     let font_dir = make_font_dir(&work);
     let cache = cache_path(&work);
+    backdate_modified_seconds(&font_dir, 10);
 
     // Populate cache.
     let refresh = run_cli(&[
@@ -620,11 +577,8 @@ fn embed_reports_drift_when_folder_mtime_changes() {
     ]);
     assert!(refresh.status.success(), "refresh-fonts failed");
 
-    // Mutate folder: add a file. mtime resolution gates this — sleep
-    // longer than the worst-case granularity (NTFS is fine, FAT/SUBST
-    // can be 1-2 s) before touching, so the post-touch mtime is
-    // strictly greater than what's in cache.
-    thread::sleep(Duration::from_millis(2100));
+    // Mutate folder: adding a file sets folder mtime to `now` (+10s ahead
+    // of the backdated snapshot stored in `cache.sqlite3`).
     fs::write(font_dir.join("added-after-cache.ttf"), b"")
         .expect("failed to add second placeholder");
 
@@ -668,8 +622,6 @@ fn embed_reports_drift_when_folder_mtime_changes() {
         "drift fallback should let embed continue (exit code = {:?}, stderr = {stderr})",
         embed.status.code()
     );
-
-    let _ = fs::remove_dir_all(work);
 }
 
 fn write_fixture_ass_for_entry(
@@ -726,10 +678,10 @@ fn chain_embed_uses_persistent_cache_read_only() {
         String::from_utf8_lossy(&refresh.stderr)
     );
 
+    backdate_modified_seconds(&cache, 10);
     let before = fs::metadata(&cache)
         .and_then(|m| m.modified())
         .expect("stat cache before chain");
-    thread::sleep(Duration::from_millis(2100));
 
     let subtitle = write_fixture_ass_for_entry(&work, "ep01.ass", &entry);
     let chain = run_cli(&[
@@ -765,8 +717,6 @@ fn chain_embed_uses_persistent_cache_read_only() {
         before, after,
         "read-only chain cache open must not modify the cache file"
     );
-
-    let _ = fs::remove_dir_all(work);
 }
 
 #[test]
@@ -788,10 +738,10 @@ fn chain_embed_with_no_cache_skips_and_preserves_cache_file() {
     ]);
     assert!(refresh.status.success(), "refresh-fonts failed");
 
+    backdate_modified_seconds(&cache, 10);
     let before = fs::metadata(&cache)
         .and_then(|m| m.modified())
         .expect("stat cache before chain --no-cache");
-    thread::sleep(Duration::from_millis(2100));
 
     let subtitle = write_fixture_ass_for_entry(&work, "ep01.ass", &entry);
     let chain = run_cli(&[
@@ -826,8 +776,6 @@ fn chain_embed_with_no_cache_skips_and_preserves_cache_file() {
         before, after,
         "chain --no-cache must not modify the cache file"
     );
-
-    let _ = fs::remove_dir_all(work);
 }
 
 #[test]
@@ -838,6 +786,7 @@ fn chain_embed_reports_drift_and_falls_back_without_mutating_cache() {
     let work = temp_dir("chain_drift");
     let font_dir = make_font_dir(&work);
     let cache = cache_path(&work);
+    backdate_modified_seconds(&font_dir, 10);
 
     let refresh = run_cli(&[
         "--cache-file",
@@ -848,10 +797,10 @@ fn chain_embed_reports_drift_and_falls_back_without_mutating_cache() {
     ]);
     assert!(refresh.status.success(), "refresh-fonts failed");
 
-    thread::sleep(Duration::from_millis(2100));
     fs::write(font_dir.join("added-after-cache.ttf"), b"")
         .expect("failed to add placeholder font for drift");
 
+    backdate_modified_seconds(&cache, 10);
     let before_drift_run = fs::metadata(&cache)
         .and_then(|m| m.modified())
         .expect("stat cache before chain drift run");
@@ -890,6 +839,4 @@ fn chain_embed_reports_drift_and_falls_back_without_mutating_cache() {
         before_drift_run, after_drift_run,
         "chain drift fallback must not mutate the cache file"
     );
-
-    let _ = fs::remove_dir_all(work);
 }

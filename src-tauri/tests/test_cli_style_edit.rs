@@ -4,25 +4,15 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod common;
+use common::TestTempDir;
+
 fn cli_path() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_ssahdrify-cli"))
 }
 
-fn temp_dir(label: &str) -> PathBuf {
-    static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let seq = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let base = std::env::temp_dir();
-    fs::create_dir_all(&base).unwrap();
-    let dir = base.join(format!(
-        "ssahdrify-cli-style-edit-{label}-{}-{stamp}-{seq}",
-        std::process::id()
-    ));
-    fs::create_dir(&dir).unwrap();
-    dir
+fn temp_dir(label: &str) -> TestTempDir {
+    TestTempDir::new("ssahdrify-cli-style-edit", label)
 }
 
 const SAMPLE_ASS: &str = "\
@@ -235,4 +225,37 @@ fn style_edit_rejects_overwrite_output_dir_invalid_ops_and_existing_outputs() {
     );
 
     let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn style_edit_lossy_refusal_preserves_decode_warnings_in_json_report() {
+    let dir = temp_dir("lossy-warnings");
+    let input = dir.join("damaged_utf8_bom.ass");
+    let mut bytes = vec![0xEF, 0xBB, 0xBF];
+    bytes.extend_from_slice(SAMPLE_ASS.as_bytes());
+    bytes.extend_from_slice(b"; trailing invalid byte \xff\n");
+    fs::write(&input, bytes).unwrap();
+
+    let out = Command::new(cli_path())
+        .args(["--lang", "en", "--json", "style-edit", "--font-size", "50"])
+        .arg(&input)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report["failed"], 1);
+    assert!(report["results"][0]["error"]
+        .as_str()
+        .unwrap()
+        .contains("source decoding was lossy"));
+    let warnings = report["results"][0]["warnings"]
+        .as_array()
+        .expect("lossy refusal should preserve decode warnings");
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.as_str().is_some_and(|s| s.contains("malformed"))),
+        "expected malformed-byte decode warning, got: {warnings:?}"
+    );
+    assert!(!dir.join("damaged_utf8_bom.styled.ass").exists());
 }

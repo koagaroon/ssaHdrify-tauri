@@ -749,4 +749,19 @@ describe("CLI Style Edit entry", () => {
       /\.ass or \.ssa/
     );
   });
+
+  it("classifies control-bearing and stemless rename paths as unknown instead of valid media", () => {
+    const plan = planRename({
+      paths: [
+        "C:\\media\\Show - 01.mkv",
+        "C:\\media\\Show - 01\x00.ass",
+        "C:\\media\\Show - 01\u202e.ass",
+        "C:\\media\\.ass",
+      ],
+      mode: "rename",
+    });
+    expect(plan.videoCount).toBe(1);
+    expect(plan.subtitleCount).toBe(0);
+    expect(plan.unknownCount).toBe(3);
+  });
 });

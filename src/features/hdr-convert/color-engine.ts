@@ -195,7 +195,9 @@ export function sRgbToHdr(
     // uses DEBUG, not WARN. Stays visible with `localStorage.debug = '*'`
     // or DevTools verbose-logging when actually investigating
     // malformed-color edge cases.
-    console.debug(`[ssaHdrify] sRgbToHdr failed for (${r},${g},${b}):`, e);
+    if (import.meta.env.DEV) {
+      console.debug(`[ssaHdrify] sRgbToHdr failed for (${r},${g},${b}):`, e);
+    }
     return [0, 0, 0];
   }
 }

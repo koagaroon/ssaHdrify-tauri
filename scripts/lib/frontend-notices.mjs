@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, relative, sep } from "node:path";
-import { buildNativeNotices } from "./native-notices.mjs";
+import { buildNativeNotices, nativeManifestPath } from "./native-notices.mjs";
 
 /**
  * @typedef {{name?: string, version?: string, license?: string, dev?: boolean, dependencies?: Record<string, string>}} PackageMetadata
@@ -105,6 +105,45 @@ export function collectNpmNotices(lockfile, readPackage) {
   });
 }
 
+/**
+ * Resolve the exact locked version of `unicode-normalization` from both
+ * `native-notices.json` and `src-tauri/Cargo.lock` so supplemental license
+ * URLs never drift behind Cargo upgrades.
+ * @param {string} root
+ * @returns {string}
+ */
+export function resolveUnicodeNormalizationVersion(root) {
+  /** @type {{ packages?: Array<{ name?: string, version?: string }> }} */
+  const manifest = JSON.parse(readFileSync(join(root, nativeManifestPath), "utf8"));
+  const matches = Array.isArray(manifest?.packages)
+    ? manifest.packages.filter((pkg) => pkg?.name === "unicode-normalization")
+    : [];
+  if (matches.length !== 1) {
+    throw new Error(
+      `Expected exactly one unicode-normalization entry in ${nativeManifestPath}, found ${matches.length}.`
+    );
+  }
+  const version = matches[0].version;
+  if (typeof version !== "string" || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u.test(version)) {
+    throw new Error(
+      `Invalid unicode-normalization version in ${nativeManifestPath}: ${String(version)}`
+    );
+  }
+  const cargoLock = readFileSync(join(root, "src-tauri/Cargo.lock"), "utf8").replace(
+    /\r\n/gu,
+    "\n"
+  );
+  const lockMatches = [
+    ...cargoLock.matchAll(/\[\[package\]\]\nname = "unicode-normalization"\nversion = "([^"]+)"/gu),
+  ].map((match) => match[1]);
+  if (lockMatches.length !== 1 || lockMatches[0] !== version) {
+    throw new Error(
+      `unicode-normalization version mismatch between ${nativeManifestPath} (${version}) and Cargo.lock (${lockMatches.join(", ") || "missing"}).`
+    );
+  }
+  return version;
+}
+
 /** @param {string} root */
 export function buildFrontendNotices(root) {
   /** @param {string} relative */
@@ -142,15 +181,17 @@ export function buildFrontendNotices(root) {
         entry.files.map((file) => `${file.name}\n\n${file.text}`).join("\n\n")
     );
   }
+  const unicodeNormVersion = resolveUnicodeNormalizationVersion(root);
+  const unicodeNormSource = `https://crates.io/crates/unicode-normalization/${unicodeNormVersion}`;
   for (const [name, source, file] of [
     [
       "unicode-normalization Rust code (MIT option)",
-      "https://crates.io/crates/unicode-normalization/0.1.26",
+      unicodeNormSource,
       "src/assets/licenses/unicode-normalization-LICENSE-MIT.txt",
     ],
     [
       "unicode-normalization Unicode data (Unicode-3.0)",
-      "https://crates.io/crates/unicode-normalization/0.1.26",
+      unicodeNormSource,
       "src/assets/licenses/unicode-normalization-LICENSE-UNICODE.txt",
     ],
     ["Inter", "https://github.com/rsms/inter", "src/assets/fonts/inter/LICENSE.txt"],

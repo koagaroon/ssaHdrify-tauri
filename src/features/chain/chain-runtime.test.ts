@@ -555,4 +555,35 @@ describe("resolveChainOutputPath", () => {
       );
     }
   );
+
+  it("rejects empty chain plans and invalid HDR step eotf while accepting BOM-prefixed ASS", () => {
+    expect(() =>
+      runChain({
+        plan: { steps: [], outputTemplate: "{name}.out.ass" },
+        inputPath: INPUT_PATH,
+        content: ASS_FIXTURE,
+      })
+    ).toThrow(/at least one step/);
+
+    expect(() =>
+      runChain({
+        plan: {
+          steps: [{ kind: "hdr", params: { eotf: "BOGUS" as "PQ", brightness: 203 } }],
+          outputTemplate: "{name}.out.ass",
+        },
+        inputPath: INPUT_PATH,
+        content: ASS_FIXTURE,
+      })
+    ).toThrow(/Invalid eotf/);
+
+    const bomResult = runChain({
+      plan: {
+        steps: [{ kind: "hdr", params: { eotf: "PQ", brightness: 203 } }],
+        outputTemplate: "{name}.out.ass",
+      },
+      inputPath: INPUT_PATH,
+      content: `\uFEFF${ASS_FIXTURE}`,
+    });
+    expect(bomResult.content.startsWith("\uFEFF[Script Info]")).toBe(true);
+  });
 });

@@ -1,4 +1,10 @@
-import { ASCII_CONTROL_CHARS, BIDI_AND_ZERO_WIDTH_CHARS } from "../../lib/unicode-controls";
+import { decodeBase64Bytes } from "../../lib/base64-bytes";
+import { sanitizeError } from "../../lib/dedup-helpers";
+import {
+  ASCII_CONTROL_CHARS,
+  BIDI_AND_ZERO_WIDTH_CHARS,
+  stripUnicodeControls,
+} from "../../lib/unicode-controls";
 
 /**
  * ASS-specific UUEncode implementation.
@@ -55,21 +61,42 @@ function utf8ByteLength(text: string): number {
   return bytes;
 }
 
-/** Exact UTF-8 size, including the header and 80-column line separators. */
-export function fontEntryByteLength(fontName: string, dataLength: number): number {
+function encodedBodyByteLength(dataLength: number): number {
   if (!Number.isSafeInteger(dataLength) || dataLength <= 0 || dataLength > MAX_FONT_DATA_SIZE) {
     throw new Error(`Invalid font data size: ${dataLength} (max ${MAX_FONT_DATA_SIZE})`);
   }
   const remainder = dataLength % 3;
   const encodedChars = Math.floor(dataLength / 3) * 4 + (remainder ? remainder + 1 : 0);
-  return (
-    11 +
-    // The CLI's bare V8 runtime has no TextEncoder or Buffer. Lone UTF-16
-    // surrogates occupy three bytes after UTF-8 replacement, like U+FFFD.
-    utf8ByteLength(safeFontEntryName(fontName)) +
-    encodedChars +
-    Math.floor((encodedChars - 1) / 80)
-  );
+  return encodedChars + Math.floor((encodedChars - 1) / 80);
+}
+
+function fontEntryByteLengthForSafeName(safeName: string, dataLength: number): number {
+  // The CLI's bare V8 runtime has no TextEncoder or Buffer. Lone UTF-16
+  // surrogates occupy three bytes after UTF-8 replacement, like U+FFFD.
+  return 11 + utf8ByteLength(safeName) + encodedBodyByteLength(dataLength);
+}
+
+/** Exact UTF-8 size, including the header and 80-column line separators. */
+export function fontEntryByteLength(fontName: string, dataLength: number): number {
+  return fontEntryByteLengthForSafeName(safeFontEntryName(fontName), dataLength);
+}
+
+function disambiguateSafeFontName(safeName: string, usedLowerNames: ReadonlySet<string>): string {
+  if (!usedLowerNames.has(safeName.toLowerCase())) {
+    return safeName;
+  }
+  const lower = safeName.toLowerCase();
+  const hasTtfSuffix = lower.endsWith(".ttf");
+  const stem = hasTtfSuffix ? safeName.slice(0, -4) : safeName;
+  const ext = hasTtfSuffix ? safeName.slice(-4) : "";
+  let counter = 2;
+  while (true) {
+    const candidate = `${stem}_${counter}${ext}`;
+    if (!usedLowerNames.has(candidate.toLowerCase())) {
+      return candidate;
+    }
+    counter += 1;
+  }
 }
 
 /** Reject cumulative growth before allocating the next encoded entry. */
@@ -77,6 +104,7 @@ export class FontSectionBuilder {
   private entries: string[] = [];
   private bytes = 9; // [Fonts] header and final newline.
   private readonly maxBytes: number;
+  private readonly usedNames = new Set<string>();
 
   constructor(maxBytes = MAX_ENCODED_FONT_SECTION_BYTES) {
     this.maxBytes = maxBytes;
@@ -87,14 +115,18 @@ export class FontSectionBuilder {
   }
 
   add(fontName: string, data: Uint8Array): void {
+    const uniqueSafeName = disambiguateSafeFontName(safeFontEntryName(fontName), this.usedNames);
     const projected =
-      this.bytes + (this.count ? 2 : 0) + fontEntryByteLength(fontName, data.length);
+      this.bytes +
+      (this.count ? 2 : 0) +
+      fontEntryByteLengthForSafeName(uniqueSafeName, data.length);
     if (projected > this.maxBytes) {
       throw new Error(
         `Embedded fonts exceed the ${this.maxBytes}-byte encoded output limit; select fewer fonts`
       );
     }
-    const entry = buildFontEntry(fontName, data);
+    const entry = buildFontEntryFromSafeName(uniqueSafeName, data);
+    this.usedNames.add(uniqueSafeName.toLowerCase());
     this.entries.push(entry);
     this.bytes = projected;
   }
@@ -168,47 +200,36 @@ export function assUuencode(data: Uint8Array): string[] {
  * @param data - Binary font data (Uint8Array)
  * @returns Complete entry text including "fontname:" header
  */
-export function buildFontEntry(fontName: string, data: Uint8Array): string {
-  // A [Fonts] entry needs body lines; a 0-byte subset would emit a bare
-  // `fontname:` header with no payload — a malformed embedded entry. This
-  // can't happen today (subset_font returns Err, never empty bytes, on a
-  // real font), but the guard fails loud at the encoder boundary against a
-  // bypass or refactor, matching the MAX_FONT_DATA_SIZE defense above.
+function buildFontEntryFromSafeName(safeName: string, data: Uint8Array): string {
   if (data.length === 0) {
     throw new Error("Cannot build a [Fonts] entry from empty font data");
   }
+  const encodedLines = assUuencode(data);
+  return `fontname: ${safeName}\n${encodedLines.join("\n")}`;
+}
+
+export function buildFontEntry(fontName: string, data: Uint8Array): string {
   // Strip ALL control chars (C0 + C1), Unicode line separators, plus ':' —
   // the header line is `fontname: <name>`, so a name containing `:` could
   // break line parsing, and a `\u2028` could smuggle a line break into the
-  // [Fonts] section. Defense-in-depth: font-embedder.buildFontFileName
-  // already sanitizes upstream, but this keeps the encoder self-contained.
-  // BiDi + zero-width + line/paragraph separators come from the shared
-  // unicode-controls set (mirrors validate_font_family + safeFontName +
-  // sanitizeForDialog). Slashes/backslashes are added beyond the
-  // upstream buildFontFileName output as a self-contained defense at
-  // the encoder boundary.
-  //
-  // `no-control-regex`
-  // eslint-disable directive removed \u2014 the rule only inspects regex
-  // literals, and this regex is built via `new RegExp(...)` from a
-  // string interpolation, so the rule was never going to fire.
-  //
-  // Sibling cross-ref: the extra `:/\\` literals on top of the BIDI /
-  // control set are SPECIFIC to the [Fonts] header line shape \u2014 header
-  // lines are `fontname: <name>` so a name carrying `:` would break the
-  // parser, and `/` / `\` get sanitized as a defense-in-depth measure
-  // beyond the upstream buildFontFileName sanitizer. The sibling
-  // sanitizer in `src/features/hdr-convert/srt-converter.ts::
-  // FONT_NAME_SANITIZER` adds `,{}\\:` instead \u2014 that's the ASS
-  // Style-line CSV path's stop chars.
-  //
-  // BOTH sanitizers share `\\` and `:` \u2014 that is the structural
-  // overlap; `,{}` are unique to srt-converter side, `/` is unique to
-  // this side. Both sanitizers must keep stripping the shared BIDI /
-  // control set; the extra boundary-specific chars are
-  // intentional and MUST NOT be unified into a single helper without
-  // re-checking the per-boundary character implications.
+  // [Fonts] section. Sibling cross-ref: `srt-converter.ts::FONT_NAME_SANITIZER`
+  // adds `,{}\\:` for ASS Style CSV fields, while this boundary adds `:/\\`.
   const safeName = safeFontEntryName(fontName);
-  const encodedLines = assUuencode(data);
-  return `fontname: ${safeName}\n${encodedLines.join("\n")}`;
+  return buildFontEntryFromSafeName(safeName, data);
+}
+
+/**
+ * Decode base64-encoded font subset bytes with sanitized font-name attribution.
+ * Shared by standalone CLI `applyFontEmbed` and `chain` `embedTransform`.
+ */
+export function decodeSubsetBase64(dataB64: string, name: string): Uint8Array {
+  try {
+    return decodeBase64Bytes(dataB64);
+  } catch (e) {
+    const message = sanitizeError(e);
+    const safeName = stripUnicodeControls(name);
+    throw new Error(`base64 decode failed for font subset '${safeName}': ${message}`, {
+      cause: e,
+    });
+  }
 }

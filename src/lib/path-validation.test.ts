@@ -588,4 +588,40 @@ describe("substituteTemplate — identifier cap + strict mode", () => {
       "Show..special.shifted.ass"
     );
   });
+
+  it("preserves final extension dot when a sole leading token is empty", () => {
+    expect(substituteTemplate("{lang}.ass", { lang: "" })).toBe(".ass");
+  });
+});
+
+describe("UNC completeness & directory/input collision helpers", () => {
+  it("rejects incomplete UNC paths missing server or share", () => {
+    expect(() => decomposeInputPath("\\\\server\\episode.ass")).toThrow(/incomplete UNC path/);
+    expect(() => decomposeInputPath("///episode.ass")).toThrow(/incomplete UNC path/);
+    expect(() => decomposeInputPath("\\\\?\\UNC\\server\\episode.ass")).toThrow(
+      /incomplete UNC path/
+    );
+  });
+
+  it("validates output directory and selected-input replacement helpers", async () => {
+    const {
+      assertOutputDoesNotReplaceSelectedInput,
+      assertSafeOutputPathInDirectory,
+      decomposeOutputDirectoryPath,
+      fileNameFromPath,
+    } = await import("./path-validation");
+
+    expect(() => decomposeOutputDirectoryPath("\\\\server")).toThrow(/incomplete UNC path/);
+    expect(decomposeOutputDirectoryPath("\\\\server\\share\\out\\")).toMatchObject({
+      dir: "//server/share/out",
+      usedBackslash: true,
+    });
+    expect(() =>
+      assertSafeOutputPathInDirectory("C:/out/ep01.ass", "C:\\out", "C:\\out\\EP01.ass")
+    ).toThrow(/same as input/);
+    expect(() =>
+      assertOutputDoesNotReplaceSelectedInput("C:/subs/ep01.ass", new Set(["c:/subs/ep01.ass"]))
+    ).toThrow(/matches a selected input file/);
+    expect(fileNameFromPath("C:\\subs\\ep\u202e01\x00.ass")).toBe("ep01.ass");
+  });
 });

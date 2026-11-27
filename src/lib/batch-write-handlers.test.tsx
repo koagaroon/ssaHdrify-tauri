@@ -8,6 +8,8 @@ import HdrConvert from "../features/hdr-convert/HdrConvert";
 import FontEmbed from "../features/font-embed/FontEmbed";
 import FontSourceModal from "../features/font-embed/FontSourceModal";
 import BatchRename from "../features/batch-rename/BatchRename";
+import StyleEdit from "../features/style-edit/StyleEdit";
+import type { Status, StatusTab } from "./StatusContext";
 import {
   useFileContext,
   type FontsFilesState,
@@ -46,8 +48,10 @@ const state = vi.hoisted(() => ({
   hdrFiles: undefined as HdrFileState | null | undefined,
   timingFiles: undefined as TimingFilesState | null | undefined,
   styleFiles: null as StyleFilesState | null,
+  statuses: {} as Partial<Record<StatusTab, Status>>,
   setHdrFiles: vi.fn(),
   setTimingFiles: vi.fn(),
+  setStyleFiles: vi.fn(),
   ask: vi.fn(),
   open: vi.fn(),
   log: vi.fn(),
@@ -110,8 +114,21 @@ vi.mock("@tauri-apps/api/core", () => ({
         encodingId: "utf-8",
         inferredWithoutBom: false,
         lossy: false,
+        sourceByteLength: Buffer.byteLength(text, "utf8"),
+        sourceRevision: `rev:${path}`,
         ...state.readMetadata,
       };
+    }
+    if (command === "safe_write_style_edit_output") {
+      const destination = String(args.outputPath);
+      const source = String(args.sourcePath);
+      state.onWrite?.(destination);
+      state.attempts.push({ path: destination, overwrite: false });
+      if (!state.files.has(source)) throw new Error("Missing input");
+      if (args.expectedRevision !== `rev:${source}`) throw new Error("Source changed");
+      if (state.files.has(destination)) throw new Error("Destination already exists");
+      state.files.set(destination, String(args.content));
+      return;
     }
     if (command === "read_timing_map_file") {
       await state.readProbe?.(path);
@@ -210,6 +227,10 @@ vi.mock("./FileContext", async (importOriginal) => {
         clearFile: vi.fn(),
         setTimingFiles: state.setTimingFiles,
         setHdrFiles: state.setHdrFiles,
+        setStyleFiles: (value: StyleFilesState | null) => {
+          state.styleFiles = value;
+          state.setStyleFiles(value);
+        },
       };
     },
   };
@@ -220,7 +241,11 @@ vi.mock("./useFolderDrop", () => ({
   },
 }));
 vi.mock("./useClickOutside", () => ({ useClickOutside: () => {} }));
-vi.mock("./useTabStatus", () => ({ useTabStatus: () => {} }));
+vi.mock("./useTabStatus", () => ({
+  useTabStatus: (tab: StatusTab, status: Status) => {
+    state.statuses[tab] = status;
+  },
+}));
 vi.mock("./useLogPanel", () => ({
   useLogPanel: () => ({
     logs: [],
@@ -231,12 +256,15 @@ vi.mock("./useLogPanel", () => ({
 }));
 
 type Props = {
+  id?: string;
+  type?: string;
   children?: ReactNode;
   title?: string;
   disabled?: boolean;
+  checked?: boolean;
   value?: string;
   onClick?: () => unknown;
-  onChange?: () => unknown;
+  onChange?: (event?: unknown) => unknown;
 };
 function elements(node: ReactNode): ReactElement<Props>[] {
   if (Array.isArray(node)) return node.flatMap(elements);
@@ -274,12 +302,14 @@ beforeEach(() => {
   state.hdrFiles = undefined;
   state.timingFiles = undefined;
   state.styleFiles = null;
+  state.statuses = {};
   state.setHdrFiles.mockReset().mockImplementation((value: HdrFileState | null) => {
     state.hdrFiles = value;
   });
   state.setTimingFiles.mockReset().mockImplementation((value: TimingFilesState | null) => {
     state.timingFiles = value;
   });
+  state.setStyleFiles.mockReset();
   state.ask.mockReset().mockResolvedValue(true);
   state.open.mockReset().mockResolvedValue(null);
   state.log.mockReset();
@@ -934,4 +964,187 @@ it("loads a JSON timing map in TimingShift and exports shifted batch outputs", a
   expect(state.files.get(inputPath("episode.shifted.srt"))).toContain(
     "00:00:02,500 --> 00:00:03,500"
   );
+});
+
+describe("partial batch failure status and style controls", () => {
+  it.each([
+    {
+      tab: "hdr" as const,
+      component: HdrConvert,
+      button: "btn_convert",
+      partialKey: "status_hdr_partial",
+      outSuffix: ".hdr.ass",
+    },
+    {
+      tab: "timing" as const,
+      component: TimingShift,
+      button: "btn_save_all",
+      partialKey: "status_timing_partial",
+      outSuffix: ".shifted.srt",
+    },
+  ])(
+    "reports partial status instead of false done when one file in $tab batch fails",
+    async ({ tab, component, button, partialKey, outSuffix }) => {
+      const okPath = inputPath("ok.srt");
+      const missingPath = inputPath("missing.srt");
+      state.paths = [okPath, missingPath];
+      state.files = new Map([[okPath, subtitle]]);
+      function renderTab() {
+        state.cursor = 0;
+        state.effects = [];
+        return elements(component());
+      }
+      const runBtn = renderTab().find(
+        (entry) => entry.type === "button" && entry.props.children === button
+      )!;
+      await runBtn.props.onClick!();
+      renderTab();
+      expect(state.attempts).toEqual([{ path: inputPath(`ok${outSuffix}`), overwrite: false }]);
+      expect(state.statuses[tab]).toEqual({ kind: "pending", message: partialKey });
+      expect(state.translations).toContainEqual({
+        key: "msg_complete_warnings",
+        args: [1, 2, 1],
+      });
+    }
+  );
+
+  it("keeps the HDR custom font input mounted when typing a preset prefix like Arial", () => {
+    function renderHdr() {
+      state.cursor = 0;
+      state.effects = [];
+      return elements(HdrConvert());
+    }
+    // Expand Style Settings panel
+    const styleToggle = renderHdr().find(
+      (entry) =>
+        entry.type === "button" &&
+        Array.isArray(entry.props.children) &&
+        entry.props.children.includes("style_settings")
+    )!;
+    styleToggle.props.onClick!();
+
+    const fontSelect = renderHdr().find(
+      (entry) => entry.type === "select" && entry.props.id === "hdr-style-font"
+    )!;
+    fontSelect.props.onChange!({ target: { value: "__custom" } });
+
+    const customInput = renderHdr().find(
+      (entry) => entry.type === "input" && entry.props.id === "hdr-style-custom-font"
+    );
+    expect(customInput).toBeDefined();
+    // Typing "Arial" (an exact preset name) on the way to "Arial Narrow" must not unmount the input!
+    customInput!.props.onChange!({ target: { value: "Arial" } });
+    const afterPresetPrefix = renderHdr().find(
+      (entry) => entry.type === "input" && entry.props.id === "hdr-style-custom-font"
+    );
+    expect(afterPresetPrefix).toBeDefined();
+    expect(afterPresetPrefix!.props.value).toBe("Arial");
+  });
+});
+
+describe("Style Edit write preparation", () => {
+  const source = (n = 1) => inputPath(`style-ep${n}.ass`);
+  const output = (n = 1) => inputPath(`style-ep${n}.styled.ass`);
+
+  function renderStyle() {
+    state.cursor = 0;
+    state.effects = [];
+    return elements(StyleEdit());
+  }
+
+  function labeled(label: string) {
+    const match = renderStyle().find(
+      (entry) => entry.type === "button" && entry.props.children === label
+    );
+    expect(match, label).toBeDefined();
+    return match!.props;
+  }
+
+  async function prepareStyle(count = 1) {
+    const paths = Array.from({ length: count }, (_, idx) => source(idx + 1));
+    for (const p of paths) state.files.set(p, assSubtitle);
+    renderStyle();
+    await state.onDrop!(paths);
+    // Enable "Change font family" and enter "Microsoft YaHei"
+    const checkboxes = renderStyle().filter(
+      (entry) => entry.type === "input" && entry.props.type === "checkbox"
+    );
+    checkboxes[0]!.props.onChange!({ target: { checked: true } });
+    const targetInput = renderStyle().find(
+      (entry) => entry.type === "input" && entry.props.id === "style-target-family"
+    )!;
+    targetInput.props.onChange!({ target: { value: "Microsoft YaHei" } });
+    renderStyle();
+    for (const effect of state.effects) effect();
+    expect(labeled("btn_write_style_edits").disabled).toBe(false);
+  }
+
+  it("writes a .styled.ass sibling exclusively and preserves the source", async () => {
+    await prepareStyle();
+    await labeled("btn_write_style_edits").onClick!();
+    expect(state.attempts).toEqual([{ path: output(), overwrite: false }]);
+    expect(state.files.get(output())).toContain("Microsoft YaHei");
+    expect(state.files.get(source())).toBe(assSubtitle);
+    renderStyle();
+    expect(state.statuses.style).toEqual({ kind: "done", message: "status_style_done" });
+  });
+
+  it("refuses to write when a .styled output already exists without prompting to overwrite", async () => {
+    await prepareStyle();
+    state.files.set(output(), "existing styled file");
+    await labeled("btn_write_style_edits").onClick!();
+    expect(state.attempts).toEqual([]);
+    expect(state.ask).not.toHaveBeenCalled();
+    expect(state.files.get(output())).toBe("existing styled file");
+  });
+
+  it.each([false, true])(
+    "blocks writing when .styled output conflicts with a loaded input in another tab (alias=%s)",
+    async (alias) => {
+      await prepareStyle();
+      const outName = output().split("/").at(-1)!;
+      const loadedOther = alias ? inputPath(`fonts-alias/${outName}`) : output();
+      if (alias) state.aliases.set(output(), loadedOther);
+      state.fontsFiles = { filePaths: [loadedOther], fileNames: [outName], firstFileContent: "" };
+      await labeled("btn_write_style_edits").onClick!();
+      expect(state.attempts).toEqual([]);
+      expect(state.translations.some((item) => item.key === "msg_style_input_conflict")).toBe(true);
+    }
+  );
+
+  it("ignores an open file picker that resolves after writing starts", async () => {
+    await prepareStyle();
+    const originalStyleFiles = state.styleFiles;
+    let finishPick!: (paths: string[]) => void;
+    state.open.mockImplementation(
+      () =>
+        new Promise<string[]>((resolvePick) => {
+          finishPick = resolvePick;
+        })
+    );
+    const pendingPick = labeled("btn_select_files").onClick!();
+    await labeled("btn_write_style_edits").onClick!();
+    finishPick([inputPath("late.ass")]);
+    await pendingPick;
+    expect(state.styleFiles).toBe(originalStyleFiles);
+    expect(state.attempts).toEqual([{ path: output(), overwrite: false }]);
+  });
+
+  it("disables Clear during delayed conflict probing and honors Cancel before writing", async () => {
+    await prepareStyle();
+    let finishProbe!: () => void;
+    state.conflictProbe = () =>
+      new Promise<string[]>((resolveProbe) => {
+        finishProbe = () => resolveProbe([]);
+      });
+    const pending = labeled("btn_write_style_edits").onClick!();
+    expect(
+      renderStyle().find((entry) => entry.props.title === "btn_clear_file")?.props.disabled
+    ).toBe(true);
+    labeled("btn_cancel").onClick!();
+    finishProbe();
+    await pending;
+    expect(state.attempts).toEqual([]);
+    expect(labeled("btn_write_style_edits").disabled).toBe(false);
+  });
 });

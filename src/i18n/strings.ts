@@ -10,7 +10,7 @@ export type Lang = (typeof LANGS)[number];
 
 type StringEntry = Record<Lang, string>;
 
-export const strings: Record<string, StringEntry> = {
+export const strings = {
   // ── App Shell ───────────────────────────────────────────
   app_title: { en: "SSA HDRify", zh: "SSA HDRify" },
   app_tagline: { en: "HDR subtitle toolkit", zh: "HDR 字幕工具箱" },
@@ -1068,6 +1068,10 @@ export const strings: Record<string, StringEntry> = {
     en: "Multiple inputs resolve to the same .styled output. No files were written.",
     zh: "多个输入会生成同一个 .styled 输出。未写入任何文件。",
   },
+  msg_style_input_conflict: {
+    en: "Blocked {0}: its .styled output matches a loaded subtitle input. No files were written.",
+    zh: "已阻止 {0}：其 .styled 输出与已加载的字幕输入冲突。未写入任何文件。",
+  },
   msg_style_start: {
     en: "Starting style edit: {0} file(s), {1} selected change(s)",
     zh: "开始样式编辑：{0} 个文件，{1} 项已选更改",
@@ -1093,4 +1097,6 @@ export const strings: Record<string, StringEntry> = {
     en: "Style edit cancelled: {0} written, {1} failed, {2} not started",
     zh: "已取消样式编辑：写入 {0} 个，失败 {1} 个，未开始 {2} 个",
   },
-};
+} satisfies Record<string, StringEntry>;
+
+export type StringKey = keyof typeof strings;

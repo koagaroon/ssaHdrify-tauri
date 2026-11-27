@@ -9,36 +9,7 @@ use crate::fonts::entries_to_cache_metadata;
 use super::*;
 
 pub(super) fn sanitize_gui_cache_init_failure(message: &str) -> String {
-    let mut sanitized = String::with_capacity(message.len().min(MAX_GUI_CACHE_INIT_FAILURE_CHARS));
-    let mut chars = message.chars();
-    for _ in 0..MAX_GUI_CACHE_INIT_FAILURE_CHARS {
-        let Some(ch) = chars.next() else {
-            return sanitized;
-        };
-        if ch.is_control()
-            || matches!(
-                ch,
-                '\u{2028}' | '\u{2029}'
-                    | '\u{200B}'..='\u{200D}'
-                    | '\u{2060}'
-                    | '\u{180E}'
-                    | '\u{FEFF}'
-                    | '\u{061C}'
-                    | '\u{200E}'
-                    | '\u{200F}'
-                    | '\u{202A}'..='\u{202E}'
-                    | '\u{2066}'..='\u{2069}'
-            )
-        {
-            sanitized.push(' ');
-        } else {
-            sanitized.push(ch);
-        }
-    }
-    if chars.next().is_some() {
-        sanitized.push('…');
-    }
-    sanitized
+    crate::util::sanitize_for_dialog(message, MAX_GUI_CACHE_INIT_FAILURE_CHARS)
 }
 
 pub(super) fn store_gui_cache_init_failure(message: String) -> Result<(), String> {
@@ -96,7 +67,13 @@ pub(super) fn gui_cache_directory_failure_for_ipc(error: &std::io::Error) -> Str
 
 pub(super) fn gui_cache_open_failure_for_ipc(cache_path: &Path, error: &CacheError) -> String {
     let path = cache_path.display().to_string();
-    let redacted_detail = error.to_string().replace(&path, "<font-cache path>");
+    let mut redacted_detail = error.to_string().replace(&path, "<font-cache path>");
+    if let Some(parent) = cache_path.parent() {
+        let parent_str = parent.display().to_string();
+        if !parent_str.is_empty() {
+            redacted_detail = redacted_detail.replace(&parent_str, "<font-cache directory>");
+        }
+    }
     format!("GUI font cache initialization failed: {redacted_detail}")
 }
 

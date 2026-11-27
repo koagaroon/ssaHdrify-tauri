@@ -107,6 +107,13 @@ fn sanitize_io_error(e: &std::io::Error, action: &str) -> String {
 /// Detect encoding and decode bytes to UTF-8. Shared logic for both the
 /// Tauri command and unit tests (which can't call Tauri commands directly).
 pub(crate) fn decode_bytes(bytes: &[u8]) -> Result<ReadTextResult, String> {
+    // Reject 4-byte UTF-32 BOMs before UTF-16 BOM sniffing: UTF-32LE begins
+    // with `FF FE 00 00`, which would otherwise match UTF-16LE's `FF FE` prefix.
+    if bytes.starts_with(&[0xFF, 0xFE, 0x00, 0x00]) || bytes.starts_with(&[0x00, 0x00, 0xFE, 0xFF])
+    {
+        return Err("UTF-32 subtitle encoding is not supported".to_string());
+    }
+
     // 1. BOM detection
     if let Some(result) = detect_bom(bytes) {
         return Ok(result);
@@ -211,208 +218,202 @@ pub struct ReadTextResult {
 /// handle and treats argv-provided paths as the trust surface) passes
 /// an allow-all closure. Same shape as `safe_io`'s `*_inner` helpers —
 /// keeps the policy gate testable without an `AppHandle` mock.
-pub fn read_text_detect_encoding_inner(
-    path: &str,
-    is_allowed: impl Fn(&Path) -> bool,
-) -> Result<ReadTextResult, String> {
-    // Length and content guards on the IPC-supplied path itself. Reject
-    // obviously-hostile or pathological shapes BEFORE touching the
-    // filesystem. Control chars / NUL in a path on Windows can truncate
-    // the access target at the null byte; zero-width and bidi-control
-    // characters are blocked here too. `..` segments are rejected
-    // upstream by `validate_ipc_path` (see
-    // util.rs § "Reject path-traversal segments"), so the canonicalize-
-    // fails fallback discussion further down doesn't apply to `..` —
-    // that branch only covers symlink-redirect cases that survive the
-    // ipc-path validator. The OS-level `..`-resolution notes below
-    // (CreateFileW on Windows / openat on Unix) are kept for general
-    // operational reference, but they aren't a live defense gap here.
-    crate::util::validate_ipc_path(path, "Subtitle")?;
+struct ScopedReadSpec<'a, E, U, L> {
+    label: &'a str,
+    max_bytes: u64,
+    ext_allowed: E,
+    unsupported_ext_msg: U,
+    symlink_ext_msg: &'a str,
+    too_large_msg: L,
+}
 
-    // Extension validation: only allow subtitle/text file types
+fn resolve_scoped_regular_file<E, U, L>(
+    path: &str,
+    spec: &ScopedReadSpec<'_, E, U, L>,
+    is_allowed: impl Fn(&Path) -> bool,
+) -> Result<PathBuf, String>
+where
+    E: Fn(&Path) -> bool,
+    U: Fn(&str) -> String,
+    L: Fn(u64, bool) -> String,
+{
+    crate::util::validate_ipc_path(path, spec.label)?;
+
     let path_ref = Path::new(path);
-    if !ext_is_allowed(path_ref) {
+    if !(spec.ext_allowed)(path_ref) {
         let ext = path_ref
             .extension()
             .and_then(|e| e.to_str())
             .map(|e| e.to_ascii_lowercase())
             .unwrap_or_default();
-        // Phrase the error so an empty extension reads naturally
-        // ("Unsupported file type: (no extension)") rather than the
-        // bare ". " trailing-dot artifact.
-        let label = if ext.is_empty() {
+        let ext_label = if ext.is_empty() {
             "(no extension)".to_string()
         } else {
             format!(".{ext}")
         };
-        return Err(format!("Unsupported file type: {label}"));
+        return Err((spec.unsupported_ext_msg)(&ext_label));
     }
 
-    // fs_scope consultation: mirror safe_io's policy on the READ side so
-    // read + write enforce the same allow/deny set. Without this, a
-    // misbehaving frontend or compromised WebView could read files in
-    // scope-denied locations (e.g. `$HOME/.ssh/id_rsa`) through the
-    // subtitle reader even though the symmetric write path would refuse.
-    // First pass checks the RAW path so a directly-typed deny-listed
-    // path fails fast. A second pass after canonicalize (below) catches
-    // symlink redirection that resolves into a deny-listed location.
-    //
-    // A previously-leaked path was `C:\Allowed\..\Denied\file.ass`:
-    // `is_allowed` string-matched the `..`-bearing form (passed
-    // allow=**), then the canonicalize-fails fallback at the bottom of
-    // the match below read via the raw path, so the OS resolved the
-    // `..` into a deny-listed target. Closed at the IPC entry by
-    // `validate_ipc_path` (called above), which now rejects `..` as a
-    // path component. The fs_scope re-check on the canonical form
-    // below remains as defense-in-depth for symlink-redirect cases
-    // that don't involve `..`.
     if !is_allowed(path_ref) {
         return Err(format!(
-            "Subtitle path is denied by the application's filesystem scope \
-             policy: {}",
+            "{} path is denied by the application's filesystem scope policy: {}",
+            spec.label,
             path_ref.display()
         ));
     }
 
-    // Resolve symlinks / reparse points. Two attack surfaces drive the
-    // checks below:
-    //   (1) A plain symlink `foo.ass` → `C:/Users/<u>/.ssh/id_rsa`. The
-    //       extension allow-list above only sees the symlink's own name,
-    //       so without a second check we'd silently read the target file.
-    //   (2) An NTFS junction with the same shape (OneDrive-redirected
-    //       Documents, or a deliberate `mklink /J`). Rust's `is_symlink()`
-    //       returns FALSE for junctions (IO_REPARSE_TAG_MOUNT_POINT), so a
-    //       junction-based bypass slips past a naive symlink check.
-    //
-    // Defense: re-validate the CANONICAL path's extension after canonicalize
-    // succeeds — a malicious symlink to `SAM` resolves to a non-subtitle
-    // path that fails the allow-list. Legitimate OneDrive placeholders
-    // resolve to same-named subtitle files and still pass.
-    //
-    // When canonicalize FAILS (some OneDrive cloud-only placeholders, some
-    // network shares), fall back to the raw path ONLY if the raw path is
-    // not itself a reparse point — the `is_reparse_point` helper uses the
-    // raw `FILE_ATTRIBUTE_REPARSE_POINT` bit on Windows to catch junctions
-    // that `is_symlink()` misses.
     let read_path: PathBuf = match path_ref.canonicalize() {
         Ok(canonical) => {
-            if !ext_is_allowed(&canonical) {
-                return Err(
-                    "Resolved path is not a subtitle file (symlink to disallowed target?)"
-                        .to_string(),
-                );
+            if !(spec.ext_allowed)(&canonical) {
+                return Err(spec.symlink_ext_msg.to_string());
             }
-            // Post-canonicalize scope re-check: a same-name reparse point
-            // can pass the raw `is_allowed` (e.g. user-picked `foo.ass`
-            // in a scope-allowed dir) and resolve into a deny-listed
-            // target (`~/.ssh/id_rsa.ass`). Catch that path here.
             if !is_allowed(&canonical) {
                 return Err(format!(
-                    "Resolved subtitle path is denied by the application's \
-                     filesystem scope policy: {}",
+                    "Resolved {} path is denied by the application's filesystem scope policy: {}",
+                    spec.label.to_ascii_lowercase(),
                     canonical.display()
                 ));
             }
             canonical
         }
         Err(e) => {
-            // Log-level discrimination: warn only when the read is refused.
-            // Reparse-point + canonicalize-failure is the path that
-            // genuinely refuses the read; WARN names the user-visible
-            // action. The non-reparse fallback succeeds with the raw
-            // path (common on network-mapped Z: drives, SUBST, OneDrive
-            // cloud-only — Rust's GetFinalPathNameByHandle returns
-            // ERROR_INVALID_PARAMETER on those filesystems, an upstream
-            // Windows-API limitation, not our bug). DEBUG keeps it
-            // available with `RUST_LOG=debug` without alarming default
-            // users every invocation.
-            if is_reparse_point(path_ref) {
+            // Check both the leaf and every ancestor when canonicalize fails so
+            // an intermediate junction on a network/SUBST fallback cannot redirect
+            // the raw-path read into a disallowed target.
+            if path_ref.ancestors().any(is_reparse_point) {
                 log::warn!(
-                    "Refusing to read possible symlink / junction (canonicalize failed: {e})"
+                    "Refusing to read possible symlink / junction for {} (canonicalize failed: {e})",
+                    spec.label
                 );
                 return Err(
                     "Refusing to read symlink / junction when canonicalize fails".to_string(),
                 );
             }
-            // no second `is_allowed` re-check on
-            // `path_ref` here, even though the Ok-arm above does
-            // double-check (pre-canonicalize at line 188, post-
-            // canonicalize on `read_path` below). The pre-canonicalize
-            // `is_allowed(path_ref)` at the function entry already
-            // gated this exact path; `validate_ipc_path` (line 149)
-            // rejected the BiDi / control / DOS-device shapes that
-            // would let a crafted argv bypass the scope policy. The
-            // canonicalize-fail branch ends with the SAME path the
-            // pre-check accepted, so a third re-check would test the
-            // identical predicate twice without closing any window.
-            log::debug!("canonicalize failed; falling back to raw path: {e}");
+            log::debug!(
+                "{} canonicalize failed; falling back to raw path: {e}",
+                spec.label
+            );
             path_ref.to_path_buf()
         }
     };
 
-    // Re-check `is_reparse_point` on the resolved `read_path` right
-    // before the stat. The arms above checked the pre-canonicalize
-    // `path_ref`; on attacker-controlled local filesystems a swap
-    // between that check and the stat below would slip a reparse
-    // point past the upstream gate . Bounded by the
-    // same single-user trust model as the size-check TOCTOU note
-    // below, but the re-check is cheap (one syscall) and parallels
-    // the symmetric scrub `lib.rs::one_line` already does for the
-    // rfd dialog path.
-    if is_reparse_point(&read_path) {
+    if read_path.ancestors().any(is_reparse_point) {
         log::warn!(
-            "Refusing to read possible symlink / junction at stat-time: {}",
+            "Refusing to read possible symlink / junction for {} at stat-time: {}",
+            spec.label,
             read_path.display()
         );
         return Err("Refusing to read symlink / junction (race-time detection)".to_string());
     }
 
-    // Size check.
-    //
-    // TOCTOU note: there's a small window between this stat and the
-    // `std::fs::read` below where the file could be swapped for a
-    // larger one, defeating the size cap. We accept the race because
-    // (a) the threat model is "user picked the file, no concurrent
-    // attacker on this local machine," (b) `std::fs::read` itself
-    // would still cap at the OS's per-syscall read limits, and (c)
-    // Rust's `Vec::reserve` plus the read loop would surface OOM as
-    // a normal Err instead of a crash. The pre-read `is_file()` check
-    // immediately below covers the race-target being a non-file at
-    // stat time; a race-replaced target between stat and read still
-    // produces a normal `std::fs::read` error on a directory / pipe.
     let metadata = std::fs::metadata(&read_path).map_err(|e| sanitize_io_error(&e, "stat"))?;
-    // Must be a regular file — directories, FIFOs, and device files
-    // (Unix /dev/urandom, raw devices the FS reports as non-file)
-    // would otherwise produce crashes or unbounded reads. Windows DOS
-    // device namespaces (`\\.\PhysicalDrive0` and `\\?\GLOBALROOT\…`)
-    // are already rejected upstream by `validate_ipc_path`; this
-    // defense-in-depth check covers everything else.
     if !metadata.file_type().is_file() {
         return Err("Path does not point to a regular file".to_string());
     }
-    if metadata.len() > MAX_TEXT_SIZE {
-        let size_mb = metadata.len() as f64 / (1024.0 * 1024.0);
-        return Err(format!(
-            "File too large: {size_mb:.1} MB exceeds the 50 MB limit"
-        ));
+    if metadata.len() > spec.max_bytes {
+        return Err((spec.too_large_msg)(metadata.len(), false));
     }
 
-    let bytes = std::fs::read(&read_path).map_err(|e| sanitize_io_error(&e, "read"))?;
+    Ok(read_path)
+}
 
-    // Post-read size check (TOCTOU mitigation — file could grow between stat and read)
-    if bytes.len() as u64 > MAX_TEXT_SIZE {
-        let size_mb = bytes.len() as f64 / (1024.0 * 1024.0);
-        return Err(format!(
-            "File too large after read: {size_mb:.1} MB exceeds the 50 MB limit"
-        ));
-    }
+fn read_scoped_regular_file<E, U, L>(
+    path: &str,
+    spec: ScopedReadSpec<'_, E, U, L>,
+    is_allowed: impl Fn(&Path) -> bool,
+) -> Result<Vec<u8>, String>
+where
+    E: Fn(&Path) -> bool,
+    U: Fn(&str) -> String,
+    L: Fn(u64, bool) -> String,
+{
+    use std::io::Read as _;
 
-    if bytes.starts_with(&[0xFF, 0xFE, 0x00, 0x00]) || bytes.starts_with(&[0x00, 0x00, 0xFE, 0xFF])
-    {
-        return Err("UTF-32 subtitle encoding is not supported".to_string());
+    let read_path = resolve_scoped_regular_file(path, &spec, is_allowed)?;
+    let file = std::fs::File::open(&read_path).map_err(|e| sanitize_io_error(&e, "read"))?;
+    let mut bytes = Vec::new();
+    let mut limited = file.take(spec.max_bytes + 1);
+    limited
+        .read_to_end(&mut bytes)
+        .map_err(|e| sanitize_io_error(&e, "read"))?;
+
+    if bytes.len() as u64 > spec.max_bytes {
+        return Err((spec.too_large_msg)(bytes.len() as u64, true));
     }
+    Ok(bytes)
+}
+
+fn subtitle_too_large_msg(len: u64, after_read: bool) -> String {
+    let size_mb = len as f64 / (1024.0 * 1024.0);
+    if after_read {
+        format!("File too large after read: {size_mb:.1} MB exceeds the 50 MB limit")
+    } else {
+        format!("File too large: {size_mb:.1} MB exceeds the 50 MB limit")
+    }
+}
+
+pub fn read_text_detect_encoding_inner(
+    path: &str,
+    is_allowed: impl Fn(&Path) -> bool,
+) -> Result<ReadTextResult, String> {
+    let bytes = read_scoped_regular_file(
+        path,
+        ScopedReadSpec {
+            label: "Subtitle",
+            max_bytes: MAX_TEXT_SIZE,
+            ext_allowed: ext_is_allowed,
+            unsupported_ext_msg: |ext_label: &str| format!("Unsupported file type: {ext_label}"),
+            symlink_ext_msg: "Resolved path is not a subtitle file (symlink to disallowed target?)",
+            too_large_msg: subtitle_too_large_msg,
+        },
+        is_allowed,
+    )?;
 
     decode_bytes(&bytes)
+}
+
+/// Stream-hash the exact bytes of a subtitle file under the same scoped/reparse/size
+/// guards as [`read_text_detect_encoding_inner`], without allocating a full-file buffer
+/// or running encoding detection a second time.
+pub(crate) fn read_subtitle_source_revision_inner(
+    path: &str,
+    is_allowed: impl Fn(&Path) -> bool,
+) -> Result<String, String> {
+    use std::io::Read as _;
+
+    let spec = ScopedReadSpec {
+        label: "Subtitle",
+        max_bytes: MAX_TEXT_SIZE,
+        ext_allowed: ext_is_allowed,
+        unsupported_ext_msg: |ext_label: &str| format!("Unsupported file type: {ext_label}"),
+        symlink_ext_msg: "Resolved path is not a subtitle file (symlink to disallowed target?)",
+        too_large_msg: subtitle_too_large_msg,
+    };
+    let read_path = resolve_scoped_regular_file(path, &spec, is_allowed)?;
+    let file = std::fs::File::open(&read_path).map_err(|e| sanitize_io_error(&e, "read"))?;
+    let mut limited = file.take(MAX_TEXT_SIZE + 1);
+    let mut hasher = Sha256::new();
+    let mut chunk = [0u8; 64 * 1024];
+    let mut total_read = 0u64;
+    loop {
+        let count = limited
+            .read(&mut chunk)
+            .map_err(|e| sanitize_io_error(&e, "read"))?;
+        if count == 0 {
+            break;
+        }
+        total_read = total_read.saturating_add(count as u64);
+        if total_read > MAX_TEXT_SIZE {
+            return Err(subtitle_too_large_msg(total_read, true));
+        }
+        hasher.update(&chunk[..count]);
+    }
+    let digest = hasher.finalize();
+    let mut revision = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        write!(&mut revision, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    Ok(revision)
 }
 
 /// Blocking command implementation. The async Tauri boundary in
@@ -434,86 +435,29 @@ pub fn read_timing_map_inner(
     path: &str,
     is_allowed: impl Fn(&Path) -> bool,
 ) -> Result<String, String> {
-    crate::util::validate_ipc_path(path, "Timing map")?;
-
-    let path_ref = Path::new(path);
-    if !timing_map_ext_is_allowed(path_ref) {
-        let ext = path_ref
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.to_ascii_lowercase())
-            .unwrap_or_default();
-        let label = if ext.is_empty() {
-            "(no extension)".to_string()
-        } else {
-            format!(".{ext}")
-        };
-        return Err(format!("Unsupported timing map file type: {label}"));
-    }
-
-    if !is_allowed(path_ref) {
-        return Err(format!(
-            "Timing map path is denied by the application's filesystem scope policy: {}",
-            path_ref.display()
-        ));
-    }
-
-    let read_path: PathBuf = match path_ref.canonicalize() {
-        Ok(canonical) => {
-            if !timing_map_ext_is_allowed(&canonical) {
-                return Err(
-                    "Resolved path is not a timing map file (symlink to disallowed target?)"
-                        .to_string(),
-                );
-            }
-            if !is_allowed(&canonical) {
-                return Err(format!(
-                    "Resolved timing map path is denied by the application's filesystem scope policy: {}",
-                    canonical.display()
-                ));
-            }
-            canonical
-        }
-        Err(e) => {
-            if is_reparse_point(path_ref) {
-                log::warn!(
-                    "Refusing to read possible symlink / junction for timing map (canonicalize failed: {e})"
-                );
-                return Err(
-                    "Refusing to read symlink / junction when canonicalize fails".to_string(),
-                );
-            }
-            log::debug!("timing map canonicalize failed; falling back to raw path: {e}");
-            path_ref.to_path_buf()
-        }
-    };
-
-    if is_reparse_point(&read_path) {
-        log::warn!(
-            "Refusing to read possible symlink / junction for timing map at stat-time: {}",
-            read_path.display()
-        );
-        return Err("Refusing to read symlink / junction (race-time detection)".to_string());
-    }
-
-    let metadata = std::fs::metadata(&read_path).map_err(|e| sanitize_io_error(&e, "stat"))?;
-    if !metadata.file_type().is_file() {
-        return Err("Path does not point to a regular file".to_string());
-    }
-    if metadata.len() > MAX_TIMING_MAP_SIZE {
-        return Err(format!(
-            "Timing map file is too large: {} bytes (max {MAX_TIMING_MAP_SIZE})",
-            metadata.len()
-        ));
-    }
-
-    let bytes = std::fs::read(&read_path).map_err(|e| sanitize_io_error(&e, "read"))?;
-    if bytes.len() as u64 > MAX_TIMING_MAP_SIZE {
-        return Err(format!(
-            "Timing map file is too large after read: {} bytes (max {MAX_TIMING_MAP_SIZE})",
-            bytes.len()
-        ));
-    }
+    let bytes = read_scoped_regular_file(
+        path,
+        ScopedReadSpec {
+            label: "Timing map",
+            max_bytes: MAX_TIMING_MAP_SIZE,
+            ext_allowed: timing_map_ext_is_allowed,
+            unsupported_ext_msg: |ext_label: &str| {
+                format!("Unsupported timing map file type: {ext_label}")
+            },
+            symlink_ext_msg:
+                "Resolved path is not a timing map file (symlink to disallowed target?)",
+            too_large_msg: |len, after_read| {
+                if after_read {
+                    format!(
+                        "Timing map file is too large after read: {len} bytes (max {MAX_TIMING_MAP_SIZE})"
+                    )
+                } else {
+                    format!("Timing map file is too large: {len} bytes (max {MAX_TIMING_MAP_SIZE})")
+                }
+            },
+        },
+        is_allowed,
+    )?;
 
     let text = std::str::from_utf8(&bytes)
         .map_err(|_| "Timing map file must be valid UTF-8 text".to_string())?;
@@ -927,35 +871,17 @@ mod tests {
         decode_bytes(&bytes).unwrap_or_else(|e| panic!("Cannot decode fixture {name}: {e}"))
     }
 
-    fn next_encoding_test_suffix() -> String {
-        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let seq = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        format!("{}_{stamp}_{seq}", std::process::id())
+    fn temp_dir(name: &str) -> crate::test_support::TestTempDir {
+        crate::test_support::TestTempDir::new("ssahdrify-encoding-dir", name)
     }
 
-    fn temp_file_path(name: &str, ext: &str) -> std::path::PathBuf {
-        let mut path = std::env::temp_dir();
-        path.push(format!(
-            "ssahdrify_encoding_{name}_{}.{}",
-            next_encoding_test_suffix(),
-            ext
-        ));
-        path
-    }
-
-    fn temp_dir(name: &str) -> std::path::PathBuf {
-        let base = std::env::temp_dir();
-        std::fs::create_dir_all(&base).unwrap();
-        let dir = base.join(format!(
-            "ssahdrify-encoding-dir-{name}-{}",
-            next_encoding_test_suffix()
-        ));
-        std::fs::create_dir(&dir).unwrap();
-        dir
+    fn temp_file_path(
+        name: &str,
+        ext: &str,
+    ) -> (crate::test_support::TestTempDir, std::path::PathBuf) {
+        let dir = temp_dir(name);
+        let path = dir.join(format!("sample.{ext}"));
+        (dir, path)
     }
 
     fn encode_utf16_without_bom(text: &str, little_endian: bool) -> Vec<u8> {
@@ -1279,19 +1205,37 @@ mod tests {
     }
 
     #[test]
-    fn reader_refuses_utf32_bom_instead_of_misdecoding_as_utf16() {
-        let path = temp_file_path("utf32", "ass");
-        std::fs::write(&path, [0xFF, 0xFE, 0x00, 0x00, b'A', 0x00, 0x00, 0x00]).unwrap();
+    fn reader_and_decode_bytes_refuse_utf32_bom_instead_of_misdecoding_as_utf16() {
+        let (_dir, path) = temp_file_path("utf32", "ass");
+        let le_bom = [0xFF, 0xFE, 0x00, 0x00, b'A', 0x00, 0x00, 0x00];
+        let be_bom = [0x00, 0x00, 0xFE, 0xFF, 0x00, 0x00, 0x00, b'A'];
+        for sample in [le_bom, be_bom] {
+            assert!(
+                decode_bytes(&sample).unwrap_err().contains("UTF-32"),
+                "decode_bytes must reject UTF-32 BOM directly"
+            );
+        }
+        std::fs::write(&path, le_bom).unwrap();
 
         let err = read_text_detect_encoding_inner(&path.to_string_lossy(), |_| true).unwrap_err();
 
         assert!(err.contains("UTF-32"), "got: {err}");
-        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn streaming_source_revision_matches_decoded_source_revision() {
+        let (_dir, path) = temp_file_path("stream_rev", "ass");
+        let payload = "[Script Info]\r\nTitle: Test\r\n".repeat(4096);
+        std::fs::write(&path, payload.as_bytes()).unwrap();
+        let decoded = read_text_detect_encoding_inner(&path.to_string_lossy(), |_| true).unwrap();
+        let streamed =
+            read_subtitle_source_revision_inner(&path.to_string_lossy(), |_| true).unwrap();
+        assert_eq!(streamed, decoded.source_revision);
     }
 
     #[test]
     fn read_text_refuses_sup_sidecar_extension() {
-        let path = temp_file_path("read_sup", "sup");
+        let (_dir, path) = temp_file_path("read_sup", "sup");
         std::fs::write(&path, b"pgs-binary").unwrap();
 
         let err = match read_text_detect_encoding_inner(&path.to_string_lossy(), |_| true) {
@@ -1300,7 +1244,6 @@ mod tests {
         };
 
         assert!(err.contains("Unsupported file type: .sup"), "got: {err}");
-        let _ = std::fs::remove_file(path);
     }
 
     #[test]

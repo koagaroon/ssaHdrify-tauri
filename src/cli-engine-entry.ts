@@ -1,4 +1,3 @@
-import { parse as parseAss } from "ass-compiler";
 import { processAssContent } from "./features/hdr-convert/ass-processor";
 import {
   DEFAULT_STYLE,
@@ -19,10 +18,10 @@ import {
   type PairingSource,
   type ParsedFile,
 } from "./features/batch-rename/pairing-engine";
-import { FontSectionBuilder } from "./features/font-embed/ass-uuencode";
+import { decodeSubsetBase64, FontSectionBuilder } from "./features/font-embed/ass-uuencode";
 import { assertAssShape, insertFontsSection } from "./features/font-embed/ass-font-section";
-import { buildFontFileName } from "./features/font-embed/font-embedder";
-import { collectFontsWithParser, fontKeyLabel } from "./features/font-embed/font-collector";
+import { buildFontFileName } from "./features/font-embed/font-naming";
+import { collectFonts, fontKeyLabel } from "./features/font-embed/font-collector";
 import {
   assertFiniteShiftMs,
   deriveShiftedPath,
@@ -48,9 +47,7 @@ import {
   substituteTemplate,
 } from "./lib/path-validation";
 import { categorizeForRename, type RenameCategory } from "./lib/rename-extensions";
-import { sanitizeError } from "./lib/dedup-helpers";
-import { stripUnicodeControls } from "./lib/unicode-controls";
-import { decodeBase64Bytes } from "./lib/base64-bytes";
+import { ASCII_CONTROL_CHARS, hasUnicodeControls } from "./lib/unicode-controls";
 
 // Chain feature — runtime + types re-exported so the Rust shell can
 // reach them via the bundled engine.js. Adding the chain entry here
@@ -389,7 +386,7 @@ export function planRename(request: RenamePlanRequest): RenamePlanResult {
 
 export function planFontEmbed(request: FontEmbedPlanRequest): FontEmbedPlanResult {
   assertAssShape(request.content);
-  const usages = collectFontsWithParser(request.content, parseAss);
+  const usages = collectFonts(request.content);
 
   return {
     outputPath: resolveEmbedOutputPathInternal(request.inputPath, request.outputTemplate),
@@ -401,14 +398,14 @@ export function planFontDiagnostics(
   request: FontDiagnosticsPlanRequest
 ): Pick<FontEmbedPlanResult, "fonts"> {
   assertAssShape(request.content);
-  const usages = collectFontsWithParser(request.content, parseAss);
+  const usages = collectFonts(request.content);
 
   return {
     fonts: toFontEmbedUsages(usages),
   };
 }
 
-function toFontEmbedUsages(usages: ReturnType<typeof collectFontsWithParser>): FontEmbedUsage[] {
+function toFontEmbedUsages(usages: ReturnType<typeof collectFonts>): FontEmbedUsage[] {
   return usages.map((usage) => ({
     family: usage.key.family,
     bold: usage.key.bold,
@@ -539,18 +536,6 @@ export function applyCliStyleEdit(request: StyleEditCliRequest): StyleEditCliRes
     changedStyleCount: applied.changedStyleCount,
     changedFieldCount: applied.changedFieldCount,
   };
-}
-
-function decodeSubsetBase64(dataB64: string, name: string): Uint8Array {
-  try {
-    return decodeBase64Bytes(dataB64);
-  } catch (e) {
-    const message = sanitizeError(e);
-    const safeName = stripUnicodeControls(name);
-    throw new Error(`base64 decode failed for font subset '${safeName}': ${message}`, {
-      cause: e,
-    });
-  }
 }
 
 /**
@@ -688,16 +673,15 @@ function categorizeRenamePaths(paths: string[]): CategorizedRenamePaths {
   return { videos, subtitles, ignored, unknown };
 }
 
+const RENAME_PATH_CONTROL_RE = new RegExp(`[${ASCII_CONTROL_CHARS}]`);
+
 function categorizeRenamePath(path: string): RenameCategory {
-  // thin wrapper — delegate the ext-lookup chain to the
-  // canonical `categorizeForRename` (which scans VIDEO_EXTS →
-  // RENAME_SUBTITLE_EXTS → IGNORED_EXTS in the same priority order).
-  // The chain was previously open-coded here, so a future bucket
-  // addition or priority shift in
-  // `rename-extensions.ts::categorizeForRename` would silently skip the
-  // CLI path. `fileNameFromPath` still applies upstream to keep the
-  // trailing-separator handling.
-  return categorizeForRename(fileNameFromPath(path));
+  if (RENAME_PATH_CONTROL_RE.test(path) || hasUnicodeControls(path)) {
+    return "unknown";
+  }
+  const normalized = path.replace(/\\/g, "/");
+  const rawName = normalized.split("/").pop() || path;
+  return categorizeForRename(rawName);
 }
 
 function parseLanguageSelection(raw: string): LanguageSelection {

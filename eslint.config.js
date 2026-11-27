@@ -20,9 +20,12 @@ export default defineConfig([
     files: ["eslint.config.js", "scripts/**/*.{mjs,js}"],
     extends: [js.configs.recommended],
     languageOptions: {
-      ecmaVersion: 2023,
+      ecmaVersion: 2025,
       sourceType: "module",
       globals: globals.node,
+    },
+    rules: {
+      eqeqeq: ["error", "always", { null: "ignore" }],
     },
   },
   {
@@ -34,13 +37,11 @@ export default defineConfig([
       reactRefresh.configs.vite,
     ],
     languageOptions: {
-      // Aligned with tsconfig.app.json `target: es2023` — the TS parser
-      // already accepts 2023 syntax, so keeping ESLint at 2020 produced a
-      // mismatched signal about what the codebase is actually compiled as.
-      ecmaVersion: 2023,
+      ecmaVersion: 2025,
       globals: globals.browser,
     },
     rules: {
+      eqeqeq: ["error", "always", { null: "ignore" }],
       // ESLint 10 + react-hooks 7 introduced this rule as an error. Five
       // sites in this codebase intentionally call setState inside useEffect
       // to clear transient UI status (e.g. last-action result, preview list,
@@ -109,6 +110,13 @@ export default defineConfig([
             "style={{ ... }} value is a TemplateLiteral — possible user-controlled CSS injection. Use a Literal or a ConditionalExpression with literal branches.",
         },
       ],
+    },
+  },
+  {
+    files: ["src/**/*.{ts,tsx}"],
+    ignores: ["src/**/*.test.{ts,tsx}"],
+    rules: {
+      "no-console": ["error", { allow: ["warn", "error", "debug"] }],
     },
   },
 ]);

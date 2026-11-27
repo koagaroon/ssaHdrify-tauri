@@ -111,16 +111,18 @@ fn process_style_edit_file(
         Ok(result) => result,
         Err(error) => return failed_report(&input_path, Some(output), None, error),
     };
+    let warnings = format_decode_warnings(globals, &read_result);
     if read_result.lossy {
-        return failed_report(
+        let mut report = failed_report(
             &input_path,
             Some(output),
             Some(read_result.encoding),
             "source decoding was lossy; refusing to write an irreversible style edit".to_string(),
         );
+        report.warnings = warnings;
+        return report;
     }
 
-    let warnings = format_decode_warnings(globals, &read_result);
     let applied = match engine.apply_style_edit(&engine::StyleEditCliRequest {
         input_path: input.clone(),
         content: read_result.text,
