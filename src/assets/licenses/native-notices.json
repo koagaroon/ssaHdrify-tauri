@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "target": "x86_64-pc-windows-msvc",
   "inputs": {
-    "src-tauri/Cargo.lock": "320362bd9533cba6de207edf1b4c3a5fe3a0c4732ef569db9de412b1ac88e9c4",
-    "src-tauri/Cargo.toml": "9acfc567013d8e6015edac2c5efa47606efc708950e6350b2483cad26049444c",
+    "src-tauri/Cargo.lock": "7f40c5d5e56f09c09186fcee1a48b0a4507d595cb3894b7222fe9bea15cb3040",
+    "src-tauri/Cargo.toml": "2e3ede6bc4eecaa7826af0a2bc16a24b81ead21d14cd3dbe1c6a8564199ee654",
     "rust-toolchain.toml": "d4580150cd6aec323fffc3d1b193cbbf262855081a3e1fb330c18b7ba8a98dff",
     "src-tauri/sqlite-bundle.json": "cc61c4d9ef6400df620a0040a0332b1ffb30220d44f9e2d6c72837e4f3842967",
     "scripts/native-notice-sources.json": "1e689681627cb9ce188e9db15980f4cde260400433014d181558da7b677dd2da",
